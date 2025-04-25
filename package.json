@@ -1,0 +1,21 @@
+{
+  "name": "itharbors",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "preinstall": "cd ./app && npm install && cd ../workflow && npm install",
+    "start": "npx electron ./app",
+    "build": "cd ./workflow && npm run build",
+    "clean": "cd ./workflow && npm run clean",
+    "test": "node --test ./test/*.spec.js",
+    "ci": "npm install && npm run build && npm run test"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "electron": "^35.2.1",
+    "esbuild": "^0.25.3",
+    "typescript": "^5.8.3"
+  }
+}

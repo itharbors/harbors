@@ -1,0 +1,18 @@
+{
+  "name": "itharbors",
+  "version": "1.0.0",
+  "description": "",
+  "main": "./startup/module/dist/index.js",
+  "scripts": {},
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@basic/panel": "file:basic/panel",
+    "@itharbors/module": "file:../../module",
+    "@itharbors/ui-panel": "file:../../ui-panel"
+  },
+  "devDependencies": {
+    "electron": "^35.2.0",
+    "typescript": "^5.8.3"
+  }
+}

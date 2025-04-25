@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<head>
+    <title>Title</title>
+</head>
+<body>
+    <style>
+        body {
+            background: #162b41;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+        }
+        .layout {
+            display: flex;
+            flex: 1;
+        }
+        .row {
+            flex-direction: row;
+        }
+        ui-panel {
+            flex: 1;
+        }
+    </style>
+
+    <section class="layout row">
+        <section class="layout" style="height: 100px;">
+            <ui-panel name="test.hierarchy"></ui-panel>
+        </section>
+        <section class="layout">
+            <ui-panel name="test.hierarchy"></ui-panel>
+            <ui-panel name="test.content"></ui-panel>
+        </section>
+    </section>
+</body>
