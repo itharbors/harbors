@@ -1,8 +1,5 @@
 export const spaceDirs = [
     [
-        './basic/panel',
-    ],
-    [
         './framework/kit',
         './framework/plugin',
         './framework/profile',

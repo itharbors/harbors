@@ -37,8 +37,8 @@
 </header>
 
 <script>
-    bridge
-        .request('query-env')
+    Editor.Message
+        .request('main-window', 'query-env')
         .then((env) => {
             for (let key in env) {
                 const $elem = document.getElementById(key);

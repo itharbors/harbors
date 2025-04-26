@@ -9,9 +9,12 @@
   "author": "",
   "license": "ISC",
   "contribute": {
-    "panel": {
-      "a": "./a.html",
-      "b": "./b.html"
+    "message": {
+      "query-path": {
+        "method": [
+          "query-path"
+        ]
+      }
     }
   }
 }

@@ -42,40 +42,45 @@ ipcRenderer.on('__plugin__:call-panel', (event, panel, method, ...args) => {
 const requestMap: Map<number, MessageRequest> = new Map();
 let messageID = 1;
 const exposeInterface = {
-    async request(message: string, ...args: any[]) {
-        const id = messageID++;
-        const option: MessageOption = {
-            id,
-            plugin: info.plugin,
-            message,
-            args,
-            reply: true,
-        };
-        if (info.plugin) {
-            ipcRenderer.send('plugin:message', option);
-        } else {
-            waitArray.push(option);
-        }
-    
-        return new Promise((resolve) => {
-            requestMap.set(id, {
-                timestamp: Date.now(),
-                resolve,
+
+    Message: {
+        async request(plugin: string, message: string, ...args: any[]) {
+            const id = messageID++;
+            const option: MessageOption = {
+                id,
+                plugin,
+                message,
+                args,
+                reply: true,
+            };
+            if (info.plugin) {
+                ipcRenderer.send('plugin:message', option);
+            } else {
+                waitArray.push(option);
+            }
+        
+            return new Promise((resolve) => {
+                requestMap.set(id, {
+                    timestamp: Date.now(),
+                    resolve,
+                });
             });
-        });
+        },
     },
 
-    register(module: TModule) {
-        info.module = generateModule(module);
-        return info.module;
+    Panel: {
+        register(module: TModule) {
+            info.module = generateModule(module);
+            return info.module;
+        },
     },
 };
 
 // contextBridge.exposeInMainWorld('bridge', exposeInterface);
 // @ts-ignore
-window.bridge = exposeInterface;
+window.Editor = exposeInterface;
 declare global {
-    const bridge: typeof exposeInterface;
+    const Editor: typeof exposeInterface;
 }
 
 ipcRenderer.on('plugin:message-reply', (event, option: MessageOption) => {

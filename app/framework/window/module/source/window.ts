@@ -6,8 +6,6 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { BrowserWindow, ipcMain } from 'electron';
 
-import '@basic/panel/browser';
-
 export class Window {
 
     private _file: string;

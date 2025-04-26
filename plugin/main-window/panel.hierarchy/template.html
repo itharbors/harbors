@@ -27,7 +27,7 @@
 </div>
 <script>
 
-    const module = bridge.register({
+    const module = Editor.Panel.register({
         stash() {
             return {};
         },
@@ -47,8 +47,8 @@
         },
     });
 
-    bridge
-        .request('query-tab')
+    Editor.Message
+        .request('main-window', 'query-tab')
         .then((tab) => {
             module.execture('change-tab', tab);
         })
@@ -60,7 +60,7 @@
     document.querySelectorAll('.buttons > div').forEach((elem) => {
         elem.addEventListener('click', () => {
             const tab = elem.getAttribute('id');
-            bridge.request('change-tab', tab);
+            Editor.Message.request('main-window', 'change-tab', tab);
         });
     });
 </script>

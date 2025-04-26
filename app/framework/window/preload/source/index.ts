@@ -2,7 +2,7 @@
  * 向渲染进程暴露安全的 API
  */
 
-import { convertURL } from '@basic/panel/renderer';
+import { convertURL } from '../../panel';
 // import { contextBridge } from 'electron';
 
 import * as message from './message';

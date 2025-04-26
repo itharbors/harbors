@@ -28,13 +28,11 @@
     mermaid.initialize({ startOnLoad: true });
 </script>
 
-<div id="container">
-    <pre class="mermaid"></pre>
-</div>
+<div id="container"></div>
 
 <script>
 
-    const module = bridge.register({
+    const module = Editor.Panel.register({
         stash() {
             return {};
         },
@@ -54,9 +52,10 @@
         },
     });
 
-    bridge
-        .request('query-mermaid')
+    Editor.Message
+        .request('main-window', 'query-mermaid')
         .then((mermaid) => {
+            debugger;
             module.execture('change-mermaid', mermaid);
         })
         .catch((error) => {

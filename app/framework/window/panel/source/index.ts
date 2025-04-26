@@ -1,4 +1,4 @@
-import type { sendOption } from '../../public';
+import type { sendOption } from './public';
 
 import { join } from 'path';
 import { WebviewTag, ipcRenderer } from 'electron';
@@ -35,7 +35,7 @@ class Panel extends HTMLElement {
 
         // 创建一个 iframe 元素
         this._$content = document.createElement('webview');
-        this._$content.setAttribute('preload', join(__dirname, '../../preload/dist/index.js'));
+        this._$content.setAttribute('preload', join(__dirname, '../../panel-preload/dist/index.js'));
         this._$content.setAttribute('webPreferences', 'webgl=1,nativeWindowOpen=1,contextIsolation=0,backgroundThrottling=0');
         this._$content.setAttribute('contextIsolation', 'false');
         this._$content.setAttribute('nodeintegration', 'true');
@@ -74,7 +74,7 @@ class Panel extends HTMLElement {
 
     disconnectedCallback() {
         const name = this.getAttribute('name') || '';
-        ipcRenderer.send('__panel__:disconnected', name);
+        // ipcRenderer.send('__panel__:disconnected', name);
         map.delete(name);
     }
 
@@ -88,7 +88,7 @@ class Panel extends HTMLElement {
     // 更新元素内容的方法
     async updateContent() {
         const name = this.getAttribute('name') || '';
-        ipcRenderer.send('__panel__:connected', name);
+        // ipcRenderer.send('__panel__:connected', name);
         map.set(name, this);
         const url = await converter(name);
         this._$content.src = url;

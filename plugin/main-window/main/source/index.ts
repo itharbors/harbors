@@ -77,9 +77,7 @@ exports.method = {
     'change-tab'(tab: WindowTab) {
         stash.tab = tab;
         // @ts-ignore
-        Editor.Message.sendToPanel('main-window', 'hierarchy', 'change-tab', tab);
-        // @ts-ignore
-        Editor.Message.sendToPanel('main-window', 'content', 'change-mermaid', data[stash.tab]);
+        Editor.Message.request('main-window', 'change-mermaid', data[stash.tab]);
     },
 
     'query-mermaid'() {

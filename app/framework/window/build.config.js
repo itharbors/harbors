@@ -1,6 +1,8 @@
 exports.tsc = function() {
     return [
         './module',
+        './panel',
+        './panel-preload',
         './preload',
     ];
 };

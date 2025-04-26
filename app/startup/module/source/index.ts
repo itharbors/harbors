@@ -2,9 +2,9 @@ import { join } from 'path';
 import { app } from 'electron';
 
 import { runModuleLifeCycle, Window, Plugin } from './framework';
+import * as all from './export';
 
 (async () => {
-
     const registerModulePromise = runModuleLifeCycle('register');
     const appReadyPromise = (() => {
         return new Promise((resolve) => {
@@ -35,11 +35,9 @@ import { runModuleLifeCycle, Window, Plugin } from './framework';
     }
 
     // 启动一个窗口
-    // const file = `${join(__dirname, '../../../html/index.html')}`;
     await Window.execture('open');
 })();
 
-import * as all from './framework';
 declare global {
     const Editor: typeof all;
 }
