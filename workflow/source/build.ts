@@ -4,6 +4,7 @@ import { executeTask, initWorkflow, Task } from '@itharbors/workflow';
 import { spaceDirs } from './public';
 
 import './task/dts';
+import './task/tsc';
 
 (async () => {
 
