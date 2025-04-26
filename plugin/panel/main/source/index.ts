@@ -1,6 +1,10 @@
 import { join } from 'path';
 
-const panelMap = new Map();
+type panelInfo = {
+    [key: string]: string;
+};
+
+const panelMap: Map<string, string> = new Map();
 
 exports.method = {
     'query-path'(name: string) {
@@ -10,13 +14,13 @@ exports.method = {
 };
 
 exports.contribute = {
-    attach(pluginInfo: any, contributeInfo: any) {
+    attach(pluginInfo: any, contributeInfo: panelInfo) {
         for (const name in contributeInfo) {
             panelMap.set(`${pluginInfo.name}.${name}`, join(pluginInfo.path, contributeInfo[name]));
         }
     },
 
-    detach(pluginInfo: any, contributeInfo: any) {
+    detach(pluginInfo: any, contributeInfo: panelInfo) {
         panelMap.forEach((path, name) => {
             if (name.startsWith(pluginInfo.name)) {
                 panelMap.delete(name);

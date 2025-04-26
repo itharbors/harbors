@@ -13,6 +13,7 @@ export const spaceDirs = [
     ],
     [
         '../plugin/panel',
+        '../plugin/message',
         '../plugin/main-window',
     ],
 ];

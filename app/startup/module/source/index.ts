@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { app } from 'electron';
 
-import { runModuleLifeCycle, window, plugin } from './framework';
+import { runModuleLifeCycle, Window, Plugin } from './framework';
 
 (async () => {
 
@@ -25,17 +25,18 @@ import { runModuleLifeCycle, window, plugin } from './framework';
 
     // 启动内置插件
     const pluginDirs = [
+        join(__dirname, '../../../../plugin/message'),
         join(__dirname, '../../../../plugin/panel'),
         join(__dirname, '../../../../plugin/main-window'),
     ];
     for (let pluginDir of pluginDirs) {
-        await plugin.execture('register', pluginDir);
-        await plugin.execture('load', pluginDir);
+        await Plugin.execture('register', pluginDir);
+        await Plugin.execture('load', pluginDir);
     }
 
     // 启动一个窗口
     // const file = `${join(__dirname, '../../../html/index.html')}`;
-    await window.execture('open');
+    await Window.execture('open');
 })();
 
 import * as all from './framework';

@@ -1,6 +1,5 @@
 import type { MessageOption } from '../../type';
 
-import { readFileSync } from 'fs';
 import { join } from 'path';
 import { BrowserWindow, ipcMain } from 'electron';
 import { generateModule } from '@itharbors/module';

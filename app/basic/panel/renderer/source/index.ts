@@ -1,10 +1,13 @@
+import type { sendOption } from '../../public';
+
 import { join } from 'path';
-import { generateModule } from '@itharbors/module';
-import { WebviewTag } from 'electron';
+import { WebviewTag, ipcRenderer } from 'electron';
 
 let converter = async function(url: string) {
     return url;
 }
+
+const map: Map<string, Panel> = new Map();
 
 /**
  * Panel 元素
@@ -20,6 +23,10 @@ class Panel extends HTMLElement {
     private _$content!: WebviewTag;
     private _$style!: HTMLStyleElement;
 
+    send(option: sendOption) {
+        this._$content.send('__send__', option);
+    }
+
     constructor() {
         super();
 
@@ -30,8 +37,8 @@ class Panel extends HTMLElement {
         this._$content = document.createElement('webview');
         this._$content.setAttribute('preload', join(__dirname, '../../preload/dist/index.js'));
         this._$content.setAttribute('webPreferences', 'webgl=1,nativeWindowOpen=1,contextIsolation=0,backgroundThrottling=0');
-        // this._$content.setAttribute('contextIsolation', 'false');
-        // this._$content.setAttribute('nodeintegration', 'true');
+        this._$content.setAttribute('contextIsolation', 'false');
+        this._$content.setAttribute('nodeintegration', 'true');
         // this._$content.setAttribute('nodeintegrationinsubframes', 'true');
         this._$content.setAttribute('enableremotemodule', 'true');
         this._$content.setAttribute('disablewebsecurity', 'true');
@@ -41,8 +48,8 @@ class Panel extends HTMLElement {
         });
         this._$content.addEventListener('did-finish-load', () => {
             const name = this.getAttribute('name') || '';
-            const pluginName = name.replace(/\.[^\.]+$/, '');
-            this._$content.send('init', pluginName);
+            const array = name.split('.');
+            this._$content.send('init', array[0], array[1]);
         });
 
         // 创建一个样式元素
@@ -65,6 +72,12 @@ class Panel extends HTMLElement {
         this.updateContent();
     }
 
+    disconnectedCallback() {
+        const name = this.getAttribute('name') || '';
+        ipcRenderer.send('__panel__:disconnected', name);
+        map.delete(name);
+    }
+
     // 当观察的属性发生变化时调用
     attributeChangedCallback(name: string, oldValue: string | null, newValue: string | null) {
         if (oldValue !== newValue) {
@@ -75,8 +88,8 @@ class Panel extends HTMLElement {
     // 更新元素内容的方法
     async updateContent() {
         const name = this.getAttribute('name') || '';
-        // const pluginName = name.replace(/\.^[\.]+$/, '');
-        // this._$content.send('init', pluginName);
+        ipcRenderer.send('__panel__:connected', name);
+        map.set(name, this);
         const url = await converter(name);
         this._$content.src = url;
     }

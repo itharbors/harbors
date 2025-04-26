@@ -1,4 +1,5 @@
 import { ipcRenderer, contextBridge } from 'electron';
+import { TModule, ModuleContainer, generateModule } from '@itharbors/module';
 
 type MessageOption = {
     id: number;
@@ -13,20 +14,29 @@ type MessageRequest = {
     resolve: (...args: any[]) => void;
 }
 
-const info = {
+const info: {
+    plugin: string,
+    module?: ModuleContainer,
+} = {
     plugin: '',
 };
 
 const waitArray: MessageOption[] = [];
 
-ipcRenderer.on('init', (event, name) => {
-    info.plugin = name;
-    console.log(`与插件 ${name} 建立连接`);
+ipcRenderer.on('init', (event, plugin, panel) => {
+    info.plugin = plugin;
+    ipcRenderer.send('plugin:connect', plugin, panel);
+    console.log(`与插件 ${plugin} 建立连接`);
+
     waitArray.forEach((option) => {
-        option.plugin = name;
+        option.plugin = plugin;
         ipcRenderer.send('plugin:message', option);
     });
     waitArray.length = 0;
+});
+
+ipcRenderer.on('__plugin__:call-panel', (event, panel, method, ...args) => {
+    info.module?.execture(method, args);
 });
 
 const requestMap: Map<number, MessageRequest> = new Map();
@@ -53,6 +63,11 @@ const exposeInterface = {
                 resolve,
             });
         });
+    },
+
+    register(module: TModule) {
+        info.module = generateModule(module);
+        return info.module;
     },
 };
 

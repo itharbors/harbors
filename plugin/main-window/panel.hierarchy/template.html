@@ -1,6 +1,66 @@
 <style>
     body {
         margin: 0;
+        color: #c2f5ff;
     }
-    
+    .buttons > div {
+        height: 60px;
+        line-height: 60px;
+        text-align: center;
+        transition: background-color 0.3s;
+        cursor: pointer;
+    }
+    .buttons > div:hover, .buttons > div[active] {
+        background: #314d6b;
+    }
 </style>
+<div class="buttons">
+    <div id="main">
+        <span>Main</span>
+    </div>
+    <div id="plugin">
+        <span>Plugin</span>
+    </div>
+    <div id="panel">
+        <span>Panel</span>
+    </div>
+</div>
+<script>
+
+    const module = bridge.register({
+        stash() {
+            return {};
+        },
+        data() {
+            return {};
+        },
+
+        async load() {},
+
+        method: {
+            'change-tab'(tab) {
+                document.querySelector('.buttons > div[active]')?.removeAttribute('active');
+
+                const $elem = document.getElementById(tab);
+                $elem && $elem.setAttribute('active', '');
+            },
+        },
+    });
+
+    bridge
+        .request('query-tab')
+        .then((tab) => {
+            module.execture('change-tab', tab);
+        })
+        .catch((error) => {
+            console.error(error);
+        });
+
+
+    document.querySelectorAll('.buttons > div').forEach((elem) => {
+        elem.addEventListener('click', () => {
+            const tab = elem.getAttribute('id');
+            bridge.request('change-tab', tab);
+        });
+    });
+</script>

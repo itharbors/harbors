@@ -13,6 +13,25 @@
       "header": "./panel.header/template.html",
       "hierarchy": "./panel.hierarchy/template.html",
       "content": "./panel.content/template.html"
+    },
+    "message": {
+      "query-env": {
+        "mthod": [
+          "query-env"
+        ]
+      },
+
+      "query-tab": {
+        "mthod": [
+          "query-tab"
+        ]
+      },
+      "change-tab": {
+        "mthod": [
+          "change-tab",
+          "hierarchy.change-tab"
+        ]
+      }
     }
   }
 }

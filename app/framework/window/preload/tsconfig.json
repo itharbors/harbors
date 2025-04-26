@@ -1,7 +1,7 @@
 {
   "compilerOptions": {
-    "target": "ESNext",
-    "module": "commonjs",
+    "target": "ES2016",
+    "module": "Node18",
     "rootDir": "./source",
     "declaration": true,
     "sourceMap": true,
@@ -9,7 +9,8 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "moduleResolution": "node16"
   },
   "include": [
     "./source",

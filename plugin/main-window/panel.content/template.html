@@ -1,5 +1,65 @@
 <style>
     body {
-        margin: 0;
+        margin: 30px;
+    }
+    /* 更改参与者文本颜色 */
+    #container .mermaid .actor {
+        /* fill: #FF0000; */
+        /* stroke: #FF0000; */
+    }
+
+    /* 更改消息文本颜色 */
+    #container .mermaid .messageText {
+        fill: #c2f5ff;
+    }
+
+    #container .mermaid .messageLine0, #container .mermaid .messageLine1 {
+        stroke: #c2f5ff;
+    }
+
+    /* 更改激活条颜色 */
+    #container .mermaid .activation0 {
+        /* fill: #0000FF; */
     }
 </style>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
+<script>
+    mermaid.initialize({ startOnLoad: true });
+</script>
+
+<div id="container">
+    <pre class="mermaid"></pre>
+</div>
+
+<script>
+
+    const module = bridge.register({
+        stash() {
+            return {};
+        },
+        data() {
+            return {};
+        },
+
+        async load() {},
+
+        method: {
+            'change-mermaid'(data) {
+                document.querySelector('#container').innerHTML = `<pre class="mermaid">${data}</pre>`;
+                mermaid.run({
+                    nodes: document.querySelectorAll('.mermaid')
+                });
+            },
+        },
+    });
+
+    bridge
+        .request('query-mermaid')
+        .then((mermaid) => {
+            module.execture('change-mermaid', mermaid);
+        })
+        .catch((error) => {
+            console.error(error);
+        });
+</script>

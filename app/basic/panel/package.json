@@ -2,10 +2,19 @@
   "name": "@basic/panel",
   "version": "1.0.0",
   "description": "",
-  "main": "./module/dist/index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "exports": {
+    "./browser": {
+      "types": "./browser/dist/index.d.js",
+      "require": "./browser/dist/index.js"
+    },
+    "./renderer": {
+      "types": "./renderer/dist/index.d.js",
+      "require": "./renderer/dist/index.js"
+    }
+  }
 }
