@@ -1,5 +1,5 @@
 import type { MessageOption } from '../../type';
-import type { MessageItem } from '../../../@types/message';
+import type { Message } from '../../../../type/editor';
 
 import { join } from 'path';
 import { BrowserWindow, ipcMain } from 'electron';
@@ -28,7 +28,7 @@ export const instance = generateModule({
 
     load() {
         ipcMain.on('plugin:message', async (event, option: MessageOption) => {
-            const info: MessageItem =  await Plugin.execture('callPlugin', 'message', 'query-message', option.plugin, option.message);
+            const info: Message.MessageItem =  await Plugin.execture('callPlugin', 'message', 'query-message', option.plugin, option.message);
             
             let result: any;
             for (let item of info.method) {

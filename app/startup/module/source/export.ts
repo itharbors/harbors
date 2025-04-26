@@ -1,5 +1,5 @@
 
-import type { MessageItem } from '../../../../app/framework/@types/message';
+import type { Message as MessageType } from '../../../../app/type/editor';
 
 
 import { instance as Plugin } from '../../../framework/plugin';
@@ -14,7 +14,7 @@ export const Message = {
      * @param args 
      */
     async request(plugin: string, message: string, ...args: any[]) {
-        const info: MessageItem =  await Plugin.execture('callPlugin', 'message', 'query-message', plugin, message);
+        const info: MessageType.MessageItem =  await Plugin.execture('callPlugin', 'message', 'query-message', plugin, message);
 
         let result: any;
         for (let item of info.method) {

@@ -1,12 +1,12 @@
-import type { MessageJSON, MessageInfo, MessageItem } from '../../../../app/framework/@types/message';
+import type { Message } from '../../../../app/type/editor';
 
-const messageMap: Map<string, MessageInfo> = new Map();
-const empty: MessageItem = {
+const messageMap: Map<string, Message.MessageInfo> = new Map();
+const empty: Message.MessageItem = {
     method: [],
 };
 
 exports.method = {
-    'query-message'(plugin: string, message: string): MessageItem {
+    'query-message'(plugin: string, message: string): Message.MessageItem {
         const info = messageMap.get(plugin);
         return info ? info[message] || empty : empty;
     },
@@ -14,8 +14,8 @@ exports.method = {
 
 exports.contribute = {
 
-    attach(pluginInfo: any, contributeInfo: MessageJSON) {
-        const info: MessageInfo = {};
+    attach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
+        const info: Message.MessageInfo = {};
         for (let message in contributeInfo) {
             info[message] = {
                 method: [],
@@ -36,7 +36,7 @@ exports.contribute = {
         messageMap.set(pluginInfo.name, info);
     },
 
-    detach(pluginInfo: any, contributeInfo: MessageJSON) {
+    detach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
         messageMap.delete(pluginInfo.name);
     },
 };
