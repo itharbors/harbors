@@ -17,5 +17,8 @@
     "electron": "^35.2.1",
     "esbuild": "^0.25.3",
     "typescript": "^5.8.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.2"
   }
 }

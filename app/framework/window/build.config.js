@@ -18,3 +18,7 @@ exports.npm = function() {
         // },
     ];
 };
+
+exports.dts = function() {
+    return [];
+};

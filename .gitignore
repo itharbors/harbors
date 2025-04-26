@@ -5,4 +5,5 @@ bundle
 
 .temp
 .DS_Store
+bundle.d.ts
 tsconfig.tsbuildinfo

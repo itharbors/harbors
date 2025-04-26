@@ -1,6 +1,11 @@
-export const method = {
-    'change-header'(num: number) {
-        debugger;
-        console.log(`change-header ${num}`);
-    },
-};
+Editor.Message
+    .request('main-window', 'query-env')
+    .then((env) => {
+        for (let key in env) {
+            const $elem = document.getElementById(key);
+            $elem && ($elem.innerText = env[key]);
+        }
+    })
+    .catch((error) => {
+        console.error(error);
+    });

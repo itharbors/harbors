@@ -1,15 +1,16 @@
 {
-  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "target": "es2016",
     "module": "commonjs",
-    "rootDir": "./source",
     "declaration": true,
     "sourceMap": true,
-    "outDir": "./dist",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": [
+      "../../../node_modules/@types/node",
+      "../../../app/type/index"
+    ]
   }
 }

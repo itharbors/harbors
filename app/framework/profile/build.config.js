@@ -7,3 +7,7 @@ exports.tsc = function() {
 exports.npm = function() {
     return [];
 };
+
+exports.dts = function() {
+    return [];
+};

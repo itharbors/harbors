@@ -30,35 +30,4 @@
 
 <div id="container"></div>
 
-<script>
-
-    const module = Editor.Panel.register({
-        stash() {
-            return {};
-        },
-        data() {
-            return {};
-        },
-
-        async load() {},
-
-        method: {
-            'change-mermaid'(data) {
-                document.querySelector('#container').innerHTML = `<pre class="mermaid">${data}</pre>`;
-                mermaid.run({
-                    nodes: document.querySelectorAll('.mermaid')
-                });
-            },
-        },
-    });
-
-    Editor.Message
-        .request('main-window', 'query-mermaid')
-        .then((mermaid) => {
-            debugger;
-            module.execture('change-mermaid', mermaid);
-        })
-        .catch((error) => {
-            console.error(error);
-        });
-</script>
+<script src="plugin://main-window/panel.content/dist/index.js"></script>

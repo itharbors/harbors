@@ -8,7 +8,7 @@
   "license": "ISC",
   "dependencies": {
     "@basic/panel": "file:basic/panel",
-    "@itharbors/module": "^0.1.0"
+    "@itharbors/module": "^0.1.2"
   },
   "devDependencies": {
     "electron": "^35.2.0",

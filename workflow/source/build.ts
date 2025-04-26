@@ -3,6 +3,8 @@ import { executeTask, initWorkflow, Task } from '@itharbors/workflow';
 
 import { spaceDirs } from './public';
 
+import './task/dts';
+
 (async () => {
 
     for (let dirs of spaceDirs) {
@@ -16,6 +18,7 @@ import { spaceDirs } from './public';
             }),
         });
         await executeTask(['tsc']);
+        // await executeTask(['dts']);
         await executeTask(['npm']);
     }
 })();

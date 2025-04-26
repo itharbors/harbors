@@ -76,7 +76,6 @@ exports.method = {
 
     'change-tab'(tab: WindowTab) {
         stash.tab = tab;
-        // @ts-ignore
         Editor.Message.request('main-window', 'change-mermaid', data[stash.tab]);
     },
 

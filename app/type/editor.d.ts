@@ -1,4 +1,4 @@
-import type { TModule, ModuleContainer } from '@itharbors/module';
+import type { TModule, ModuleContainer } from './module';
 
 export namespace Message {
     /**
