@@ -1,5 +1,6 @@
 exports.remove = function() {
     return [
-        './panel/dist',
+        './module/dist',
+        './preload/dist',
     ];
 };

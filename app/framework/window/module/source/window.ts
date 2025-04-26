@@ -21,7 +21,8 @@ export class Window {
             webPreferences: {
                 nodeIntegration: true, // 禁用 Node.js 集成
                 contextIsolation: false, // 启用上下文隔离（默认值，增强安全性）
-                preload: join(__dirname, '../../preload/bundle/preload.js'), // 指定预加载脚本
+                webviewTag: true,
+                preload: join(__dirname, '../../preload/dist/index.js'), // 指定预加载脚本
             },
         });
         win.loadFile(this._file);

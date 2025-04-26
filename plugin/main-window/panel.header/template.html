@@ -1,1 +1,51 @@
-<span>Header</span>
+<style>
+    body {
+        margin: 0;
+        color: #c2f5ff;
+    }
+    header {
+        display: flex;
+        overflow: hidden;
+    }
+    header > div {
+        padding: 0 10px;
+    }
+    header > div > span {
+        display: inline-block;
+        padding: 19px 0;
+    }
+    .icon {
+        width: 60px;
+    }
+</style>
+<header>
+    <div>
+        <img class="icon" src="plugin://main-window/panel.header/icon.png" />
+    </div>
+    <div>
+        <span>Electron: </span>
+        <span id="Electron"></span>
+    </div>
+    <div>
+        <span>NodeJS: </span>
+        <span id="NodeJS"></span>
+    </div>
+    <div>
+        <span>Chromium: </span>
+        <span id="Chromium"></span>
+    </div>
+</header>
+
+<script>
+    bridge
+        .request('query-env')
+        .then((env) => {
+            for (let key in env) {
+                const $elem = document.getElementById(key);
+                $elem && ($elem.innerText = env[key]);
+            }
+        })
+        .catch((error) => {
+            console.error(error);
+        });
+</script>

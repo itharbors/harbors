@@ -1,5 +1,6 @@
-import {  } from 'fs';
+import { join } from 'path';
 import { generateModule } from '@itharbors/module';
+import { WebviewTag } from 'electron';
 
 let converter = async function(url: string) {
     return url;
@@ -15,7 +16,8 @@ class Panel extends HTMLElement {
     }
 
     private _$shadow: ShadowRoot;
-    private _$iframe!: HTMLIFrameElement;
+    // private _$content!: HTMLIFrameElement;
+    private _$content!: WebviewTag;
     private _$style!: HTMLStyleElement;
 
     constructor() {
@@ -25,12 +27,28 @@ class Panel extends HTMLElement {
         this._$shadow = this.attachShadow({ mode: 'open' });
 
         // 创建一个 iframe 元素
-        this._$iframe = document.createElement('iframe');
+        this._$content = document.createElement('webview');
+        this._$content.setAttribute('preload', join(__dirname, '../../preload/dist/index.js'));
+        this._$content.setAttribute('webPreferences', 'webgl=1,nativeWindowOpen=1,contextIsolation=0,backgroundThrottling=0');
+        // this._$content.setAttribute('contextIsolation', 'false');
+        // this._$content.setAttribute('nodeintegration', 'true');
+        // this._$content.setAttribute('nodeintegrationinsubframes', 'true');
+        this._$content.setAttribute('enableremotemodule', 'true');
+        this._$content.setAttribute('disablewebsecurity', 'true');
+        this._$content.setAttribute('allowpopups', 'true');
+        this._$content.addEventListener('ipc-message', (event) => {
+            // TODO
+        });
+        this._$content.addEventListener('did-finish-load', () => {
+            const name = this.getAttribute('name') || '';
+            const pluginName = name.replace(/\.[^\.]+$/, '');
+            this._$content.send('init', pluginName);
+        });
 
         // 创建一个样式元素
         this._$style = document.createElement('style');
         this._$style.textContent = `
-            iframe {
+            iframe, webview {
                 border: none;
                 height: 100%;
                 width: 100%;
@@ -39,7 +57,7 @@ class Panel extends HTMLElement {
 
         // 将样式和段落元素添加到影子 DOM 中
         this._$shadow.appendChild(this._$style);
-        this._$shadow.appendChild(this._$iframe);
+        this._$shadow.appendChild(this._$content);
     }
 
     // 当元素被插入到文档中时调用
@@ -57,7 +75,10 @@ class Panel extends HTMLElement {
     // 更新元素内容的方法
     async updateContent() {
         const name = this.getAttribute('name') || '';
-        this._$iframe.src = await converter(name);
+        // const pluginName = name.replace(/\.^[\.]+$/, '');
+        // this._$content.send('init', pluginName);
+        const url = await converter(name);
+        this._$content.src = url;
     }
 }
 

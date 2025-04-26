@@ -19,18 +19,18 @@
         .row {
             flex-direction: row;
         }
-        ui-panel {
-            flex: 1;
+        .column {
+            flex-direction: column;
         }
     </style>
 
-    <section class="layout row">
-        <section class="layout" style="height: 100px;">
-            <ui-panel name="test.hierarchy"></ui-panel>
+    <section class="layout column">
+        <section class="layout" style="max-height: 100px;">
+            <ui-panel name="main-window.header" style="flex: 1;"></ui-panel>
         </section>
         <section class="layout">
-            <ui-panel name="test.hierarchy"></ui-panel>
-            <ui-panel name="test.content"></ui-panel>
+            <ui-panel name="main-window.hierarchy" style="flex: 1;"></ui-panel>
+            <ui-panel name="main-window.content" style="flex: 3;"></ui-panel>
         </section>
     </section>
 </body>

@@ -26,7 +26,7 @@ import { runModuleLifeCycle, window, plugin } from './framework';
     // 启动内置插件
     const pluginDirs = [
         join(__dirname, '../../../../plugin/panel'),
-        join(__dirname, '../../../../plugin/window'),
+        join(__dirname, '../../../../plugin/main-window'),
     ];
     for (let pluginDir of pluginDirs) {
         await plugin.execture('register', pluginDir);
