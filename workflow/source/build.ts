@@ -7,14 +7,16 @@ import './task/dts';
 import './task/tsc';
 
 (async () => {
-
-    for (let dirs of spaceDirs) {
+    for (let item of spaceDirs) {
+        console.log(' ');
+        console.log(' ');
+        console.log(item.message);
         initWorkflow({
             entry: './build.config.js',
             params: {},
             cacheFile: join(__dirname, '../.temp/.cache.json'),
             cacheDir: join(__dirname, '../.temp'),
-            workspaces: dirs.map((dir) => {
+            workspaces: item.list.map((dir) => {
                 return join(__dirname, '../../app', dir);
             }),
         });

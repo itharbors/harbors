@@ -1,17 +1,17 @@
 import { join } from 'path';
-import { executeTask, initWorkflow, Task } from '@itharbors/workflow';
+import { executeTask, initWorkflow } from '@itharbors/workflow';
 
 import { spaceDirs } from './public';
 
 (async () => {
-
-    for (let dirs of spaceDirs) {
+    for (let item of spaceDirs) {
+        console.log(' ---- ' + item.message);
         initWorkflow({
             entry: './clean.config.js',
             params: {},
             cacheFile: join(__dirname, '../.temp/.cache.json'),
             cacheDir: join(__dirname, '../.temp'),
-            workspaces: dirs.map((dir) => {
+            workspaces: item.list.map((dir) => {
                 return join(__dirname, '../../app', dir);
             }),
         });
