@@ -5,40 +5,42 @@ const empty: Message.MessageItem = {
     method: [],
 };
 
-exports.contribute = {
+Editor.Module.register({
+    contribute: {
 
-    attach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
-        const info: Message.MessageInfo = {};
-        for (let message in contributeInfo) {
-            info[message] = {
-                method: [],
-            };
-
-            const messageJSON = contributeInfo[message];
-
-            if (messageJSON.method) {
-                for (let method of messageJSON.method) {
-                    const item = method.split('.');
-                    info[message].method.push({
-                        panel: item.length > 1 ? item[0] : '',
-                        function: item[1] || item[0],
-                    });
+        attach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
+            const info: Message.MessageInfo = {};
+            for (let message in contributeInfo) {
+                info[message] = {
+                    method: [],
+                };
+    
+                const messageJSON = contributeInfo[message];
+    
+                if (messageJSON.method) {
+                    for (let method of messageJSON.method) {
+                        const item = method.split('.');
+                        info[message].method.push({
+                            panel: item.length > 1 ? item[0] : '',
+                            function: item[1] || item[0],
+                        });
+                    }
                 }
             }
-        }
-        messageMap.set(pluginInfo.name, info);
+            messageMap.set(pluginInfo.name, info);
+        },
+    
+        detach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
+            messageMap.delete(pluginInfo.name);
+        },
     },
 
-    detach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
-        messageMap.delete(pluginInfo.name);
-    },
-};
-
-Editor.Module.register({
     stash() { return {}; },
+
     data() { return {}; },
+
     method: {
-        'query-message'(plugin: string, message: string): Message.MessageItem {
+        queryMessage(plugin: string, message: string): Message.MessageItem {
             const info = messageMap.get(plugin);
             return info ? info[message] || empty : empty;
         },

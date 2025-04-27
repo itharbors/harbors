@@ -17,30 +17,26 @@
     "message": {
       "query-env": {
         "method": [
-          "query-env"
+          "queryENV"
         ]
       },
 
       "query-tab": {
         "method": [
-          "query-tab"
+          "queryTab"
         ]
       },
       "change-tab": {
         "method": [
-          "change-tab",
-          "hierarchy.change-tab"
+          "changeTab",
+          "hierarchy.changeTab",
+          "content.changeTab"
         ]
       },
 
       "query-mermaid": {
         "method": [
-          "query-mermaid"
-        ]
-      },
-      "change-mermaid": {
-        "method": [
-          "content.change-mermaid"
+          "queryMermaid"
         ]
       }
     }

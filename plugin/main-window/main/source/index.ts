@@ -61,32 +61,30 @@ Editor.Module.register({
             tab: 'main',
         };
     },
-    data(): {
-
-    } {
+    data() {
         return {};
     },
     method: {
-        'query-env'() {
+        queryENV() {
             return {
                 Electron: process.versions.electron,
                 NodeJS: process.versions.node,
                 Chromium: process.versions.chrome,
             };
         },
-    
+
         // --- tab
-    
-        'query-tab'(): WindowTab {
+
+        queryTab(): WindowTab {
             return this.stash.tab;
         },
-    
-        'change-tab'(tab: WindowTab) {
+
+        changeTab(tab: WindowTab) {
             this.stash.tab = tab;
             Editor.Message.request('main-window', 'change-mermaid', data[this.stash.tab]);
         },
-    
-        'query-mermaid'() {
+
+        queryMermaid() {
             return data[this.stash.tab];
         },
     },

@@ -12,7 +12,7 @@
     "message": {
       "query-message": {
         "method": [
-          "query-message"
+          "queryMessage"
         ]
       }
     }

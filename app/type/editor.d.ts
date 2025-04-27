@@ -31,5 +31,9 @@ export namespace Message {
 }
 
 export namespace Module {
-    export function register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S>;
+    export type TContribute = {
+        attach(pluginInfo: any, contributeInfo: any): void;
+        detach(pluginInfo: any, contributeInfo: any): void;
+    }
+    export function register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: TContribute }): ModuleContainer<M, D, S>;
 }

@@ -28,7 +28,7 @@ export const instance = generateModule({
 
     load() {
         ipcMain.on('plugin:message', async (event, option: MessageOption) => {
-            const info: Message.MessageItem =  await Plugin.execture('callPlugin', 'message', 'query-message', option.plugin, option.message);
+            const info: Message.MessageItem =  await Plugin.execture('callPlugin', 'message', 'queryMessage', option.plugin, option.message);
             
             let result: any;
             for (let item of info.method) {

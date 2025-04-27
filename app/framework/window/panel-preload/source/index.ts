@@ -71,6 +71,8 @@ const exposeInterface = {
     Module: {
         register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
             info.module = generateModule(module);
+            info.module.run('register');
+            info.module.run('load');
             return info.module;
         },
     },

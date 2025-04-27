@@ -1,17 +1,7 @@
 {
+  "extends": "../startup.tsconfig.json",
   "compilerOptions": {
-    "target": "es2016",
-    "module": "commonjs",
     "rootDir": "./source",
-    "declaration": true,
-    "sourceMap": true,
     "outDir": "./dist",
-    "esModuleInterop": true,
-    "forceConsistentCasingInFileNames": true,
-    "strict": true,
-    "skipLibCheck": true,
-    "types": [
-      "../../type"
-    ]
   }
 }

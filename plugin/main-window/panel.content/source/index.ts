@@ -12,24 +12,24 @@ const instance = Editor.Module.register({
     async load() {},
 
     method: {
-        'change-mermaid'(data) {
-            const $elem = document.querySelector('#container');
-            if ($elem) {
-                $elem.innerHTML = `<pre class="mermaid">${data}</pre>`;
-            }
+        changeTab() {
+            Editor.Message
+                .request('main-window', 'query-mermaid')
+                .then((data) => {
+                    const $elem = document.querySelector('#container');
+                    if ($elem) {
+                        $elem.innerHTML = `<pre class="mermaid">${data}</pre>`;
+                    }
 
-            mermaid.run({
-                nodes: document.querySelectorAll('.mermaid')
-            });
+                    mermaid.run({
+                        nodes: document.querySelectorAll('.mermaid')
+                    });
+                })
+                .catch((error) => {
+                    console.error(error);
+                });
         },
     },
 });
 
-Editor.Message
-    .request('main-window', 'query-mermaid')
-    .then((mermaid) => {
-        instance.execture('change-mermaid', mermaid);
-    })
-    .catch((error) => {
-        console.error(error);
-    });
+instance.execture('changeTab');

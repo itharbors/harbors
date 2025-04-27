@@ -6,27 +6,29 @@ type panelInfo = {
 
 const panelMap: Map<string, string> = new Map();
 
-exports.contribute = {
-    attach(pluginInfo: any, contributeInfo: panelInfo) {
-        for (const name in contributeInfo) {
-            panelMap.set(`${pluginInfo.name}.${name}`, join(pluginInfo.path, contributeInfo[name]));
+Editor.Module.register({
+
+    stash() { return {}; },
+    data() { return {}; },
+
+    contribute: {
+        attach(pluginInfo: any, contributeInfo: any) {
+            for (const name in contributeInfo) {
+                panelMap.set(`${pluginInfo.name}.${name}`, join(pluginInfo.path, contributeInfo[name]));
+            }
+        },
+    
+        detach(pluginInfo: any, contributeInfo: any) {
+            panelMap.forEach((path, name) => {
+                if (name.startsWith(pluginInfo.name)) {
+                    panelMap.delete(name);
+                }
+            });
         }
     },
 
-    detach(pluginInfo: any, contributeInfo: panelInfo) {
-        panelMap.forEach((path, name) => {
-            if (name.startsWith(pluginInfo.name)) {
-                panelMap.delete(name);
-            }
-        });
-    }
-};
-
-Editor.Module.register({
-    stash() { return {}; },
-    data() { return {}; },
     method: {
-        'query-path'(name: string) {
+        queryPath(name: string) {
             const path = panelMap.get(name);
             return path || name;
         },

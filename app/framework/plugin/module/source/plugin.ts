@@ -1,4 +1,5 @@
 import type { TPluginInfo, TPluginJSON } from './type';
+import type { Module } from '@type/editor';
 
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
@@ -7,8 +8,10 @@ import { ModuleContainer, TModule } from '@itharbors/module';
 
 export let _plugin_: {
     module: ModuleContainer | undefined;
+    contribute?: Module.TContribute;
 } = {
     module: undefined,
+    contribute: undefined,
 };
 
 interface PModule extends TModule {
@@ -22,8 +25,7 @@ export class Plugin {
     public info: TPluginInfo;
     public path: string;
     public module: ModuleContainer;
-    
-    private _contribute: PModule["contribute"];
+    public contribute?: Module.TContribute;
 
     constructor(path: string) {
         const infoFilePath = join(path, 'package.json');
@@ -42,8 +44,7 @@ export class Plugin {
         try {
             if (json.main) {
                 const mainFile = join(path, json.main);
-                const pm = require(mainFile);
-                this._contribute = pm.contribute;
+                require(mainFile);
             }
         } catch(error) {
             const message = (error as any)?.message || '';
@@ -54,6 +55,7 @@ export class Plugin {
         }
 
         this.module = _plugin_.module;
+        this.contribute = _plugin_.contribute;
 
         // 记录数据
         this.info = {
@@ -65,10 +67,10 @@ export class Plugin {
     }
 
     public attach(pluginInfo: TPluginInfo, contributeInfo: any) {
-        this._contribute?.attach?.(pluginInfo, contributeInfo);
+        this.contribute?.attach?.(pluginInfo, contributeInfo);
     }
 
     public detach(pluginInfo: TPluginInfo, contributeInfo: any) {
-        this._contribute?.detach?.(pluginInfo, contributeInfo);
+        this.contribute?.detach?.(pluginInfo, contributeInfo);
     }
 }
