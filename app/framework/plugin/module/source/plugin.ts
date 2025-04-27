@@ -5,6 +5,12 @@ import { join } from 'path';
 
 import { ModuleContainer, TModule } from '@itharbors/module';
 
+export let _plugin_: {
+    module: ModuleContainer | undefined;
+} = {
+    module: undefined,
+};
+
 interface PModule extends TModule {
     contribute?: {
         attach?(pluginInfo: TPluginInfo, contributeInfo: any): void,
@@ -12,9 +18,10 @@ interface PModule extends TModule {
     };
 }
 
-export class Plugin extends ModuleContainer {
+export class Plugin {
     public info: TPluginInfo;
     public path: string;
+    public module: ModuleContainer;
     
     private _contribute: PModule["contribute"];
 
@@ -32,21 +39,21 @@ export class Plugin extends ModuleContainer {
             throw new Error(`Failed to read the file: ${infoFilePath}\n  ${message}`);
         }
 
-        let pm: Partial<PModule> = {};
         try {
             if (json.main) {
                 const mainFile = join(path, json.main);
-                pm = require(mainFile);
+                const pm = require(mainFile);
+                this._contribute = pm.contribute;
             }
         } catch(error) {
             const message = (error as any)?.message || '';
             throw new Error(`Failed to read the file: ${json.main}\n  ${message}`);
         }
-        super({
-            stash: pm.stash || function () { return {}; },
-            data: pm.data || function () { return {}; },
-            method: pm.method || {},
-        });
+        if (!_plugin_.module) {
+            throw new Error(`Failed to read the file: ${json.main}}`);
+        }
+
+        this.module = _plugin_.module;
 
         // 记录数据
         this.info = {
@@ -55,8 +62,6 @@ export class Plugin extends ModuleContainer {
             json,
         };
         this.path = path;
-
-        this._contribute = pm.contribute;
     }
 
     public attach(pluginInfo: TPluginInfo, contributeInfo: any) {

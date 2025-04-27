@@ -7,7 +7,6 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@basic/panel": "file:basic/panel",
     "@itharbors/module": "^0.1.2"
   },
   "devDependencies": {

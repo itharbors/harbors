@@ -5,13 +5,6 @@ const empty: Message.MessageItem = {
     method: [],
 };
 
-exports.method = {
-    'query-message'(plugin: string, message: string): Message.MessageItem {
-        const info = messageMap.get(plugin);
-        return info ? info[message] || empty : empty;
-    },
-};
-
 exports.contribute = {
 
     attach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
@@ -40,3 +33,14 @@ exports.contribute = {
         messageMap.delete(pluginInfo.name);
     },
 };
+
+Editor.Module.register({
+    stash() { return {}; },
+    data() { return {}; },
+    method: {
+        'query-message'(plugin: string, message: string): Message.MessageItem {
+            const info = messageMap.get(plugin);
+            return info ? info[message] || empty : empty;
+        },
+    },
+});

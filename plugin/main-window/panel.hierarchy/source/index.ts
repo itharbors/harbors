@@ -1,5 +1,5 @@
 
-const instance = Editor.Panel.register({
+const instance = Editor.Module.register({
     stash() {
         return {};
     },
@@ -10,7 +10,7 @@ const instance = Editor.Panel.register({
     async load() {},
 
     method: {
-        'change-tab'(tab) {
+        'change-tab'(tab: string) {
             document.querySelector('.buttons > div[active]')?.removeAttribute('active');
 
             const $elem = document.getElementById(tab);

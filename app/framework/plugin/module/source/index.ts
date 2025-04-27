@@ -66,7 +66,7 @@ export const instance = generateModule({
         async register(path: string): Promise<TPluginInfo> {
             const plugin = new Plugin(path);
             // 触发注册生命周期
-            await plugin.run('register');
+            await plugin.module.run('register');
             this.stash.pathMap.set(path, plugin);
             return plugin.info;
         },
@@ -82,7 +82,7 @@ export const instance = generateModule({
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
             }
-            await plugin.run('unregister');
+            await plugin.module.run('unregister');
             this.stash.pathMap.delete(path);
             return plugin.info;
         },
@@ -104,7 +104,8 @@ export const instance = generateModule({
                 await instance.execture('unload', legacy.info.path);
             }
 
-            await plugin.run('load');
+            await plugin.module.run('load');
+            this.stash.nameMap.set(plugin.info.json.name, plugin);
 
             if (plugin.info.json.contribute) {
                 for (const name in plugin.info.json.contribute) {
@@ -119,7 +120,6 @@ export const instance = generateModule({
                 }
             });
 
-            this.stash.nameMap.set(plugin.info.json.name, plugin);
             return plugin.info;
         },
 
@@ -134,7 +134,7 @@ export const instance = generateModule({
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
             }
-            await plugin.run('unload');
+            await plugin.module.run('unload');
 
             this.stash.nameMap.forEach((p, name) => {
                 if (p.info.json.contribute && plugin.info.json.name in p.info.json.contribute) {
@@ -168,14 +168,28 @@ export const instance = generateModule({
             return result;
         },
 
+        /**
+         * 调用插件上的方法
+         * @param name 
+         * @param method 
+         * @param args 
+         * @returns 
+         */
         async callPlugin(name: string, method: string, ...args: any[]) {
             const plugin = this.stash.nameMap.get(name);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${name}`);
             }
-            return await plugin.execture(method, ...args);
+            return await plugin.module.execture(method, ...args);
         },
 
+        /**
+         * 调用面板上的方法
+         * @param plugin 
+         * @param panel 
+         * @param method 
+         * @param args 
+         */
         async callPanel(plugin: string, panel: string, method: string, ...args: any[]) {
             const pluginMap = panelMap.get(plugin);
             if (!pluginMap) {
@@ -186,6 +200,7 @@ export const instance = generateModule({
         },
     },
 });
+
 const panelMap: Map<string, {
     [key: string]: WebContents;
 }> = new Map();

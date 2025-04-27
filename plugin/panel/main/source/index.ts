@@ -6,13 +6,6 @@ type panelInfo = {
 
 const panelMap: Map<string, string> = new Map();
 
-exports.method = {
-    'query-path'(name: string) {
-        const path = panelMap.get(name);
-        return path || name;
-    },
-};
-
 exports.contribute = {
     attach(pluginInfo: any, contributeInfo: panelInfo) {
         for (const name in contributeInfo) {
@@ -28,3 +21,14 @@ exports.contribute = {
         });
     }
 };
+
+Editor.Module.register({
+    stash() { return {}; },
+    data() { return {}; },
+    method: {
+        'query-path'(name: string) {
+            const path = panelMap.get(name);
+            return path || name;
+        },
+    },
+});

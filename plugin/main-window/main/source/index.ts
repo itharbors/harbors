@@ -1,11 +1,5 @@
 type WindowTab = 'main' | 'plugin' | 'panel';
 
-const stash: {
-    tab: WindowTab;
-} = {
-    tab: 'main',
-};
-
 const data = {
     main: `
 sequenceDiagram
@@ -59,27 +53,41 @@ erDiagram
     `,
 }
 
-exports.method = {
-    'query-env'() {
+Editor.Module.register({
+    stash(): {
+        tab: WindowTab,
+    } {
         return {
-            Electron: process.versions.electron,
-            NodeJS: process.versions.node,
-            Chromium: process.versions.chrome,
+            tab: 'main',
         };
     },
+    data(): {
 
-    // --- tab
-
-    'query-tab'(): WindowTab {
-        return stash.tab;
+    } {
+        return {};
     },
-
-    'change-tab'(tab: WindowTab) {
-        stash.tab = tab;
-        Editor.Message.request('main-window', 'change-mermaid', data[stash.tab]);
+    method: {
+        'query-env'() {
+            return {
+                Electron: process.versions.electron,
+                NodeJS: process.versions.node,
+                Chromium: process.versions.chrome,
+            };
+        },
+    
+        // --- tab
+    
+        'query-tab'(): WindowTab {
+            return this.stash.tab;
+        },
+    
+        'change-tab'(tab: WindowTab) {
+            this.stash.tab = tab;
+            Editor.Message.request('main-window', 'change-mermaid', data[this.stash.tab]);
+        },
+    
+        'query-mermaid'() {
+            return data[this.stash.tab];
+        },
     },
-
-    'query-mermaid'() {
-        return data[stash.tab];
-    },
-};
+});

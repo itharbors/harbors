@@ -8,5 +8,11 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "exports": {
+    "./temp": {
+      "require": "./module/dist/plugin.js",
+      "types": "./module/dist/plugin.d.ts"
+    }
+  }
 }

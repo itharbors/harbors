@@ -10,7 +10,7 @@
     "skipLibCheck": true,
     "types": [
       "../../../node_modules/@types/node",
-      "../../../app/type/index"
+      "../../../app/type"
     ]
   }
 }

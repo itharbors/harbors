@@ -1,7 +1,7 @@
 // 在 html 里引入的 mermaid 库
 declare const mermaid: any;
 
-const instance = Editor.Panel.register({
+const instance = Editor.Module.register({
     stash() {
         return {};
     },

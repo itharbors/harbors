@@ -10,7 +10,10 @@
     "forceConsistentCasingInFileNames": true,
     "strict": true,
     "skipLibCheck": true,
-    "moduleResolution": "node16"
+    "moduleResolution": "node16",
+    "types": [
+      "../../../type"
+    ]
   },
   "include": [
     "./source",

@@ -1,4 +1,4 @@
-import type { TModule, ModuleContainer } from './module';
+import type { TModule, ModuleContainer, TMethod, TData, TStash } from './module';
 
 export namespace Message {
     /**
@@ -30,6 +30,6 @@ export namespace Message {
     export function request(plugin: string, message: string, ...args: any[]): Promise<any>;
 }
 
-export namespace Panel {
-    export function register(module: TModule): ModuleContainer
+export namespace Module {
+    export function register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S>;
 }

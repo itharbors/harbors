@@ -4,12 +4,14 @@
     "module": "commonjs",
     "rootDir": "./source",
     "declaration": true,
-    "declarationDir": "./@types",
     "sourceMap": true,
     "outDir": "./dist",
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "strict": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "types": [
+      "../../type"
+    ]
   }
 }

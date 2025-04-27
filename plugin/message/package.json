@@ -8,5 +8,13 @@
   },
   "author": "",
   "license": "ISC",
-  "contribute": {}
+  "contribute": {
+    "message": {
+      "query-message": {
+        "method": [
+          "query-message"
+        ]
+      }
+    }
+  }
 }

@@ -1,5 +1,5 @@
 import { ipcRenderer, contextBridge } from 'electron';
-import { TModule, ModuleContainer, generateModule } from '@itharbors/module';
+import { TModule, ModuleContainer, generateModule, TMethod, TData, TStash } from '@itharbors/module';
 
 type MessageOption = {
     id: number;
@@ -68,8 +68,8 @@ const exposeInterface = {
         },
     },
 
-    Panel: {
-        register(module: TModule) {
+    Module: {
+        register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
             info.module = generateModule(module);
             return info.module;
         },
@@ -78,10 +78,7 @@ const exposeInterface = {
 
 // contextBridge.exposeInMainWorld('bridge', exposeInterface);
 // @ts-ignore
-window.Editor = exposeInterface;
-declare global {
-    const Editor: typeof exposeInterface;
-}
+global.Editor = exposeInterface;
 
 ipcRenderer.on('plugin:message-reply', (event, option: MessageOption) => {
     const request = requestMap.get(option.id);

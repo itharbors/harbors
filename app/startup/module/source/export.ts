@@ -1,8 +1,9 @@
 
 import type { Message as MessageType } from '../../../../app/type/editor';
 
-
+import { generateModule, ModuleContainer, TModule, TStash, TData, TMethod } from '@itharbors/module';
 import { instance as Plugin } from '../../../framework/plugin';
+import { _plugin_ } from '../../../framework/plugin/module/dist/plugin';
 
 export const Message = {
 
@@ -27,4 +28,11 @@ export const Message = {
         result = result || undefined;
         return result;
     },
+};
+
+export const Module = {
+    register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
+        _plugin_.module = generateModule(module);
+        return _plugin_.module;
+    }
 };

@@ -4,6 +4,9 @@ import { app } from 'electron';
 import { runModuleLifeCycle, Window, Plugin } from './framework';
 import * as all from './export';
 
+// @ts-ignore
+global.Editor = all;
+
 (async () => {
     const registerModulePromise = runModuleLifeCycle('register');
     const appReadyPromise = (() => {
@@ -37,9 +40,3 @@ import * as all from './export';
     // 启动一个窗口
     await Window.execture('open');
 })();
-
-declare global {
-    const Editor: typeof all;
-}
-// @ts-ignore
-global.Editor = all;
