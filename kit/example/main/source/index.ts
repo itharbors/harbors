@@ -81,7 +81,7 @@ Editor.Module.register({
 
         changeTab(tab: WindowTab) {
             this.stash.tab = tab;
-            Editor.Message.request('main-window', 'change-mermaid', data[this.stash.tab]);
+            Editor.Message.request('example', 'change-mermaid', data[this.stash.tab]);
         },
 
         queryMermaid() {

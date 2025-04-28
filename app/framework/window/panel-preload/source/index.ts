@@ -1,13 +1,7 @@
 import { ipcRenderer, contextBridge } from 'electron';
 import { TModule, ModuleContainer, generateModule, TMethod, TData, TStash } from '@itharbors/module';
 
-type MessageOption = {
-    id: number;
-    plugin: string;
-    message: string;
-    args: any[];
-    reply: boolean;
-}
+import type { PluginMessageOption } from '../../type';
 
 type MessageRequest = {
     timestamp: number;
@@ -21,7 +15,7 @@ const info: {
     plugin: '',
 };
 
-const waitArray: MessageOption[] = [];
+const waitArray: PluginMessageOption[] = [];
 
 ipcRenderer.on('init', (event, plugin, panel) => {
     info.plugin = plugin;
@@ -29,8 +23,8 @@ ipcRenderer.on('init', (event, plugin, panel) => {
     console.log(`与插件 ${plugin} 建立连接`);
 
     waitArray.forEach((option) => {
-        option.plugin = plugin;
-        ipcRenderer.send('plugin:message', option);
+        option.module = plugin;
+        ipcRenderer.send('window:message', option);
     });
     waitArray.length = 0;
 });
@@ -46,15 +40,15 @@ const exposeInterface = {
     Message: {
         async request(plugin: string, message: string, ...args: any[]) {
             const id = messageID++;
-            const option: MessageOption = {
+            const option: PluginMessageOption = {
                 id,
-                plugin,
+                module: plugin,
                 message,
                 args,
                 reply: true,
             };
             if (info.plugin) {
-                ipcRenderer.send('plugin:message', option);
+                ipcRenderer.send('window:message', option);
             } else {
                 waitArray.push(option);
             }
@@ -82,7 +76,7 @@ const exposeInterface = {
 // @ts-ignore
 global.Editor = exposeInterface;
 
-ipcRenderer.on('plugin:message-reply', (event, option: MessageOption) => {
+ipcRenderer.on('window:message-reply', (event, option: PluginMessageOption) => {
     const request = requestMap.get(option.id);
     request?.resolve(option.args[0]);
     requestMap.delete(option.id);

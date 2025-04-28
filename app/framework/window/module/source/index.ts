@@ -1,4 +1,4 @@
-import type { MessageOption } from '../../type';
+import type { PluginMessageOption } from '../../type';
 import type { Message } from '../../../../type/editor';
 
 import { join } from 'path';
@@ -7,6 +7,7 @@ import { generateModule } from '@itharbors/module';
 
 import { Window } from './window';
 import { instance as Plugin} from '../../../plugin';
+import { instance as Kit} from '../../../kit';
 
 export const instance = generateModule({
 
@@ -27,29 +28,33 @@ export const instance = generateModule({
     },
 
     load() {
-        ipcMain.on('plugin:message', async (event, option: MessageOption) => {
-            const info: Message.MessageItem =  await Plugin.execture('callPlugin', 'message', 'queryMessage', option.plugin, option.message);
-            
-            let result: any;
+        ipcMain.on('window:message', async (event, option: PluginMessageOption) => {
+            const info: Message.MessageItem =  await Plugin.execture('callPlugin', 'message', 'queryMessage', option.module, option.message);
+        
+            let result: PluginMessageOption | undefined = undefined;
             for (let item of info.method) {
                 if (item.panel) {
-                    Plugin.execture('callPanel', option.plugin, item.panel, item.function, ...option.args);
+                    Plugin.execture('callPanel', option.module, item.panel, item.function, ...option.args);
                 } else {
-                    result = await Plugin.execture('callPlugin', option.plugin, item.function, ...option.args);
+                    result = await Plugin.execture('callPlugin', option.module, item.function, ...option.args);
                 }
             }
-            result = result || undefined;
 
             if (option.reply) {
                 result = {
                     id: option.id,
-                    plugin: option.plugin,
+                    module: option.module,
                     message: option.message,
                     args: [result],
                     reply: false,
                 };
-                event.reply('plugin:message-reply', result);
+                event.reply('window:message-reply', result);
             }
+        });
+
+        ipcMain.on('window:query-layout', async (event) => {
+            const path = await Kit.execture('getLayout');
+            event.reply('window:query-layout-reply', path);
         });
     },
 

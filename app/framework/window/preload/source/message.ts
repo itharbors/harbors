@@ -7,7 +7,7 @@
  * 监听统一收口到受框架管理的对象上
  */
 
-import type { MessageOption } from '../../type';
+import type { PluginMessageOption } from '../../type';
 
 import { ipcRenderer } from 'electron';
 
@@ -17,23 +17,6 @@ type MessageRequest = {
 }
 
 let messageID = 1;
-
-/**
- * 渲染进程 -> 主进程（发送消息）
- * @param plugin 
- * @param message 
- * @param args 
- */
-export function send(plugin: string, message: string, ...args: any[]) {
-    const option: MessageOption = {
-        id: messageID++,
-        plugin,
-        message,
-        args,
-        reply: false,
-    };
-    ipcRenderer.send('plugin:message', option);
-}
 
 const requestMap: Map<number, MessageRequest> = new Map();
 
@@ -45,14 +28,14 @@ const requestMap: Map<number, MessageRequest> = new Map();
  */
 export async function request(plugin: string, message: string, ...args: any[]): Promise<any> {
     const id = messageID++;
-    const option: MessageOption = {
+    const option: PluginMessageOption = {
         id,
-        plugin,
+        module: plugin,
         message,
         args,
         reply: true,
     };
-    ipcRenderer.send('plugin:message', option);
+    ipcRenderer.send('window:message', option);
 
     return new Promise((resolve) => {
         requestMap.set(id, {
@@ -62,8 +45,17 @@ export async function request(plugin: string, message: string, ...args: any[]): 
     });
 }
 
-ipcRenderer.on('plugin:message-reply', (event, option: MessageOption) => {
+ipcRenderer.on('window:message-reply', (event, option: PluginMessageOption) => {
     const request = requestMap.get(option.id);
     request?.resolve(option.args[0]);
     requestMap.delete(option.id);
 });
+
+export function queryLayout(): Promise<string> {
+    return new Promise(resolve => {
+        ipcRenderer.once('window:query-layout-reply', (event, path) => {
+            resolve(path);
+        });
+        ipcRenderer.send('window:query-layout');
+    });
+}

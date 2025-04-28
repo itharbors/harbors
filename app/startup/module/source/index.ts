@@ -1,7 +1,7 @@
 import { join } from 'path';
 import { app } from 'electron';
 
-import { runModuleLifeCycle, Window, Plugin } from './framework';
+import { runModuleLifeCycle, Window, Plugin, Kit } from './framework';
 import * as all from './export';
 
 // @ts-ignore
@@ -30,12 +30,13 @@ global.Editor = all;
     const pluginDirs = [
         join(__dirname, '../../../../plugin/message'),
         join(__dirname, '../../../../plugin/panel'),
-        join(__dirname, '../../../../plugin/main-window'),
     ];
     for (let pluginDir of pluginDirs) {
         await Plugin.execture('register', pluginDir);
         await Plugin.execture('load', pluginDir);
     }
+
+    Kit.execture('load', join(__dirname, '../../../../kit'));
 
     // 启动一个窗口
     await Window.execture('open');

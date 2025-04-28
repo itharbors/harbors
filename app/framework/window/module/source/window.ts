@@ -2,9 +2,8 @@
  * 
  */
 
-import { readFileSync } from 'fs';
 import { join } from 'path';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow } from 'electron';
 
 export class Window {
 

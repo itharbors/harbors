@@ -14,7 +14,7 @@ const instance = Editor.Module.register({
     method: {
         changeTab() {
             Editor.Message
-                .request('main-window', 'query-mermaid')
+                .request('example', 'query-mermaid')
                 .then((data) => {
                     const $elem = document.querySelector('#container');
                     if ($elem) {

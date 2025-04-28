@@ -23,7 +23,12 @@ export const spaceDirs = [
         list: [
             '../plugin/panel',
             '../plugin/message',
-            '../plugin/main-window',
+        ],
+    },
+    {
+        message: '内置套件',
+        list: [
+            '../kit/example',
         ],
     },
 ];

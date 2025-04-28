@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <head>
-    <title>Title</title>
+    <title>Harbors</title>
 </head>
 <body>
     <style>
@@ -12,32 +12,8 @@
             width: 100vw;
             display: flex;
         }
-        .layout {
-            display: flex;
-            flex: 1;
-        }
-        .row {
-            flex-direction: row;
-        }
-        .column {
-            flex-direction: column;
-        }
-        ui-panel {
+        body > * {
             flex: 1;
         }
     </style>
-
-    <section class="layout column">
-        <section class="layout" style="max-height: 60px;">
-            <ui-panel name="main-window.header" style="flex: 1;"></ui-panel>
-        </section>
-        <section class="layout">
-            <section class="layout" style="max-width: 140px;">
-                <ui-panel name="main-window.hierarchy"></ui-panel>
-            </section>
-            <section class="layout">
-                <ui-panel name="main-window.content"></ui-panel>
-            </section>
-        </section>
-    </section>
 </body>

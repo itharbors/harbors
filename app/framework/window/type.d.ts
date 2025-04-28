@@ -1,11 +1,7 @@
-export type MessageOption = {
+export type PluginMessageOption = {
     id: number;
-    plugin: string;
+    module: string;
     message: string;
     args: any[];
     reply: boolean;
 }
-
-export type Message = {
-    
-};

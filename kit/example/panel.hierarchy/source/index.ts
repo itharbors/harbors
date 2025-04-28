@@ -10,7 +10,7 @@ const instance = Editor.Module.register({
     async load() {
 
         Editor.Message
-            .request('main-window', 'query-tab')
+            .request('example', 'query-tab')
             .then((tab: string) => {
                 instance.execture('changeTab', tab);
             })
@@ -21,7 +21,7 @@ const instance = Editor.Module.register({
         document.querySelectorAll('.buttons > div').forEach((elem) => {
             elem.addEventListener('click', () => {
                 const tab = elem.getAttribute('id');
-                Editor.Message.request('main-window', 'change-tab', tab);
+                Editor.Message.request('example', 'change-tab', tab);
             });
         });
     },

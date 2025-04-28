@@ -1,0 +1,32 @@
+{
+  "ver": "1",
+  "layout": {
+    "type": "fixed",
+    "dir": "vertical",
+    "children": [
+      {
+        "type": "fixed",
+        "dir": "none",
+        "size": 60,
+        "panel": "example.header"
+      },
+      {
+        "type": "variable",
+        "dir": "horizontal",
+        "children": [
+          {
+            "type": "fixed",
+            "dir": "none",
+            "size": 140,
+            "panel": "example.hierarchy"
+          },
+          {
+            "type": "variable",
+            "dir": "none",
+            "panel": "example.content"
+          }
+        ]
+      }
+    ]
+  }
+}
