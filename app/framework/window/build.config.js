@@ -4,6 +4,7 @@ exports.tsc = function() {
         './panel',
         './panel-preload',
         './preload',
+        './layout',
     ];
 };
 

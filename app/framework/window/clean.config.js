@@ -4,5 +4,6 @@ exports.remove = function() {
         './panel/dist',
         './panel-preload/dist',
         './preload/dist',
+        './layout/dist',
     ];
 };

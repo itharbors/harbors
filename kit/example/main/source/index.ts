@@ -1,64 +1,12 @@
-type WindowTab = 'main' | 'plugin' | 'panel';
-
-const data = {
-    main: `
-sequenceDiagram
-    participant User
-    participant Framework
-    participant Window
-    participant Plugin
-    
-    User       ->> Framework: 启动程序
-    activate Framework
-    Framework  ->> Window: 打开窗口
-    activate Window
-    Window     ->> Plugin: 查询面板数据
-    activate Plugin
-    Plugin    -->> Window: 返回面板数据
-    deactivate Plugin
-    Window    -->> Framework: 面板打开结束
-    deactivate Window
-    Framework -->> User: 启动完毕
-    deactivate Framework
-    `,
-    plugin: `
-erDiagram
-    Plugin {
-      string panels
-      string main
-    }
-    Panel {
-      string js
-    }
-    Main {
-      string js
-    }
-    Plugin    ||--o{  Panel : places
-    Plugin    ||--|{  Main : contains
-    `,
-    panel: `
-erDiagram
-    Panel {
-        string panels
-        string main
-    }
-    HTMLFile {
-      string html
-    }
-    Module {
-      string js
-    }
-    Panel     ||--|{  HTMLFile : places
-    HTMLFile  ||--|{  Module : contains
-    `,
-}
+import { readFileSync, existsSync, readdirSync } from 'fs';
+import { join } from 'path';
 
 Editor.Module.register({
     stash(): {
-        tab: WindowTab,
+        tab: string,
     } {
         return {
-            tab: 'main',
+            tab: '1. 概览',
         };
     },
     data() {
@@ -74,18 +22,27 @@ Editor.Module.register({
         },
 
         // --- tab
+        queryTabs(): string[] {
+            const mdFile = join(__dirname, `../../static`);
+            const files = readdirSync(mdFile).map(file => file.replace(/\.md$/, ''));
+            return files;
+        },
 
-        queryTab(): WindowTab {
+        queryTab(): string {
             return this.stash.tab;
         },
 
-        changeTab(tab: WindowTab) {
+        changeTab(tab: string) {
             this.stash.tab = tab;
-            Editor.Message.request('example', 'change-mermaid', data[this.stash.tab]);
         },
 
-        queryMermaid() {
-            return data[this.stash.tab];
+        queryContent(tab: string) {
+            const mdFile = join(__dirname, `../../static/${tab}.md`);
+            if (existsSync(mdFile)) {
+                const data = readFileSync(mdFile, 'utf8');
+                return data;
+            }
+            return '404';
         },
     },
 });

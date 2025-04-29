@@ -50,12 +50,3 @@ ipcRenderer.on('window:message-reply', (event, option: PluginMessageOption) => {
     request?.resolve(option.args[0]);
     requestMap.delete(option.id);
 });
-
-export function queryLayout(): Promise<string> {
-    return new Promise(resolve => {
-        ipcRenderer.once('window:query-layout-reply', (event, path) => {
-            resolve(path);
-        });
-        ipcRenderer.send('window:query-layout');
-    });
-}

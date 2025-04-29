@@ -51,11 +51,6 @@ export const instance = generateModule({
                 event.reply('window:message-reply', result);
             }
         });
-
-        ipcMain.on('window:query-layout', async (event) => {
-            const path = await Kit.execture('getLayout');
-            event.reply('window:query-layout-reply', path);
-        });
     },
 
     method: {

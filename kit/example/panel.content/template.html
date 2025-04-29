@@ -1,32 +1,11 @@
 <style>
     body {
-        margin: 30px;
-    }
-    /* 更改参与者文本颜色 */
-    #container .mermaid .actor {
-        /* fill: #FF0000; */
-        /* stroke: #FF0000; */
-    }
-
-    /* 更改消息文本颜色 */
-    #container .mermaid .messageText {
-        fill: #c2f5ff;
-    }
-
-    #container .mermaid .messageLine0, #container .mermaid .messageLine1 {
-        stroke: #c2f5ff;
-    }
-
-    /* 更改激活条颜色 */
-    #container .mermaid .activation0 {
-        /* fill: #0000FF; */
+        margin: 0 30px;
+        color: #c2f5ff;
     }
 </style>
 
-<script src="https://cdn.jsdelivr.net/npm/mermaid@10.6.1/dist/mermaid.min.js"></script>
-<script>
-    mermaid.initialize({ startOnLoad: true });
-</script>
+<script src="plugin://example/panel.content/static/marked.min.js"></script>
 
 <div id="container"></div>
 

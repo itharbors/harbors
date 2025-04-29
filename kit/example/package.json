@@ -21,6 +21,12 @@
         ]
       },
 
+      "query-tabs": {
+        "method": [
+          "queryTabs"
+        ]
+      },
+
       "query-tab": {
         "method": [
           "queryTab"
@@ -34,9 +40,9 @@
         ]
       },
 
-      "query-mermaid": {
+      "query-content": {
         "method": [
-          "queryMermaid"
+          "queryContent"
         ]
       }
     }

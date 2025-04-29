@@ -1,5 +1,5 @@
-// 在 html 里引入的 mermaid 库
-declare const mermaid: any;
+// 在 html 里引入的 marked 库
+declare const marked: any;
 
 const instance = Editor.Module.register({
     stash() {
@@ -9,21 +9,24 @@ const instance = Editor.Module.register({
         return {};
     },
 
-    async load() {},
+    async load() {
+        Editor.Message
+        .request('example', 'query-tab')
+        .then((tab: string) => {
+            instance.execture('changeTab', tab);
+        })
+        .catch((error) => {
+            console.error(error);
+        });
+    },
 
     method: {
-        changeTab() {
+        changeTab(tab: string) {
             Editor.Message
-                .request('example', 'query-mermaid')
+                .request('example', 'query-content', tab)
                 .then((data) => {
-                    const $elem = document.querySelector('#container');
-                    if ($elem) {
-                        $elem.innerHTML = `<pre class="mermaid">${data}</pre>`;
-                    }
-
-                    mermaid.run({
-                        nodes: document.querySelectorAll('.mermaid')
-                    });
+                    const $html = marked.parse(data);
+                    document.getElementById('container')!.innerHTML = $html;
                 })
                 .catch((error) => {
                     console.error(error);
@@ -31,5 +34,3 @@ const instance = Editor.Module.register({
         },
     },
 });
-
-instance.execture('changeTab');

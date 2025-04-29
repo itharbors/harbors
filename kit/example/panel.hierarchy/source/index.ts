@@ -8,6 +8,26 @@ const instance = Editor.Module.register({
     },
 
     async load() {
+        Editor.Message
+            .request('example', 'query-tabs')
+            .then((tabs: string[]) => {
+                const $buttons = document.querySelector('.buttons');
+
+                tabs.forEach((tab) => {
+                    const $div = document.createElement('div');
+                    const $span = document.createElement('span');
+                    $div.setAttribute('id', tab);
+                    $span.innerHTML = tab;
+                    $div.appendChild($span);
+                    $div.addEventListener('click', () => {
+                        Editor.Message.request('example', 'change-tab', tab);
+                    });
+                    $buttons?.appendChild($div);
+                });
+            })
+            .catch((error) => {
+                console.error(error);
+            });
 
         Editor.Message
             .request('example', 'query-tab')
@@ -18,12 +38,6 @@ const instance = Editor.Module.register({
                 console.error(error);
             });
 
-        document.querySelectorAll('.buttons > div').forEach((elem) => {
-            elem.addEventListener('click', () => {
-                const tab = elem.getAttribute('id');
-                Editor.Message.request('example', 'change-tab', tab);
-            });
-        });
     },
 
     method: {

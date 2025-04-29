@@ -44,7 +44,10 @@ export const instance = generateModule({
     },
 
     load() {
-
+        ipcMain.on('kit:query-layout', async (event) => {
+            const path = await instance.execture('getLayout');
+            event.reply('kit:query-layout-reply', path);
+        });
     },
 
     method: {
