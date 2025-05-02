@@ -8,7 +8,7 @@
         "type": "fixed",
         "dir": "none",
         "size": 60,
-        "panel": "example.header"
+        "panel": "default-example.header"
       },
       {
         "type": "variable",
@@ -18,12 +18,12 @@
             "type": "fixed",
             "dir": "none",
             "size": 140,
-            "panel": "example.hierarchy"
+            "panel": "default-example.hierarchy"
           },
           {
             "type": "variable",
             "dir": "none",
-            "panel": "example.content"
+            "panel": "default-example.content"
           }
         ]
       }

@@ -1,5 +1,5 @@
 Editor.Message
-    .request('example', 'query-env')
+    .request('default-example', 'query-env')
     .then((env) => {
         for (let key in env) {
             const $elem = document.getElementById(key);

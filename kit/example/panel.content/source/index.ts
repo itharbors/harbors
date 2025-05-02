@@ -11,7 +11,7 @@ const instance = Editor.Module.register({
 
     async load() {
         Editor.Message
-        .request('example', 'query-tab')
+        .request('default-example', 'query-tab')
         .then((tab: string) => {
             instance.execture('changeTab', tab);
         })
@@ -23,7 +23,7 @@ const instance = Editor.Module.register({
     method: {
         changeTab(tab: string) {
             Editor.Message
-                .request('example', 'query-content', tab)
+                .request('default-example', 'query-content', tab)
                 .then((data) => {
                     const $html = marked.parse(data);
                     document.getElementById('container')!.innerHTML = $html;

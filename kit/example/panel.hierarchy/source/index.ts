@@ -9,7 +9,7 @@ const instance = Editor.Module.register({
 
     async load() {
         Editor.Message
-            .request('example', 'query-tabs')
+            .request('default-example', 'query-tabs')
             .then((tabs: string[]) => {
                 const $buttons = document.querySelector('.buttons');
 
@@ -20,7 +20,7 @@ const instance = Editor.Module.register({
                     $span.innerHTML = tab;
                     $div.appendChild($span);
                     $div.addEventListener('click', () => {
-                        Editor.Message.request('example', 'change-tab', tab);
+                        Editor.Message.request('default-example', 'change-tab', tab);
                     });
                     $buttons?.appendChild($div);
                 });
@@ -30,7 +30,7 @@ const instance = Editor.Module.register({
             });
 
         Editor.Message
-            .request('example', 'query-tab')
+            .request('default-example', 'query-tab')
             .then((tab: string) => {
                 instance.execture('changeTab', tab);
             })
