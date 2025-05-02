@@ -9,6 +9,11 @@ export const spaceDirs = [
         message: 'APP 核心的功能模块',
         list: [
             './framework/kit',
+        ],
+    },
+    {
+        message: 'APP 核心的功能模块',
+        list: [
             './framework/window',
         ],
     },

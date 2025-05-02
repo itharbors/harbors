@@ -1,18 +1,15 @@
 import { instance as Window } from '../../../framework/window';
 import { instance as Plugin } from '../../../framework/plugin';
 import { instance as Kit } from '../../../framework/kit';
-import { instance as Profile } from '../../../framework/profile';
 
 export { instance as Window } from '../../../framework/window';
 export { instance as Plugin } from '../../../framework/plugin';
 export { instance as Kit } from '../../../framework/kit';
-export { instance as Profile } from '../../../framework/profile';
 
 export async function runModuleLifeCycle(lifecycle: 'register' | 'load') {
     await Plugin.run(lifecycle);
     await Window.run(lifecycle);
     await Kit.run(lifecycle);
-    await Profile.run(lifecycle);
 }
 
 export const Message = {

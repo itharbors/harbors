@@ -3,7 +3,6 @@ import type { TPluginInfo } from './type';
 
 import { readFileSync } from 'fs';
 import { join } from 'path';
-import { parse } from 'url';
 import { protocol, ipcMain } from 'electron';
 import { generateModule } from '@itharbors/module';
 
