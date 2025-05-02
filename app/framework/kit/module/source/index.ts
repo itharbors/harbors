@@ -9,33 +9,22 @@ import { ipcMain } from 'electron';
 import { generateModule } from '@itharbors/module';
 import { instance as Plugin } from '../../../plugin';
 
-type KitJSON = {
-    name?: string;
-    version?: string;
-    harbors?: {
-        // 布局信息
-        layout?: string;
-        plugin?: string[];
-    };
-}
+import { Kit } from './kit';
 
 export const instance = generateModule({
-    stash(): {} {
-        return {};
+    stash(): {
+        nameMap: Map<string, Kit>;
+    } {
+        return {
+            nameMap: new Map(),
+        };
     },
 
     data(): {
-        path: string;
         name: string;
-        layout: string;
-        plugin: string[];
     } {
         return {
-            path: '',
             name: '',
-
-            layout: '',
-            plugin: [],
         };
     },
 
@@ -56,33 +45,10 @@ export const instance = generateModule({
          * @param path 
          */
         async load(path: string) {
-            this.set('path', path);
-            const infoFilePath = join(path, 'package.json');
-            if (!existsSync(infoFilePath)) {
-                throw new Error(`Failed to read the file: ${infoFilePath}`);
-            }
-    
-            try {
-                const json = JSON.parse(readFileSync(infoFilePath, 'utf8')) as KitJSON;
-
-                json.name = json.name || '';
-                json.harbors = json.harbors || {};
-                json.harbors.layout = json.harbors.layout || '';
-                json.harbors.plugin = json.harbors.plugin || [];
-
-                this.set('name', json.name);
-                this.set('layout', join(path, json.harbors.layout));
-                this.set('plugin', json.harbors.plugin);
-
-                for (let plugin of json.harbors.plugin) {
-                    const pluginPath = join(path, plugin);
-                    await Plugin.execture('register', pluginPath);
-                    await Plugin.execture('load', pluginPath);
-                }
-            } catch(error) {
-                const message = (error as any)?.message || '';
-                throw new Error(`Failed to read the file: ${infoFilePath}\n  ${message}`);
-            }
+            const kit = new Kit(path);
+            await kit.init();
+            this.stash.nameMap.set(kit.name, kit);
+            this.set('name', kit.name);
         },
 
         /**
@@ -90,11 +56,17 @@ export const instance = generateModule({
          * @param path 
          */
         async unload(path: string) {
-
+            this.stash.nameMap.forEach((kit, name) => {
+                if (kit.path === path) {
+                    this.stash.nameMap.delete(name);
+                }
+            });
         },
 
         async getLayout() {
-            return this.get('layout');
+            const name = this.get('name');
+            const kit = this.stash.nameMap.get(name);
+            return join(kit?.path || '', kit?.layout || '');
         },
     },
 });

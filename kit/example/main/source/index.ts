@@ -1,12 +1,21 @@
 import { readFileSync, existsSync, readdirSync } from 'fs';
 import { join } from 'path';
 
+const list = [
+    '概览',
+    '套件',
+    '插件',
+    '面板',
+    '消息',
+    '贡献'
+];
+
 Editor.Module.register({
     stash(): {
         tab: string,
     } {
         return {
-            tab: '1. 概览',
+            tab: list[0],
         };
     },
     data() {
@@ -23,9 +32,7 @@ Editor.Module.register({
 
         // --- tab
         queryTabs(): string[] {
-            const mdFile = join(__dirname, `../../static`);
-            const files = readdirSync(mdFile).map(file => file.replace(/\.md$/, ''));
-            return files;
+            return list;
         },
 
         queryTab(): string {
