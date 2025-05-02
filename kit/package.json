@@ -14,7 +14,9 @@
       "width": 1280,
       "height": 800
     },
-    "layout": "./layout.json",
+    "layout": {
+      "default": "./layout.json"
+    },
     "plugin": [
       "./example"
     ]

@@ -5,9 +5,6 @@ const list = [
     '概览',
     '套件',
     '插件',
-    '面板',
-    '消息',
-    '贡献'
 ];
 
 Editor.Module.register({

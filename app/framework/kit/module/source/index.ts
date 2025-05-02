@@ -60,10 +60,10 @@ export const instance = generateModule({
             });
         },
 
-        async getLayout(name?: string) {
-            name = name || 'default';
-            const kit = this.stash.nameMap.get(name);
-            return kit?.layout || '';
+        async getLayout(kitName?: string, layoutName?: string) {
+            kitName = kitName || 'default';
+            const kit = this.stash.nameMap.get(kitName);
+            return kit?.layout[layoutName || 'default'];
         },
 
         async getWindow(name?: string) {

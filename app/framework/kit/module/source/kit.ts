@@ -14,7 +14,9 @@ type KitJSON = {
             height: number;
         };
         // 布局信息
-        layout: string;
+        layout: {
+            [key: string]: string;
+        };
         plugin?: string[];
     };
 }
@@ -56,12 +58,14 @@ export class Kit {
             this._json.harbors.window.file = this._json.harbors.window.file || '';
             this._json.harbors.window.width = this._json.harbors.window.width || 800;
             this._json.harbors.window.height = this._json.harbors.window.height || 600;
-            this._json.harbors.layout = this._json.harbors.layout || '';
+            this._json.harbors.layout = this._json.harbors.layout || {};
             this._json.harbors.plugin = this._json.harbors.plugin || [];
 
             // 相对路径转绝对路径
             this._json.harbors.window.file = join(path, this._json.harbors.window.file);
-            this._json.harbors.layout = join(path, this._json.harbors.layout);
+            for (let name in this._json.harbors.layout) {
+                this._json.harbors.layout[name] = join(path, this._json.harbors.layout[name]);
+            }
         } catch(error) {
             const message = (error as any)?.message || '';
             throw new Error(`Failed to read the file: ${infoFilePath}\n  ${message}`);

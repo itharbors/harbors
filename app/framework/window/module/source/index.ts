@@ -52,9 +52,9 @@ export const instance = generateModule({
             }
         });
 
-        ipcMain.on('window:query-layout', async (event) => {
+        ipcMain.on('window:query-layout', async (event, name) => {
             const win = this.stash.windowMap.get(event.sender);
-            const path = await Kit.execture('getLayout', win?.kit);
+            const path = await Kit.execture('getLayout', win?.kit, 'default');
             event.reply('window:query-layout-reply', path);
         });
     },
