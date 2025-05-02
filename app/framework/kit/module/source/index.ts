@@ -63,13 +63,13 @@ export const instance = generateModule({
         async getLayout(name?: string) {
             name = name || 'default';
             const kit = this.stash.nameMap.get(name);
-            return join(kit?.path || '', kit?.layout || '');
+            return kit?.layout || '';
         },
 
         async getWindow(name?: string) {
             name = name || 'default';
             const kit = this.stash.nameMap.get(name);
-            return join(kit?.path || '', kit?.window || '');
+            return kit?.window;
         },
     },
 });

@@ -8,7 +8,11 @@ type KitJSON = {
     version: string;
     harbors: {
         // 窗口
-        window: string;
+        window: {
+            file: string;
+            width: number;
+            height: number;
+        };
         // 布局信息
         layout: string;
         plugin?: string[];
@@ -45,11 +49,19 @@ export class Kit {
         try {
             this._json = JSON.parse(readFileSync(infoFilePath, 'utf8')) as KitJSON;
 
+            // 补全必要信息
             this._json.name = this._json.name || '';
             this._json.harbors = this._json.harbors || {};
-            this._json.harbors.window = this._json.harbors.window || '';
+            this._json.harbors.window = this._json.harbors.window || {};
+            this._json.harbors.window.file = this._json.harbors.window.file || '';
+            this._json.harbors.window.width = this._json.harbors.window.width || 800;
+            this._json.harbors.window.height = this._json.harbors.window.height || 600;
             this._json.harbors.layout = this._json.harbors.layout || '';
             this._json.harbors.plugin = this._json.harbors.plugin || [];
+
+            // 相对路径转绝对路径
+            this._json.harbors.window.file = join(path, this._json.harbors.window.file);
+            this._json.harbors.layout = join(path, this._json.harbors.layout);
         } catch(error) {
             const message = (error as any)?.message || '';
             throw new Error(`Failed to read the file: ${infoFilePath}\n  ${message}`);

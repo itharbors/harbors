@@ -33,11 +33,14 @@ export class Window {
 
     public async init() {
 
-        const HTMLFile =  await Kit.execture('getWindow', this._kit);
+        let WinInfo =  await Kit.execture('getWindow', this._kit);
+        if (!WinInfo) {
+            throw new Error(`查询不到 kit 信息 ${this._kit}`);
+        }
 
         this._win = new BrowserWindow({
-            width: 800,
-            height: 600,
+            width: WinInfo.width,
+            height: WinInfo.height,
             webPreferences: {
                 nodeIntegration: true, // 禁用 Node.js 集成
                 contextIsolation: false, // 启用上下文隔离（默认值，增强安全性）
@@ -45,6 +48,6 @@ export class Window {
                 preload: join(__dirname, '../../preload/dist/index.js'), // 指定预加载脚本
             },
         });
-        this._win.loadFile(HTMLFile || '');
+        this._win.loadFile(WinInfo.file || '');
     }
 }
