@@ -36,7 +36,7 @@ global.Editor = all;
         await Plugin.execture('load', pluginDir);
     }
 
-    Kit.execture('load', join(__dirname, '../../../../kit'));
+    await Kit.execture('load', join(__dirname, '../../../../kit'));
 
     // 启动一个窗口
     await Window.execture('open');

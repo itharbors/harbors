@@ -33,10 +33,7 @@ export const instance = generateModule({
     },
 
     load() {
-        ipcMain.on('kit:query-layout', async (event) => {
-            const path = await instance.execture('getLayout');
-            event.reply('kit:query-layout-reply', path);
-        });
+
     },
 
     method: {
@@ -63,10 +60,16 @@ export const instance = generateModule({
             });
         },
 
-        async getLayout() {
-            const name = this.get('name');
+        async getLayout(name?: string) {
+            name = name || 'default';
             const kit = this.stash.nameMap.get(name);
             return join(kit?.path || '', kit?.layout || '');
+        },
+
+        async getWindow(name?: string) {
+            name = name || 'default';
+            const kit = this.stash.nameMap.get(name);
+            return join(kit?.path || '', kit?.window || '');
         },
     },
 });

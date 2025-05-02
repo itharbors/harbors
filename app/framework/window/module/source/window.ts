@@ -5,16 +5,37 @@
 import { join } from 'path';
 import { BrowserWindow } from 'electron';
 
+import { instance as Kit } from '../../../kit/module/dist/index';
+
+let winID = 1;
+
 export class Window {
 
-    private _file: string;
+    private _kit: string;
+    private _id: number;
+    private _win?: BrowserWindow;
 
-    constructor(file: string) {
-        this._file = file;
+    public get id() {
+        return this._id;
+    }
+    public get kit() {
+        return this._kit;
+    }
+
+    public get win() {
+        return this._win;
+    }
+
+    constructor(kit: string) {
+        this._kit = kit;
+        this._id = winID++;
     }
 
     public async init() {
-        const win = new BrowserWindow({
+
+        const HTMLFile =  await Kit.execture('getWindow', this._kit);
+
+        this._win = new BrowserWindow({
             width: 800,
             height: 600,
             webPreferences: {
@@ -24,6 +45,6 @@ export class Window {
                 preload: join(__dirname, '../../preload/dist/index.js'), // 指定预加载脚本
             },
         });
-        win.loadFile(this._file);
+        this._win.loadFile(HTMLFile || '');
     }
 }

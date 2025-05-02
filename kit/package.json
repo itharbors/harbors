@@ -9,6 +9,7 @@
   "author": "",
   "license": "ISC",
   "harbors": {
+    "window": "./static/window.html",
     "layout": "./layout.json",
     "plugin": [
       "./example"

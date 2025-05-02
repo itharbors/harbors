@@ -6,9 +6,11 @@ import { instance as Plugin } from '../../../plugin';
 type KitJSON = {
     name: string;
     version: string;
-    harbors?: {
+    harbors: {
+        // 窗口
+        window: string;
         // 布局信息
-        layout?: string;
+        layout: string;
         plugin?: string[];
     };
 }
@@ -29,6 +31,10 @@ export class Kit {
         return this._json.harbors?.layout;
     }
 
+    get window() {
+        return this._json.harbors?.window;
+    }
+
     constructor(path: string) {
         this._path = path;
         const infoFilePath = join(path, 'package.json');
@@ -41,6 +47,7 @@ export class Kit {
 
             this._json.name = this._json.name || '';
             this._json.harbors = this._json.harbors || {};
+            this._json.harbors.window = this._json.harbors.window || '';
             this._json.harbors.layout = this._json.harbors.layout || '';
             this._json.harbors.plugin = this._json.harbors.plugin || [];
         } catch(error) {

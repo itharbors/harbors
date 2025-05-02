@@ -2,7 +2,7 @@ import type { PluginMessageOption } from '../../type';
 import type { Message } from '../../../../type/editor';
 
 import { join } from 'path';
-import { BrowserWindow, ipcMain } from 'electron';
+import { BrowserWindow, ipcMain, WebContents } from 'electron';
 import { generateModule } from '@itharbors/module';
 
 import { Window } from './window';
@@ -12,10 +12,10 @@ import { instance as Kit} from '../../../kit';
 export const instance = generateModule({
 
     stash(): {
-        windowMap: Map<string, BrowserWindow>
+        windowMap: WeakMap<WebContents, Window>
     } {
         return {
-            windowMap: new Map(),
+            windowMap: new WeakMap(),
         }; 
     },
 
@@ -51,15 +51,20 @@ export const instance = generateModule({
                 event.reply('window:message-reply', result);
             }
         });
+
+        ipcMain.on('window:query-layout', async (event) => {
+            const win = this.stash.windowMap.get(event.sender);
+            const path = await Kit.execture('getLayout', win?.kit);
+            event.reply('window:query-layout-reply', path);
+        });
     },
 
     method: {
-        async open(file?: string) {
-            file = file || join(__dirname, '../../static/window.html');
-            const win = new Window(file);
+        async open(kit?: string) {
+            kit = kit || 'default';
+            const win = new Window(kit);
             await win.init();
-            
-            return 1;
+            win.win && this.stash.windowMap.set(win.win?.webContents, win);
         },
     },
 });

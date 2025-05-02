@@ -66,7 +66,7 @@ class Layout extends HTMLElement {
             return;
         }
         this._name = name;
-        ipcRenderer.once('kit:query-layout-reply', (event, path) => {
+        ipcRenderer.once('window:query-layout-reply', (event, path) => {
             if (this._name !== name) {
                 return;
             }
@@ -75,7 +75,7 @@ class Layout extends HTMLElement {
             const $elem = parse(layout);
             this.appendChild($elem);
         });
-        ipcRenderer.send('kit:query-layout', name);
+        ipcRenderer.send('window:query-layout', name);
     }
 }
 
