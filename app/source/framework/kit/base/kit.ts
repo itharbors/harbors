@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-import { instance as Plugin } from '../../plugin/module';
+import { instance as Plugin } from '../../plugin';
 
 type KitJSON = {
     name: string;

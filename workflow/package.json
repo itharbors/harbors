@@ -11,6 +11,7 @@
   "license": "ISC",
   "dependencies": {
     "@itharbors/workflow": "^1.0.1",
+    "commander": "^13.1.0",
     "dts-bundle-generator": "^9.5.1"
   }
 }

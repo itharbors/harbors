@@ -5,7 +5,7 @@
 import { join } from 'path';
 import { BrowserWindow } from 'electron';
 
-import { instance as Kit } from '../../kit/module';
+import { instance as Kit } from '../../kit';
 
 let winID = 1;
 

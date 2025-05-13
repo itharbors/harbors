@@ -2,8 +2,8 @@
 import type { Message as MessageType, Module as ModuleType } from '@type/editor';
 
 import { ModuleContainer, TModule, TStash, TData, TMethod } from '@itharbors/module';
-import { instance as Plugin } from '../framework/plugin/module';
-import { _plugin_ } from '../framework/plugin/module/plugin';
+import { instance as Plugin } from './framework/plugin';
+import { _plugin_ } from './framework/plugin/base/plugin';
 
 export const Message = {
 

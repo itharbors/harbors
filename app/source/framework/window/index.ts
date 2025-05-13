@@ -1,12 +1,12 @@
-import type { PluginMessageOption } from '../type';
+import type { PluginMessageOption } from './type';
 import type { Message } from '@type/editor';
 
 import { ipcMain, WebContents } from 'electron';
 import { generateModule } from '@itharbors/module';
 
-import { Window } from './window';
-import { instance as Plugin} from '../../plugin/module';
-import { instance as Kit} from '../../kit/module';
+import { Window } from './base';
+import { instance as Plugin} from '../plugin';
+import { instance as Kit} from '../kit';
 
 export const instance = generateModule({
 

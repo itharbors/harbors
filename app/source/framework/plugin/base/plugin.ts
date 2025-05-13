@@ -1,4 +1,4 @@
-import type { TPluginInfo, TPluginJSON } from './type';
+import type { TPluginInfo, TPluginJSON } from '../type';
 import type { Module } from '@type/editor';
 
 import { readFileSync, existsSync } from 'fs';

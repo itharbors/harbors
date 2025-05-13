@@ -2,10 +2,10 @@
  * 套件是一个插件包
  * 用于批量启动、关闭功能互相关联的插件
  */
-
+import { basename } from 'path';
 import { generateModule } from '@itharbors/module';
 
-import { Kit } from './kit';
+import { Kit } from './base/kit';
 
 export const instance = generateModule({
     stash(): {
@@ -38,6 +38,7 @@ export const instance = generateModule({
          * @param path 
          */
         async load(path: string) {
+            console.log(`[Framework] 启动套件: ${basename(path)}`);
             const kit = new Kit(path);
             await kit.init();
             this.stash.nameMap.set(kit.name, kit);
@@ -49,6 +50,7 @@ export const instance = generateModule({
          * @param path 
          */
         async unload(path: string) {
+            console.log(`[Framework] 关闭套件: ${basename(path)}`);
             this.stash.nameMap.forEach((kit, name) => {
                 if (kit.path === path) {
                     this.stash.nameMap.delete(name);

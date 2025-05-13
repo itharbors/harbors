@@ -1,13 +1,14 @@
 {
   "name": "itharbors",
-  "version": "1.0.0",
+  "version": "0.1.0",
   "description": "",
-  "main": "./dist/startup/index.js",
+  "main": "./dist/index.js",
   "scripts": {},
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@itharbors/module": "^0.1.2"
+    "@itharbors/module": "^0.1.2",
+    "commander": "^13.1.0"
   },
   "devDependencies": {
     "electron": "^35.2.0",

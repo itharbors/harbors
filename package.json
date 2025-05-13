@@ -1,6 +1,7 @@
 {
   "name": "harbors",
   "version": "0.1.0",
+  "bin": "./workflow/dist/cli.js",
   "description": "",
   "main": "index.js",
   "scripts": {
