@@ -1,7 +1,0 @@
-{
-  "extends": "../startup.tsconfig.json",
-  "compilerOptions": {
-    "rootDir": "./source",
-    "outDir": "./dist",
-  }
-}
