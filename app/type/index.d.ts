@@ -1,4 +1,4 @@
-import * as editor from './editor';
+import * as editor from './export/editor';
 declare global {
     export import Editor = editor;
 }

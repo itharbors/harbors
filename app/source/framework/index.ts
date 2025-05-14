@@ -1,10 +1,10 @@
-import { instance as Window } from './framework/window';
-import { instance as Plugin } from './framework/plugin';
-import { instance as Kit } from './framework/kit';
+import { instance as Window } from './window';
+import { instance as Plugin } from './plugin';
+import { instance as Kit } from './kit';
 
-export { instance as Window } from './framework/window';
-export { instance as Plugin } from './framework/plugin';
-export { instance as Kit } from './framework/kit';
+export { instance as Window } from './window';
+export { instance as Plugin } from './plugin';
+export { instance as Kit } from './kit';
 
 export async function runModuleLifeCycle(lifecycle: 'register' | 'load') {
     await Plugin.run(lifecycle);

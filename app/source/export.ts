@@ -3,7 +3,7 @@ import type { Message as MessageType, Module as ModuleType } from '@type/editor'
 
 import { ModuleContainer, TModule, TStash, TData, TMethod } from '@itharbors/module';
 import { instance as Plugin } from './framework/plugin';
-import { _plugin_ } from './framework/plugin/base/plugin';
+import { _plugin_ } from './framework/plugin/plugin';
 
 export const Message = {
 
@@ -31,6 +31,11 @@ export const Message = {
 };
 
 export const Module = {
+    /**
+     * 注册插件模块
+     * @param module 
+     * @returns 
+     */
     register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: ModuleType.TContribute }): ModuleContainer<M, D, S> {
         _plugin_.module = new ModuleContainer(module);
         _plugin_.contribute = module.contribute;

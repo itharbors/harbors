@@ -1,7 +1,7 @@
 import { ipcRenderer, contextBridge } from 'electron';
 import { TModule, ModuleContainer, generateModule, TMethod, TData, TStash } from '@itharbors/module';
 
-import type { PluginMessageOption } from '../type';
+import type { PluginMessageOption } from '@type/internal';
 
 type MessageRequest = {
     timestamp: number;

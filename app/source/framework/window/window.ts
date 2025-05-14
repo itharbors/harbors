@@ -5,7 +5,8 @@
 import { join } from 'path';
 import { BrowserWindow } from 'electron';
 
-import { instance as Kit } from '../../kit';
+import { instance as Kit } from '../kit';
+import { MODULE } from '../../const';
 
 let winID = 1;
 
@@ -45,7 +46,7 @@ export class Window {
                 nodeIntegration: true, // 禁用 Node.js 集成
                 contextIsolation: false, // 启用上下文隔离（默认值，增强安全性）
                 webviewTag: true,
-                preload: join(__dirname, '../preload/index.js'), // 指定预加载脚本
+                preload: MODULE.PRELOAD_WINDOW, // 指定预加载脚本
             },
         });
         this._win.loadFile(WinInfo.file || '');

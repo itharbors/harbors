@@ -1,8 +1,11 @@
-// import type { sendOption } from './public';
+/**
+ * Layout 布局对象
+ * 这是一个基于 WebComponent 实现的 HTML DOM 元素
+ * 主要用于布局的还原、调整、序列化
+ */
 
 import { readFileSync } from 'fs';
-import { join } from 'path';
-import { WebviewTag, ipcRenderer } from 'electron';
+import { ipcRenderer } from 'electron';
 
 import { parse, injection } from './layout';
 

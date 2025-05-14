@@ -1,7 +1,14 @@
+/**
+ * Panel 布局对象
+ * 这是一个基于 WebComponent 实现的 HTML DOM 元素
+ * 主要用于局部功能的模块化和隔离
+ */
+
 import type { sendOption } from './public';
 
+import { MODULE } from '../../const';
 import { join } from 'path';
-import { WebviewTag, ipcRenderer } from 'electron';
+import { WebviewTag } from 'electron';
 
 let converter = async function(url: string) {
     return url;
@@ -35,7 +42,7 @@ class Panel extends HTMLElement {
 
         // 创建一个 iframe 元素
         this._$content = document.createElement('webview');
-        this._$content.setAttribute('preload', join(__dirname, '../panel-preload/index.js'));
+        this._$content.setAttribute('preload', MODULE.PRELOAD_PANEL);
         this._$content.setAttribute('webPreferences', 'webgl=1,nativeWindowOpen=1,contextIsolation=0,backgroundThrottling=0');
         this._$content.setAttribute('contextIsolation', 'false');
         this._$content.setAttribute('nodeintegration', 'true');

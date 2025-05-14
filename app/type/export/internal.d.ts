@@ -1,4 +1,15 @@
 /**
+ * 插件发送的配置
+ */
+export type PluginMessageOption = {
+    id: number;
+    module: string;
+    message: string;
+    args: any[];
+    reply: boolean;
+}
+
+/**
  * 插件里的 package.json 信息
  */
 export type TPluginJSON = {

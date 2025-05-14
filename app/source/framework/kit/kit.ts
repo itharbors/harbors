@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
-import { instance as Plugin } from '../../plugin';
+import { instance as Plugin } from '../plugin';
 
 type KitJSON = {
     name: string;
@@ -45,7 +45,7 @@ export class Kit {
         this._path = path;
         const infoFilePath = join(path, 'package.json');
         if (!existsSync(infoFilePath)) {
-            throw new Error(`Failed to read the file: ${infoFilePath}`);
+            throw new Error(`[Kit]] 启动失败，读取文件失败: ${infoFilePath}`);
         }
 
         try {
@@ -68,7 +68,7 @@ export class Kit {
             }
         } catch(error) {
             const message = (error as any)?.message || '';
-            throw new Error(`Failed to read the file: ${infoFilePath}\n  ${message}`);
+            throw new Error(`[Kit]] 启动失败，读取文件失败: ${infoFilePath}\n  ${message}`);
         }
     }
 

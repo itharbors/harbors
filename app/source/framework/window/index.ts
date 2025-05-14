@@ -1,4 +1,4 @@
-import type { PluginMessageOption } from './type';
+import type { PluginMessageOption } from '@type/internal';
 import type { Message } from '@type/editor';
 
 import { ipcMain, WebContents } from 'electron';

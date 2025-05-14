@@ -7,7 +7,7 @@
  * 监听统一收口到受框架管理的对象上
  */
 
-import type { PluginMessageOption } from '../type';
+import type { PluginMessageOption } from '@type/internal';
 
 import { ipcRenderer } from 'electron';
 

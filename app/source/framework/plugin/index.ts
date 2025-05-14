@@ -1,12 +1,12 @@
 import type { WebContents } from 'electron';
-import type { TPluginInfo } from './type';
+import type { TPluginInfo } from '@type/internal';
 
 import { readFileSync } from 'fs';
 import { join, basename } from 'path';
 import { protocol, ipcMain } from 'electron';
 import { generateModule } from '@itharbors/module';
 
-import { Plugin } from './base/plugin';
+import { Plugin } from './plugin';
 
 export const instance = generateModule({
     stash(): {
@@ -63,7 +63,7 @@ export const instance = generateModule({
          * @param path 插件在磁盘上的绝对路径地址
          */
         async register(path: string): Promise<TPluginInfo> {
-            console.log(`[Framework] 注册插件: ${basename(path)}`);
+            console.log(`[Plugin] 注册: ${basename(path)}`);
             const plugin = new Plugin(path);
             // 触发注册生命周期
             await plugin.module.run('register');
@@ -78,7 +78,7 @@ export const instance = generateModule({
          * @param path 插件在磁盘上的绝对路径地址
          */
         async unregister(path: string): Promise<TPluginInfo> {
-            console.log(`[Framework] 注销插件: ${basename(path)}`);
+            console.log(`[Plugin] 注销: ${basename(path)}`);
             const plugin = this.stash.pathMap.get(path);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
@@ -95,7 +95,7 @@ export const instance = generateModule({
          * @param path 插件在磁盘上的绝对路径地址
          */
         async load(path: string): Promise<TPluginInfo> {
-            console.log(`[Framework] 启动插件: ${basename(path)}`);
+            console.log(`[Plugin] 启动: ${basename(path)}`);
             const plugin = this.stash.pathMap.get(path);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
@@ -132,7 +132,7 @@ export const instance = generateModule({
          * @param path 插件在磁盘上的绝对路径地址
          */
         async unload(path: string): Promise<TPluginInfo> {
-            console.log(`[Framework] 关闭插件: ${basename(path)}`);
+            console.log(`[Plugin] 关闭: ${basename(path)}`);
             const plugin = this.stash.pathMap.get(path);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);

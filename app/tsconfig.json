@@ -10,7 +10,7 @@
     "strict": true,
     "skipLibCheck": true,
     "paths": {
-      "@type/*": ["./type/*"]
+      "@type/*": ["./type/export/*"]
     }
   }
 }

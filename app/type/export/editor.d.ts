@@ -31,9 +31,19 @@ export namespace Message {
 }
 
 export namespace Module {
+    /**
+     * 模块互相贡献的类型定义
+     */
     export type TContribute = {
         attach(pluginInfo: any, contributeInfo: any): void;
         detach(pluginInfo: any, contributeInfo: any): void;
     }
+
+    /**
+     * 注册一个模块
+     * 在插件里注册的时候会被识别成插件，在面板里注册的时候，会识别成面板
+     * 注意：该方法必须在入口文件里同步执行
+     * @param module 
+     */
     export function register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: TContribute }): ModuleContainer<M, D, S>;
 }

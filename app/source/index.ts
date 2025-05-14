@@ -4,16 +4,15 @@ import { app } from 'electron';
 import { program } from 'commander';
 
 import { runModuleLifeCycle, Window, Plugin, Kit } from './framework';
-import * as all from './export';
 
-// @ts-ignore
+import * as all from './export';
 global.Editor = all;
 
 (async () => {
     const pkg = require('../package.json');
     const defaultKitDir = join(__dirname, '../../kit');
 
-    // 整理命令行
+    // 整理命令行参数
     program
         .version(pkg.version)
         .option('-d, --debug', '启用调试模式')
@@ -40,7 +39,7 @@ global.Editor = all;
     await runModuleLifeCycle('load');
 
     // 启动内置插件
-    console.log(`[Framework] 启动内置插件...`);
+    console.log(`[APP] 启动内置插件...`);
     const pluginRootDir = join(__dirname, '../../plugin');
     const pluginNames: string[] = await new Promise((resolve, reject) => {
         readdir(pluginRootDir, (error, names) => {
@@ -65,7 +64,7 @@ global.Editor = all;
     console.log(' ');
 
     // 启动内置 KIT
-    console.log(`[Framework] 启动内置套件...`);
+    console.log(`[APP] 启动内置套件...`);
     await Kit.execture('load', options.kit);
     console.log(' ');
 

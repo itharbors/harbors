@@ -3,8 +3,6 @@
 declare class ModuleData<Data, Stash> {
 	stash: Stash;
 	constructor(data: Data, stash: Stash);
-	private propertyEventMap;
-	private _data;
 	/**
 	 * 触发一个属性的变更事件
 	 *
@@ -51,17 +49,6 @@ declare class ModuleData<Data, Stash> {
 	 *               监听函数接收两个参数：当前值和前一个值
 	 */
 	removeListener<K extends keyof Data>(key: K, handle: (value: Data[K], legacy: Data[K]) => void): void;
-	/**
-	 * 发送属性变化事件
-	 *
-	 * 此方法用于触发属性变化事件，它会查找与属性相关联的事件监听函数列表，
-	 * 并逐一调用这些函数，使它们能够响应属性的变化
-	 *
-	 * @param key 变化的属性名称，限定于T对象的键
-	 * @param value 属性的新值，类型为T[K]
-	 * @param legacy 属性的旧值，类型为T[K]
-	 */
-	private _emit;
 }
 export type TMethod = Record<string, (...args: any) => any>;
 export type TData = Record<string, any>;
@@ -81,8 +68,6 @@ export type TModule<M = TMethod, D extends () => TData = () => TData, S extends 
  * 模块的容器
  */
 export declare class ModuleContainer<M extends TMethod = TMethod, D extends () => TData = () => TData, S extends () => TStash = () => TStash> {
-	private _module;
-	private _intance;
 	status: TModuleStatus;
 	constructor(module: TModule<M, D, S>);
 	/**

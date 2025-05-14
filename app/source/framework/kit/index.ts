@@ -5,7 +5,7 @@
 import { basename } from 'path';
 import { generateModule } from '@itharbors/module';
 
-import { Kit } from './base/kit';
+import { Kit } from './kit';
 
 export const instance = generateModule({
     stash(): {
@@ -38,7 +38,7 @@ export const instance = generateModule({
          * @param path 
          */
         async load(path: string) {
-            console.log(`[Framework] 启动套件: ${basename(path)}`);
+            console.log(`[Kit] 启动: ${basename(path)}`);
             const kit = new Kit(path);
             await kit.init();
             this.stash.nameMap.set(kit.name, kit);
@@ -50,7 +50,7 @@ export const instance = generateModule({
          * @param path 
          */
         async unload(path: string) {
-            console.log(`[Framework] 关闭套件: ${basename(path)}`);
+            console.log(`[Kit] 关闭: ${basename(path)}`);
             this.stash.nameMap.forEach((kit, name) => {
                 if (kit.path === path) {
                     this.stash.nameMap.delete(name);
