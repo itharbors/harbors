@@ -35,8 +35,19 @@ export namespace Module {
      * 模块互相贡献的类型定义
      */
     export type TContribute = {
-        attach(pluginInfo: any, contributeInfo: any): void;
-        detach(pluginInfo: any, contributeInfo: any): void;
+        attach?(pluginInfo: any, contributeInfo: any): void;
+        detach?(pluginInfo: any, contributeInfo: any): void;
+
+        data?: {
+            message?: {
+                [key in string]: {
+                    method: string[];
+                };
+            };
+            panel?: {
+
+            };
+        };
     }
 
     /**

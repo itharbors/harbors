@@ -7,44 +7,5 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
-  "license": "ISC",
-  "contribute": {
-    "panel": {
-      "header": "./panel.header/template.html",
-      "hierarchy": "./panel.hierarchy/template.html",
-      "content": "./panel.content/template.html"
-    },
-    "message": {
-      "query-env": {
-        "method": [
-          "queryENV"
-        ]
-      },
-
-      "query-tabs": {
-        "method": [
-          "queryTabs"
-        ]
-      },
-
-      "query-tab": {
-        "method": [
-          "queryTab"
-        ]
-      },
-      "change-tab": {
-        "method": [
-          "changeTab",
-          "hierarchy.changeTab",
-          "content.changeTab"
-        ]
-      },
-
-      "query-content": {
-        "method": [
-          "queryContent"
-        ]
-      }
-    }
-  }
+  "license": "ISC"
 }

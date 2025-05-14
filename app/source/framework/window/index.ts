@@ -4,7 +4,7 @@ import type { Message } from '@type/editor';
 import { ipcMain, WebContents } from 'electron';
 import { generateModule } from '@itharbors/module';
 
-import { Window } from './base';
+import { Window } from './window';
 import { instance as Plugin} from '../plugin';
 import { instance as Kit} from '../kit';
 

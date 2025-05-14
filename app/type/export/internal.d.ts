@@ -21,9 +21,6 @@ export type TPluginJSON = {
 
     // 附加数据
     extra?: Record<string, any>;
-
-    // 贡献数据
-    contribute?: Record<string, any>;
 };
 
 /**

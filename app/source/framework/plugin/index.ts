@@ -109,15 +109,15 @@ export const instance = generateModule({
             await plugin.module.run('load');
             this.stash.nameMap.set(plugin.info.json.name, plugin);
 
-            if (plugin.info.json.contribute) {
-                for (const name in plugin.info.json.contribute) {
+            if (plugin.contributeData) {
+                for (const name in plugin.contributeData) {
                     const p = this.stash.nameMap.get(name);
-                    p && p.attach(plugin.info, plugin.info.json.contribute[name]);
+                    p && p.attach(plugin.info, plugin.contributeData[name]);
                 }
             }
             this.stash.nameMap.forEach((p, name) => {
-                if (p.info.json.contribute && plugin.info.json.name in p.info.json.contribute) {
-                    const contributeInfo = p.info.json.contribute[plugin.info.json.name];
+                if (p.contributeData && plugin.info.json.name in p.contributeData) {
+                    const contributeInfo = p.contributeData[plugin.info.json.name];
                     plugin.attach(p.info, contributeInfo);
                 }
             });
@@ -140,15 +140,15 @@ export const instance = generateModule({
             await plugin.module.run('unload');
 
             this.stash.nameMap.forEach((p, name) => {
-                if (p.info.json.contribute && plugin.info.json.name in p.info.json.contribute) {
-                    const contributeInfo = p.info.json.contribute[plugin.info.json.name];
+                if (p.contributeData && plugin.info.json.name in p.contributeData) {
+                    const contributeInfo = p.contributeData[plugin.info.json.name];
                     plugin.detach(p.info, contributeInfo);
                 }
             });
-            if (plugin.info.json.contribute) {
-                for (const name in plugin.info.json.contribute) {
+            if (plugin.contributeData) {
+                for (const name in plugin.contributeData) {
                     const p = this.stash.nameMap.get(name);
-                    p && p.detach(plugin.info, plugin.info.json.contribute[name]);
+                    p && p.detach(plugin.info, plugin.contributeData[name]);
                 }
             }
 

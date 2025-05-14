@@ -7,14 +7,5 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
-  "license": "ISC",
-  "contribute": {
-    "message": {
-      "query-path": {
-        "method": [
-          "queryPath"
-        ]
-      }
-    }
-  }
+  "license": "ISC"
 }

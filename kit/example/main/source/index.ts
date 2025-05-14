@@ -8,6 +8,49 @@ const list = [
 ];
 
 Editor.Module.register({
+
+    contribute: {
+        data: {
+            message: {
+                'query-env': {
+                    method: [
+                        'queryENV',
+                    ],
+                },
+
+                'query-tabs': {
+                    method: [
+                        'queryTabs',
+                    ],
+                },
+
+                'query-tab': {
+                    method: [
+                        'queryTab',
+                    ],
+                },
+                'change-tab': {
+                    method: [
+                        'changeTab',
+                        'hierarchy.changeTab',
+                        'content.changeTab',
+                    ],
+                },
+
+                'query-content': {
+                    method: [
+                        'queryContent',
+                    ],
+                },
+            },
+            panel: {
+                header: './panel.header/template.html',
+                hierarchy: './panel.hierarchy/template.html',
+                content: './panel.content/template.html',
+            }
+        },
+    },
+
     stash(): {
         tab: string,
     } {
@@ -15,9 +58,11 @@ Editor.Module.register({
             tab: list[0],
         };
     },
+
     data() {
         return {};
     },
+
     method: {
         queryENV() {
             return {

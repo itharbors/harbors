@@ -14,31 +14,25 @@ export const _plugin_: {
     contribute: undefined,
 };
 
-interface PModule extends TModule {
-    contribute?: {
-        attach?(pluginInfo: TPluginInfo, contributeInfo: any): void,
-        detach?(pluginInfo: TPluginInfo, contributeInfo: any): void,
-    };
-}
-
 export class Plugin {
     public info: TPluginInfo;
     public path: string;
     public module: ModuleContainer;
     public contribute?: Module.TContribute;
 
+    get contributeData(): any {
+        return this.contribute?.data || {};
+    }
+
     constructor(path: string) {
         const infoFilePath = join(path, 'package.json');
-        if (!existsSync(infoFilePath)) {
-            throw new Error(`[Plugin] 加载失败: 描述文件不存在 ${infoFilePath}`);
-        }
 
         let json: TPluginJSON;
         try {
             json = JSON.parse(readFileSync(infoFilePath, 'utf8'));
         } catch(error) {
             const message = (error as any)?.message || '';
-            throw new Error(`[Plugin] 加载失败: 描述文件格式不正确 ${infoFilePath}\n  ${message}`);
+            throw new Error(`[Plugin] 加载失败: ${infoFilePath}\n  ${message}`);
         }
 
         // 加载插件入口，生成插件模块对象
