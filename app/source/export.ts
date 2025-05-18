@@ -2,8 +2,7 @@
 import type { Message as MessageType, Module as ModuleType } from '@type/editor';
 
 import { ModuleContainer, TModule, TStash, TData, TMethod } from '@itharbors/module';
-import { instance as Plugin } from './framework/plugin';
-import { _plugin_ } from './framework/plugin/plugin';
+import { instance as Plugin, contributeMap } from './framework/plugin';
 
 export const Message = {
 
@@ -36,9 +35,20 @@ export const Module = {
      * @param module 
      * @returns 
      */
-    register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: ModuleType.TContribute }): ModuleContainer<M, D, S> {
-        _plugin_.module = new ModuleContainer(module);
-        _plugin_.contribute = module.contribute;
-        return _plugin_.module;
-    }
+    registerPlugin<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: ModuleType.TContribute }): ModuleContainer<M, D, S> {
+        const mod = new ModuleContainer(module);
+        if (module.contribute) {
+            contributeMap.set(mod, module.contribute);
+        }
+        return mod;
+    },
+
+    /**
+     * 注册插件模块
+     * @param module 
+     * @returns 
+     */
+    registerPanel<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
+        throw new Error('Panel 不能在插件进程注册');
+    },
 };

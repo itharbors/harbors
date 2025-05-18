@@ -1,5 +1,5 @@
 
-const instance = Editor.Module.register({
+const instance = Editor.Module.registerPanel({
     stash() {
         return {};
     },
@@ -49,3 +49,5 @@ const instance = Editor.Module.register({
         },
     },
 });
+
+export default instance;

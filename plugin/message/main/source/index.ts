@@ -5,8 +5,18 @@ const empty: Message.MessageItem = {
     method: [],
 };
 
-Editor.Module.register({
+export default Editor.Module.registerPlugin({
     contribute: {
+        data: {
+            message: {
+                'query-message': {
+                    method: [
+                        'queryMessage',
+                    ],
+                },
+            },
+        },
+
         /**
          * 当贡献了 message 信息的插件启动的时候触发
          * @param pluginInfo 
@@ -41,16 +51,6 @@ Editor.Module.register({
          */
         detach(pluginInfo: any, contributeInfo: Message.MessageJSON) {
             messageMap.delete(pluginInfo.name);
-        },
-
-        data: {
-            message: {
-                'query-message': {
-                    method: [
-                        'queryMessage'
-                    ],
-                },
-            }
         },
     },
 

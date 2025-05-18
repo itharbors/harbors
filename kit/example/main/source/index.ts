@@ -7,7 +7,7 @@ const list = [
     '插件',
 ];
 
-Editor.Module.register({
+export default Editor.Module.registerPlugin({
 
     contribute: {
         data: {
@@ -29,6 +29,7 @@ Editor.Module.register({
                         'queryTab',
                     ],
                 },
+
                 'change-tab': {
                     method: [
                         'changeTab',
@@ -43,11 +44,12 @@ Editor.Module.register({
                     ],
                 },
             },
+
             panel: {
                 header: './panel.header/template.html',
                 hierarchy: './panel.hierarchy/template.html',
                 content: './panel.content/template.html',
-            }
+            },
         },
     },
 

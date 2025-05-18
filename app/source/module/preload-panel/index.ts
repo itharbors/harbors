@@ -1,7 +1,9 @@
-import { ipcRenderer, contextBridge } from 'electron';
-import { TModule, ModuleContainer, generateModule, TMethod, TData, TStash } from '@itharbors/module';
-
+import type { Module as ModuleType } from '@type/editor';
 import type { PluginMessageOption } from '@type/internal';
+import type { TModule, ModuleContainer, TMethod, TData, TStash } from '@type/module';
+
+import { ipcRenderer } from 'electron';
+import { generateModule } from '@itharbors/module';
 
 type MessageRequest = {
     timestamp: number;
@@ -63,7 +65,11 @@ const exposeInterface = {
     },
 
     Module: {
-        register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
+        registerPlugin<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: ModuleType.TContribute }): ModuleContainer<M, D, S> {
+            throw new Error('Plugin 不能在 Panel 进程注册');
+        },
+
+        registerPanel<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
             info.module = generateModule(module);
             info.module.run('register');
             info.module.run('load');
@@ -72,8 +78,6 @@ const exposeInterface = {
     },
 };
 
-// contextBridge.exposeInMainWorld('bridge', exposeInterface);
-// @ts-ignore
 global.Editor = exposeInterface;
 
 ipcRenderer.on('window:message-reply', (event, option: PluginMessageOption) => {

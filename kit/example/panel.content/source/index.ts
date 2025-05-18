@@ -1,7 +1,7 @@
 // 在 html 里引入的 marked 库
 declare const marked: any;
 
-const instance = Editor.Module.register({
+const instance = Editor.Module.registerPanel({
     stash() {
         return {};
     },
@@ -34,3 +34,5 @@ const instance = Editor.Module.register({
         },
     },
 });
+
+export default instance;

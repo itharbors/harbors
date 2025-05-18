@@ -37,17 +37,7 @@ export namespace Module {
     export type TContribute = {
         attach?(pluginInfo: any, contributeInfo: any): void;
         detach?(pluginInfo: any, contributeInfo: any): void;
-
-        data?: {
-            message?: {
-                [key in string]: {
-                    method: string[];
-                };
-            };
-            panel?: {
-
-            };
-        };
+        data?: EditorContributeData;
     }
 
     /**
@@ -56,5 +46,7 @@ export namespace Module {
      * 注意：该方法必须在入口文件里同步执行
      * @param module 
      */
-    export function register<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: TContribute }): ModuleContainer<M, D, S>;
+    export function registerPlugin<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: TContribute }): ModuleContainer<M, D, S>;
+
+    export function registerPanel<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S>;
 }

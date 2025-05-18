@@ -6,22 +6,18 @@ import { join } from 'path';
 
 import { ModuleContainer, TModule } from '@itharbors/module';
 
-export const _plugin_: {
-    module: ModuleContainer | undefined;
-    contribute?: Module.TContribute;
-} = {
-    module: undefined,
-    contribute: undefined,
-};
+export const contributeMap: WeakMap<ModuleContainer, Module.TContribute> = new WeakMap();
 
 export class Plugin {
     public info: TPluginInfo;
     public path: string;
-    public module: ModuleContainer;
-    public contribute?: Module.TContribute;
+    public module!: ModuleContainer;
 
     get contributeData(): any {
-        return this.contribute?.data || {};
+        if (!this.module) {
+            return {};
+        }
+        return contributeMap.get(this.module)?.data;
     }
 
     constructor(path: string) {
@@ -36,24 +32,19 @@ export class Plugin {
         }
 
         // 加载插件入口，生成插件模块对象
-        _plugin_.module = undefined;
-        _plugin_.contribute = undefined;
-
         try {
             if (json.main) {
                 const mainFile = join(path, json.main);
-                require(mainFile);
+                const mod = require(mainFile);
+                if (!mod.default) {
+                    throw new Error(`[Plugin] 加载失败: 插件内没有定义模块 ${json.main}}`);
+                }
+                this.module = mod.default;
             }
         } catch(error) {
             const message = (error as any)?.message || '';
             throw new Error(`[Plugin] 加载失败: 插件入口运行失败 ${json.main}\n  ${message}`);
         }
-        if (!_plugin_.module) {
-            throw new Error(`[Plugin] 加载失败: 插件内没有定义模块 ${json.main}}`);
-        }
-
-        this.module = _plugin_.module;
-        this.contribute = _plugin_.contribute;
 
         // 记录数据
         this.info = {
@@ -65,10 +56,18 @@ export class Plugin {
     }
 
     public attach(pluginInfo: TPluginInfo, contributeInfo: any) {
-        this.contribute?.attach?.(pluginInfo, contributeInfo);
+        if (!this.module) {
+            return;
+        }
+        const contribute = contributeMap.get(this.module);
+        contribute?.attach?.(pluginInfo, contributeInfo);
     }
 
     public detach(pluginInfo: TPluginInfo, contributeInfo: any) {
-        this.contribute?.detach?.(pluginInfo, contributeInfo);
+        if (!this.module) {
+            return;
+        }
+        const contribute = contributeMap.get(this.module);
+        contribute?.detach?.(pluginInfo, contributeInfo);
     }
 }

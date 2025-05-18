@@ -8,6 +8,8 @@ import { generateModule } from '@itharbors/module';
 
 import { Plugin } from './plugin';
 
+export { contributeMap } from './plugin';
+
 export const instance = generateModule({
     stash(): {
         // 路径和 plugin 的映射关系，只要注册进来就会存放在 map 里

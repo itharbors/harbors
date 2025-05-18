@@ -2,9 +2,19 @@ import { join } from 'path';
 
 const panelMap: Map<string, string> = new Map();
 
-Editor.Module.register({
+export default Editor.Module.registerPlugin({
     // 贡献数据
     contribute: {
+        data: {
+            message: {
+                'query-path': {
+                    method: [
+                        'queryPath',
+                    ],
+                },
+            },
+        },
+
         /**
          * 当贡献了 panel 信息的插件启动的时候触发
          * @param pluginInfo 
@@ -27,16 +37,6 @@ Editor.Module.register({
                     panelMap.delete(name);
                 }
             });
-        },
-
-        data: {
-            message: {
-                'query-path': {
-                    method: [
-                        'queryPath',
-                    ],
-                },
-            },
         },
     },
 

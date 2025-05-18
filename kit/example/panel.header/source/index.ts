@@ -9,3 +9,15 @@ Editor.Message
     .catch((error) => {
         console.error(error);
     });
+
+const instance = Editor.Module.registerPanel({
+    stash() {
+        return {};
+    },
+    data() {
+        return {};
+    },
+    method: {},
+});
+
+export default instance;
