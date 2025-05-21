@@ -19,5 +19,3 @@ const instance = Editor.Module.registerPanel({
     },
     method: {},
 });
-
-export default instance;
