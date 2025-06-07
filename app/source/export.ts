@@ -4,6 +4,7 @@ import type { PanelInfo } from '@itharbors/electron-panel/browser';
 import type { PanelStash, PanelOption } from '@itharbors/electron-panel/panel';
 
 import { ModuleContainer, TModule } from '@itharbors/module';
+
 import { instance as PluginModule, contributeMap } from './framework/plugin';
 import { instance as PanelModule } from './framework/panel';
 

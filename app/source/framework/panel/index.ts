@@ -19,9 +19,19 @@ export const instance = generateModule({
     },
 
     method: {
+        /**
+         * 注册一个面板
+         * @param name 
+         * @param info 
+         */
         async register(name: string, info: PanelInfo) {
             register(name, info);
         },
+
+        /**
+         * 卸载一个面板
+         * @param name 
+         */
         async unregister(name: string) {
             unregister(name);
         },

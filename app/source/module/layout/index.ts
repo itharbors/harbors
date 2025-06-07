@@ -8,6 +8,7 @@ import { readFileSync } from 'fs';
 import { ipcRenderer } from 'electron';
 
 import { parse, injection } from './layout';
+import { request } from '@itharbors/electron-message/renderer';
 
 const map: Map<string, Layout> = new Map();
 
@@ -69,7 +70,7 @@ class Layout extends HTMLElement {
             return;
         }
         this._name = name;
-        ipcRenderer.once('window:query-layout-reply', (event, path) => {
+        request('window:query-layout', name).then((path: string) => {
             if (this._name !== name) {
                 return;
             }
@@ -78,7 +79,6 @@ class Layout extends HTMLElement {
             const $elem = parse(layout);
             this.appendChild($elem);
         });
-        ipcRenderer.send('window:query-layout', name);
     }
 }
 

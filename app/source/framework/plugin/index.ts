@@ -1,9 +1,8 @@
-import type { WebContents } from 'electron';
 import type { TPluginInfo } from '@type/internal';
 
 import { readFileSync } from 'fs';
 import { join, basename } from 'path';
-import { protocol, ipcMain } from 'electron';
+import { protocol } from 'electron';
 import { generateModule } from '@itharbors/module';
 
 import { Plugin } from './plugin';
@@ -15,6 +14,7 @@ export const instance = generateModule<{
     pathMap: Map<string, Plugin>;
     // name 和 plugin 的映射关系，启动后才会放入这个 map
     nameMap: Map<string, Plugin>;
+    
 }>({
 
     data(): {} {
@@ -182,31 +182,5 @@ export const instance = generateModule<{
             }
             return await plugin.module.execture(method, ...args);
         },
-
-        /**
-         * 调用面板上的方法
-         * @param plugin 
-         * @param panel 
-         * @param method 
-         * @param args 
-         */
-        async callPanel(plugin: string, panel: string, method: string, ...args: any[]) {
-            const pluginMap = panelMap.get(plugin);
-            if (!pluginMap) {
-                throw new Error(`[Plugin]: ${plugin} 插件没有注册`);
-            }
-            const webcontent = pluginMap[panel];
-            webcontent?.send('__plugin__:call-panel', panel, method, ...args);
-        },
     },
-});
-
-const panelMap: Map<string, {
-    [key: string]: WebContents;
-}> = new Map();
-
-ipcMain.on('plugin:connect', async (event, plugin: string, panel: string) => {
-    const p = panelMap.get(plugin) || {};
-    p[panel] = event.sender;
-    panelMap.set(plugin, p);
 });

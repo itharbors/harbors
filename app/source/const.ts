@@ -3,7 +3,6 @@ import { join } from 'path';
 
 export const MODULE = {
     LAYOUT: join(__dirname, './module/layout/index.js'),
-    PANEL: join(__dirname, './module/panel/index.js'),
     PRELOAD_PANEL: join(__dirname, './module/preload-panel/index.js'),
     PRELOAD_WINDOW: join(__dirname, './module/preload-window/index.js'),
 };

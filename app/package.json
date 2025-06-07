@@ -7,7 +7,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@itharbors/electron-message": "file:../../electron-message",
+    "@itharbors/electron-message": "^0.1.1",
     "@itharbors/electron-panel": "^0.1.1",
     "@itharbors/module": "^0.2.2",
     "commander": "^13.1.0"

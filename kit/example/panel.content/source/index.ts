@@ -18,14 +18,15 @@ const instance = Editor.Module.registerPanel({
         const $script = document.createElement('script');
         $script.src = 'plugin://default-example/panel.content/static/marked.min.js';
         document.body.appendChild($script);
-
+        $script.addEventListener('load', () => {
         Editor.Message
-        .request('default-example', 'query-tab')
-        .then((tab: string) => {
-            instance.execture('changeTab', tab);
-        })
-        .catch((error) => {
-            console.error(error);
+            .request('default-example', 'query-tab')
+            .then((tab: string) => {
+                instance.execture('changeTab', tab);
+            })
+            .catch((error) => {
+                console.error(error);
+            });
         });
     },
 

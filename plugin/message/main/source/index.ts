@@ -54,10 +54,6 @@ export default Editor.Module.registerPlugin({
         },
     },
 
-    stash() {
-        return {};
-    },
-
     data() {
         return {};
     },
