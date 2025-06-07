@@ -22,7 +22,11 @@ export default Editor.Module.registerPlugin({
          */
         attach(pluginInfo: any, contributeInfo: any) {
             for (const name in contributeInfo) {
-                panelMap.set(`${pluginInfo.name}.${name}`, join(pluginInfo.path, contributeInfo[name]));
+                Editor.Panel.register(`${pluginInfo.name}.${name}`, {
+                    module: join(pluginInfo.path, contributeInfo[name]),
+                    width: 200,
+                    height: 200,
+                });
             }
         },
     
@@ -34,14 +38,10 @@ export default Editor.Module.registerPlugin({
         detach(pluginInfo: any, contributeInfo: any) {
             panelMap.forEach((path, name) => {
                 if (name.startsWith(pluginInfo.name)) {
-                    panelMap.delete(name);
+                    Editor.Panel.unregister(name);
                 }
             });
         },
-    },
-
-    stash() {
-        return {};
     },
 
     data() {

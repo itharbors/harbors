@@ -1,13 +1,16 @@
-
+import { readFileSync } from 'fs';
+import { join } from 'path';
+debugger
 const instance = Editor.Module.registerPanel({
-    stash() {
-        return {};
-    },
+    html: readFileSync(join(__dirname, '../template.html'), 'utf-8'),
+
     data() {
-        return {};
+        return {
+            num: 0,
+        };
     },
 
-    async load() {
+    load() {
         Editor.Message
             .request('default-example', 'query-tabs')
             .then((tabs: string[]) => {
@@ -37,7 +40,6 @@ const instance = Editor.Module.registerPanel({
             .catch((error) => {
                 console.error(error);
             });
-
     },
 
     method: {
@@ -49,3 +51,5 @@ const instance = Editor.Module.registerPanel({
         },
     },
 });
+
+exports.default = instance;

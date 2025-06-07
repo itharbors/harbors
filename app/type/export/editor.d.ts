@@ -1,4 +1,17 @@
 import type { TModule, ModuleContainer, TMethod, TData, TStash } from './module';
+export type PanelInfo = {
+    module: string;
+    width: number;
+    height: number;
+};
+
+export type PanelOption = {
+    html: string;
+}
+
+export type PanelStash = {
+    $html: HTMLElement,
+}
 
 export namespace Message {
     /**
@@ -46,7 +59,22 @@ export namespace Module {
      * 注意：该方法必须在入口文件里同步执行
      * @param module 
      */
-    export function registerPlugin<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: TContribute }): ModuleContainer<M, D, S>;
+    export function registerPlugin<C extends {} = {}>(module: TModule<C> & { contribute?: ModuleType.TContribute }): ModuleContainer<C>;
 
-    export function registerPanel<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S>;
+    export function registerPanel(module: TModule<PanelStash> & PanelOption): ModuleContainer<PanelStash>;
+}
+
+export namespace Panel {
+    /**
+     * 注册一个面板
+     * @param name 
+     * @param info 
+     */
+    export function register(name: string, info: PanelInfo): Promise<void>;
+
+    /**
+     * 卸载一个面板
+     * @param name 
+     */
+    export function unregister(name: string): Promise<void>;
 }

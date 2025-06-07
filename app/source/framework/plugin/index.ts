@@ -10,25 +10,20 @@ import { Plugin } from './plugin';
 
 export { contributeMap } from './plugin';
 
-export const instance = generateModule({
-    stash(): {
-        // 路径和 plugin 的映射关系，只要注册进来就会存放在 map 里
-        pathMap: Map<string, Plugin>;
-        // name 和 plugin 的映射关系，启动后才会放入这个 map
-        nameMap: Map<string, Plugin>;
-    } {
-        return {
-            pathMap: new Map(),
-            nameMap: new Map(),
-        };
-    },
+export const instance = generateModule<{
+    // 路径和 plugin 的映射关系，只要注册进来就会存放在 map 里
+    pathMap: Map<string, Plugin>;
+    // name 和 plugin 的映射关系，启动后才会放入这个 map
+    nameMap: Map<string, Plugin>;
+}>({
 
     data(): {} {
         return {};
     },
 
     register() {
-
+        this.pathMap = new Map();
+        this.nameMap = new Map();
     },
 
     load() {
@@ -36,7 +31,7 @@ export const instance = generateModule({
         protocol.handle('plugin', (request) => {
             const url = new URL(request.url);
 
-            const plugin = this.stash.nameMap.get(url.hostname);
+            const plugin = this.nameMap.get(url.hostname);
             if (!plugin) {
                 return new Response(null, { status: 404, statusText: 'Not Found' });
             }
@@ -69,7 +64,7 @@ export const instance = generateModule({
             const plugin = new Plugin(path);
             // 触发注册生命周期
             await plugin.module.run('register');
-            this.stash.pathMap.set(path, plugin);
+            this.pathMap.set(path, plugin);
             return plugin.info;
         },
 
@@ -81,12 +76,12 @@ export const instance = generateModule({
          */
         async unregister(path: string): Promise<TPluginInfo> {
             console.log(`[Plugin] 注销: ${basename(path)}`);
-            const plugin = this.stash.pathMap.get(path);
+            const plugin = this.pathMap.get(path);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
             }
             await plugin.module.run('unregister');
-            this.stash.pathMap.delete(path);
+            this.pathMap.delete(path);
             return plugin.info;
         },
 
@@ -98,26 +93,26 @@ export const instance = generateModule({
          */
         async load(path: string): Promise<TPluginInfo> {
             console.log(`[Plugin] 启动: ${basename(path)}`);
-            const plugin = this.stash.pathMap.get(path);
+            const plugin = this.pathMap.get(path);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
             }
 
-            const legacy = this.stash.nameMap.get(plugin.info.json.name);
+            const legacy = this.nameMap.get(plugin.info.json.name);
             if (legacy) {
                 await instance.execture('unload', legacy.info.path);
             }
 
             await plugin.module.run('load');
-            this.stash.nameMap.set(plugin.info.json.name, plugin);
+            this.nameMap.set(plugin.info.json.name, plugin);
 
             if (plugin.contributeData) {
                 for (const name in plugin.contributeData) {
-                    const p = this.stash.nameMap.get(name);
+                    const p = this.nameMap.get(name);
                     p && p.attach(plugin.info, plugin.contributeData[name]);
                 }
             }
-            this.stash.nameMap.forEach((p, name) => {
+            this.nameMap.forEach((p, name) => {
                 if (p.contributeData && plugin.info.json.name in p.contributeData) {
                     const contributeInfo = p.contributeData[plugin.info.json.name];
                     plugin.attach(p.info, contributeInfo);
@@ -135,13 +130,13 @@ export const instance = generateModule({
          */
         async unload(path: string): Promise<TPluginInfo> {
             console.log(`[Plugin] 关闭: ${basename(path)}`);
-            const plugin = this.stash.pathMap.get(path);
+            const plugin = this.pathMap.get(path);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${path}`);
             }
             await plugin.module.run('unload');
 
-            this.stash.nameMap.forEach((p, name) => {
+            this.nameMap.forEach((p, name) => {
                 if (p.contributeData && plugin.info.json.name in p.contributeData) {
                     const contributeInfo = p.contributeData[plugin.info.json.name];
                     plugin.detach(p.info, contributeInfo);
@@ -149,12 +144,12 @@ export const instance = generateModule({
             });
             if (plugin.contributeData) {
                 for (const name in plugin.contributeData) {
-                    const p = this.stash.nameMap.get(name);
+                    const p = this.nameMap.get(name);
                     p && p.detach(plugin.info, plugin.contributeData[name]);
                 }
             }
 
-            this.stash.nameMap.delete(plugin.info.json.name);
+            this.nameMap.delete(plugin.info.json.name);
             return plugin.info;
         },
 
@@ -165,7 +160,7 @@ export const instance = generateModule({
          */
         async queryInfos(options: { name?: string }): Promise<TPluginInfo[]> {
             const result: TPluginInfo[] = [];
-            this.stash.pathMap.forEach((Plugin, path) => {
+            this.pathMap.forEach((Plugin, path) => {
                 if (Plugin.info.json.name === options.name) {
                     result.push(Plugin.info);
                 }
@@ -181,7 +176,7 @@ export const instance = generateModule({
          * @returns 
          */
         async callPlugin(name: string, method: string, ...args: any[]) {
-            const plugin = this.stash.nameMap.get(name);
+            const plugin = this.nameMap.get(name);
             if (!plugin) {
                 throw new Error(`pluign in not defined ${name}`);
             }

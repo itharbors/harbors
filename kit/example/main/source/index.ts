@@ -7,7 +7,9 @@ const list = [
     '插件',
 ];
 
-export default Editor.Module.registerPlugin({
+export default Editor.Module.registerPlugin<{
+    tab: string;
+}>({
 
     contribute: {
         data: {
@@ -46,19 +48,15 @@ export default Editor.Module.registerPlugin({
             },
 
             panel: {
-                header: './panel.header/template.html',
-                hierarchy: './panel.hierarchy/template.html',
-                content: './panel.content/template.html',
+                header: './panel.header/dist/index.js',
+                hierarchy: './panel.hierarchy/dist/index.js',
+                content: './panel.content/dist/index.js',
             },
         },
     },
 
-    stash(): {
-        tab: string,
-    } {
-        return {
-            tab: list[0],
-        };
+    register() {
+        this.tab = list[0];
     },
 
     data() {
@@ -80,11 +78,11 @@ export default Editor.Module.registerPlugin({
         },
 
         queryTab(): string {
-            return this.stash.tab;
+            return this.tab;
         },
 
         changeTab(tab: string) {
-            this.stash.tab = tab;
+            this.tab = tab;
         },
 
         queryContent(tab: string) {

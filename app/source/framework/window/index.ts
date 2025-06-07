@@ -8,22 +8,17 @@ import { Window } from './window';
 import { instance as Plugin} from '../plugin';
 import { instance as Kit} from '../kit';
 
-export const instance = generateModule({
+import { callMethod } from '@itharbors/electron-panel/browser';
 
-    stash(): {
-        windowMap: WeakMap<WebContents, Window>
-    } {
-        return {
-            windowMap: new WeakMap(),
-        }; 
-    },
-
+export const instance = generateModule<{
+     windowMap: WeakMap<WebContents, Window>;
+}>({
     data(): {} {
         return {};
     },
 
     register() {
-
+        this.windowMap = new WeakMap();
     },
 
     load() {
@@ -33,7 +28,7 @@ export const instance = generateModule({
             let result: PluginMessageOption | undefined = undefined;
             for (let item of info.method) {
                 if (item.panel) {
-                    Plugin.execture('callPanel', option.module, item.panel, item.function, ...option.args);
+                    callMethod(`${option.module}.${item.panel}`, item.function, ...option.args);
                 } else {
                     result = await Plugin.execture('callPlugin', option.module, item.function, ...option.args);
                 }
@@ -52,7 +47,7 @@ export const instance = generateModule({
         });
 
         ipcMain.on('window:query-layout', async (event, name) => {
-            const win = this.stash.windowMap.get(event.sender);
+            const win = this.windowMap.get(event.sender);
             const path = await Kit.execture('getLayout', win?.kit, 'default');
             event.reply('window:query-layout-reply', path);
         });
@@ -63,7 +58,7 @@ export const instance = generateModule({
             kit = kit || 'default';
             const win = new Window(kit);
             await win.init();
-            win.win && this.stash.windowMap.set(win.win?.webContents, win);
+            win.win && this.windowMap.set(win.win?.webContents, win);
         },
     },
 });

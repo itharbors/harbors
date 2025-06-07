@@ -1,13 +1,11 @@
 /**
  * 向渲染进程暴露安全的 API
  */
-import { convertURL } from '../panel';
+import { join } from 'path';
 
+import { registerPreload } from '@itharbors/electron-panel/renderer';
 import '../layout/index';
 
-import * as message from './message';
+// import * as message from './message';
 
-convertURL(async (name: string) => {
-    const path = await message.request('panel', 'query-path', name);
-    return path || name;
-});
+registerPreload(join(__dirname, '../preload-panel/index.js'));

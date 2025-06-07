@@ -1,8 +1,11 @@
 
 import type { Message as MessageType, Module as ModuleType } from '@type/editor';
+import type { PanelInfo } from '@itharbors/electron-panel/browser';
+import type { PanelStash, PanelOption } from '@itharbors/electron-panel/panel';
 
-import { ModuleContainer, TModule, TStash, TData, TMethod } from '@itharbors/module';
-import { instance as Plugin, contributeMap } from './framework/plugin';
+import { ModuleContainer, TModule } from '@itharbors/module';
+import { instance as PluginModule, contributeMap } from './framework/plugin';
+import { instance as PanelModule } from './framework/panel';
 
 export const Message = {
 
@@ -14,14 +17,14 @@ export const Message = {
      * @param args 
      */
     async request(plugin: string, message: string, ...args: any[]) {
-        const info: MessageType.MessageItem =  await Plugin.execture('callPlugin', 'message', 'query-message', plugin, message);
+        const info: MessageType.MessageItem =  await PluginModule.execture('callPlugin', 'message', 'query-message', plugin, message);
 
         let result: any;
         for (let item of info.method) {
             if (item.panel) {
-                Plugin.execture('callPanel', plugin, item.panel, item.function, args);
+                PluginModule.execture('callPanel', plugin, item.panel, item.function, args);
             } else {
-                result = await Plugin.execture('callPlugin', plugin, item.function, args);
+                result = await PluginModule.execture('callPlugin', plugin, item.function, args);
             }
         }
         result = result || undefined;
@@ -35,8 +38,8 @@ export const Module = {
      * @param module 
      * @returns 
      */
-    registerPlugin<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: ModuleType.TContribute }): ModuleContainer<M, D, S> {
-        const mod = new ModuleContainer(module);
+    registerPlugin<C extends {} = {}>(module: TModule<C> & { contribute?: ModuleType.TContribute }): ModuleContainer<C> {
+        const mod = new ModuleContainer<C>(module);
         if (module.contribute) {
             contributeMap.set(mod, module.contribute);
         }
@@ -48,7 +51,26 @@ export const Module = {
      * @param module 
      * @returns 
      */
-    registerPanel<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
+    registerPanel(module: TModule<PanelStash> & PanelOption): ModuleContainer<PanelStash> {
         throw new Error('Panel 不能在插件进程注册');
+    },
+};
+
+export const Panel = {
+    /**
+     * 注册面板
+     * @param name 
+     * @param info 
+     */
+    async register(name: string, info: PanelInfo) {
+        return PanelModule.execture('register', name, info);
+    },
+
+    /**
+     * 卸载面板
+     * @param name 
+     */
+    async unregister(name: string) {
+        return PanelModule.execture('unregister', name);
     },
 };

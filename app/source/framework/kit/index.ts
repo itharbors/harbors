@@ -7,15 +7,9 @@ import { generateModule } from '@itharbors/module';
 
 import { Kit } from './kit';
 
-export const instance = generateModule({
-    stash(): {
-        nameMap: Map<string, Kit>;
-    } {
-        return {
-            nameMap: new Map(),
-        };
-    },
-
+export const instance = generateModule<{
+    nameMap: Map<string, Kit>;
+}>({
     data(): {
         name: string;
     } {
@@ -25,7 +19,7 @@ export const instance = generateModule({
     },
 
     register() {
-
+        this.nameMap = new Map();
     },
 
     load() {
@@ -41,8 +35,8 @@ export const instance = generateModule({
             console.log(`[Kit] 启动: ${basename(path)}`);
             const kit = new Kit(path);
             await kit.init();
-            this.stash.nameMap.set(kit.name, kit);
-            this.set('name', kit.name);
+            this.nameMap.set(kit.name, kit);
+            this.data.set('name', kit.name);
         },
 
         /**
@@ -51,22 +45,22 @@ export const instance = generateModule({
          */
         async unload(path: string) {
             console.log(`[Kit] 关闭: ${basename(path)}`);
-            this.stash.nameMap.forEach((kit, name) => {
+            this.nameMap.forEach((kit, name) => {
                 if (kit.path === path) {
-                    this.stash.nameMap.delete(name);
+                    this.nameMap.delete(name);
                 }
             });
         },
 
         async getLayout(kitName?: string, layoutName?: string) {
             kitName = kitName || 'default';
-            const kit = this.stash.nameMap.get(kitName);
+            const kit = this.nameMap.get(kitName);
             return kit?.layout[layoutName || 'default'];
         },
 
         async getWindow(name?: string) {
             name = name || 'default';
-            const kit = this.stash.nameMap.get(name);
+            const kit = this.nameMap.get(name);
             return kit?.window;
         },
     },

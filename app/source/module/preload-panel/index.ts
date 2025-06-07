@@ -1,9 +1,10 @@
 import type { Module as ModuleType } from '@type/editor';
 import type { PluginMessageOption } from '@type/internal';
-import type { TModule, ModuleContainer, TMethod, TData, TStash } from '@type/module';
+import type { TModule, ModuleContainer } from '@type/module';
+import type { PanelStash, PanelOption } from '@itharbors/electron-panel/panel';
 
 import { ipcRenderer } from 'electron';
-import { generateModule } from '@itharbors/module';
+import { registerPanel } from '@itharbors/electron-panel/panel';
 
 type MessageRequest = {
     timestamp: number;
@@ -65,15 +66,22 @@ const exposeInterface = {
     },
 
     Module: {
-        registerPlugin<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S> & { contribute?: ModuleType.TContribute }): ModuleContainer<M, D, S> {
+        registerPlugin<C extends {} = {}>(module: TModule<C> & { contribute?: ModuleType.TContribute }): ModuleContainer<C> {
             throw new Error('Plugin 不能在 Panel 进程注册');
         },
 
-        registerPanel<M extends TMethod, D extends () => TData, S extends () => TStash>(module: TModule<M, D, S>): ModuleContainer<M, D, S> {
-            info.module = generateModule(module);
-            info.module.run('register');
-            info.module.run('load');
-            return info.module;
+        registerPanel(module: TModule<PanelStash> & PanelOption): ModuleContainer<PanelStash> {
+            return registerPanel(module);
+        },
+    },
+
+    Panel: {
+        async register(name: string, info: any) {
+            throw new Error('Panel 不能在 Panel 进程注册');
+        },
+
+        async unregister(name: string) {
+            throw new Error('Panel 不能在 Panel 进程注册');
         },
     },
 };
