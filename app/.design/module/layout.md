@@ -28,7 +28,7 @@ classDiagram
         -parseItem(item: TLayoutItem): HTMLElement
     }
 
-    Layout --&gt; layoutUtils: 使用
+    Layout --> layoutUtils: 使用
 ```
 
 ## 数据结构
@@ -155,18 +155,18 @@ type TLayoutItem = {
 
 ```mermaid
 flowchart TD
-    A[元素插入文档] --&gt; B[connectedCallback]
-    B --&gt; C[updateContent]
-    C --&gt; D{name 已变化?}
-    D --&gt;|否| E[结束]
-    D --&gt;|是| F[请求布局文件路径]
-    F --&gt; G[injection 注入样式]
-    G --&gt; H[读取布局 JSON]
-    H --&gt; I[parse 解析]
-    I --&gt; J[递归 parseItem]
-    J --&gt; K[构建 DOM 树]
-    K --&gt; L[添加到元素]
-    L --&gt; E
+    A[元素插入文档] --> B[connectedCallback]
+    B --> C[updateContent]
+    C --> D{name 已变化?}
+    D -->|否| E[结束]
+    D -->|是| F[请求布局文件路径]
+    F --> G[injection 注入样式]
+    G --> H[读取布局 JSON]
+    H --> I[parse 解析]
+    I --> J[递归 parseItem]
+    J --> K[构建 DOM 树]
+    K --> L[添加到元素]
+    L --> E
 ```
 
 ## 依赖关系
@@ -178,7 +178,7 @@ flowchart TD
 ## 使用示例
 
 ```html
-&lt;!-- 在 HTML 中使用 ui-layout 元素 --&gt;
+&lt;!-- 在 HTML 中使用 ui-layout 元素 -->
 &lt;ui-layout name="default"&gt;&lt;/ui-layout&gt;
 ```
 

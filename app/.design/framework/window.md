@@ -12,24 +12,32 @@ classDiagram
     class Window {
         -_kit: string
         -_id: number
-        -_win?: BrowserWindow
+        -_win: BrowserWindow
         +id: number
         +kit: string
-        +win?: BrowserWindow
+        +win: BrowserWindow
         +constructor(kit: string)
-        +init(): Promise&lt;void&gt;
+        +init(): Promise<void>
     }
 
     class WindowModule {
-        -windowMap: WeakMap&lt;WebContents, Window&gt;
+        -windowMap: WeakMap<WebContents, Window>
         +register()
         +load()
-        +open(kit?: string): Promise&lt;void&gt;
+        +open(kit: string): Promise<void>
     }
 
-    WindowModule --&gt; Window: 创建和管理
-    WindowModule --&gt; "@itharbors/electron-message/browser": 消息监听
-    WindowModule --&gt; "@itharbors/electron-panel/browser": 面板方法调用
+    class ElectronMessage {
+        <<external>>
+    }
+
+    class ElectronPanel {
+        <<external>>
+    }
+
+    WindowModule --> Window: 创建和管理
+    WindowModule --> ElectronMessage: 消息监听
+    WindowModule --> ElectronPanel: 面板方法调用
 ```
 
 ## 流程图
@@ -38,16 +46,16 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    A[开始] --&gt; B[调用 WindowModule.open]
-    B --&gt; C[创建 Window 实例]
-    C --&gt; D[调用 window.init]
-    D --&gt; E[从 Kit 获取窗口配置]
-    E --&gt; F{配置存在?}
-    F --&gt;|否| G[抛出错误]
-    F --&gt;|是| H[创建 BrowserWindow]
-    H --&gt; I[加载页面文件]
-    I --&gt; J[添加到 windowMap]
-    J --&gt; K[结束]
+    A[开始] --> B[调用 WindowModule.open]
+    B --> C[创建 Window 实例]
+    C --> D[调用 window.init]
+    D --> E[从 Kit 获取窗口配置]
+    E --> F{配置存在?}
+    F -->|否| G[抛出错误]
+    F -->|是| H[创建 BrowserWindow]
+    H --> I[加载页面文件]
+    I --> J[添加到 windowMap]
+    J --> K[结束]
 ```
 
 ## 主要方法

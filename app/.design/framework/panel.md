@@ -12,11 +12,15 @@ classDiagram
     class PanelModule {
         +register()
         +load()
-        +register(name: string, info: PanelInfo): Promise&lt;void&gt;
-        +unregister(name: string): Promise&lt;void&gt;
+        +register(name: string, info: PanelInfo): Promise<void>
+        +unregister(name: string): Promise<void>
     }
 
-    PanelModule --&gt; "@itharbors/electron-panel/browser": 使用
+    class ElectronPanel {
+        <<external>>
+    }
+
+    PanelModule --> ElectronPanel: 使用
 ```
 
 ## 主要方法

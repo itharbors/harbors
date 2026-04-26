@@ -47,13 +47,13 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    A[应用启动] --&gt; B[导入 getElectronService]
-    B --&gt; C[默认使用 ElectronMainService]
-    D[测试环境] --&gt; E[导入 setElectronService]
-    E --&gt; F[替换为 ElectronMainServiceMock]
-    C --&gt; G[使用服务 API]
-    F --&gt; G
-    G --&gt; H[结束]
+    A[应用启动] --> B[导入 getElectronService]
+    B --> C[默认使用 ElectronMainService]
+    D[测试环境] --> E[导入 setElectronService]
+    E --> F[替换为 ElectronMainServiceMock]
+    C --> G[使用服务 API]
+    F --> G
+    G --> H[结束]
 ```
 
 ## 数据结构

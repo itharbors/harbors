@@ -19,12 +19,16 @@ classDiagram
     }
 
     class message {
-        +request(plugin, message, ...args): Promise&lt;any&gt;
+        +request(plugin, message, ...args): Promise<any>
     }
 
-    preloadWindow --&gt; layout: 引入
-    preloadWindow --&gt; message: 包含
-    preloadWindow --&gt; "@itharbors/electron-panel/renderer": 使用
+    class ElectronPanel {
+        <<external>>
+    }
+
+    preloadWindow --> layout: 引入
+    preloadWindow --> message: 包含
+    preloadWindow --> ElectronPanel: 使用
 ```
 
 ## 主要功能
@@ -72,12 +76,12 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    A[窗口预加载脚本执行] --&gt; B[引入 layout 模块]
-    B --&gt; C[注册 ui-layout 自定义元素]
-    C --&gt; D[注册面板预加载脚本]
-    D --&gt; E[加载 preload-panel 脚本]
-    E --&gt; F[暴露 Editor API]
-    F --&gt; G[窗口就绪]
+    A[窗口预加载脚本执行] --> B[引入 layout 模块]
+    B --> C[注册 ui-layout 自定义元素]
+    C --> D[注册面板预加载脚本]
+    D --> E[加载 preload-panel 脚本]
+    E --> F[暴露 Editor API]
+    F --> G[窗口就绪]
 ```
 
 ## 依赖关系

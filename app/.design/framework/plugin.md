@@ -20,24 +20,24 @@ classDiagram
     }
 
     class PluginModule {
-        -pathMap: Map&lt;string, Plugin&gt;
-        -nameMap: Map&lt;string, Plugin&gt;
+        -pathMap: Map<string, Plugin>
+        -nameMap: Map<string, Plugin>
         +register()
         +load()
-        +register(path: string): Promise&lt;TPluginInfo&gt;
-        +unregister(path: string): Promise&lt;TPluginInfo&gt;
-        +load(path: string): Promise&lt;TPluginInfo&gt;
-        +unload(path: string): Promise&lt;TPluginInfo&gt;
-        +queryInfos(options: { name?: string }): Promise&lt;TPluginInfo[]&gt;
-        +callPlugin(name: string, method: string, ...args: any[]): Promise&lt;any&gt;
+        +register(path: string): Promise<TPluginInfo>
+        +unregister(path: string): Promise<TPluginInfo>
+        +load(path: string): Promise<TPluginInfo>
+        +unload(path: string): Promise<TPluginInfo>
+        +queryInfos(options: object): Promise<TPluginInfo[]>
+        +callPlugin(name: string, method: string, ...args: any[]): Promise<any>
     }
 
     class contributeMap {
-        &lt;&lt;WeakMap&gt;&gt;
+        <<WeakMap>>
     }
 
-    PluginModule --&gt; Plugin: 管理
-    Plugin --&gt; contributeMap: 关联
+    PluginModule --> Plugin: 管理
+    Plugin --> contributeMap: 关联
 ```
 
 ## 流程图
@@ -46,32 +46,32 @@ classDiagram
 
 ```mermaid
 flowchart TD
-    A[开始] --&gt; B[调用 PluginModule.load]
-    B --&gt; C{插件已注册?}
-    C --&gt;|否| D[抛出错误]
-    C --&gt;|是| E{已有同名插件?}
-    E --&gt;|是| F[先卸载旧插件]
-    E --&gt;|否| G[执行插件 load 生命周期]
-    F --&gt; G
-    G --&gt; H[添加到 nameMap]
-    H --&gt; I[处理插件贡献数据]
-    I --&gt; J[通知其他插件 attach]
-    J --&gt; K[通知当前插件 attach 其他插件]
-    K --&gt; L[结束]
+    A[开始] --> B[调用 PluginModule.load]
+    B --> C{插件已注册?}
+    C -->|否| D[抛出错误]
+    C -->|是| E{已有同名插件?}
+    E -->|是| F[先卸载旧插件]
+    E -->|否| G[执行插件 load 生命周期]
+    F --> G
+    G --> H[添加到 nameMap]
+    H --> I[处理插件贡献数据]
+    I --> J[通知其他插件 attach]
+    J --> K[通知当前插件 attach 其他插件]
+    K --> L[结束]
 ```
 
 ### 插件关闭流程图
 
 ```mermaid
 flowchart TD
-    A[开始] --&gt; B[调用 PluginModule.unload]
-    B --&gt; C{插件已注册?}
-    C --&gt;|否| D[抛出错误]
-    C --&gt;|是| E[执行插件 unload 生命周期]
-    E --&gt; F[通知其他插件 detach]
-    F --&gt; G[通知当前插件 detach 其他插件]
-    G --&gt; H[从 nameMap 中删除]
-    H --&gt; I[结束]
+    A[开始] --> B[调用 PluginModule.unload]
+    B --> C{插件已注册?}
+    C -->|否| D[抛出错误]
+    C -->|是| E[执行插件 unload 生命周期]
+    E --> F[通知其他插件 detach]
+    F --> G[通知当前插件 detach 其他插件]
+    G --> H[从 nameMap 中删除]
+    H --> I[结束]
 ```
 
 ## 数据结构

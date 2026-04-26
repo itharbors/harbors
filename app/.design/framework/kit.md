@@ -17,20 +17,20 @@ classDiagram
         +layout: object
         +window: object
         +constructor(path: string)
-        +init(): Promise&lt;void&gt;
+        +init(): Promise<void>
     }
 
     class KitModule {
-        -nameMap: Map&lt;string, Kit&gt;
+        -nameMap: Map<string, Kit>
         +register()
         +load()
-        +load(path: string): Promise&lt;void&gt;
-        +unload(path: string): Promise&lt;void&gt;
-        +getLayout(kitName?: string, layoutName?: string): Promise&lt;string&gt;
-        +getWindow(name?: string): Promise&lt;object&gt;
+        +load(path: string): Promise<void>
+        +unload(path: string): Promise<void>
+        +getLayout(kitName: string, layoutName: string): Promise<string>
+        +getWindow(name: string): Promise<object>
     }
 
-    KitModule --&gt; Kit: 管理
+    KitModule --> Kit: 管理
 ```
 
 ## 数据结构
@@ -130,18 +130,18 @@ type KitJSON = {
 
 ```mermaid
 flowchart TD
-    A[开始] --&gt; B[调用 KitModule.load]
-    B --&gt; C[创建 Kit 实例]
-    C --&gt; D[读取 package.json]
-    D --&gt; E[解析配置]
-    E --&gt; F[调用 Kit.init]
-    F --&gt; G[遍历插件列表]
-    G --&gt; H[注册插件]
-    H --&gt; I[启动插件]
-    I --&gt; J{还有插件?}
-    J --&gt;|是| G
-    J --&gt;|否| K[添加到 nameMap]
-    K --&gt; L[结束]
+    A[开始] --> B[调用 KitModule.load]
+    B --> C[创建 Kit 实例]
+    C --> D[读取 package.json]
+    D --> E[解析配置]
+    E --> F[调用 Kit.init]
+    F --> G[遍历插件列表]
+    G --> H[注册插件]
+    H --> I[启动插件]
+    I --> J{还有插件?}
+    J -->|是| G
+    J -->|否| K[添加到 nameMap]
+    K --> L[结束]
 ```
 
 ## 依赖关系
