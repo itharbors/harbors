@@ -10,7 +10,7 @@
   },
   "scripts": {
     "prepublishOnly": "npm run clean && npm install && npm run build && npm run test",
-    "preinstall": "cd ../workflow && npm install",
+    "preinstall": "cd ./workflow && npm install",
     "start": "npx electron ./app",
     "build": "cd ./workflow && npm run build",
     "clean": "cd ./workflow && npm run clean",

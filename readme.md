@@ -57,27 +57,27 @@ const result = await Editor.Plugin.execute('callPlugin', 'plugin-name', 'method'
 
 ### Framework Design
 
-- [Kit Design Document](./app/.design/framework/kit.md)
-- [Plugin Design Document](./app/.design/framework/plugin.md)
-- [Panel Design Document](./app/.design/framework/panel.md)
-- [Window Design Document](./app/.design/framework/window.md)
-- [Module Standard Specification](./app/.design/framework/module-standard.md)
+- [Kit Design Document](./app/design/framework/kit.md)
+- [Plugin Design Document](./app/design/framework/plugin.md)
+- [Panel Design Document](./app/design/framework/panel.md)
+- [Window Design Document](./app/design/framework/window.md)
+- [Module Standard Specification](./app/design/framework/module-standard.md)
 
 ### Module Design
 
-- [Layout Design Document](./app/.design/module/layout.md)
-- [Preload-Panel Design Document](./app/.design/module/preload-panel.md)
-- [Preload-Window Design Document](./app/.design/module/preload-window.md)
+- [Layout Design Document](./app/design/module/layout.md)
+- [Preload-Panel Design Document](./app/design/module/preload-panel.md)
+- [Preload-Window Design Document](./app/design/module/preload-window.md)
 
 ### Service Design
 
-- [Electron Service Design Document](./app/.design/service/electron.md)
+- [Electron Service Design Document](./app/design/service/electron.md)
 
 ### Built-in Plugins Design
 
-- [Main Menu Plugin Design Document](./plugin/main-menu/.design/index.md)
-- [Message Plugin Design Document](./plugin/message/.design/index.md)
-- [Panel Plugin Design Document](./plugin/panel/.design/index.md)
+- [Main Menu Plugin Design Document](./plugin/main-menu/design/index.md)
+- [Message Plugin Design Document](./plugin/message/design/index.md)
+- [Panel Plugin Design Document](./plugin/panel/design/index.md)
 
 ## 📁 Project Structure
 

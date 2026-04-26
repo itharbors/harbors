@@ -57,27 +57,27 @@ const result = await Editor.Plugin.execute('callPlugin', 'plugin-name', 'method'
 
 ### 框架设计
 
-- [Kit 套件设计文档](./app/.design/framework/kit_cn.md)
-- [Plugin 插件设计文档](./app/.design/framework/plugin_cn.md)
-- [Panel 面板设计文档](./app/.design/framework/panel_cn.md)
-- [Window 窗口设计文档](./app/.design/framework/window_cn.md)
-- [模块标准规范](./app/.design/framework/module-standard_cn.md)
+- [Kit 套件设计文档](./app/design/framework/kit_cn.md)
+- [Plugin 插件设计文档](./app/design/framework/plugin_cn.md)
+- [Panel 面板设计文档](./app/design/framework/panel_cn.md)
+- [Window 窗口设计文档](./app/design/framework/window_cn.md)
+- [模块标准规范](./app/design/framework/module-standard_cn.md)
 
 ### 模块设计
 
-- [Layout 布局设计文档](./app/.design/module/layout_cn.md)
-- [Preload-Panel 面板预加载设计文档](./app/.design/module/preload-panel_cn.md)
-- [Preload-Window 窗口预加载设计文档](./app/.design/module/preload-window_cn.md)
+- [Layout 布局设计文档](./app/design/module/layout_cn.md)
+- [Preload-Panel 面板预加载设计文档](./app/design/module/preload-panel_cn.md)
+- [Preload-Window 窗口预加载设计文档](./app/design/module/preload-window_cn.md)
 
 ### 服务设计
 
-- [Electron 服务设计文档](./app/.design/service/electron_cn.md)
+- [Electron 服务设计文档](./app/design/service/electron_cn.md)
 
 ### 内置插件设计
 
-- [Main Menu 主菜单插件设计文档](./plugin/main-menu/.design/index_cn.md)
-- [Message 消息插件设计文档](./plugin/message/.design/index_cn.md)
-- [Panel 面板插件设计文档](./plugin/panel/.design/index_cn.md)
+- [Main Menu 主菜单插件设计文档](./plugin/main-menu/design/index_cn.md)
+- [Message 消息插件设计文档](./plugin/message/design/index_cn.md)
+- [Panel 面板插件设计文档](./plugin/panel/design/index_cn.md)
 
 ## 📁 项目结构
 
