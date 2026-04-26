@@ -44,15 +44,7 @@ export const instance = generateModule<{
         },
 
         /**
-         * 获取所有菜单
-         * @returns 菜单映射
-         */
-        get() {
-            return this.menuMap;
-        },
-
-        /**
-         * 重置菜单
+         * 重置菜单，清空所有菜单数据
          */
         reset() {
             this.menuMap.clear();
@@ -81,11 +73,7 @@ function parseMenu(menuMapData: Map<string, MessageType.MessageJSON>): MenuItemC
 }
 
 function updateMenu(menuMap: Map<string, MessageType.MessageJSON>) {
-    try {
-        const menuTemplate = parseMenu(menuMap);
-        const menu = Menu.buildFromTemplate(menuTemplate);
-        Menu.setApplicationMenu(menu);
-    } catch (error) {
-        // 在非 Electron 环境中忽略错误
-    }
+    const menuTemplate = parseMenu(menuMap);
+    const menu = Menu.buildFromTemplate(menuTemplate);
+    Menu.setApplicationMenu(menu);
 }
