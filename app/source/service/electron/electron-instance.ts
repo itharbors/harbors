@@ -1,9 +1,8 @@
 // Electron 服务实例管理
 import type { IElectronMainService } from './electron';
-import { ElectronMainService } from './electron-real';
 
-// 默认使用真实实现
-let electronService: IElectronMainService = new ElectronMainService();
+// 默认先设为 null，让 service/index.ts 来设置
+let electronService: IElectronMainService;
 
 /**
  * 获取 Electron 服务

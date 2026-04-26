@@ -22,11 +22,14 @@ export default Editor.Module.registerPlugin({
          */
         attach(pluginInfo: any, contributeInfo: any) {
             for (const name in contributeInfo) {
-                Editor.Panel.register(`${pluginInfo.name}.${name}`, {
-                    module: join(pluginInfo.path, contributeInfo[name]),
+                const fullName = `${pluginInfo.name}.${name}`;
+                const modulePath = join(pluginInfo.path, contributeInfo[name]);
+                Editor.Panel.register(fullName, {
+                    module: modulePath,
                     width: 200,
                     height: 200,
                 });
+                panelMap.set(fullName, modulePath);
             }
         },
     
@@ -36,11 +39,16 @@ export default Editor.Module.registerPlugin({
          * @param contributeInfo 
          */
         detach(pluginInfo: any, contributeInfo: any) {
+            const keysToDelete: string[] = [];
             panelMap.forEach((path, name) => {
                 if (name.startsWith(pluginInfo.name)) {
                     Editor.Panel.unregister(name);
+                    keysToDelete.push(name);
                 }
             });
+            for (const key of keysToDelete) {
+                panelMap.delete(key);
+            }
         },
     },
 

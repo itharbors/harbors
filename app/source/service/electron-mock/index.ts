@@ -1,6 +1,6 @@
 // Electron Mock 实现（用于测试环境）
 
-import type { IElectronMainService, IElectronRendererService, WindowConfig, ProtocolHandler } from './electron';
+import type { IElectronMainService, IElectronRendererService, WindowConfig, ProtocolHandler } from '../electron/electron';
 
 /**
  * Electron 主进程 Mock 服务

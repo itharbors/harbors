@@ -7,10 +7,17 @@ export const MODULE = {
     PRELOAD_WINDOW: join(__dirname, './module/preload-window/index.js'),
 };
 
-// 检查上述文件是否存在
-for (const name in MODULE) {
-    const file = MODULE[name as keyof typeof MODULE];
-    if (!existsSync(file)) {
-        throw new Error(`[App] 文件不存在 ${file}`);
+// 检测运行环境
+const isElectronEnvironment = typeof process !== 'undefined' && 
+    process.versions && 
+    !!process.versions.electron;
+
+// 只在 Electron 环境中检查上述文件是否存在
+if (isElectronEnvironment) {
+    for (const name in MODULE) {
+        const file = MODULE[name as keyof typeof MODULE];
+        if (!existsSync(file)) {
+            throw new Error(`[App] 文件不存在 ${file}`);
+        }
     }
 }

@@ -6,7 +6,7 @@ export { instance as Window } from './window';
 export { instance as Plugin } from './plugin';
 export { instance as Kit } from './kit';
 
-export async function runModuleLifeCycle(lifecycle: 'register' | 'load') {
+export async function runModuleLifeCycle(lifecycle: 'register' | 'load' | 'unload' | 'unregister') {
     await Plugin.run(lifecycle);
     await Window.run(lifecycle);
     await Kit.run(lifecycle);
