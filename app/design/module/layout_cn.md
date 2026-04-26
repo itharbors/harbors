@@ -19,7 +19,7 @@ classDiagram
         +connectedCallback()
         +disconnectedCallback()
         +attributeChangedCallback(name, oldValue, newValue)
-        +updateContent(): Promise&lt;void&gt;
+        +updateContent(): Promise<void>
     }
 
     class layoutUtils {
@@ -178,8 +178,8 @@ flowchart TD
 ## 使用示例
 
 ```html
-&lt;!-- 在 HTML 中使用 ui-layout 元素 -->
-&lt;ui-layout name="default"&gt;&lt;/ui-layout&gt;
+<!-- 在 HTML 中使用 ui-layout 元素 -->
+<ui-layout name="default"></ui-layout>
 ```
 
 ```typescript

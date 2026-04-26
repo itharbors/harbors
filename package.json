@@ -1,26 +1,31 @@
 {
-  "name": "harbors",
+  "name": "@itharbors/harbors",
   "version": "0.1.0",
+  "workspaces": ["app"],
   "bin": "./workflow/dist/cli.js",
   "description": "",
-  "main": "index.js",
+  "main": "./app/dist/index.js",
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
-    "preinstall": "cd ./app && npm install && cd ../workflow && npm install",
+    "prepublishOnly": "npm run clean && npm install && npm run build && npm run test",
+    "preinstall": "cd ../workflow && npm install",
     "start": "npx electron ./app",
     "build": "cd ./workflow && npm run build",
     "clean": "cd ./workflow && npm run clean",
-    "test": "NODE_ENV=test npm run build && tsx --test --test-concurrency=1 ./test/**/*.spec.ts",
+    "test": "tsx --test --test-concurrency=1 ./test/**/*.spec.ts",
     "ci": "npm install && npm run build && npm run test"
   },
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "dependencies": {
-    "electron": "^35.2.1",
-    "esbuild": "^0.25.3",
-    "typescript": "^5.8.3"
+    "electron": "^35.2.1"
   },
   "devDependencies": {
     "@types/node": "^22.15.2",
-    "tsx": "^4.21.0"
+    "esbuild": "^0.25.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3"
   }
 }

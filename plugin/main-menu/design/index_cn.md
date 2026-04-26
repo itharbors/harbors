@@ -34,7 +34,7 @@ flowchart TD
     B --> C[调用 Editor.Menu.set]
     C --> D[更新菜单数据]
     D --> E[重新生成菜单]
-    
+
     F[插件卸载] --> G[触发 detach 事件]
     G --> H[调用 Editor.Menu.remove]
     H --> I[移除菜单数据]

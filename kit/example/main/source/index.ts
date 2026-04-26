@@ -2,9 +2,9 @@ import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const list = [
-    '概览',
-    '套件',
-    '插件',
+    'Overview',
+    'Kit',
+    'Plugin',
 ];
 
 export default Editor.Module.registerPlugin<{

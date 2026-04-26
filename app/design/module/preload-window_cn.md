@@ -62,7 +62,7 @@ classDiagram
 - `message`: 消息名称
 - `...args`: 消息参数
 
-**返回值**: `Promise&lt;any&gt;` - 消息返回结果
+**返回值**: `Promise<any>` - 消息返回结果
 
 **说明**:
 - 通讯 API，对外屏蔽内部实现
@@ -97,7 +97,7 @@ flowchart TD
 // 该模块是窗口预加载脚本，自动执行，无需手动调用
 
 // 窗口进程中可以直接使用 ui-layout 元素
-// &lt;ui-layout name="default"&gt;&lt;/ui-layout&gt;
+// <ui-layout name="default"></ui-layout>
 
 // 窗口进程中可以使用 message 模块（如果暴露）
 // import { request } from '@module/preload-window/message';

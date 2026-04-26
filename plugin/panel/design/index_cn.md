@@ -1,4 +1,4 @@
-# Panel 插件设计文档
+# Panel 面板插件设计文档
 
 ## 文件信息
 - **源文件路径**: `plugin/panel/main/source/`
@@ -36,7 +36,7 @@ flowchart TD
     D --> E[构建面板路径]
     E --> F[调用 Editor.Panel.register]
     F --> G[存储到 panelMap]
-    
+
     H[插件卸载] --> I[触发 detach 事件]
     I --> J[遍历 panelMap]
     J --> K[查找插件相关面板]
@@ -139,7 +139,7 @@ export default Editor.Module.registerPlugin({
 import { instance as Plugin } from '@framework/plugin';
 
 // 查询面板路径
-const panelPath = await Plugin.execture('callPlugin', 'panel', 'queryPath', 'test-plugin.my-panel');
+const panelPath = await Plugin.execute('callPlugin', 'panel', 'queryPath', 'test-plugin.my-panel');
 console.log(panelPath);
 // 输出: /path/to/test-plugin/source/panel.js
 ```

@@ -127,7 +127,7 @@ type TPluginInfo = {
 **参数**:
 - `path`: 插件在磁盘上的绝对路径地址
 
-**返回值**: `Promise&lt;TPluginInfo&gt;` - 插件信息
+**返回值**: `Promise<TPluginInfo>` - 插件信息
 
 **流程**:
 1. 创建 Plugin 实例
@@ -141,7 +141,7 @@ type TPluginInfo = {
 **参数**:
 - `path`: 插件在磁盘上的绝对路径地址
 
-**返回值**: `Promise&lt;TPluginInfo&gt;` - 插件信息
+**返回值**: `Promise<TPluginInfo>` - 插件信息
 
 **流程**:
 1. 从 pathMap 获取插件
@@ -155,7 +155,7 @@ type TPluginInfo = {
 **参数**:
 - `path`: 插件在磁盘上的绝对路径地址
 
-**返回值**: `Promise&lt;TPluginInfo&gt;` - 插件信息
+**返回值**: `Promise<TPluginInfo>` - 插件信息
 
 **流程**:
 1. 从 pathMap 获取插件
@@ -171,7 +171,7 @@ type TPluginInfo = {
 **参数**:
 - `path`: 插件在磁盘上的绝对路径地址
 
-**返回值**: `Promise&lt;TPluginInfo&gt;` - 插件信息
+**返回值**: `Promise<TPluginInfo>` - 插件信息
 
 **流程**:
 1. 从 pathMap 获取插件
@@ -187,7 +187,7 @@ type TPluginInfo = {
 - `options`: 查询选项
   - `name?: string`: 插件名称
 
-**返回值**: `Promise&lt;TPluginInfo[]&gt;` - 插件信息数组
+**返回值**: `Promise<TPluginInfo[]>` - 插件信息数组
 
 ### PluginModule.callPlugin
 
@@ -198,7 +198,7 @@ type TPluginInfo = {
 - `method`: 方法名
 - `...args`: 方法参数
 
-**返回值**: `Promise&lt;any&gt;` - 方法返回值
+**返回值**: `Promise<any>` - 方法返回值
 
 ## 依赖关系
 

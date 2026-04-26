@@ -10,35 +10,35 @@
 ```mermaid
 classDiagram
     class IElectronMainService {
-        +waitForReady(): Promise&lt;void&gt;
+        +waitForReady(): Promise<void>
         +createBrowserWindow(config: WindowConfig): any
         +registerProtocol(scheme: string, handler: ProtocolHandler): void
-        +handleIpc(channel: string, listener: (...args: any[]) =&gt; any): void
-        +onIpc(channel: string, listener: (...args: any[]) =&gt; any): void
+        +handleIpc(channel: string, listener: (...args: any[]) => any): void
+        +onIpc(channel: string, listener: (...args: any[]) => any): void
     }
 
     class ElectronMainService {
-        +waitForReady(): Promise&lt;void&gt;
+        +waitForReady(): Promise<void>
         +createBrowserWindow(config: WindowConfig): ElectronBrowserWindow
         +registerProtocol(scheme: string, handler: ProtocolHandler): void
-        +handleIpc(channel: string, listener: (...args: any[]) =&gt; any): void
-        +onIpc(channel: string, listener: (...args: any[]) =&gt; any): void
+        +handleIpc(channel: string, listener: (...args: any[]) => any): void
+        +onIpc(channel: string, listener: (...args: any[]) => any): void
     }
 
     class ElectronMainServiceMock {
         +windows: any[]
-        +protocols: Map&lt;string, ProtocolHandler&gt;
-        +ipcHandlers: Map&lt;string, any&gt;
-        +ipcListeners: Map&lt;string, any&gt;
-        +waitForReady(): Promise&lt;void&gt;
+        +protocols: Map<string, ProtocolHandler>
+        +ipcHandlers: Map<string, any>
+        +ipcListeners: Map<string, any>
+        +waitForReady(): Promise<void>
         +createBrowserWindow(config: WindowConfig): any
         +registerProtocol(scheme: string, handler: ProtocolHandler): void
-        +handleIpc(channel: string, listener: (...args: any[]) =&gt; any): void
-        +onIpc(channel: string, listener: (...args: any[]) =&gt; any): void
+        +handleIpc(channel: string, listener: (...args: any[]) => any): void
+        +onIpc(channel: string, listener: (...args: any[]) => any): void
     }
 
-    IElectronMainService &lt;|-- ElectronMainService
-    IElectronMainService &lt;|-- ElectronMainServiceMock
+    IElectronMainService <|-- ElectronMainService
+    IElectronMainService <|-- ElectronMainServiceMock
 ```
 
 ## 流程图
@@ -77,7 +77,7 @@ interface WindowConfig {
 ### ProtocolHandler
 
 ```typescript
-type ProtocolHandler = (request: Request) =&gt; Promise&lt;Response&gt; | Response;
+type ProtocolHandler = (request: Request) => Promise<Response> | Response;
 ```
 
 **说明**: 协议处理函数类型，用于处理自定义协议请求
@@ -88,7 +88,7 @@ type ProtocolHandler = (request: Request) =&gt; Promise&lt;Response&gt; | Respon
 
 **功能**: 等待 Electron 应用就绪
 
-**返回值**: `Promise&lt;void&gt;` - 应用就绪时解析
+**返回值**: `Promise<void>` - 应用就绪时解析
 
 **实现**: 
 - 真实实现: 监听 `app.ready` 事件

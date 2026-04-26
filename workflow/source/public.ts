@@ -2,7 +2,7 @@ export const spaceDirs = [
     {
         message: '框架',
         list: [
-            '.',
+            '../app',
         ],
     },
     {
@@ -17,6 +17,12 @@ export const spaceDirs = [
         message: '内置套件',
         list: [
             '../kit/example',
+        ],
+    },
+    {
+        message: '其他',
+        list: [
+            '..',
         ],
     },
 ];

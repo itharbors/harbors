@@ -1,4 +1,4 @@
-# Message 插件设计文档
+# Message 消息插件设计文档
 
 ## 文件信息
 - **源文件路径**: `plugin/message/main/source/`
@@ -46,7 +46,7 @@ flowchart TD
     C --> D[处理方法路径]
     D --> E[构建 MessageInfo 对象]
     E --> F[存储到 messageMap]
-    
+
     G[插件卸载] --> H[触发 detach 事件]
     H --> I[从 messageMap 中删除]
 ```
@@ -149,7 +149,7 @@ export default Editor.Module.registerPlugin({
 import { instance as Plugin } from '@framework/plugin';
 
 // 查询消息注册信息
-const messageInfo = await Plugin.execture('callPlugin', 'message', 'queryMessage', 'test-plugin', 'query-message');
+const messageInfo = await Plugin.execute('callPlugin', 'message', 'queryMessage', 'test-plugin', 'query-message');
 console.log(messageInfo);
 // 输出: { method: [{ panel: '', function: 'testMethod' }, { panel: 'panel1', function: 'otherMethod' }] }
 ```

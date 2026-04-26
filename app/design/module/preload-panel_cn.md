@@ -9,7 +9,10 @@
 
 ```mermaid
 classDiagram
-
+    class preloadPanel {
+        -info: object
+        +exposeInterface: object
+    }
 
     class exposeInterface {
         +Message: MessageAPI

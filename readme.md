@@ -1,156 +1,151 @@
 # ITHARBORS
 
-[![NPM](https://img.shields.io/npm/v/@itharbors/itharbors)](https://www.npmjs.com/package/@itharbors/itharbors)
-[![CI Status](https://github.com/itharbors/itharbors/actions/workflows/ci.yaml/badge.svg)](https://github.com/itharbors/itharbors/actions/workflows/ci.yaml)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/node/v/@itharbors/itharbors)](https://nodejs.org/)
+[![NPM](https://img.shields.io/npm/v/@itharbors/harbors)](https://www.npmjs.com/package/@itharbors/harbors)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Node.js](https://img.shields.io/node/v/@itharbors/harbors)](https://nodejs.org/)
 
-一款基于 Electron 的程序开发框架，提供插件化架构和丰富的开发工具，帮助开发者快速构建跨平台桌面应用。
+> 📖 This document is in English. For Chinese version, see [readme_cn.md](./readme_cn.md).
 
-## 📋 特性
+A desktop application development framework based on Electron, featuring a plugin-based architecture and rich development tools to help developers quickly build cross-platform desktop applications.
 
-- **插件化架构**：基于插件系统，支持动态加载和卸载功能模块
-- **套件管理**：通过套件批量管理相关插件，简化应用配置
-- **面板系统**：内置面板管理，支持自定义面板的注册和管理
-- **菜单系统**：灵活的菜单管理，支持动态菜单贡献
-- **消息通信**：插件间通过消息系统进行通信
-- **跨平台**：基于 Electron，支持 Windows、macOS、Linux
-- **TypeScript 支持**：完整的类型定义，提供良好的开发体验
+## 📋 Features
 
-## 🚀 快速开始
+- **Plugin Architecture**: Based on plugin system, supports dynamic loading and unloading of functional modules
+- **Kit Management**: Batch management of related plugins through kits, simplifying application configuration
+- **Panel System**: Built-in panel management, supports registration and management of custom panels
+- **Menu System**: Flexible menu management, supports dynamic menu contributions
+- **Message Communication**: Inter-plugin communication through message system
+- **Cross-Platform**: Based on Electron, supports Windows, macOS, and Linux
+- **TypeScript Support**: Complete type definitions for a great development experience
 
-### 环境要求
+## 🚀 Quick Start
+
+### Requirements
 
 - Node.js >= 16.0.0
 - npm >= 7.0.0
 - Electron >= 20.0.0
 
-### 安装
+### Installation
 
 ```bash
-npm install @itharbors/itharbors
+npm install @itharbors/harbors
 ```
 
-### 基本用法
+### Usage
 
 ```typescript
-import { Editor } from '@itharbors/itharbors';
+import { Editor } from '@itharbors/harbors';
 
-// 初始化框架
+// Initialize the framework
 Editor.initialize();
 
-// 加载套件
-await Editor.Kit.execture('load', '/path/to/kit');
+// Load a kit
+await Editor.Kit.execute('load', '/path/to/kit');
 
-// 注册插件
-await Editor.Plugin.execture('register', '/path/to/plugin');
+// Register a plugin
+await Editor.Plugin.execute('register', '/path/to/plugin');
 
-// 启动插件
-await Editor.Plugin.execture('load', '/path/to/plugin');
+// Start a plugin
+await Editor.Plugin.execute('load', '/path/to/plugin');
 
-// 调用插件方法
-const result = await Editor.Plugin.execture('callPlugin', 'plugin-name', 'method', args);
+// Call plugin method
+const result = await Editor.Plugin.execute('callPlugin', 'plugin-name', 'method', args);
 ```
 
-## 📁 项目结构
+## 📚 Documentation
+
+### Framework Design
+
+- [Kit Design Document](./app/.design/framework/kit.md)
+- [Plugin Design Document](./app/.design/framework/plugin.md)
+- [Panel Design Document](./app/.design/framework/panel.md)
+- [Window Design Document](./app/.design/framework/window.md)
+- [Module Standard Specification](./app/.design/framework/module-standard.md)
+
+### Module Design
+
+- [Layout Design Document](./app/.design/module/layout.md)
+- [Preload-Panel Design Document](./app/.design/module/preload-panel.md)
+- [Preload-Window Design Document](./app/.design/module/preload-window.md)
+
+### Service Design
+
+- [Electron Service Design Document](./app/.design/service/electron.md)
+
+### Built-in Plugins Design
+
+- [Main Menu Plugin Design Document](./plugin/main-menu/.design/index.md)
+- [Message Plugin Design Document](./plugin/message/.design/index.md)
+- [Panel Plugin Design Document](./plugin/panel/.design/index.md)
+
+## 📁 Project Structure
 
 ```
-├── app/             # 核心应用
-│   ├── source/       # 源代码
-│   ├── type/         # 类型定义
-│   └── .design/      # 设计文档
-├── plugin/          # 内置插件
-│   ├── main-menu/    # 主菜单插件
-│   ├── message/      # 消息插件
-│   └── panel/        # 面板插件
-├── kit/             # 内置套件
-├── workflow/        # 构建工作流
-├── test/            # 测试代码
-└── package.json     # 项目配置
+├── app/             # Core application
+│   ├── dist/        # Compiled output
+│   ├── type/         # Type definitions
+│   └── .design/      # Design documents
+├── plugin/          # Built-in plugins
+│   ├── main-menu/    # Main menu plugin
+│   ├── message/      # Message plugin
+│   └── panel/        # Panel plugin
+├── kit/             # Built-in kits
+├── workflow/        # Build workflow
+└── package.json     # Project configuration
 ```
 
-## 📚 文档
+## 🔧 Development Guide
 
-### 框架文档
-
-- [Kit 套件设计文档](app/.design/framework/kit.md)
-- [Plugin 插件设计文档](app/.design/framework/plugin.md)
-- [Panel 面板设计文档](app/.design/framework/panel.md)
-- [Window 窗口设计文档](app/.design/framework/window.md)
-- [模块标准设计文档](app/.design/framework/module-standard.md)
-
-### 模块文档
-
-- [Layout 布局设计文档](app/.design/module/layout.md)
-- [Preload Panel 预加载面板设计文档](app/.design/module/preload-panel.md)
-- [Preload Window 预加载窗口设计文档](app/.design/module/preload-window.md)
-
-### 服务文档
-
-- [Electron 服务设计文档](app/.design/service/electron.md)
-
-### 内置插件文档
-
-- [Main Menu 主菜单插件设计文档](plugin/main-menu/.design/index.md)
-- [Message 消息插件设计文档](plugin/message/.design/index.md)
-- [Panel 面板插件设计文档](plugin/panel/.design/index.md)
-
-## 🔧 开发指南
-
-### 开发环境设置
+### Development Setup
 
 ```bash
-# 克隆仓库
-git clone https://github.com/itharbors/itharbors.git
-cd itharbors
+# Clone the repository
+git clone https://github.com/itharbors/harbors.git
+cd harbors
 
-# 安装依赖
+# Install dependencies
 npm install
 
-# 构建项目
+# Build project
 npm run build
 
-# 运行测试
+# Run tests
 npm run test
 ```
 
-### 插件开发
+### Plugin Development
 
-1. **创建插件目录结构**
-2. **编写 package.json 配置**
-3. **实现插件逻辑**
-4. **注册插件贡献**
+1. **Create plugin directory structure**
+2. **Write package.json configuration**
+3. **Implement plugin logic**
+4. **Register plugin contributions**
 
-### 套件开发
+### Kit Development
 
-1. **创建套件目录结构**
-2. **编写 package.json 配置**
-3. **配置套件插件列表**
+1. **Create kit directory structure**
+2. **Write package.json configuration**
+3. **Configure kit plugin list**
 
-## 🤝 贡献
+## 🤝 Contributing
 
-我们欢迎社区贡献！请查看 [CONTRIBUTING.md](CONTRIBUTING.md) 了解如何参与。
+We welcome community contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to participate.
 
-### 贡献流程
+### Contribution Process
 
-1. Fork 仓库
-2. 创建特性分支
-3. 提交更改
-4. 推送到分支
-5. 开启 Pull Request
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Open a Pull Request
 
-## 📄 许可证
+## 📄 License
 
-本项目采用 MIT 许可证 - 查看 [LICENSE](LICENSE) 文件了解详情。
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## 🌟 致谢
+## 📞 Contact
 
-感谢所有为项目做出贡献的开发者！
-
-## 📞 联系方式
-
-- **GitHub Issues**: [https://github.com/itharbors/itharbors/issues](https://github.com/itharbors/itharbors/issues)
-- **Discord**: [Join our Discord server](https://discord.gg/itharbors)
+- **GitHub Issues**: [https://github.com/itharbors/harbors/issues](https://github.com/itharbors/harbors/issues)
 - **Email**: contact@itharbors.com
 
 ---
