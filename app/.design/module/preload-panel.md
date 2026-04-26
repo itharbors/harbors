@@ -1,0 +1,150 @@
+# Preload-Panel 面板预加载设计文档
+
+## 文件信息
+- **源文件路径**: `app/source/module/preload-panel/`
+- **模块名/类名**: `preload-panel`
+- **功能**: 面板进程的预加载脚本，向渲染进程暴露安全的 API 接口
+
+## 模块/类结构图
+
+```mermaid
+classDiagram
+    class preloadPanel {
+        -info: { plugin: string, module?: ModuleContainer }
+        +exposeInterface: object
+    }
+
+    class exposeInterface {
+        +Message: MessageAPI
+        +Module: ModuleAPI
+        +Panel: PanelAPI
+    }
+
+    class MessageAPI {
+        +request(plugin, message, ...args): Promise&lt;any&gt;
+    }
+
+    class ModuleAPI {
+        +registerPlugin(): ModuleContainer
+        +registerPanel(module): ModuleContainer
+    }
+
+    class PanelAPI {
+        +register(name, info): Promise&lt;void&gt;
+        +unregister(name): Promise&lt;void&gt;
+    }
+
+    preloadPanel --&gt; exposeInterface: 暴露
+    exposeInterface --&gt; MessageAPI: 包含
+    exposeInterface --&gt; ModuleAPI: 包含
+    exposeInterface --&gt; PanelAPI: 包含
+```
+
+## 主要功能
+
+### 初始化
+
+**功能**: 监听 init 事件，初始化面板信息
+
+**参数**:
+- `event`: IPC 事件对象
+- `plugin`: 插件名称
+- `panel`: 面板名称
+
+**流程**:
+1. 监听 ipcRenderer 的 init 事件
+2. 保存插件名称到 info 对象中
+
+### 暴露的 API 接口
+
+#### Message.request
+
+**功能**: 发送消息请求到主进程并等待回复
+
+**参数**:
+- `plugin`: 目标插件名称
+- `message`: 消息名称
+- `...args`: 消息参数
+
+**返回值**: `Promise&lt;any&gt;` - 消息返回结果
+
+**流程**:
+1. 调用 @itharbors/electron-message/renderer 的 requestMessage
+2. 发送 plugin:message 消息到主进程
+
+#### Module.registerPlugin
+
+**功能**: 注册插件（面板进程不支持）
+
+**参数**:
+- `module`: 模块配置
+
+**返回值**: `ModuleContainer`
+
+**说明**: 面板进程不能注册插件，调用会抛出错误
+
+#### Module.registerPanel
+
+**功能**: 注册面板模块
+
+**参数**:
+- `module`: 面板模块配置
+
+**返回值**: `ModuleContainer`
+
+**流程**:
+1. 调用 @itharbors/electron-panel/panel 的 registerPanel
+
+#### Panel.register
+
+**功能**: 注册面板（面板进程不支持）
+
+**参数**:
+- `name`: 面板名称
+- `info`: 面板信息
+
+**返回值**: `Promise&lt;void&gt;`
+
+**说明**: 面板进程不能注册面板，调用会抛出错误
+
+#### Panel.unregister
+
+**功能**: 卸载面板（面板进程不支持）
+
+**参数**:
+- `name`: 面板名称
+
+**返回值**: `Promise&lt;void&gt;`
+
+**说明**: 面板进程不能卸载面板，调用会抛出错误
+
+## 依赖关系
+
+- 依赖: `@itharbors/electron-message/renderer` - 用于发送消息到主进程
+- 依赖: `@itharbors/electron-panel/panel` - 用于注册面板模块
+- 依赖: `electron/ipcRenderer` - Electron IPC 渲染进程模块
+
+## 使用示例
+
+```typescript
+// 在面板进程中使用暴露的 API
+
+// 发送消息
+const result = await Editor.Message.request('plugin-name', 'message-name', arg1, arg2);
+
+// 注册面板模块
+const panelModule = Editor.Module.registerPanel({
+    data() {
+        return { /* 面板数据 */ };
+    },
+    method: { /* 面板方法 */ }
+});
+```
+
+## 注意事项
+
+1. 该模块是面板进程的预加载脚本
+2. 通过 global.Editor 暴露 API 接口
+3. 面板进程不能注册插件或面板
+4. 只能通过 Message.request 与主进程通信
+5. 面板模块通过 Module.registerPanel 注册
