@@ -49,7 +49,7 @@ export const instance = generateModule<{
             try {
                 // 读取文件内容
                 const data = readFileSync(file);
-                return new Response(data, {
+                return new Response(new Uint8Array(data), {
                     headers: {
                         'Access-Control-Allow-Origin': '*',
                     }

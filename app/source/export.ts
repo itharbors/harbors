@@ -7,15 +7,16 @@ import { ModuleContainer, TModule } from '@itharbors/module';
 
 import { instance as PluginModule, contributeMap } from './framework/plugin';
 import { instance as PanelModule } from './framework/panel';
+import { instance as MenuModule } from './framework/menu';
 
 export const Message = {
 
     /**
      * 发送消息
-     * @param plugin 
-     * @param panel 
-     * @param method 
-     * @param args 
+     * @param plugin
+     * @param panel
+     * @param method
+     * @param args
      */
     async request(plugin: string, message: string, ...args: any[]) {
         const info: MessageType.MessageItem =  await PluginModule.execture('callPlugin', 'message', 'query-message', plugin, message);
@@ -36,8 +37,8 @@ export const Message = {
 export const Module = {
     /**
      * 注册插件模块
-     * @param module 
-     * @returns 
+     * @param module
+     * @returns
      */
     registerPlugin<C extends {} = {}>(module: TModule<C> & { contribute?: ModuleType.TContribute }): ModuleContainer<C> {
         const mod = new ModuleContainer<C>(module);
@@ -49,8 +50,8 @@ export const Module = {
 
     /**
      * 注册插件模块
-     * @param module 
-     * @returns 
+     * @param module
+     * @returns
      */
     registerPanel(module: TModule<PanelStash> & PanelOption): ModuleContainer<PanelStash> {
         throw new Error('Panel 不能在插件进程注册');
@@ -60,8 +61,8 @@ export const Module = {
 export const Panel = {
     /**
      * 注册面板
-     * @param name 
-     * @param info 
+     * @param name
+     * @param info
      */
     async register(name: string, info: PanelInfo) {
         return PanelModule.execture('register', name, info);
@@ -69,9 +70,28 @@ export const Panel = {
 
     /**
      * 卸载面板
-     * @param name 
+     * @param name
      */
     async unregister(name: string) {
         return PanelModule.execture('unregister', name);
+    },
+};
+
+export const Menu = {
+    /**
+     * 设置某个插件贡献的菜单
+     * @param pluginName 插件名称
+     * @param menuJSON 菜单配置
+     */
+    set(pluginName: string, menuJSON: MessageType.MessageJSON) {
+        return MenuModule.execture('set', pluginName, menuJSON);
+    },
+
+    /**
+     * 移除某个插件贡献的菜单
+     * @param pluginName 插件名称
+     */
+    remove(pluginName: string) {
+        return MenuModule.execture('remove', pluginName);
     },
 };

@@ -46,6 +46,15 @@ const exposeInterface = {
             throw new Error('Panel 不能在 Panel 进程注册');
         },
     },
+
+    Menu: {
+        set(pluginName: string, menuJSON: any) {
+            throw new Error('Menu 不能在 Panel 进程操作');
+        },
+        remove(pluginName: string) {
+            throw new Error('Menu 不能在 Panel 进程操作');
+        },
+    },
 };
 
 global.Editor = exposeInterface;

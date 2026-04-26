@@ -67,14 +67,29 @@ export namespace Module {
 export namespace Panel {
     /**
      * 注册一个面板
-     * @param name 
-     * @param info 
+     * @param name
+     * @param info
      */
     export function register(name: string, info: PanelInfo): Promise<void>;
 
     /**
      * 卸载一个面板
-     * @param name 
+     * @param name
      */
     export function unregister(name: string): Promise<void>;
+}
+
+export namespace Menu {
+    /**
+     * 设置某个插件贡献的菜单
+     * @param pluginName 插件名称
+     * @param menuJSON 菜单配置
+     */
+    export function set(pluginName: string, menuJSON: Message.MessageJSON): void;
+
+    /**
+     * 移除某个插件贡献的菜单
+     * @param pluginName 插件名称
+     */
+    export function remove(pluginName: string): void;
 }

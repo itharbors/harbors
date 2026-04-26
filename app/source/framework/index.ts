@@ -1,13 +1,16 @@
 import { instance as Window } from './window';
 import { instance as Plugin } from './plugin';
 import { instance as Kit } from './kit';
+import { instance as Menu } from './menu';
 
 export { instance as Window } from './window';
 export { instance as Plugin } from './plugin';
 export { instance as Kit } from './kit';
+export { instance as Menu } from './menu';
 
 export async function runModuleLifeCycle(lifecycle: 'register' | 'load' | 'unload' | 'unregister') {
     await Plugin.run(lifecycle);
+    await Menu.run(lifecycle);
     await Window.run(lifecycle);
     await Kit.run(lifecycle);
 }
