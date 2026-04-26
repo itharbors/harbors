@@ -1,0 +1,13 @@
+{
+  "name": "kit2",
+  "version": "1.0.0",
+  "harbors": {
+    "window": {
+      "file": "window.html",
+      "width": 800,
+      "height": 600
+    },
+    "layout": {},
+    "plugin": []
+  }
+}

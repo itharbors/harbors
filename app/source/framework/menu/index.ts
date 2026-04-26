@@ -42,6 +42,22 @@ export const instance = generateModule<{
             this.menuMap.delete(pluginName);
             updateMenu(this.menuMap);
         },
+
+        /**
+         * 获取所有菜单
+         * @returns 菜单映射
+         */
+        get() {
+            return this.menuMap;
+        },
+
+        /**
+         * 重置菜单
+         */
+        reset() {
+            this.menuMap.clear();
+            updateMenu(this.menuMap);
+        },
     },
 });
 
@@ -65,7 +81,11 @@ function parseMenu(menuMapData: Map<string, MessageType.MessageJSON>): MenuItemC
 }
 
 function updateMenu(menuMap: Map<string, MessageType.MessageJSON>) {
-    const menuTemplate = parseMenu(menuMap);
-    const menu = Menu.buildFromTemplate(menuTemplate);
-    Menu.setApplicationMenu(menu);
+    try {
+        const menuTemplate = parseMenu(menuMap);
+        const menu = Menu.buildFromTemplate(menuTemplate);
+        Menu.setApplicationMenu(menu);
+    } catch (error) {
+        // 在非 Electron 环境中忽略错误
+    }
 }

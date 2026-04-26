@@ -2,8 +2,8 @@
  * 
  */
 
-import type { BrowserWindow as ElectronBrowserWindow } from 'electron';
-import { getElectronService } from '../../service';
+import { electronService } from '../../service';
+import type { ElectronWindow } from '../../service/impl';
 
 import { instance as Kit } from '../kit';
 import { MODULE } from '../../const';
@@ -14,7 +14,7 @@ export class Window {
 
     private _kit: string;
     private _id: number;
-    private _win?: ElectronBrowserWindow;
+    private _win?: ElectronWindow;
 
     public get id() {
         return this._id;
@@ -33,8 +33,6 @@ export class Window {
     }
 
     public async init() {
-        const electronService = getElectronService();
-
         let WinInfo =  await Kit.execture('getWindow', this._kit);
         if (!WinInfo) {
             throw new Error(`查询不到 kit 信息 ${this._kit}`);

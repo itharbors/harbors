@@ -3,7 +3,7 @@ import { join } from 'path';
 import { program } from 'commander';
 
 import { runModuleLifeCycle, Window, Plugin, Kit } from './framework';
-import { getElectronService } from './service';
+import { electronService } from './service';
 
 import * as all from './export';
 global.Editor = all;
@@ -40,7 +40,6 @@ export async function startApp(options?: {
     }
 
     const registerModulePromise = runModuleLifeCycle('register');
-    const electronService = getElectronService();
     const appReadyPromise = electronService.waitForReady();
 
     // 等待模块注册以及 app 准备就绪

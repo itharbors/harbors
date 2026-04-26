@@ -3,7 +3,7 @@ import type { TPluginInfo } from '@type/internal';
 import { readFileSync } from 'fs';
 import { join, basename } from 'path';
 import { generateModule } from '@itharbors/module';
-import { getElectronService } from '../../service';
+import { electronService } from '../../service';
 
 import { Plugin } from './plugin';
 
@@ -34,9 +34,7 @@ export const instance = generateModule<{
     },
 
     load() {
-        // 注册 plugin 协议，通过 plugin:// 可以访问到插件目录内的静态资源
-        const electronService = getElectronService();
-        electronService.registerProtocol('plugin', (request) => {
+        electronService.registerProtocol('plugin', (request: { url: string }) => {
             const url = new URL(request.url);
 
             const plugin = this.nameMap.get(url.hostname);

@@ -1,35 +1,37 @@
 import type { PluginMessageOption } from '@type/internal';
 import type { Message } from '@type/editor';
 
-import { WebContents } from 'electron';
 import { generateModule } from '@itharbors/module';
 
 import { Window } from './window';
 import { instance as Kit} from '../kit';
 import { instance as Plugin} from '../plugin';
 
-import { callMethod } from '@itharbors/electron-panel/browser';
-import { addListener } from '@itharbors/electron-message/browser';
+import { panelService, messageService } from '../../service/index';
 
-export const instance = generateModule<{
-     windowMap: WeakMap<WebContents, Window>;
-}>({
-    data(): {} {
-        return {};
+interface WindowModuleData {
+    windowMap: Map<number, Window>;
+}
+
+export const instance = generateModule<WindowModuleData>({
+    data(): WindowModuleData {
+        return {
+            windowMap: new Map(),
+        };
     },
 
     register() {
-        this.windowMap = new WeakMap();
+        this.windowMap = new Map();
     },
 
-    load() {
-        addListener('plugin:message', async (plugin: string, message: string, ...args: any[]) => {
+    async load() {
+        messageService.addListener('plugin:message', async (plugin: string, message: string, ...args: any[]) => {
             const info: Message.MessageItem =  await Plugin.execture('callPlugin', 'message', 'queryMessage', plugin, message);
 
             let result: PluginMessageOption | undefined = undefined;
             for (let item of info.method) {
                 if (item.panel) {
-                    callMethod(`${plugin}.${item.panel}`, item.function, ...args);
+                    panelService.callMethod(`${plugin}.${item.panel}`, item.function, ...args);
                 } else {
                     result = await Plugin.execture('callPlugin', plugin, item.function, ...args);
                 }
@@ -38,8 +40,9 @@ export const instance = generateModule<{
             return result;
         });
 
-        addListener('window:query-layout', async (event, name) => {
-            const win = this.windowMap.get(event.sender);
+        messageService.addListener('window:query-layout', async (...args: any[]) => {
+            const event = args[0];
+            const win = event?.sender?.id ? this.windowMap.get(event.sender.id) : undefined;
             const path = await Kit.execture('getLayout', win?.kit, 'default');
             return path;
         });
@@ -50,7 +53,9 @@ export const instance = generateModule<{
             kit = kit || 'default';
             const win = new Window(kit);
             await win.init();
-            win.win && this.windowMap.set(win.win?.webContents, win);
+            if (win.win) {
+                this.windowMap.set(win.win.id, win);
+            }
         },
     },
 });

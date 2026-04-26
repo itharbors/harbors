@@ -1,21 +1,25 @@
-// Service 入口
-import { setElectronService } from './electron';
-import { ElectronMainService } from './electron/electron-real';
-import { ElectronMainServiceMock } from './electron-mock';
+// Service 入口 - 根据环境导出不同实现
 
-// 检测运行环境
-const isElectronEnvironment = typeof process !== 'undefined' && 
-    process.versions && 
+export * from './impl';
+
+const isElectronEnvironment = typeof process !== 'undefined' &&
+    process.versions &&
     !!process.versions.electron;
 
-// 根据环境选择服务
 if (isElectronEnvironment) {
-    console.log('[Service] 运行在 Electron 环境，使用真实的 ElectronService');
-    setElectronService(new ElectronMainService());
+    console.log('[Service] 运行在 Electron 环境');
 } else {
-    console.log('[Service] 运行在 Node.js 环境，使用 Mock 的 ElectronService');
-    setElectronService(new ElectronMainServiceMock());
+    console.log('[Service] 运行在 Node.js 环境，使用 Mock 实现');
 }
 
-export * from './electron';
-export * from './electron-mock';
+export const electronService = isElectronEnvironment
+    ? require('./electron').electronService
+    : require('./node').electronService;
+
+export const panelService = isElectronEnvironment
+    ? require('./electron').panelService
+    : require('./node').panelService;
+
+export const messageService = isElectronEnvironment
+    ? require('./electron').messageService
+    : require('./node').messageService;
