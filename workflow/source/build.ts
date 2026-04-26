@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { executeTask, initWorkflow, Task } from '@itharbors/workflow';
+import { executeTask, initWorkflow, Task, TaskState } from '@itharbors/workflow';
 
 import { spaceDirs } from './public';
 
@@ -20,7 +20,19 @@ import './task/tsc';
                 return join(__dirname, '../../app', dir);
             }),
         });
-        await executeTask(['tsc']);
+        const tscResult = await executeTask(['tsc']);
+        let hasError = false;
+        // 检查 tsc 任务的结果
+        for (const taskName in tscResult) {
+            if (tscResult[taskName].includes(TaskState.error)) {
+                hasError = true;
+                break;
+            }
+        }
+        if (hasError) {
+            console.error('Build failed due to TypeScript compilation errors');
+            process.exit(1);
+        }
         // await executeTask(['dts']);
         await executeTask(['npm']);
     }
