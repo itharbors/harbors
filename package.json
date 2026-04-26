@@ -9,7 +9,7 @@
     "start": "npx electron ./app",
     "build": "cd ./workflow && npm run build",
     "clean": "cd ./workflow && npm run clean",
-    "test": "node --test ./test/*.spec.js",
+    "test": "npm run build && tsx --test --test-concurrency=1 ./test/**/*.spec.ts",
     "ci": "npm install && npm run build && npm run test"
   },
   "author": "",
@@ -20,6 +20,7 @@
     "typescript": "^5.8.3"
   },
   "devDependencies": {
-    "@types/node": "^22.15.2"
+    "@types/node": "^22.15.2",
+    "tsx": "^4.21.0"
   }
 }

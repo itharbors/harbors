@@ -10,6 +10,7 @@ export const spaceDirs = [
         list: [
             '../plugin/panel',
             '../plugin/message',
+            '../plugin/main-menu',
         ],
     },
     {

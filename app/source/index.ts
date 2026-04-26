@@ -1,9 +1,9 @@
 import { readdir, statSync } from 'fs';
 import { join } from 'path';
-import { app } from 'electron';
 import { program } from 'commander';
 
 import { runModuleLifeCycle, Window, Plugin, Kit } from './framework';
+import { getElectronService } from './service';
 
 import * as all from './export';
 global.Editor = all;
@@ -21,13 +21,8 @@ global.Editor = all;
     const options = program.opts();
 
     const registerModulePromise = runModuleLifeCycle('register');
-    const appReadyPromise = (() => {
-        return new Promise((resolve) => {
-            app.on('ready', async () => {
-                resolve(null);
-            });
-        });
-    })();
+    const electronService = getElectronService();
+    const appReadyPromise = electronService.waitForReady();
 
     // 等待模块注册以及 app 准备就绪
     await Promise.all([

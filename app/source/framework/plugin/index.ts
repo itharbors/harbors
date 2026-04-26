@@ -2,8 +2,8 @@ import type { TPluginInfo } from '@type/internal';
 
 import { readFileSync } from 'fs';
 import { join, basename } from 'path';
-import { protocol } from 'electron';
 import { generateModule } from '@itharbors/module';
+import { getElectronService } from '../../service';
 
 import { Plugin } from './plugin';
 
@@ -17,18 +17,26 @@ export const instance = generateModule<{
     
 }>({
 
-    data(): {} {
-        return {};
+    data(): {
+        pathMap: Map<string, Plugin>;
+        nameMap: Map<string, Plugin>;
+    } {
+        return {
+            pathMap: new Map(),
+            nameMap: new Map()
+        };
     },
 
     register() {
+        // 每次 register 重新初始化
         this.pathMap = new Map();
         this.nameMap = new Map();
     },
 
     load() {
         // 注册 plugin 协议，通过 plugin:// 可以访问到插件目录内的静态资源
-        protocol.handle('plugin', (request) => {
+        const electronService = getElectronService();
+        electronService.registerProtocol('plugin', (request) => {
             const url = new URL(request.url);
 
             const plugin = this.nameMap.get(url.hostname);
@@ -53,6 +61,14 @@ export const instance = generateModule<{
     },
 
     method: {
+        /**
+         * 重置状态（测试专用）
+         */
+        reset() {
+            this.pathMap = new Map();
+            this.nameMap = new Map();
+        },
+
         /**
          * 注册一个插件
          * 允许注册同名插件，但同一地址只能注册一次
