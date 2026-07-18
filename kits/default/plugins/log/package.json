@@ -1,0 +1,45 @@
+{
+  "name": "@ce/log",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "log": {
+          "entry": "./panel.log/dist/index.html"
+        }
+      },
+      "message": {
+        "request": {
+          "getLogs": [
+            "getLogs"
+          ],
+          "appendLog": [
+            "appendLog"
+          ],
+          "clearLogs": [
+            "clearLogs"
+          ],
+          "openLogPanel": [
+            "openLogPanel"
+          ]
+        },
+        "broadcast": {
+          "log.changed": [
+            "panel.onLogsChanged"
+          ]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-log-log",
+          "message": "openLogPanel",
+          "order": 1000,
+          "label": "Log"
+        }
+      ]
+    }
+  }
+}

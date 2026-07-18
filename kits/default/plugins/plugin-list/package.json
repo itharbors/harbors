@@ -1,0 +1,48 @@
+{
+  "name": "@ce/plugin-list",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "list": {
+          "entry": "./panel.list/dist/index.html"
+        }
+      },
+      "message": {
+        "request": {
+          "getPlugins": [
+            "getPlugins"
+          ],
+          "getPluginSummary": [
+            "getPluginSummary"
+          ],
+          "getSelectedPlugin": [
+            "getSelectedPlugin"
+          ],
+          "selectPlugin": [
+            "selectPlugin"
+          ],
+          "openListPanel": [
+            "openListPanel"
+          ]
+        },
+        "broadcast": {
+          "plugin.selected": [
+            "panel.onPluginSelected"
+          ]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-plugin-list-list",
+          "message": "openListPanel",
+          "order": 1030,
+          "label": "Plugin List"
+        }
+      ]
+    }
+  }
+}

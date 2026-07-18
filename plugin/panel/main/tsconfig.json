@@ -1,7 +1,0 @@
-{
-  "extends": "../../plugin.tsconfig.json",
-  "compilerOptions": {
-    "rootDir": "./source",
-    "outDir": "./dist",
-  }
-}

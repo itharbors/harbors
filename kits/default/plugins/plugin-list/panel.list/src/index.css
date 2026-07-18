@@ -1,0 +1,138 @@
+:root {
+  color-scheme: dark;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+body {
+  margin: 0;
+  background: #101010;
+  color: #d4d4d4;
+  font-size: 12px;
+}
+#panel-root {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: #101010;
+}
+.header {
+  flex-shrink: 0;
+  padding: 12px;
+  border-bottom: 1px solid #2a2a2a;
+  background: #181818;
+}
+.title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.title {
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.count {
+  color: #8fd3ff;
+  font-size: 20px;
+  font-weight: 700;
+  line-height: 1;
+}
+.subtitle {
+  margin-top: 6px;
+  color: #858585;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+.summary-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+.list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px;
+}
+.section {
+  margin-bottom: 12px;
+}
+.section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 8px;
+  padding: 0 2px;
+  color: #b8b8b8;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.plugin {
+  padding: 9px 10px;
+  border: 1px solid #272727;
+  border-radius: 6px;
+  background: #161616;
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+.plugin:hover {
+  border-color: #3a3a3a;
+  background: #1d1d1d;
+}
+.plugin.active {
+  border-color: #3d7db8;
+  background: #162231;
+}
+.section .plugin + .plugin {
+  margin-top: 8px;
+}
+.plugin-name {
+  overflow: hidden;
+  color: #f0f0f0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.plugin-meta {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 7px;
+}
+.badge {
+  border: 1px solid #333;
+  border-radius: 999px;
+  padding: 2px 7px;
+  color: #aaa;
+  background: #202020;
+  font-size: 11px;
+}
+.badge-source-builtin {
+  border-color: #4462a8;
+  color: #bcd0ff;
+  background: #17233f;
+}
+.badge-source-kit {
+  border-color: #3d7a50;
+  color: #b8efc5;
+  background: #16291d;
+}
+.badge-source-external {
+  border-color: #7a5a34;
+  color: #f1d0aa;
+  background: #2b2115;
+}
+.empty,
+.error {
+  padding: 16px 10px;
+  color: #858585;
+}
+.error {
+  color: #f48771;
+}

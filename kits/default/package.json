@@ -1,0 +1,23 @@
+{
+  "name": "@itharbors/kit-default",
+  "version": "0.0.1",
+  "ce-editor": {
+    "kit": {
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "@ce/log",
+        "@ce/message-debug",
+        "@ce/plugin-detail",
+        "@ce/plugin-list",
+        "@ce/status-bar",
+        "@ce/title-bar"
+      ]
+    }
+  }
+}

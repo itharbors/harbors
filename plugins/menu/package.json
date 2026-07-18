@@ -1,0 +1,17 @@
+{
+  "name": "@ce/menu",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "newSession": ["newSession"],
+          "openDocumentation": ["openDocumentation"],
+          "openAbout": ["openAbout"]
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@ce/title-bar",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "title": {
+          "entry": "./panel.title/dist/index.html"
+        }
+      },
+      "message": {
+        "request": {
+          "getTitle": [
+            "getTitle"
+          ],
+          "openTitlePanel": [
+            "openTitlePanel"
+          ]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-title-bar-title",
+          "message": "openTitlePanel",
+          "order": 1050,
+          "label": "Title Bar"
+        }
+      ]
+    }
+  }
+}

@@ -1,31 +1,21 @@
 {
-  "name": "@itharbors/harbors",
-  "version": "0.1.0",
-  "workspaces": ["app"],
-  "bin": "./workflow/dist/cli.js",
-  "description": "",
-  "main": "./app/dist/index.js",
-  "publishConfig": {
-    "access": "public"
-  },
+  "name": "itharbors",
+  "private": true,
+  "workspaces": ["packages/*", "kits/*", "plugins/*"],
   "scripts": {
-    "prepublishOnly": "npm run clean && npm install && npm run build && npm run test",
-    "preinstall": "cd ./workflow && npm install",
-    "start": "npx electron ./app",
-    "build": "cd ./workflow && npm run build",
-    "clean": "cd ./workflow && npm run clean",
-    "test": "tsx --test --test-concurrency=1 ./test/**/*.spec.ts",
-    "ci": "npm install && npm run build && npm run test"
-  },
-  "author": "",
-  "license": "MIT",
-  "dependencies": {
-    "electron": "^35.2.1"
+    "dev": "node scripts/dev.mjs",
+    "electron": "electron scripts/electron.mjs",
+    "plugins:build": "node scripts/ce-plugin.mjs build --all",
+    "plugins:check": "node scripts/ce-plugin.mjs check --all",
+    "build": "npm run build -w @ce/plugin-types && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
+    "clean": "node scripts/clean.mjs",
+    "test": "npm run test -w packages/server && npm run test -w packages/client",
+    "kill": "lsof -ti:8080 | xargs kill -9 2>/dev/null; lsof -ti:3000 | xargs kill -9 2>/dev/null; lsof -ti:5173 | xargs kill -9 2>/dev/null; echo 'ports cleared'",
+    "check": "npm run build -w @ce/plugin-types && npm test && npm run plugins:check"
   },
   "devDependencies": {
-    "@types/node": "^22.15.2",
-    "esbuild": "^0.25.3",
-    "tsx": "^4.21.0",
-    "typescript": "^5.8.3"
+    "concurrently": "^9.0.0",
+    "electron": "^31.0.0",
+    "typescript": "^5.7.0"
   }
 }

@@ -1,0 +1,36 @@
+{
+  "name": "@ce/plugin-detail",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "detail": {
+          "entry": "./panel.detail/dist/index.html"
+        }
+      },
+      "message": {
+        "broadcast": {
+          "plugin.selected": [
+            "panel.onPluginSelected"
+          ]
+        },
+        "request": {
+          "openDetailPanel": [
+            "openDetailPanel"
+          ]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-plugin-detail-detail",
+          "message": "openDetailPanel",
+          "order": 1020,
+          "label": "Plugin Detail"
+        }
+      ]
+    }
+  }
+}

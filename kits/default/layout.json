@@ -1,0 +1,53 @@
+{
+  "windows": [
+    {
+      "id": "default-main",
+      "type": "panel-area",
+      "layout": {
+        "type": "vsplit",
+        "sizes": [32, 1, 220, 28],
+        "children": [
+          {
+            "type": "leaf",
+            "panel": "@ce/title-bar.title",
+            "panelType": "simple"
+          },
+          {
+            "type": "hsplit",
+            "sizes": [340, 1],
+            "children": [
+              {
+                "type": "leaf",
+                "panel": "@ce/plugin-list.list"
+              },
+              {
+                "type": "vsplit",
+                "sizes": [1, 220],
+                "children": [
+                  {
+                    "type": "leaf",
+                    "panel": "@ce/plugin-detail.detail"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "@ce/message-debug.debug"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "type": "leaf",
+            "panel": "@ce/log.log"
+          },
+          {
+            "type": "leaf",
+            "panel": "@ce/status-bar.status",
+            "panelType": "simple"
+          }
+        ]
+      }
+    }
+  ],
+  "activePanel": "@ce/log.log"
+}

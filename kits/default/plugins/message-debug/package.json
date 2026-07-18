@@ -1,0 +1,45 @@
+{
+  "name": "@ce/message-debug",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "debug": {
+          "entry": "./panel.debug/dist/index.html"
+        }
+      },
+      "message": {
+        "request": {
+          "*": [
+            "onAnyRequest"
+          ],
+          "getSnapshot": [
+            "getSnapshot"
+          ],
+          "openDebugPanel": [
+            "openDebugPanel"
+          ]
+        },
+        "broadcast": {
+          "*": [
+            "onAnyBroadcast"
+          ],
+          "@ce/message-debug.messages.changed": [
+            "panel.onMessagesChanged"
+          ]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-message-debug-debug",
+          "message": "openDebugPanel",
+          "order": 1010,
+          "label": "Message Debug"
+        }
+      ]
+    }
+  }
+}
