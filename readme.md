@@ -1,153 +1,181 @@
 # ITHARBORS
 
-[![NPM](https://img.shields.io/npm/v/@itharbors/harbors)](https://www.npmjs.com/package/@itharbors/harbors)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Node.js](https://img.shields.io/node/v/@itharbors/harbors)](https://nodejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=node.js)](https://nodejs.org/)
+[![Electron](https://img.shields.io/badge/Electron-31%2B-47848F?logo=electron)](https://www.electronjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5%2B-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 
-> 📖 This document is in English. For Chinese version, see [readme_cn.md](./readme_cn.md).
+ITHARBORS 是一个以插件为核心的桌面应用开发框架。它提供基于 Web 的编辑器工作台、按会话隔离的 Kit 与插件运行时，以及可选的 Electron 桌面宿主，用于构建跨平台开发工具。
 
-A desktop application development framework based on Electron, featuring a plugin-based architecture and rich development tools to help developers quickly build cross-platform desktop applications.
+> 仓库仍在持续演进。内置的默认 Kit 既可直接运行，也可作为编写 Kit 和插件的参考实现。
 
-## 📋 Features
+## 功能特性
 
-- **Plugin Architecture**: Based on plugin system, supports dynamic loading and unloading of functional modules
-- **Kit Management**: Batch management of related plugins through kits, simplifying application configuration
-- **Panel System**: Built-in panel management, supports registration and management of custom panels
-- **Menu System**: Flexible menu management, supports dynamic menu contributions
-- **Message Communication**: Inter-plugin communication through message system
-- **Cross-Platform**: Based on Electron, supports Windows, macOS, and Linux
-- **TypeScript Support**: Complete type definitions for a great development experience
+- **插件优先的运行时**：功能、面板、菜单和消息处理器均通过插件声明和实现。
+- **基于 Kit 的组合**：一个 Kit 定义单个编辑器会话可用的插件、默认布局、窗口入口和主题。
+- **会话隔离**：每个会话拥有独立的运行时、当前 Kit 和已加载的外部插件。
+- **消息中枢**：面板与插件之间通过服务端路由的 request / broadcast API 通信。
+- **可组合布局**：使用 split pane、divider 和 panel 构建可调整尺寸的编辑器工作台。
+- **Web 与桌面宿主**：既可以启动本地 Web 开发栈，也可以在 Electron 中运行同一套工作台。
+- **TypeScript 工具链**：提供共享插件协议、类型定义，以及插件源码和 `dist/` 产物的构建/校验工具。
 
-## 🚀 Quick Start
+## 快速开始
 
-### Requirements
+### 环境要求
 
-- Node.js >= 16.0.0
-- npm >= 7.0.0
-- Electron >= 20.0.0
+- Node.js 20.19 或更高版本
+- npm 9 或更高版本
 
-### Installation
+服务端使用 `better-sqlite3`。如果当前 Node.js 版本和平台没有可用的预编译二进制包，安装依赖时还需要 Python 和可用的 C/C++ 编译工具链。
 
-```bash
-npm install @itharbors/harbors
-```
-
-### Usage
-
-```typescript
-import { Editor } from '@itharbors/harbors';
-
-// Initialize the framework
-Editor.initialize();
-
-// Load a kit
-await Editor.Kit.execute('load', '/path/to/kit');
-
-// Register a plugin
-await Editor.Plugin.execute('register', '/path/to/plugin');
-
-// Start a plugin
-await Editor.Plugin.execute('load', '/path/to/plugin');
-
-// Call plugin method
-const result = await Editor.Plugin.execute('callPlugin', 'plugin-name', 'method', args);
-```
-
-## 📚 Documentation
-
-### Framework Design
-
-- [Kit Design Document](./app/design/framework/kit.md)
-- [Plugin Design Document](./app/design/framework/plugin.md)
-- [Panel Design Document](./app/design/framework/panel.md)
-- [Window Design Document](./app/design/framework/window.md)
-- [Module Standard Specification](./app/design/framework/module-standard.md)
-
-### Module Design
-
-- [Layout Design Document](./app/design/module/layout.md)
-- [Preload-Panel Design Document](./app/design/module/preload-panel.md)
-- [Preload-Window Design Document](./app/design/module/preload-window.md)
-
-### Service Design
-
-- [Electron Service Design Document](./app/design/service/electron.md)
-
-### Built-in Plugins Design
-
-- [Main Menu Plugin Design Document](./plugin/main-menu/design/index.md)
-- [Message Plugin Design Document](./plugin/message/design/index.md)
-- [Panel Plugin Design Document](./plugin/panel/design/index.md)
-
-## 📁 Project Structure
-
-```
-├── app/             # Core application
-│   ├── dist/        # Compiled output
-│   ├── type/         # Type definitions
-│   └── .design/      # Design documents
-├── plugin/          # Built-in plugins
-│   ├── main-menu/    # Main menu plugin
-│   ├── message/      # Message plugin
-│   └── panel/        # Panel plugin
-├── kit/             # Built-in kits
-├── workflow/        # Build workflow
-└── package.json     # Project configuration
-```
-
-## 🔧 Development Guide
-
-### Development Setup
+### 开发环境
 
 ```bash
-# Clone the repository
-git clone https://github.com/itharbors/harbors.git
-cd harbors
-
-# Install dependencies
+git clone https://github.com/itharbors/itharbors.git
+cd itharbors
 npm install
+npm run dev
+```
 
-# Build project
+在浏览器中打开 [http://localhost:8080](http://localhost:8080)。开发栈会启动以下服务：
+
+| 服务 | 地址 | 职责 |
+| --- | --- | --- |
+| Gateway | http://localhost:8080 | 统一入口；代理 API、SSE 与前端资源 |
+| Server | http://localhost:3000 | 会话、Kit、插件运行时、消息和存储 |
+| Client | http://localhost:5173 | 基于 Vite 的工作台前端 |
+
+Gateway 是日常访问入口：它会把 `/api/*` 和 `/sse/*` 转发给 Server，并把其他请求转发到 Client 开发服务。
+
+### 在 Electron 中运行
+
+```bash
+npm run electron
+```
+
+Electron 会启动开发栈，等待 Gateway 就绪后打开桌面窗口，并使用 Electron 默认图标。
+
+## 常用命令
+
+```bash
+# 构建插件类型、前端、服务端和全部插件
 npm run build
 
-# Run tests
-npm run test
+# 清理可再生构建产物和开发缓存
+npm run clean
+
+# 运行服务端与前端测试
+npm test
+
+# 构建并校验全部插件产物
+npm run plugins:build
+npm run plugins:check
+
+# 构建或校验单个插件
+node scripts/ce-plugin.mjs build plugins/menu
+node scripts/ce-plugin.mjs check kits/default/plugins/log
+
+# 使用指定 Kit 目录启动
+npm run dev -- --kit ./kits/default
 ```
 
-### Plugin Development
+`npm run kill` 会强制释放 8080、3000 和 5173 端口；使用前请确认这些进程确实属于本项目。
 
-1. **Create plugin directory structure**
-2. **Write package.json configuration**
-3. **Implement plugin logic**
-4. **Register plugin contributions**
+## 架构概览
 
-### Kit Development
+```text
+浏览器 / Electron
+        │
+    Gateway (:8080)
+      ├─ /api、/sse ───────► Server (:3000)
+      │                         ├─ 会话运行时
+      │                         ├─ Kit 加载器
+      │                         └─ 插件与消息路由器
+      └─ 其他请求 ─────────► Vite Client (:5173)
+```
 
-1. **Create kit directory structure**
-2. **Write package.json configuration**
-3. **Configure kit plugin list**
+### Kit
 
-## 🤝 Contributing
+Kit 是一个会话的能力边界。它声明要加载的外部插件、窗口入口、默认布局和主题。切换 Kit 时，运行时会先卸载旧 Kit 的外部插件并清理其面板、菜单和消息注册，再装载新的能力集合。内置插件由装配层加载并保持可用。
 
-We welcome community contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for how to participate.
+### 插件
 
-### Contribution Process
+插件在 `package.json` 中静态声明面板、消息映射、菜单和公开资源，并通过 `editor.plugin.define()` 注册运行时行为与生命周期。
 
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Open a Pull Request
+运行时只加载构建后的 `dist/` 文件。插件目录约定如下：
 
-## 📄 License
+```text
+my-plugin/
+├── package.json
+├── main/
+│   ├── src/index.ts
+│   └── dist/index.js
+└── panel.example/
+    ├── src/index.html
+    └── dist/index.html
+```
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+最小 manifest 示例：
 
-## 📞 Contact
+```json
+{
+  "name": "@example/my-plugin",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "example": { "entry": "./panel.example/dist/index.html" }
+      }
+    }
+  }
+}
+```
 
-- **GitHub Issues**: [https://github.com/itharbors/harbors/issues](https://github.com/itharbors/harbors/issues)
-- **Email**: contact@itharbors.com
+浏览器面板通过 `editor.message.request()` 和 `editor.message.broadcast()` 通信；不要绕过服务端消息中枢直接调用其他面板。
 
----
+## 目录结构
 
-**Made with ❤️ by the ITHARBORS team**
+```text
+packages/
+├── client/        浏览器工作台与 UI 组件
+├── gateway/       开发入口与反向代理
+├── plugin-types/  共享插件协议与类型
+└── server/        会话、运行时、Kit、插件和 API 路由
+kits/
+└── default/       内置默认 Kit 及其外部插件
+plugins/           内置插件（配置、菜单、消息、面板）
+scripts/           开发栈、Electron 宿主和插件构建工具
+docs/              架构约束、操作指南和历史记录
+```
+
+## 文档
+
+- [文档入口](./docs/README.md)
+- [核心原则](./docs/architecture/core-principles.md)
+- [系统架构](./docs/architecture/system-overview.md)
+- [核心运行流程](./docs/architecture/runtime-flows.md)
+- [插件运行时模型](./docs/architecture/plugin-runtime-model.md)
+- [Kit 与会话模型](./docs/architecture/kit-and-session-model.md)
+- [布局模型](./docs/architecture/layout-model.md)
+- [UI 系统](./docs/architecture/ui-system.md)
+- [开发工作流](./docs/guides/development-workflow.md)
+- [插件与 Kit 开发指南](./docs/guides/developing-plugins-and-kits.md)
+- [架构决策记录](./docs/decisions/README.md)
+
+`docs/architecture/` 和 `docs/guides/` 描述当前行为；`docs/decisions/` 解释重要取舍；`docs/superpowers/` 仅保留文档设计和实施过程，不属于产品文档主线。
+
+## 开发原则
+
+- 保持 Framework 的通用性；不要在其中硬编码产品专属插件或业务逻辑。
+- 新能力应优先建模为插件贡献点，再考虑新增 Framework API。
+- Panel 资源只能从 manifest 显式声明、且归属该插件的公开目录中提供。
+- 工作台的结构性区域应使用布局模型表达，而不要使用临时容器绕过布局语义。
+- 修改插件后运行 `npm run plugins:build` 和 `npm run plugins:check`；提交前应运行相关测试。
+
+## 贡献
+
+欢迎贡献。请通过 Issue 或 Pull Request 提交清晰、聚焦的变更说明。提交前请构建受影响的包、校验修改过的插件，并运行相关测试。
+
+## 许可证
+
+仓库当前尚未包含许可证文件。在将 ITHARBORS 作为开源包分发前，请补充明确的许可证。
