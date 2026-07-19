@@ -9,7 +9,7 @@
     "plugins:check": "node scripts/ce-plugin.mjs check --all",
     "build": "npm run build -w @ce/plugin-types && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
     "clean": "node scripts/clean.mjs",
-    "test": "npm run test -w packages/server && npm run test -w packages/client",
+    "test": "npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/kit-sqlite && node --test scripts/lib/kit-path.test.mjs",
     "kill": "lsof -ti:8080 | xargs kill -9 2>/dev/null; lsof -ti:3000 | xargs kill -9 2>/dev/null; lsof -ti:5173 | xargs kill -9 2>/dev/null; echo 'ports cleared'",
     "check": "npm run build -w @ce/plugin-types && npm test && npm run plugins:check"
   },

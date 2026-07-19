@@ -264,6 +264,22 @@ npm run dev -- --kit ./kits/my-kit
 5. 切换 Kit 后旧 Panel、菜单和消息路由不再存在。
 6. 主窗口与次窗口都能加载各自 entry。
 
+## SQLite Kit
+
+仓库内置的 `@itharbors/kit-sqlite` 提供本地 SQLite 数据库工作台。启动前先构建它的插件：
+
+```bash
+node scripts/ce-plugin.mjs build kits/sqlite/plugins/sqlite-workbench
+npm run dev -- --kit ./kits/sqlite
+```
+
+启动后，在顶部输入本地数据库文件路径：已有文件使用 **Open**；不存在的路径必须使用
+**Create** 显式创建，工具不会覆盖已有文件。左侧列出表与视图，数据页支持分页和记录新增、
+修改、删除，结构页展示字段与索引。视图始终只读，BLOB 首版只显示大小与十六进制摘要。
+
+SQL 页每次执行一个语句，可运行查询、DDL 或 DML；结果集最多预览 500 行。所有表格生成的
+写操作使用参数绑定，删除记录前会要求确认。
+
 ## 参考实现
 
 - [默认 Kit](../../kits/default/package.json)

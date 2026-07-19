@@ -1,0 +1,26 @@
+{
+  "name": "@itharbors/kit-sqlite",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "ce-editor": {
+    "kit": {
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "@itharbors/sqlite-workbench"
+      ],
+      "theme": {
+        "--ce-accent": "#56b6a9"
+      }
+    }
+  }
+}

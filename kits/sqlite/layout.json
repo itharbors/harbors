@@ -1,0 +1,14 @@
+{
+  "windows": [
+    {
+      "id": "sqlite-main",
+      "kind": "main",
+      "type": "panel-area",
+      "layout": {
+        "type": "leaf",
+        "panel": "@itharbors/sqlite-workbench.workbench"
+      }
+    }
+  ],
+  "activePanel": "@itharbors/sqlite-workbench.workbench"
+}
