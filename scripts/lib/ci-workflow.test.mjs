@@ -45,3 +45,35 @@ test('CI dependency lock does not reference the private npm registry', async () 
     'package-lock.json must use a registry reachable by public GitHub runners',
   );
 });
+
+test('CI runs for every pull request change without repository-inaccurate path filters', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  const triggers = parseWorkflowTriggers(workflow);
+
+  assert.ok(triggers.has('pull_request'), 'CI must declare a pull_request trigger');
+  assert.equal(
+    triggers.get('pull_request').has('paths'),
+    false,
+    'pull_request CI must not skip changes outside an incomplete path allowlist',
+  );
+});
+
+function parseWorkflowTriggers(workflow) {
+  const lines = workflow.split(/\r?\n/);
+  const onIndex = lines.findIndex((line) => line === 'on:');
+  assert.notEqual(onIndex, -1, 'workflow must contain a top-level on mapping');
+  const triggers = new Map();
+  let currentTrigger = null;
+  for (const line of lines.slice(onIndex + 1)) {
+    if (/^\S/.test(line)) break;
+    const trigger = line.match(/^  ([\w-]+):/);
+    if (trigger) {
+      currentTrigger = trigger[1];
+      triggers.set(currentTrigger, new Set());
+      continue;
+    }
+    const property = line.match(/^    ([\w-]+):/);
+    if (property && currentTrigger) triggers.get(currentTrigger).add(property[1]);
+  }
+  return triggers;
+}
