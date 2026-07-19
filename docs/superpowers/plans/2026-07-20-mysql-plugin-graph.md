@@ -12,7 +12,7 @@
 
 - Preserve all existing MySQL connection, schema, paging, CRUD, transaction, value-serialization, SQL-result, and error-code behavior.
 - Add only the relationship graph; do not add SQLite-only undo, export, SQL cancellation, query planning, file browsing, or read/write modes.
-- Only `@itharbors/mysql-core` may depend on `mysql2` or create/close a pool.
+- The Kit workspace installs `mysql2`; among plugin packages only `@itharbors/mysql-core` may depend on or import it, and only core may create/close a pool.
 - Panels may import `@itharbors/mysql-contracts` and files inside their own plugin only; they may not import another plugin implementation.
 - Relationship nodes are current-database `BASE TABLE` objects only; edges are declared MySQL constraints grouped by constraint and ordered by `ORDINAL_POSITION`.
 - Broadcasts invalidate state; mount-time requests remain the authoritative recovery path.
@@ -416,7 +416,7 @@ Expected: manifest/runtime tests FAIL while the Kit still declares `mysql-workbe
 
 - [ ] **Step 3: Cut over the Kit and remove the monolith**
 
-Update manifest/layout/docs, remove `mysql2` from the Kit package dependency, delete the remaining old Panel/tests/plugin package, and update the guide example from `mysql-workbench` to one valid new MySQL plugin. Run:
+Update manifest/layout/docs, keep `mysql2` in the Kit workspace as the nested plugin installation bridge, delete the remaining old Panel/tests/plugin package, and update the guide example from `mysql-workbench` to the all-plugin build command. Run:
 
 ```bash
 rg -n '@itharbors/mysql-workbench|plugins/mysql-workbench' . --glob '!docs/superpowers/**'

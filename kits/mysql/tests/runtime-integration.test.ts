@@ -1,6 +1,7 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { unwrapMysqlResponse } from '@itharbors/mysql-contracts';
 import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
 import { createEditor } from '../../../packages/server/src/editor/index';
 
@@ -19,15 +20,22 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
     });
     const call = <T>(method: string, input?: unknown): Promise<T> => Promise.resolve(
       input === undefined
-        ? editor.plugin.callPlugin('@itharbors/mysql-workbench', method)
-        : editor.plugin.callPlugin('@itharbors/mysql-workbench', method, input),
-    ) as Promise<T>;
+        ? editor.plugin.callPlugin('@itharbors/mysql-core', method)
+        : editor.plugin.callPlugin('@itharbors/mysql-core', method, input),
+    ).then((value) => unwrapMysqlResponse<T>(value));
     let connected = false;
 
     try {
       await editor.kit.load(path.join(projectRoot, 'kits/mysql'));
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-mysql');
-      expect(editor.plugin.listLoaded()).toContain('@itharbors/mysql-workbench');
+      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining([
+        '@itharbors/mysql-core',
+        '@itharbors/mysql-explorer',
+        '@itharbors/mysql-data',
+        '@itharbors/mysql-schema',
+        '@itharbors/mysql-relationships',
+        '@itharbors/mysql-sql',
+      ]));
 
       const connection = await call<{
         connected: boolean;
@@ -46,6 +54,9 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
         connected: true,
         database: decodeURIComponent(url.pathname.slice(1)),
         endpoint: `${url.hostname}:${Number(url.port || 3306)}`,
+        connectionRevision: 1,
+        schemaRevision: 1,
+        dataRevision: 1,
       });
 
       await call('executeSql', {
@@ -106,6 +117,32 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
           onDelete: 'RESTRICT',
         }),
       ]);
+
+      const graph = await call<{
+        tables: Array<{ name: string; columns: Array<{ name: string; primaryKeyOrder: number; foreignKey: boolean }> }>;
+        relationships: Array<{
+          fromTable: string;
+          toTable: string;
+          columns: Array<{ from: string; to: string }>;
+          onDelete: string;
+        }>;
+      }>('getRelationshipGraph');
+      expect(graph.tables).toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: parentName }),
+        expect.objectContaining({ name: childName }),
+      ]));
+      expect(graph.relationships).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          fromTable: childName,
+          toTable: parentName,
+          columns: [
+            { from: 'parent_tenant_id', to: 'tenant_id' },
+            { from: 'parent_id', to: 'id' },
+          ],
+          onDelete: 'RESTRICT',
+        }),
+      ]));
+      expect((await call<{ schemaRevision: number }>('getConnectionState')).schemaRevision).toBeGreaterThan(1);
 
       const viewSchema = await call<{ type: string; insertable: boolean; rowEditable: boolean }>(
         'getObjectSchema',
