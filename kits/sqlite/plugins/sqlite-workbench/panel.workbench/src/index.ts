@@ -525,12 +525,15 @@ function renderAndFocusTab(tab: WorkbenchState['activeTab']): void {
 }
 
 function renderPreservingTabFocus(tab?: WorkbenchState['activeTab']): void {
-  const shouldRestore = tab !== undefined
-    && state.activeTab === tab
-    && document.activeElement instanceof HTMLElement
-    && document.activeElement.dataset.tab === tab;
+  const focusedElement = document.activeElement;
+  const focusedTab = tab !== undefined
+    && focusedElement instanceof HTMLElement
+    && focusedElement.matches('[role="tab"][data-tab]')
+    && root?.contains(focusedElement)
+    ? focusedElement.dataset.tab as WorkbenchState['activeTab'] | undefined
+    : undefined;
   render();
-  if (shouldRestore && state.activeTab === tab) focusActiveTab();
+  if (focusedTab && state.activeTab === focusedTab) focusActiveTab();
 }
 
 async function loadActiveView(tabFocusTarget?: WorkbenchState['activeTab']): Promise<void> {
