@@ -1,0 +1,36 @@
+{
+  "name": "@itharbors/mysql-workbench",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "mysql2": "^3.23.0"
+  },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "workbench": {
+          "entry": "./panel.workbench/dist/index.html",
+          "title": "MySQL Workbench",
+          "minWidth": 560,
+          "minHeight": 360,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "request": {
+          "getConnectionState": ["getConnectionState"],
+          "connect": ["connect"],
+          "disconnect": ["disconnect"],
+          "getSchema": ["getSchema"],
+          "getObjectSchema": ["getObjectSchema"],
+          "getRows": ["getRows"],
+          "insertRow": ["insertRow"],
+          "updateRow": ["updateRow"],
+          "deleteRow": ["deleteRow"],
+          "executeSql": ["executeSql"]
+        }
+      }
+    }
+  }
+}

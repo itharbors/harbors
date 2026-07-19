@@ -1,0 +1,14 @@
+{
+  "windows": [
+    {
+      "id": "mysql-main",
+      "kind": "main",
+      "type": "panel-area",
+      "layout": {
+        "type": "leaf",
+        "panel": "@itharbors/mysql-workbench.workbench"
+      }
+    }
+  ],
+  "activePanel": "@itharbors/mysql-workbench.workbench"
+}
