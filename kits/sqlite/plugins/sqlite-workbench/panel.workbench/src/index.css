@@ -538,6 +538,35 @@ td {
   white-space: nowrap;
 }
 
+td.has-cell-detail {
+  padding-right: 4px;
+}
+
+.cell-preview-value {
+  display: inline-block;
+  width: calc(100% - 42px);
+  overflow: hidden;
+  vertical-align: middle;
+  text-overflow: ellipsis;
+}
+
+.cell-detail-trigger {
+  min-height: 22px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-color: #38545a;
+  color: #a7dcd3;
+  background: #142329;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
+.cell-detail-trigger:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: #eafffb;
+  background: var(--teal-soft);
+}
+
 th {
   position: sticky;
   z-index: 2;
@@ -1172,11 +1201,27 @@ dialog:not([data-record-dialog]) footer {
   box-shadow: -18px 0 42px rgb(0 0 0 / 42%);
 }
 
-.cell-detail h2 {
+.cell-detail-heading {
   grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   margin: 0 0 12px;
+}
+
+.cell-detail h2 {
+  margin: 0;
   font-family: var(--mono);
   font-size: 15px;
+}
+
+.cell-detail-readonly {
+  border: 1px solid #725d35;
+  padding: 2px 6px;
+  color: #efcb86;
+  background: var(--amber-soft);
+  font-size: var(--font-secondary);
+  letter-spacing: 0.08em;
 }
 
 .cell-detail pre {

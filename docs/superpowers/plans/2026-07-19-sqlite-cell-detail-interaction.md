@@ -28,21 +28,21 @@
 - Produces: `isExpandableCellValue(value: SerializedValue): boolean`
 - Consumes: existing `formatValue`, `state.cellDetail`, `renderCellDetail`, and row-selection behavior.
 
-- [ ] **Step 1: Write failing Panel tests**
+- [x] **Step 1: Write failing Panel tests**
 
 Add assertions that clicking a short cell selects its row without creating `[data-cell-detail]`, while values longer than 80 characters, multiline values, and BLOB values render one accessible expand button that opens the drawer. Assert the drawer contains a read-only label.
 
-- [ ] **Step 2: Verify the new tests fail for the expected reason**
+- [x] **Step 2: Verify the new tests fail for the expected reason**
 
 Run: `npm run test -w @itharbors/kit-sqlite -- plugins/sqlite-workbench/tests/panel.test.ts`
 
 Expected: FAIL because every cell currently opens the drawer and no explicit expand control/read-only label exists.
 
-- [ ] **Step 3: Implement the minimal behavior**
+- [x] **Step 3: Implement the minimal behavior**
 
 Treat BLOB values, multiline values, and formatted values longer than the table preview limit as expandable. Remove the cell single-click drawer action, render an accessible button only for expandable values, and make double-click open details only for those cells. Add the drawer's visible “只读字段” label and restrained button styling.
 
-- [ ] **Step 4: Verify focused and complete checks**
+- [x] **Step 4: Verify focused and complete checks**
 
 Run:
 
@@ -56,7 +56,7 @@ git diff --check
 
 Expected: all commands exit 0; the SQLite suite reports no failures.
 
-- [ ] **Step 5: Commit and push the exact files**
+- [x] **Step 5: Commit and push the exact files**
 
 ```bash
 git add docs/superpowers/specs/2026-07-19-sqlite-cell-detail-interaction-design.md docs/superpowers/plans/2026-07-19-sqlite-cell-detail-interaction.md kits/sqlite/plugins/sqlite-workbench/panel.workbench/src/index.ts kits/sqlite/plugins/sqlite-workbench/panel.workbench/src/index.css kits/sqlite/plugins/sqlite-workbench/tests/panel.test.ts

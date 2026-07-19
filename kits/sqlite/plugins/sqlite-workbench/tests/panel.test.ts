@@ -409,7 +409,59 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector<HTMLDialogElement>('dialog[data-record-dialog]')?.open).toBe(true);
   });
 
-  it('searches, sorts, opens cell detail, and exports the current result', async () => {
+  it('selects a row without opening field detail when a short cell is clicked', async () => {
+    await connect();
+    const shortCell = root.querySelector<HTMLTableCellElement>('tbody tr td:nth-child(3)')!;
+    shortCell.click();
+
+    expect(root.querySelector<HTMLTableRowElement>('tbody tr')?.getAttribute('aria-selected')).toBe('true');
+    expect(root.querySelector('[data-cell-detail]')).toBeNull();
+    expect(root.querySelector('[data-action="open-cell-detail"]')).toBeNull();
+  });
+
+  it('offers explicit read-only detail only for long, multiline, and BLOB values', async () => {
+    const longText = 'x'.repeat(81);
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getRows') {
+        return {
+          ...rows,
+          columns: ['id', 'summary', 'content', 'notes', 'attachment'],
+          rows: [{
+            ...rows.rows[0],
+            values: [
+              { type: 'integer', value: '1' },
+              'short',
+              longText,
+              'line one\nline two',
+              { type: 'blob', size: 32, previewHex: 'deadbeef' },
+            ],
+          }],
+        };
+      }
+      return baseImplementation(...args);
+    });
+    await connect();
+
+    const expandButtons = root.querySelectorAll<HTMLButtonElement>('[data-action="open-cell-detail"]');
+    expect(expandButtons).toHaveLength(3);
+    expect(root.querySelector('[aria-label="查看 content 字段详情"]')).not.toBeNull();
+    expect(root.querySelector('[aria-label="查看 notes 字段详情"]')).not.toBeNull();
+    expect(root.querySelector('[aria-label="查看 attachment 字段详情"]')).not.toBeNull();
+
+    expandButtons[0].click();
+    expect(root.querySelector('[data-cell-detail]')?.textContent).toContain('只读字段');
+    expect(root.querySelector('[data-cell-detail]')?.textContent).toContain(longText);
+    root.querySelector<HTMLButtonElement>('[data-action="close-cell-detail"]')!.click();
+
+    root.querySelector<HTMLTableCellElement>('tbody tr td:nth-child(5)')!.dispatchEvent(new MouseEvent('dblclick', {
+      bubbles: true,
+    }));
+    expect(root.querySelector('[data-cell-detail]')?.textContent).toContain('line one\nline two');
+    expect(root.querySelector('dialog[data-record-dialog]')).toBeNull();
+  });
+
+  it('searches, sorts, and exports the current result', async () => {
     await connect();
     const search = root.querySelector<HTMLInputElement>('[data-field="quick-search"]')!;
     search.value = 'alice';
@@ -425,9 +477,6 @@ describe('SQLite workbench panel', () => {
     expect(request).toHaveBeenCalledWith(PLUGIN, 'getRows', expect.objectContaining({
       sorts: [{ column: 'email', direction: 'asc' }],
     }));
-
-    root.querySelector<HTMLTableCellElement>('tbody tr td:nth-child(3)')!.click();
-    expect(root.querySelector('[data-cell-detail]')?.textContent).toContain('a@example.com');
 
     root.querySelector<HTMLButtonElement>('[data-action="export-csv"]')!.click();
     await flush();

@@ -17,6 +17,7 @@ import { completionCandidates, formatSql } from './sql-format.js';
 import { historyAfterExecution, lineNumberText } from './sql-view.js';
 
 const PLUGIN = '@itharbors/sqlite-workbench';
+const CELL_DETAIL_TEXT_LIMIT = 80;
 
 type PanelContext = {
   message: {
@@ -1133,16 +1134,38 @@ function createDataTable(columns: string[], rows: SerializedValue[][], selectabl
     }
     values.forEach((value, columnIndex) => {
       const td = document.createElement('td');
-      td.textContent = formatValue(value);
-      td.title = td.textContent;
+      const column = columns[columnIndex];
+      const displayValue = formatValue(value);
+      const expandable = isExpandableCellValue(value);
+      td.title = displayValue;
       if (value === null) td.classList.add('value-null');
       if (value !== null && typeof value === 'object' && value.type === 'blob') {
         td.classList.add('value-blob');
       }
-      td.addEventListener('click', () => {
-        state.cellDetail = { column: columns[columnIndex], value };
-        render();
-      });
+      if (expandable) {
+        td.classList.add('has-cell-detail');
+        const preview = document.createElement('span');
+        preview.className = 'cell-preview-value';
+        preview.textContent = displayValue;
+        const expand = document.createElement('button');
+        expand.type = 'button';
+        expand.className = 'cell-detail-trigger';
+        expand.dataset.action = 'open-cell-detail';
+        expand.setAttribute('aria-label', `查看 ${column} 字段详情`);
+        expand.textContent = '查看';
+        expand.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openCellDetail(column, value, rowIndex);
+        });
+        td.append(preview, expand);
+        td.addEventListener('dblclick', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openCellDetail(column, value, rowIndex);
+        });
+      } else {
+        td.textContent = displayValue;
+      }
       tr.append(td);
     });
     body.append(tr);
@@ -1644,8 +1667,14 @@ function renderCellDetail(): void {
   const drawer = document.createElement('aside');
   drawer.dataset.cellDetail = '';
   drawer.className = 'cell-detail';
+  const heading = document.createElement('header');
+  heading.className = 'cell-detail-heading';
   const title = document.createElement('h2');
   title.textContent = detail.column;
+  const readonly = document.createElement('span');
+  readonly.className = 'cell-detail-readonly';
+  readonly.textContent = '只读字段';
+  heading.append(title, readonly);
   const content = document.createElement('pre');
   content.textContent = formatValue(detail.value);
   const close = actionButton('关闭', 'close-cell-detail', false, async () => {
@@ -1656,8 +1685,20 @@ function renderCellDetail(): void {
     await navigator.clipboard?.writeText(formatValue(detail.value));
     state.status = '单元格内容已复制';
   });
-  drawer.append(title, content, copy, close);
+  drawer.append(heading, content, copy, close);
   root!.querySelector('.workbench-shell')!.append(drawer);
+}
+
+function openCellDetail(column: string, value: SerializedValue, rowIndex: number): void {
+  state.selectedRowIndex = rowIndex;
+  state.cellDetail = { column, value };
+  render();
+}
+
+function isExpandableCellValue(value: SerializedValue): boolean {
+  if (value !== null && typeof value === 'object' && value.type === 'blob') return true;
+  const displayValue = formatValue(value);
+  return displayValue.length > CELL_DETAIL_TEXT_LIMIT || /[\r\n]/.test(displayValue);
 }
 
 function renderSqlWriteDialog(): void {
