@@ -392,6 +392,40 @@ describe('SQLite workbench panel', () => {
     expect(request).toHaveBeenCalledWith(PLUGIN, 'getObjectSchema', { name: 'memberships' });
   });
 
+  it('shows a dedicated relationship failure state and retries the request', async () => {
+    await connect();
+    const baseImplementation = request.getMockImplementation()!;
+    let attempts = 0;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getRelationshipGraph') {
+        attempts += 1;
+        if (attempts === 1) throw new Error('relationship request failed');
+        return relationshipGraph;
+      }
+      return baseImplementation(...args);
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-relationship-error]')).not.toBeNull());
+    expect(root.querySelector('[data-view="relationships"]')?.textContent).toContain('关系图加载失败，请重试。');
+    expect(root.querySelector('[data-view="relationships"]')?.textContent).not.toContain('正在加载表关系…');
+
+    root.querySelector<HTMLButtonElement>('[data-action="retry-relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+    expect(attempts).toBe(2);
+  });
+
+  it('does not show a selected readonly object badge in the database relationship heading', async () => {
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+
+    expect(root.querySelector('.object-title h1')?.textContent).toBe('example.sqlite');
+    expect(root.querySelector('.object-title [data-readonly]')).toBeNull();
+  });
+
   it('keeps the database-global relationship tab enabled for an empty schema', async () => {
     const baseImplementation = request.getMockImplementation()!;
     request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
@@ -423,6 +457,79 @@ describe('SQLite workbench panel', () => {
     root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
     await flush();
     expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(2);
+  });
+
+  it('reloads the relationship graph after DDL accepts a new schema snapshot', async () => {
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+    root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
+
+    const freshGraph = {
+      ...relationshipGraph,
+      tables: [
+        ...relationshipGraph.tables,
+        { name: 'audit_log', kind: 'table', columns: [] },
+      ],
+    };
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'analyzeSql') {
+        return {
+          readonly: false,
+          statementType: 'CREATE',
+          targetObjects: ['audit_log'],
+          risk: 'normal',
+          confirmationToken: 'ddl-token',
+        };
+      }
+      if (args[1] === 'executeSql') {
+        return { kind: 'mutation', changes: 0, lastInsertRowid: null, elapsedMs: 0.4 };
+      }
+      if (args[1] === 'getRelationshipGraph') return freshGraph;
+      return baseImplementation(...args);
+    });
+
+    const sql = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]')!;
+    sql.value = 'CREATE TABLE audit_log (id INTEGER PRIMARY KEY)';
+    sql.dispatchEvent(new Event('input', { bubbles: true }));
+    root.querySelector<HTMLButtonElement>('[data-action="execute-sql"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="confirm-write-sql"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="audit_log"]')).not.toBeNull());
+
+    expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(2);
+  });
+
+  it('replaces a graph populated while a schema refresh is pending', async () => {
+    await connect();
+    const baseImplementation = request.getMockImplementation()!;
+    let resolveSchema!: (result: unknown) => void;
+    let graphRequests = 0;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getSchema') {
+        return new Promise((resolve) => { resolveSchema = resolve; });
+      }
+      if (args[1] === 'getRelationshipGraph') {
+        graphRequests += 1;
+        return graphRequests === 1
+          ? { tables: [{ name: 'old_snapshot', kind: 'table', columns: [] }], relationships: [] }
+          : { tables: [{ name: 'fresh_snapshot', kind: 'table', columns: [] }], relationships: [] };
+      }
+      return baseImplementation(...args);
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="old_snapshot"]')).not.toBeNull());
+    resolveSchema(schema);
+    await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="fresh_snapshot"]')).not.toBeNull());
+
+    expect(root.querySelector('[data-relationship-table="old_snapshot"]')).toBeNull();
+    expect(graphRequests).toBe(2);
   });
 
   it('ignores a relationship response that resolves after the database closes', async () => {

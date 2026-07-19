@@ -84,6 +84,8 @@ export const sqliteCopy = {
     zoomIn: '放大关系图',
     fit: '适应窗口',
     loading: '正在加载表关系…',
+    failure: '关系图加载失败，请重试。',
+    retry: '重试',
     empty: '此数据库还没有可展示的表。',
     noRelationships: '未检测到已声明的外键关系。',
     status: (tables: number, relationships: number) => `${tables} 个表 · ${relationships} 条关系`,

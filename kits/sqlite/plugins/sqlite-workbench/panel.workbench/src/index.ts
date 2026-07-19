@@ -159,6 +159,7 @@ type WorkbenchState = {
   rows: RowsResult | null;
   objectSchema: ObjectSchema | null;
   relationshipGraph: RelationshipGraph | null;
+  relationshipError: PanelError | null;
   relationshipViewport: RelationshipViewport;
   relationshipQuery: string;
   relationshipNeedsFit: boolean;
@@ -269,6 +270,7 @@ function createInitialState(): WorkbenchState {
     rows: null,
     objectSchema: null,
     relationshipGraph: null,
+    relationshipError: null,
     relationshipViewport: { x: 0, y: 0, scale: 1 },
     relationshipQuery: '',
     relationshipNeedsFit: true,
@@ -438,8 +440,6 @@ async function closeDatabase(): Promise<void> {
 
 async function refreshWorkbench(): Promise<void> {
   await runAction(async () => {
-    viewRequestSequence += 1;
-    resetRelationshipState();
     await loadSchema(false);
     await loadActiveView();
     state.status = sqliteCopy.connection.refreshed;
@@ -455,12 +455,17 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
     || sequence !== schemaRequestSequence
     || !state.connection.connected
   ) return;
+  viewRequestSequence += 1;
+  resetRelationshipState();
   state.objects = result.objects;
   const selectedStillExists = state.objects.some((object) => object.name === state.selectedName);
   if (selectFirst || !selectedStillExists) {
     state.selectedName = state.objects.find((object) => object.type === 'table')?.name
       ?? state.objects[0]?.name
       ?? null;
+  }
+  if (!state.selectedName && state.activeTab !== 'relationships' && state.activeTab !== 'sql') {
+    state.activeTab = 'relationships';
   }
 }
 
@@ -509,6 +514,8 @@ async function loadActiveView(): Promise<void> {
   const generation = connectionGeneration;
   if (state.activeTab === 'relationships') {
     if (state.relationshipGraph) return;
+    state.relationshipError = null;
+    render();
     let graph: RelationshipGraph;
     try {
       graph = await request<RelationshipGraph>('getRelationshipGraph');
@@ -519,7 +526,9 @@ async function loadActiveView(): Promise<void> {
         || state.activeTab !== 'relationships'
         || !state.connection.connected
       ) return;
-      throw error;
+      state.relationshipError = panelError(error);
+      state.status = sqliteCopy.relationships.failure;
+      return;
     }
     if (
       sequence !== viewRequestSequence
@@ -528,6 +537,7 @@ async function loadActiveView(): Promise<void> {
       || !state.connection.connected
     ) return;
     state.relationshipGraph = graph;
+    state.relationshipError = null;
     state.relationshipNeedsFit = true;
     state.status = sqliteCopy.relationships.status(graph.tables.length, graph.relationships.length);
     return;
@@ -1080,7 +1090,7 @@ function renderHeading(): void {
     ? sqliteCopy.objects.emptyDatabase
     : sqliteCopy.objects.connectDatabase);
   title.append(eyebrow, name);
-  if (object && !object.writable) {
+  if (state.activeTab !== 'relationships' && object && !object.writable) {
     const badge = document.createElement('span');
     badge.dataset.readonly = '';
     badge.className = 'readonly-badge';
@@ -1148,6 +1158,22 @@ function renderActiveView(): void {
 }
 
 function renderRelationshipWorkbench(): HTMLElement {
+  if (state.relationshipError) {
+    const failure = document.createElement('section');
+    failure.id = 'sqlite-view-relationships';
+    failure.dataset.view = 'relationships';
+    failure.setAttribute('role', 'tabpanel');
+    failure.setAttribute('aria-labelledby', 'sqlite-tab-relationships');
+    const message = emptyMessage(sqliteCopy.relationships.failure);
+    message.dataset.relationshipError = '';
+    failure.append(message, actionButton(
+      sqliteCopy.relationships.retry,
+      'retry-relationships',
+      false,
+      retryRelationshipGraph,
+    ));
+    return failure;
+  }
   if (!state.relationshipGraph) {
     const loading = document.createElement('section');
     loading.id = 'sqlite-view-relationships';
@@ -1206,6 +1232,13 @@ function renderRelationshipWorkbench(): HTMLElement {
     toolbar.append(noRelationships);
   }
   return view;
+}
+
+async function retryRelationshipGraph(): Promise<void> {
+  state.relationshipError = null;
+  render();
+  await loadActiveView();
+  render();
 }
 
 function relationshipToolbarButton(label: string, ariaLabel: string, handler: () => void): HTMLButtonElement {
@@ -2155,6 +2188,7 @@ function currentObject(): SchemaObject | undefined {
 
 function resetRelationshipState(): void {
   state.relationshipGraph = null;
+  state.relationshipError = null;
   state.relationshipViewport = { x: 0, y: 0, scale: 1 };
   state.relationshipQuery = '';
   state.relationshipNeedsFit = true;

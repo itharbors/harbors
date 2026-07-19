@@ -151,4 +151,44 @@ describe('SQLite workbench accessibility foundations', () => {
       document.body.innerHTML = '';
     }
   });
+
+  it('keeps one enabled roving tab selected for an empty connected schema', async () => {
+    document.body.innerHTML = '<div id="panel-root"></div>';
+    const root = document.querySelector<HTMLDivElement>('#panel-root')!;
+    const request = vi.fn(async (_plugin: string, name: string) => {
+      if (name === 'getConnectionState') {
+        return {
+          connected: true,
+          path: '/tmp/empty.sqlite',
+          fileName: 'empty.sqlite',
+          mode: 'readonly',
+          sqliteVersion: '3.46.0',
+        };
+      }
+      if (name === 'getSchema') return { objects: [] };
+      if (name === 'getRelationshipGraph') return { tables: [], relationships: [] };
+      throw new Error(`Unexpected request: ${name}`);
+    });
+
+    try {
+      await definition.mount?.({ message: { request } } as never);
+      const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      const enabledRovingTabs = tabs.filter((tab) => !tab.disabled && tab.tabIndex === 0);
+      const selectedTabs = tabs.filter((tab) => tab.getAttribute('aria-selected') === 'true');
+      expect(enabledRovingTabs).toHaveLength(1);
+      expect(selectedTabs).toHaveLength(1);
+      expect(selectedTabs[0].disabled).toBe(false);
+      expect(selectedTabs[0].dataset.tab).toBe('relationships');
+
+      selectedTabs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await Promise.resolve();
+      const nextSelected = root.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+      expect(nextSelected.dataset.tab).toBe('sql');
+      expect(nextSelected.disabled).toBe(false);
+      expect(nextSelected.tabIndex).toBe(0);
+    } finally {
+      await definition.unmount?.();
+      document.body.innerHTML = '';
+    }
+  });
 });
