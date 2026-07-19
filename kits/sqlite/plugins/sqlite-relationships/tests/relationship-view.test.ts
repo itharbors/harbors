@@ -10,7 +10,7 @@ import {
   renderRelationshipView,
   zoomRelationshipViewport,
   type RelationshipGraph,
-} from '../panel.workbench/src/relationship-view';
+} from '../panel.relationships/src/relationship-view';
 
 const graph: RelationshipGraph = {
   tables: [
