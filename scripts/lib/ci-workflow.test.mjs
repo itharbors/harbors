@@ -5,6 +5,7 @@ import test from 'node:test';
 const rootUrl = new URL('../../', import.meta.url);
 const workflowUrl = new URL('.github/workflows/ci.yaml', rootUrl);
 const packageUrl = new URL('package.json', rootUrl);
+const packageLockUrl = new URL('package-lock.json', rootUrl);
 
 test('CI installs locked dependencies before running the repository check', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
@@ -33,4 +34,14 @@ test('CI only invokes npm scripts declared by the root package', async () => {
       `CI invokes missing root npm script: ${script}`,
     );
   }
+});
+
+test('CI dependency lock does not reference the private npm registry', async () => {
+  const packageLock = await readFile(packageLockUrl, 'utf8');
+
+  assert.equal(
+    packageLock.includes('https://bnpm.byted.org/'),
+    false,
+    'package-lock.json must use a registry reachable by public GitHub runners',
+  );
 });
