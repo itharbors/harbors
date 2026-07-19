@@ -4,6 +4,7 @@ dist
 bundle
 
 .temp
+.worktrees/
 .DS_Store
 bundle.d.ts
 tsconfig.tsbuildinfo

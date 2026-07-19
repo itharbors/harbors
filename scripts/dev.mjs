@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { normalizeKitArgument } from './lib/kit-path.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -15,7 +16,7 @@ if (parsed.errors.length > 0) {
   process.exit(1);
 }
 
-const defaultKit = parsed.kit;
+const defaultKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
 const serverEnv = { ...baseEnv };
 const gatewayPort = parsePort(baseEnv.PORT, 8080);
