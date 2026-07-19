@@ -19,16 +19,24 @@
       },
       "message": {
         "request": {
+          "listDirectory": ["listDirectory"],
+          "getRecentDatabases": ["getRecentDatabases"],
           "getConnectionState": ["getConnectionState"],
           "openDatabase": ["openDatabase"],
+          "setConnectionMode": ["setConnectionMode"],
           "closeDatabase": ["closeDatabase"],
           "getSchema": ["getSchema"],
           "getObjectSchema": ["getObjectSchema"],
           "getRows": ["getRows"],
+          "exportRows": ["exportRows"],
           "insertRow": ["insertRow"],
           "updateRow": ["updateRow"],
           "deleteRow": ["deleteRow"],
-          "executeSql": ["executeSql"]
+          "undoLastMutation": ["undoLastMutation"],
+          "analyzeSql": ["analyzeSql"],
+          "executeSql": ["executeSql"],
+          "cancelSql": ["cancelSql"],
+          "explainSql": ["explainSql"]
         }
       }
     }

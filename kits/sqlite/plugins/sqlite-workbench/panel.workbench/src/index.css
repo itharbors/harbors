@@ -1,6 +1,6 @@
 :root {
   color-scheme: dark;
-  font-family: "Arial Narrow", "Aptos Narrow", "Helvetica Neue", Arial, sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
   font-synthesis: none;
   --ink: #0b1116;
   --deck: #121a21;
@@ -15,6 +15,8 @@
   --amber-soft: #392d19;
   --coral: #ff7d72;
   --coral-soft: #3a211f;
+  --font-body: 12px;
+  --font-secondary: 11px;
   --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
@@ -34,7 +36,7 @@ body,
 body {
   background: var(--ink);
   color: var(--text);
-  font-size: 13px;
+  font-size: var(--font-body);
 }
 
 button,
@@ -43,6 +45,7 @@ select,
 textarea {
   color: inherit;
   font: inherit;
+  font-size: var(--font-body);
 }
 
 button,
@@ -114,7 +117,7 @@ textarea:focus-visible {
 .connection-bar {
   z-index: 4;
   display: grid;
-  grid-template-columns: 168px minmax(360px, 1fr) minmax(132px, auto);
+  grid-template-columns: 168px auto minmax(220px, 1fr);
   align-items: stretch;
   border-bottom: 1px solid var(--grid-strong);
   background: #10181e;
@@ -145,7 +148,7 @@ textarea:focus-visible {
 .brand-block small {
   margin-top: 2px;
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: var(--font-secondary);
   letter-spacing: 0.14em;
   text-transform: uppercase;
 }
@@ -183,7 +186,7 @@ textarea:focus-visible {
 
 .connection-form {
   display: flex;
-  align-items: end;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   padding: 8px 12px;
@@ -198,7 +201,7 @@ textarea:focus-visible {
 
 .path-field > span {
   color: var(--text-muted);
-  font-size: 9px;
+  font-size: var(--font-secondary);
   font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
@@ -224,6 +227,19 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.connection-summary {
+  flex-shrink: 0;
+}
+
+.connection-state code {
+  min-width: 0;
+  overflow: hidden;
+  color: #9db0b7;
+  font-family: var(--mono);
+  font-size: var(--font-secondary);
+  text-overflow: ellipsis;
+}
+
 .connection-state[data-connection="connected"] {
   color: #c8ece6;
 }
@@ -245,14 +261,20 @@ textarea:focus-visible {
 .connection-state small {
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
 }
 
 .workbench-body {
+  position: relative;
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
+}
+
+.navigation-trigger,
+.navigation-backdrop {
+  display: none;
 }
 
 .object-rail {
@@ -272,7 +294,7 @@ textarea:focus-visible {
   padding: 0 14px;
   border-bottom: 1px solid var(--grid);
   color: #9daab0;
-  font-size: 10px;
+  font-size: var(--font-secondary);
   font-weight: 800;
   letter-spacing: 0.15em;
   text-transform: uppercase;
@@ -291,13 +313,38 @@ textarea:focus-visible {
   padding: 8px 0 20px;
 }
 
-.object-group h2 {
+.object-group-title {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
   margin: 15px 14px 6px;
   color: #687982;
-  font-size: 9px;
+  font-size: var(--font-secondary);
   font-weight: 800;
   letter-spacing: 0.13em;
   text-transform: uppercase;
+}
+
+.object-group > summary.object-group-title {
+  cursor: pointer;
+  list-style: none;
+}
+
+.object-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.object-group > summary.object-group-title::after {
+  margin-left: auto;
+  color: var(--teal);
+  content: "›";
+  font-size: 15px;
+  line-height: 1;
+  transform: rotate(0deg);
+}
+
+.object-group[open] > summary.object-group-title::after {
+  transform: rotate(90deg);
 }
 
 .object-item {
@@ -335,7 +382,7 @@ textarea:focus-visible {
 
 .object-item small {
   color: #60717a;
-  font-size: 8px;
+  font-size: var(--font-secondary);
   letter-spacing: 0.1em;
   text-transform: uppercase;
 }
@@ -380,7 +427,7 @@ textarea:focus-visible {
   margin-right: 10px;
   color: var(--teal);
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: var(--font-secondary);
   font-weight: 800;
   letter-spacing: 0.12em;
 }
@@ -403,7 +450,7 @@ textarea:focus-visible {
   padding: 3px 6px;
   color: #efcb86;
   background: var(--amber-soft);
-  font-size: 9px;
+  font-size: var(--font-secondary);
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -459,11 +506,10 @@ textarea:focus-visible {
 
 .data-view {
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr) 40px;
+  grid-template-rows: 80px minmax(0, 1fr) 40px;
   height: 100%;
 }
 
-.data-toolbar,
 .sql-toolbar,
 .pagination {
   display: flex;
@@ -474,20 +520,64 @@ textarea:focus-visible {
   background: #0f171c;
 }
 
+.data-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  border-bottom: 1px solid var(--grid);
+  background: #0f171c;
+}
+
+.data-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0 10px;
+}
+
+.data-toolbar-primary {
+  border-bottom: 1px solid var(--grid);
+}
+
+.data-toolbar-row > * {
+  flex-shrink: 0;
+}
+
+.data-toolbar-row button {
+  white-space: nowrap;
+}
+
 .data-toolbar button,
 .sql-toolbar button,
 .pagination button,
 .pagination select {
   min-height: 26px;
-  font-size: 10px;
+  font-size: var(--font-secondary);
 }
 
-.data-toolbar > span,
+.data-toolbar-primary > span,
 .sql-toolbar > span {
   margin-left: auto;
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
+}
+
+.data-toolbar select,
+.data-toolbar input {
+  min-height: 27px;
+  padding-inline: 7px;
+  font-size: var(--font-secondary);
+}
+
+.data-toolbar select[data-field="filter-column"] {
+  max-width: 130px;
+}
+
+.data-toolbar input[data-field="filter-value"] {
+  width: 120px;
 }
 
 .table-scroller {
@@ -520,6 +610,35 @@ td {
   white-space: nowrap;
 }
 
+td.has-cell-detail {
+  padding-right: 4px;
+}
+
+.cell-preview-value {
+  display: inline-block;
+  width: calc(100% - 42px);
+  overflow: hidden;
+  vertical-align: middle;
+  text-overflow: ellipsis;
+}
+
+.cell-detail-trigger {
+  min-height: 22px;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-color: #38545a;
+  color: #a7dcd3;
+  background: #142329;
+  font-size: 10px;
+  vertical-align: middle;
+}
+
+.cell-detail-trigger:hover:not(:disabled) {
+  border-color: var(--teal);
+  color: #eafffb;
+  background: var(--teal-soft);
+}
+
 th {
   position: sticky;
   z-index: 2;
@@ -529,7 +648,7 @@ th {
   background:
     repeating-linear-gradient(90deg, transparent 0 15px, rgb(87 200 181 / 8%) 15px 16px),
     #172128;
-  font-size: 9px;
+  font-size: var(--font-secondary);
   font-weight: 750;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -564,14 +683,18 @@ td:has(.row-selector) {
 }
 
 .row-selector {
-  width: 100%;
-  min-height: 31px;
-  border: 0;
-  border-radius: 0;
+  width: 14px;
+  height: 14px;
+  margin: 0 3px 0 7px;
+  accent-color: var(--teal);
+  vertical-align: middle;
+}
+
+.row-number {
   color: #61747d;
-  background: transparent;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
+  vertical-align: middle;
 }
 
 .value-null {
@@ -593,7 +716,7 @@ td:has(.row-selector) {
   margin-right: 4px;
   color: #a2b0b6;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--font-secondary);
 }
 
 .page-grid {
@@ -660,14 +783,14 @@ td:has(.row-selector) {
 .index-row code {
   overflow: hidden;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--font-secondary);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .index-row small {
   color: var(--amber);
-  font-size: 8px;
+  font-size: var(--font-secondary);
   letter-spacing: 0.08em;
 }
 
@@ -703,7 +826,7 @@ pre {
   border-right: 1px solid var(--grid);
   color: #52636c;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
   line-height: 1.8;
   text-align: right;
   white-space: pre-line;
@@ -739,12 +862,37 @@ pre {
   height: 100%;
 }
 
+.sql-result-toolbar {
+  position: sticky;
+  z-index: 3;
+  top: 0;
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--grid);
+  background: #0f171c;
+}
+
+.sql-result-toolbar button {
+  min-height: 26px;
+  font-size: var(--font-secondary);
+}
+
+.sql-result-toolbar span {
+  align-self: center;
+  margin-right: auto;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  font-size: var(--font-secondary);
+}
+
 .result-notice {
   padding: 7px 12px;
   border-bottom: 1px solid #725d35;
   color: #f0ce8e;
   background: var(--amber-soft);
-  font-size: 10px;
+  font-size: var(--font-secondary);
 }
 
 .mutation-summary {
@@ -774,7 +922,7 @@ pre {
 .mutation-summary code {
   color: var(--text-muted);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
 }
 
 .welcome-panel {
@@ -790,7 +938,7 @@ pre {
 .welcome-panel > span {
   color: var(--teal);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
   font-weight: 800;
   letter-spacing: 0.2em;
 }
@@ -826,7 +974,7 @@ pre {
   padding-top: 14px;
   color: #5f717a;
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: var(--font-secondary);
   text-transform: uppercase;
 }
 
@@ -868,7 +1016,7 @@ pre {
 
 .status-bar {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 18px;
   min-width: 0;
@@ -877,7 +1025,7 @@ pre {
   color: #6f818a;
   background: #0e151a;
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: var(--font-secondary);
   letter-spacing: 0.04em;
 }
 
@@ -887,7 +1035,6 @@ pre {
   white-space: nowrap;
 }
 
-.status-bar span:nth-child(2) { color: #9db0b7; }
 .status-bar span:last-child { text-align: right; }
 
 dialog[data-record-dialog] {
@@ -923,7 +1070,7 @@ dialog[data-record-dialog] header {
 dialog[data-record-dialog] header small {
   color: var(--teal);
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: var(--font-secondary);
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -940,6 +1087,14 @@ dialog[data-record-dialog] h2 {
   min-height: 0;
   overflow: auto;
   padding: 8px 18px 16px;
+}
+
+.record-validation-error {
+  margin: 8px 0;
+  border-left: 3px solid var(--coral);
+  padding: 8px 10px;
+  color: #ffd0cc;
+  background: var(--coral-soft);
 }
 
 .record-fields label {
@@ -962,7 +1117,7 @@ dialog[data-record-dialog] h2 {
 .record-fields label > small {
   color: #697b84;
   font-family: var(--mono);
-  font-size: 8px;
+  font-size: var(--font-secondary);
 }
 
 .record-fields input,
@@ -971,7 +1126,7 @@ dialog[data-record-dialog] h2 {
   height: 30px;
   padding: 0 8px;
   font-family: var(--mono);
-  font-size: 10px;
+  font-size: var(--font-secondary);
 }
 
 .record-fields input:disabled {
@@ -988,13 +1143,265 @@ dialog[data-record-dialog] footer {
   background: #0e151a;
 }
 
-@media (max-width: 880px) {
+dialog:not([data-record-dialog]) {
+  width: min(560px, calc(100% - 32px));
+  max-height: min(680px, calc(100% - 32px));
+  padding: 18px;
+  overflow: auto;
+  border: 1px solid #4a5c66;
+  border-radius: 2px;
+  color: var(--text);
+  background: #111a20;
+  box-shadow: 0 24px 64px rgb(0 0 0 / 65%);
+}
+
+dialog:not([data-record-dialog])::backdrop {
+  background: rgb(3 7 10 / 68%);
+  backdrop-filter: blur(2px);
+}
+
+dialog:not([data-record-dialog]) h2 {
+  margin: 0 0 12px;
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 550;
+}
+
+dialog:not([data-record-dialog]) > code {
+  display: block;
+  margin-bottom: 10px;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-family: var(--mono);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+dialog:not([data-record-dialog]) > input {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 10px;
+  padding: 0 9px;
+}
+
+dialog[data-file-dialog] details {
+  display: grid;
+  gap: 6px;
+  margin: 10px 0;
+  border: 1px solid var(--grid);
+  padding: 8px;
+}
+
+dialog[data-file-dialog] summary {
+  cursor: pointer;
+  color: var(--text-muted);
+}
+
+dialog[data-file-dialog] details button {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  margin-top: 5px;
+  font-family: var(--mono);
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+dialog[data-file-dialog] details input {
+  width: 100%;
+  min-height: 34px;
+  margin-top: 8px;
+  padding: 0 9px;
+  font-family: var(--mono);
+}
+
+dialog:not([data-record-dialog]) footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 7px;
+  margin-top: 16px;
+}
+
+.file-list {
+  display: grid;
+  max-height: 380px;
+  overflow: auto;
+  border: 1px solid var(--grid);
+  background: #0c1217;
+}
+
+.file-list button {
+  justify-content: flex-start;
+  min-height: 34px;
+  border: 0;
+  border-bottom: 1px solid var(--grid);
+  border-radius: 0;
+  background: transparent;
+  font-family: var(--mono);
+  text-align: left;
+}
+
+.file-list button.selected {
+  color: #eafffb;
+  background: var(--teal-soft);
+}
+
+.object-list > input[type="search"] {
+  width: calc(100% - 20px);
+  min-height: 30px;
+  margin: 8px 10px 2px;
+  padding: 0 8px;
+}
+
+.data-toolbar input[type="search"] {
+  width: min(220px, 28vw);
+  min-height: 27px;
+  padding: 0 8px;
+}
+
+.cell-detail {
+  position: absolute;
+  z-index: 16;
+  top: 64px;
+  right: 0;
+  bottom: 26px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-columns: 1fr auto;
+  width: min(420px, calc(100% - 24px));
+  padding: 16px;
+  border-left: 1px solid var(--grid-strong);
+  background: #111a20;
+  box-shadow: -18px 0 42px rgb(0 0 0 / 42%);
+}
+
+.cell-detail-heading {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 12px;
+}
+
+.cell-detail h2 {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 15px;
+}
+
+.cell-detail-readonly {
+  border: 1px solid #725d35;
+  padding: 2px 6px;
+  color: #efcb86;
+  background: var(--amber-soft);
+  font-size: var(--font-secondary);
+  letter-spacing: 0.08em;
+}
+
+.cell-detail pre {
+  grid-column: 1 / -1;
+  margin-bottom: 12px;
+}
+
+.undo-toast {
+  position: absolute;
+  z-index: 18;
+  right: 16px;
+  bottom: 40px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 9px 10px 9px 14px;
+  border: 1px solid #725d35;
+  color: #f5d99f;
+  background: var(--amber-soft);
+  box-shadow: 0 12px 30px rgb(0 0 0 / 38%);
+}
+
+.code-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 6px;
+}
+
+.trigger-row {
+  margin-bottom: 10px;
+  border: 1px solid var(--grid);
+}
+
+.trigger-row strong {
+  display: block;
+  padding: 8px 12px;
+  color: var(--amber);
+  font-family: var(--mono);
+}
+
+.sql-editor {
+  position: relative;
+}
+
+.sql-completions {
+  position: absolute;
+  z-index: 3;
+  right: 12px;
+  bottom: 8px;
+  display: flex;
+  gap: 4px;
+  max-width: calc(100% - 64px);
+  overflow-x: auto;
+}
+
+.sql-completions:empty {
+  display: none;
+}
+
+.sql-completions button {
+  min-height: 24px;
+  padding-inline: 7px;
+  font-family: var(--mono);
+  font-size: var(--font-secondary);
+}
+
+.sql-code {
+  counter-reset: sql-line;
+}
+
+.sql-code > span {
+  display: block;
+}
+
+.sql-code.nowrap pre {
+  white-space: pre;
+}
+
+.sql-code .sql-keyword { color: #e5c07b; }
+.sql-code .sql-string { color: #98c379; }
+.sql-code .sql-number { color: #d19a66; }
+.sql-code .sql-comment { color: #6f818a; }
+
+@media (max-width: 1180px) {
   .connection-bar {
-    grid-template-columns: 132px minmax(300px, 1fr);
+    grid-template-columns: 148px minmax(330px, 1fr) minmax(116px, auto);
   }
 
-  .connection-state {
-    display: none;
+  .workbench-body {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .connection-form {
+    gap: 4px;
+  }
+
+  .connection-form button {
+    padding-inline: 8px;
+  }
+
+}
+
+@media (max-width: 880px) {
+  .connection-bar {
+    grid-template-columns: 132px auto minmax(160px, 1fr);
   }
 
   .brand-block {
@@ -1023,18 +1430,56 @@ dialog[data-record-dialog] footer {
     flex-wrap: wrap;
   }
 
-  .path-field {
-    flex-basis: 100%;
+  .connection-state {
+    justify-content: flex-start;
+    min-height: 38px;
+    border-top: 1px solid var(--grid);
+    border-left: 0;
   }
 
   .workbench-body {
-    grid-template-rows: 116px minmax(0, 1fr);
     grid-template-columns: 1fr;
   }
 
   .object-rail {
-    border-right: 0;
-    border-bottom: 1px solid var(--grid-strong);
+    position: absolute;
+    z-index: 12;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 86vw);
+    border-right: 1px solid var(--grid-strong);
+    background: var(--deck);
+    box-shadow: 16px 0 36px rgb(0 0 0 / 45%);
+    transform: translateX(-102%);
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 160ms ease, visibility 0s linear 160ms;
+  }
+
+  .object-rail[data-open="true"] {
+    transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
+  }
+
+  .navigation-backdrop[data-open="true"] {
+    position: absolute;
+    z-index: 11;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: rgb(0 0 0 / 48%);
+  }
+
+  .navigation-trigger {
+    display: inline-flex;
+    align-self: center;
+    margin-left: 8px;
+    padding-inline: 8px;
   }
 
   .rail-heading {
@@ -1042,30 +1487,27 @@ dialog[data-record-dialog] footer {
   }
 
   .object-list {
-    display: flex;
-    overflow-x: auto;
-    padding: 4px 8px;
+    display: block;
+    overflow: auto;
+    padding: 8px 0 20px;
   }
 
   .object-group {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
+    display: block;
   }
 
-  .object-group h2 {
-    margin: 0 8px;
-    writing-mode: vertical-rl;
+  .object-group-title {
+    margin: 15px 14px 6px;
   }
 
   .object-item {
-    width: 170px;
-    border-left: 0;
-    border-bottom: 2px solid transparent;
+    width: 100%;
+    border-bottom: 0;
+    border-left: 2px solid transparent;
   }
 
   .object-item.active {
-    border-bottom-color: var(--teal);
+    border-left-color: var(--teal);
   }
 
   .workspace-heading {
@@ -1090,10 +1532,6 @@ dialog[data-record-dialog] footer {
 
   .record-fields input {
     grid-column: 1 / -1;
-  }
-
-  .status-bar {
-    grid-template-columns: 1fr auto;
   }
 
   .status-bar span:last-child {

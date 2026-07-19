@@ -32,7 +32,7 @@ assert_ref_missing() {
 }
 
 new_fixture() {
-  FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}feature-workflow.XXXXXX")
+  FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/feature-workflow.XXXXXX")
   FIXTURE_ROOT=$(cd "$FIXTURE_ROOT" && pwd -P)
   ORIGIN="$FIXTURE_ROOT/origin.git"
   REPO="$FIXTURE_ROOT/repo"

@@ -8,8 +8,16 @@ import {
   type SerializedValue,
 } from './view-model.js';
 import { sqliteCopy } from './copy.js';
+import { WorkbenchController, WorkbenchRequestError } from './controller.js';
+import { closeModal, showModal } from './dialogs.js';
+import { identitySummary, limitRenderedRows } from './data-view.js';
+import { createDownload, rowsToCsv } from './export.js';
+import { groupSchemaObjects, renderSqlCode } from './schema-view.js';
+import { completionCandidates, formatSql } from './sql-format.js';
+import { historyAfterExecution, lineNumberText } from './sql-view.js';
 
 const PLUGIN = '@itharbors/sqlite-workbench';
+const CELL_DETAIL_TEXT_LIMIT = 80;
 
 type PanelContext = {
   message: {
@@ -20,13 +28,36 @@ type PanelContext = {
 type ConnectionState = {
   connected: boolean;
   path: string | null;
+  fileName?: string | null;
+  mode?: 'readonly' | 'readwrite' | null;
   sqliteVersion: string | null;
+};
+
+type FileEntry = {
+  name: string;
+  path: string;
+  kind: 'directory' | 'file';
+  sqliteCandidate: boolean;
+};
+
+type FileDialogState = {
+  mode: 'open' | 'create';
+  currentPath: string;
+  parentPath: string | null;
+  entries: FileEntry[];
+  selectedPath: string | null;
+  fileName: string;
+  recentPaths: string[];
+  showAll: boolean;
+  manualPath: string;
 };
 
 type SchemaObject = {
   name: string;
+  kind?: 'table' | 'view' | 'virtual' | 'shadow';
   type: 'table' | 'view';
   writable: boolean;
+  readOnlyReason?: string | null;
   sql: string;
 };
 
@@ -52,6 +83,8 @@ type ObjectSchema = SchemaObject & {
   columns: ColumnSchema[];
   primaryKey: string[];
   indexes: IndexSchema[];
+  foreignKeys?: Array<{ table: string; from: string; to: string | null; onUpdate: string; onDelete: string }>;
+  triggers?: Array<{ name: string; sql: string }>;
   hasRowid: boolean;
 };
 
@@ -80,6 +113,7 @@ type SqlResult =
     columns: string[];
     rows: SerializedValue[][];
     truncated: boolean;
+    page?: number;
     elapsedMs: number;
   }
   | {
@@ -93,12 +127,23 @@ type RecordDialog = {
   mode: 'add' | 'edit';
   fields: RecordFieldDraft[];
   identity: RowIdentity | null;
+  dirty: boolean;
+  validationError: string | null;
+  validationField: string | null;
+  openerAction: string;
 };
 
+type MutationReceipt = {
+  undoToken: string;
+  undoExpiresAt: string;
+};
+
+type PanelError = { message: string; detail?: string };
+
 type WorkbenchState = {
-  path: string;
   connection: ConnectionState;
   objects: SchemaObject[];
+  expandedObjectGroups: Set<NonNullable<SchemaObject['kind']>>;
   selectedName: string | null;
   activeTab: 'data' | 'schema' | 'sql';
   page: number;
@@ -108,42 +153,93 @@ type WorkbenchState = {
   selectedRowIndex: number | null;
   sqlText: string;
   sqlResult: SqlResult | null;
+  sqlResultSql: string | null;
+  sqlPage: number;
   dialog: RecordDialog | null;
   busy: boolean;
   status: string;
-  error: string | null;
+  error: PanelError | null;
+  fileDialog: FileDialogState | null;
+  writeDialog: boolean;
+  deleteDialog: RowRecord | null;
+  undoReceipt: MutationReceipt | null;
+  search: string;
+  filters: Array<{ column: string; operator: 'contains' | 'equals' | 'is-null' | 'is-not-null'; value?: string }>;
+  sorts: Array<{ column: string; direction: 'asc' | 'desc' }>;
+  cellDetail: { column: string; value: SerializedValue } | null;
+  schemaWrap: boolean;
+  sqlHistory: string[];
+  sqlExecutionCounter: number;
+  activeExecutionId: string | null;
+  sqlWriteDialog: {
+    confirmationToken: string;
+    risk: 'normal' | 'high';
+    statementType: string;
+    targetObjects: string[];
+  } | null;
+  discardRecordDialog: boolean;
+  navigationOpen: boolean;
 };
 
 let context: PanelContext | undefined;
+let controller: WorkbenchController | undefined;
 let root: HTMLElement | null = null;
 let state: WorkbenchState = createInitialState();
+let viewRequestSequence = 0;
+let schemaRequestSequence = 0;
+let connectionGeneration = 0;
+let undoTimer: ReturnType<typeof setTimeout> | null = null;
+let pendingDialogOpenerAction: string | null = null;
+let narrowNavigationMedia: MediaQueryList | null = null;
+
+function handleNarrowNavigationChange(event: MediaQueryListEvent): void {
+  if (!event.matches) state.navigationOpen = false;
+  render();
+}
 
 const definition = {
   async mount(ctx: PanelContext) {
     context = ctx;
+    controller = new WorkbenchController(ctx, PLUGIN);
     root = document.querySelector('#panel-root');
     if (!root) throw new Error('Panel root element #panel-root not found');
     state = createInitialState();
+    viewRequestSequence = 0;
+    schemaRequestSequence = 0;
+    connectionGeneration = 0;
+    narrowNavigationMedia?.removeEventListener('change', handleNarrowNavigationChange);
+    narrowNavigationMedia = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 720px)')
+      : null;
+    narrowNavigationMedia?.addEventListener('change', handleNarrowNavigationChange);
+    clearUndoReceipt();
     render();
     try {
       const connection = await request<ConnectionState>('getConnectionState');
       state.connection = connection;
-      state.path = connection.path ?? '';
       if (connection.connected) {
+        connectionGeneration += 1;
         await loadSchema(true);
         await loadActiveView();
       }
     } catch (error) {
-      state.error = errorMessage(error);
+      state.error = panelError(error);
     }
     render();
   },
 
   async unmount() {
+    narrowNavigationMedia?.removeEventListener('change', handleNarrowNavigationChange);
+    narrowNavigationMedia = null;
     if (root) root.replaceChildren();
     root = null;
     context = undefined;
+    controller = undefined;
     state = createInitialState();
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    connectionGeneration += 1;
+    clearUndoReceipt();
   },
 };
 
@@ -151,28 +247,45 @@ export default definition;
 
 function createInitialState(): WorkbenchState {
   return {
-    path: '',
     connection: { connected: false, path: null, sqliteVersion: null },
     objects: [],
+    expandedObjectGroups: new Set(),
     selectedName: null,
     activeTab: 'data',
     page: 1,
-    pageSize: 100,
+    pageSize: 50,
     rows: null,
     objectSchema: null,
     selectedRowIndex: null,
     sqlText: 'SELECT name, type\nFROM sqlite_schema\nORDER BY name;',
     sqlResult: null,
+    sqlResultSql: null,
+    sqlPage: 1,
     dialog: null,
     busy: false,
     status: sqliteCopy.status.initial,
     error: null,
+    fileDialog: null,
+    writeDialog: false,
+    deleteDialog: null,
+    undoReceipt: null,
+    search: '',
+    filters: [],
+    sorts: [],
+    cellDetail: null,
+    schemaWrap: true,
+    sqlHistory: [],
+    sqlExecutionCounter: 0,
+    activeExecutionId: null,
+    sqlWriteDialog: null,
+    discardRecordDialog: false,
+    navigationOpen: false,
   };
 }
 
 async function request<T>(name: string, input?: unknown): Promise<T> {
-  if (!context) throw new Error(sqliteCopy.errors.panelNotMounted);
-  return context.message.request(PLUGIN, name, ...(input === undefined ? [] : [input])) as Promise<T>;
+  if (!controller) throw new Error(sqliteCopy.errors.panelNotMounted);
+  return controller.request<T>(name, input);
 }
 
 async function runAction(action: () => Promise<void>): Promise<void> {
@@ -182,46 +295,121 @@ async function runAction(action: () => Promise<void>): Promise<void> {
   try {
     await action();
   } catch (error) {
-    state.error = errorMessage(error);
+    state.error = panelError(error);
   } finally {
     state.busy = false;
     render();
   }
 }
 
-async function openDatabase(create: boolean): Promise<void> {
-  const input = root?.querySelector<HTMLInputElement>('[data-field="database-path"]');
-  state.path = input?.value.trim() ?? state.path.trim();
-  if (!state.path) {
-    state.error = sqliteCopy.connection.enterPath;
-    render();
-    return;
-  }
+async function openDatabaseAt(databasePath: string, create: boolean): Promise<void> {
   await runAction(async () => {
-    state.connection = await request<ConnectionState>('openDatabase', {
-      path: state.path,
-      create,
-    });
-    state.path = state.connection.path ?? state.path;
+    connectionGeneration += 1;
+    const generation = connectionGeneration;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    clearUndoReceipt();
+    const connection = await request<ConnectionState>('openDatabase', { path: databasePath, create });
+    if (generation !== connectionGeneration) return;
+    state.connection = connection;
+    state.expandedObjectGroups.clear();
+    state.fileDialog = null;
     state.page = 1;
     state.rows = null;
     state.objectSchema = null;
     state.sqlResult = null;
+    state.sqlResultSql = null;
+    state.sqlPage = 1;
     state.selectedRowIndex = null;
+    state.search = '';
+    state.filters = [];
+    state.sorts = [];
+    state.cellDetail = null;
     await loadSchema(true);
     await loadActiveView();
     state.status = create ? sqliteCopy.connection.created : sqliteCopy.connection.opened;
   });
 }
 
+async function openFileBrowser(mode: 'open' | 'create'): Promise<void> {
+  await runAction(async () => {
+    const recent = await request<string[]>('getRecentDatabases');
+    const initialPath = recent[0]?.replace(/[\\/][^\\/]+$/, '') || '.';
+    const listing = await request<{ currentPath: string; parentPath: string | null; entries: FileEntry[] }>(
+      'listDirectory',
+      { path: initialPath, showAll: false },
+    );
+    state.fileDialog = {
+      mode,
+      ...listing,
+      selectedPath: mode === 'open' ? recent[0] ?? null : null,
+      fileName: 'database.sqlite',
+      recentPaths: recent,
+      showAll: false,
+      manualPath: '',
+    };
+  });
+}
+
+async function browseDirectory(directoryPath: string): Promise<void> {
+  if (!state.fileDialog) return;
+  await runAction(async () => {
+    const listing = await request<{ currentPath: string; parentPath: string | null; entries: FileEntry[] }>(
+      'listDirectory',
+      { path: directoryPath, showAll: state.fileDialog.showAll },
+    );
+    state.fileDialog = { ...state.fileDialog!, ...listing, selectedPath: null };
+  });
+}
+
+async function confirmFileDialog(): Promise<void> {
+  const dialog = state.fileDialog;
+  if (!dialog) return;
+  const target = dialog.manualPath.trim() || (dialog.mode === 'open'
+    ? dialog.selectedPath
+    : `${dialog.currentPath.replace(/[\\/]$/, '')}/${dialog.fileName.trim()}`);
+  if (!target) return;
+  await openDatabaseAt(target, dialog.mode === 'create');
+}
+
+async function enableWrites(): Promise<void> {
+  await runAction(async () => {
+    connectionGeneration += 1;
+    const generation = connectionGeneration;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    const connection = await request<ConnectionState>('setConnectionMode', { mode: 'readwrite' });
+    if (generation !== connectionGeneration) return;
+    state.connection = connection;
+    state.writeDialog = false;
+    await loadSchema(false);
+    await loadActiveView();
+  });
+}
+
 async function closeDatabase(): Promise<void> {
   await runAction(async () => {
-    state.connection = await request<ConnectionState>('closeDatabase');
+    connectionGeneration += 1;
+    const generation = connectionGeneration;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    clearUndoReceipt();
+    const connection = await request<ConnectionState>('closeDatabase');
+    if (generation !== connectionGeneration) return;
+    state.connection = connection;
+    state.expandedObjectGroups.clear();
     state.objects = [];
     state.selectedName = null;
     state.rows = null;
     state.objectSchema = null;
+    state.sqlResult = null;
+    state.sqlResultSql = null;
+    state.sqlPage = 1;
     state.selectedRowIndex = null;
+    state.search = '';
+    state.filters = [];
+    state.sorts = [];
+    state.cellDetail = null;
     state.status = sqliteCopy.connection.closed;
   });
 }
@@ -235,7 +423,14 @@ async function refreshWorkbench(): Promise<void> {
 }
 
 async function loadSchema(selectFirst: boolean): Promise<void> {
+  const generation = connectionGeneration;
+  const sequence = ++schemaRequestSequence;
   const result = await request<{ objects: SchemaObject[] }>('getSchema');
+  if (
+    generation !== connectionGeneration
+    || sequence !== schemaRequestSequence
+    || !state.connection.connected
+  ) return;
   state.objects = result.objects;
   const selectedStillExists = state.objects.some((object) => object.name === state.selectedName);
   if (selectFirst || !selectedStillExists) {
@@ -247,17 +442,25 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
 
 async function selectObject(name: string): Promise<void> {
   await runAction(async () => {
+    viewRequestSequence += 1;
     state.selectedName = name;
     state.page = 1;
     state.rows = null;
     state.objectSchema = null;
     state.selectedRowIndex = null;
+    state.search = '';
+    state.filters = [];
+    state.sorts = [];
+    state.cellDetail = null;
+    state.navigationOpen = false;
+    render();
     await loadActiveView();
     state.status = sqliteCopy.objects.selected(name);
   });
 }
 
 async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
+  viewRequestSequence += 1;
   state.activeTab = tab;
   state.error = null;
   render();
@@ -269,18 +472,42 @@ async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
 
 async function loadActiveView(): Promise<void> {
   if (!state.selectedName) return;
+  const sequence = ++viewRequestSequence;
+  const generation = connectionGeneration;
+  const requestedName = state.selectedName;
+  const requestedTab = state.activeTab;
   if (state.activeTab === 'data') {
-    state.rows = await request<RowsResult>('getRows', {
-      name: state.selectedName,
+    const input: Record<string, unknown> = {
+      name: requestedName,
       page: state.page,
       pageSize: state.pageSize,
-    });
+    };
+    if (state.search) input.search = state.search;
+    if (state.filters.length > 0) input.filters = state.filters;
+    if (state.sorts.length > 0) input.sorts = state.sorts;
+    const rows = await request<RowsResult>('getRows', input);
+    if (
+      sequence !== viewRequestSequence
+      || generation !== connectionGeneration
+      || !state.connection.connected
+      || state.activeTab !== requestedTab
+      || state.selectedName !== requestedName
+    ) return;
+    state.rows = rows;
     state.selectedRowIndex = null;
     state.status = sqliteCopy.data.rows(state.rows.total);
   } else if (state.activeTab === 'schema') {
-    state.objectSchema = await request<ObjectSchema>('getObjectSchema', {
-      name: state.selectedName,
+    const objectSchema = await request<ObjectSchema>('getObjectSchema', {
+      name: requestedName,
     });
+    if (
+      sequence !== viewRequestSequence
+      || generation !== connectionGeneration
+      || !state.connection.connected
+      || state.activeTab !== requestedTab
+      || state.selectedName !== requestedName
+    ) return;
+    state.objectSchema = objectSchema;
     state.status = sqliteCopy.schema.columnCount(state.objectSchema.columns.length);
   }
 }
@@ -301,12 +528,84 @@ async function changePageSize(pageSize: number): Promise<void> {
   });
 }
 
-async function ensureObjectSchema(): Promise<ObjectSchema> {
+async function sortRows(column: string): Promise<void> {
+  await runAction(async () => {
+    const current = state.sorts[0];
+    state.sorts = [{
+      column,
+      direction: current?.column === column && current.direction === 'asc' ? 'desc' : 'asc',
+    }];
+    state.page = 1;
+    await loadActiveView();
+  });
+}
+
+async function applyColumnFilter(column: string, operator: string, value: string): Promise<void> {
+  if (!column) return;
+  const normalizedOperator = operator as WorkbenchState['filters'][number]['operator'];
+  state.filters = [{
+    column,
+    operator: normalizedOperator,
+    ...(!normalizedOperator.startsWith('is-') ? { value } : {}),
+  }];
+  state.page = 1;
+  await runAction(loadActiveView);
+}
+
+async function clearColumnFilter(): Promise<void> {
+  state.filters = [];
+  state.page = 1;
+  await runAction(loadActiveView);
+}
+
+async function copySelectedRow(): Promise<void> {
+  if (state.selectedRowIndex === null || !state.rows) return;
+  const row = state.rows.rows[state.selectedRowIndex];
+  if (!row) return;
+  const record = Object.fromEntries(state.rows.columns.map((column, index) => [column, formatValue(row.values[index])]));
+  await navigator.clipboard?.writeText(JSON.stringify(record, null, 2));
+  state.status = '所选记录已复制';
+  render();
+}
+
+async function exportRows(format: 'csv' | 'json'): Promise<void> {
+  if (!state.selectedName) return;
+  await runAction(async () => {
+    const result = await request<{ fileName: string; mimeType: string; content: string }>('exportRows', {
+      name: state.selectedName,
+      format,
+      ...(state.search ? { search: state.search } : {}),
+      ...(state.filters.length ? { filters: state.filters } : {}),
+      ...(state.sorts.length ? { sorts: state.sorts } : {}),
+    });
+    createDownload(result.fileName, result.mimeType, result.content);
+    state.status = `${format.toUpperCase()} 已导出`;
+  });
+}
+
+function exportSqlResult(format: 'csv' | 'json'): void {
+  const result = state.sqlResult;
+  if (result?.kind !== 'rows') return;
+  const content = format === 'csv'
+    ? rowsToCsv(result.columns, result.rows)
+    : JSON.stringify(result.rows.map((row) => Object.fromEntries(
+      result.columns.map((column, index) => [column, formatValue(row[index])]),
+    )), null, 2);
+  createDownload(`sqlite-result.${format}`, format === 'csv' ? 'text/csv;charset=utf-8' : 'application/json', content);
+  state.status = `SQL 结果 ${format.toUpperCase()} 已导出`;
+  render();
+}
+
+async function ensureObjectSchema(): Promise<ObjectSchema | null> {
   if (!state.selectedName) throw new Error(sqliteCopy.errors.selectTable);
   if (!state.objectSchema || state.objectSchema.name !== state.selectedName) {
-    state.objectSchema = await request<ObjectSchema>('getObjectSchema', {
-      name: state.selectedName,
+    const requestedName = state.selectedName;
+    const generation = connectionGeneration;
+    const objectSchema = await request<ObjectSchema>('getObjectSchema', {
+      name: requestedName,
     });
+    if (generation !== connectionGeneration || state.selectedName !== requestedName) return null;
+    state.objectSchema = objectSchema;
   }
   return state.objectSchema;
 }
@@ -314,6 +613,7 @@ async function ensureObjectSchema(): Promise<ObjectSchema> {
 async function openRecordDialog(mode: 'add' | 'edit'): Promise<void> {
   await runAction(async () => {
     const schema = await ensureObjectSchema();
+    if (!schema) return;
     if (!currentObject()?.writable) throw new Error(sqliteCopy.errors.readonly);
     const row = mode === 'edit' && state.selectedRowIndex !== null
       ? state.rows?.rows[state.selectedRowIndex]
@@ -323,6 +623,10 @@ async function openRecordDialog(mode: 'add' | 'edit'): Promise<void> {
       mode,
       fields: createRecordDraft(schema.columns, row?.values),
       identity: row?.identity ?? null,
+      dirty: false,
+      validationError: null,
+      validationField: null,
+      openerAction: pendingDialogOpenerAction ?? (mode === 'add' ? 'add-row' : 'edit-row'),
     };
   });
 }
@@ -330,21 +634,28 @@ async function openRecordDialog(mode: 'add' | 'edit'): Promise<void> {
 async function saveRecord(): Promise<void> {
   if (!state.dialog || !state.selectedName) return;
   const dialog = state.dialog;
-  await runAction(async () => {
-    const values: Record<string, EditableValue> = {};
-    for (const field of dialog.fields) {
-      if (field.inputType === 'default') continue;
+  const values: Record<string, EditableValue> = {};
+  for (const field of dialog.fields) {
+    if (field.inputType === 'default') continue;
+    try {
       values[field.name] = editableValueFromInput(field.inputType, field.value);
+    } catch (error) {
+      dialog.validationError = error instanceof Error ? error.message : String(error);
+      dialog.validationField = field.name;
+      render();
+      return;
     }
+  }
+  await runAction(async () => {
     if (dialog.mode === 'add') {
-      await request('insertRow', { name: state.selectedName, values });
+      setUndoReceipt(await request<MutationReceipt>('insertRow', { name: state.selectedName, values }));
       state.status = sqliteCopy.data.added;
     } else {
-      await request('updateRow', {
+      setUndoReceipt(await request<MutationReceipt>('updateRow', {
         name: state.selectedName,
         identity: dialog.identity,
         values,
-      });
+      }));
       state.status = sqliteCopy.data.updated;
     }
     state.dialog = null;
@@ -354,13 +665,38 @@ async function saveRecord(): Promise<void> {
   });
 }
 
+async function closeRecordDialog(): Promise<void> {
+  if (state.dialog?.dirty) {
+    state.discardRecordDialog = true;
+  } else {
+    const openerAction = state.dialog?.openerAction;
+    const openDialog = root?.querySelector<HTMLDialogElement>('dialog[data-record-dialog]');
+    if (openDialog) closeModal(openDialog);
+    state.dialog = null;
+    render();
+    if (openerAction) queueMicrotask(() => root?.querySelector<HTMLElement>(`[data-action="${openerAction}"]`)?.focus());
+    return;
+  }
+  render();
+}
+
 async function deleteSelectedRow(): Promise<void> {
   if (!state.selectedName || state.selectedRowIndex === null) return;
   const row = state.rows?.rows[state.selectedRowIndex];
   if (!row?.identity) return;
-  if (!window.confirm(sqliteCopy.data.confirmDelete)) return;
+  state.deleteDialog = row;
+  render();
+}
+
+async function confirmDelete(): Promise<void> {
+  if (!state.selectedName || !state.deleteDialog?.identity) return;
+  const row = state.deleteDialog;
   await runAction(async () => {
-    await request('deleteRow', { name: state.selectedName, identity: row.identity });
+    setUndoReceipt(await request<MutationReceipt>('deleteRow', {
+      name: state.selectedName,
+      identity: row.identity,
+    }));
+    state.deleteDialog = null;
     state.selectedRowIndex = null;
     await loadSchema(false);
     await loadActiveView();
@@ -368,20 +704,128 @@ async function deleteSelectedRow(): Promise<void> {
   });
 }
 
+async function undoMutation(): Promise<void> {
+  if (!state.undoReceipt) return;
+  const token = state.undoReceipt.undoToken;
+  await runAction(async () => {
+    try {
+      await request('undoLastMutation', { token });
+    } catch (error) {
+      if (error instanceof WorkbenchRequestError && error.code === 'UNDO_EXPIRED') {
+        clearUndoReceipt();
+      }
+      throw error;
+    }
+    clearUndoReceipt();
+    await loadSchema(false);
+    await loadActiveView();
+    state.status = '记录操作已撤销';
+  });
+}
+
+function setUndoReceipt(receipt: MutationReceipt): void {
+  clearUndoReceipt();
+  state.undoReceipt = receipt;
+  const delay = Math.max(0, Date.parse(receipt.undoExpiresAt) - Date.now());
+  undoTimer = setTimeout(() => {
+    if (state.undoReceipt?.undoToken !== receipt.undoToken) return;
+    state.undoReceipt = null;
+    undoTimer = null;
+    render();
+  }, delay);
+}
+
+function clearUndoReceipt(): void {
+  if (undoTimer !== null) clearTimeout(undoTimer);
+  undoTimer = null;
+  state.undoReceipt = null;
+}
+
 async function executeSql(): Promise<void> {
   const textarea = root?.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]');
   state.sqlText = textarea?.value ?? state.sqlText;
   await runAction(async () => {
-    state.sqlResult = await request<SqlResult>('executeSql', { sql: state.sqlText });
+    const analysis = await request<{
+      readonly: boolean;
+      confirmationToken: string | null;
+      risk: 'normal' | 'high';
+      statementType: string;
+      targetObjects: string[];
+    }>('analyzeSql', { sql: state.sqlText });
+    if (!analysis.readonly) {
+      if (!analysis.confirmationToken) throw new Error('当前连接为只读模式，无法执行写 SQL。');
+      state.sqlWriteDialog = {
+        confirmationToken: analysis.confirmationToken,
+        risk: analysis.risk,
+        statementType: analysis.statementType,
+        targetObjects: analysis.targetObjects,
+      };
+      return;
+    }
+    await executeAnalyzedSql();
+  });
+}
+
+async function executeAnalyzedSql(confirmationToken?: string, page = 1): Promise<void> {
+  state.sqlExecutionCounter += 1;
+  const executionId = `sql-${state.sqlExecutionCounter}`;
+  state.activeExecutionId = executionId;
+  render();
+  try {
+    state.sqlResult = await request<SqlResult>('executeSql', {
+      executionId,
+      sql: state.sqlText,
+      page,
+      ...(confirmationToken ? { confirmationToken } : {}),
+    });
+    state.sqlResultSql = state.sqlText;
+    state.sqlPage = state.sqlResult.kind === 'rows' ? state.sqlResult.page ?? page : 1;
+    state.sqlHistory = historyAfterExecution(state.sqlHistory, state.sqlText);
     state.status = state.sqlResult.kind === 'rows'
       ? sqliteCopy.sql.resultRows(state.sqlResult.rows.length, state.sqlResult.elapsedMs)
       : sqliteCopy.sql.changedRows(state.sqlResult.changes, state.sqlResult.elapsedMs);
     await loadSchema(false);
+  } finally {
+    state.activeExecutionId = null;
+  }
+}
+
+async function explainSql(): Promise<void> {
+  const executionId = `sql-${++state.sqlExecutionCounter}`;
+  await runAction(async () => {
+    state.activeExecutionId = executionId;
+    try {
+      state.sqlResult = await request<SqlResult>('explainSql', { executionId, sql: state.sqlText });
+      state.sqlResultSql = state.sqlText;
+      state.sqlPage = 1;
+      state.status = '查询计划已生成';
+    } finally {
+      state.activeExecutionId = null;
+    }
   });
+}
+
+async function cancelSql(): Promise<void> {
+  if (!state.activeExecutionId) return;
+  const executionId = state.activeExecutionId;
+  await request('cancelSql', { executionId });
+  state.activeExecutionId = null;
+  state.status = 'SQL 执行已取消';
+  render();
+}
+
+async function confirmWriteSql(): Promise<void> {
+  if (!state.sqlWriteDialog) return;
+  const token = state.sqlWriteDialog.confirmationToken;
+  state.sqlWriteDialog = null;
+  await runAction(() => executeAnalyzedSql(token));
 }
 
 function render(): void {
   if (!root) return;
+  const narrowNavigation = narrowNavigationMedia?.matches === true;
+  const narrowNavigationOpen = narrowNavigation && state.navigationOpen;
+  const narrowNavigationClosed = narrowNavigation && !state.navigationOpen;
   root.innerHTML = `
     <main class="workbench-shell">
       <header class="connection-bar">
@@ -389,25 +833,23 @@ function render(): void {
           <span class="database-mark" aria-hidden="true"><i></i><i></i><i></i></span>
           <span><strong>SQLite</strong><small>${sqliteCopy.brand.subtitle}</small></span>
         </div>
-        <form class="connection-form">
-          <label class="path-field">
-            <span>${sqliteCopy.connection.path}</span>
-            <input data-field="database-path" aria-label="${sqliteCopy.connection.path}" autocomplete="off" spellcheck="false">
-          </label>
-          <button type="button" data-action="open" class="primary">${sqliteCopy.connection.open}</button>
-          <button type="button" data-action="create">${sqliteCopy.connection.create}</button>
+        <div class="connection-form" aria-label="数据库连接操作">
+          <button type="button" data-action="browse-open" class="primary">打开数据库</button>
+          <button type="button" data-action="browse-create">新建数据库</button>
           <button type="button" data-action="refresh" aria-label="${sqliteCopy.connection.refresh}">${sqliteCopy.connection.refresh}</button>
           <button type="button" data-action="close">${sqliteCopy.connection.close}</button>
-        </form>
+        </div>
         <div class="connection-state"></div>
       </header>
       <div class="workbench-body">
-        <aside class="object-rail">
+        <button type="button" class="navigation-backdrop" data-action="close-navigation" data-open="${narrowNavigationOpen}" aria-label="关闭数据库对象导航"${narrowNavigationOpen ? '' : ' disabled aria-hidden="true"'}></button>
+        <aside class="object-rail" id="sqlite-object-navigation" data-open="${state.navigationOpen}"${narrowNavigationClosed ? ' inert aria-hidden="true"' : ''}>
           <div class="rail-heading"><span>${sqliteCopy.objects.title}</span><b></b></div>
           <div class="object-list"></div>
         </aside>
-        <section class="workspace">
+        <section class="workspace"${narrowNavigationOpen ? ' inert aria-hidden="true"' : ''}>
           <div class="workspace-heading">
+            <button type="button" class="navigation-trigger" data-action="toggle-navigation" aria-controls="sqlite-object-navigation" aria-expanded="${state.navigationOpen}">对象</button>
             <div class="object-title"></div>
             <div class="tabs" role="tablist" aria-label="${sqliteCopy.objects.workspace}">
               <button type="button" role="tab" data-tab="data">${sqliteCopy.tabs.data}</button>
@@ -422,17 +864,28 @@ function render(): void {
     </main>
   `;
 
-  const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
-  pathInput.value = state.path;
-  pathInput.addEventListener('input', () => { state.path = pathInput.value; });
-  root.querySelector<HTMLFormElement>('.connection-form')!.addEventListener('submit', (event) => {
-    event.preventDefault();
-    void openDatabase(false);
-  });
-  bindClick('[data-action="open"]', () => openDatabase(false));
-  bindClick('[data-action="create"]', () => openDatabase(true));
+  bindClick('[data-action="browse-open"]', () => openFileBrowser('open'));
+  bindClick('[data-action="browse-create"]', () => openFileBrowser('create'));
   bindClick('[data-action="refresh"]', refreshWorkbench);
   bindClick('[data-action="close"]', closeDatabase);
+  root.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')!.addEventListener('click', () => {
+    state.navigationOpen = !state.navigationOpen;
+    render();
+    queueMicrotask(() => {
+      const focusTarget = state.navigationOpen
+        ? root?.querySelector<HTMLElement>('.object-list input[type="search"]')
+        : root?.querySelector<HTMLElement>('[data-action="toggle-navigation"]');
+      focusTarget?.focus();
+    });
+  });
+  root.querySelector<HTMLButtonElement>('[data-action="close-navigation"]')!.addEventListener('click', () => {
+    closeNavigationDrawer();
+  });
+  root.querySelector<HTMLElement>('#sqlite-object-navigation')!.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeNavigationDrawer();
+  });
 
   renderConnection();
   renderObjects();
@@ -440,10 +893,23 @@ function render(): void {
   renderActiveView();
   renderStatus();
   if (state.dialog) renderRecordDialog();
+  if (state.fileDialog) renderFileDialog();
+  if (state.writeDialog) renderWriteDialog();
+  if (state.deleteDialog) renderDeleteDialog();
+  if (state.undoReceipt) renderUndoToast();
+  if (state.cellDetail) renderCellDetail();
+  if (state.sqlWriteDialog) renderSqlWriteDialog();
+  if (state.discardRecordDialog) renderDiscardRecordDialog();
 
   for (const control of Array.from(root.querySelectorAll<HTMLButtonElement>('.connection-form button'))) {
     control.disabled = state.busy || (!state.connection.connected && ['refresh', 'close'].includes(control.dataset.action ?? ''));
   }
+}
+
+function closeNavigationDrawer(): void {
+  state.navigationOpen = false;
+  render();
+  queueMicrotask(() => root?.querySelector<HTMLElement>('[data-action="toggle-navigation"]')?.focus());
 }
 
 function renderConnection(): void {
@@ -456,11 +922,20 @@ function renderConnection(): void {
   host.dataset.connection = 'connected';
   const signal = document.createElement('span');
   signal.className = 'signal';
-  const label = document.createElement('span');
-  label.textContent = fileName(state.connection.path ?? 'SQLite');
-  const version = document.createElement('small');
-  version.textContent = state.connection.sqliteVersion ? `v${state.connection.sqliteVersion}` : '';
-  host.append(signal, label, version);
+  const summary = document.createElement('span');
+  summary.className = 'connection-summary';
+  summary.textContent = `${state.connection.mode === 'readonly' ? '只读' : '可写'} · ${fileName(state.connection.path ?? 'SQLite')}`;
+  const currentPath = document.createElement('code');
+  currentPath.dataset.currentPath = '';
+  currentPath.title = state.connection.path ?? '';
+  currentPath.textContent = state.connection.path ?? '';
+  host.append(signal, summary, currentPath);
+  if (state.connection.mode === 'readonly') {
+    host.append(actionButton('启用写入', 'unlock-writes', false, async () => {
+      state.writeDialog = true;
+      render();
+    }));
+  }
 }
 
 function renderObjects(): void {
@@ -473,33 +948,60 @@ function renderObjects(): void {
     list.append(emptyMessage(sqliteCopy.objects.empty));
     return;
   }
-  for (const type of ['table', 'view'] as const) {
-    const objects = state.objects.filter((object) => object.type === type);
-    if (objects.length === 0) continue;
-    const section = document.createElement('section');
-    section.className = 'object-group';
-    const title = document.createElement('h2');
-    title.textContent = `${type === 'table' ? sqliteCopy.objects.tables : sqliteCopy.objects.views} · ${objects.length}`;
-    section.append(title);
-    for (const object of objects) {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.dataset.objectName = object.name;
-      button.className = object.name === state.selectedName ? 'object-item active' : 'object-item';
-      button.setAttribute('aria-pressed', String(object.name === state.selectedName));
-      const icon = document.createElement('span');
-      icon.className = `object-icon ${object.type}`;
-      icon.textContent = object.type === 'table' ? '▦' : '◇';
-      const name = document.createElement('span');
-      name.textContent = object.name;
-      const badge = document.createElement('small');
-      badge.textContent = object.type === 'table' ? sqliteCopy.objects.table : sqliteCopy.objects.view;
-      button.append(icon, name, badge);
-      button.addEventListener('click', () => { void selectObject(object.name); });
-      section.append(button);
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.placeholder = '搜索对象';
+  search.setAttribute('aria-label', '搜索数据库对象');
+  list.append(search);
+  const normalized = state.objects.map((object) => ({
+    ...object,
+    kind: object.kind ?? object.type,
+  }));
+  const renderGroups = (query = ''): void => {
+    for (const group of Array.from(list.querySelectorAll('.object-group, details'))) group.remove();
+    const filtered = normalized.filter((object) => object.name.toLowerCase().includes(query.toLowerCase()));
+    for (const group of groupSchemaObjects(filtered)) {
+      const objects = group.objects;
+      const type = group.kind;
+      const section = group.collapsed ? document.createElement('details') : document.createElement('section');
+      if (section instanceof HTMLDetailsElement) {
+        section.open = state.expandedObjectGroups.has(type);
+        section.addEventListener('toggle', () => {
+          if (!section.isConnected) return;
+          if (section.open) state.expandedObjectGroups.add(type);
+          else state.expandedObjectGroups.delete(type);
+        });
+      }
+      section.className = 'object-group';
+      section.dataset.objectKind = type;
+      const title = group.collapsed ? document.createElement('summary') : document.createElement('h2');
+      const labels = { table: '表', view: '视图', virtual: '虚拟表', shadow: '系统对象' };
+      title.className = 'object-group-title';
+      title.textContent = `${labels[type]} · ${objects.length}`;
+      section.append(title);
+      for (const object of objects) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.dataset.objectName = object.name;
+        button.className = object.name === state.selectedName ? 'object-item active' : 'object-item';
+        button.setAttribute('aria-pressed', String(object.name === state.selectedName));
+        const icon = document.createElement('span');
+        icon.className = `object-icon ${type}`;
+        icon.textContent = type === 'table' ? '▦' : type === 'view' ? '◇' : type === 'virtual' ? '◈' : '·';
+        const name = document.createElement('span');
+        name.textContent = object.name;
+        const badge = document.createElement('small');
+        badge.textContent = labels[type];
+        button.title = object.readOnlyReason ?? '';
+        button.append(icon, name, badge);
+        button.addEventListener('click', () => { void selectObject(object.name); });
+        section.append(button);
+      }
+      list.append(section);
     }
-    list.append(section);
-  }
+  };
+  search.addEventListener('input', () => renderGroups(search.value));
+  renderGroups();
 }
 
 function renderHeading(): void {
@@ -522,13 +1024,28 @@ function renderHeading(): void {
     title.append(badge);
   }
 
-  for (const button of Array.from(root!.querySelectorAll<HTMLButtonElement>('[data-tab]'))) {
+  const tabButtons = Array.from(root!.querySelectorAll<HTMLButtonElement>('[data-tab]'));
+  for (const button of tabButtons) {
+    const tab = button.dataset.tab as WorkbenchState['activeTab'];
     const active = button.dataset.tab === state.activeTab;
+    button.id = `sqlite-tab-${tab}`;
+    button.setAttribute('aria-controls', `sqlite-view-${tab}`);
     button.setAttribute('aria-selected', String(active));
+    button.tabIndex = active ? 0 : -1;
     button.classList.toggle('active', active);
     button.disabled = !state.connection.connected || (button.dataset.tab !== 'sql' && !state.selectedName);
     button.addEventListener('click', () => {
-      void selectTab(button.dataset.tab as WorkbenchState['activeTab']);
+      void selectTab(tab);
+    });
+    button.addEventListener('keydown', (event) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
+      event.preventDefault();
+      const enabled = tabButtons.filter((candidate) => !candidate.disabled);
+      const current = enabled.indexOf(button);
+      const offset = event.key === 'ArrowRight' ? 1 : -1;
+      const next = enabled[(current + offset + enabled.length) % enabled.length];
+      next?.focus();
+      next?.click();
     });
   }
 }
@@ -573,19 +1090,91 @@ function renderWelcome(): HTMLElement {
 
 function renderDataView(): HTMLElement {
   const view = document.createElement('div');
+  view.id = 'sqlite-view-data';
+  view.setAttribute('role', 'tabpanel');
+  view.setAttribute('aria-labelledby', 'sqlite-tab-data');
   view.dataset.view = 'data';
   view.className = 'data-view';
   const toolbar = document.createElement('div');
   toolbar.className = 'data-toolbar';
+  const primaryToolbar = document.createElement('div');
+  primaryToolbar.className = 'data-toolbar-row data-toolbar-primary';
+  const filterToolbar = document.createElement('div');
+  filterToolbar.className = 'data-toolbar-row data-toolbar-filters';
   const writable = Boolean(currentObject()?.writable && state.rows?.writable);
-  toolbar.append(
+  primaryToolbar.append(
     actionButton(sqliteCopy.data.add, 'add-row', !writable, () => openRecordDialog('add'), 'primary'),
     actionButton(sqliteCopy.data.edit, 'edit-row', !writable || state.selectedRowIndex === null, () => openRecordDialog('edit')),
     actionButton(sqliteCopy.data.delete, 'delete-row', !writable || state.selectedRowIndex === null, deleteSelectedRow, 'danger'),
   );
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.dataset.field = 'quick-search';
+  search.placeholder = '搜索当前表';
+  search.value = state.search;
+  search.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter') return;
+    state.search = search.value.trim();
+    state.page = 1;
+    void runAction(loadActiveView);
+  });
+  const filterColumn = document.createElement('select');
+  filterColumn.dataset.field = 'filter-column';
+  filterColumn.setAttribute('aria-label', '筛选列');
+  const emptyColumn = document.createElement('option');
+  emptyColumn.value = '';
+  emptyColumn.textContent = '筛选列';
+  filterColumn.append(emptyColumn);
+  for (const column of state.rows?.columns ?? []) {
+    const option = document.createElement('option');
+    option.value = column;
+    option.textContent = column;
+    option.selected = state.filters[0]?.column === column;
+    filterColumn.append(option);
+  }
+  const filterOperator = document.createElement('select');
+  filterOperator.dataset.field = 'filter-operator';
+  filterOperator.setAttribute('aria-label', '筛选方式');
+  for (const [operator, label] of [
+    ['contains', '包含'], ['equals', '等于'], ['is-null', '为空'], ['is-not-null', '不为空'],
+  ] as const) {
+    const option = document.createElement('option');
+    option.value = operator;
+    option.textContent = label;
+    option.selected = state.filters[0]?.operator === operator;
+    filterOperator.append(option);
+  }
+  const filterValue = document.createElement('input');
+  filterValue.dataset.field = 'filter-value';
+  filterValue.setAttribute('aria-label', '筛选值');
+  filterValue.placeholder = '筛选值';
+  filterValue.value = state.filters[0]?.value ?? '';
+  const syncFilterValue = (): void => {
+    filterValue.disabled = filterOperator.value === 'is-null' || filterOperator.value === 'is-not-null';
+  };
+  filterOperator.addEventListener('change', syncFilterValue);
+  syncFilterValue();
+  primaryToolbar.append(
+    search,
+    actionButton('复制整行', 'copy-row', state.selectedRowIndex === null, copySelectedRow),
+    actionButton('导出 CSV', 'export-csv', false, () => exportRows('csv')),
+    actionButton('导出 JSON', 'export-json', false, () => exportRows('json')),
+  );
+  filterToolbar.append(
+    filterColumn,
+    filterOperator,
+    filterValue,
+    actionButton('应用筛选', 'apply-filter', false, () => applyColumnFilter(filterColumn.value, filterOperator.value, filterValue.value)),
+    actionButton('清除筛选', 'clear-filter', state.filters.length === 0, clearColumnFilter),
+  );
   const meta = document.createElement('span');
-  meta.textContent = state.rows ? sqliteCopy.data.records(state.rows.total) : sqliteCopy.data.loading;
-  toolbar.append(meta);
+  const selectedRow = state.selectedRowIndex === null ? null : state.rows?.rows[state.selectedRowIndex];
+  meta.dataset.selectedIdentity = '';
+  meta.textContent = state.rows
+    ? `${sqliteCopy.data.records(state.rows.total)}${selectedRow?.identity ? ` · 已选 ${identitySummary(selectedRow.identity)}` : ''}`
+    : sqliteCopy.data.loading;
+  primaryToolbar.append(meta);
+  toolbar.append(primaryToolbar, filterToolbar);
   view.append(toolbar);
 
   if (!state.rows) {
@@ -616,39 +1205,104 @@ function createDataTable(columns: string[], rows: SerializedValue[][], selectabl
   }
   for (const column of columns) {
     const th = document.createElement('th');
-    th.textContent = column;
+    if (selectable) {
+      const sort = document.createElement('button');
+      sort.type = 'button';
+      sort.dataset.sortColumn = column;
+      sort.textContent = `${column}${state.sorts[0]?.column === column ? state.sorts[0].direction === 'asc' ? ' ↑' : ' ↓' : ''}`;
+      sort.addEventListener('click', () => { void sortRows(column); });
+      th.append(sort);
+    } else {
+      th.textContent = column;
+    }
     headRow.append(th);
   }
   head.append(headRow);
   const body = document.createElement('tbody');
-  rows.forEach((values, rowIndex) => {
+  limitRenderedRows(rows).forEach((values, rowIndex) => {
     const tr = document.createElement('tr');
     tr.classList.toggle('selected', selectable && rowIndex === state.selectedRowIndex);
     if (selectable) {
+      tr.tabIndex = rowIndex === state.selectedRowIndex || (state.selectedRowIndex === null && rowIndex === 0) ? 0 : -1;
+      tr.setAttribute('aria-selected', String(rowIndex === state.selectedRowIndex));
+      const selectRow = (): void => {
+        state.selectedRowIndex = rowIndex;
+        render();
+      };
+      tr.addEventListener('click', selectRow);
+      tr.addEventListener('dblclick', () => { state.selectedRowIndex = rowIndex; void openRecordDialog('edit'); });
+      tr.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          const direction = event.key === 'ArrowDown' ? 1 : -1;
+          state.selectedRowIndex = Math.max(0, Math.min(rows.length - 1, rowIndex + direction));
+          render();
+          root?.querySelector<HTMLTableRowElement>(`tbody tr:nth-child(${state.selectedRowIndex + 1})`)?.focus();
+        } else if (event.key === ' ' || event.key === 'Spacebar') {
+          event.preventDefault();
+          selectRow();
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          state.selectedRowIndex = rowIndex;
+          void openRecordDialog('edit');
+        }
+      });
       const td = document.createElement('td');
-      const select = document.createElement('button');
-      select.type = 'button';
+      const select = document.createElement('input');
+      select.type = 'radio';
+      select.name = 'sqlite-row-selection';
       select.dataset.rowIndex = String(rowIndex);
       select.className = 'row-selector';
       select.setAttribute('aria-label', sqliteCopy.data.rowSelector(rowIndex + 1));
-      select.textContent = String((state.page - 1) * state.pageSize + rowIndex + 1);
-      select.addEventListener('click', () => {
+      select.checked = rowIndex === state.selectedRowIndex;
+      select.addEventListener('click', (event) => {
+        event.stopPropagation();
         state.selectedRowIndex = rowIndex;
         render();
       });
-      td.append(select);
+      const rowNumber = document.createElement('span');
+      rowNumber.className = 'row-number';
+      rowNumber.setAttribute('aria-hidden', 'true');
+      rowNumber.textContent = String((state.page - 1) * state.pageSize + rowIndex + 1);
+      td.append(select, rowNumber);
       tr.append(td);
     }
-    for (const value of values) {
+    values.forEach((value, columnIndex) => {
       const td = document.createElement('td');
-      td.textContent = formatValue(value);
-      td.title = td.textContent;
+      const column = columns[columnIndex];
+      const displayValue = formatValue(value);
+      const expandable = isExpandableCellValue(value);
+      td.title = displayValue;
       if (value === null) td.classList.add('value-null');
       if (value !== null && typeof value === 'object' && value.type === 'blob') {
         td.classList.add('value-blob');
       }
+      if (expandable) {
+        td.classList.add('has-cell-detail');
+        const preview = document.createElement('span');
+        preview.className = 'cell-preview-value';
+        preview.textContent = displayValue;
+        const expand = document.createElement('button');
+        expand.type = 'button';
+        expand.className = 'cell-detail-trigger';
+        expand.dataset.action = 'open-cell-detail';
+        expand.setAttribute('aria-label', `查看 ${column} 字段详情`);
+        expand.textContent = '查看';
+        expand.addEventListener('click', (event) => {
+          event.stopPropagation();
+          openCellDetail(column, value, rowIndex);
+        });
+        td.append(preview, expand);
+        td.addEventListener('dblclick', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          openCellDetail(column, value, rowIndex);
+        });
+      } else {
+        td.textContent = displayValue;
+      }
       tr.append(td);
-    }
+    });
     body.append(tr);
   });
   table.append(head, body);
@@ -670,7 +1324,7 @@ function renderPagination(): HTMLElement {
   const next = actionButton(sqliteCopy.pagination.next, 'next-page', nextDisabled, () => changePage(state.page + 1));
   const select = document.createElement('select');
   select.setAttribute('aria-label', sqliteCopy.pagination.rowsPerPage);
-  for (const size of [25, 50, 100, 250]) {
+  for (const size of [25, 50]) {
     const option = document.createElement('option');
     option.value = String(size);
     option.textContent = sqliteCopy.pagination.pageSize(size);
@@ -684,6 +1338,9 @@ function renderPagination(): HTMLElement {
 
 function renderSchemaView(): HTMLElement {
   const view = document.createElement('div');
+  view.id = 'sqlite-view-schema';
+  view.setAttribute('role', 'tabpanel');
+  view.setAttribute('aria-labelledby', 'sqlite-tab-schema');
   view.dataset.view = 'schema';
   view.className = 'schema-view';
   const schema = state.objectSchema;
@@ -730,37 +1387,98 @@ function renderSchemaView(): HTMLElement {
 
   const definitionSection = document.createElement('section');
   definitionSection.append(sectionTitle(sqliteCopy.schema.definition));
-  const pre = document.createElement('pre');
-  pre.textContent = schema.sql;
-  definitionSection.append(pre);
-  view.append(columnsSection, indexesSection, definitionSection);
+  const codeToolbar = document.createElement('div');
+  codeToolbar.className = 'code-toolbar';
+  codeToolbar.append(actionButton('复制定义', 'copy-ddl', false, async () => {
+    await navigator.clipboard?.writeText(formatSql(schema.sql));
+  }), actionButton(state.schemaWrap ? '不换行' : '自动换行', 'toggle-ddl-wrap', false, async () => {
+    state.schemaWrap = !state.schemaWrap;
+    render();
+  }));
+  const definitionCode = renderSqlCode(schema.sql);
+  definitionCode.dataset.definitionCode = '';
+  definitionCode.classList.toggle('nowrap', !state.schemaWrap);
+  definitionSection.append(codeToolbar, definitionCode);
+
+  const foreignKeysSection = document.createElement('section');
+  foreignKeysSection.append(sectionTitle('外键', schema.foreignKeys?.length ?? 0));
+  for (const key of schema.foreignKeys ?? []) {
+    const item = document.createElement('div');
+    item.className = 'index-row';
+    item.textContent = `${key.from} → ${key.table}.${key.to ?? '(rowid)'} · ON DELETE ${key.onDelete}`;
+    foreignKeysSection.append(item);
+  }
+  const triggersSection = document.createElement('section');
+  triggersSection.append(sectionTitle('触发器', schema.triggers?.length ?? 0));
+  for (const trigger of schema.triggers ?? []) {
+    const item = document.createElement('div');
+    item.className = 'trigger-row';
+    const name = document.createElement('strong');
+    name.textContent = trigger.name;
+    item.append(name, renderSqlCode(trigger.sql));
+    triggersSection.append(item);
+  }
+  view.append(columnsSection, indexesSection, foreignKeysSection, triggersSection, definitionSection);
   return view;
 }
 
 function renderSqlView(): HTMLElement {
   const view = document.createElement('div');
+  view.id = 'sqlite-view-sql';
+  view.setAttribute('role', 'tabpanel');
+  view.setAttribute('aria-labelledby', 'sqlite-tab-sql');
   view.dataset.view = 'sql';
   view.className = 'sql-view';
   const editor = document.createElement('div');
   editor.className = 'sql-editor';
   const gutter = document.createElement('div');
   gutter.className = 'sql-gutter';
-  gutter.textContent = 'SQL\n01';
+  gutter.textContent = lineNumberText(state.sqlText);
   const textarea = document.createElement('textarea');
   textarea.setAttribute('aria-label', 'SQL');
   textarea.spellcheck = false;
   textarea.value = state.sqlText;
-  textarea.addEventListener('input', () => { state.sqlText = textarea.value; });
+  const completions = document.createElement('div');
+  completions.className = 'sql-completions';
+  completions.setAttribute('role', 'listbox');
+  completions.setAttribute('aria-label', 'SQL 补全');
+  textarea.addEventListener('input', () => {
+    state.sqlText = textarea.value;
+    gutter.textContent = lineNumberText(state.sqlText);
+    const prefix = textarea.value.slice(0, textarea.selectionStart).match(/[A-Za-z_][\w$]*$/)?.[0] ?? '';
+    completions.replaceChildren(...completionCandidates(prefix, state.objects.map((object) => object.name)).slice(0, 6).map((candidate) => {
+      const option = document.createElement('button');
+      option.type = 'button';
+      option.setAttribute('role', 'option');
+      option.textContent = candidate;
+      option.addEventListener('click', () => {
+        const cursor = textarea.selectionStart;
+        const start = cursor - prefix.length;
+        textarea.setRangeText(candidate, start, cursor, 'end');
+        state.sqlText = textarea.value;
+        gutter.textContent = lineNumberText(state.sqlText);
+        completions.replaceChildren();
+        textarea.focus();
+      });
+      return option;
+    }));
+  });
   textarea.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
       event.preventDefault();
       void executeSql();
     }
   });
-  editor.append(gutter, textarea);
+  textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; });
+  editor.append(gutter, textarea, completions);
   const toolbar = document.createElement('div');
   toolbar.className = 'sql-toolbar';
-  toolbar.append(actionButton(sqliteCopy.sql.run, 'execute-sql', state.busy, executeSql, 'primary'));
+  toolbar.append(
+    actionButton('格式化', 'format-sql', false, async () => { state.sqlText = formatSql(state.sqlText); render(); }),
+    actionButton(sqliteCopy.sql.run, 'execute-sql', state.busy, executeSql, 'primary'),
+    actionButton('查询计划', 'explain-sql', state.busy, explainSql),
+    actionButton('取消', 'cancel-sql', !state.activeExecutionId, cancelSql, 'danger'),
+  );
   const hint = document.createElement('span');
   hint.textContent = sqliteCopy.sql.hint;
   toolbar.append(hint);
@@ -772,6 +1490,27 @@ function renderSqlView(): HTMLElement {
   if (!state.sqlResult) {
     result.append(emptyMessage(sqliteCopy.sql.emptyResult));
   } else if (state.sqlResult.kind === 'rows') {
+    const resultToolbar = document.createElement('div');
+    resultToolbar.className = 'sql-result-toolbar';
+    resultToolbar.append(
+      actionButton('上一页', 'previous-sql-page', state.sqlPage <= 1 || state.sqlResultSql !== state.sqlText, async () => {
+        await runAction(() => executeAnalyzedSql(undefined, state.sqlPage - 1));
+      }),
+      actionButton('下一页', 'next-sql-page', !state.sqlResult.truncated || state.sqlResultSql !== state.sqlText, async () => {
+        await runAction(() => executeAnalyzedSql(undefined, state.sqlPage + 1));
+      }),
+      actionButton('复制 CSV', 'copy-sql-result', false, async () => {
+        if (state.sqlResult?.kind !== 'rows') return;
+        await navigator.clipboard?.writeText(rowsToCsv(state.sqlResult.columns, state.sqlResult.rows));
+        state.status = 'SQL 结果已复制';
+      }),
+      actionButton('导出 CSV', 'export-sql-csv', false, async () => exportSqlResult('csv')),
+      actionButton('导出 JSON', 'export-sql-json', false, async () => exportSqlResult('json')),
+    );
+    const pageLabel = document.createElement('span');
+    pageLabel.textContent = `第 ${state.sqlPage} 页`;
+    resultToolbar.prepend(pageLabel);
+    result.append(resultToolbar);
     if (state.sqlResult.truncated) {
       const notice = document.createElement('div');
       notice.className = 'result-notice';
@@ -795,6 +1534,20 @@ function renderSqlView(): HTMLElement {
     result.append(summary);
   }
   view.append(result);
+  if (state.sqlHistory.length > 0) {
+    const history = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `历史 · ${state.sqlHistory.length}`;
+    history.append(summary);
+    for (const sql of state.sqlHistory) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = sql;
+      button.addEventListener('click', () => { state.sqlText = sql; render(); });
+      history.append(button);
+    }
+    view.append(history);
+  }
   return view;
 }
 
@@ -802,7 +1555,6 @@ function renderRecordDialog(): void {
   const dialogState = state.dialog!;
   const dialog = document.createElement('dialog');
   dialog.dataset.recordDialog = '';
-  dialog.open = true;
   const header = document.createElement('header');
   const eyebrow = document.createElement('small');
   eyebrow.textContent = state.selectedName ?? sqliteCopy.dialog.table;
@@ -837,38 +1589,340 @@ function renderRecordDialog(): void {
     select.addEventListener('change', () => {
       field.inputType = select.value as FieldInputType;
       input.disabled = field.inputType === 'null' || field.inputType === 'default';
+      dialogState.dirty = true;
+      dialogState.validationError = null;
+      dialogState.validationField = null;
     });
-    input.addEventListener('input', () => { field.value = input.value; });
+    input.addEventListener('input', () => {
+      field.value = input.value;
+      dialogState.dirty = true;
+      dialogState.validationError = null;
+      dialogState.validationField = null;
+    });
     row.append(name, affinity, select, input);
     fields.append(row);
   }
+  if (dialogState.validationError) {
+    const validation = document.createElement('p');
+    validation.className = 'record-validation-error';
+    validation.setAttribute('role', 'alert');
+    validation.textContent = dialogState.validationError;
+    fields.prepend(validation);
+  }
   const footer = document.createElement('footer');
   footer.append(
-    actionButton(sqliteCopy.dialog.cancel, 'cancel-record', false, async () => {
-      state.dialog = null;
-      state.error = null;
-      render();
-    }),
+    actionButton(sqliteCopy.dialog.cancel, 'cancel-record', false, closeRecordDialog),
     actionButton(dialogState.mode === 'add' ? sqliteCopy.dialog.add : sqliteCopy.dialog.save, 'save-record', state.busy, saveRecord, 'primary'),
   );
   dialog.append(header, fields, footer);
   root!.querySelector('.workbench-shell')!.append(dialog);
+  const invalidControl = dialogState.validationField
+    ? Array.from(fields.querySelectorAll<HTMLElement>('[data-field-name]'))
+      .find((row) => row.dataset.fieldName === dialogState.validationField)
+      ?.querySelector<HTMLElement>('input:not(:disabled)')
+      ?? Array.from(fields.querySelectorAll<HTMLElement>('[data-field-name]'))
+        .find((row) => row.dataset.fieldName === dialogState.validationField)
+        ?.querySelector<HTMLElement>('select')
+    : null;
+  showModal(
+    dialog,
+    invalidControl ?? fields.querySelector('input, select'),
+    () => { void closeRecordDialog(); },
+    dialogState.openerAction,
+  );
+}
+
+function renderFileDialog(): void {
+  const data = state.fileDialog!;
+  const dialog = document.createElement('dialog');
+  dialog.dataset.fileDialog = '';
+  const title = document.createElement('h2');
+  title.textContent = data.mode === 'open' ? '打开 SQLite 数据库' : '新建 SQLite 数据库';
+  const pathLabel = document.createElement('code');
+  pathLabel.textContent = data.currentPath;
+  if (data.mode === 'open' && data.recentPaths.length > 0) {
+    const recent = document.createElement('details');
+    const summary = document.createElement('summary');
+    summary.textContent = `最近使用 · ${data.recentPaths.length}`;
+    recent.append(summary);
+    for (const recentPath of data.recentPaths) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = recentPath;
+      button.addEventListener('click', () => {
+        state.fileDialog!.selectedPath = recentPath;
+        state.fileDialog!.manualPath = recentPath;
+        render();
+      });
+      recent.append(button);
+    }
+    dialog.append(recent);
+  }
+  const showAllLabel = document.createElement('label');
+  const showAll = document.createElement('input');
+  showAll.type = 'checkbox';
+  showAll.dataset.field = 'show-all-files';
+  showAll.checked = data.showAll;
+  showAll.addEventListener('change', () => {
+    state.fileDialog!.showAll = showAll.checked;
+    void browseDirectory(state.fileDialog!.currentPath);
+  });
+  showAllLabel.append(showAll, document.createTextNode(' 显示全部文件'));
+  const list = document.createElement('div');
+  list.className = 'file-list';
+  if (data.parentPath) {
+    const parent = document.createElement('button');
+    parent.type = 'button';
+    parent.textContent = '← 上一级';
+    parent.addEventListener('click', () => { void browseDirectory(data.parentPath!); });
+    list.append(parent);
+  }
+  for (const entry of data.entries) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.filePath = entry.path;
+    button.textContent = `${entry.kind === 'directory' ? '▸' : '◫'} ${entry.name}`;
+    button.classList.toggle('selected', entry.path === data.selectedPath);
+    button.addEventListener('click', () => {
+      if (entry.kind === 'directory') void browseDirectory(entry.path);
+      else { state.fileDialog!.selectedPath = entry.path; render(); }
+    });
+    list.append(button);
+  }
+  dialog.append(title, pathLabel, showAllLabel, list);
+  if (data.mode === 'create') {
+    const input = document.createElement('input');
+    input.value = data.fileName;
+    input.setAttribute('aria-label', '数据库文件名');
+    input.addEventListener('input', () => { state.fileDialog!.fileName = input.value; });
+    dialog.append(input);
+  }
+  const advanced = document.createElement('details');
+  const advancedSummary = document.createElement('summary');
+  advancedSummary.textContent = '手动输入路径';
+  const manual = document.createElement('input');
+  manual.dataset.field = 'manual-path';
+  manual.setAttribute('aria-label', '手动数据库路径');
+  manual.placeholder = data.mode === 'open' ? '/path/to/database.sqlite' : '/path/to/new-database.sqlite';
+  manual.value = data.manualPath;
+  manual.addEventListener('input', () => {
+    state.fileDialog!.manualPath = manual.value;
+    dialog.querySelector<HTMLButtonElement>('[data-action="confirm-file"]')!.disabled = manual.value.trim() === ''
+      && data.mode === 'open'
+      && !state.fileDialog!.selectedPath;
+  });
+  advanced.append(advancedSummary, manual);
+  dialog.append(advanced);
+  const footer = document.createElement('footer');
+  footer.append(
+    actionButton('取消', 'cancel-file', false, async () => {
+      closeModal(dialog);
+      state.fileDialog = null;
+      render();
+    }),
+    actionButton(
+      data.mode === 'open' ? '打开' : '新建',
+      'confirm-file',
+      data.mode === 'open' && !data.selectedPath && data.manualPath.trim() === '',
+      confirmFileDialog,
+      'primary',
+    ),
+  );
+  dialog.append(footer);
+  root!.querySelector('.workbench-shell')!.append(dialog);
+  showModal(dialog, list.querySelector('button'), () => {
+    state.fileDialog = null;
+    render();
+  }, pendingDialogOpenerAction);
+}
+
+function renderWriteDialog(): void {
+  const dialog = document.createElement('dialog');
+  dialog.dataset.writeDialog = '';
+  const title = document.createElement('h2');
+  title.textContent = '启用数据库写入';
+  const copy = document.createElement('p');
+  copy.textContent = '启用后可新增、编辑、删除记录并执行写 SQL。系统对象仍保持只读。';
+  const footer = document.createElement('footer');
+  footer.append(
+    actionButton('保持只读', 'cancel-write-mode', false, async () => {
+      closeModal(dialog);
+      state.writeDialog = false;
+      render();
+    }),
+    actionButton('启用写入', 'confirm-write-mode', false, enableWrites, 'danger'),
+  );
+  dialog.append(title, copy, footer);
+  root!.querySelector('.workbench-shell')!.append(dialog);
+  showModal(dialog, footer.querySelector('button'), () => {
+    state.writeDialog = false;
+    render();
+  }, pendingDialogOpenerAction);
+}
+
+function renderDeleteDialog(): void {
+  const row = state.deleteDialog!;
+  const dialog = document.createElement('dialog');
+  dialog.dataset.deleteDialog = '';
+  const title = document.createElement('h2');
+  title.textContent = '删除所选记录';
+  const summary = document.createElement('p');
+  summary.textContent = `${state.connection.fileName ?? fileName(state.connection.path ?? '')} · ${state.selectedName} · ${row.identity ? identitySummary(row.identity) : ''}`;
+  const warning = document.createElement('p');
+  warning.textContent = '删除可能触发外键级联；完成后可在 10 秒内撤销。';
+  const footer = document.createElement('footer');
+  footer.append(
+    actionButton('取消', 'cancel-delete', false, async () => {
+      closeModal(dialog);
+      state.deleteDialog = null;
+      render();
+    }),
+    actionButton('确认删除', 'confirm-delete', false, confirmDelete, 'danger'),
+  );
+  dialog.append(title, summary, warning, footer);
+  root!.querySelector('.workbench-shell')!.append(dialog);
+  showModal(dialog, footer.querySelector('button'), () => {
+    state.deleteDialog = null;
+    render();
+  }, pendingDialogOpenerAction);
+}
+
+function renderUndoToast(): void {
+  const toast = document.createElement('div');
+  toast.className = 'undo-toast';
+  toast.setAttribute('role', 'status');
+  const message = document.createElement('span');
+  message.textContent = '记录已修改，可在 10 秒内撤销。';
+  toast.append(message, actionButton('撤销', 'undo-mutation', false, undoMutation));
+  root!.querySelector('.workbench-shell')!.append(toast);
+}
+
+function renderCellDetail(): void {
+  const detail = state.cellDetail!;
+  const drawer = document.createElement('aside');
+  drawer.dataset.cellDetail = '';
+  drawer.className = 'cell-detail';
+  const heading = document.createElement('header');
+  heading.className = 'cell-detail-heading';
+  const title = document.createElement('h2');
+  title.textContent = detail.column;
+  const readonly = document.createElement('span');
+  readonly.className = 'cell-detail-readonly';
+  readonly.textContent = '只读字段';
+  heading.append(title, readonly);
+  const content = document.createElement('pre');
+  content.textContent = formatValue(detail.value);
+  const close = actionButton('关闭', 'close-cell-detail', false, async () => {
+    state.cellDetail = null;
+    render();
+  });
+  const copy = actionButton('复制', 'copy-cell', false, async () => {
+    await navigator.clipboard?.writeText(formatValue(detail.value));
+    state.status = '单元格内容已复制';
+  });
+  drawer.append(heading, content, copy, close);
+  root!.querySelector('.workbench-shell')!.append(drawer);
+}
+
+function openCellDetail(column: string, value: SerializedValue, rowIndex: number): void {
+  state.selectedRowIndex = rowIndex;
+  state.cellDetail = { column, value };
+  render();
+}
+
+function isExpandableCellValue(value: SerializedValue): boolean {
+  if (value !== null && typeof value === 'object' && value.type === 'blob') return true;
+  const displayValue = formatValue(value);
+  return displayValue.length > CELL_DETAIL_TEXT_LIMIT || /[\r\n]/.test(displayValue);
+}
+
+function renderSqlWriteDialog(): void {
+  const analysis = state.sqlWriteDialog!;
+  const dialog = document.createElement('dialog');
+  dialog.dataset.sqlWriteDialog = '';
+  const title = document.createElement('h2');
+  title.textContent = analysis.risk === 'high' ? '确认高风险 SQL' : '确认写 SQL';
+  const summary = document.createElement('p');
+  const targetSummary = analysis.targetObjects.length > 0
+    ? `目标对象：${analysis.targetObjects.join('、')}`
+    : '目标对象：数据库级设置';
+  summary.textContent = `${analysis.statementType} 将修改当前数据库；${targetSummary}${analysis.risk === 'high' ? '，且可能影响大量结构或记录' : ''}。`;
+  const code = document.createElement('pre');
+  code.textContent = state.sqlText;
+  const footer = document.createElement('footer');
+  footer.append(
+    actionButton('取消', 'cancel-write-sql', false, async () => {
+      closeModal(dialog);
+      state.sqlWriteDialog = null;
+      render();
+    }),
+    actionButton('确认执行', 'confirm-write-sql', false, confirmWriteSql, 'danger'),
+  );
+  dialog.append(title, summary, code, footer);
+  root!.querySelector('.workbench-shell')!.append(dialog);
+  showModal(dialog, footer.querySelector('button'), () => {
+    state.sqlWriteDialog = null;
+    render();
+  }, pendingDialogOpenerAction);
+}
+
+function renderDiscardRecordDialog(): void {
+  const dialog = document.createElement('dialog');
+  dialog.dataset.discardRecordDialog = '';
+  const title = document.createElement('h2');
+  title.textContent = '放弃未保存的更改？';
+  const copy = document.createElement('p');
+  copy.textContent = '当前记录中有尚未保存的输入。';
+  const footer = document.createElement('footer');
+  const keepEditing = async (): Promise<void> => {
+    closeModal(dialog);
+    state.discardRecordDialog = false;
+    render();
+  };
+  footer.append(
+    actionButton('继续编辑', 'keep-editing-record', false, keepEditing),
+    actionButton('放弃更改', 'discard-record', false, async () => {
+      const openerAction = state.dialog?.openerAction;
+      closeModal(dialog);
+      state.discardRecordDialog = false;
+      state.dialog = null;
+      render();
+      if (openerAction) queueMicrotask(() => root?.querySelector<HTMLElement>(`[data-action="${openerAction}"]`)?.focus());
+    }, 'danger'),
+  );
+  dialog.append(title, copy, footer);
+  root!.querySelector('.workbench-shell')!.append(dialog);
+  showModal(
+    dialog,
+    footer.querySelector('button'),
+    () => { void keepEditing(); },
+    state.dialog?.openerAction ?? pendingDialogOpenerAction,
+  );
 }
 
 function renderStatus(): void {
   const footer = root!.querySelector<HTMLElement>('[role="status"]')!;
   const left = document.createElement('span');
   left.textContent = state.busy ? sqliteCopy.status.working : state.status;
-  const center = document.createElement('span');
-  center.textContent = state.selectedName ?? '—';
   const right = document.createElement('span');
   right.textContent = state.connection.connected ? sqliteCopy.status.online : sqliteCopy.status.offline;
-  footer.append(left, center, right);
+  footer.append(left, right);
   if (state.error) {
     const alert = document.createElement('div');
     alert.className = 'error-banner';
     alert.setAttribute('role', 'alert');
-    alert.textContent = `${state.error} ${sqliteCopy.status.advice}`;
+    const message = document.createElement('span');
+    message.textContent = `${state.error.message} ${sqliteCopy.status.advice}`;
+    alert.append(message);
+    if (state.error.detail) {
+      const details = document.createElement('details');
+      const summary = document.createElement('summary');
+      summary.textContent = '技术详情';
+      const detail = document.createElement('pre');
+      detail.textContent = state.error.detail;
+      details.append(summary, detail);
+      alert.append(details);
+    }
     root!.querySelector('.workspace')!.prepend(alert);
   }
 }
@@ -886,12 +1940,18 @@ function actionButton(
   button.textContent = label;
   button.disabled = disabled;
   if (variant) button.className = variant;
-  button.addEventListener('click', () => { void handler(); });
+  button.addEventListener('click', () => {
+    pendingDialogOpenerAction = action;
+    void handler().finally(() => { pendingDialogOpenerAction = null; });
+  });
   return button;
 }
 
 function bindClick(selector: string, handler: () => Promise<void>): void {
-  root!.querySelector<HTMLButtonElement>(selector)?.addEventListener('click', () => { void handler(); });
+  root!.querySelector<HTMLButtonElement>(selector)?.addEventListener('click', (event) => {
+    pendingDialogOpenerAction = (event.currentTarget as HTMLButtonElement).dataset.action ?? null;
+    void handler().finally(() => { pendingDialogOpenerAction = null; });
+  });
 }
 
 function currentObject(): SchemaObject | undefined {
@@ -931,6 +1991,9 @@ function fileName(value: string): string {
   return value.split(/[\\/]/).filter(Boolean).at(-1) ?? value;
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function panelError(error: unknown): PanelError {
+  if (error instanceof WorkbenchRequestError) {
+    return { message: error.message, ...(error.detail ? { detail: error.detail } : {}) };
+  }
+  return { message: error instanceof Error ? error.message : String(error) };
 }

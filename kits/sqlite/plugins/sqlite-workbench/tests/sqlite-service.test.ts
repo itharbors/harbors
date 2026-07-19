@@ -2,7 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { toPublicError, WorkbenchError } from '../main/src/protocol';
 import { SqliteService } from '../main/src/sqlite-service';
 
 describe('SqliteService connection and schema', () => {
@@ -32,6 +33,33 @@ describe('SqliteService connection and schema', () => {
         PRIMARY KEY (region, code)
       ) WITHOUT ROWID;
       CREATE TABLE loose_items (label TEXT, amount INTEGER);
+      CREATE TABLE teams (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+      CREATE TABLE memberships (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        team_id INTEGER NOT NULL REFERENCES teams(id),
+        PRIMARY KEY (user_id, team_id)
+      );
+      CREATE TABLE user_events (user_id INTEGER, event TEXT);
+      CREATE TABLE stable_items (
+        code TEXT PRIMARY KEY,
+        rank INTEGER NOT NULL,
+        label TEXT,
+        note TEXT
+      );
+      CREATE TABLE nullable_keys (
+        code TEXT PRIMARY KEY,
+        label TEXT NOT NULL
+      );
+      CREATE TABLE integer_desc_keys (
+        id INTEGER PRIMARY KEY DESC,
+        label TEXT NOT NULL
+      );
+      CREATE TRIGGER users_score_audit
+        AFTER UPDATE OF score ON users
+        BEGIN
+          INSERT INTO user_events (user_id, event) VALUES (NEW.id, 'score-updated');
+        END;
+      CREATE VIRTUAL TABLE chunk_fts USING fts5(body);
       INSERT INTO users (id, email, score, note, payload) VALUES
         (1, 'a@example.com', 2.5, NULL, X'00FF'),
         (9007199254740993, 'big@example.com', 0, '', NULL);
@@ -39,48 +67,122 @@ describe('SqliteService connection and schema', () => {
         ('north', 'A', 'first'),
         ('south', 'B', 'second');
       INSERT INTO loose_items (label, amount) VALUES ('loose', 7);
+      INSERT INTO stable_items (code, rank, label, note) VALUES
+        ('C', 2, 'Gamma', NULL),
+        ('A', 1, 'Alpha', 'ready'),
+        ('B', 1, 'Beta', NULL);
+      INSERT INTO nullable_keys (code, label) VALUES
+        (NULL, 'first-null'),
+        (NULL, 'second-null'),
+        ('A', 'named');
+      INSERT INTO integer_desc_keys (id, label) VALUES
+        (NULL, 'first-desc-null'),
+        (NULL, 'second-desc-null'),
+        (7, 'named');
     `);
     fixture.close();
     service = new SqliteService();
   });
 
-  afterEach(() => {
-    service.dispose();
+  afterEach(async () => {
+    await service.dispose();
+    vi.restoreAllMocks();
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
+
+  function openReadWrite(databasePath = dbPath): void {
+    service.openDatabase({ path: databasePath, create: false });
+    service.setConnectionMode({ mode: 'readwrite' });
+  }
 
   it('opens a database and reports its connection state', () => {
     expect(service.getConnectionState()).toEqual({
       connected: false,
       path: null,
+      fileName: null,
+      mode: null,
       sqliteVersion: null,
+      foreignKeys: null,
+      busyTimeout: null,
     });
 
     const state = service.openDatabase({ path: dbPath, create: false });
 
     expect(state).toMatchObject({
       connected: true,
-      path: path.resolve(dbPath),
+      path: fs.realpathSync(dbPath),
+      fileName: 'fixture.sqlite',
+      mode: 'readonly',
+      foreignKeys: true,
+      busyTimeout: 5000,
     });
     expect(state.sqliteVersion).toMatch(/^3\./);
     expect(service.getConnectionState()).toEqual(state);
   });
 
-  it('returns tables and views in name order', () => {
+  it('classifies ordinary, view, virtual, and shadow objects in name order', () => {
     service.openDatabase({ path: dbPath, create: false });
 
-    expect(service.getSchema()).toEqual({
-      objects: [
-        expect.objectContaining({ name: 'active_users', type: 'view', writable: false }),
-        expect.objectContaining({ name: 'keyed', type: 'table', writable: true }),
-        expect.objectContaining({ name: 'loose_items', type: 'table', writable: true }),
-        expect.objectContaining({ name: 'users', type: 'table', writable: true }),
-      ],
+    const objects = service.getSchema().objects;
+    expect(objects.map((object) => object.name)).toEqual(
+      objects.map((object) => object.name).sort((left, right) => (
+        left.localeCompare(right, 'en', { sensitivity: 'base' })
+      )),
+    );
+    expect(objects.find((object) => object.name === 'active_users')).toMatchObject({
+      kind: 'view',
+      type: 'view',
+      writable: false,
+      readOnlyReason: '视图不支持记录编辑。',
+    });
+    expect(objects.find((object) => object.name === 'chunk_fts')).toMatchObject({
+      kind: 'virtual',
+      writable: false,
+      readOnlyReason: '虚拟表不支持记录编辑。',
+    });
+    expect(objects.find((object) => object.name === 'chunk_fts_config')).toMatchObject({
+      kind: 'shadow',
+      writable: false,
+      readOnlyReason: 'SQLite 系统影子表不可编辑。',
+    });
+    expect(objects.find((object) => object.name === 'users')).toMatchObject({
+      kind: 'table',
+      writable: false,
+      readOnlyReason: '当前连接为只读模式。',
     });
   });
 
-  it('returns columns, primary keys, indexes, and rowid capability', () => {
+  it('reopens the same database only after an explicit mode change', () => {
     service.openDatabase({ path: dbPath, create: false });
+
+    expect(service.setConnectionMode({ mode: 'readwrite' })).toMatchObject({
+      path: fs.realpathSync(dbPath),
+      mode: 'readwrite',
+    });
+    expect(service.getSchema().objects.find((object) => object.name === 'users')).toMatchObject({
+      writable: true,
+      readOnlyReason: null,
+    });
+    expect(service.setConnectionMode({ mode: 'readonly' })).toMatchObject({ mode: 'readonly' });
+  });
+
+  it('preserves the current connection when a mode reopen fails', () => {
+    service.openDatabase({ path: dbPath, create: false });
+    const connectedPath = service.getConnectionState().path;
+    const movedPath = path.join(tempDir, 'moved.sqlite');
+    fs.renameSync(dbPath, movedPath);
+
+    expect(() => service.setConnectionMode({ mode: 'readwrite' })).toThrow(/INVALID_PATH/);
+    expect(service.getConnectionState()).toMatchObject({
+      connected: true,
+      path: connectedPath,
+      mode: 'readonly',
+    });
+    expect(service.getSchema().objects.map((object) => object.name)).toContain('users');
+  });
+
+  it('returns columns, primary keys, indexes, and rowid capability', () => {
+    openReadWrite();
 
     const users = service.getObjectSchema({ name: 'users' });
     expect(users).toMatchObject({
@@ -108,31 +210,110 @@ describe('SqliteService connection and schema', () => {
     expect(view.sql).toContain('CREATE VIEW active_users');
   });
 
+  it('returns foreign keys and triggers with object details', () => {
+    service.openDatabase({ path: dbPath, create: false });
+
+    expect(service.getObjectSchema({ name: 'memberships' }).foreignKeys).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: 'user_id',
+          table: 'users',
+          to: 'id',
+          onDelete: 'CASCADE',
+        }),
+      ]),
+    );
+    expect(service.getObjectSchema({ name: 'users' }).triggers).toEqual([
+      expect.objectContaining({
+        name: 'users_score_audit',
+        sql: expect.stringContaining('AFTER UPDATE OF score'),
+      }),
+    ]);
+  });
+
   it('creates a missing database only when explicitly requested', () => {
     const newPath = path.join(tempDir, 'new.sqlite');
 
-    expect(() => service.openDatabase({ path: newPath, create: false })).toThrow(/does not exist/i);
+    expect(() => service.openDatabase({ path: newPath, create: false })).toThrow(/INVALID_PATH/);
     expect(fs.existsSync(newPath)).toBe(false);
 
     expect(service.openDatabase({ path: newPath, create: true })).toMatchObject({
       connected: true,
-      path: path.resolve(newPath),
+      path: fs.realpathSync(newPath),
+      mode: 'readwrite',
     });
     expect(fs.existsSync(newPath)).toBe(true);
-    expect(() => service.openDatabase({ path: dbPath, create: true })).toThrow(/already exists/i);
+    expect(() => service.openDatabase({ path: dbPath, create: true })).toThrow(/PATH_EXISTS/);
+  });
+
+  it('normalizes extensionless create targets through the controlled file policy', () => {
+    const requestedPath = path.join(tempDir, 'notes');
+    const normalizedPath = `${requestedPath}.sqlite`;
+
+    expect(service.openDatabase({ path: requestedPath, create: true })).toMatchObject({
+      connected: true,
+      path: fs.realpathSync(normalizedPath),
+      fileName: 'notes.sqlite',
+      mode: 'readwrite',
+    });
+    expect(fs.existsSync(requestedPath)).toBe(false);
+    expect(fs.existsSync(normalizedPath)).toBe(true);
+  });
+
+  it('never removes a file created by another process during create-target reservation', () => {
+    const target = path.join(fs.realpathSync(tempDir), 'raced.sqlite');
+    const originalOpen = fs.openSync.bind(fs);
+    vi.spyOn(fs, 'openSync').mockImplementation((candidate, flags, mode) => {
+      if (path.resolve(String(candidate)) === target && flags === 'wx') {
+        fs.writeFileSync(target, 'owned-by-another-process');
+      }
+      return originalOpen(candidate, flags, mode);
+    });
+
+    expect(() => service.openDatabase({ path: target, create: true })).toThrow();
+    expect(fs.readFileSync(target, 'utf8')).toBe('owned-by-another-process');
   });
 
   it('preserves the current connection when a switch fails', () => {
     service.openDatabase({ path: dbPath, create: false });
     const missingPath = path.join(tempDir, 'missing', 'new.sqlite');
 
-    expect(() => service.openDatabase({ path: missingPath, create: true })).toThrow(/parent directory/i);
-    expect(service.getConnectionState().path).toBe(path.resolve(dbPath));
+    expect(() => service.openDatabase({ path: missingPath, create: true })).toThrow(/INVALID_PATH/);
+    expect(service.getConnectionState().path).toBe(fs.realpathSync(dbPath));
     expect(service.getSchema().objects.map((item) => item.name)).toContain('users');
   });
 
+  it('keeps normalized recent database paths for the current service session', () => {
+    const secondPath = path.join(tempDir, 'second.sqlite');
+    const second = new Database(secondPath);
+    second.close();
+
+    service.openDatabase({ path: dbPath, create: false });
+    service.openDatabase({ path: secondPath, create: false });
+    service.openDatabase({ path: dbPath, create: false });
+
+    const recent = service.getRecentDatabases();
+    expect(recent).toEqual([fs.realpathSync(dbPath), fs.realpathSync(secondPath)]);
+    recent.push('/mutated/by/caller.sqlite');
+    expect(service.getRecentDatabases()).toEqual([
+      fs.realpathSync(dbPath),
+      fs.realpathSync(secondPath),
+    ]);
+  });
+
+  it('keeps only the ten most recently opened database paths', () => {
+    const databasePaths = Array.from({ length: 11 }, (_, index) => {
+      const databasePath = path.join(tempDir, `recent-${index}.sqlite`);
+      new Database(databasePath).close();
+      service.openDatabase({ path: databasePath, create: false });
+      return fs.realpathSync(databasePath);
+    });
+
+    expect(service.getRecentDatabases()).toEqual(databasePaths.slice(1).reverse());
+  });
+
   it('rejects directories and invalid database files', () => {
-    expect(() => service.openDatabase({ path: tempDir, create: false })).toThrow(/not a file/i);
+    expect(() => service.openDatabase({ path: tempDir, create: false })).toThrow(/INVALID_PATH/);
 
     const invalidPath = path.join(tempDir, 'invalid.sqlite');
     fs.writeFileSync(invalidPath, 'not a sqlite database');
@@ -140,11 +321,21 @@ describe('SqliteService connection and schema', () => {
   });
 
   it('requires a connection and closes idempotently', () => {
-    expect(() => service.getSchema()).toThrow(/NOT_CONNECTED/);
+    let error: unknown;
+    try {
+      service.getSchema();
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(WorkbenchError);
+    expect(toPublicError(error)).toEqual({
+      code: 'NOT_CONNECTED',
+      message: '尚未连接 SQLite 数据库。',
+    });
 
     service.openDatabase({ path: dbPath, create: false });
-    expect(service.closeDatabase()).toEqual({ connected: false, path: null, sqliteVersion: null });
-    expect(service.closeDatabase()).toEqual({ connected: false, path: null, sqliteVersion: null });
+    expect(service.closeDatabase()).toMatchObject({ connected: false, path: null, mode: null });
+    expect(service.closeDatabase()).toMatchObject({ connected: false, path: null, mode: null });
   });
 
   it('reads bounded pages with JSON-safe values and primary-key identities', () => {
@@ -156,7 +347,7 @@ describe('SqliteService connection and schema', () => {
       page: 1,
       pageSize: 25,
       total: 2,
-      writable: true,
+      writable: false,
       columns: ['id', 'email', 'score', 'note', 'payload'],
     });
     expect(page.rows[0]).toEqual({
@@ -207,8 +398,143 @@ describe('SqliteService connection and schema', () => {
     expect(() => service.getRows({ name: 'users', page: 1, pageSize: 500 })).toThrow(/pageSize/);
   });
 
-  it('inserts, updates, and deletes a primary-key row', () => {
+  it('uses the complete primary key as its stable default order', () => {
     service.openDatabase({ path: dbPath, create: false });
+
+    const result = service.getRows({ name: 'stable_items', page: 1, pageSize: 25 });
+    expect(result.rows.map((row) => row.values[0])).toEqual(['A', 'B', 'C']);
+  });
+
+  it('appends stable identity columns to a user-selected sort', () => {
+    service.openDatabase({ path: dbPath, create: false });
+
+    const result = service.getRows({
+      name: 'stable_items',
+      page: 1,
+      pageSize: 25,
+      sorts: [{ column: 'rank', direction: 'asc' }],
+    });
+    expect(result.rows.map((row) => row.values[0])).toEqual(['A', 'B', 'C']);
+  });
+
+  it('uses rowid to distinguish and stably mutate duplicate null primary keys', () => {
+    openReadWrite();
+    const result = service.getRows({ name: 'nullable_keys', page: 1, pageSize: 25 });
+
+    expect(result.rows.slice(0, 2).map((row) => row.identity)).toEqual([
+      { kind: 'rowid', value: { type: 'integer', value: '1' } },
+      { kind: 'rowid', value: { type: 'integer', value: '2' } },
+    ]);
+    expect(service.updateRow({
+      name: 'nullable_keys',
+      identity: result.rows[0].identity,
+      values: { label: { type: 'text', value: 'changed-only-first' } },
+    })).toMatchObject({ changes: 1 });
+    expect(service.getRows({ name: 'nullable_keys', page: 1, pageSize: 25 }).rows
+      .map((row) => row.values[1])).toEqual(['changed-only-first', 'second-null', 'named']);
+  });
+
+  it('uses rowid for duplicate null INTEGER PRIMARY KEY DESC records', () => {
+    openReadWrite();
+    const schema = service.getObjectSchema({ name: 'integer_desc_keys' });
+    const result = service.getRows({ name: 'integer_desc_keys', page: 1, pageSize: 25 });
+
+    expect(schema.indexes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ origin: 'pk', unique: true, columns: ['id'] }),
+    ]));
+    expect(result.rows.slice(0, 2).map((row) => row.identity)).toEqual([
+      { kind: 'rowid', value: { type: 'integer', value: '1' } },
+      { kind: 'rowid', value: { type: 'integer', value: '2' } },
+    ]);
+    expect(service.updateRow({
+      name: 'integer_desc_keys',
+      identity: result.rows[0].identity,
+      values: { label: { type: 'text', value: 'changed-only-first-desc' } },
+    })).toMatchObject({ changes: 1 });
+    expect(service.getRows({ name: 'integer_desc_keys', page: 1, pageSize: 25 }).rows
+      .map((row) => row.values[1])).toEqual(['changed-only-first-desc', 'second-desc-null', 'named']);
+  });
+
+  it('searches visible text and numeric columns with a contains query', () => {
+    service.openDatabase({ path: dbPath, create: false });
+
+    expect(service.getRows({
+      name: 'stable_items',
+      page: 1,
+      pageSize: 25,
+      search: 'lph',
+    }).rows.map((row) => row.values[0])).toEqual(['A']);
+    expect(service.getRows({
+      name: 'stable_items',
+      page: 1,
+      pageSize: 25,
+      search: '2',
+    }).rows.map((row) => row.values[0])).toEqual(['C']);
+  });
+
+  it('supports contains, equals, null, and non-null column filters', () => {
+    service.openDatabase({ path: dbPath, create: false });
+
+    const base = { name: 'stable_items', page: 1, pageSize: 25 as const };
+    expect(service.getRows({
+      ...base,
+      filters: [{ column: 'label', operator: 'contains', value: 'et' }],
+    }).rows.map((row) => row.values[0])).toEqual(['B']);
+    expect(service.getRows({
+      ...base,
+      filters: [{ column: 'rank', operator: 'equals', value: '1' }],
+    }).rows.map((row) => row.values[0])).toEqual(['A', 'B']);
+    expect(service.getRows({
+      ...base,
+      filters: [{ column: 'note', operator: 'is-null' }],
+    }).rows.map((row) => row.values[0])).toEqual(['B', 'C']);
+    expect(service.getRows({
+      ...base,
+      filters: [{ column: 'note', operator: 'is-not-null' }],
+    }).rows.map((row) => row.values[0])).toEqual(['A']);
+  });
+
+  it('rejects unknown sort and filter columns before preparing SQL', () => {
+    service.openDatabase({ path: dbPath, create: false });
+
+    expect(() => service.getRows({
+      name: 'stable_items',
+      page: 1,
+      pageSize: 25,
+      sorts: [{ column: 'missing', direction: 'asc' }],
+    })).toThrow(/INVALID_COLUMN/);
+    expect(() => service.getRows({
+      name: 'stable_items',
+      page: 1,
+      pageSize: 25,
+      filters: [{ column: 'missing', operator: 'equals', value: 'x' }],
+    })).toThrow(/INVALID_COLUMN/);
+  });
+
+  it('invalidates a cached filtered count after an insert', () => {
+    openReadWrite();
+    const query = {
+      name: 'stable_items',
+      page: 1,
+      pageSize: 25 as const,
+      filters: [{ column: 'rank', operator: 'equals' as const, value: '1' }],
+    };
+    expect(service.getRows(query).total).toBe(2);
+
+    service.insertRow({
+      name: 'stable_items',
+      values: {
+        code: { type: 'text', value: 'D' },
+        rank: { type: 'integer', value: '1' },
+        label: { type: 'text', value: 'Delta' },
+      },
+    });
+
+    expect(service.getRows(query).total).toBe(3);
+  });
+
+  it('inserts, updates, and deletes a primary-key row', () => {
+    openReadWrite();
 
     expect(service.insertRow({
       name: 'users',
@@ -226,13 +552,13 @@ describe('SqliteService connection and schema', () => {
       name: 'users',
       identity: inserted!.identity,
       values: { email: { type: 'text', value: 'changed@example.com' } },
-    })).toEqual({ changes: 1 });
-    expect(service.deleteRow({ name: 'users', identity: inserted!.identity })).toEqual({ changes: 1 });
+    })).toMatchObject({ changes: 1 });
+    expect(service.deleteRow({ name: 'users', identity: inserted!.identity })).toMatchObject({ changes: 1 });
     expect(service.getRows({ name: 'users', page: 1, pageSize: 25 }).total).toBe(2);
   });
 
   it('writes through composite-key and rowid identities', () => {
-    service.openDatabase({ path: dbPath, create: false });
+    openReadWrite();
     const keyed = service.getRows({ name: 'keyed', page: 1, pageSize: 25 }).rows[0];
     const loose = service.getRows({ name: 'loose_items', page: 1, pageSize: 25 }).rows[0];
 
@@ -240,8 +566,8 @@ describe('SqliteService connection and schema', () => {
       name: 'keyed',
       identity: keyed.identity,
       values: { value: { type: 'text', value: 'changed' } },
-    })).toEqual({ changes: 1 });
-    expect(service.deleteRow({ name: 'loose_items', identity: loose.identity })).toEqual({ changes: 1 });
+    })).toMatchObject({ changes: 1 });
+    expect(service.deleteRow({ name: 'loose_items', identity: loose.identity })).toMatchObject({ changes: 1 });
   });
 
   it('supports DEFAULT VALUES inserts and rejects unsafe writes', () => {
@@ -250,7 +576,7 @@ describe('SqliteService connection and schema', () => {
     const defaults = new Database(defaultTablePath);
     defaults.exec('CREATE TABLE defaults (id INTEGER PRIMARY KEY, label TEXT DEFAULT \'ready\')');
     defaults.close();
-    service.openDatabase({ path: defaultTablePath, create: false });
+    openReadWrite(defaultTablePath);
 
     expect(service.insertRow({ name: 'defaults', values: {} })).toMatchObject({ changes: 1 });
     expect(service.getRows({ name: 'defaults', page: 1, pageSize: 25 }).rows[0].values[1]).toBe('ready');
@@ -261,7 +587,7 @@ describe('SqliteService connection and schema', () => {
   });
 
   it('rolls back constraint failures and rejects views, blobs, and stale identities', () => {
-    service.openDatabase({ path: dbPath, create: false });
+    openReadWrite();
     const first = service.getRows({ name: 'users', page: 1, pageSize: 25 }).rows[0];
 
     expect(() => service.insertRow({
@@ -275,7 +601,7 @@ describe('SqliteService connection and schema', () => {
     })).toThrow(/type/i);
     expect(() => service.insertRow({ name: 'active_users', values: {} })).toThrow(/READ_ONLY/);
 
-    expect(service.deleteRow({ name: 'users', identity: first.identity })).toEqual({ changes: 1 });
+    expect(service.deleteRow({ name: 'users', identity: first.identity })).toMatchObject({ changes: 1 });
     expect(() => service.deleteRow({ name: 'users', identity: first.identity })).toThrow(/STALE_ROW/);
   });
 
@@ -291,7 +617,7 @@ describe('SqliteService connection and schema', () => {
       );
     `);
     relational.close();
-    service.openDatabase({ path: relationalPath, create: false });
+    openReadWrite(relationalPath);
 
     expect(() => service.insertRow({
       name: 'tasks',
@@ -301,8 +627,7 @@ describe('SqliteService connection and schema', () => {
   });
 
   it('reports a locked database without partially writing', () => {
-    service.openDatabase({ path: dbPath, create: false });
-    service.executeSql({ sql: 'PRAGMA busy_timeout = 0' });
+    openReadWrite();
     const locker = new Database(dbPath);
     locker.exec('BEGIN EXCLUSIVE');
 
@@ -319,10 +644,10 @@ describe('SqliteService connection and schema', () => {
     expect(service.getRows({ name: 'users', page: 1, pageSize: 25 }).total).toBe(2);
   });
 
-  it('executes a row-returning SQL statement with serialized values', () => {
+  it('executes a row-returning SQL statement with serialized values', async () => {
     service.openDatabase({ path: dbPath, create: false });
 
-    const result = service.executeSql({
+    const result = await service.executeSql({
       sql: 'SELECT id, email, payload FROM users ORDER BY id',
     });
 
@@ -340,22 +665,28 @@ describe('SqliteService connection and schema', () => {
     expect(result.elapsedMs).toBeGreaterThanOrEqual(0);
   });
 
-  it('executes mutations and DDL with a change summary', () => {
-    service.openDatabase({ path: dbPath, create: false });
+  it('executes mutations and DDL with a change summary', async () => {
+    openReadWrite();
 
-    expect(service.executeSql({
-      sql: "UPDATE users SET score = 9 WHERE email = 'a@example.com'",
-    })).toMatchObject({ kind: 'mutation', changes: 1 });
-    expect(service.executeSql({
-      sql: 'CREATE TABLE audit (id INTEGER)',
-    })).toMatchObject({ kind: 'mutation', changes: 0 });
+    const updateSql = "UPDATE users SET score = 9 WHERE email = 'a@example.com'";
+    const updateAnalysis = service.analyzeSql({ sql: updateSql });
+    await expect(service.executeSql({
+      sql: updateSql,
+      confirmationToken: updateAnalysis.confirmationToken,
+    })).resolves.toMatchObject({ kind: 'mutation', changes: 1 });
+    const createSql = 'CREATE TABLE audit (id INTEGER)';
+    const createAnalysis = service.analyzeSql({ sql: createSql });
+    await expect(service.executeSql({
+      sql: createSql,
+      confirmationToken: createAnalysis.confirmationToken,
+    })).resolves.toMatchObject({ kind: 'mutation', changes: 0 });
     expect(service.getSchema().objects.map((item) => item.name)).toContain('audit');
   });
 
-  it('bounds SQL result sets at 500 rows', () => {
+  it('bounds SQL result sets at 50 rows', async () => {
     service.openDatabase({ path: dbPath, create: false });
 
-    const result = service.executeSql({
+    const result = await service.executeSql({
       sql: `
         WITH RECURSIVE numbers(value) AS (
           SELECT 1 UNION ALL SELECT value + 1 FROM numbers WHERE value < 501
@@ -365,15 +696,15 @@ describe('SqliteService connection and schema', () => {
 
     expect(result.kind).toBe('rows');
     if (result.kind !== 'rows') throw new Error('Expected rows result');
-    expect(result.rows).toHaveLength(500);
+    expect(result.rows).toHaveLength(50);
     expect(result.truncated).toBe(true);
   });
 
-  it('rejects empty, malformed, and multiple SQL statements', () => {
+  it('rejects empty, malformed, and multiple SQL statements', async () => {
     service.openDatabase({ path: dbPath, create: false });
 
-    expect(() => service.executeSql({ sql: '' })).toThrow(/SQL/i);
-    expect(() => service.executeSql({ sql: 'SELECT FROM' })).toThrow(/SQLITE_ERROR/);
-    expect(() => service.executeSql({ sql: 'SELECT 1; SELECT 2' })).toThrow(/MULTIPLE_STATEMENTS/);
+    await expect(service.executeSql({ sql: '' })).rejects.toThrow(/SQL/i);
+    await expect(service.executeSql({ sql: 'SELECT FROM' })).rejects.toThrow(/SQLITE_ERROR/);
+    await expect(service.executeSql({ sql: 'SELECT 1; SELECT 2' })).rejects.toThrow(/MULTIPLE_STATEMENTS/);
   });
 });

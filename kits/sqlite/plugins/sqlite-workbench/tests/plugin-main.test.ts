@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type PluginDefinition = {
   lifecycle?: {
-    unload?(): void;
+    unload?(): void | Promise<void>;
   };
   methods: Record<string, (...args: unknown[]) => unknown>;
 };
@@ -35,15 +35,23 @@ describe('SQLite plugin main', () => {
     await import('../main/src/index');
 
     expect(Object.keys(definition!.methods).sort()).toEqual([
+      'analyzeSql',
+      'cancelSql',
       'closeDatabase',
       'deleteRow',
       'executeSql',
+      'explainSql',
+      'exportRows',
       'getConnectionState',
       'getObjectSchema',
+      'getRecentDatabases',
       'getRows',
       'getSchema',
       'insertRow',
+      'listDirectory',
       'openDatabase',
+      'setConnectionMode',
+      'undoLastMutation',
       'updateRow',
     ]);
 
@@ -56,14 +64,27 @@ describe('SQLite plugin main', () => {
 
     expect(definition!.methods.openDatabase({ path: dbPath, create: false })).toMatchObject({
       connected: true,
-      path: path.resolve(dbPath),
+      path: fs.realpathSync(dbPath),
     });
-    definition!.lifecycle?.unload?.();
-    definition!.lifecycle?.unload?.();
+    expect(definition!.methods.deleteRow({
+      name: 'items',
+      identity: { kind: 'rowid', value: { type: 'integer', value: '1' } },
+    })).toEqual({
+      $sqliteWorkbenchError: {
+        code: 'READ_ONLY',
+        message: '当前连接为只读模式，无法修改记录。',
+      },
+    });
+    await definition!.lifecycle?.unload?.();
+    await definition!.lifecycle?.unload?.();
     expect(definition!.methods.getConnectionState()).toEqual({
       connected: false,
       path: null,
+      fileName: null,
+      mode: null,
       sqliteVersion: null,
+      foreignKeys: null,
+      busyTimeout: null,
     });
   });
 });
