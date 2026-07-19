@@ -294,13 +294,38 @@ textarea:focus-visible {
   padding: 8px 0 20px;
 }
 
-.object-group h2 {
+.object-group-title {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
   margin: 15px 14px 6px;
   color: #687982;
   font-size: var(--font-secondary);
   font-weight: 800;
   letter-spacing: 0.13em;
   text-transform: uppercase;
+}
+
+.object-group > summary.object-group-title {
+  cursor: pointer;
+  list-style: none;
+}
+
+.object-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.object-group > summary.object-group-title::after {
+  margin-left: auto;
+  color: var(--teal);
+  content: "›";
+  font-size: 15px;
+  line-height: 1;
+  transform: rotate(0deg);
+}
+
+.object-group[open] > summary.object-group-title::after {
+  transform: rotate(90deg);
 }
 
 .object-item {
@@ -462,11 +487,10 @@ textarea:focus-visible {
 
 .data-view {
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr) 40px;
+  grid-template-rows: 80px minmax(0, 1fr) 40px;
   height: 100%;
 }
 
-.data-toolbar,
 .sql-toolbar,
 .pagination {
   display: flex;
@@ -477,6 +501,35 @@ textarea:focus-visible {
   background: #0f171c;
 }
 
+.data-toolbar {
+  display: grid;
+  min-width: 0;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  border-bottom: 1px solid var(--grid);
+  background: #0f171c;
+}
+
+.data-toolbar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 0 10px;
+}
+
+.data-toolbar-primary {
+  border-bottom: 1px solid var(--grid);
+}
+
+.data-toolbar-row > * {
+  flex-shrink: 0;
+}
+
+.data-toolbar-row button {
+  white-space: nowrap;
+}
+
 .data-toolbar button,
 .sql-toolbar button,
 .pagination button,
@@ -485,7 +538,7 @@ textarea:focus-visible {
   font-size: var(--font-secondary);
 }
 
-.data-toolbar > span,
+.data-toolbar-primary > span,
 .sql-toolbar > span {
   margin-left: auto;
   color: var(--text-muted);
@@ -1322,9 +1375,6 @@ dialog:not([data-record-dialog]) footer {
     padding-inline: 8px;
   }
 
-  .data-toolbar {
-    overflow-x: auto;
-  }
 }
 
 @media (max-width: 880px) {
@@ -1392,7 +1442,7 @@ dialog:not([data-record-dialog]) footer {
     align-items: center;
   }
 
-  .object-group h2 {
+  .object-group-title {
     margin: 0 8px;
     writing-mode: vertical-rl;
   }

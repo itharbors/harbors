@@ -19,6 +19,17 @@ describe('SQLite workbench accessibility foundations', () => {
     expect(css).toContain('prefers-reduced-motion: reduce');
   });
 
+  it('keeps object headings consistent and the data toolbar on two non-wrapping rows', () => {
+    const css = fs.readFileSync(cssPath, 'utf8');
+    expect(css).toContain('.object-group-title');
+    expect(css).toContain('.object-group > summary::-webkit-details-marker');
+    expect(css).toMatch(/\.data-view\s*\{[^}]*grid-template-rows:\s*80px/s);
+    expect(css).toMatch(/\.data-toolbar\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*repeat\(2,/s);
+    expect(css).toMatch(/\.data-toolbar-row\s*\{[^}]*overflow-x:\s*auto/s);
+    expect(css).toMatch(/\.data-toolbar-row\s*>\s*\*\s*\{[^}]*flex-shrink:\s*0/s);
+    expect(css).toMatch(/\.data-toolbar-row\s+button\s*\{[^}]*white-space:\s*nowrap/s);
+  });
+
   it('loops keyboard focus inside a modal dialog', () => {
     HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute('open', ''); };
     const dialog = document.createElement('dialog');

@@ -191,6 +191,34 @@ describe('SQLite workbench panel', () => {
     });
   });
 
+  it('uses consistent object group headings and two distinct data toolbar rows', async () => {
+    await connect();
+
+    const groupTitles = Array.from(root.querySelectorAll<HTMLElement>('.object-group-title'));
+    expect(groupTitles.map((title) => title.textContent)).toEqual([
+      '表 · 1',
+      '视图 · 1',
+      '虚拟表 · 1',
+      '系统对象 · 1',
+    ]);
+    const systemGroup = root.querySelector<HTMLDetailsElement>('details[data-object-kind="shadow"]')!;
+    expect(systemGroup).not.toBeNull();
+    expect(systemGroup.open).toBe(false);
+    expect(systemGroup.querySelector('summary')?.classList.contains('object-group-title')).toBe(true);
+
+    const toolbar = root.querySelector<HTMLElement>('.data-toolbar')!;
+    expect(toolbar.querySelectorAll(':scope > .data-toolbar-row')).toHaveLength(2);
+    const primary = toolbar.querySelector<HTMLElement>('.data-toolbar-primary')!;
+    const filters = toolbar.querySelector<HTMLElement>('.data-toolbar-filters')!;
+    expect(primary.querySelector('[data-action="add-row"]')).not.toBeNull();
+    expect(primary.querySelector('[data-field="quick-search"]')).not.toBeNull();
+    expect(primary.querySelector('[data-action="export-json"]')).not.toBeNull();
+    expect(primary.querySelector('[data-field="filter-column"]')).toBeNull();
+    expect(filters.querySelector('[data-field="filter-column"]')).not.toBeNull();
+    expect(filters.querySelector('[data-action="apply-filter"]')).not.toBeNull();
+    expect(filters.querySelector('[data-action="add-row"]')).toBeNull();
+  });
+
   it('opens an existing database through the controlled file browser', async () => {
     await mount();
     root.querySelector<HTMLButtonElement>('[data-action="browse-open"]')!.click();

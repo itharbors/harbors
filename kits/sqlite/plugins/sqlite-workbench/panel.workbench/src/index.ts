@@ -856,8 +856,10 @@ function renderObjects(): void {
       const section = group.collapsed ? document.createElement('details') : document.createElement('section');
       if (section instanceof HTMLDetailsElement) section.open = false;
       section.className = 'object-group';
+      section.dataset.objectKind = type;
       const title = group.collapsed ? document.createElement('summary') : document.createElement('h2');
       const labels = { table: '表', view: '视图', virtual: '虚拟表', shadow: '系统对象' };
+      title.className = 'object-group-title';
       title.textContent = `${labels[type]} · ${objects.length}`;
       section.append(title);
       for (const object of objects) {
@@ -978,8 +980,12 @@ function renderDataView(): HTMLElement {
   view.className = 'data-view';
   const toolbar = document.createElement('div');
   toolbar.className = 'data-toolbar';
+  const primaryToolbar = document.createElement('div');
+  primaryToolbar.className = 'data-toolbar-row data-toolbar-primary';
+  const filterToolbar = document.createElement('div');
+  filterToolbar.className = 'data-toolbar-row data-toolbar-filters';
   const writable = Boolean(currentObject()?.writable && state.rows?.writable);
-  toolbar.append(
+  primaryToolbar.append(
     actionButton(sqliteCopy.data.add, 'add-row', !writable, () => openRecordDialog('add'), 'primary'),
     actionButton(sqliteCopy.data.edit, 'edit-row', !writable || state.selectedRowIndex === null, () => openRecordDialog('edit')),
     actionButton(sqliteCopy.data.delete, 'delete-row', !writable || state.selectedRowIndex === null, deleteSelectedRow, 'danger'),
@@ -1031,20 +1037,23 @@ function renderDataView(): HTMLElement {
   };
   filterOperator.addEventListener('change', syncFilterValue);
   syncFilterValue();
-  toolbar.append(
+  primaryToolbar.append(
     search,
+    actionButton('复制整行', 'copy-row', state.selectedRowIndex === null, copySelectedRow),
+    actionButton('导出 CSV', 'export-csv', false, () => exportRows('csv')),
+    actionButton('导出 JSON', 'export-json', false, () => exportRows('json')),
+  );
+  filterToolbar.append(
     filterColumn,
     filterOperator,
     filterValue,
     actionButton('应用筛选', 'apply-filter', false, () => applyColumnFilter(filterColumn.value, filterOperator.value, filterValue.value)),
     actionButton('清除筛选', 'clear-filter', state.filters.length === 0, clearColumnFilter),
-    actionButton('复制整行', 'copy-row', state.selectedRowIndex === null, copySelectedRow),
-    actionButton('导出 CSV', 'export-csv', false, () => exportRows('csv')),
-    actionButton('导出 JSON', 'export-json', false, () => exportRows('json')),
   );
   const meta = document.createElement('span');
   meta.textContent = state.rows ? sqliteCopy.data.records(state.rows.total) : sqliteCopy.data.loading;
-  toolbar.append(meta);
+  primaryToolbar.append(meta);
+  toolbar.append(primaryToolbar, filterToolbar);
   view.append(toolbar);
 
   if (!state.rows) {
