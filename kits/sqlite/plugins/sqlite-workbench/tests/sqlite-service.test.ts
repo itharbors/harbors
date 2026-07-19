@@ -231,6 +231,146 @@ describe('SqliteService connection and schema', () => {
     ]);
   });
 
+  it('requires a connection before building a relationship graph', () => {
+    let error: unknown;
+    try {
+      service.getRelationshipGraph();
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(WorkbenchError);
+    expect(toPublicError(error)).toEqual({
+      code: 'NOT_CONNECTED',
+      message: '尚未连接 SQLite 数据库。',
+    });
+  });
+
+  it('builds a complete user-table relationship graph', () => {
+    const fixture = new Database(dbPath);
+    fixture.exec(`
+      CREATE TABLE regions (country TEXT, code TEXT, PRIMARY KEY (country, code));
+      CREATE TABLE offices (
+        id INTEGER PRIMARY KEY,
+        country TEXT,
+        region_code TEXT,
+        parent_id INTEGER REFERENCES offices(id),
+        FOREIGN KEY (country, region_code) REFERENCES regions(country, code)
+      );
+      CREATE TABLE cycle_a (id INTEGER PRIMARY KEY, b_id INTEGER REFERENCES cycle_b(id));
+      CREATE TABLE cycle_b (id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES cycle_a(id));
+      CREATE TABLE parallel_targets (id INTEGER PRIMARY KEY);
+      CREATE TABLE parallel_links (
+        primary_target_id INTEGER REFERENCES parallel_targets(id),
+        backup_target_id INTEGER REFERENCES parallel_targets(id)
+      );
+      CREATE TABLE isolated (id INTEGER PRIMARY KEY, note TEXT);
+      CREATE TABLE "odd table" ("odd id" INTEGER PRIMARY KEY);
+      CREATE VIEW office_names AS SELECT id FROM offices;
+      CREATE TABLE view_reference (office_id INTEGER REFERENCES office_names(id));
+      CREATE TABLE generated_values (
+        base INTEGER,
+        virtual_value INTEGER GENERATED ALWAYS AS (base * 2) VIRTUAL,
+        stored_value INTEGER GENERATED ALWAYS AS (base * 3) STORED
+      );
+      CREATE TABLE "ParentItems" ("ParentID" INTEGER PRIMARY KEY);
+      CREATE TABLE "ChildItems" (
+        "ParentRef" INTEGER,
+        FOREIGN KEY (parentref) REFERENCES parentitems(parentid)
+      );
+    `);
+    fixture.close();
+    service.openDatabase({ path: dbPath, create: false });
+
+    const graph = service.getRelationshipGraph();
+
+    expect(graph.tables.map((table) => table.name)).toEqual(expect.arrayContaining([
+      'chunk_fts', 'cycle_a', 'cycle_b', 'isolated', 'memberships', 'odd table', 'offices', 'regions', 'users',
+    ]));
+    expect(graph.tables.map((table) => table.name)).not.toContain('active_users');
+    expect(graph.tables.map((table) => table.name)).not.toContain('chunk_fts_data');
+    expect(graph.tables.find((table) => table.name === 'offices')).toMatchObject({
+      kind: 'table',
+      columns: expect.arrayContaining([
+        { name: 'id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false },
+        { name: 'parent_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true },
+      ]),
+    });
+    expect(graph.tables.find((table) => table.name === 'odd table')?.columns).toEqual([
+      { name: 'odd id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false },
+    ]);
+    expect(graph.tables.find((table) => table.name === 'chunk_fts')?.columns).toEqual([
+      { name: 'body', type: '', primaryKeyOrder: 0, foreignKey: false },
+    ]);
+    expect(graph.tables.find((table) => table.name === 'view_reference')?.columns).toEqual([
+      { name: 'office_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true },
+    ]);
+    expect(graph.tables.find((table) => table.name === 'generated_values')?.columns).toEqual([
+      { name: 'base', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: false },
+      { name: 'virtual_value', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: false },
+      { name: 'stored_value', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: false },
+    ]);
+    expect(graph.relationships).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromTable: 'offices',
+        toTable: 'regions',
+        columns: [{ from: 'country', to: 'country' }, { from: 'region_code', to: 'code' }],
+      }),
+      expect.objectContaining({
+        fromTable: 'offices',
+        toTable: 'offices',
+        columns: [{ from: 'parent_id', to: 'id' }],
+      }),
+      expect.objectContaining({
+        fromTable: 'cycle_a',
+        toTable: 'cycle_b',
+        columns: [{ from: 'b_id', to: 'id' }],
+      }),
+      expect.objectContaining({
+        fromTable: 'cycle_b',
+        toTable: 'cycle_a',
+        columns: [{ from: 'a_id', to: 'id' }],
+      }),
+      expect.objectContaining({
+        fromTable: 'ChildItems',
+        toTable: 'ParentItems',
+        columns: [{ from: 'ParentRef', to: 'ParentID' }],
+      }),
+    ]));
+    const parallelRelationships = graph.relationships.filter((relationship) => (
+      relationship.fromTable === 'parallel_links'
+      && relationship.toTable === 'parallel_targets'
+    ));
+    expect(parallelRelationships).toHaveLength(2);
+    expect(new Set(parallelRelationships.map((relationship) => relationship.id)).size).toBe(2);
+    expect(parallelRelationships.map((relationship) => relationship.columns)).toEqual(
+      expect.arrayContaining([
+        [{ from: 'primary_target_id', to: 'id' }],
+        [{ from: 'backup_target_id', to: 'id' }],
+      ]),
+    );
+    expect(graph.relationships.some((relationship) => (
+      relationship.fromTable === 'view_reference'
+      || relationship.toTable === 'office_names'
+    ))).toBe(false);
+  });
+
+  it('reads relationship graph metadata in a linear number of statements', () => {
+    const fixture = new Database(dbPath);
+    fixture.exec(Array.from({ length: 80 }, (_, index) => (
+      `CREATE TABLE scale_${index} (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES scale_${Math.max(0, index - 1)}(id));`
+    )).join('\n'));
+    fixture.close();
+    service.openDatabase({ path: dbPath, create: false });
+    const prepare = vi.spyOn(Database.prototype, 'prepare');
+
+    const graph = service.getRelationshipGraph();
+
+    const graphTableCount = graph.tables.length;
+    expect(graphTableCount).toBeGreaterThan(80);
+    expect(graph.tables.map((table) => table.name)).toContain('scale_79');
+    expect(prepare.mock.calls.length).toBeLessThanOrEqual(graphTableCount * 2 + 3);
+  });
+
   it('creates a missing database only when explicitly requested', () => {
     const newPath = path.join(tempDir, 'new.sqlite');
 

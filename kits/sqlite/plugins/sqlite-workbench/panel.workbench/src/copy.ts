@@ -35,6 +35,7 @@ export const sqliteCopy = {
   tabs: {
     data: '数据',
     schema: '结构',
+    relationships: '关系图',
     sql: 'SQL',
   },
   welcome: {
@@ -76,6 +77,18 @@ export const sqliteCopy = {
     defaultValue: '默认值',
     noIndexes: '未声明索引。',
     columnCount: (count: number) => `${count} 个字段`,
+  },
+  relationships: {
+    search: '搜索表',
+    zoomOut: '缩小关系图',
+    zoomIn: '放大关系图',
+    fit: '适应窗口',
+    loading: '正在加载表关系…',
+    failure: '关系图加载失败，请重试。',
+    retry: '重试',
+    empty: '此数据库还没有可展示的表。',
+    noRelationships: '未检测到已声明的外键关系。',
+    status: (tables: number, relationships: number) => `${tables} 个表 · ${relationships} 条关系`,
   },
   sql: {
     run: '执行语句',

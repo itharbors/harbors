@@ -15,6 +15,14 @@ import { createDownload, rowsToCsv } from './export.js';
 import { groupSchemaObjects, renderSqlCode } from './schema-view.js';
 import { completionCandidates, formatSql } from './sql-format.js';
 import { historyAfterExecution, lineNumberText } from './sql-view.js';
+import {
+  fitRelationshipViewport,
+  layoutRelationshipGraph,
+  renderRelationshipView,
+  zoomRelationshipViewport,
+  type RelationshipGraph,
+  type RelationshipViewport,
+} from './relationship-view.js';
 
 const PLUGIN = '@itharbors/sqlite-workbench';
 const CELL_DETAIL_TEXT_LIMIT = 80;
@@ -145,11 +153,16 @@ type WorkbenchState = {
   objects: SchemaObject[];
   expandedObjectGroups: Set<NonNullable<SchemaObject['kind']>>;
   selectedName: string | null;
-  activeTab: 'data' | 'schema' | 'sql';
+  activeTab: 'data' | 'schema' | 'relationships' | 'sql';
   page: number;
   pageSize: number;
   rows: RowsResult | null;
   objectSchema: ObjectSchema | null;
+  relationshipGraph: RelationshipGraph | null;
+  relationshipError: PanelError | null;
+  relationshipViewport: RelationshipViewport;
+  relationshipQuery: string;
+  relationshipNeedsFit: boolean;
   selectedRowIndex: number | null;
   sqlText: string;
   sqlResult: SqlResult | null;
@@ -256,6 +269,11 @@ function createInitialState(): WorkbenchState {
     pageSize: 50,
     rows: null,
     objectSchema: null,
+    relationshipGraph: null,
+    relationshipError: null,
+    relationshipViewport: { x: 0, y: 0, scale: 1 },
+    relationshipQuery: '',
+    relationshipNeedsFit: true,
     selectedRowIndex: null,
     sqlText: 'SELECT name, type\nFROM sqlite_schema\nORDER BY name;',
     sqlResult: null,
@@ -288,17 +306,20 @@ async function request<T>(name: string, input?: unknown): Promise<T> {
   return controller.request<T>(name, input);
 }
 
-async function runAction(action: () => Promise<void>): Promise<void> {
+async function runAction(
+  action: () => Promise<void>,
+  tabFocusTarget?: WorkbenchState['activeTab'],
+): Promise<void> {
   state.busy = true;
   state.error = null;
-  render();
+  renderPreservingTabFocus(tabFocusTarget);
   try {
     await action();
   } catch (error) {
     state.error = panelError(error);
   } finally {
     state.busy = false;
-    render();
+    renderPreservingTabFocus(tabFocusTarget);
   }
 }
 
@@ -309,6 +330,8 @@ async function openDatabaseAt(databasePath: string, create: boolean): Promise<vo
     viewRequestSequence += 1;
     schemaRequestSequence += 1;
     clearUndoReceipt();
+    resetRelationshipState();
+    render();
     const connection = await request<ConnectionState>('openDatabase', { path: databasePath, create });
     if (generation !== connectionGeneration) return;
     state.connection = connection;
@@ -378,6 +401,8 @@ async function enableWrites(): Promise<void> {
     const generation = connectionGeneration;
     viewRequestSequence += 1;
     schemaRequestSequence += 1;
+    resetRelationshipState();
+    render();
     const connection = await request<ConnectionState>('setConnectionMode', { mode: 'readwrite' });
     if (generation !== connectionGeneration) return;
     state.connection = connection;
@@ -394,6 +419,8 @@ async function closeDatabase(): Promise<void> {
     viewRequestSequence += 1;
     schemaRequestSequence += 1;
     clearUndoReceipt();
+    resetRelationshipState();
+    render();
     const connection = await request<ConnectionState>('closeDatabase');
     if (generation !== connectionGeneration) return;
     state.connection = connection;
@@ -431,6 +458,10 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
     || sequence !== schemaRequestSequence
     || !state.connection.connected
   ) return;
+  viewRequestSequence += 1;
+  const schemaChanged = schemaSnapshotSignature(state.objects)
+    !== schemaSnapshotSignature(result.objects);
+  if (schemaChanged) resetRelationshipState();
   state.objects = result.objects;
   const selectedStillExists = state.objects.some((object) => object.name === state.selectedName);
   if (selectFirst || !selectedStillExists) {
@@ -438,6 +469,22 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
       ?? state.objects[0]?.name
       ?? null;
   }
+  if (!state.selectedName && state.activeTab !== 'relationships' && state.activeTab !== 'sql') {
+    state.activeTab = 'relationships';
+  }
+}
+
+function schemaSnapshotSignature(objects: SchemaObject[]): string {
+  return JSON.stringify(objects
+    .map((object) => [
+      object.name,
+      object.kind ?? null,
+      object.type,
+      object.writable,
+      object.readOnlyReason ?? null,
+      object.sql,
+    ])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
 }
 
 async function selectObject(name: string): Promise<void> {
@@ -459,21 +506,85 @@ async function selectObject(name: string): Promise<void> {
   });
 }
 
-async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
+async function selectTab(tab: WorkbenchState['activeTab'], restoreFocus = false): Promise<void> {
   viewRequestSequence += 1;
   state.activeTab = tab;
   state.error = null;
-  render();
-  if (tab === 'sql' || !state.selectedName) return;
+  if (restoreFocus) renderAndFocusTab(tab);
+  else render();
+  if (tab === 'sql' || (tab !== 'relationships' && !state.selectedName)) {
+    return;
+  }
+  if (tab === 'relationships') {
+    try {
+      await loadActiveView(restoreFocus ? tab : undefined);
+    } catch (error) {
+      state.error = panelError(error);
+    } finally {
+      renderPreservingTabFocus(restoreFocus ? tab : undefined);
+    }
+    return;
+  }
   await runAction(async () => {
     await loadActiveView();
-  });
+  }, restoreFocus ? tab : undefined);
 }
 
-async function loadActiveView(): Promise<void> {
-  if (!state.selectedName) return;
+function focusActiveTab(): void {
+  root?.querySelector<HTMLButtonElement>(`[data-tab="${state.activeTab}"]`)?.focus();
+}
+
+function renderAndFocusTab(tab: WorkbenchState['activeTab']): void {
+  render();
+  if (state.activeTab === tab) focusActiveTab();
+}
+
+function renderPreservingTabFocus(tab?: WorkbenchState['activeTab']): void {
+  const focusedElement = document.activeElement;
+  const focusedTab = tab !== undefined
+    && focusedElement instanceof HTMLElement
+    && focusedElement.matches('[role="tab"][data-tab]')
+    && root?.contains(focusedElement)
+    ? focusedElement.dataset.tab as WorkbenchState['activeTab'] | undefined
+    : undefined;
+  render();
+  if (focusedTab && state.activeTab === focusedTab) focusActiveTab();
+}
+
+async function loadActiveView(tabFocusTarget?: WorkbenchState['activeTab']): Promise<void> {
   const sequence = ++viewRequestSequence;
   const generation = connectionGeneration;
+  if (state.activeTab === 'relationships') {
+    if (state.relationshipGraph) return;
+    state.relationshipError = null;
+    renderPreservingTabFocus(tabFocusTarget);
+    let graph: RelationshipGraph;
+    try {
+      graph = await request<RelationshipGraph>('getRelationshipGraph');
+    } catch (error) {
+      if (
+        sequence !== viewRequestSequence
+        || generation !== connectionGeneration
+        || state.activeTab !== 'relationships'
+        || !state.connection.connected
+      ) return;
+      state.relationshipError = panelError(error);
+      state.status = sqliteCopy.relationships.failure;
+      return;
+    }
+    if (
+      sequence !== viewRequestSequence
+      || generation !== connectionGeneration
+      || state.activeTab !== 'relationships'
+      || !state.connection.connected
+    ) return;
+    state.relationshipGraph = graph;
+    state.relationshipError = null;
+    state.relationshipNeedsFit = true;
+    state.status = sqliteCopy.relationships.status(graph.tables.length, graph.relationships.length);
+    return;
+  }
+  if (!state.selectedName) return;
   const requestedName = state.selectedName;
   const requestedTab = state.activeTab;
   if (state.activeTab === 'data') {
@@ -854,6 +965,7 @@ function render(): void {
             <div class="tabs" role="tablist" aria-label="${sqliteCopy.objects.workspace}">
               <button type="button" role="tab" data-tab="data">${sqliteCopy.tabs.data}</button>
               <button type="button" role="tab" data-tab="schema">${sqliteCopy.tabs.schema}</button>
+              <button type="button" role="tab" data-tab="relationships">${sqliteCopy.tabs.relationships}</button>
               <button type="button" role="tab" data-tab="sql">${sqliteCopy.tabs.sql}</button>
             </div>
           </div>
@@ -1008,15 +1120,19 @@ function renderHeading(): void {
   const title = root!.querySelector<HTMLElement>('.object-title')!;
   const object = currentObject();
   const eyebrow = document.createElement('small');
-  eyebrow.textContent = object
+  eyebrow.textContent = state.activeTab === 'relationships'
+    ? sqliteCopy.objects.database
+    : object
     ? (object.type === 'table' ? sqliteCopy.objects.table : sqliteCopy.objects.view)
     : sqliteCopy.objects.database;
   const name = document.createElement('h1');
-  name.textContent = object?.name ?? (state.connection.connected
+  name.textContent = state.activeTab === 'relationships' && state.connection.connected
+    ? state.connection.fileName ?? fileName(state.connection.path ?? 'SQLite')
+    : object?.name ?? (state.connection.connected
     ? sqliteCopy.objects.emptyDatabase
     : sqliteCopy.objects.connectDatabase);
   title.append(eyebrow, name);
-  if (object && !object.writable) {
+  if (state.activeTab !== 'relationships' && object && !object.writable) {
     const badge = document.createElement('span');
     badge.dataset.readonly = '';
     badge.className = 'readonly-badge';
@@ -1033,9 +1149,10 @@ function renderHeading(): void {
     button.setAttribute('aria-selected', String(active));
     button.tabIndex = active ? 0 : -1;
     button.classList.toggle('active', active);
-    button.disabled = !state.connection.connected || (button.dataset.tab !== 'sql' && !state.selectedName);
+    const globalTab = tab === 'sql' || tab === 'relationships';
+    button.disabled = !state.connection.connected || (!globalTab && !state.selectedName);
     button.addEventListener('click', () => {
-      void selectTab(tab);
+      void selectTab(tab, true);
     });
     button.addEventListener('keydown', (event) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -1044,8 +1161,8 @@ function renderHeading(): void {
       const current = enabled.indexOf(button);
       const offset = event.key === 'ArrowRight' ? 1 : -1;
       const next = enabled[(current + offset + enabled.length) % enabled.length];
-      next?.focus();
-      next?.click();
+      const nextTab = next?.dataset.tab as WorkbenchState['activeTab'] | undefined;
+      if (nextTab) void selectTab(nextTab, true);
     });
   }
 }
@@ -1060,11 +1177,164 @@ function renderActiveView(): void {
     host.append(renderSqlView());
     return;
   }
+  if (state.activeTab === 'relationships') {
+    const view = renderRelationshipWorkbench();
+    host.append(view);
+    if (state.relationshipGraph && state.relationshipGraph.tables.length > 0 && state.relationshipNeedsFit) {
+      const canvas = view.querySelector<HTMLElement>('.relationship-canvas')!;
+      state.relationshipViewport = fitRelationshipViewport(
+        layoutRelationshipGraph(state.relationshipGraph),
+        canvas.clientWidth || 960,
+        canvas.clientHeight || 640,
+      );
+      state.relationshipNeedsFit = false;
+      host.replaceChildren(renderRelationshipWorkbench());
+    }
+    return;
+  }
   if (!state.selectedName) {
     host.append(emptyMessage(sqliteCopy.objects.noneSelected));
     return;
   }
   host.append(state.activeTab === 'data' ? renderDataView() : renderSchemaView());
+}
+
+function renderRelationshipWorkbench(): HTMLElement {
+  if (state.relationshipError) {
+    const failure = document.createElement('section');
+    failure.id = 'sqlite-view-relationships';
+    failure.dataset.view = 'relationships';
+    failure.setAttribute('role', 'tabpanel');
+    failure.setAttribute('aria-labelledby', 'sqlite-tab-relationships');
+    const message = emptyMessage(sqliteCopy.relationships.failure);
+    message.dataset.relationshipError = '';
+    failure.append(message, actionButton(
+      sqliteCopy.relationships.retry,
+      'retry-relationships',
+      false,
+      retryRelationshipGraph,
+    ));
+    return failure;
+  }
+  if (!state.relationshipGraph) {
+    const loading = document.createElement('section');
+    loading.id = 'sqlite-view-relationships';
+    loading.dataset.view = 'relationships';
+    loading.setAttribute('role', 'tabpanel');
+    loading.setAttribute('aria-labelledby', 'sqlite-tab-relationships');
+    loading.append(emptyMessage(sqliteCopy.relationships.loading));
+    return loading;
+  }
+  if (state.relationshipGraph.tables.length === 0) {
+    const empty = document.createElement('section');
+    empty.id = 'sqlite-view-relationships';
+    empty.dataset.view = 'relationships';
+    empty.setAttribute('role', 'tabpanel');
+    empty.setAttribute('aria-labelledby', 'sqlite-tab-relationships');
+    empty.append(emptyMessage(sqliteCopy.relationships.empty));
+    return empty;
+  }
+
+  const view = renderRelationshipView({
+    graph: state.relationshipGraph,
+    viewport: state.relationshipViewport,
+    query: state.relationshipQuery,
+    onViewportChange: (viewport) => { state.relationshipViewport = viewport; },
+    onOpenTable: (name) => { void openRelationshipTable(name); },
+  });
+  const toolbar = view.querySelector<HTMLElement>('.relationship-toolbar')!;
+  const search = document.createElement('input');
+  search.type = 'search';
+  search.dataset.field = 'relationship-search';
+  search.placeholder = sqliteCopy.relationships.search;
+  search.setAttribute('aria-label', sqliteCopy.relationships.search);
+  search.value = state.relationshipQuery;
+  search.addEventListener('input', () => {
+    state.relationshipQuery = search.value;
+    render();
+    queueMicrotask(() => {
+      const next = root?.querySelector<HTMLInputElement>('[data-field="relationship-search"]');
+      next?.focus();
+      next?.setSelectionRange(next.value.length, next.value.length);
+    });
+  });
+  const zoomOut = relationshipToolbarButton('−', sqliteCopy.relationships.zoomOut, () => {
+    zoomRelationshipCanvas(1 / 1.1);
+  });
+  const zoomIn = relationshipToolbarButton('+', sqliteCopy.relationships.zoomIn, () => {
+    zoomRelationshipCanvas(1.1);
+  });
+  const fit = relationshipToolbarButton(sqliteCopy.relationships.fit, sqliteCopy.relationships.fit, () => {
+    fitRelationshipCanvas();
+  });
+  toolbar.prepend(search, zoomOut, zoomIn, fit);
+  if (state.relationshipGraph.relationships.length === 0) {
+    const noRelationships = document.createElement('small');
+    noRelationships.textContent = sqliteCopy.relationships.noRelationships;
+    toolbar.append(noRelationships);
+  }
+  return view;
+}
+
+async function retryRelationshipGraph(): Promise<void> {
+  state.relationshipError = null;
+  render();
+  await loadActiveView();
+  render();
+}
+
+function relationshipToolbarButton(label: string, ariaLabel: string, handler: () => void): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = label;
+  button.setAttribute('aria-label', ariaLabel);
+  button.addEventListener('click', handler);
+  return button;
+}
+
+function relationshipCanvasSize(): { width: number; height: number } {
+  const canvas = root?.querySelector<HTMLElement>('.relationship-canvas');
+  return { width: canvas?.clientWidth || 960, height: canvas?.clientHeight || 640 };
+}
+
+function fitRelationshipCanvas(): void {
+  if (!state.relationshipGraph) return;
+  const { width, height } = relationshipCanvasSize();
+  state.relationshipViewport = fitRelationshipViewport(
+    layoutRelationshipGraph(state.relationshipGraph),
+    width,
+    height,
+  );
+  state.relationshipNeedsFit = false;
+  render();
+}
+
+function zoomRelationshipCanvas(factor: number): void {
+  const { width, height } = relationshipCanvasSize();
+  state.relationshipViewport = zoomRelationshipViewport(
+    state.relationshipViewport,
+    factor,
+    { x: width / 2, y: height / 2 },
+  );
+  state.relationshipNeedsFit = false;
+  render();
+}
+
+async function openRelationshipTable(name: string): Promise<void> {
+  viewRequestSequence += 1;
+  state.selectedName = name;
+  state.activeTab = 'schema';
+  state.page = 1;
+  state.rows = null;
+  state.objectSchema = null;
+  state.selectedRowIndex = null;
+  state.search = '';
+  state.filters = [];
+  state.sorts = [];
+  state.cellDetail = null;
+  state.navigationOpen = false;
+  render();
+  await runAction(loadActiveView);
 }
 
 function renderWelcome(): HTMLElement {
@@ -1956,6 +2226,14 @@ function bindClick(selector: string, handler: () => Promise<void>): void {
 
 function currentObject(): SchemaObject | undefined {
   return state.objects.find((object) => object.name === state.selectedName);
+}
+
+function resetRelationshipState(): void {
+  state.relationshipGraph = null;
+  state.relationshipError = null;
+  state.relationshipViewport = { x: 0, y: 0, scale: 1 };
+  state.relationshipQuery = '';
+  state.relationshipNeedsFit = true;
 }
 
 function sectionTitle(label: string, count?: number): HTMLElement {
