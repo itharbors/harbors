@@ -46,6 +46,10 @@ describe('SqliteService connection and schema', () => {
         label TEXT,
         note TEXT
       );
+      CREATE TABLE nullable_keys (
+        code TEXT PRIMARY KEY,
+        label TEXT NOT NULL
+      );
       CREATE TRIGGER users_score_audit
         AFTER UPDATE OF score ON users
         BEGIN
@@ -63,6 +67,10 @@ describe('SqliteService connection and schema', () => {
         ('C', 2, 'Gamma', NULL),
         ('A', 1, 'Alpha', 'ready'),
         ('B', 1, 'Beta', NULL);
+      INSERT INTO nullable_keys (code, label) VALUES
+        (NULL, 'first-null'),
+        (NULL, 'second-null'),
+        ('A', 'named');
     `);
     fixture.close();
     service = new SqliteService();
@@ -399,6 +407,23 @@ describe('SqliteService connection and schema', () => {
       sorts: [{ column: 'rank', direction: 'asc' }],
     });
     expect(result.rows.map((row) => row.values[0])).toEqual(['A', 'B', 'C']);
+  });
+
+  it('uses rowid to distinguish and stably mutate duplicate null primary keys', () => {
+    openReadWrite();
+    const result = service.getRows({ name: 'nullable_keys', page: 1, pageSize: 25 });
+
+    expect(result.rows.slice(0, 2).map((row) => row.identity)).toEqual([
+      { kind: 'rowid', value: { type: 'integer', value: '1' } },
+      { kind: 'rowid', value: { type: 'integer', value: '2' } },
+    ]);
+    expect(service.updateRow({
+      name: 'nullable_keys',
+      identity: result.rows[0].identity,
+      values: { label: { type: 'text', value: 'changed-only-first' } },
+    })).toMatchObject({ changes: 1 });
+    expect(service.getRows({ name: 'nullable_keys', page: 1, pageSize: 25 }).rows
+      .map((row) => row.values[1])).toEqual(['changed-only-first', 'second-null', 'named']);
   });
 
   it('searches visible text and numeric columns with a contains query', () => {

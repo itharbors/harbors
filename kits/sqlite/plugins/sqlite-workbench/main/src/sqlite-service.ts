@@ -476,7 +476,8 @@ export class SqliteService {
         : [];
       const triggers = this.readTriggers(database, name);
       const hasRowid = object.kind === 'table' && !/\bWITHOUT\s+ROWID\b/i.test(object.sql);
-      const stableIdentity = primaryKey.length > 0
+      const stablePrimaryKey = hasGuaranteedPrimaryKey({ primaryKey, columns, hasRowid });
+      const stableIdentity = stablePrimaryKey
         || (hasRowid && chooseRowidSource(columns.map((column) => column.name)) !== null);
       const writable = object.writable && stableIdentity;
       const readOnlyReason = object.readOnlyReason
@@ -988,7 +989,9 @@ export class SqliteService {
         throw workbenchError('INVALID_COLUMN', `排序列不存在：${sort.column}`);
       }
     }
-    const rowidSource = schema.kind === 'table' && schema.primaryKey.length === 0 && schema.hasRowid
+    const rowidSource = schema.kind === 'table'
+      && schema.hasRowid
+      && !hasGuaranteedPrimaryKey(schema)
       ? chooseRowidSource(columns)
       : null;
     const stableColumns = schema.primaryKey.length > 0
@@ -1220,7 +1223,7 @@ export class SqliteService {
   }
 
   private identityForRecord(schema: ObjectSchema, record: Record<string, unknown>): RowIdentity | null {
-    if (schema.primaryKey.length > 0) {
+    if (hasGuaranteedPrimaryKey(schema)) {
       return {
         kind: 'primary-key',
         values: Object.fromEntries(
@@ -1285,7 +1288,7 @@ function createRowIdentity(
   rowidAlias: string | null,
 ): RowIdentity | null {
   if (schema.kind !== 'table') return null;
-  if (schema.primaryKey.length > 0) {
+  if (hasGuaranteedPrimaryKey(schema)) {
     return {
       kind: 'primary-key',
       values: Object.fromEntries(
@@ -1297,6 +1300,22 @@ function createRowIdentity(
     return { kind: 'rowid', value: serializeValue(record[rowidAlias]) };
   }
   return null;
+}
+
+function hasGuaranteedPrimaryKey(
+  schema: Pick<ObjectSchema, 'primaryKey' | 'columns' | 'hasRowid'>,
+): boolean {
+  if (schema.primaryKey.length === 0) return false;
+  if (!schema.hasRowid) return true;
+  const primaryColumns = schema.primaryKey.map((name) => (
+    schema.columns.find((column) => column.name === name)
+  ));
+  if (primaryColumns.some((column) => column === undefined)) return false;
+  if (
+    primaryColumns.length === 1
+    && primaryColumns[0]!.type.trim().toUpperCase() === 'INTEGER'
+  ) return true;
+  return primaryColumns.every((column) => column!.notNull);
 }
 
 function buildIdentityWhere(
