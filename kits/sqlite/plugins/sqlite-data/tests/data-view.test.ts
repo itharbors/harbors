@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { identitySummary, limitRenderedRows } from '../panel.workbench/src/data-view';
+import { identitySummary, limitRenderedRows } from '../panel.data/src/data-view';
 
 describe('SQLite data view helpers', () => {
   it('summarizes primary-key and rowid identities', () => {

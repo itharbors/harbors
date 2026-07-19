@@ -5,7 +5,7 @@ import {
   createRecordDraft,
   editableValueFromInput,
   formatValue,
-} from '../panel.workbench/src/view-model';
+} from '../panel.data/src/view-model';
 
 describe('SQLite workbench view model', () => {
   it('formats protocol values without losing type cues', () => {

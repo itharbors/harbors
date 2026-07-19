@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createDownload, rowsToCsv } from '../panel.workbench/src/export';
+import { createDownload, rowsToCsv } from '../panel.data/src/export';
 
 describe('SQLite panel export helpers', () => {
   afterEach(() => vi.restoreAllMocks());
