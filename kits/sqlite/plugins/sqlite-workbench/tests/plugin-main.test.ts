@@ -45,6 +45,7 @@ describe('SQLite plugin main', () => {
       'getConnectionState',
       'getObjectSchema',
       'getRecentDatabases',
+      'getRelationshipGraph',
       'getRows',
       'getSchema',
       'insertRow',
@@ -65,6 +66,10 @@ describe('SQLite plugin main', () => {
     expect(definition!.methods.openDatabase({ path: dbPath, create: false })).toMatchObject({
       connected: true,
       path: fs.realpathSync(dbPath),
+    });
+    expect(definition!.methods.getRelationshipGraph()).toMatchObject({
+      tables: [expect.objectContaining({ name: 'items' })],
+      relationships: [],
     });
     expect(definition!.methods.deleteRow({
       name: 'items',

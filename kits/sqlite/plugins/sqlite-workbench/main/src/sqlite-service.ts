@@ -80,6 +80,33 @@ export type ForeignKeySchema = {
   match: string;
 };
 
+export type RelationshipColumn = {
+  name: string;
+  type: string;
+  primaryKeyOrder: number;
+  foreignKey: boolean;
+};
+
+export type RelationshipTable = {
+  name: string;
+  kind: 'table' | 'virtual';
+  columns: RelationshipColumn[];
+};
+
+export type Relationship = {
+  id: string;
+  fromTable: string;
+  toTable: string;
+  columns: Array<{ from: string; to: string | null }>;
+  onUpdate: string;
+  onDelete: string;
+};
+
+export type RelationshipGraph = {
+  tables: RelationshipTable[];
+  relationships: Relationship[];
+};
+
 export type TriggerSchema = {
   name: string;
   sql: string;
@@ -438,6 +465,55 @@ export class SqliteService {
         };
       }),
     };
+  }
+
+  getRelationshipGraph(): RelationshipGraph {
+    const objects = this.getSchema().objects.filter(
+      (object): object is SchemaObject & { kind: 'table' | 'virtual' } => (
+        object.kind === 'table' || object.kind === 'virtual'
+      ),
+    );
+    const visibleNames = new Set(objects.map((object) => object.name));
+    const schemas = objects.map((object) => this.getObjectSchema({ name: object.name }));
+    const tables = schemas.map((schema) => {
+      const foreignColumns = new Set(schema.foreignKeys.map((key) => key.from));
+      return {
+        name: schema.name,
+        kind: schema.kind as 'table' | 'virtual',
+        columns: schema.columns
+          .filter((column) => !column.hidden)
+          .map((column) => ({
+            name: column.name,
+            type: column.type,
+            primaryKeyOrder: column.primaryKeyOrder,
+            foreignKey: foreignColumns.has(column.name),
+          })),
+      };
+    });
+    const relationships = schemas.flatMap((schema) => {
+      const groups = new Map<number, ForeignKeySchema[]>();
+      for (const key of schema.foreignKeys) {
+        const group = groups.get(key.id) ?? [];
+        group.push(key);
+        groups.set(key.id, group);
+      }
+      return [...groups.entries()]
+        .sort(([left], [right]) => left - right)
+        .flatMap(([id, keys]) => {
+          const ordered = [...keys].sort((left, right) => left.sequence - right.sequence);
+          const first = ordered[0];
+          if (!first || !visibleNames.has(first.table)) return [];
+          return [{
+            id: `${schema.name}:${id}`,
+            fromTable: schema.name,
+            toTable: first.table,
+            columns: ordered.map((key) => ({ from: key.from, to: key.to })),
+            onUpdate: first.onUpdate,
+            onDelete: first.onDelete,
+          }];
+        });
+    });
+    return { tables, relationships };
   }
 
   getObjectSchema(input: unknown): ObjectSchema {

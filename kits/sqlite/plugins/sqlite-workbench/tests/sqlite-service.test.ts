@@ -231,6 +231,54 @@ describe('SqliteService connection and schema', () => {
     ]);
   });
 
+  it('builds a complete user-table relationship graph', () => {
+    const fixture = new Database(dbPath);
+    fixture.exec(`
+      CREATE TABLE regions (country TEXT, code TEXT, PRIMARY KEY (country, code));
+      CREATE TABLE offices (
+        id INTEGER PRIMARY KEY,
+        country TEXT,
+        region_code TEXT,
+        parent_id INTEGER REFERENCES offices(id),
+        FOREIGN KEY (country, region_code) REFERENCES regions(country, code)
+      );
+      CREATE TABLE cycle_a (id INTEGER PRIMARY KEY, b_id INTEGER REFERENCES cycle_b(id));
+      CREATE TABLE cycle_b (id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES cycle_a(id));
+      CREATE TABLE isolated (id INTEGER PRIMARY KEY, note TEXT);
+      CREATE TABLE "odd table" ("odd id" INTEGER PRIMARY KEY);
+      CREATE VIEW office_names AS SELECT id FROM offices;
+    `);
+    fixture.close();
+    service.openDatabase({ path: dbPath, create: false });
+
+    const graph = service.getRelationshipGraph();
+
+    expect(graph.tables.map((table) => table.name)).toEqual(expect.arrayContaining([
+      'chunk_fts', 'cycle_a', 'cycle_b', 'isolated', 'memberships', 'odd table', 'offices', 'regions', 'users',
+    ]));
+    expect(graph.tables.map((table) => table.name)).not.toContain('active_users');
+    expect(graph.tables.map((table) => table.name)).not.toContain('chunk_fts_data');
+    expect(graph.tables.find((table) => table.name === 'offices')).toMatchObject({
+      kind: 'table',
+      columns: expect.arrayContaining([
+        { name: 'id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false },
+        { name: 'parent_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true },
+      ]),
+    });
+    expect(graph.relationships).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        fromTable: 'offices',
+        toTable: 'regions',
+        columns: [{ from: 'country', to: 'country' }, { from: 'region_code', to: 'code' }],
+      }),
+      expect.objectContaining({
+        fromTable: 'offices',
+        toTable: 'offices',
+        columns: [{ from: 'parent_id', to: 'id' }],
+      }),
+    ]));
+  });
+
   it('creates a missing database only when explicitly requested', () => {
     const newPath = path.join(tempDir, 'new.sqlite');
 

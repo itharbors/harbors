@@ -27,6 +27,7 @@
           "closeDatabase": ["closeDatabase"],
           "getSchema": ["getSchema"],
           "getObjectSchema": ["getObjectSchema"],
+          "getRelationshipGraph": ["getRelationshipGraph"],
           "getRows": ["getRows"],
           "exportRows": ["exportRows"],
           "insertRow": ["insertRow"],
