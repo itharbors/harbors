@@ -219,6 +219,32 @@ describe('SQLite workbench panel', () => {
     expect(filters.querySelector('[data-action="add-row"]')).toBeNull();
   });
 
+  it('keeps the system object group expanded after selecting a child object', async () => {
+    await connect();
+    const systemGroup = root.querySelector<HTMLDetailsElement>('details[data-object-kind="shadow"]')!;
+    systemGroup.open = true;
+    systemGroup.dispatchEvent(new Event('toggle'));
+
+    systemGroup.querySelector<HTMLButtonElement>('[data-object-name="search_fts_data"]')!.click();
+    await flush();
+
+    expect(root.querySelector<HTMLDetailsElement>('details[data-object-kind="shadow"]')!.open).toBe(true);
+  });
+
+  it('resets the system object group when reconnecting to a database', async () => {
+    await connect();
+    const systemGroup = root.querySelector<HTMLDetailsElement>('details[data-object-kind="shadow"]')!;
+    systemGroup.open = true;
+    systemGroup.dispatchEvent(new Event('toggle'));
+
+    root.querySelector<HTMLButtonElement>('[data-action="close"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
+    await flush();
+
+    expect(root.querySelector<HTMLDetailsElement>('details[data-object-kind="shadow"]')!.open).toBe(false);
+  });
+
   it('opens an existing database through the controlled file browser', async () => {
     await mount();
     root.querySelector<HTMLButtonElement>('[data-action="browse-open"]')!.click();

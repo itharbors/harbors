@@ -144,6 +144,7 @@ type WorkbenchState = {
   path: string;
   connection: ConnectionState;
   objects: SchemaObject[];
+  expandedObjectGroups: Set<NonNullable<SchemaObject['kind']>>;
   selectedName: string | null;
   activeTab: 'data' | 'schema' | 'sql';
   page: number;
@@ -222,6 +223,7 @@ function createInitialState(): WorkbenchState {
     path: '',
     connection: { connected: false, path: null, sqliteVersion: null },
     objects: [],
+    expandedObjectGroups: new Set(),
     selectedName: null,
     activeTab: 'data',
     page: 1,
@@ -287,6 +289,7 @@ async function openDatabase(create: boolean): Promise<void> {
 async function openDatabaseAt(databasePath: string, create: boolean): Promise<void> {
   await runAction(async () => {
     state.connection = await request<ConnectionState>('openDatabase', { path: databasePath, create });
+    state.expandedObjectGroups.clear();
     state.path = state.connection.path ?? state.path;
     state.fileDialog = null;
     state.page = 1;
@@ -360,6 +363,7 @@ async function closeDatabase(): Promise<void> {
   await runAction(async () => {
     rowRequestSequence += 1;
     state.connection = await request<ConnectionState>('closeDatabase');
+    state.expandedObjectGroups.clear();
     state.objects = [];
     state.selectedName = null;
     state.rows = null;
@@ -854,7 +858,14 @@ function renderObjects(): void {
       const objects = group.objects;
       const type = group.kind;
       const section = group.collapsed ? document.createElement('details') : document.createElement('section');
-      if (section instanceof HTMLDetailsElement) section.open = false;
+      if (section instanceof HTMLDetailsElement) {
+        section.open = state.expandedObjectGroups.has(type);
+        section.addEventListener('toggle', () => {
+          if (!section.isConnected) return;
+          if (section.open) state.expandedObjectGroups.add(type);
+          else state.expandedObjectGroups.delete(type);
+        });
+      }
       section.className = 'object-group';
       section.dataset.objectKind = type;
       const title = group.collapsed ? document.createElement('summary') : document.createElement('h2');
