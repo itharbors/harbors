@@ -93,10 +93,10 @@ describe('SQLite workbench panel', () => {
             ? { ...objectSchema, name: 'active_users', type: 'view', writable: false, hasRowid: false, sql: 'CREATE VIEW active_users AS ...' }
             : objectSchema;
         case 'insertRow':
-          return { changes: 1, lastInsertRowid: { type: 'integer', value: '2' }, undoToken: 'undo-insert', undoExpiresAt: '2026-07-19T08:00:10.000Z' };
+          return { changes: 1, lastInsertRowid: { type: 'integer', value: '2' }, undoToken: 'undo-insert', undoExpiresAt: new Date(Date.now() + 10_000).toISOString() };
         case 'updateRow':
         case 'deleteRow':
-          return { changes: 1, undoToken: 'undo-mutation', undoExpiresAt: '2026-07-19T08:00:10.000Z' };
+          return { changes: 1, undoToken: 'undo-mutation', undoExpiresAt: new Date(Date.now() + 10_000).toISOString() };
         case 'undoLastMutation':
           return { undone: true, operation: 'delete' };
         case 'exportRows':
@@ -132,16 +132,12 @@ describe('SQLite workbench panel', () => {
 
   it('renders product-controlled interface copy in Chinese', async () => {
     await mount();
-    expect(root.textContent).toContain('数据库路径');
-    expect(root.textContent).toContain('打开');
-    expect(root.textContent).toContain('创建');
+    expect(root.textContent).toContain('打开数据库');
+    expect(root.textContent).toContain('新建数据库');
     expect(root.textContent).toContain('尚未连接');
     expect(root.textContent).not.toContain('Not connected');
 
-    const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
-    pathInput.value = '/tmp/example.sqlite';
-    root.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
-    await flush();
+    await openThroughBrowser('open');
 
     expect(root.textContent).toContain('数据');
     expect(root.textContent).toContain('结构');
@@ -172,10 +168,7 @@ describe('SQLite workbench panel', () => {
     await mount();
     expect(root.querySelector('[data-state="disconnected"]')).not.toBeNull();
 
-    const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
-    pathInput.value = '/tmp/example.sqlite';
-    root.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
-    await flush();
+    await openThroughBrowser('open');
 
     expect(request).toHaveBeenCalledWith(PLUGIN, 'openDatabase', {
       path: '/tmp/example.sqlite',
@@ -189,6 +182,17 @@ describe('SQLite workbench panel', () => {
       page: 1,
       pageSize: 50,
     });
+  });
+
+  it('shows only immutable current connection state in the header', async () => {
+    await connect();
+
+    expect(root.querySelector('[data-field="database-path"]')).toBeNull();
+    expect(root.querySelector('[data-current-path]')?.textContent).toBe('/tmp/example.sqlite');
+    expect(root.querySelector('[data-connection="connected"]')?.textContent).toContain('只读');
+    expect(root.querySelector('[data-connection="connected"]')?.textContent).toContain('example.sqlite');
+    expect(root.querySelector('[data-action="browse-open"]')).not.toBeNull();
+    expect(root.querySelector('[data-action="browse-create"]')).not.toBeNull();
   });
 
   it('uses consistent object group headings and two distinct data toolbar rows', async () => {
@@ -239,8 +243,7 @@ describe('SQLite workbench panel', () => {
 
     root.querySelector<HTMLButtonElement>('[data-action="close"]')!.click();
     await flush();
-    root.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
-    await flush();
+    await openThroughBrowser('open');
 
     expect(root.querySelector<HTMLDetailsElement>('details[data-object-kind="shadow"]')!.open).toBe(false);
   });
@@ -301,10 +304,7 @@ describe('SQLite workbench panel', () => {
 
   it('creates explicitly and paginates the selected table', async () => {
     await mount();
-    const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
-    pathInput.value = '/tmp/new.sqlite';
-    root.querySelector<HTMLButtonElement>('[data-action="create"]')!.click();
-    await flush();
+    await openThroughBrowser('create', '/tmp/new.sqlite');
 
     expect(request).toHaveBeenCalledWith(PLUGIN, 'openDatabase', {
       path: '/tmp/new.sqlite',
@@ -491,6 +491,16 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector<HTMLDialogElement>('dialog[data-record-dialog]')?.open).toBe(true);
   });
 
+  it('uses native radio selection and announces the selected identity in the toolbar', async () => {
+    await connect();
+    const selector = root.querySelector<HTMLInputElement>('input[type="radio"][data-row-index="0"]')!;
+    selector.click();
+
+    expect(selector.type).toBe('radio');
+    expect(root.querySelector<HTMLInputElement>('input[type="radio"][data-row-index="0"]')?.checked).toBe(true);
+    expect(root.querySelector('[data-selected-identity]')?.textContent).toContain('id = 1');
+  });
+
   it('selects a row without opening field detail when a short cell is clicked', async () => {
     await connect();
     const shortCell = root.querySelector<HTMLTableCellElement>('tbody tr td:nth-child(3)')!;
@@ -541,6 +551,28 @@ describe('SQLite workbench panel', () => {
     }));
     expect(root.querySelector('[data-cell-detail]')?.textContent).toContain('line one\nline two');
     expect(root.querySelector('dialog[data-record-dialog]')).toBeNull();
+  });
+
+  it('clears field detail immediately when switching objects', async () => {
+    const longText = 'x'.repeat(81);
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getRows') {
+        return {
+          ...rows,
+          columns: ['id', 'content'],
+          rows: [{ ...rows.rows[0], values: [rows.rows[0].values[0], longText] }],
+        };
+      }
+      return baseImplementation(...args);
+    });
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-action="open-cell-detail"]')!.click();
+    expect(root.querySelector('[data-cell-detail]')).not.toBeNull();
+
+    root.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!.click();
+    expect(root.querySelector('[data-cell-detail]')).toBeNull();
+    await flush();
   });
 
   it('searches, sorts, and exports the current result', async () => {
@@ -649,6 +681,41 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector('[data-readonly]')?.textContent).toContain('只读');
   });
 
+  it('removes expired undo actions and clears receipts rejected as expired', async () => {
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'deleteRow') {
+        return {
+          changes: 1,
+          undoToken: 'expiring-undo',
+          undoExpiresAt: new Date(Date.now() + 80).toISOString(),
+        };
+      }
+      if (args[1] === 'undoLastMutation') {
+        return { $sqliteWorkbenchError: { code: 'UNDO_EXPIRED', message: '撤销操作已过期。' } };
+      }
+      return baseImplementation(...args);
+    });
+    await connect();
+    root.querySelector<HTMLTableRowElement>('tbody tr')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="delete-row"]')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="confirm-delete"]')!.click();
+    await flush();
+    expect(root.querySelector('[data-action="undo-mutation"]')).not.toBeNull();
+
+    root.querySelector<HTMLButtonElement>('[data-action="undo-mutation"]')!.click();
+    await flush();
+    expect(root.querySelector('[data-action="undo-mutation"]')).toBeNull();
+
+    root.querySelector<HTMLTableRowElement>('tbody tr')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="delete-row"]')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="confirm-delete"]')!.click();
+    await flush();
+    expect(root.querySelector('[data-action="undo-mutation"]')).not.toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(root.querySelector('[data-action="undo-mutation"]')).toBeNull();
+  });
+
   it('preserves SQL input and shows an actionable error when execution fails', async () => {
     await connect();
     root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
@@ -724,6 +791,61 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector('[data-view="data"]')?.textContent).not.toContain('stale@example.com');
   });
 
+  it('ignores a stale schema response after selecting a newer object', async () => {
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-tab="schema"]')!.click();
+    await flush();
+    const baseImplementation = request.getMockImplementation()!;
+    let resolveOlder!: (result: unknown) => void;
+    let resolveNewer!: (result: unknown) => void;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] !== 'getObjectSchema') return baseImplementation(...args);
+      const input = args[2] as { name: string };
+      return new Promise((resolve) => {
+        if (input.name === 'active_users') resolveOlder = resolve;
+        else resolveNewer = resolve;
+      });
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-object-name="users"]')!.click();
+    await flush();
+    resolveNewer({ ...objectSchema, name: 'users', sql: 'CREATE TABLE users (fresh INTEGER)' });
+    await flush();
+    resolveOlder({ ...objectSchema, name: 'active_users', type: 'view', sql: 'CREATE VIEW active_users AS SELECT 1' });
+    await flush();
+
+    expect(root.querySelector('.object-title h1')?.textContent).toBe('users');
+    expect(root.querySelector('[data-definition-code]')?.textContent).toContain('fresh');
+    expect(root.querySelector('[data-definition-code]')?.textContent).not.toContain('active_users');
+  });
+
+  it('opens the narrow navigation as an accessible focus-managed drawer', async () => {
+    await connect();
+    const trigger = root.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')!;
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    trigger.click();
+    await Promise.resolve();
+
+    const currentTrigger = root.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')!;
+    expect(currentTrigger.getAttribute('aria-expanded')).toBe('true');
+    expect(document.activeElement).toBe(root.querySelector('.object-list input[type="search"]'));
+    root.querySelector<HTMLElement>('#sqlite-object-navigation')!.dispatchEvent(new KeyboardEvent('keydown', {
+      key: 'Escape',
+      bubbles: true,
+    }));
+    await Promise.resolve();
+    expect(root.querySelector('[data-action="toggle-navigation"]')?.getAttribute('aria-expanded')).toBe('false');
+    expect(document.activeElement).toBe(root.querySelector('[data-action="toggle-navigation"]'));
+  });
+
+  it('does not duplicate the selected object in the status bar', async () => {
+    await connect();
+    expect(root.querySelector('.object-title h1')?.textContent).toBe('users');
+    expect(root.querySelector('.status-bar')?.textContent).not.toContain('users');
+  });
+
   async function mount() {
     await definition.mount?.({ message: { request } } as never);
     await flush();
@@ -731,9 +853,19 @@ describe('SQLite workbench panel', () => {
 
   async function connect() {
     await mount();
-    const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
-    pathInput.value = '/tmp/example.sqlite';
-    root.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
+    await openThroughBrowser('open');
+  }
+
+  async function openThroughBrowser(mode: 'open' | 'create', manualPath?: string) {
+    root.querySelector<HTMLButtonElement>(`[data-action="browse-${mode}"]`)!.click();
+    await flush();
+    const dialog = root.querySelector<HTMLDialogElement>('dialog[data-file-dialog]')!;
+    if (manualPath) {
+      const manual = dialog.querySelector<HTMLInputElement>('[data-field="manual-path"]')!;
+      manual.value = manualPath;
+      manual.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    dialog.querySelector<HTMLButtonElement>('[data-action="confirm-file"]')!.click();
     await flush();
   }
 });

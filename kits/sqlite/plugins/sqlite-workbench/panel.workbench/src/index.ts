@@ -141,7 +141,6 @@ type MutationReceipt = {
 type PanelError = { message: string; detail?: string };
 
 type WorkbenchState = {
-  path: string;
   connection: ConnectionState;
   objects: SchemaObject[];
   expandedObjectGroups: Set<NonNullable<SchemaObject['kind']>>;
@@ -179,13 +178,17 @@ type WorkbenchState = {
     targetObjects: string[];
   } | null;
   discardRecordDialog: boolean;
+  navigationOpen: boolean;
 };
 
 let context: PanelContext | undefined;
 let controller: WorkbenchController | undefined;
 let root: HTMLElement | null = null;
 let state: WorkbenchState = createInitialState();
-let rowRequestSequence = 0;
+let viewRequestSequence = 0;
+let schemaRequestSequence = 0;
+let connectionGeneration = 0;
+let undoTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingDialogOpenerAction: string | null = null;
 
 const definition = {
@@ -195,13 +198,16 @@ const definition = {
     root = document.querySelector('#panel-root');
     if (!root) throw new Error('Panel root element #panel-root not found');
     state = createInitialState();
-    rowRequestSequence = 0;
+    viewRequestSequence = 0;
+    schemaRequestSequence = 0;
+    connectionGeneration = 0;
+    clearUndoReceipt();
     render();
     try {
       const connection = await request<ConnectionState>('getConnectionState');
       state.connection = connection;
-      state.path = connection.path ?? '';
       if (connection.connected) {
+        connectionGeneration += 1;
         await loadSchema(true);
         await loadActiveView();
       }
@@ -217,7 +223,10 @@ const definition = {
     context = undefined;
     controller = undefined;
     state = createInitialState();
-    rowRequestSequence += 1;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    connectionGeneration += 1;
+    clearUndoReceipt();
   },
 };
 
@@ -225,7 +234,6 @@ export default definition;
 
 function createInitialState(): WorkbenchState {
   return {
-    path: '',
     connection: { connected: false, path: null, sqliteVersion: null },
     objects: [],
     expandedObjectGroups: new Set(),
@@ -258,6 +266,7 @@ function createInitialState(): WorkbenchState {
     activeExecutionId: null,
     sqlWriteDialog: null,
     discardRecordDialog: false,
+    navigationOpen: false,
   };
 }
 
@@ -280,22 +289,17 @@ async function runAction(action: () => Promise<void>): Promise<void> {
   }
 }
 
-async function openDatabase(create: boolean): Promise<void> {
-  const input = root?.querySelector<HTMLInputElement>('[data-field="database-path"]');
-  state.path = input?.value.trim() ?? state.path.trim();
-  if (!state.path) {
-    state.error = { message: sqliteCopy.connection.enterPath };
-    render();
-    return;
-  }
-  await openDatabaseAt(state.path, create);
-}
-
 async function openDatabaseAt(databasePath: string, create: boolean): Promise<void> {
   await runAction(async () => {
-    state.connection = await request<ConnectionState>('openDatabase', { path: databasePath, create });
+    connectionGeneration += 1;
+    const generation = connectionGeneration;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    clearUndoReceipt();
+    const connection = await request<ConnectionState>('openDatabase', { path: databasePath, create });
+    if (generation !== connectionGeneration) return;
+    state.connection = connection;
     state.expandedObjectGroups.clear();
-    state.path = state.connection.path ?? state.path;
     state.fileDialog = null;
     state.page = 1;
     state.rows = null;
@@ -357,7 +361,13 @@ async function confirmFileDialog(): Promise<void> {
 
 async function enableWrites(): Promise<void> {
   await runAction(async () => {
-    state.connection = await request<ConnectionState>('setConnectionMode', { mode: 'readwrite' });
+    connectionGeneration += 1;
+    const generation = connectionGeneration;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    const connection = await request<ConnectionState>('setConnectionMode', { mode: 'readwrite' });
+    if (generation !== connectionGeneration) return;
+    state.connection = connection;
     state.writeDialog = false;
     await loadSchema(false);
     await loadActiveView();
@@ -366,8 +376,14 @@ async function enableWrites(): Promise<void> {
 
 async function closeDatabase(): Promise<void> {
   await runAction(async () => {
-    rowRequestSequence += 1;
-    state.connection = await request<ConnectionState>('closeDatabase');
+    connectionGeneration += 1;
+    const generation = connectionGeneration;
+    viewRequestSequence += 1;
+    schemaRequestSequence += 1;
+    clearUndoReceipt();
+    const connection = await request<ConnectionState>('closeDatabase');
+    if (generation !== connectionGeneration) return;
+    state.connection = connection;
     state.expandedObjectGroups.clear();
     state.objects = [];
     state.selectedName = null;
@@ -394,7 +410,14 @@ async function refreshWorkbench(): Promise<void> {
 }
 
 async function loadSchema(selectFirst: boolean): Promise<void> {
+  const generation = connectionGeneration;
+  const sequence = ++schemaRequestSequence;
   const result = await request<{ objects: SchemaObject[] }>('getSchema');
+  if (
+    generation !== connectionGeneration
+    || sequence !== schemaRequestSequence
+    || !state.connection.connected
+  ) return;
   state.objects = result.objects;
   const selectedStillExists = state.objects.some((object) => object.name === state.selectedName);
   if (selectFirst || !selectedStillExists) {
@@ -406,6 +429,7 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
 
 async function selectObject(name: string): Promise<void> {
   await runAction(async () => {
+    viewRequestSequence += 1;
     state.selectedName = name;
     state.page = 1;
     state.rows = null;
@@ -414,12 +438,16 @@ async function selectObject(name: string): Promise<void> {
     state.search = '';
     state.filters = [];
     state.sorts = [];
+    state.cellDetail = null;
+    state.navigationOpen = false;
+    render();
     await loadActiveView();
     state.status = sqliteCopy.objects.selected(name);
   });
 }
 
 async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
+  viewRequestSequence += 1;
   state.activeTab = tab;
   state.error = null;
   render();
@@ -431,9 +459,11 @@ async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
 
 async function loadActiveView(): Promise<void> {
   if (!state.selectedName) return;
+  const sequence = ++viewRequestSequence;
+  const generation = connectionGeneration;
+  const requestedName = state.selectedName;
+  const requestedTab = state.activeTab;
   if (state.activeTab === 'data') {
-    const sequence = ++rowRequestSequence;
-    const requestedName = state.selectedName;
     const input: Record<string, unknown> = {
       name: requestedName,
       page: state.page,
@@ -444,18 +474,27 @@ async function loadActiveView(): Promise<void> {
     if (state.sorts.length > 0) input.sorts = state.sorts;
     const rows = await request<RowsResult>('getRows', input);
     if (
-      sequence !== rowRequestSequence
+      sequence !== viewRequestSequence
+      || generation !== connectionGeneration
       || !state.connection.connected
-      || state.activeTab !== 'data'
+      || state.activeTab !== requestedTab
       || state.selectedName !== requestedName
     ) return;
     state.rows = rows;
     state.selectedRowIndex = null;
     state.status = sqliteCopy.data.rows(state.rows.total);
   } else if (state.activeTab === 'schema') {
-    state.objectSchema = await request<ObjectSchema>('getObjectSchema', {
-      name: state.selectedName,
+    const objectSchema = await request<ObjectSchema>('getObjectSchema', {
+      name: requestedName,
     });
+    if (
+      sequence !== viewRequestSequence
+      || generation !== connectionGeneration
+      || !state.connection.connected
+      || state.activeTab !== requestedTab
+      || state.selectedName !== requestedName
+    ) return;
+    state.objectSchema = objectSchema;
     state.status = sqliteCopy.schema.columnCount(state.objectSchema.columns.length);
   }
 }
@@ -544,12 +583,16 @@ function exportSqlResult(format: 'csv' | 'json'): void {
   render();
 }
 
-async function ensureObjectSchema(): Promise<ObjectSchema> {
+async function ensureObjectSchema(): Promise<ObjectSchema | null> {
   if (!state.selectedName) throw new Error(sqliteCopy.errors.selectTable);
   if (!state.objectSchema || state.objectSchema.name !== state.selectedName) {
-    state.objectSchema = await request<ObjectSchema>('getObjectSchema', {
-      name: state.selectedName,
+    const requestedName = state.selectedName;
+    const generation = connectionGeneration;
+    const objectSchema = await request<ObjectSchema>('getObjectSchema', {
+      name: requestedName,
     });
+    if (generation !== connectionGeneration || state.selectedName !== requestedName) return null;
+    state.objectSchema = objectSchema;
   }
   return state.objectSchema;
 }
@@ -557,6 +600,7 @@ async function ensureObjectSchema(): Promise<ObjectSchema> {
 async function openRecordDialog(mode: 'add' | 'edit'): Promise<void> {
   await runAction(async () => {
     const schema = await ensureObjectSchema();
+    if (!schema) return;
     if (!currentObject()?.writable) throw new Error(sqliteCopy.errors.readonly);
     const row = mode === 'edit' && state.selectedRowIndex !== null
       ? state.rows?.rows[state.selectedRowIndex]
@@ -591,14 +635,14 @@ async function saveRecord(): Promise<void> {
   }
   await runAction(async () => {
     if (dialog.mode === 'add') {
-      state.undoReceipt = await request<MutationReceipt>('insertRow', { name: state.selectedName, values });
+      setUndoReceipt(await request<MutationReceipt>('insertRow', { name: state.selectedName, values }));
       state.status = sqliteCopy.data.added;
     } else {
-      state.undoReceipt = await request<MutationReceipt>('updateRow', {
+      setUndoReceipt(await request<MutationReceipt>('updateRow', {
         name: state.selectedName,
         identity: dialog.identity,
         values,
-      });
+      }));
       state.status = sqliteCopy.data.updated;
     }
     state.dialog = null;
@@ -635,10 +679,10 @@ async function confirmDelete(): Promise<void> {
   if (!state.selectedName || !state.deleteDialog?.identity) return;
   const row = state.deleteDialog;
   await runAction(async () => {
-    state.undoReceipt = await request<MutationReceipt>('deleteRow', {
+    setUndoReceipt(await request<MutationReceipt>('deleteRow', {
       name: state.selectedName,
       identity: row.identity,
-    });
+    }));
     state.deleteDialog = null;
     state.selectedRowIndex = null;
     await loadSchema(false);
@@ -651,12 +695,37 @@ async function undoMutation(): Promise<void> {
   if (!state.undoReceipt) return;
   const token = state.undoReceipt.undoToken;
   await runAction(async () => {
-    await request('undoLastMutation', { token });
-    state.undoReceipt = null;
+    try {
+      await request('undoLastMutation', { token });
+    } catch (error) {
+      if (error instanceof WorkbenchRequestError && error.code === 'UNDO_EXPIRED') {
+        clearUndoReceipt();
+      }
+      throw error;
+    }
+    clearUndoReceipt();
     await loadSchema(false);
     await loadActiveView();
     state.status = '记录操作已撤销';
   });
+}
+
+function setUndoReceipt(receipt: MutationReceipt): void {
+  clearUndoReceipt();
+  state.undoReceipt = receipt;
+  const delay = Math.max(0, Date.parse(receipt.undoExpiresAt) - Date.now());
+  undoTimer = setTimeout(() => {
+    if (state.undoReceipt?.undoToken !== receipt.undoToken) return;
+    state.undoReceipt = null;
+    undoTimer = null;
+    render();
+  }, delay);
+}
+
+function clearUndoReceipt(): void {
+  if (undoTimer !== null) clearTimeout(undoTimer);
+  undoTimer = null;
+  state.undoReceipt = null;
 }
 
 async function executeSql(): Promise<void> {
@@ -748,27 +817,23 @@ function render(): void {
           <span class="database-mark" aria-hidden="true"><i></i><i></i><i></i></span>
           <span><strong>SQLite</strong><small>${sqliteCopy.brand.subtitle}</small></span>
         </div>
-        <form class="connection-form">
-          <label class="path-field">
-            <span>${sqliteCopy.connection.path}</span>
-            <input data-field="database-path" aria-label="${sqliteCopy.connection.path}" autocomplete="off" spellcheck="false">
-          </label>
-          <button type="button" data-action="open" class="primary">${sqliteCopy.connection.open}</button>
-          <button type="button" data-action="create">${sqliteCopy.connection.create}</button>
-          <button type="button" data-action="browse-open">浏览打开</button>
-          <button type="button" data-action="browse-create">浏览新建</button>
+        <div class="connection-form" aria-label="数据库连接操作">
+          <button type="button" data-action="browse-open" class="primary">打开数据库</button>
+          <button type="button" data-action="browse-create">新建数据库</button>
           <button type="button" data-action="refresh" aria-label="${sqliteCopy.connection.refresh}">${sqliteCopy.connection.refresh}</button>
           <button type="button" data-action="close">${sqliteCopy.connection.close}</button>
-        </form>
+        </div>
         <div class="connection-state"></div>
       </header>
       <div class="workbench-body">
-        <aside class="object-rail">
+        <button type="button" class="navigation-backdrop" data-action="close-navigation" data-open="${state.navigationOpen}" aria-label="关闭数据库对象导航"></button>
+        <aside class="object-rail" id="sqlite-object-navigation" data-open="${state.navigationOpen}">
           <div class="rail-heading"><span>${sqliteCopy.objects.title}</span><b></b></div>
           <div class="object-list"></div>
         </aside>
         <section class="workspace">
           <div class="workspace-heading">
+            <button type="button" class="navigation-trigger" data-action="toggle-navigation" aria-controls="sqlite-object-navigation" aria-expanded="${state.navigationOpen}">对象</button>
             <div class="object-title"></div>
             <div class="tabs" role="tablist" aria-label="${sqliteCopy.objects.workspace}">
               <button type="button" role="tab" data-tab="data">${sqliteCopy.tabs.data}</button>
@@ -783,19 +848,28 @@ function render(): void {
     </main>
   `;
 
-  const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
-  pathInput.value = state.path;
-  pathInput.addEventListener('input', () => { state.path = pathInput.value; });
-  root.querySelector<HTMLFormElement>('.connection-form')!.addEventListener('submit', (event) => {
-    event.preventDefault();
-    void openDatabase(false);
-  });
-  bindClick('[data-action="open"]', () => openDatabase(false));
-  bindClick('[data-action="create"]', () => openDatabase(true));
   bindClick('[data-action="browse-open"]', () => openFileBrowser('open'));
   bindClick('[data-action="browse-create"]', () => openFileBrowser('create'));
   bindClick('[data-action="refresh"]', refreshWorkbench);
   bindClick('[data-action="close"]', closeDatabase);
+  root.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')!.addEventListener('click', () => {
+    state.navigationOpen = !state.navigationOpen;
+    render();
+    queueMicrotask(() => {
+      const focusTarget = state.navigationOpen
+        ? root?.querySelector<HTMLElement>('.object-list input[type="search"]')
+        : root?.querySelector<HTMLElement>('[data-action="toggle-navigation"]');
+      focusTarget?.focus();
+    });
+  });
+  root.querySelector<HTMLButtonElement>('[data-action="close-navigation"]')!.addEventListener('click', () => {
+    closeNavigationDrawer();
+  });
+  root.querySelector<HTMLElement>('#sqlite-object-navigation')!.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    closeNavigationDrawer();
+  });
 
   renderConnection();
   renderObjects();
@@ -816,6 +890,12 @@ function render(): void {
   }
 }
 
+function closeNavigationDrawer(): void {
+  state.navigationOpen = false;
+  render();
+  queueMicrotask(() => root?.querySelector<HTMLElement>('[data-action="toggle-navigation"]')?.focus());
+}
+
 function renderConnection(): void {
   const host = root!.querySelector<HTMLElement>('.connection-state')!;
   if (!state.connection.connected) {
@@ -826,11 +906,14 @@ function renderConnection(): void {
   host.dataset.connection = 'connected';
   const signal = document.createElement('span');
   signal.className = 'signal';
-  const label = document.createElement('span');
-  label.textContent = `${state.connection.mode === 'readonly' ? '只读' : '可写'} · ${fileName(state.connection.path ?? 'SQLite')}`;
-  const version = document.createElement('small');
-  version.textContent = state.connection.sqliteVersion ? `v${state.connection.sqliteVersion}` : '';
-  host.append(signal, label, version);
+  const summary = document.createElement('span');
+  summary.className = 'connection-summary';
+  summary.textContent = `${state.connection.mode === 'readonly' ? '只读' : '可写'} · ${fileName(state.connection.path ?? 'SQLite')}`;
+  const currentPath = document.createElement('code');
+  currentPath.dataset.currentPath = '';
+  currentPath.title = state.connection.path ?? '';
+  currentPath.textContent = state.connection.path ?? '';
+  host.append(signal, summary, currentPath);
   if (state.connection.mode === 'readonly') {
     host.append(actionButton('启用写入', 'unlock-writes', false, async () => {
       state.writeDialog = true;
@@ -1069,7 +1152,11 @@ function renderDataView(): HTMLElement {
     actionButton('清除筛选', 'clear-filter', state.filters.length === 0, clearColumnFilter),
   );
   const meta = document.createElement('span');
-  meta.textContent = state.rows ? sqliteCopy.data.records(state.rows.total) : sqliteCopy.data.loading;
+  const selectedRow = state.selectedRowIndex === null ? null : state.rows?.rows[state.selectedRowIndex];
+  meta.dataset.selectedIdentity = '';
+  meta.textContent = state.rows
+    ? `${sqliteCopy.data.records(state.rows.total)}${selectedRow?.identity ? ` · 已选 ${identitySummary(selectedRow.identity)}` : ''}`
+    : sqliteCopy.data.loading;
   primaryToolbar.append(meta);
   toolbar.append(primaryToolbar, filterToolbar);
   view.append(toolbar);
@@ -1116,6 +1203,10 @@ function createDataTable(columns: string[], rows: SerializedValue[][], selectabl
   }
   head.append(headRow);
   const body = document.createElement('tbody');
+  if (selectable) {
+    body.setAttribute('role', 'radiogroup');
+    body.setAttribute('aria-label', '记录选择');
+  }
   limitRenderedRows(rows).forEach((values, rowIndex) => {
     const tr = document.createElement('tr');
     tr.classList.toggle('selected', selectable && rowIndex === state.selectedRowIndex);
@@ -1145,18 +1236,23 @@ function createDataTable(columns: string[], rows: SerializedValue[][], selectabl
         }
       });
       const td = document.createElement('td');
-      const select = document.createElement('button');
-      select.type = 'button';
+      const select = document.createElement('input');
+      select.type = 'radio';
+      select.name = 'sqlite-row-selection';
       select.dataset.rowIndex = String(rowIndex);
       select.className = 'row-selector';
       select.setAttribute('aria-label', sqliteCopy.data.rowSelector(rowIndex + 1));
-      select.textContent = String((state.page - 1) * state.pageSize + rowIndex + 1);
+      select.checked = rowIndex === state.selectedRowIndex;
       select.addEventListener('click', (event) => {
         event.stopPropagation();
         state.selectedRowIndex = rowIndex;
         render();
       });
-      td.append(select);
+      const rowNumber = document.createElement('span');
+      rowNumber.className = 'row-number';
+      rowNumber.setAttribute('aria-hidden', 'true');
+      rowNumber.textContent = String((state.page - 1) * state.pageSize + rowIndex + 1);
+      td.append(select, rowNumber);
       tr.append(td);
     }
     values.forEach((value, columnIndex) => {
@@ -1796,11 +1892,9 @@ function renderStatus(): void {
   const footer = root!.querySelector<HTMLElement>('[role="status"]')!;
   const left = document.createElement('span');
   left.textContent = state.busy ? sqliteCopy.status.working : state.status;
-  const center = document.createElement('span');
-  center.textContent = state.selectedName ?? '—';
   const right = document.createElement('span');
   right.textContent = state.connection.connected ? sqliteCopy.status.online : sqliteCopy.status.offline;
-  footer.append(left, center, right);
+  footer.append(left, right);
   if (state.error) {
     const alert = document.createElement('div');
     alert.className = 'error-banner';

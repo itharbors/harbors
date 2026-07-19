@@ -117,7 +117,7 @@ textarea:focus-visible {
 .connection-bar {
   z-index: 4;
   display: grid;
-  grid-template-columns: 168px minmax(360px, 1fr) minmax(132px, auto);
+  grid-template-columns: 168px auto minmax(220px, 1fr);
   align-items: stretch;
   border-bottom: 1px solid var(--grid-strong);
   background: #10181e;
@@ -186,7 +186,7 @@ textarea:focus-visible {
 
 .connection-form {
   display: flex;
-  align-items: end;
+  align-items: center;
   gap: 6px;
   min-width: 0;
   padding: 8px 12px;
@@ -227,6 +227,19 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
+.connection-summary {
+  flex-shrink: 0;
+}
+
+.connection-state code {
+  min-width: 0;
+  overflow: hidden;
+  color: #9db0b7;
+  font-family: var(--mono);
+  font-size: var(--font-secondary);
+  text-overflow: ellipsis;
+}
+
 .connection-state[data-connection="connected"] {
   color: #c8ece6;
 }
@@ -252,10 +265,16 @@ textarea:focus-visible {
 }
 
 .workbench-body {
+  position: relative;
   display: grid;
   grid-template-columns: 250px minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
+}
+
+.navigation-trigger,
+.navigation-backdrop {
+  display: none;
 }
 
 .object-rail {
@@ -664,14 +683,18 @@ td:has(.row-selector) {
 }
 
 .row-selector {
-  width: 100%;
-  min-height: 31px;
-  border: 0;
-  border-radius: 0;
+  width: 14px;
+  height: 14px;
+  margin: 0 3px 0 7px;
+  accent-color: var(--teal);
+  vertical-align: middle;
+}
+
+.row-number {
   color: #61747d;
-  background: transparent;
   font-family: var(--mono);
   font-size: var(--font-secondary);
+  vertical-align: middle;
 }
 
 .value-null {
@@ -993,7 +1016,7 @@ pre {
 
 .status-bar {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  grid-template-columns: 1fr auto;
   align-items: center;
   gap: 18px;
   min-width: 0;
@@ -1012,7 +1035,6 @@ pre {
   white-space: nowrap;
 }
 
-.status-bar span:nth-child(2) { color: #9db0b7; }
 .status-bar span:last-child { text-align: right; }
 
 dialog[data-record-dialog] {
@@ -1379,11 +1401,7 @@ dialog:not([data-record-dialog]) footer {
 
 @media (max-width: 880px) {
   .connection-bar {
-    grid-template-columns: 132px minmax(300px, 1fr);
-  }
-
-  .connection-state {
-    display: none;
+    grid-template-columns: 132px auto minmax(160px, 1fr);
   }
 
   .brand-block {
@@ -1412,18 +1430,51 @@ dialog:not([data-record-dialog]) footer {
     flex-wrap: wrap;
   }
 
-  .path-field {
-    flex-basis: 100%;
+  .connection-state {
+    justify-content: flex-start;
+    min-height: 38px;
+    border-top: 1px solid var(--grid);
+    border-left: 0;
   }
 
   .workbench-body {
-    grid-template-rows: 116px minmax(0, 1fr);
     grid-template-columns: 1fr;
   }
 
   .object-rail {
-    border-right: 0;
-    border-bottom: 1px solid var(--grid-strong);
+    position: absolute;
+    z-index: 12;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    width: min(300px, 86vw);
+    border-right: 1px solid var(--grid-strong);
+    background: var(--deck);
+    box-shadow: 16px 0 36px rgb(0 0 0 / 45%);
+    transform: translateX(-102%);
+    transition: transform 160ms ease;
+  }
+
+  .object-rail[data-open="true"] {
+    transform: translateX(0);
+  }
+
+  .navigation-backdrop[data-open="true"] {
+    position: absolute;
+    z-index: 11;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: rgb(0 0 0 / 48%);
+  }
+
+  .navigation-trigger {
+    display: inline-flex;
+    align-self: center;
+    margin-left: 8px;
+    padding-inline: 8px;
   }
 
   .rail-heading {
@@ -1431,30 +1482,27 @@ dialog:not([data-record-dialog]) footer {
   }
 
   .object-list {
-    display: flex;
-    overflow-x: auto;
-    padding: 4px 8px;
+    display: block;
+    overflow: auto;
+    padding: 8px 0 20px;
   }
 
   .object-group {
-    display: flex;
-    flex-shrink: 0;
-    align-items: center;
+    display: block;
   }
 
   .object-group-title {
-    margin: 0 8px;
-    writing-mode: vertical-rl;
+    margin: 15px 14px 6px;
   }
 
   .object-item {
-    width: 170px;
-    border-left: 0;
-    border-bottom: 2px solid transparent;
+    width: 100%;
+    border-bottom: 0;
+    border-left: 2px solid transparent;
   }
 
   .object-item.active {
-    border-bottom-color: var(--teal);
+    border-left-color: var(--teal);
   }
 
   .workspace-heading {
@@ -1479,10 +1527,6 @@ dialog:not([data-record-dialog]) footer {
 
   .record-fields input {
     grid-column: 1 / -1;
-  }
-
-  .status-bar {
-    grid-template-columns: 1fr auto;
   }
 
   .status-bar span:last-child {
