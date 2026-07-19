@@ -4,7 +4,7 @@ import {
   formatSql,
   sqlLineNumbers,
   tokenizeSql,
-} from '../panel.workbench/src/sql-format';
+} from '../panel.sql/src/sql-format';
 
 describe('SQLite SQL presentation helpers', () => {
   it('formats common DDL using whitespace only and produces real line numbers', () => {

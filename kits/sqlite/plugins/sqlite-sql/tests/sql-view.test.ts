@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { historyAfterExecution, lineNumberText, paginateSqlRows } from '../panel.workbench/src/sql-view';
+import { historyAfterExecution, lineNumberText, paginateSqlRows } from '../panel.sql/src/sql-view';
 
 describe('SQLite SQL view helpers', () => {
   it('renders one real line number per SQL line', () => {
