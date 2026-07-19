@@ -1,0 +1,26 @@
+{
+  "name": "@itharbors/sqlite-sql",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": { "@itharbors/sqlite-contracts": "0.0.1" },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "sql": {
+          "entry": "./panel.sql/dist/index.html",
+          "title": "SQLite SQL",
+          "minWidth": 480,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "broadcast": {
+          "@itharbors/sqlite.connection.changed": ["panel.onConnectionChanged"],
+          "@itharbors/sqlite.schema.changed": ["panel.onSchemaChanged"]
+        }
+      }
+    }
+  }
+}

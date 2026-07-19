@@ -1,0 +1,28 @@
+{
+  "name": "@itharbors/sqlite-data",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": { "@itharbors/sqlite-contracts": "0.0.1" },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "data": {
+          "entry": "./panel.data/dist/index.html",
+          "title": "SQLite 数据",
+          "minWidth": 480,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "broadcast": {
+          "@itharbors/sqlite.connection.changed": ["panel.onConnectionChanged"],
+          "@itharbors/sqlite.selection.changed": ["panel.onSelectionChanged"],
+          "@itharbors/sqlite.data.changed": ["panel.onDataChanged"],
+          "@itharbors/sqlite.schema.changed": ["panel.onSchemaChanged"]
+        }
+      }
+    }
+  }
+}
