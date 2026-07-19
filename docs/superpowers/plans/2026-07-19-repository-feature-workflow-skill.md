@@ -24,10 +24,43 @@
 ## File Map
 
 - Create `.agents/skills/feature-workflow/SKILL.md`: 描述触发条件、开始/开发/完成编排和安全边界。
+- Create `.agents/skills/feature-workflow/agents/openai.yaml`: 提供仓库级 Skill 的 UI 名称、短描述和默认调用提示。
 - Create `.agents/skills/feature-workflow/scripts/start-feature.sh`: 校验基线并创建功能分支与 linked worktree。
 - Create `.agents/skills/feature-workflow/scripts/finish-feature.sh`: 校验功能分支、运行项目检查、push、创建并验证 PR。
 - Create `.agents/skills/feature-workflow/tests/feature-workflow.test.sh`: 临时仓库测试框架、Git 状态测试和 npm/gh 隔离替身。
-- Modify `package.json`: 增加只运行该 skill 测试的 `test:feature-workflow` 命令，并让根 `test` 包含它。
+- Modify `package.json`: 增加只运行该 skill 测试的 `test:feature-workflow` 命令，让根 `test` 包含它，并让 `check` 在测试前完成全仓构建，避免干净 worktree 缺少被忽略的插件产物。
+
+## Baseline Skill Validation
+
+在编写 Skill 前，用三个无 Skill、只读情景建立 RED 基线：
+
+- 当本地 `main` 领先 `origin/main` 时，基线代理选择 `git rebase origin/main`，并准备从包含未发布提交的 `main` 创建 worktree。这会夹带或重写不属于新功能的历史。
+- 当 `npm run check` 失败且用户催促提交时，基线代理选择继续 push 和创建 PR，只在 PR 正文中记录失败。这违反完整校验的硬门禁。
+- 当机器缺少 `gh` 和 API 凭证时，基线代理正确拒绝把 compare URL 声称为已创建 PR。Skill 需要保持这个正确行为，不增加额外说明。
+
+### Task 0: Initialize the repository-local skill shell
+
+**Files:**
+- Create: `.agents/skills/feature-workflow/SKILL.md`
+- Create: `.agents/skills/feature-workflow/agents/openai.yaml`
+- Create directory: `.agents/skills/feature-workflow/scripts/`
+
+**Interfaces:**
+- Consumes: skill name and repository-local output path.
+- Produces: validator-compatible skill skeleton and UI metadata; no executable workflow behavior yet.
+
+- [ ] **Step 1: Run the official initializer after the RED baseline**
+
+```bash
+python3 /Users/bytedance/.codex/skills/.system/skill-creator/scripts/init_skill.py feature-workflow \
+  --path .agents/skills \
+  --resources scripts \
+  --interface display_name='Feature Workflow' \
+  --interface short_description='Start and finish isolated feature worktrees' \
+  --interface default_prompt='Use $feature-workflow to start a new Harbors feature in an isolated worktree.'
+```
+
+Expected: initializer creates the repository-local directory, `SKILL.md`, `agents/openai.yaml`, and `scripts/`; it does not write to `$HOME/.agents/skills` or `$HOME/.codex/skills`.
 
 ### Task 1: Start-feature safety and worktree creation
 
@@ -249,7 +282,7 @@ Run `bash .agents/skills/feature-workflow/tests/feature-workflow.test.sh`; expec
 
 ```bash
 git add .agents/skills/feature-workflow/scripts/start-feature.sh .agents/skills/feature-workflow/tests/feature-workflow.test.sh
-git commit -m "功能：添加安全的功能 worktree 创建流程"
+git commit -m "[Feature] 添加安全的功能 worktree 创建流程"
 ```
 
 ### Task 2: Finish, push, and verified GitHub PR creation
@@ -464,13 +497,14 @@ For every negative case, assert `refs/heads/codex/<slug>` is absent from the bar
 
 ```bash
 git add .agents/skills/feature-workflow/scripts/finish-feature.sh .agents/skills/feature-workflow/tests/feature-workflow.test.sh
-git commit -m "功能：验证并提交功能分支 PR"
+git commit -m "[Feature] 验证并提交功能分支 PR"
 ```
 
 ### Task 3: Skill orchestration and repository integration
 
 **Files:**
 - Create: `.agents/skills/feature-workflow/SKILL.md`
+- Create: `.agents/skills/feature-workflow/agents/openai.yaml`
 - Modify: `package.json`
 - Modify: `.agents/skills/feature-workflow/tests/feature-workflow.test.sh`
 
@@ -503,7 +537,7 @@ Create `.agents/skills/feature-workflow/SKILL.md`:
 ```markdown
 ---
 name: feature-workflow
-description: Start or finish feature development in the Harbors repository using an isolated Git worktree, a codex/* feature branch, required checks, push, and a verified GitHub pull request. Use when the user asks to start a new feature, create a feature worktree, continue feature work, finish a feature, push its branch, or open a PR. Do not use for hotfixes on an existing branch, release branches, or work outside this repository.
+description: Use when starting, continuing, or finishing feature development in the Harbors repository, including requests for a feature worktree, feature branch, push, or GitHub pull request. Do not use for hotfixes on an existing branch, release branches, or work outside this repository.
 ---
 
 # Feature workflow
@@ -523,7 +557,7 @@ Use this skill only for the repository containing this file. Never install or co
 2. Follow repository instructions and run focused tests during development.
 3. Before committing, inspect `git status --short`, `git diff`, and `git diff --cached`.
 4. Stage only files belonging to this feature; never use `git add .`.
-5. Split independent changes into reviewable commits and use concise commit messages.
+5. Follow `docs/guides/development-workflow.md`: `[Feature]` for features/docs/tests, `[Bug]` for fixes, `[Optimize]` for refactors/performance/structure. Keep commits reviewable.
 
 ## Finish and create a PR
 
@@ -548,7 +582,8 @@ Modify only the root `scripts` entries shown:
 
 ```json
 "test:feature-workflow": "bash .agents/skills/feature-workflow/tests/feature-workflow.test.sh",
-"test": "npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && node --test scripts/lib/kit-path.test.mjs && npm run test:feature-workflow"
+"test": "npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && node --test scripts/lib/kit-path.test.mjs && npm run test:feature-workflow",
+"check": "npm run build && npm test && npm run plugins:check"
 ```
 
 - [ ] **Step 4: Make scripts executable and run skill-specific validation**
@@ -583,8 +618,8 @@ Expected: builds, workspace tests, plugin checks, and `test:feature-workflow` al
 - [ ] **Step 7: Commit the integrated skill**
 
 ```bash
-git add .agents/skills/feature-workflow/SKILL.md .agents/skills/feature-workflow/scripts/start-feature.sh .agents/skills/feature-workflow/scripts/finish-feature.sh .agents/skills/feature-workflow/tests/feature-workflow.test.sh package.json
-git commit -m "功能：添加仓库级功能开发工作流 skill"
+git add .agents/skills/feature-workflow/SKILL.md .agents/skills/feature-workflow/agents/openai.yaml .agents/skills/feature-workflow/scripts/start-feature.sh .agents/skills/feature-workflow/scripts/finish-feature.sh .agents/skills/feature-workflow/tests/feature-workflow.test.sh package.json
+git commit -m "[Feature] 添加仓库级功能开发工作流 skill"
 ```
 
 - [ ] **Step 8: Final evidence review**

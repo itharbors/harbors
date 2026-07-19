@@ -9,9 +9,10 @@
     "plugins:check": "node scripts/ce-plugin.mjs check --all",
     "build": "npm run build -w @ce/plugin-types && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
     "clean": "node scripts/clean.mjs",
-    "test": "npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && node --test scripts/lib/kit-path.test.mjs",
+    "test": "npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && node --test scripts/lib/kit-path.test.mjs && npm run test:feature-workflow",
+    "test:feature-workflow": "bash .agents/skills/feature-workflow/tests/feature-workflow.test.sh",
     "kill": "lsof -ti:8080 | xargs kill -9 2>/dev/null; lsof -ti:3000 | xargs kill -9 2>/dev/null; lsof -ti:5173 | xargs kill -9 2>/dev/null; echo 'ports cleared'",
-    "check": "npm run build -w @ce/plugin-types && npm test && npm run plugins:check"
+    "check": "npm run build && npm test && npm run plugins:check"
   },
   "devDependencies": {
     "concurrently": "^9.0.0",
