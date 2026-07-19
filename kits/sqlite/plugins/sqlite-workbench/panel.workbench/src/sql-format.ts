@@ -10,13 +10,36 @@ const KEYWORDS = new Set([
   'VALUES', 'VIEW', 'WHERE', 'WITH',
 ]);
 
+const LINE_BREAK_KEYWORDS = new Set([
+  'FROM', 'WHERE', 'GROUP', 'ORDER', 'HAVING', 'LIMIT', 'VALUES', 'SET',
+]);
+
 export function formatSql(sql: string): string {
   if (!isBalanced(sql)) return sql;
-  return sql
+  const tokens = tokenizeSql(sql);
+  const pieces = tokens.map((token) => (
+    token.kind === 'text' ? formatWhitespaceBetweenTokens(token.text) : token.text
+  ));
+
+  for (let index = 1; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token.kind !== 'keyword' || !LINE_BREAK_KEYWORDS.has(token.text.toUpperCase())) continue;
+    if (tokens[index - 1].kind !== 'text') continue;
+    pieces[index - 1] = pieces[index - 1].replace(/[ \t\r\n]+$/, '\n');
+  }
+
+  if (tokens[0]?.kind === 'text') pieces[0] = pieces[0].replace(/^[ \t\r\n]+/, '');
+  const lastIndex = tokens.length - 1;
+  if (tokens[lastIndex]?.kind === 'text') {
+    pieces[lastIndex] = pieces[lastIndex].replace(/[ \t\r\n]+$/, '');
+  }
+  return pieces.join('');
+}
+
+function formatWhitespaceBetweenTokens(text: string): string {
+  return text
     .replace(/[ \t\r\n]+/g, ' ')
-    .replace(/,\s*/g, ',\n  ')
-    .replace(/\s+(FROM|WHERE|GROUP\s+BY|ORDER\s+BY|HAVING|LIMIT|VALUES|SET)\b/gi, '\n$1')
-    .trim();
+    .replace(/, */g, ',\n  ');
 }
 
 export function tokenizeSql(sql: string): SqlToken[] {

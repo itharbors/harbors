@@ -25,6 +25,19 @@ describe('SQLite SQL presentation helpers', () => {
     expect(tokens.map((token) => token.text).join('')).toContain("'FROM users'");
   });
 
+  it('preserves whitespace and newlines inside every protected token exactly', () => {
+    const source = `INSERT INTO "odd  identifier
+name" (value) VALUES ('first  line
+second line') /* block  comment
+keeps spacing */ -- line  comment
+RETURNING value`;
+    const protectedTokens = (sql: string) => tokenizeSql(sql)
+      .filter((token) => ['string', 'identifier', 'comment'].includes(token.kind))
+      .map((token) => token.text);
+
+    expect(protectedTokens(formatSql(source))).toEqual(protectedTokens(source));
+  });
+
   it('falls back to original text for malformed quoted SQL', () => {
     expect(formatSql("SELECT 'unfinished")).toBe("SELECT 'unfinished");
     expect(tokenizeSql("SELECT 'unfinished")).toEqual([
