@@ -74,3 +74,70 @@ The closest repository-native automated coverage remains:
 - `kits/sqlite/plugins/sqlite-workbench/tests/sql-worker.test.ts`: real worker cancellation and recovery.
 
 Linux CI execution also requires a remote workflow run; this local macOS task did not have authority to push or create a pull request. The corrected workflow now schedules `npm run check` for every pull request change.
+
+## Re-review fixes
+
+Date: 2026-07-19
+
+The two remaining merge-blocking findings and the related table-semantics Minor finding are resolved. The explicitly environment-gated real iframe follow-up remains unchanged; no fake or hanging harness was added.
+
+### Commits and files
+
+| Commit | Files | Resolution |
+| --- | --- | --- |
+| `bb49768` `[Bug] 修复 SQLite 降序整数主键标识` | `main/src/sqlite-service.ts`, `tests/sqlite-service.test.ts` | Uses SQLite's `origin='pk'` autoindex metadata to distinguish the legacy nullable `INTEGER PRIMARY KEY DESC` form from a real rowid alias; duplicate `NULL` keys receive distinct rowid identities and mutate one row only. |
+| `d7e0e11` `[Bug] 修复 SQLite 窄屏导航焦点泄漏` | Panel `index.ts`, `index.css`, `panel.test.ts`, `accessibility.test.ts` | Closed narrow navigation is `inert`, accessibility-hidden, visibility-hidden, and pointer-disabled; the obscured workspace becomes inert while open; focus still moves into the drawer and returns on Escape; `<tbody>` retains native semantics. |
+
+### RED evidence
+
+Identity command:
+
+```bash
+npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/sqlite-service.test.ts -t "INTEGER PRIMARY KEY DESC"
+```
+
+Result: 1 focused failure. Both duplicate `NULL` rows returned `{ kind: 'primary-key', values: { id: null } }` instead of distinct rowid identities `1` and `2`.
+
+Accessibility command:
+
+```bash
+npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/panel.test.ts plugins/sqlite-workbench/tests/accessibility.test.ts -t "narrow navigation|native table body|closed narrow drawer"
+```
+
+Result: 3 focused failures. The narrow CSS lacked hidden/noninteractive rules, the closed drawer lacked `inert`, and the data `<tbody>` still exposed `role="radiogroup"`.
+
+### GREEN evidence
+
+```bash
+npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/sqlite-service.test.ts -t "INTEGER PRIMARY KEY DESC"
+npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/sqlite-service.test.ts
+```
+
+Result: the focused regression passed 1/1; the complete service file passed 35/35.
+
+```bash
+npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/panel.test.ts plugins/sqlite-workbench/tests/accessibility.test.ts -t "narrow navigation|native table body|closed narrow drawer"
+npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/panel.test.ts plugins/sqlite-workbench/tests/accessibility.test.ts
+node scripts/ce-plugin.mjs build kits/sqlite/plugins/sqlite-workbench
+node scripts/ce-plugin.mjs check kits/sqlite/plugins/sqlite-workbench
+```
+
+Result: 3/3 focused regressions passed, then the complete Panel/accessibility set passed 38/38; plugin build and output validation exited 0.
+
+### Final verification
+
+`npm run check` exited 0 after the re-review commits:
+
+- Server: 268 tests passed.
+- Client: 245 tests passed.
+- SQLite Kit: 134 tests passed.
+- MySQL Kit: 41 tests passed; its pre-existing environment-gated live integration test remained skipped.
+- Repository Node tests: 6 passed.
+- Feature workflow: 22 checks passed.
+- All package/plugin builds and plugin output checks passed.
+
+### Remaining concerns
+
+- Real Panel iframe acceptance remains an Electron-capable environment follow-up for the readiness limitation documented above; this re-review explicitly accepts that disposition.
+- The narrow-layout regression honestly combines browser `matchMedia` contract simulation for DOM state/focus with static breakpoint-rule verification. jsdom does not evaluate media queries or implement native inert tab traversal, so final viewport/tab-order confirmation still belongs in the future real-renderer acceptance run.
+- A remote Ubuntu Actions run remains pending until the branch is pushed or a pull request is created.
