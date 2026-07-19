@@ -29,13 +29,13 @@
 - Create: `packages/mysql-contracts/src/request.ts`
 - Create: `packages/mysql-contracts/src/index.ts`
 - Create: `kits/mysql/plugins/mysql-core/package.json`
-- Move: `kits/mysql/plugins/mysql-workbench/main/src/mysql-driver.ts` to `kits/mysql/plugins/mysql-core/main/src/mysql-driver.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/main/src/protocol.ts` to `kits/mysql/plugins/mysql-core/main/src/protocol.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/main/src/mysql-service.ts` to `kits/mysql/plugins/mysql-core/main/src/mysql-service.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/tests/fake-driver.ts` to `kits/mysql/plugins/mysql-core/tests/fake-driver.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/tests/mysql-driver.test.ts` to `kits/mysql/plugins/mysql-core/tests/mysql-driver.test.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/tests/protocol.test.ts` to `kits/mysql/plugins/mysql-core/tests/protocol.test.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/tests/mysql-service.test.ts` to `kits/mysql/plugins/mysql-core/tests/mysql-service.test.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/main/src/mysql-driver.ts` to `kits/mysql/plugins/mysql-core/main/src/mysql-driver.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/main/src/protocol.ts` to `kits/mysql/plugins/mysql-core/main/src/protocol.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/main/src/mysql-service.ts` to `kits/mysql/plugins/mysql-core/main/src/mysql-service.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/tests/fake-driver.ts` to `kits/mysql/plugins/mysql-core/tests/fake-driver.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/tests/mysql-driver.test.ts` to `kits/mysql/plugins/mysql-core/tests/mysql-driver.test.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/tests/protocol.test.ts` to `kits/mysql/plugins/mysql-core/tests/protocol.test.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/tests/mysql-service.test.ts` to `kits/mysql/plugins/mysql-core/tests/mysql-service.test.ts`
 - Create: `kits/mysql/plugins/mysql-core/tests/contracts.test.ts`
 - Modify: `package.json`
 - Modify: `package-lock.json`
@@ -134,7 +134,7 @@ Stage only the contract package, root package files, and `mysql-core` service/te
 
 **Files:**
 - Create: `kits/mysql/plugins/mysql-core/main/src/index.ts`
-- Move and rewrite: `kits/mysql/plugins/mysql-workbench/tests/plugin-main.test.ts` to `kits/mysql/plugins/mysql-core/tests/plugin-main.test.ts`
+- Copy and rewrite, then delete the source during Task 7: `kits/mysql/plugins/mysql-workbench/tests/plugin-main.test.ts` to `kits/mysql/plugins/mysql-core/tests/plugin-main.test.ts`
 
 **Interfaces:**
 - Consumes: contract constants and snapshots from Task 1.
@@ -243,10 +243,10 @@ Expected: both commands exit 0. Commit: `[Feature] 拆分 MySQL 资源管理器�
 - Create: `kits/mysql/plugins/mysql-data/main/src/index.ts`
 - Create: `kits/mysql/plugins/mysql-data/panel.data/src/index.html`
 - Create: `kits/mysql/plugins/mysql-data/panel.data/src/index.css`
-- Move: `kits/mysql/plugins/mysql-workbench/panel.workbench/src/view-model.ts` to `kits/mysql/plugins/mysql-data/panel.data/src/view-model.ts`
-- Move: `kits/mysql/plugins/mysql-workbench/panel.workbench/src/copy.ts` to `kits/mysql/plugins/mysql-data/panel.data/src/copy.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/panel.workbench/src/view-model.ts` to `kits/mysql/plugins/mysql-data/panel.data/src/view-model.ts`
+- Copy, then delete during Task 7: `kits/mysql/plugins/mysql-workbench/panel.workbench/src/copy.ts` to `kits/mysql/plugins/mysql-data/panel.data/src/copy.ts`
 - Create: `kits/mysql/plugins/mysql-data/panel.data/src/index.ts`
-- Move and split: `kits/mysql/plugins/mysql-workbench/tests/view-model.test.ts` to `kits/mysql/plugins/mysql-data/tests/view-model.test.ts`
+- Copy and split, then delete the source during Task 7: `kits/mysql/plugins/mysql-workbench/tests/view-model.test.ts` to `kits/mysql/plugins/mysql-data/tests/view-model.test.ts`
 - Create: `kits/mysql/plugins/mysql-data/tests/panel.test.ts`
 - Create: `kits/mysql/plugins/mysql-schema/package.json`
 - Create: `kits/mysql/plugins/mysql-schema/main/src/index.ts`
