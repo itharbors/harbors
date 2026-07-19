@@ -589,6 +589,7 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     const heading = document.createElement('strong');
     heading.textContent = `关系明细 (${layout.edges.length})`;
     const list = document.createElement('ul');
+    list.dataset.relationshipSummary = '';
     for (const edge of layout.edges) {
       const relationship = relationshipById.get(edge.id)!;
       const item = document.createElement('li');
@@ -604,16 +605,6 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     details.append(heading, list);
     view.append(details);
   }
-
-  const summaries = document.createElement('ul');
-  summaries.className = 'sr-only';
-  summaries.dataset.relationshipSummary = '';
-  for (const edge of layout.edges) {
-    const item = document.createElement('li');
-    item.textContent = relationshipSummary(relationshipById.get(edge.id)!);
-    summaries.append(item);
-  }
-  view.append(summaries);
 
   const updateViewport = (viewport: RelationshipViewport): void => {
     currentViewport = viewport;

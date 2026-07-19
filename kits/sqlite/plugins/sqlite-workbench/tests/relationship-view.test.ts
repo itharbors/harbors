@@ -215,6 +215,8 @@ describe('SQLite relationship view', () => {
     expect(view.querySelector('[data-relationship-table="parents"]')?.getAttribute('data-dimmed')).toBe('true');
     expect(view.querySelectorAll('svg [data-relationship-edge]')).toHaveLength(1);
     expect(view.querySelector('[data-relationship-summary]')?.textContent).toContain('children.parent_id → parents.id');
+    expect(view.querySelector('[data-relationship-summary]')?.closest('.relationship-details')).not.toBeNull();
+    expect(view.querySelector('.sr-only [data-relationship-summary]')).toBeNull();
     expect(view.querySelector('[data-relationship-detail="children:0"]')?.textContent)
       .toContain('children.parent_id → parents.id');
     expect(view.querySelector('[data-relationship-edge="children:0"]')?.getAttribute('marker-end'))
