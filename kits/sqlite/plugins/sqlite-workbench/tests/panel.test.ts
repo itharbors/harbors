@@ -45,6 +45,29 @@ const rows = {
   }],
 };
 
+const relationshipGraph = {
+  tables: [
+    { name: 'users', kind: 'table', columns: [{ name: 'id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false }] },
+    { name: 'teams', kind: 'table', columns: [{ name: 'id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false }] },
+    {
+      name: 'memberships',
+      kind: 'table',
+      columns: [
+        { name: 'user_id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: true },
+        { name: 'team_id', type: 'INTEGER', primaryKeyOrder: 2, foreignKey: true },
+      ],
+    },
+  ],
+  relationships: [{
+    id: 'memberships:0',
+    fromTable: 'memberships',
+    toTable: 'users',
+    columns: [{ from: 'user_id', to: 'id' }],
+    onUpdate: 'NO ACTION',
+    onDelete: 'CASCADE',
+  }],
+};
+
 type RequestMock = ReturnType<typeof vi.fn>;
 
 describe('SQLite workbench panel', () => {
@@ -92,6 +115,8 @@ describe('SQLite workbench panel', () => {
           return input?.name === 'active_users'
             ? { ...objectSchema, name: 'active_users', type: 'view', writable: false, hasRowid: false, sql: 'CREATE VIEW active_users AS ...' }
             : objectSchema;
+        case 'getRelationshipGraph':
+          return relationshipGraph;
         case 'insertRow':
           return { changes: 1, lastInsertRowid: { type: 'integer', value: '2' }, undoToken: 'undo-insert', undoExpiresAt: new Date(Date.now() + 10_000).toISOString() };
         case 'updateRow':
@@ -348,6 +373,186 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector('[data-sql-result]')?.textContent).toContain('42');
     expect(root.querySelector('[role="status"]')?.textContent).toContain('0.2 ms');
     expect(root.querySelector('.sql-gutter')?.textContent).toBe('1');
+  });
+
+  it('renders the database relationship graph and opens a table schema from a node', async () => {
+    await connect();
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await Promise.resolve();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith(PLUGIN, 'getRelationshipGraph');
+      expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3);
+    });
+    expect(root.querySelector('.object-title h1')?.textContent).toBe('example.sqlite');
+    expect(root.querySelector('[data-view="relationships"]')?.textContent).toContain('memberships');
+
+    root.querySelector<HTMLElement>('[data-relationship-table="memberships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-view="schema"]')).not.toBeNull());
+    expect(request).toHaveBeenCalledWith(PLUGIN, 'getObjectSchema', { name: 'memberships' });
+  });
+
+  it('keeps the database-global relationship tab enabled for an empty schema', async () => {
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getSchema') return { objects: [] };
+      return baseImplementation(...args);
+    });
+
+    await connect();
+
+    const relationshipTab = root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!;
+    expect(relationshipTab.disabled).toBe(false);
+    relationshipTab.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-view="relationships"]')).not.toBeNull());
+    expect(root.querySelector('.object-title')?.textContent).toContain('数据库');
+    expect(root.querySelector('.object-title h1')?.textContent).toBe('example.sqlite');
+  });
+
+  it('caches the relationship graph until refresh invalidates the schema snapshot', async () => {
+    await connect();
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+    root.querySelector<HTMLButtonElement>('[data-tab="data"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(1);
+
+    root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    await flush();
+    expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(2);
+  });
+
+  it('ignores a relationship response that resolves after the database closes', async () => {
+    await connect();
+    const baseImplementation = request.getMockImplementation()!;
+    let resolveGraph!: (result: unknown) => void;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getRelationshipGraph') {
+        return new Promise((resolve) => { resolveGraph = resolve; });
+      }
+      return baseImplementation(...args);
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="close"]')!.click();
+    await flush();
+    resolveGraph(relationshipGraph);
+    await flush();
+
+    expect(root.querySelector('[data-state="disconnected"]')).not.toBeNull();
+    expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(0);
+  });
+
+  it('does not reuse a stale relationship response after reconnecting', async () => {
+    await connect();
+    const baseImplementation = request.getMockImplementation()!;
+    let resolveOldGraph!: (result: unknown) => void;
+    let graphRequests = 0;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] !== 'getRelationshipGraph') return baseImplementation(...args);
+      graphRequests += 1;
+      if (graphRequests === 1) return new Promise((resolve) => { resolveOldGraph = resolve; });
+      return relationshipGraph;
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="close"]')!.click();
+    await flush();
+    await openThroughBrowser('open');
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+
+    resolveOldGraph({
+      tables: [{ name: 'stale_table', kind: 'table', columns: [] }],
+      relationships: [],
+    });
+    await flush();
+    expect(root.querySelector('[data-relationship-table="stale_table"]')).toBeNull();
+    expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3);
+  });
+
+  it('does not cache a relationship response after switching tabs', async () => {
+    await connect();
+    const baseImplementation = request.getMockImplementation()!;
+    let resolveOldGraph!: (result: unknown) => void;
+    let graphRequests = 0;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] !== 'getRelationshipGraph') return baseImplementation(...args);
+      graphRequests += 1;
+      if (graphRequests === 1) return new Promise((resolve) => { resolveOldGraph = resolve; });
+      return relationshipGraph;
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="data"]')!.click();
+    await flush();
+    resolveOldGraph({
+      tables: [{ name: 'stale_table', kind: 'table', columns: [] }],
+      relationships: [],
+    });
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+
+    expect(graphRequests).toBe(2);
+    expect(root.querySelector('[data-relationship-table="stale_table"]')).toBeNull();
+  });
+
+  it('distinguishes an empty database from a graph without foreign keys', async () => {
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getRelationshipGraph') return { tables: [], relationships: [] };
+      return baseImplementation(...args);
+    });
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelector('[data-view="relationships"]')?.textContent)
+      .toContain('此数据库还没有可展示的表。'));
+    expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(0);
+
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getRelationshipGraph') {
+        return { tables: relationshipGraph.tables, relationships: [] };
+      }
+      return baseImplementation(...args);
+    });
+    root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+
+    expect(root.querySelector('[data-view="relationships"]')?.textContent)
+      .toContain('未检测到已声明的外键关系。');
+  });
+
+  it('searches, zooms, and fits the relationship canvas using its client size', async () => {
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockImplementation(function clientWidth() {
+      return this.classList.contains('relationship-canvas') ? 480 : 0;
+    });
+    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockImplementation(function clientHeight() {
+      return this.classList.contains('relationship-canvas') ? 320 : 0;
+    });
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+
+    const fittedTransform = root.querySelector<HTMLElement>('.relationship-stage')!.style.transform;
+    const search = root.querySelector<HTMLInputElement>('[data-field="relationship-search"]')!;
+    search.value = 'teams';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    await Promise.resolve();
+    expect(root.querySelector('[data-relationship-table="teams"]')?.getAttribute('data-dimmed')).toBeNull();
+    expect(root.querySelector('[data-relationship-table="memberships"]')?.getAttribute('data-dimmed')).toBe('true');
+
+    root.querySelector<HTMLButtonElement>('[aria-label="放大关系图"]')!.click();
+    expect(root.querySelector<HTMLElement>('.relationship-stage')!.style.transform).not.toBe(fittedTransform);
+    root.querySelector<HTMLButtonElement>('[aria-label="适应窗口"]')!.click();
+    expect(root.querySelector<HTMLElement>('.relationship-stage')!.style.transform).toBe(fittedTransform);
+    width.mockRestore();
+    height.mockRestore();
   });
 
   it('names every resolved target in the write SQL confirmation', async () => {

@@ -2,8 +2,9 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { showModal } from '../panel.workbench/src/dialogs';
+import definition from '../panel.workbench/src/index';
 
 const cssPath = path.resolve(process.cwd(), 'plugins/sqlite-workbench/panel.workbench/src/index.css');
 
@@ -69,5 +70,85 @@ describe('SQLite workbench accessibility foundations', () => {
     await Promise.resolve();
     expect(cancelled).toBe(true);
     expect(document.activeElement).toBe(opener);
+  });
+
+  it('exposes relationship tabs, controls, nodes, edges, and summaries accessibly', async () => {
+    document.body.innerHTML = '<div id="panel-root"></div>';
+    const root = document.querySelector<HTMLDivElement>('#panel-root')!;
+    const request = vi.fn(async (_plugin: string, name: string) => {
+      if (name === 'getConnectionState') {
+        return {
+          connected: true,
+          path: '/tmp/example.sqlite',
+          fileName: 'example.sqlite',
+          mode: 'readonly',
+          sqliteVersion: '3.46.0',
+        };
+      }
+      if (name === 'getSchema') {
+        return {
+          objects: [{
+            name: 'users',
+            kind: 'table',
+            type: 'table',
+            writable: true,
+            sql: 'CREATE TABLE users (id INTEGER PRIMARY KEY)',
+          }],
+        };
+      }
+      if (name === 'getRows') {
+        return {
+          name: 'users',
+          page: 1,
+          pageSize: 50,
+          total: 0,
+          writable: true,
+          columns: ['id'],
+          rows: [],
+        };
+      }
+      if (name === 'getRelationshipGraph') {
+        return {
+          tables: [
+            { name: 'users', kind: 'table', columns: [{ name: 'id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false }] },
+            { name: 'memberships', kind: 'table', columns: [{ name: 'user_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true }] },
+          ],
+          relationships: [{
+            id: 'memberships:0',
+            fromTable: 'memberships',
+            toTable: 'users',
+            columns: [{ from: 'user_id', to: 'id' }],
+            onUpdate: 'NO ACTION',
+            onDelete: 'CASCADE',
+          }],
+        };
+      }
+      throw new Error(`Unexpected request: ${name}`);
+    });
+
+    try {
+      await definition.mount?.({ message: { request } } as never);
+      root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+      await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(2));
+
+      const tabs = Array.from(root.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+      expect(tabs).toHaveLength(4);
+      expect(tabs.find((tab) => tab.dataset.tab === 'relationships')?.tabIndex).toBe(0);
+      expect(tabs.filter((tab) => tab.dataset.tab !== 'relationships').every((tab) => tab.tabIndex === -1)).toBe(true);
+      for (const node of root.querySelectorAll<HTMLElement>('[data-relationship-table]')) {
+        expect(node.getAttribute('role')).toBe('button');
+        expect(node.tabIndex).toBe(0);
+      }
+      expect(root.querySelector('[aria-label="缩小关系图"]')).not.toBeNull();
+      expect(root.querySelector('[aria-label="放大关系图"]')).not.toBeNull();
+      expect(root.querySelector('[aria-label="适应窗口"]')).not.toBeNull();
+      expect(root.querySelector('.relationship-edges')?.getAttribute('aria-hidden')).toBe('true');
+      const summary = root.querySelector<HTMLElement>('[data-relationship-summary]')!;
+      expect(summary.getAttribute('aria-hidden')).toBeNull();
+      expect(summary.textContent).toContain('memberships.user_id → users.id');
+    } finally {
+      await definition.unmount?.();
+      document.body.innerHTML = '';
+    }
   });
 });
