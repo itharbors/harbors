@@ -1,0 +1,17 @@
+{
+  "name": "@itharbors/mysql-schema",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": { "@itharbors/mysql-contracts": "0.0.1" },
+  "ce-editor": {
+    "contribute": {
+      "panel": { "schema": { "entry": "./panel.schema/dist/index.html", "title": "MySQL 结构", "minWidth": 480, "minHeight": 320, "multiInstance": false } },
+      "message": { "broadcast": {
+        "@itharbors/mysql.connection.changed": ["panel.onConnectionChanged"],
+        "@itharbors/mysql.selection.changed": ["panel.onSelectionChanged"],
+        "@itharbors/mysql.schema.changed": ["panel.onSchemaChanged"]
+      } }
+    }
+  }
+}
