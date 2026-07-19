@@ -476,7 +476,7 @@ export class SqliteService {
         : [];
       const triggers = this.readTriggers(database, name);
       const hasRowid = object.kind === 'table' && !/\bWITHOUT\s+ROWID\b/i.test(object.sql);
-      const stablePrimaryKey = hasGuaranteedPrimaryKey({ primaryKey, columns, hasRowid });
+      const stablePrimaryKey = hasGuaranteedPrimaryKey({ primaryKey, columns, indexes, hasRowid });
       const stableIdentity = stablePrimaryKey
         || (hasRowid && chooseRowidSource(columns.map((column) => column.name)) !== null);
       const writable = object.writable && stableIdentity;
@@ -1303,7 +1303,7 @@ function createRowIdentity(
 }
 
 function hasGuaranteedPrimaryKey(
-  schema: Pick<ObjectSchema, 'primaryKey' | 'columns' | 'hasRowid'>,
+  schema: Pick<ObjectSchema, 'primaryKey' | 'columns' | 'indexes' | 'hasRowid'>,
 ): boolean {
   if (schema.primaryKey.length === 0) return false;
   if (!schema.hasRowid) return true;
@@ -1314,6 +1314,7 @@ function hasGuaranteedPrimaryKey(
   if (
     primaryColumns.length === 1
     && primaryColumns[0]!.type.trim().toUpperCase() === 'INTEGER'
+    && !schema.indexes.some((index) => index.origin === 'pk')
   ) return true;
   return primaryColumns.every((column) => column!.notNull);
 }

@@ -50,6 +50,10 @@ describe('SqliteService connection and schema', () => {
         code TEXT PRIMARY KEY,
         label TEXT NOT NULL
       );
+      CREATE TABLE integer_desc_keys (
+        id INTEGER PRIMARY KEY DESC,
+        label TEXT NOT NULL
+      );
       CREATE TRIGGER users_score_audit
         AFTER UPDATE OF score ON users
         BEGIN
@@ -71,6 +75,10 @@ describe('SqliteService connection and schema', () => {
         (NULL, 'first-null'),
         (NULL, 'second-null'),
         ('A', 'named');
+      INSERT INTO integer_desc_keys (id, label) VALUES
+        (NULL, 'first-desc-null'),
+        (NULL, 'second-desc-null'),
+        (7, 'named');
     `);
     fixture.close();
     service = new SqliteService();
@@ -424,6 +432,27 @@ describe('SqliteService connection and schema', () => {
     })).toMatchObject({ changes: 1 });
     expect(service.getRows({ name: 'nullable_keys', page: 1, pageSize: 25 }).rows
       .map((row) => row.values[1])).toEqual(['changed-only-first', 'second-null', 'named']);
+  });
+
+  it('uses rowid for duplicate null INTEGER PRIMARY KEY DESC records', () => {
+    openReadWrite();
+    const schema = service.getObjectSchema({ name: 'integer_desc_keys' });
+    const result = service.getRows({ name: 'integer_desc_keys', page: 1, pageSize: 25 });
+
+    expect(schema.indexes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ origin: 'pk', unique: true, columns: ['id'] }),
+    ]));
+    expect(result.rows.slice(0, 2).map((row) => row.identity)).toEqual([
+      { kind: 'rowid', value: { type: 'integer', value: '1' } },
+      { kind: 'rowid', value: { type: 'integer', value: '2' } },
+    ]);
+    expect(service.updateRow({
+      name: 'integer_desc_keys',
+      identity: result.rows[0].identity,
+      values: { label: { type: 'text', value: 'changed-only-first-desc' } },
+    })).toMatchObject({ changes: 1 });
+    expect(service.getRows({ name: 'integer_desc_keys', page: 1, pageSize: 25 }).rows
+      .map((row) => row.values[1])).toEqual(['changed-only-first-desc', 'second-desc-null', 'named']);
   });
 
   it('searches visible text and numeric columns with a contains query', () => {
