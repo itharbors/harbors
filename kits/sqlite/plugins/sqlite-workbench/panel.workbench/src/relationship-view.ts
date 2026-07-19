@@ -439,6 +439,7 @@ function renderRelationshipColumn(column: RelationshipColumn): HTMLElement {
 
 export function renderRelationshipView(options: RenderRelationshipViewOptions): HTMLElement {
   const layout = layoutRelationshipGraph(options.graph);
+  const query = options.query.trim();
   const relationshipById = new Map(
     options.graph.relationships.map((relationship) => [relationship.id, relationship]),
   );
@@ -483,6 +484,11 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     const path = document.createElementNS(SVG_NAMESPACE, 'path');
     path.setAttribute('d', edge.path);
     path.dataset.relationshipEdge = edge.id;
+    path.dataset.dimmed = String(
+      query.length > 0
+      && !matchesRelationshipSearch(edge.fromTable, query)
+      && !matchesRelationshipSearch(edge.toTable, query),
+    );
     const title = document.createElementNS(SVG_NAMESPACE, 'title');
     title.textContent = relationshipSummary(relationshipById.get(edge.id)!);
     path.append(title);
@@ -497,7 +503,7 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     card.setAttribute('role', 'button');
     card.tabIndex = 0;
     card.dataset.relationshipTable = table.name;
-    if (options.query.trim() && !matchesRelationshipSearch(table.name, options.query)) {
+    if (query && !matchesRelationshipSearch(table.name, query)) {
       card.dataset.dimmed = 'true';
     }
     card.style.left = `${node.x}px`;
@@ -589,6 +595,7 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     if (event.pointerId === pointerId) pointerId = null;
   });
   canvas.addEventListener('wheel', (event) => {
+    if (event.deltaY === 0) return;
     event.preventDefault();
     const bounds = canvas.getBoundingClientRect();
     const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;

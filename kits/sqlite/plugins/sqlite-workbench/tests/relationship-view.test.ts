@@ -220,6 +220,130 @@ describe('SQLite relationship view', () => {
     expect(onOpenTable).toHaveBeenCalledWith('children');
   });
 
+  it('opens a table with the Space key', () => {
+    const onOpenTable = vi.fn();
+    const view = renderRelationshipView({
+      graph,
+      viewport: { x: 0, y: 0, scale: 1 },
+      query: '',
+      onViewportChange: vi.fn(),
+      onOpenTable,
+    });
+    const child = view.querySelector<HTMLElement>('[data-relationship-table="children"]')!;
+    child.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    expect(onOpenTable).toHaveBeenCalledWith('children');
+  });
+
+  it('dims an edge only when neither endpoint matches the search query', () => {
+    const renderWithQuery = (query: string): HTMLElement => renderRelationshipView({
+      graph,
+      viewport: { x: 0, y: 0, scale: 1 },
+      query,
+      onViewportChange: vi.fn(),
+      onOpenTable: vi.fn(),
+    });
+    expect(
+      renderWithQuery('isolated')
+        .querySelector('[data-relationship-edge="children:0"]')
+        ?.getAttribute('data-dimmed'),
+    ).toBe('true');
+    expect(
+      renderWithQuery('child')
+        .querySelector('[data-relationship-edge="children:0"]')
+        ?.getAttribute('data-dimmed'),
+    ).toBe('false');
+    expect(
+      renderWithQuery('')
+        .querySelector('[data-relationship-edge="children:0"]')
+        ?.getAttribute('data-dimmed'),
+    ).toBe('false');
+  });
+
+  it('ignores a zero-delta wheel event', () => {
+    const onViewportChange = vi.fn();
+    const view = renderRelationshipView({
+      graph,
+      viewport: { x: 0, y: 0, scale: 1 },
+      query: '',
+      onViewportChange,
+      onOpenTable: vi.fn(),
+    });
+    view.querySelector<HTMLElement>('.relationship-canvas')!.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 40,
+      clientY: 30,
+      deltaX: 12,
+      deltaY: 0,
+    }));
+    expect(onViewportChange).not.toHaveBeenCalled();
+  });
+
+  it('anchors wheel zoom to the pointer and clamps the scale', () => {
+    const onViewportChange = vi.fn();
+    const view = renderRelationshipView({
+      graph,
+      viewport: { x: 10, y: 20, scale: 1.9 },
+      query: '',
+      onViewportChange,
+      onOpenTable: vi.fn(),
+    });
+    view.querySelector<HTMLElement>('.relationship-canvas')!.dispatchEvent(new WheelEvent('wheel', {
+      bubbles: true,
+      cancelable: true,
+      clientX: 110,
+      clientY: 120,
+      deltaY: -1,
+    }));
+    const next = onViewportChange.mock.calls[0][0];
+    expect(next.scale).toBe(2);
+    expect((110 - next.x) / next.scale).toBeCloseTo((110 - 10) / 1.9);
+    expect((120 - next.y) / next.scale).toBeCloseTo((120 - 20) / 1.9);
+  });
+
+  it('pans through pointer capture without rebuilding stage nodes', () => {
+    const onViewportChange = vi.fn();
+    const view = renderRelationshipView({
+      graph,
+      viewport: { x: 0, y: 0, scale: 1 },
+      query: '',
+      onViewportChange,
+      onOpenTable: vi.fn(),
+    });
+    const canvas = view.querySelector<HTMLElement>('.relationship-canvas')!;
+    const stage = view.querySelector<HTMLElement>('.relationship-stage')!;
+    const tables = [...view.querySelectorAll('[data-relationship-table]')];
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.assign(canvas, {
+      setPointerCapture,
+      hasPointerCapture: vi.fn(() => true),
+      releasePointerCapture,
+    });
+
+    canvas.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      button: 0,
+      clientX: 10,
+      clientY: 15,
+      pointerId: 7,
+    }));
+    canvas.dispatchEvent(new PointerEvent('pointermove', {
+      bubbles: true,
+      clientX: 25,
+      clientY: 35,
+      pointerId: 7,
+    }));
+    canvas.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7 }));
+
+    expect(setPointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(onViewportChange).toHaveBeenCalledWith({ x: 15, y: 20, scale: 1 });
+    expect(view.querySelector('.relationship-stage')).toBe(stage);
+    expect([...view.querySelectorAll('[data-relationship-table]')]).toEqual(tables);
+    expect(stage.style.transform).toBe('translate(15px, 20px) scale(1)');
+  });
+
   it('keeps non-SVG summaries aligned with routed relationships', () => {
     const view = renderRelationshipView({
       graph: {
