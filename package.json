@@ -7,7 +7,7 @@
     "electron": "electron scripts/electron.mjs",
     "plugins:build": "node scripts/ce-plugin.mjs build --all",
     "plugins:check": "node scripts/ce-plugin.mjs check --all",
-    "build": "npm run build -w @ce/plugin-types && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
+    "build": "npm run build -w @ce/plugin-types && npm run build -w @itharbors/sqlite-contracts && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
     "clean": "node scripts/clean.mjs",
     "test": "npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && node --test scripts/lib/kit-path.test.mjs scripts/lib/ci-workflow.test.mjs && npm run test:feature-workflow",
     "test:feature-workflow": "bash .agents/skills/feature-workflow/tests/feature-workflow.test.sh",

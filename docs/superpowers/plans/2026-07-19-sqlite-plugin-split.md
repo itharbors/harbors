@@ -14,7 +14,7 @@
 - Only `sqlite-core` may depend on or import `better-sqlite3`, Node filesystem APIs, or worker threads.
 - Preserve Chinese copy, readonly-by-default behavior, explicit write confirmation, object write restrictions, ten-second single-use undo, 25/50 row pages, 10,000 row export cap, 50 row SQL render pages, SQL risk confirmation, cancellation, and existing accessibility behavior.
 - Cross-plugin interaction uses declared `message.request` and `message.broadcast`; panels do not import another plugin implementation.
-- Shared code under `kits/sqlite/shared/` is serializable protocol or browser-safe pure code only.
+- Shared code under `packages/sqlite-contracts/` is serializable protocol or browser-safe pure code only; all six plugins import it as `@itharbors/sqlite-contracts`.
 - Final source, manifest, tests, docs, and dist contain no reference to `@itharbors/sqlite-workbench` and the old plugin directory is absent.
 - Follow repository commit titles: `[Feature]` for capability/tests/docs and `[Optimize]` for structure-only moves, with concise Chinese summaries.
 
@@ -23,8 +23,10 @@
 ### Task 1: Shared protocol and revision-aware core plugin
 
 **Files:**
-- Create: `kits/sqlite/shared/src/contracts.ts`
-- Create: `kits/sqlite/shared/src/request.ts`
+- Create: `packages/sqlite-contracts/package.json`
+- Create: `packages/sqlite-contracts/tsconfig.json`
+- Create: `packages/sqlite-contracts/src/{index.ts,contracts.ts,request.ts}`
+- Modify: `package.json`
 - Create: `kits/sqlite/plugins/sqlite-core/package.json`
 - Create: `kits/sqlite/plugins/sqlite-core/main/src/index.ts`
 - Move unchanged into core: `file-browser.ts`, `protocol.ts`, `sql-analysis.ts`, `sql-worker-runner.ts`, `sql-worker.ts`, `sqlite-service.ts`
@@ -127,7 +129,7 @@ Expected: both commands exit 0.
 - [ ] **Step 6: Commit the core boundary**
 
 ```bash
-git add kits/sqlite/shared/src/contracts.ts kits/sqlite/shared/src/request.ts kits/sqlite/plugins/sqlite-core
+git add package.json package-lock.json packages/sqlite-contracts kits/sqlite/plugins/sqlite-core
 git commit -m "[Feature] 建立 SQLite 核心插件"
 ```
 

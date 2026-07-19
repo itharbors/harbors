@@ -83,7 +83,7 @@
 
 ## 共享协议与依赖方向
 
-新增 `kits/sqlite/shared/`，只包含可序列化 TypeScript 类型、公开错误 envelope、revision 类型和浏览器端通用 request 解包函数。它不得导入 Node API、`better-sqlite3`、DOM 或任何插件实现。
+新增 workspace 包 `packages/sqlite-contracts/`，只包含可序列化 TypeScript 类型、公开错误 envelope、revision 类型和浏览器端通用 request 解包函数。插件构建器把每个插件的 TypeScript `rootDir` 限制在插件自身，因此共享契约必须通过 workspace package 导入。该包不得导入 Node API、`better-sqlite3`、DOM 或任何插件实现。
 
 依赖方向固定为：
 
@@ -97,7 +97,7 @@ sqlite-sql ──────┘
 sqlite-data/schema/relationships/sql ── request/broadcast ──> sqlite-explorer selection
 ```
 
-Panel 不导入其他插件实现。构建期只允许导入 `kits/sqlite/shared/` 中的协议与纯函数，以及自身插件目录内的模块。
+Panel 不导入其他插件实现。构建期只允许导入 `@itharbors/sqlite-contracts` 中的协议与纯函数，以及自身插件目录内的模块。
 
 只有 `sqlite-core/package.json` 声明 `better-sqlite3`。其余插件不直接访问文件系统或数据库。
 
