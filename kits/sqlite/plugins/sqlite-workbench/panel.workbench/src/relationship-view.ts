@@ -388,3 +388,215 @@ export function relationshipSummary(relationship: Relationship): string {
     .join('，');
   return `${mappings}；ON DELETE ${relationship.onDelete}；ON UPDATE ${relationship.onUpdate}`;
 }
+
+export type RenderRelationshipViewOptions = {
+  graph: RelationshipGraph;
+  viewport: RelationshipViewport;
+  query: string;
+  onViewportChange(viewport: RelationshipViewport): void;
+  onOpenTable(name: string): void;
+};
+
+const SVG_NAMESPACE = 'http://www.w3.org/2000/svg';
+
+function relationshipTransform(viewport: RelationshipViewport): string {
+  return `translate(${viewport.x}px, ${viewport.y}px) scale(${viewport.scale})`;
+}
+
+function renderRelationshipColumn(column: RelationshipColumn): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'relationship-column';
+
+  const name = document.createElement('span');
+  name.className = 'relationship-column-name';
+  name.textContent = column.name;
+  row.append(name);
+
+  const type = document.createElement('span');
+  type.className = 'relationship-column-type';
+  type.textContent = column.type || '—';
+  row.append(type);
+
+  const keys = document.createElement('span');
+  keys.className = 'relationship-column-keys';
+  if (column.primaryKeyOrder > 0) {
+    const primaryKey = document.createElement('span');
+    primaryKey.className = 'relationship-key';
+    primaryKey.dataset.key = 'pk';
+    primaryKey.textContent = 'PK';
+    keys.append(primaryKey);
+  }
+  if (column.foreignKey) {
+    const foreignKey = document.createElement('span');
+    foreignKey.className = 'relationship-key';
+    foreignKey.dataset.key = 'fk';
+    foreignKey.textContent = 'FK';
+    keys.append(foreignKey);
+  }
+  row.append(keys);
+  return row;
+}
+
+export function renderRelationshipView(options: RenderRelationshipViewOptions): HTMLElement {
+  const layout = layoutRelationshipGraph(options.graph);
+  const relationshipById = new Map(
+    options.graph.relationships.map((relationship) => [relationship.id, relationship]),
+  );
+  const tableByName = new Map(options.graph.tables.map((table) => [table.name, table]));
+
+  const view = document.createElement('section');
+  view.id = 'sqlite-view-relationships';
+  view.className = 'relationship-view';
+  view.setAttribute('role', 'tabpanel');
+  view.setAttribute('aria-labelledby', 'sqlite-tab-relationships');
+  view.dataset.view = 'relationships';
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'relationship-toolbar';
+  const toolbarLabel = document.createElement('strong');
+  toolbarLabel.textContent = '关系画布';
+  const toolbarCount = document.createElement('span');
+  toolbarCount.textContent = `${options.graph.tables.length} 张表 · ${layout.edges.length} 条关系`;
+  const toolbarHelp = document.createElement('small');
+  toolbarHelp.textContent = '拖动画布平移 · 滚轮缩放 · 回车打开表结构';
+  toolbar.append(toolbarLabel, toolbarCount, toolbarHelp);
+  view.append(toolbar);
+
+  const canvas = document.createElement('div');
+  canvas.className = 'relationship-canvas';
+  canvas.setAttribute('aria-label', 'SQLite 表关系画布');
+
+  const stage = document.createElement('div');
+  stage.className = 'relationship-stage';
+  stage.style.width = `${layout.width}px`;
+  stage.style.height = `${layout.height}px`;
+  let currentViewport = { ...options.viewport };
+  stage.style.transform = relationshipTransform(currentViewport);
+
+  const edges = document.createElementNS(SVG_NAMESPACE, 'svg');
+  edges.classList.add('relationship-edges');
+  edges.setAttribute('width', String(layout.width));
+  edges.setAttribute('height', String(layout.height));
+  edges.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
+  edges.setAttribute('aria-hidden', 'true');
+  for (const edge of layout.edges) {
+    const path = document.createElementNS(SVG_NAMESPACE, 'path');
+    path.setAttribute('d', edge.path);
+    path.dataset.relationshipEdge = edge.id;
+    const title = document.createElementNS(SVG_NAMESPACE, 'title');
+    title.textContent = relationshipSummary(relationshipById.get(edge.id)!);
+    path.append(title);
+    edges.append(path);
+  }
+  stage.append(edges);
+
+  for (const node of layout.nodes) {
+    const table = tableByName.get(node.name)!;
+    const card = document.createElement('article');
+    card.className = 'relationship-table';
+    card.setAttribute('role', 'button');
+    card.tabIndex = 0;
+    card.dataset.relationshipTable = table.name;
+    if (options.query.trim() && !matchesRelationshipSearch(table.name, options.query)) {
+      card.dataset.dimmed = 'true';
+    }
+    card.style.left = `${node.x}px`;
+    card.style.top = `${node.y}px`;
+    card.style.width = `${node.width}px`;
+    card.style.height = `${node.height}px`;
+
+    const heading = document.createElement('header');
+    heading.className = 'relationship-table-heading';
+    const tableName = document.createElement('strong');
+    tableName.textContent = table.name;
+    const tableKind = document.createElement('span');
+    tableKind.textContent = table.kind === 'virtual' ? 'VIRTUAL' : 'TABLE';
+    heading.append(tableName, tableKind);
+    card.append(heading);
+
+    if (table.columns.length === 0) {
+      const emptyColumn = document.createElement('div');
+      emptyColumn.className = 'relationship-column relationship-column-empty';
+      emptyColumn.textContent = '无字段';
+      card.append(emptyColumn);
+    } else {
+      for (const column of table.columns) card.append(renderRelationshipColumn(column));
+    }
+
+    const openTable = (): void => options.onOpenTable(table.name);
+    card.addEventListener('click', openTable);
+    card.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      openTable();
+    });
+    card.addEventListener('pointerdown', (event) => event.stopPropagation());
+    stage.append(card);
+  }
+
+  if (options.graph.tables.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'relationship-empty';
+    empty.textContent = '当前数据库中没有可绘制的表';
+    stage.append(empty);
+  }
+  canvas.append(stage);
+  view.append(canvas);
+
+  const summaries = document.createElement('ul');
+  summaries.className = 'sr-only';
+  summaries.dataset.relationshipSummary = '';
+  for (const edge of layout.edges) {
+    const item = document.createElement('li');
+    item.textContent = relationshipSummary(relationshipById.get(edge.id)!);
+    summaries.append(item);
+  }
+  view.append(summaries);
+
+  const updateViewport = (viewport: RelationshipViewport): void => {
+    currentViewport = viewport;
+    stage.style.transform = relationshipTransform(currentViewport);
+    options.onViewportChange({ ...currentViewport });
+  };
+
+  let pointerId: number | null = null;
+  let previousPointer = { x: 0, y: 0 };
+  canvas.addEventListener('pointerdown', (event) => {
+    if (event.button !== 0 || pointerId !== null) return;
+    event.preventDefault();
+    pointerId = event.pointerId;
+    previousPointer = { x: event.clientX, y: event.clientY };
+    canvas.setPointerCapture(event.pointerId);
+  });
+  canvas.addEventListener('pointermove', (event) => {
+    if (event.pointerId !== pointerId) return;
+    const next = panRelationshipViewport(
+      currentViewport,
+      event.clientX - previousPointer.x,
+      event.clientY - previousPointer.y,
+    );
+    previousPointer = { x: event.clientX, y: event.clientY };
+    updateViewport(next);
+  });
+  const finishPointer = (event: PointerEvent): void => {
+    if (event.pointerId !== pointerId) return;
+    pointerId = null;
+    if (canvas.hasPointerCapture(event.pointerId)) canvas.releasePointerCapture(event.pointerId);
+  };
+  canvas.addEventListener('pointerup', finishPointer);
+  canvas.addEventListener('pointercancel', finishPointer);
+  canvas.addEventListener('lostpointercapture', (event) => {
+    if (event.pointerId === pointerId) pointerId = null;
+  });
+  canvas.addEventListener('wheel', (event) => {
+    event.preventDefault();
+    const bounds = canvas.getBoundingClientRect();
+    const factor = event.deltaY < 0 ? 1.1 : 1 / 1.1;
+    updateViewport(zoomRelationshipViewport(currentViewport, factor, {
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    }));
+  }, { passive: false });
+
+  return view;
+}

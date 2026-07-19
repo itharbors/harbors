@@ -1,10 +1,13 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { describe, expect, it, vi } from 'vitest';
 import {
   fitRelationshipViewport,
   layoutRelationshipGraph,
   matchesRelationshipSearch,
   panRelationshipViewport,
   relationshipSummary,
+  renderRelationshipView,
   zoomRelationshipViewport,
   type RelationshipGraph,
 } from '../panel.workbench/src/relationship-view';
@@ -197,6 +200,48 @@ function orthogonalMidpointX(path: string): number {
 }
 
 describe('SQLite relationship view', () => {
+  it('renders accessible table nodes, SVG edges, search emphasis, and summaries', () => {
+    const onOpenTable = vi.fn();
+    const view = renderRelationshipView({
+      graph,
+      viewport: { x: 0, y: 0, scale: 1 },
+      query: 'child',
+      onViewportChange: vi.fn(),
+      onOpenTable,
+    });
+    document.body.append(view);
+    expect(view.querySelectorAll('[data-relationship-table]')).toHaveLength(3);
+    expect(view.querySelector('[data-relationship-table="children"]')?.textContent).toContain('FK');
+    expect(view.querySelector('[data-relationship-table="parents"]')?.getAttribute('data-dimmed')).toBe('true');
+    expect(view.querySelectorAll('svg [data-relationship-edge]')).toHaveLength(1);
+    expect(view.querySelector('[data-relationship-summary]')?.textContent).toContain('children.parent_id → parents.id');
+    const child = view.querySelector<HTMLElement>('[data-relationship-table="children"]')!;
+    child.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onOpenTable).toHaveBeenCalledWith('children');
+  });
+
+  it('keeps non-SVG summaries aligned with routed relationships', () => {
+    const view = renderRelationshipView({
+      graph: {
+        ...graph,
+        relationships: [
+          ...graph.relationships,
+          {
+            ...graph.relationships[0],
+            id: 'missing:0',
+            fromTable: 'missing',
+          },
+        ],
+      },
+      viewport: { x: 0, y: 0, scale: 1 },
+      query: '',
+      onViewportChange: vi.fn(),
+      onOpenTable: vi.fn(),
+    });
+    expect(view.querySelectorAll('svg [data-relationship-edge]')).toHaveLength(1);
+    expect(view.querySelectorAll('[data-relationship-summary] li')).toHaveLength(1);
+  });
+
   it('places parents before children and isolated tables below without overlap', () => {
     const first = layoutRelationshipGraph(graph);
     expect(layoutRelationshipGraph(graph)).toEqual(first);
