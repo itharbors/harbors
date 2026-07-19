@@ -11,7 +11,7 @@
       "panel": {
         "workbench": {
           "entry": "./panel.workbench/dist/index.html",
-          "title": "MySQL Workbench",
+          "title": "MySQL 工作台",
           "minWidth": 560,
           "minHeight": 360,
           "multiInstance": false

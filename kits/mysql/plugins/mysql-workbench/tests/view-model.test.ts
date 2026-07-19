@@ -28,8 +28,8 @@ describe('MySQL workbench view model', () => {
     expect(editableValueFromInput('datetime', '2026-07-19 10:20:30')).toEqual({
       type: 'datetime', value: '2026-07-19 10:20:30',
     });
-    expect(() => editableValueFromInput('integer', '4.2')).toThrow(/integer/i);
-    expect(() => editableValueFromInput('json', '{bad')).toThrow(/JSON/);
+    expect(() => editableValueFromInput('integer', '4.2')).toThrow('请输入十进制整数');
+    expect(() => editableValueFromInput('json', '{bad')).toThrow('请输入有效的 JSON');
   });
 
   it('builds add/edit drafts while omitting generated and binary fields', () => {

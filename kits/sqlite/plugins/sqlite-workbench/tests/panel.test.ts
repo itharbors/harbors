@@ -91,6 +91,25 @@ describe('SQLite workbench panel', () => {
     document.body.innerHTML = '';
   });
 
+  it('renders product-controlled interface copy in Chinese', async () => {
+    await mount();
+    expect(root.textContent).toContain('数据库路径');
+    expect(root.textContent).toContain('打开');
+    expect(root.textContent).toContain('创建');
+    expect(root.textContent).toContain('尚未连接');
+    expect(root.textContent).not.toContain('Not connected');
+
+    const pathInput = root.querySelector<HTMLInputElement>('[data-field="database-path"]')!;
+    pathInput.value = '/tmp/example.sqlite';
+    root.querySelector<HTMLButtonElement>('[data-action="open"]')!.click();
+    await flush();
+
+    expect(root.textContent).toContain('数据');
+    expect(root.textContent).toContain('结构');
+    expect(root.textContent).toContain('新增记录');
+    expect(root.textContent).toContain('150 条记录');
+  });
+
   it('opens a database and renders its objects and first data page', async () => {
     await mount();
     expect(root.querySelector('[data-state="disconnected"]')).not.toBeNull();
@@ -215,7 +234,7 @@ describe('SQLite workbench panel', () => {
     root.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!.click();
     await flush();
     expect(root.querySelector<HTMLButtonElement>('[data-action="add-row"]')!.disabled).toBe(true);
-    expect(root.querySelector('[data-readonly]')?.textContent).toMatch(/read.only/i);
+    expect(root.querySelector('[data-readonly]')?.textContent).toContain('只读');
   });
 
   it('preserves SQL input and shows an actionable error when execution fails', async () => {

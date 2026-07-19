@@ -23,8 +23,8 @@ describe('SQLite workbench view model', () => {
     expect(editableValueFromInput('text', '0042')).toEqual({ type: 'text', value: '0042' });
     expect(editableValueFromInput('integer', '-42')).toEqual({ type: 'integer', value: '-42' });
     expect(editableValueFromInput('real', '4.25')).toEqual({ type: 'real', value: '4.25' });
-    expect(() => editableValueFromInput('integer', '4.2')).toThrow(/integer/i);
-    expect(() => editableValueFromInput('real', 'Infinity')).toThrow(/real/i);
+    expect(() => editableValueFromInput('integer', '4.2')).toThrow('请输入十进制整数');
+    expect(() => editableValueFromInput('real', 'Infinity')).toThrow('请输入有限实数');
   });
 
   it('creates editable drafts while omitting generated and BLOB fields', () => {
