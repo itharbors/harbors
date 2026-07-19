@@ -30,48 +30,59 @@ describe('SQLite kit runtime integration', () => {
     try {
       await editor.kit.load(path.join(projectRoot, 'kits/sqlite'));
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-sqlite');
-      expect(editor.plugin.listLoaded()).toContain('@itharbors/sqlite-workbench');
-
-      editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'openDatabase', {
+      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining([
+        '@itharbors/sqlite-core',
+        '@itharbors/sqlite-explorer',
+        '@itharbors/sqlite-data',
+        '@itharbors/sqlite-schema',
+        '@itharbors/sqlite-relationships',
+        '@itharbors/sqlite-sql',
+      ]));
+      editor.plugin.callPlugin('@itharbors/sqlite-core', 'openDatabase', {
         path: databasePath,
         create: true,
       });
       const createSql = 'CREATE TABLE smoke_items (id INTEGER PRIMARY KEY, label TEXT NOT NULL)';
-      const analysis = editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'analyzeSql', {
+      const analysis = editor.plugin.callPlugin('@itharbors/sqlite-core', 'analyzeSql', {
         sql: createSql,
       }) as { confirmationToken: string };
-      await editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'executeSql', {
+      await editor.plugin.callPlugin('@itharbors/sqlite-core', 'executeSql', {
+        executionId: 'runtime-create-table',
         sql: createSql,
         confirmationToken: analysis.confirmationToken,
       });
       const schema = editor.plugin.callPlugin(
-        '@itharbors/sqlite-workbench',
+        '@itharbors/sqlite-core',
         'getSchema',
-      ) as { objects: Array<{ name: string }> };
+      ) as { connectionRevision: number; objects: Array<{ name: string }> };
       expect(schema.objects.map((object) => object.name)).toContain('smoke_items');
+      await expect(editor.plugin.callPlugin('@itharbors/sqlite-explorer', 'selectObject', {
+        connectionRevision: schema.connectionRevision,
+        objectName: 'smoke_items',
+      })).resolves.toEqual({ connectionRevision: schema.connectionRevision, objectName: 'smoke_items' });
 
-      expect(editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'insertRow', {
+      expect(editor.plugin.callPlugin('@itharbors/sqlite-core', 'insertRow', {
         name: 'smoke_items',
         values: { label: { type: 'text', value: 'first' } },
       })).toMatchObject({ changes: 1 });
-      const inserted = editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'getRows', {
+      const inserted = editor.plugin.callPlugin('@itharbors/sqlite-core', 'getRows', {
         name: 'smoke_items',
         page: 1,
         pageSize: 25,
       }) as { rows: Array<{ identity: unknown; values: unknown[] }>; total: number };
       expect(inserted.total).toBe(1);
 
-      expect(editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'updateRow', {
+      expect(editor.plugin.callPlugin('@itharbors/sqlite-core', 'updateRow', {
         name: 'smoke_items',
         identity: inserted.rows[0].identity,
         values: { label: { type: 'text', value: 'changed' } },
       })).toMatchObject({ changes: 1 });
-      expect(editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'deleteRow', {
+      expect(editor.plugin.callPlugin('@itharbors/sqlite-core', 'deleteRow', {
         name: 'smoke_items',
         identity: inserted.rows[0].identity,
       })).toMatchObject({ changes: 1 });
 
-      const remaining = editor.plugin.callPlugin('@itharbors/sqlite-workbench', 'getRows', {
+      const remaining = editor.plugin.callPlugin('@itharbors/sqlite-core', 'getRows', {
         name: 'smoke_items',
         page: 1,
         pageSize: 25,
@@ -104,7 +115,7 @@ describe('SQLite kit runtime integration', () => {
 
     try {
       await editor.kit.load(path.join(projectRoot, 'kits/sqlite'));
-      const plugin = '@itharbors/sqlite-workbench';
+      const plugin = '@itharbors/sqlite-core';
       editor.plugin.callPlugin(plugin, 'openDatabase', {
         path: databasePath,
         create: false,
@@ -138,7 +149,7 @@ describe('SQLite kit runtime integration', () => {
 
     try {
       await editor.kit.load(path.join(projectRoot, 'kits/sqlite'));
-      const plugin = '@itharbors/sqlite-workbench';
+      const plugin = '@itharbors/sqlite-core';
       expect(editor.plugin.callPlugin(plugin, 'openDatabase', {
         path: databasePath,
         create: false,
@@ -147,7 +158,7 @@ describe('SQLite kit runtime integration', () => {
         name: 'members',
         identity: { kind: 'rowid', value: { type: 'integer', value: '1' } },
       })).toEqual({
-        $sqliteWorkbenchError: {
+        $sqliteError: {
           code: 'READ_ONLY',
           message: '当前连接为只读模式，无法修改记录。',
         },

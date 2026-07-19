@@ -1,0 +1,32 @@
+{
+  "name": "@itharbors/sqlite-explorer",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "@itharbors/sqlite-contracts": "0.0.1"
+  },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "explorer": {
+          "entry": "./panel.explorer/dist/index.html",
+          "title": "SQLite 资源管理器",
+          "minWidth": 240,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "request": {
+          "getSelection": ["getSelection"],
+          "selectObject": ["selectObject"]
+        },
+        "broadcast": {
+          "@itharbors/sqlite.connection.changed": ["onConnectionChanged", "panel.onConnectionChanged"],
+          "@itharbors/sqlite.schema.changed": ["onSchemaChanged", "panel.onSchemaChanged"]
+        }
+      }
+    }
+  }
+}
