@@ -822,14 +822,32 @@ describe('SQLite workbench panel', () => {
   });
 
   it('opens the narrow navigation as an accessible focus-managed drawer', async () => {
+    const addEventListener = vi.fn();
+    const removeEventListener = vi.fn();
+    vi.stubGlobal('matchMedia', vi.fn(() => ({
+      matches: true,
+      media: '(max-width: 720px)',
+      onchange: null,
+      addEventListener,
+      removeEventListener,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    } as unknown as MediaQueryList)));
     await connect();
     const trigger = root.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')!;
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(root.querySelector('#sqlite-object-navigation')?.hasAttribute('inert')).toBe(true);
+    expect(root.querySelector('#sqlite-object-navigation')?.getAttribute('aria-hidden')).toBe('true');
+    expect(root.querySelector('.workspace')?.hasAttribute('inert')).toBe(false);
     trigger.click();
     await Promise.resolve();
 
     const currentTrigger = root.querySelector<HTMLButtonElement>('[data-action="toggle-navigation"]')!;
     expect(currentTrigger.getAttribute('aria-expanded')).toBe('true');
+    expect(root.querySelector('#sqlite-object-navigation')?.hasAttribute('inert')).toBe(false);
+    expect(root.querySelector('#sqlite-object-navigation')?.hasAttribute('aria-hidden')).toBe(false);
+    expect(root.querySelector('.workspace')?.hasAttribute('inert')).toBe(true);
     expect(document.activeElement).toBe(root.querySelector('.object-list input[type="search"]'));
     root.querySelector<HTMLElement>('#sqlite-object-navigation')!.dispatchEvent(new KeyboardEvent('keydown', {
       key: 'Escape',
@@ -837,7 +855,23 @@ describe('SQLite workbench panel', () => {
     }));
     await Promise.resolve();
     expect(root.querySelector('[data-action="toggle-navigation"]')?.getAttribute('aria-expanded')).toBe('false');
+    expect(root.querySelector('#sqlite-object-navigation')?.hasAttribute('inert')).toBe(true);
+    expect(root.querySelector('.workspace')?.hasAttribute('inert')).toBe(false);
     expect(document.activeElement).toBe(root.querySelector('[data-action="toggle-navigation"]'));
+    expect(addEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+    await definition.unmount?.();
+    expect(removeEventListener).toHaveBeenCalledWith('change', expect.any(Function));
+  });
+
+  it('keeps native table body semantics around named row radio controls', async () => {
+    await connect();
+
+    const body = root.querySelector('#sqlite-view-data tbody')!;
+    const radio = body.querySelector<HTMLInputElement>('input[type="radio"]')!;
+    expect(body.hasAttribute('role')).toBe(false);
+    expect(body.hasAttribute('aria-label')).toBe(false);
+    expect(radio.name).toBe('sqlite-row-selection');
+    expect(radio.getAttribute('aria-label')).toBeTruthy();
   });
 
   it('does not duplicate the selected object in the status bar', async () => {

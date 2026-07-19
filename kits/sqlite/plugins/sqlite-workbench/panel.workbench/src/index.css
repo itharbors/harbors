@@ -1452,11 +1452,16 @@ dialog:not([data-record-dialog]) footer {
     background: var(--deck);
     box-shadow: 16px 0 36px rgb(0 0 0 / 45%);
     transform: translateX(-102%);
-    transition: transform 160ms ease;
+    visibility: hidden;
+    pointer-events: none;
+    transition: transform 160ms ease, visibility 0s linear 160ms;
   }
 
   .object-rail[data-open="true"] {
     transform: translateX(0);
+    visibility: visible;
+    pointer-events: auto;
+    transition-delay: 0s;
   }
 
   .navigation-backdrop[data-open="true"] {

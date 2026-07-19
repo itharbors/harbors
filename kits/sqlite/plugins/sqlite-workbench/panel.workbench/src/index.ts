@@ -190,6 +190,12 @@ let schemaRequestSequence = 0;
 let connectionGeneration = 0;
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
 let pendingDialogOpenerAction: string | null = null;
+let narrowNavigationMedia: MediaQueryList | null = null;
+
+function handleNarrowNavigationChange(event: MediaQueryListEvent): void {
+  if (!event.matches) state.navigationOpen = false;
+  render();
+}
 
 const definition = {
   async mount(ctx: PanelContext) {
@@ -201,6 +207,11 @@ const definition = {
     viewRequestSequence = 0;
     schemaRequestSequence = 0;
     connectionGeneration = 0;
+    narrowNavigationMedia?.removeEventListener('change', handleNarrowNavigationChange);
+    narrowNavigationMedia = typeof window.matchMedia === 'function'
+      ? window.matchMedia('(max-width: 720px)')
+      : null;
+    narrowNavigationMedia?.addEventListener('change', handleNarrowNavigationChange);
     clearUndoReceipt();
     render();
     try {
@@ -218,6 +229,8 @@ const definition = {
   },
 
   async unmount() {
+    narrowNavigationMedia?.removeEventListener('change', handleNarrowNavigationChange);
+    narrowNavigationMedia = null;
     if (root) root.replaceChildren();
     root = null;
     context = undefined;
@@ -810,6 +823,9 @@ async function confirmWriteSql(): Promise<void> {
 
 function render(): void {
   if (!root) return;
+  const narrowNavigation = narrowNavigationMedia?.matches === true;
+  const narrowNavigationOpen = narrowNavigation && state.navigationOpen;
+  const narrowNavigationClosed = narrowNavigation && !state.navigationOpen;
   root.innerHTML = `
     <main class="workbench-shell">
       <header class="connection-bar">
@@ -826,12 +842,12 @@ function render(): void {
         <div class="connection-state"></div>
       </header>
       <div class="workbench-body">
-        <button type="button" class="navigation-backdrop" data-action="close-navigation" data-open="${state.navigationOpen}" aria-label="关闭数据库对象导航"></button>
-        <aside class="object-rail" id="sqlite-object-navigation" data-open="${state.navigationOpen}">
+        <button type="button" class="navigation-backdrop" data-action="close-navigation" data-open="${narrowNavigationOpen}" aria-label="关闭数据库对象导航"${narrowNavigationOpen ? '' : ' disabled aria-hidden="true"'}></button>
+        <aside class="object-rail" id="sqlite-object-navigation" data-open="${state.navigationOpen}"${narrowNavigationClosed ? ' inert aria-hidden="true"' : ''}>
           <div class="rail-heading"><span>${sqliteCopy.objects.title}</span><b></b></div>
           <div class="object-list"></div>
         </aside>
-        <section class="workspace">
+        <section class="workspace"${narrowNavigationOpen ? ' inert aria-hidden="true"' : ''}>
           <div class="workspace-heading">
             <button type="button" class="navigation-trigger" data-action="toggle-navigation" aria-controls="sqlite-object-navigation" aria-expanded="${state.navigationOpen}">对象</button>
             <div class="object-title"></div>
@@ -1203,10 +1219,6 @@ function createDataTable(columns: string[], rows: SerializedValue[][], selectabl
   }
   head.append(headRow);
   const body = document.createElement('tbody');
-  if (selectable) {
-    body.setAttribute('role', 'radiogroup');
-    body.setAttribute('aria-label', '记录选择');
-  }
   limitRenderedRows(rows).forEach((values, rowIndex) => {
     const tr = document.createElement('tr');
     tr.classList.toggle('selected', selectable && rowIndex === state.selectedRowIndex);

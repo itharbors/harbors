@@ -30,6 +30,13 @@ describe('SQLite workbench accessibility foundations', () => {
     expect(css).toMatch(/\.data-toolbar-row\s+button\s*\{[^}]*white-space:\s*nowrap/s);
   });
 
+  it('hides the closed narrow drawer from visibility and pointer interaction', () => {
+    const css = fs.readFileSync(cssPath, 'utf8');
+    const narrowRules = css.slice(css.indexOf('@media (max-width: 720px)'));
+    expect(narrowRules).toMatch(/\.object-rail\s*\{[^}]*visibility:\s*hidden[^}]*pointer-events:\s*none/s);
+    expect(narrowRules).toMatch(/\.object-rail\[data-open="true"\]\s*\{[^}]*visibility:\s*visible[^}]*pointer-events:\s*auto/s);
+  });
+
   it('loops keyboard focus inside a modal dialog', () => {
     HTMLDialogElement.prototype.showModal = function showModal() { this.setAttribute('open', ''); };
     const dialog = document.createElement('dialog');
