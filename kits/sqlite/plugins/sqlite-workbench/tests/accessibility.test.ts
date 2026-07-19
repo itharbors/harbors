@@ -107,6 +107,27 @@ describe('SQLite workbench accessibility foundations', () => {
           rows: [],
         };
       }
+      if (name === 'getObjectSchema') {
+        return {
+          name: 'users',
+          kind: 'table',
+          type: 'table',
+          writable: true,
+          hasRowid: true,
+          sql: 'CREATE TABLE users (id INTEGER PRIMARY KEY)',
+          primaryKey: ['id'],
+          columns: [{
+            name: 'id',
+            type: 'INTEGER',
+            notNull: false,
+            primaryKeyOrder: 1,
+            defaultValue: null,
+            hidden: false,
+            generated: false,
+          }],
+          indexes: [],
+        };
+      }
       if (name === 'getRelationshipGraph') {
         return {
           tables: [
@@ -146,6 +167,23 @@ describe('SQLite workbench accessibility foundations', () => {
       const summary = root.querySelector<HTMLElement>('[data-relationship-summary]')!;
       expect(summary.getAttribute('aria-hidden')).toBeNull();
       expect(summary.textContent).toContain('memberships.user_id → users.id');
+
+      for (const expectedTab of ['sql', 'data', 'schema', 'relationships']) {
+        const current = root.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+        current.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+        await vi.waitFor(() => {
+          const selected = root.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+          expect(selected.dataset.tab).toBe(expectedTab);
+          expect(document.activeElement).toBe(selected);
+        });
+      }
+
+      root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
+      await vi.waitFor(() => {
+        const selected = root.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+        expect(selected.dataset.tab).toBe('sql');
+        expect(document.activeElement).toBe(selected);
+      });
     } finally {
       await definition.unmount?.();
       document.body.innerHTML = '';
@@ -181,11 +219,19 @@ describe('SQLite workbench accessibility foundations', () => {
       expect(selectedTabs[0].dataset.tab).toBe('relationships');
 
       selectedTabs[0].dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
-      await Promise.resolve();
+      await vi.waitFor(() => expect(root.querySelector('[data-view="sql"]')).not.toBeNull());
       const nextSelected = root.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
       expect(nextSelected.dataset.tab).toBe('sql');
       expect(nextSelected.disabled).toBe(false);
       expect(nextSelected.tabIndex).toBe(0);
+      expect(document.activeElement).toBe(nextSelected);
+
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await vi.waitFor(() => {
+        const chainedSelected = root.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
+        expect(chainedSelected.dataset.tab).toBe('relationships');
+        expect(document.activeElement).toBe(chainedSelected);
+      });
     } finally {
       await definition.unmount?.();
       document.body.innerHTML = '';

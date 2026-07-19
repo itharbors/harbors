@@ -532,6 +532,44 @@ describe('SQLite workbench panel', () => {
     expect(graphRequests).toBe(2);
   });
 
+  it('ignores an old graph request that resolves after a newer schema snapshot is accepted', async () => {
+    await connect();
+    const baseImplementation = request.getMockImplementation()!;
+    let resolveSchema!: (result: unknown) => void;
+    let resolveOldGraph!: (result: unknown) => void;
+    let graphRequests = 0;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'getSchema') {
+        return new Promise((resolve) => { resolveSchema = resolve; });
+      }
+      if (args[1] === 'getRelationshipGraph') {
+        graphRequests += 1;
+        if (graphRequests === 1) {
+          return new Promise((resolve) => { resolveOldGraph = resolve; });
+        }
+        return { tables: [{ name: 'fresh_snapshot', kind: 'table', columns: [] }], relationships: [] };
+      }
+      return baseImplementation(...args);
+    });
+
+    root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(graphRequests).toBe(1));
+
+    resolveSchema(schema);
+    await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="fresh_snapshot"]')).not.toBeNull());
+    resolveOldGraph({
+      tables: [{ name: 'old_snapshot', kind: 'table', columns: [] }],
+      relationships: [],
+    });
+    await flush();
+
+    expect(root.querySelector('[data-relationship-table="old_snapshot"]')).toBeNull();
+    expect(root.querySelector('[data-relationship-table="fresh_snapshot"]')).not.toBeNull();
+    expect(graphRequests).toBe(2);
+  });
+
   it('ignores a relationship response that resolves after the database closes', async () => {
     await connect();
     const baseImplementation = request.getMockImplementation()!;

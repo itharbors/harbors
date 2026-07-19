@@ -488,12 +488,15 @@ async function selectObject(name: string): Promise<void> {
   });
 }
 
-async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
+async function selectTab(tab: WorkbenchState['activeTab'], restoreFocus = false): Promise<void> {
   viewRequestSequence += 1;
   state.activeTab = tab;
   state.error = null;
   render();
-  if (tab === 'sql' || (tab !== 'relationships' && !state.selectedName)) return;
+  if (tab === 'sql' || (tab !== 'relationships' && !state.selectedName)) {
+    if (restoreFocus) focusActiveTab();
+    return;
+  }
   if (tab === 'relationships') {
     try {
       await loadActiveView();
@@ -501,12 +504,18 @@ async function selectTab(tab: WorkbenchState['activeTab']): Promise<void> {
       state.error = panelError(error);
     } finally {
       render();
+      if (restoreFocus) focusActiveTab();
     }
     return;
   }
   await runAction(async () => {
     await loadActiveView();
   });
+  if (restoreFocus) focusActiveTab();
+}
+
+function focusActiveTab(): void {
+  root?.querySelector<HTMLButtonElement>(`[data-tab="${state.activeTab}"]`)?.focus();
 }
 
 async function loadActiveView(): Promise<void> {
@@ -1110,7 +1119,7 @@ function renderHeading(): void {
     const globalTab = tab === 'sql' || tab === 'relationships';
     button.disabled = !state.connection.connected || (!globalTab && !state.selectedName);
     button.addEventListener('click', () => {
-      void selectTab(tab);
+      void selectTab(tab, true);
     });
     button.addEventListener('keydown', (event) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
@@ -1119,8 +1128,8 @@ function renderHeading(): void {
       const current = enabled.indexOf(button);
       const offset = event.key === 'ArrowRight' ? 1 : -1;
       const next = enabled[(current + offset + enabled.length) % enabled.length];
-      next?.focus();
-      next?.click();
+      const nextTab = next?.dataset.tab as WorkbenchState['activeTab'] | undefined;
+      if (nextTab) void selectTab(nextTab, true);
     });
   }
 }
