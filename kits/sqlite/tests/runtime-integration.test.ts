@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
 import { createEditor } from '../../../packages/server/src/editor/index';
@@ -76,6 +77,51 @@ describe('SQLite kit runtime integration', () => {
         pageSize: 25,
       }) as { total: number };
       expect(remaining.total).toBe(0);
+    } finally {
+      await editor.dispose();
+    }
+  });
+
+  it('exposes the relationship graph through the assembled plugin request', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sqlite-kit-runtime-relationships-'));
+    tempDirs.push(tempDir);
+    const databasePath = path.join(tempDir, 'relationships.sqlite');
+    const fixtureDatabase = new Database(databasePath);
+    try {
+      fixtureDatabase.exec(`
+        CREATE TABLE parents (id INTEGER PRIMARY KEY);
+        CREATE TABLE children (
+          id INTEGER PRIMARY KEY,
+          parent_id INTEGER REFERENCES parents(id)
+        );
+      `);
+    } finally {
+      fixtureDatabase.close();
+    }
+    const editor = createEditor('sqlite-kit-runtime-relationships', {
+      assembly: createDefaultAssemblyConfig(projectRoot),
+    });
+
+    try {
+      await editor.kit.load(path.join(projectRoot, 'kits/sqlite'));
+      const plugin = '@itharbors/sqlite-workbench';
+      editor.plugin.callPlugin(plugin, 'openDatabase', {
+        path: databasePath,
+        create: false,
+      });
+
+      const graph = editor.plugin.callPlugin(plugin, 'getRelationshipGraph');
+      expect(graph).toMatchObject({
+        tables: expect.arrayContaining([
+          expect.objectContaining({ name: 'parents' }),
+          expect.objectContaining({ name: 'children' }),
+        ]),
+        relationships: [expect.objectContaining({
+          fromTable: 'children',
+          toTable: 'parents',
+          columns: [{ from: 'parent_id', to: 'id' }],
+        })],
+      });
     } finally {
       await editor.dispose();
     }

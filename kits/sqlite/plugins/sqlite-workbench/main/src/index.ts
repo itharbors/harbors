@@ -41,6 +41,7 @@ editor.plugin.define({
     closeDatabase: () => callService('closeDatabase'),
     getSchema: () => callService('getSchema'),
     getObjectSchema: (input: unknown) => callService('getObjectSchema', input),
+    getRelationshipGraph: () => callService('getRelationshipGraph'),
     getRows: (input: unknown) => callService('getRows', input),
     exportRows: (input: unknown) => callService('exportRows', input),
     insertRow: (input: unknown) => callService('insertRow', input),
