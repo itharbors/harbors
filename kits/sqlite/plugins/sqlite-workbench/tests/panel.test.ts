@@ -350,6 +350,34 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector('.sql-gutter')?.textContent).toBe('1');
   });
 
+  it('names every resolved target in the write SQL confirmation', async () => {
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'analyzeSql') {
+        return {
+          readonly: false,
+          statementType: 'UPDATE',
+          targetObjects: ['users', 'audit'],
+          risk: 'normal',
+          confirmationToken: 'write-token',
+        };
+      }
+      return baseImplementation(...args);
+    });
+
+    const sql = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]')!;
+    sql.value = "UPDATE users SET email = 'new@example.com'";
+    sql.dispatchEvent(new Event('input', { bubbles: true }));
+    root.querySelector<HTMLButtonElement>('[data-action="execute-sql"]')!.click();
+    await flush();
+
+    const dialog = root.querySelector<HTMLDialogElement>('dialog[data-sql-write-dialog]')!;
+    expect(dialog.textContent).toContain('users');
+    expect(dialog.textContent).toContain('audit');
+  });
+
   it('requests later SQL result pages instead of discarding rows after fifty', async () => {
     await connect();
     root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();

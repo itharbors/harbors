@@ -62,6 +62,21 @@ describe('SQLite SQL analysis', () => {
     });
   });
 
+  it('extracts the mutated object for every supported object-write syntax', () => {
+    for (const [sql, targetObjects] of [
+      ['INSERT OR REPLACE INTO main.users(id) VALUES (1)', ['users']],
+      ['REPLACE INTO "main"."users"(id) VALUES (1)', ['users']],
+      ['UPDATE OR ABORT [main].[users] SET name = \'A\'', ['users']],
+      ['WITH chosen AS (SELECT 1) DELETE FROM `main`.`users` WHERE id = 1', ['users']],
+      ['ALTER TABLE main.users RENAME TO members', ['users']],
+      ['DROP VIEW IF EXISTS main.active_users', ['active_users']],
+      ['CREATE INDEX users_name ON main.users(name)', ['users']],
+      ['CREATE TRIGGER users_audit AFTER UPDATE ON main.users BEGIN SELECT 1; END', ['users']],
+    ] as const) {
+      expect(analyzeSqlText(sql).targetObjects, sql).toEqual(targetObjects);
+    }
+  });
+
   it('rejects empty and multiple statements', () => {
     expect(() => analyzeSqlText('')).toThrow(/INVALID_SQL/);
     expect(() => analyzeSqlText('SELECT 1; SELECT 2')).toThrow(/MULTIPLE_STATEMENTS/);

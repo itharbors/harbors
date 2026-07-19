@@ -172,7 +172,12 @@ type WorkbenchState = {
   sqlHistory: string[];
   sqlExecutionCounter: number;
   activeExecutionId: string | null;
-  sqlWriteDialog: { confirmationToken: string; risk: 'normal' | 'high'; statementType: string } | null;
+  sqlWriteDialog: {
+    confirmationToken: string;
+    risk: 'normal' | 'high';
+    statementType: string;
+    targetObjects: string[];
+  } | null;
   discardRecordDialog: boolean;
 };
 
@@ -663,6 +668,7 @@ async function executeSql(): Promise<void> {
       confirmationToken: string | null;
       risk: 'normal' | 'high';
       statementType: string;
+      targetObjects: string[];
     }>('analyzeSql', { sql: state.sqlText });
     if (!analysis.readonly) {
       if (!analysis.confirmationToken) throw new Error('当前连接为只读模式，无法执行写 SQL。');
@@ -670,6 +676,7 @@ async function executeSql(): Promise<void> {
         confirmationToken: analysis.confirmationToken,
         risk: analysis.risk,
         statementType: analysis.statementType,
+        targetObjects: analysis.targetObjects,
       };
       return;
     }
@@ -1728,7 +1735,10 @@ function renderSqlWriteDialog(): void {
   const title = document.createElement('h2');
   title.textContent = analysis.risk === 'high' ? '确认高风险 SQL' : '确认写 SQL';
   const summary = document.createElement('p');
-  summary.textContent = `${analysis.statementType} 将修改当前数据库${analysis.risk === 'high' ? '，且可能影响大量结构或记录' : ''}。`;
+  const targetSummary = analysis.targetObjects.length > 0
+    ? `目标对象：${analysis.targetObjects.join('、')}`
+    : '目标对象：数据库级设置';
+  summary.textContent = `${analysis.statementType} 将修改当前数据库；${targetSummary}${analysis.risk === 'high' ? '，且可能影响大量结构或记录' : ''}。`;
   const code = document.createElement('pre');
   code.textContent = state.sqlText;
   const footer = document.createElement('footer');

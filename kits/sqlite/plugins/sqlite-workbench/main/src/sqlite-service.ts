@@ -174,6 +174,11 @@ type SchemaSqlRow = {
   sql: string | null;
 };
 
+type SchemaOwnerRow = {
+  name: string;
+  tbl_name: string;
+};
+
 type TableListRow = {
   schema: string;
   name: string;
@@ -782,7 +787,10 @@ export class SqliteService {
   analyzeSql(input: unknown): SqlAnalysis {
     if (!isRecord(input)) throw workbenchError('INVALID_INPUT', 'SQL 分析参数无效。');
     const sql = requireNonEmptyString(input.sql, 'SQL');
-    const analysis = analyzeSqlText(sql);
+    const parsedAnalysis = analyzeSqlText(sql);
+    const analysis = !parsedAnalysis.readonly && this.connectionMode === 'readwrite'
+      ? { ...parsedAnalysis, targetObjects: this.authorizeSqlTargets(parsedAnalysis) }
+      : parsedAnalysis;
     let confirmationToken: string | null = null;
     if (!analysis.readonly && this.connectionMode === 'readwrite') {
       confirmationToken = this.createToken();
@@ -801,7 +809,10 @@ export class SqliteService {
   async executeSql(input: unknown): Promise<SqlExecutionResult> {
     const request = this.parseSqlExecution(input);
     const analysis = analyzeSqlText(request.sql);
-    if (!analysis.readonly) this.consumeSqlConfirmation(request.sql, request.confirmationToken);
+    if (!analysis.readonly) {
+      this.consumeSqlConfirmation(request.sql, request.confirmationToken);
+      this.authorizeSqlTargets(analysis);
+    }
     const databasePath = this.databasePath;
     const mode = this.connectionMode;
     this.requireDatabase();
@@ -1135,6 +1146,44 @@ export class SqliteService {
       throw workbenchError('INVALID_SQL_CONFIRMATION', '写 SQL 的确认凭证无效或已过期。');
     }
     this.sqlConfirmation = null;
+  }
+
+  private authorizeSqlTargets(analysis: SqlTextAnalysis): string[] {
+    const database = this.requireDatabase();
+    const objects = this.getSchema().objects;
+    const resolvedTargets: string[] = [];
+
+    for (const requestedTarget of analysis.targetObjects) {
+      const schemaOwner = database.prepare(`
+        SELECT name, tbl_name
+        FROM sqlite_schema
+        WHERE name = ? COLLATE NOCASE
+        LIMIT 1
+      `).get(requestedTarget) as SchemaOwnerRow | undefined;
+      const protectedName = schemaOwner?.tbl_name ?? requestedTarget;
+      const object = objects.find((candidate) => (
+        candidate.name.localeCompare(protectedName, 'en', { sensitivity: 'base' }) === 0
+      ));
+
+      if (!object) {
+        if (analysis.statementType !== 'CREATE' && analysis.statementType !== 'DROP') {
+          throw workbenchError('OBJECT_NOT_FOUND', `SQL 目标对象不存在：${requestedTarget}`);
+        }
+        resolvedTargets.push(requestedTarget);
+        continue;
+      }
+
+      const schema = this.getObjectSchema({ name: object.name });
+      if (!schema.writable) {
+        throw workbenchError(
+          'READ_ONLY_OBJECT',
+          `SQL 目标对象不可写：${object.name}。${schema.readOnlyReason ?? '该对象受只读策略保护。'}`,
+        );
+      }
+      resolvedTargets.push(object.name);
+    }
+
+    return [...new Set(resolvedTargets)];
   }
 
   private readInsertedRecord(

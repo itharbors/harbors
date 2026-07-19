@@ -104,6 +104,7 @@ function splitStatements(sql: string): string[] {
       continue;
     }
     if (char === ';') {
+      if (isInsideCreateTriggerBody(sql.slice(start, index))) continue;
       const statement = sql.slice(start, index).trim();
       if (stripComments(statement).trim() !== '') statements.push(statement);
       start = index + 1;
@@ -112,6 +113,25 @@ function splitStatements(sql: string): string[] {
   const tail = sql.slice(start).trim();
   if (stripComments(tail).trim() !== '') statements.push(tail);
   return statements;
+}
+
+function isInsideCreateTriggerBody(sql: string): boolean {
+  const tokens = tokenize(sql);
+  const triggerIndex = tokens.findIndex((token) => token.depth === 0 && token.upper === 'TRIGGER');
+  if (tokens[0]?.upper !== 'CREATE' || triggerIndex < 0) return false;
+  const beginIndex = tokens.findIndex((token, index) => (
+    index > triggerIndex && token.depth === 0 && token.upper === 'BEGIN'
+  ));
+  if (beginIndex < 0) return false;
+  let caseDepth = 0;
+  for (const token of tokens.slice(beginIndex + 1)) {
+    if (token.depth !== 0) continue;
+    if (token.upper === 'CASE') caseDepth += 1;
+    if (token.upper !== 'END') continue;
+    if (caseDepth > 0) caseDepth -= 1;
+    else return false;
+  }
+  return true;
 }
 
 function stripComments(sql: string): string {
@@ -161,26 +181,64 @@ function findWithStatementType(tokens: Token[]): string {
 }
 
 function findTargets(tokens: Token[], statementType: string): string[] {
-  let marker: string | null = null;
-  if (statementType === 'SELECT') marker = 'FROM';
-  if (statementType === 'INSERT' || statementType === 'REPLACE') marker = 'INTO';
-  if (statementType === 'UPDATE') marker = 'UPDATE';
-  if (statementType === 'DELETE') marker = 'FROM';
-  if (['CREATE', 'ALTER', 'DROP'].includes(statementType)) {
+  if (statementType === 'SELECT') return targetAfter(tokens, 'FROM');
+  if (statementType === 'INSERT' || statementType === 'REPLACE') {
+    return requiredMutationTarget(tokens, statementType, targetAfter(tokens, 'INTO'));
+  }
+  if (statementType === 'UPDATE') {
+    return requiredMutationTarget(tokens, statementType, targetAfter(tokens, 'UPDATE'));
+  }
+  if (statementType === 'DELETE') {
+    return requiredMutationTarget(tokens, statementType, targetAfter(tokens, 'FROM'));
+  }
+  if (statementType === 'ALTER') {
+    return requiredMutationTarget(tokens, statementType, targetAfter(tokens, 'TABLE'));
+  }
+  if (statementType === 'CREATE' || statementType === 'DROP') {
     const typeIndex = tokens.findIndex((token) => (
       token.depth === 0 && ['TABLE', 'VIEW', 'INDEX', 'TRIGGER'].includes(token.upper)
     ));
-    if (typeIndex >= 0) return nextIdentifier(tokens, typeIndex + 1);
+    if (typeIndex < 0) return [];
+    const objectType = tokens[typeIndex].upper;
+    const targets = statementType === 'CREATE' && (objectType === 'INDEX' || objectType === 'TRIGGER')
+      ? targetAfter(tokens, 'ON', typeIndex + 1)
+      : nextIdentifier(tokens, typeIndex + 1);
+    return requiredMutationTarget(tokens, statementType, targets);
   }
-  if (marker === null) return [];
-  const index = tokens.findIndex((token) => token.depth === 0 && token.upper === marker);
-  return index < 0 ? [] : nextIdentifier(tokens, index + 1);
+  return [];
 }
 
 function nextIdentifier(tokens: Token[], start: number): string[] {
-  const ignored = new Set(['IF', 'NOT', 'EXISTS', 'OR', 'REPLACE']);
-  const token = tokens.slice(start).find((candidate) => (
-    candidate.depth === 0 && !ignored.has(candidate.upper) && !['(', ')', ',', '='].includes(candidate.value)
+  const ignored = new Set([
+    'IF', 'NOT', 'EXISTS', 'OR', 'REPLACE', 'ABORT', 'FAIL', 'IGNORE', 'ROLLBACK',
+  ]);
+  const index = tokens.findIndex((candidate, candidateIndex) => (
+    candidateIndex >= start
+    && candidate.depth === 0
+    && !ignored.has(candidate.upper)
+    && !['(', ')', ',', '=', '.'].includes(candidate.value)
   ));
-  return token ? [token.value] : [];
+  if (index < 0) return [];
+  const dot = tokens[index + 1];
+  const qualified = tokens[index + 2];
+  return dot?.depth === 0 && dot.value === '.' && qualified?.depth === 0
+    ? [qualified.value]
+    : [tokens[index].value];
+}
+
+function targetAfter(tokens: Token[], marker: string, start = 0): string[] {
+  const index = tokens.findIndex((token, tokenIndex) => (
+    tokenIndex >= start && token.depth === 0 && token.upper === marker
+  ));
+  return index < 0 ? [] : nextIdentifier(tokens, index + 1);
+}
+
+function requiredMutationTarget(tokens: Token[], statementType: string, targets: string[]): string[] {
+  if (targets.length > 0) return targets;
+  const statement = tokens.map((token) => token.value).join(' ');
+  throw new WorkbenchError(
+    'UNSUPPORTED_SQL_TARGET',
+    `无法安全识别 ${statementType} 语句的目标对象。`,
+    statement,
+  );
 }

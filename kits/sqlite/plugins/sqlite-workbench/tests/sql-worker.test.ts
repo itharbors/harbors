@@ -16,6 +16,8 @@ describe('SQLite cancellable SQL worker', () => {
     const fixture = new Database(dbPath);
     fixture.exec(`
       CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT);
+      CREATE VIEW item_labels AS SELECT id, label FROM items;
+      CREATE VIRTUAL TABLE item_fts USING fts5(label);
       INSERT INTO items (label) VALUES ('first'), ('second');
     `);
     fixture.close();
@@ -91,6 +93,34 @@ describe('SQLite cancellable SQL worker', () => {
     expect(optimizeAnalysis).toMatchObject({ readonly: false, confirmationToken: expect.any(String) });
     await expect(service.executeSql({ executionId: 'optimize-blocked', sql: optimizeSql }))
       .rejects.toThrow(/INVALID_SQL_CONFIRMATION/);
+  });
+
+  it('rejects SQL writes to views, virtual tables, and shadow tables before issuing a token', () => {
+    service.setConnectionMode({ mode: 'readwrite' });
+
+    for (const sql of [
+      "DELETE FROM item_labels WHERE id = 1",
+      "INSERT INTO item_fts(label) VALUES ('blocked')",
+      "UPDATE item_fts_config SET v = 1 WHERE k = 'version'",
+    ]) {
+      expect(() => service.analyzeSql({ sql }), sql).toThrow(/READ_ONLY_OBJECT/);
+    }
+  });
+
+  it('revalidates a confirmed target immediately before worker execution', async () => {
+    service.setConnectionMode({ mode: 'readwrite' });
+    const sql = "UPDATE items SET label = 'blocked' WHERE id = 1";
+    const analysis = service.analyzeSql({ sql });
+
+    const concurrent = new Database(dbPath);
+    concurrent.exec('DROP TABLE items; CREATE VIEW items AS SELECT 1 AS id, \'view\' AS label;');
+    concurrent.close();
+
+    await expect(service.executeSql({
+      executionId: 'revalidate-target',
+      sql,
+      confirmationToken: analysis.confirmationToken,
+    })).rejects.toThrow(/READ_ONLY_OBJECT/);
   });
 
   it('returns EXPLAIN QUERY PLAN rows without mutating', async () => {
