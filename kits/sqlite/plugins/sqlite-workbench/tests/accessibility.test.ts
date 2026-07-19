@@ -190,6 +190,132 @@ describe('SQLite workbench accessibility foundations', () => {
     }
   });
 
+  it('keeps live tab focus while relationship, data, and schema requests are pending', async () => {
+    document.body.innerHTML = '<div id="panel-root"></div>';
+    const root = document.querySelector<HTMLDivElement>('#panel-root')!;
+    let resolveGraph!: (result: unknown) => void;
+    let resolveRows!: (result: unknown) => void;
+    let resolveSchema!: (result: unknown) => void;
+    let rowRequests = 0;
+    const emptyRows = {
+      name: 'users',
+      page: 1,
+      pageSize: 50,
+      total: 0,
+      writable: true,
+      columns: ['id'],
+      rows: [],
+    };
+    const userSchema = {
+      name: 'users',
+      kind: 'table',
+      type: 'table',
+      writable: true,
+      hasRowid: true,
+      sql: 'CREATE TABLE users (id INTEGER PRIMARY KEY)',
+      primaryKey: ['id'],
+      columns: [{
+        name: 'id',
+        type: 'INTEGER',
+        notNull: false,
+        primaryKeyOrder: 1,
+        defaultValue: null,
+        hidden: false,
+        generated: false,
+      }],
+      indexes: [],
+    };
+    const request = vi.fn(async (_plugin: string, name: string) => {
+      if (name === 'getConnectionState') {
+        return {
+          connected: true,
+          path: '/tmp/example.sqlite',
+          fileName: 'example.sqlite',
+          mode: 'readonly',
+          sqliteVersion: '3.46.0',
+        };
+      }
+      if (name === 'getSchema') {
+        return {
+          objects: [{
+            name: 'users',
+            kind: 'table',
+            type: 'table',
+            writable: true,
+            sql: userSchema.sql,
+          }],
+        };
+      }
+      if (name === 'getRows') {
+        rowRequests += 1;
+        if (rowRequests === 1) return emptyRows;
+        return new Promise((resolve) => { resolveRows = resolve; });
+      }
+      if (name === 'getObjectSchema') {
+        return new Promise((resolve) => { resolveSchema = resolve; });
+      }
+      if (name === 'getRelationshipGraph') {
+        return new Promise((resolve) => { resolveGraph = resolve; });
+      }
+      throw new Error(`Unexpected request: ${name}`);
+    });
+
+    try {
+      await definition.mount?.({ message: { request } } as never);
+      root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
+      await vi.waitFor(() => expect(document.activeElement)
+        .toBe(root.querySelector('[data-tab="sql"]')));
+
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+        '@itharbors/sqlite-workbench',
+        'getRelationshipGraph',
+      ));
+      expect(document.activeElement).toBe(root.querySelector('[data-tab="relationships"]'));
+      resolveGraph({ tables: [{ name: 'users', kind: 'table', columns: [] }], relationships: [] });
+      await vi.waitFor(() => {
+        expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(1);
+        expect(document.activeElement).toBe(root.querySelector('[data-tab="relationships"]'));
+      });
+
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await vi.waitFor(() => expect(document.activeElement).toBe(root.querySelector('[data-tab="sql"]')));
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await vi.waitFor(() => expect(rowRequests).toBe(2));
+      expect(document.activeElement).toBe(root.querySelector('[data-tab="data"]'));
+      resolveRows({
+        ...emptyRows,
+        total: 1,
+        columns: ['value'],
+        rows: [{ values: ['fresh-row'], identity: null }],
+      });
+      await vi.waitFor(() => {
+        expect(root.querySelector('[data-view="data"]')?.textContent).toContain('fresh-row');
+        expect(document.activeElement).toBe(root.querySelector('[data-tab="data"]'));
+      });
+
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+        '@itharbors/sqlite-workbench',
+        'getObjectSchema',
+        { name: 'users' },
+      ));
+      expect(document.activeElement).toBe(root.querySelector('[data-tab="schema"]'));
+      resolveSchema(userSchema);
+      await vi.waitFor(() => {
+        expect(root.querySelector('[data-view="schema"]')?.textContent).toContain('id');
+        expect(document.activeElement).toBe(root.querySelector('[data-tab="schema"]'));
+      });
+
+      document.activeElement!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+      await vi.waitFor(() => expect(document.activeElement)
+        .toBe(root.querySelector('[data-tab="relationships"]')));
+    } finally {
+      await definition.unmount?.();
+      document.body.innerHTML = '';
+    }
+  });
+
   it('keeps one enabled roving tab selected for an empty connected schema', async () => {
     document.body.innerHTML = '<div id="panel-root"></div>';
     const root = document.querySelector<HTMLDivElement>('#panel-root')!;

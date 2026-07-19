@@ -306,17 +306,20 @@ async function request<T>(name: string, input?: unknown): Promise<T> {
   return controller.request<T>(name, input);
 }
 
-async function runAction(action: () => Promise<void>): Promise<void> {
+async function runAction(
+  action: () => Promise<void>,
+  tabFocusTarget?: WorkbenchState['activeTab'],
+): Promise<void> {
   state.busy = true;
   state.error = null;
-  render();
+  renderPreservingTabFocus(tabFocusTarget);
   try {
     await action();
   } catch (error) {
     state.error = panelError(error);
   } finally {
     state.busy = false;
-    render();
+    renderPreservingTabFocus(tabFocusTarget);
   }
 }
 
@@ -492,39 +495,51 @@ async function selectTab(tab: WorkbenchState['activeTab'], restoreFocus = false)
   viewRequestSequence += 1;
   state.activeTab = tab;
   state.error = null;
-  render();
+  if (restoreFocus) renderAndFocusTab(tab);
+  else render();
   if (tab === 'sql' || (tab !== 'relationships' && !state.selectedName)) {
-    if (restoreFocus) focusActiveTab();
     return;
   }
   if (tab === 'relationships') {
     try {
-      await loadActiveView();
+      await loadActiveView(restoreFocus ? tab : undefined);
     } catch (error) {
       state.error = panelError(error);
     } finally {
-      render();
-      if (restoreFocus) focusActiveTab();
+      renderPreservingTabFocus(restoreFocus ? tab : undefined);
     }
     return;
   }
   await runAction(async () => {
     await loadActiveView();
-  });
-  if (restoreFocus) focusActiveTab();
+  }, restoreFocus ? tab : undefined);
 }
 
 function focusActiveTab(): void {
   root?.querySelector<HTMLButtonElement>(`[data-tab="${state.activeTab}"]`)?.focus();
 }
 
-async function loadActiveView(): Promise<void> {
+function renderAndFocusTab(tab: WorkbenchState['activeTab']): void {
+  render();
+  if (state.activeTab === tab) focusActiveTab();
+}
+
+function renderPreservingTabFocus(tab?: WorkbenchState['activeTab']): void {
+  const shouldRestore = tab !== undefined
+    && state.activeTab === tab
+    && document.activeElement instanceof HTMLElement
+    && document.activeElement.dataset.tab === tab;
+  render();
+  if (shouldRestore && state.activeTab === tab) focusActiveTab();
+}
+
+async function loadActiveView(tabFocusTarget?: WorkbenchState['activeTab']): Promise<void> {
   const sequence = ++viewRequestSequence;
   const generation = connectionGeneration;
   if (state.activeTab === 'relationships') {
     if (state.relationshipGraph) return;
     state.relationshipError = null;
-    render();
+    renderPreservingTabFocus(tabFocusTarget);
     let graph: RelationshipGraph;
     try {
       graph = await request<RelationshipGraph>('getRelationshipGraph');
