@@ -11,7 +11,7 @@
       "panel": {
         "workbench": {
           "entry": "./panel.workbench/dist/index.html",
-          "title": "SQLite Workbench",
+          "title": "SQLite 工作台",
           "minWidth": 560,
           "minHeight": 360,
           "multiInstance": false

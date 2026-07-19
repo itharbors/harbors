@@ -1,3 +1,5 @@
+import { sqliteCopy } from './copy.js';
+
 export type SerializedValue =
   | null
   | string
@@ -47,12 +49,12 @@ export function editableValueFromInput(
       return { type: 'null' };
     case 'integer':
       if (!INTEGER_PATTERN.test(value)) {
-        throw new Error('Enter a base-10 integer');
+        throw new Error(sqliteCopy.validation.integer);
       }
       return { type: 'integer', value };
     case 'real':
       if (value.trim() === '' || !Number.isFinite(Number(value))) {
-        throw new Error('Enter a finite real number');
+        throw new Error(sqliteCopy.validation.real);
       }
       return { type: 'real', value };
     case 'text':

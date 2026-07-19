@@ -274,7 +274,7 @@ export class EditorApp extends HTMLElement {
 
     this.renderedWindow = windowGroup;
     const defaultLayout = createEditorLayout(windowGroup.layout, this.panelMap, this.session.sessionId, windowGroup.id);
-    this.defaultLayoutSignature = stableStringify(windowGroup.layout);
+    this.defaultLayoutSignature = createDefaultLayoutSignature(windowGroup.layout, this.panelMap);
     this.layout = this.loadCachedLayout(bootstrap.kitName ?? 'unknown-kit', windowGroup.id, this.defaultLayoutSignature)
       ?? defaultLayout;
     return this.renderEditorLayoutNode(this.layout);
@@ -285,7 +285,7 @@ export class EditorApp extends HTMLElement {
     if (!this.session || !this.bootstrap) return;
 
     this.renderedWindow = windowDescriptor;
-    this.defaultLayoutSignature = stableStringify(windowDescriptor.layout);
+    this.defaultLayoutSignature = createDefaultLayoutSignature(windowDescriptor.layout, this.panelMap);
     this.layout = createEditorLayout(
       windowDescriptor.layout,
       this.panelMap,
@@ -822,6 +822,21 @@ function stableStringify(value: unknown): string {
     return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableStringify(entry)}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function createDefaultLayoutSignature(
+  layout: LayoutNode,
+  panelMap: Map<string, BootstrapInfo['panels'][number]>,
+): string {
+  const panels = Array.from(panelMap.values())
+    .map((panel) => ({
+      name: panel.name,
+      entry: panel.entry,
+      title: panel.title,
+      titleKey: panel.titleKey,
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name));
+  return stableStringify({ layout, panels });
 }
 
 function rebindLayoutRuntime(node: EditorLayoutNode, sessionId: string, windowId: string): EditorLayoutNode {

@@ -7,6 +7,7 @@ import {
   type RecordFieldDraft,
   type SerializedValue,
 } from './view-model.js';
+import { mysqlCopy } from './copy.js';
 
 const PLUGIN = '@itharbors/mysql-workbench';
 
@@ -202,7 +203,7 @@ function createInitialState(): WorkbenchState {
     sqlResult: null,
     dialog: null,
     busy: false,
-    status: 'Enter a MySQL connection to begin.',
+    status: mysqlCopy.connection.prompt,
     error: null,
   };
 }
@@ -214,41 +215,41 @@ function render(): void {
       <header class="connection-deck">
         <div class="brand-block">
           <span class="brand-mark" aria-hidden="true">MY</span>
-          <span class="brand-copy"><strong>MySQL Workbench</strong><small>direct database access</small></span>
+          <span class="brand-copy"><strong>${mysqlCopy.brand.title}</strong><small>${mysqlCopy.brand.subtitle}</small></span>
         </div>
         <form class="connection-form" data-connection-form>
-          <label>Host<input data-field="host" autocomplete="off"></label>
-          <label class="port-field">Port<input data-field="port" type="number" min="1" max="65535"></label>
-          <label>User<input data-field="user" autocomplete="username"></label>
-          <label>Password<input data-field="password" type="password" autocomplete="current-password"></label>
-          <label>Database<input data-field="database" autocomplete="off"></label>
+          <label>${mysqlCopy.connection.host}<input data-field="host" autocomplete="off"></label>
+          <label class="port-field">${mysqlCopy.connection.port}<input data-field="port" type="number" min="1" max="65535"></label>
+          <label>${mysqlCopy.connection.user}<input data-field="user" autocomplete="username"></label>
+          <label>${mysqlCopy.connection.password}<input data-field="password" type="password" autocomplete="current-password"></label>
+          <label>${mysqlCopy.connection.database}<input data-field="database" autocomplete="off"></label>
           <label class="tls-field"><input data-field="tls" type="checkbox"><span>TLS</span></label>
-          <button class="primary-action" data-action="connect" type="submit">Connect</button>
-          <button data-action="disconnect" type="button">Disconnect</button>
-          <button class="icon-action" data-action="refresh" type="button" aria-label="Refresh database">↻</button>
+          <button class="primary-action" data-action="connect" type="submit">${mysqlCopy.connection.connect}</button>
+          <button data-action="disconnect" type="button">${mysqlCopy.connection.disconnect}</button>
+          <button class="icon-action" data-action="refresh" type="button" aria-label="${mysqlCopy.connection.refresh}">↻</button>
         </form>
         <div class="connection-readout"></div>
       </header>
       <section class="workbench-body">
         <aside class="object-rail">
-          <div class="rail-heading"><span>Database objects</span><span class="object-count"></span></div>
-          <label class="object-search"><span class="sr-only">Filter objects</span><input data-field="object-filter" placeholder="Filter tables and views"></label>
+          <div class="rail-heading"><span>${mysqlCopy.objects.title}</span><span class="object-count"></span></div>
+          <label class="object-search"><span class="sr-only">${mysqlCopy.objects.filterLabel}</span><input data-field="object-filter" placeholder="${mysqlCopy.objects.filterPlaceholder}"></label>
           <div class="object-tree"></div>
         </aside>
         <section class="workspace">
           <div class="workspace-heading">
-            <div class="object-identity"><span class="object-kind"></span><strong class="object-title">No object selected</strong></div>
+            <div class="object-identity"><span class="object-kind"></span><strong class="object-title">${mysqlCopy.objects.noneSelected}</strong></div>
             <div class="data-actions">
-              <button data-action="add-row" type="button">Add row</button>
-              <button data-action="edit-row" type="button">Edit</button>
-              <button class="danger-action" data-action="delete-row" type="button">Delete</button>
+              <button data-action="add-row" type="button">${mysqlCopy.actions.add}</button>
+              <button data-action="edit-row" type="button">${mysqlCopy.actions.edit}</button>
+              <button class="danger-action" data-action="delete-row" type="button">${mysqlCopy.actions.delete}</button>
             </div>
           </div>
           <div class="capability-slot"></div>
-          <div class="tabs" role="tablist" aria-label="MySQL object workspace">
-            <button role="tab" data-tab="data">Data</button>
-            <button role="tab" data-tab="schema">Structure</button>
-            <button role="tab" data-tab="sql">SQL</button>
+          <div class="tabs" role="tablist" aria-label="${mysqlCopy.objects.workspace}">
+            <button role="tab" data-tab="data">${mysqlCopy.tabs.data}</button>
+            <button role="tab" data-tab="schema">${mysqlCopy.tabs.schema}</button>
+            <button role="tab" data-tab="sql">${mysqlCopy.tabs.sql}</button>
           </div>
           <div class="view-host"></div>
         </section>
@@ -281,15 +282,15 @@ function renderConnection(): void {
   const readout = root.querySelector<HTMLElement>('.connection-readout')!;
   if (state.connection.connected) {
     readout.dataset.connection = 'connected';
-    appendText(readout, 'span', 'Connected', 'connection-state');
+    appendText(readout, 'span', mysqlCopy.connection.connectedLabel, 'connection-state');
     appendText(readout, 'strong', state.connection.endpoint ?? 'MySQL');
     appendText(readout, 'span', state.connection.database ?? '', 'connection-database');
-    appendText(readout, 'span', `MySQL ${state.connection.mysqlVersion ?? 'unknown'}`);
-    if (state.connection.tls) appendText(readout, 'span', 'TLS verified', 'secure-badge');
+    appendText(readout, 'span', `MySQL ${state.connection.mysqlVersion ?? mysqlCopy.connection.unknownVersion}`);
+    if (state.connection.tls) appendText(readout, 'span', mysqlCopy.connection.tlsVerified, 'secure-badge');
   } else {
     readout.dataset.connection = 'disconnected';
-    appendText(readout, 'span', 'Disconnected', 'connection-state');
-    appendText(readout, 'span', 'Credentials stay in this server session only.');
+    appendText(readout, 'span', mysqlCopy.connection.disconnectedLabel, 'connection-state');
+    appendText(readout, 'span', mysqlCopy.connection.credentialsLocal);
   }
   root.querySelector<HTMLButtonElement>('[data-action="connect"]')!.disabled = state.busy;
   root.querySelector<HTMLButtonElement>('[data-action="disconnect"]')!.disabled = state.busy || !state.connection.connected;
@@ -312,7 +313,7 @@ function renderObjects(): void {
     const section = document.createElement('section');
     section.className = 'object-group';
     const heading = document.createElement('h3');
-    heading.textContent = type === 'table' ? 'Tables' : 'Views';
+    heading.textContent = type === 'table' ? mysqlCopy.objects.tables : mysqlCopy.objects.views;
     section.append(heading);
     for (const object of group) {
       const button = document.createElement('button');
@@ -330,9 +331,9 @@ function renderObjects(): void {
     tree.append(section);
   }
   if (!state.connection.connected) {
-    appendText(tree, 'p', 'Connect to inspect tables and views.', 'empty-hint');
+    appendText(tree, 'p', mysqlCopy.objects.connectPrompt, 'empty-hint');
   } else if (objects.length === 0) {
-    appendText(tree, 'p', state.objects.length === 0 ? 'This database has no tables or views.' : 'No objects match this filter.', 'empty-hint');
+    appendText(tree, 'p', state.objects.length === 0 ? mysqlCopy.objects.empty : mysqlCopy.objects.noMatch, 'empty-hint');
   }
 }
 
@@ -340,9 +341,11 @@ function renderWorkspace(): void {
   if (!root) return;
   const object = state.objects.find((candidate) => candidate.name === state.selectedName);
   const title = root.querySelector<HTMLElement>('.object-title')!;
-  title.textContent = state.selectedName ?? 'No object selected';
+  title.textContent = state.selectedName ?? mysqlCopy.objects.noneSelected;
   const kind = root.querySelector<HTMLElement>('.object-kind')!;
-  kind.textContent = object?.type ?? 'database';
+  kind.textContent = object
+    ? (object.type === 'table' ? mysqlCopy.objects.table : mysqlCopy.objects.view)
+    : mysqlCopy.objects.database;
 
   const add = root.querySelector<HTMLButtonElement>('[data-action="add-row"]')!;
   const edit = root.querySelector<HTMLButtonElement>('[data-action="edit-row"]')!;
@@ -353,10 +356,10 @@ function renderWorkspace(): void {
 
   const capability = root.querySelector<HTMLElement>('.capability-slot')!;
   if (state.objectSchema?.type === 'view') {
-    appendText(capability, 'p', 'View is read-only. Use SQL for database-defined view behavior.', 'capability-notice');
+    appendText(capability, 'p', mysqlCopy.capability.readonlyView, 'capability-notice');
     capability.firstElementChild?.setAttribute('data-capability-notice', '');
   } else if (state.objectSchema && !state.objectSchema.rowEditable) {
-    appendText(capability, 'p', 'This table has no usable primary key. Add is available; edit and delete are disabled.', 'capability-notice');
+    appendText(capability, 'p', mysqlCopy.capability.noPrimaryKey, 'capability-notice');
     capability.firstElementChild?.setAttribute('data-capability-notice', '');
   }
 
@@ -371,7 +374,7 @@ function renderWorkspace(): void {
     return;
   }
   if (!state.selectedName) {
-    appendText(host, 'p', 'Choose a table or view to inspect it.', 'empty-view');
+    appendText(host, 'p', mysqlCopy.objects.choose, 'empty-view');
     return;
   }
   if (state.activeTab === 'data') renderData(host);
@@ -382,16 +385,12 @@ function renderWorkspace(): void {
 function renderWelcome(host: HTMLElement): void {
   const welcome = document.createElement('section');
   welcome.className = 'welcome-state';
-  appendText(welcome, 'span', 'SERVER → DATABASE → ROW', 'welcome-eyebrow');
-  appendText(welcome, 'h1', 'Inspect MySQL without hiding the SQL.');
-  appendText(welcome, 'p', 'Connect to one database, browse its structure, edit primary-keyed rows, or run a deliberate statement.');
+  appendText(welcome, 'span', mysqlCopy.welcome.eyebrow, 'welcome-eyebrow');
+  appendText(welcome, 'h1', mysqlCopy.welcome.title);
+  appendText(welcome, 'p', mysqlCopy.welcome.description);
   const steps = document.createElement('div');
   steps.className = 'welcome-steps';
-  for (const [label, copy] of [
-    ['Connect', 'Credentials remain in the current server process.'],
-    ['Inspect', 'Read tables, views, keys, indexes, and foreign keys.'],
-    ['Operate', 'Bound CRUD for rows; direct execution in the SQL tab.'],
-  ]) {
+  for (const [label, copy] of mysqlCopy.welcome.steps) {
     const item = document.createElement('article');
     appendText(item, 'strong', label);
     appendText(item, 'span', copy);
@@ -406,7 +405,7 @@ function renderData(host: HTMLElement): void {
   view.dataset.view = 'data';
   view.className = 'data-view';
   if (!state.rows) {
-    appendText(view, 'p', state.busy ? 'Loading rows…' : 'No row data loaded.', 'empty-view');
+    appendText(view, 'p', state.busy ? mysqlCopy.data.loading : mysqlCopy.data.notLoaded, 'empty-view');
     host.append(view);
     return;
   }
@@ -434,26 +433,26 @@ function renderData(host: HTMLElement): void {
   });
   table.append(thead, tbody);
   tableShell.append(table);
-  if (state.rows.rows.length === 0) appendText(tableShell, 'p', 'No rows in this object.', 'empty-table');
+  if (state.rows.rows.length === 0) appendText(tableShell, 'p', mysqlCopy.data.empty, 'empty-table');
 
   const pager = document.createElement('div');
   pager.className = 'pager';
   const start = state.rows.total === 0 ? 0 : (state.rows.page - 1) * state.rows.pageSize + 1;
   const end = Math.min(state.rows.total, state.rows.page * state.rows.pageSize);
-  appendText(pager, 'span', `${start}–${end} of ${state.rows.total}`);
+  appendText(pager, 'span', mysqlCopy.data.range(start, end, state.rows.total));
   const pageSize = document.createElement('select');
   pageSize.dataset.action = 'page-size';
-  pageSize.setAttribute('aria-label', 'Rows per page');
+  pageSize.setAttribute('aria-label', mysqlCopy.data.rowsPerPage);
   for (const size of [25, 50, 100, 250]) {
     const option = document.createElement('option');
     option.value = String(size);
-    option.textContent = `${size} rows`;
+    option.textContent = mysqlCopy.data.pageSize(size);
     option.selected = size === state.pageSize;
     pageSize.append(option);
   }
-  const previous = button('Previous', 'previous-page');
+  const previous = button(mysqlCopy.data.previous, 'previous-page');
   previous.disabled = state.busy || state.rows.page <= 1;
-  const next = button('Next', 'next-page');
+  const next = button(mysqlCopy.data.next, 'next-page');
   next.disabled = state.busy || end >= state.rows.total;
   pager.append(pageSize, previous, next);
   view.append(tableShell, pager);
@@ -466,28 +465,34 @@ function renderSchema(host: HTMLElement): void {
   view.className = 'schema-view';
   const schema = state.objectSchema;
   if (!schema) {
-    appendText(view, 'p', 'No structure loaded.', 'empty-view');
+    appendText(view, 'p', mysqlCopy.schema.notLoaded, 'empty-view');
     host.append(view);
     return;
   }
-  const columnsCard = card('Columns');
+  const columnsCard = card(mysqlCopy.schema.columns);
   const columnsTable = document.createElement('table');
   const header = document.createElement('tr');
-  for (const name of ['Name', 'Type', 'Null', 'Default', 'Extra']) appendText(header, 'th', name);
+  for (const name of [
+    mysqlCopy.schema.name,
+    mysqlCopy.schema.type,
+    mysqlCopy.schema.nullable,
+    mysqlCopy.schema.defaultValue,
+    mysqlCopy.schema.extra,
+  ]) appendText(header, 'th', name);
   columnsTable.append(header);
   for (const column of schema.columns) {
     const row = document.createElement('tr');
     appendText(row, 'td', column.name);
     appendText(row, 'td', column.type);
-    appendText(row, 'td', column.nullable ? 'YES' : 'NO');
+    appendText(row, 'td', column.nullable ? mysqlCopy.schema.yes : mysqlCopy.schema.no);
     appendText(row, 'td', column.defaultValue ?? '—');
-    appendText(row, 'td', column.extra || (column.generated ? 'generated' : '—'));
+    appendText(row, 'td', column.extra || (column.generated ? mysqlCopy.schema.generated : '—'));
     columnsTable.append(row);
   }
   columnsCard.append(columnsTable);
 
-  const indexesCard = card('Indexes');
-  if (schema.indexes.length === 0) appendText(indexesCard, 'p', 'No indexes.');
+  const indexesCard = card(mysqlCopy.schema.indexes);
+  if (schema.indexes.length === 0) appendText(indexesCard, 'p', mysqlCopy.schema.noIndexes);
   for (const index of schema.indexes) {
     const item = document.createElement('div');
     item.className = 'schema-item';
@@ -496,8 +501,8 @@ function renderSchema(host: HTMLElement): void {
     indexesCard.append(item);
   }
 
-  const foreignCard = card('Foreign keys');
-  if (schema.foreignKeys.length === 0) appendText(foreignCard, 'p', 'No foreign keys.');
+  const foreignCard = card(mysqlCopy.schema.foreignKeys);
+  if (schema.foreignKeys.length === 0) appendText(foreignCard, 'p', mysqlCopy.schema.noForeignKeys);
   for (const foreignKey of schema.foreignKeys) {
     const item = document.createElement('div');
     item.className = 'schema-item';
@@ -507,7 +512,7 @@ function renderSchema(host: HTMLElement): void {
     foreignCard.append(item);
   }
 
-  const ddlCard = card('Definition SQL');
+  const ddlCard = card(mysqlCopy.schema.definitionSql);
   const pre = document.createElement('pre');
   pre.textContent = schema.sql;
   ddlCard.append(pre);
@@ -522,12 +527,12 @@ function renderSql(host: HTMLElement): void {
   const editor = document.createElement('div');
   editor.className = 'sql-editor';
   const label = document.createElement('label');
-  label.textContent = 'One statement · direct execution';
+  label.textContent = mysqlCopy.sql.label;
   const textarea = document.createElement('textarea');
   textarea.setAttribute('aria-label', 'SQL');
   textarea.value = state.sqlText;
   textarea.spellcheck = false;
-  const execute = button('Run statement', 'execute-sql');
+  const execute = button(mysqlCopy.sql.run, 'execute-sql');
   execute.className = 'primary-action';
   execute.disabled = state.busy || state.sqlText.trim() === '';
   label.append(textarea);
@@ -552,10 +557,10 @@ function renderSql(host: HTMLElement): void {
       }
       tableShell.append(table);
       result.append(tableShell);
-      if (state.sqlResult.truncated) appendText(result, 'p', 'Result preview stopped at 500 rows.', 'truncated-notice');
+      if (state.sqlResult.truncated) appendText(result, 'p', mysqlCopy.sql.truncated, 'truncated-notice');
     } else {
-      appendText(result, 'strong', `${state.sqlResult.affectedRows} rows affected`);
-      appendText(result, 'span', `Insert ID ${state.sqlResult.insertId} · warnings ${state.sqlResult.warningStatus}`);
+      appendText(result, 'strong', mysqlCopy.sql.affected(state.sqlResult.affectedRows));
+      appendText(result, 'span', mysqlCopy.sql.mutationMeta(state.sqlResult.insertId, state.sqlResult.warningStatus));
     }
     view.append(result);
   }
@@ -564,7 +569,7 @@ function renderSql(host: HTMLElement): void {
 
 function renderStatus(): void {
   if (!root) return;
-  root.querySelector<HTMLElement>('[role="status"]')!.textContent = state.busy ? 'Working…' : state.status;
+  root.querySelector<HTMLElement>('[role="status"]')!.textContent = state.busy ? mysqlCopy.status.working : state.status;
   const slot = root.querySelector<HTMLElement>('.error-slot')!;
   if (state.error) {
     const alert = document.createElement('div');
@@ -580,8 +585,8 @@ function renderRecordDialog(): void {
   dialog.dataset.recordDialog = '';
   dialog.open = true;
   const header = document.createElement('header');
-  appendText(header, 'span', state.dialog.mode === 'add' ? 'INSERT' : 'UPDATE', 'dialog-mode');
-  appendText(header, 'h2', state.dialog.mode === 'add' ? 'Add row' : 'Edit selected row');
+  appendText(header, 'span', state.dialog.mode === 'add' ? mysqlCopy.dialog.insertMode : mysqlCopy.dialog.updateMode, 'dialog-mode');
+  appendText(header, 'h2', state.dialog.mode === 'add' ? mysqlCopy.dialog.add : mysqlCopy.dialog.edit);
   dialog.append(header);
   const form = document.createElement('form');
   form.method = 'dialog';
@@ -594,13 +599,13 @@ function renderRecordDialog(): void {
     include.type = 'checkbox';
     include.dataset.fieldInclude = '';
     include.checked = field.included;
-    include.setAttribute('aria-label', `Include ${field.name}`);
+    include.setAttribute('aria-label', mysqlCopy.dialog.include(field.name));
     const label = document.createElement('label');
     appendText(label, 'strong', field.name);
     appendText(label, 'small', field.dataType);
     const select = document.createElement('select');
     select.dataset.fieldType = '';
-    select.setAttribute('aria-label', `${field.name} value type`);
+    select.setAttribute('aria-label', mysqlCopy.dialog.valueType(field.name));
     for (const type of fieldTypes()) {
       const option = document.createElement('option');
       option.value = type;
@@ -617,8 +622,8 @@ function renderRecordDialog(): void {
   }
   const actions = document.createElement('div');
   actions.className = 'dialog-actions';
-  const cancel = button('Cancel', 'cancel-record');
-  const save = button(state.dialog.mode === 'add' ? 'Add row' : 'Save changes', 'save-record');
+  const cancel = button(mysqlCopy.actions.cancel, 'cancel-record');
+  const save = button(state.dialog.mode === 'add' ? mysqlCopy.actions.add : mysqlCopy.actions.save, 'save-record');
   save.className = 'primary-action';
   actions.append(cancel, save);
   form.append(actions);
@@ -733,7 +738,7 @@ async function connect(): Promise<void> {
     });
     state.connectionForm.password = '';
     await loadSchema(true);
-    state.status = `Connected to ${state.connection.endpoint}/${state.connection.database}.`;
+    state.status = mysqlCopy.connection.connected(state.connection.endpoint, state.connection.database);
   });
 }
 
@@ -745,14 +750,14 @@ async function disconnect(): Promise<void> {
     state.objectSchema = null;
     state.rows = null;
     state.selectedRowIndex = null;
-    state.status = 'Disconnected.';
+    state.status = mysqlCopy.connection.disconnected;
   });
 }
 
 async function refresh(): Promise<void> {
   await perform(async () => {
     await loadSchema(false);
-    state.status = 'Database metadata refreshed.';
+    state.status = mysqlCopy.connection.refreshed;
   });
 }
 
@@ -779,7 +784,7 @@ async function selectObject(name: string): Promise<void> {
     state.page = 1;
     state.selectedRowIndex = null;
     await loadSelected();
-    state.status = `Selected ${name}.`;
+    state.status = mysqlCopy.objects.selected(name);
   });
 }
 
@@ -802,7 +807,7 @@ async function loadRows(): Promise<void> {
 async function loadRowsWithBusy(): Promise<void> {
   await perform(async () => {
     await loadRows();
-    state.status = `Loaded page ${state.page}.`;
+    state.status = mysqlCopy.data.loadedPage(state.page);
   });
 }
 
@@ -864,17 +869,17 @@ async function saveRecord(): Promise<void> {
     }
     if (dialog.mode === 'edit' && Object.keys(values).length === 0) {
       state.dialog = null;
-      state.status = 'No record values changed.';
+      state.status = mysqlCopy.data.unchanged;
       render();
       return;
     }
     await perform(async () => {
       if (dialog.mode === 'add') {
         await request('insertRow', { name: state.selectedName, values });
-        state.status = 'Row added.';
+        state.status = mysqlCopy.data.added;
       } else {
         await request('updateRow', { name: state.selectedName, identity: dialog.identity, values });
-        state.status = 'Row updated.';
+        state.status = mysqlCopy.data.updated;
       }
       state.dialog = null;
       await loadSchema(false);
@@ -890,11 +895,11 @@ async function deleteSelectedRow(): Promise<void> {
   if (!state.objectSchema?.rowEditable || state.selectedRowIndex === null || !state.rows) return;
   const row = state.rows.rows[state.selectedRowIndex];
   if (!row?.identity) return;
-  if (!window.confirm(`Delete the selected row from ${state.selectedName}?`)) return;
+  if (!window.confirm(mysqlCopy.data.confirmDelete(state.selectedName))) return;
   await perform(async () => {
     await request('deleteRow', { name: state.selectedName, identity: row.identity });
     await loadRows();
-    state.status = 'Row deleted.';
+    state.status = mysqlCopy.data.deleted;
   });
 }
 
@@ -904,8 +909,8 @@ async function executeSql(): Promise<void> {
     state.sqlResult = await request<SqlResult>('executeSql', { sql: state.sqlText });
     const elapsed = `${formatMs(state.sqlResult.elapsedMs)} ms`;
     state.status = state.sqlResult.kind === 'rows'
-      ? `${state.sqlResult.rows.length} rows returned · ${elapsed}`
-      : `${state.sqlResult.affectedRows} rows affected · ${elapsed}`;
+      ? mysqlCopy.sql.returnedStatus(state.sqlResult.rows.length, elapsed)
+      : mysqlCopy.sql.affectedStatus(state.sqlResult.affectedRows, elapsed);
     if (state.sqlResult.kind === 'mutation') await loadSchema(false);
   });
 }
@@ -926,7 +931,7 @@ async function perform(operation: () => Promise<void>): Promise<void> {
 }
 
 async function request<T = unknown>(name: string, input?: unknown): Promise<T> {
-  if (!context) throw new Error('MySQL workbench is not mounted');
+  if (!context) throw new Error(mysqlCopy.errors.panelNotMounted);
   return context.message.request(PLUGIN, name, ...(input === undefined ? [] : [input])) as Promise<T>;
 }
 

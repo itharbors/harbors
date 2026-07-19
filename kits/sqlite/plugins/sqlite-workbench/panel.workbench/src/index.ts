@@ -7,6 +7,7 @@ import {
   type RecordFieldDraft,
   type SerializedValue,
 } from './view-model.js';
+import { sqliteCopy } from './copy.js';
 
 const PLUGIN = '@itharbors/sqlite-workbench';
 
@@ -164,13 +165,13 @@ function createInitialState(): WorkbenchState {
     sqlResult: null,
     dialog: null,
     busy: false,
-    status: 'No database connected',
+    status: sqliteCopy.status.initial,
     error: null,
   };
 }
 
 async function request<T>(name: string, input?: unknown): Promise<T> {
-  if (!context) throw new Error('Panel is not mounted');
+  if (!context) throw new Error(sqliteCopy.errors.panelNotMounted);
   return context.message.request(PLUGIN, name, ...(input === undefined ? [] : [input])) as Promise<T>;
 }
 
@@ -192,7 +193,7 @@ async function openDatabase(create: boolean): Promise<void> {
   const input = root?.querySelector<HTMLInputElement>('[data-field="database-path"]');
   state.path = input?.value.trim() ?? state.path.trim();
   if (!state.path) {
-    state.error = 'Enter a local SQLite database path.';
+    state.error = sqliteCopy.connection.enterPath;
     render();
     return;
   }
@@ -209,7 +210,7 @@ async function openDatabase(create: boolean): Promise<void> {
     state.selectedRowIndex = null;
     await loadSchema(true);
     await loadActiveView();
-    state.status = create ? 'Database created' : 'Database opened';
+    state.status = create ? sqliteCopy.connection.created : sqliteCopy.connection.opened;
   });
 }
 
@@ -221,7 +222,7 @@ async function closeDatabase(): Promise<void> {
     state.rows = null;
     state.objectSchema = null;
     state.selectedRowIndex = null;
-    state.status = 'Database closed';
+    state.status = sqliteCopy.connection.closed;
   });
 }
 
@@ -229,7 +230,7 @@ async function refreshWorkbench(): Promise<void> {
   await runAction(async () => {
     await loadSchema(false);
     await loadActiveView();
-    state.status = 'Database refreshed';
+    state.status = sqliteCopy.connection.refreshed;
   });
 }
 
@@ -252,7 +253,7 @@ async function selectObject(name: string): Promise<void> {
     state.objectSchema = null;
     state.selectedRowIndex = null;
     await loadActiveView();
-    state.status = `Selected ${name}`;
+    state.status = sqliteCopy.objects.selected(name);
   });
 }
 
@@ -275,12 +276,12 @@ async function loadActiveView(): Promise<void> {
       pageSize: state.pageSize,
     });
     state.selectedRowIndex = null;
-    state.status = `${state.rows.total.toLocaleString()} rows`;
+    state.status = sqliteCopy.data.rows(state.rows.total);
   } else if (state.activeTab === 'schema') {
     state.objectSchema = await request<ObjectSchema>('getObjectSchema', {
       name: state.selectedName,
     });
-    state.status = `${state.objectSchema.columns.length} columns`;
+    state.status = sqliteCopy.schema.columnCount(state.objectSchema.columns.length);
   }
 }
 
@@ -301,7 +302,7 @@ async function changePageSize(pageSize: number): Promise<void> {
 }
 
 async function ensureObjectSchema(): Promise<ObjectSchema> {
-  if (!state.selectedName) throw new Error('Select a table first');
+  if (!state.selectedName) throw new Error(sqliteCopy.errors.selectTable);
   if (!state.objectSchema || state.objectSchema.name !== state.selectedName) {
     state.objectSchema = await request<ObjectSchema>('getObjectSchema', {
       name: state.selectedName,
@@ -313,11 +314,11 @@ async function ensureObjectSchema(): Promise<ObjectSchema> {
 async function openRecordDialog(mode: 'add' | 'edit'): Promise<void> {
   await runAction(async () => {
     const schema = await ensureObjectSchema();
-    if (!currentObject()?.writable) throw new Error('This database object is read-only');
+    if (!currentObject()?.writable) throw new Error(sqliteCopy.errors.readonly);
     const row = mode === 'edit' && state.selectedRowIndex !== null
       ? state.rows?.rows[state.selectedRowIndex]
       : undefined;
-    if (mode === 'edit' && !row) throw new Error('Select a row to edit');
+    if (mode === 'edit' && !row) throw new Error(sqliteCopy.errors.selectRow);
     state.dialog = {
       mode,
       fields: createRecordDraft(schema.columns, row?.values),
@@ -337,14 +338,14 @@ async function saveRecord(): Promise<void> {
     }
     if (dialog.mode === 'add') {
       await request('insertRow', { name: state.selectedName, values });
-      state.status = 'Row added';
+      state.status = sqliteCopy.data.added;
     } else {
       await request('updateRow', {
         name: state.selectedName,
         identity: dialog.identity,
         values,
       });
-      state.status = 'Row updated';
+      state.status = sqliteCopy.data.updated;
     }
     state.dialog = null;
     await loadSchema(false);
@@ -357,13 +358,13 @@ async function deleteSelectedRow(): Promise<void> {
   if (!state.selectedName || state.selectedRowIndex === null) return;
   const row = state.rows?.rows[state.selectedRowIndex];
   if (!row?.identity) return;
-  if (!window.confirm('Delete the selected row? This cannot be undone.')) return;
+  if (!window.confirm(sqliteCopy.data.confirmDelete)) return;
   await runAction(async () => {
     await request('deleteRow', { name: state.selectedName, identity: row.identity });
     state.selectedRowIndex = null;
     await loadSchema(false);
     await loadActiveView();
-    state.status = 'Row deleted';
+    state.status = sqliteCopy.data.deleted;
   });
 }
 
@@ -373,8 +374,8 @@ async function executeSql(): Promise<void> {
   await runAction(async () => {
     state.sqlResult = await request<SqlResult>('executeSql', { sql: state.sqlText });
     state.status = state.sqlResult.kind === 'rows'
-      ? `${state.sqlResult.rows.length} result rows · ${state.sqlResult.elapsedMs} ms`
-      : `${state.sqlResult.changes} rows changed · ${state.sqlResult.elapsedMs} ms`;
+      ? sqliteCopy.sql.resultRows(state.sqlResult.rows.length, state.sqlResult.elapsedMs)
+      : sqliteCopy.sql.changedRows(state.sqlResult.changes, state.sqlResult.elapsedMs);
     await loadSchema(false);
   });
 }
@@ -384,34 +385,34 @@ function render(): void {
   root.innerHTML = `
     <main class="workbench-shell">
       <header class="connection-bar">
-        <div class="brand-block" aria-label="SQLite Workbench">
+        <div class="brand-block" aria-label="${sqliteCopy.brand.aria}">
           <span class="database-mark" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span><strong>SQLite</strong><small>Workbench</small></span>
+          <span><strong>SQLite</strong><small>${sqliteCopy.brand.subtitle}</small></span>
         </div>
         <form class="connection-form">
           <label class="path-field">
-            <span>Database path</span>
-            <input data-field="database-path" aria-label="Database path" autocomplete="off" spellcheck="false">
+            <span>${sqliteCopy.connection.path}</span>
+            <input data-field="database-path" aria-label="${sqliteCopy.connection.path}" autocomplete="off" spellcheck="false">
           </label>
-          <button type="button" data-action="open" class="primary">Open</button>
-          <button type="button" data-action="create">Create</button>
-          <button type="button" data-action="refresh" aria-label="Refresh database">Refresh</button>
-          <button type="button" data-action="close">Close</button>
+          <button type="button" data-action="open" class="primary">${sqliteCopy.connection.open}</button>
+          <button type="button" data-action="create">${sqliteCopy.connection.create}</button>
+          <button type="button" data-action="refresh" aria-label="${sqliteCopy.connection.refresh}">${sqliteCopy.connection.refresh}</button>
+          <button type="button" data-action="close">${sqliteCopy.connection.close}</button>
         </form>
         <div class="connection-state"></div>
       </header>
       <div class="workbench-body">
         <aside class="object-rail">
-          <div class="rail-heading"><span>Objects</span><b></b></div>
+          <div class="rail-heading"><span>${sqliteCopy.objects.title}</span><b></b></div>
           <div class="object-list"></div>
         </aside>
         <section class="workspace">
           <div class="workspace-heading">
             <div class="object-title"></div>
-            <div class="tabs" role="tablist" aria-label="Object workspace">
-              <button type="button" role="tab" data-tab="data">Data</button>
-              <button type="button" role="tab" data-tab="schema">Structure</button>
-              <button type="button" role="tab" data-tab="sql">SQL</button>
+            <div class="tabs" role="tablist" aria-label="${sqliteCopy.objects.workspace}">
+              <button type="button" role="tab" data-tab="data">${sqliteCopy.tabs.data}</button>
+              <button type="button" role="tab" data-tab="schema">${sqliteCopy.tabs.schema}</button>
+              <button type="button" role="tab" data-tab="sql">${sqliteCopy.tabs.sql}</button>
             </div>
           </div>
           <div class="view-host"></div>
@@ -449,7 +450,7 @@ function renderConnection(): void {
   const host = root!.querySelector<HTMLElement>('.connection-state')!;
   if (!state.connection.connected) {
     host.dataset.state = 'disconnected';
-    host.innerHTML = '<span class="signal"></span><span>Not connected</span>';
+    host.innerHTML = `<span class="signal"></span><span>${sqliteCopy.connection.disconnected}</span>`;
     return;
   }
   host.dataset.connection = 'connected';
@@ -465,11 +466,11 @@ function renderConnection(): void {
 function renderObjects(): void {
   const list = root!.querySelector<HTMLElement>('.object-list')!;
   if (!state.connection.connected) {
-    list.append(emptyMessage('Open a database to inspect its tables and views.'));
+    list.append(emptyMessage(sqliteCopy.objects.openPrompt));
     return;
   }
   if (state.objects.length === 0) {
-    list.append(emptyMessage('This database has no tables or views yet. Use SQL to create one.'));
+    list.append(emptyMessage(sqliteCopy.objects.empty));
     return;
   }
   for (const type of ['table', 'view'] as const) {
@@ -478,7 +479,7 @@ function renderObjects(): void {
     const section = document.createElement('section');
     section.className = 'object-group';
     const title = document.createElement('h2');
-    title.textContent = `${type === 'table' ? 'Tables' : 'Views'} · ${objects.length}`;
+    title.textContent = `${type === 'table' ? sqliteCopy.objects.tables : sqliteCopy.objects.views} · ${objects.length}`;
     section.append(title);
     for (const object of objects) {
       const button = document.createElement('button');
@@ -492,7 +493,7 @@ function renderObjects(): void {
       const name = document.createElement('span');
       name.textContent = object.name;
       const badge = document.createElement('small');
-      badge.textContent = object.type;
+      badge.textContent = object.type === 'table' ? sqliteCopy.objects.table : sqliteCopy.objects.view;
       button.append(icon, name, badge);
       button.addEventListener('click', () => { void selectObject(object.name); });
       section.append(button);
@@ -505,15 +506,19 @@ function renderHeading(): void {
   const title = root!.querySelector<HTMLElement>('.object-title')!;
   const object = currentObject();
   const eyebrow = document.createElement('small');
-  eyebrow.textContent = object ? object.type : 'DATABASE';
+  eyebrow.textContent = object
+    ? (object.type === 'table' ? sqliteCopy.objects.table : sqliteCopy.objects.view)
+    : sqliteCopy.objects.database;
   const name = document.createElement('h1');
-  name.textContent = object?.name ?? (state.connection.connected ? 'Empty database' : 'Connect a database');
+  name.textContent = object?.name ?? (state.connection.connected
+    ? sqliteCopy.objects.emptyDatabase
+    : sqliteCopy.objects.connectDatabase);
   title.append(eyebrow, name);
   if (object && !object.writable) {
     const badge = document.createElement('span');
     badge.dataset.readonly = '';
     badge.className = 'readonly-badge';
-    badge.textContent = 'Read-only view';
+    badge.textContent = sqliteCopy.objects.readonlyView;
     title.append(badge);
   }
 
@@ -539,7 +544,7 @@ function renderActiveView(): void {
     return;
   }
   if (!state.selectedName) {
-    host.append(emptyMessage('No database object is selected.'));
+    host.append(emptyMessage(sqliteCopy.objects.noneSelected));
     return;
   }
   host.append(state.activeTab === 'data' ? renderDataView() : renderSchemaView());
@@ -550,14 +555,14 @@ function renderWelcome(): HTMLElement {
   welcome.className = 'welcome-panel';
   welcome.dataset.state = 'disconnected';
   const label = document.createElement('span');
-  label.textContent = 'LOCAL SQLITE';
+  label.textContent = sqliteCopy.welcome.label;
   const title = document.createElement('h2');
-  title.textContent = 'Open the file. See the truth.';
+  title.textContent = sqliteCopy.welcome.title;
   const copy = document.createElement('p');
-  copy.textContent = 'Inspect structure, page through records, make precise edits, or run one SQL statement at a time.';
+  copy.textContent = sqliteCopy.welcome.description;
   const grid = document.createElement('div');
   grid.className = 'page-grid-signature';
-  for (const text of ['schema', 'rows', 'keys', 'query']) {
+  for (const text of sqliteCopy.welcome.cells) {
     const cell = document.createElement('span');
     cell.textContent = text;
     grid.append(cell);
@@ -574,21 +579,21 @@ function renderDataView(): HTMLElement {
   toolbar.className = 'data-toolbar';
   const writable = Boolean(currentObject()?.writable && state.rows?.writable);
   toolbar.append(
-    actionButton('Add row', 'add-row', !writable, () => openRecordDialog('add'), 'primary'),
-    actionButton('Edit', 'edit-row', !writable || state.selectedRowIndex === null, () => openRecordDialog('edit')),
-    actionButton('Delete', 'delete-row', !writable || state.selectedRowIndex === null, deleteSelectedRow, 'danger'),
+    actionButton(sqliteCopy.data.add, 'add-row', !writable, () => openRecordDialog('add'), 'primary'),
+    actionButton(sqliteCopy.data.edit, 'edit-row', !writable || state.selectedRowIndex === null, () => openRecordDialog('edit')),
+    actionButton(sqliteCopy.data.delete, 'delete-row', !writable || state.selectedRowIndex === null, deleteSelectedRow, 'danger'),
   );
   const meta = document.createElement('span');
-  meta.textContent = state.rows ? `${state.rows.total.toLocaleString()} records` : 'Loading records';
+  meta.textContent = state.rows ? sqliteCopy.data.records(state.rows.total) : sqliteCopy.data.loading;
   toolbar.append(meta);
   view.append(toolbar);
 
   if (!state.rows) {
-    view.append(emptyMessage('Loading the selected object…'));
+    view.append(emptyMessage(sqliteCopy.data.loadingSelected));
     return view;
   }
   if (state.rows.rows.length === 0) {
-    view.append(emptyMessage(state.rows.total === 0 ? 'This table is empty. Add the first row.' : 'No rows on this page.'));
+    view.append(emptyMessage(state.rows.total === 0 ? sqliteCopy.data.empty : sqliteCopy.data.emptyPage));
   } else {
     const scroller = document.createElement('div');
     scroller.className = 'table-scroller';
@@ -625,7 +630,7 @@ function createDataTable(columns: string[], rows: SerializedValue[][], selectabl
       select.type = 'button';
       select.dataset.rowIndex = String(rowIndex);
       select.className = 'row-selector';
-      select.setAttribute('aria-label', `Select row ${rowIndex + 1}`);
+      select.setAttribute('aria-label', sqliteCopy.data.rowSelector(rowIndex + 1));
       select.textContent = String((state.page - 1) * state.pageSize + rowIndex + 1);
       select.addEventListener('click', () => {
         state.selectedRowIndex = rowIndex;
@@ -660,15 +665,15 @@ function renderPagination(): HTMLElement {
   const grid = document.createElement('span');
   grid.className = 'page-grid';
   grid.setAttribute('aria-hidden', 'true');
-  const previous = actionButton('Previous', 'previous-page', state.page <= 1, () => changePage(state.page - 1));
+  const previous = actionButton(sqliteCopy.pagination.previous, 'previous-page', state.page <= 1, () => changePage(state.page - 1));
   const nextDisabled = Boolean(state.rows && state.page * state.pageSize >= state.rows.total);
-  const next = actionButton('Next', 'next-page', nextDisabled, () => changePage(state.page + 1));
+  const next = actionButton(sqliteCopy.pagination.next, 'next-page', nextDisabled, () => changePage(state.page + 1));
   const select = document.createElement('select');
-  select.setAttribute('aria-label', 'Rows per page');
+  select.setAttribute('aria-label', sqliteCopy.pagination.rowsPerPage);
   for (const size of [25, 50, 100, 250]) {
     const option = document.createElement('option');
     option.value = String(size);
-    option.textContent = `${size} / page`;
+    option.textContent = sqliteCopy.pagination.pageSize(size);
     option.selected = size === state.pageSize;
     select.append(option);
   }
@@ -683,13 +688,13 @@ function renderSchemaView(): HTMLElement {
   view.className = 'schema-view';
   const schema = state.objectSchema;
   if (!schema || schema.name !== state.selectedName) {
-    view.append(emptyMessage('Loading structure…'));
+    view.append(emptyMessage(sqliteCopy.schema.loading));
     return view;
   }
   const columnsSection = document.createElement('section');
-  columnsSection.append(sectionTitle('Columns', schema.columns.length));
+  columnsSection.append(sectionTitle(sqliteCopy.schema.columns, schema.columns.length));
   const table = document.createElement('table');
-  table.innerHTML = '<thead><tr><th>Name</th><th>Type</th><th>Flags</th><th>Default</th></tr></thead>';
+  table.innerHTML = `<thead><tr><th>${sqliteCopy.schema.name}</th><th>${sqliteCopy.schema.type}</th><th>${sqliteCopy.schema.flags}</th><th>${sqliteCopy.schema.defaultValue}</th></tr></thead>`;
   const body = document.createElement('tbody');
   for (const column of schema.columns) {
     const tr = document.createElement('tr');
@@ -705,9 +710,9 @@ function renderSchemaView(): HTMLElement {
   columnsSection.append(table);
 
   const indexesSection = document.createElement('section');
-  indexesSection.append(sectionTitle('Indexes', schema.indexes.length));
+  indexesSection.append(sectionTitle(sqliteCopy.schema.indexes, schema.indexes.length));
   if (schema.indexes.length === 0) {
-    indexesSection.append(emptyMessage('No indexes declared.'));
+    indexesSection.append(emptyMessage(sqliteCopy.schema.noIndexes));
   } else {
     for (const index of schema.indexes) {
       const item = document.createElement('div');
@@ -724,7 +729,7 @@ function renderSchemaView(): HTMLElement {
   }
 
   const definitionSection = document.createElement('section');
-  definitionSection.append(sectionTitle('Definition'));
+  definitionSection.append(sectionTitle(sqliteCopy.schema.definition));
   const pre = document.createElement('pre');
   pre.textContent = schema.sql;
   definitionSection.append(pre);
@@ -755,9 +760,9 @@ function renderSqlView(): HTMLElement {
   editor.append(gutter, textarea);
   const toolbar = document.createElement('div');
   toolbar.className = 'sql-toolbar';
-  toolbar.append(actionButton('Run statement', 'execute-sql', state.busy, executeSql, 'primary'));
+  toolbar.append(actionButton(sqliteCopy.sql.run, 'execute-sql', state.busy, executeSql, 'primary'));
   const hint = document.createElement('span');
-  hint.textContent = 'One statement · ⌘/Ctrl + Enter';
+  hint.textContent = sqliteCopy.sql.hint;
   toolbar.append(hint);
   view.append(editor, toolbar);
 
@@ -765,12 +770,12 @@ function renderSqlView(): HTMLElement {
   result.dataset.sqlResult = '';
   result.className = 'sql-result';
   if (!state.sqlResult) {
-    result.append(emptyMessage('Results appear here after you run a statement.'));
+    result.append(emptyMessage(sqliteCopy.sql.emptyResult));
   } else if (state.sqlResult.kind === 'rows') {
     if (state.sqlResult.truncated) {
       const notice = document.createElement('div');
       notice.className = 'result-notice';
-      notice.textContent = 'Showing the first 500 rows.';
+      notice.textContent = sqliteCopy.sql.truncated;
       result.append(notice);
     }
     const scroller = document.createElement('div');
@@ -783,9 +788,9 @@ function renderSqlView(): HTMLElement {
     const number = document.createElement('strong');
     number.textContent = state.sqlResult.changes.toLocaleString();
     const label = document.createElement('span');
-    label.textContent = state.sqlResult.changes === 1 ? 'row changed' : 'rows changed';
+    label.textContent = sqliteCopy.sql.changed;
     const insertId = document.createElement('code');
-    insertId.textContent = `last rowid ${formatValue(state.sqlResult.lastInsertRowid)}`;
+    insertId.textContent = sqliteCopy.sql.lastRowid(formatValue(state.sqlResult.lastInsertRowid));
     summary.append(number, label, insertId);
     result.append(summary);
   }
@@ -800,9 +805,9 @@ function renderRecordDialog(): void {
   dialog.open = true;
   const header = document.createElement('header');
   const eyebrow = document.createElement('small');
-  eyebrow.textContent = state.selectedName ?? 'TABLE';
+  eyebrow.textContent = state.selectedName ?? sqliteCopy.dialog.table;
   const title = document.createElement('h2');
-  title.textContent = dialogState.mode === 'add' ? 'Add row' : 'Edit row';
+  title.textContent = dialogState.mode === 'add' ? sqliteCopy.dialog.add : sqliteCopy.dialog.edit;
   header.append(eyebrow, title);
   const fields = document.createElement('div');
   fields.className = 'record-fields';
@@ -814,19 +819,19 @@ function renderRecordDialog(): void {
     const affinity = document.createElement('small');
     affinity.textContent = field.affinity;
     const select = document.createElement('select');
-    select.setAttribute('aria-label', `${field.name} type`);
+    select.setAttribute('aria-label', sqliteCopy.dialog.fieldType(field.name));
     const types: FieldInputType[] = dialogState.mode === 'add'
       ? ['default', 'null', 'text', 'integer', 'real']
       : ['null', 'text', 'integer', 'real'];
     for (const type of types) {
       const option = document.createElement('option');
       option.value = type;
-      option.textContent = type === 'default' ? 'Use default' : type.toUpperCase();
+      option.textContent = type === 'default' ? sqliteCopy.dialog.useDefault : type.toUpperCase();
       option.selected = type === field.inputType;
       select.append(option);
     }
     const input = document.createElement('input');
-    input.setAttribute('aria-label', `${field.name} value`);
+    input.setAttribute('aria-label', sqliteCopy.dialog.fieldValue(field.name));
     input.value = field.value;
     input.disabled = field.inputType === 'null' || field.inputType === 'default';
     select.addEventListener('change', () => {
@@ -839,12 +844,12 @@ function renderRecordDialog(): void {
   }
   const footer = document.createElement('footer');
   footer.append(
-    actionButton('Cancel', 'cancel-record', false, async () => {
+    actionButton(sqliteCopy.dialog.cancel, 'cancel-record', false, async () => {
       state.dialog = null;
       state.error = null;
       render();
     }),
-    actionButton(dialogState.mode === 'add' ? 'Add row' : 'Save changes', 'save-record', state.busy, saveRecord, 'primary'),
+    actionButton(dialogState.mode === 'add' ? sqliteCopy.dialog.add : sqliteCopy.dialog.save, 'save-record', state.busy, saveRecord, 'primary'),
   );
   dialog.append(header, fields, footer);
   root!.querySelector('.workbench-shell')!.append(dialog);
@@ -853,17 +858,17 @@ function renderRecordDialog(): void {
 function renderStatus(): void {
   const footer = root!.querySelector<HTMLElement>('[role="status"]')!;
   const left = document.createElement('span');
-  left.textContent = state.busy ? 'Working…' : state.status;
+  left.textContent = state.busy ? sqliteCopy.status.working : state.status;
   const center = document.createElement('span');
   center.textContent = state.selectedName ?? '—';
   const right = document.createElement('span');
-  right.textContent = state.connection.connected ? 'foreign keys on · busy timeout 5s' : 'offline';
+  right.textContent = state.connection.connected ? sqliteCopy.status.online : sqliteCopy.status.offline;
   footer.append(left, center, right);
   if (state.error) {
     const alert = document.createElement('div');
     alert.className = 'error-banner';
     alert.setAttribute('role', 'alert');
-    alert.textContent = `${state.error} Check the database path, lock state, or SQL and try again.`;
+    alert.textContent = `${state.error} ${sqliteCopy.status.advice}`;
     root!.querySelector('.workspace')!.prepend(alert);
   }
 }

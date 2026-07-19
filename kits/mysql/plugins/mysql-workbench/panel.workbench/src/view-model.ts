@@ -1,3 +1,5 @@
+import { mysqlCopy } from './copy.js';
+
 export type SerializedValue =
   | null
   | string
@@ -72,28 +74,28 @@ export function editableValueFromInput(
     case 'null':
       return { type: 'null' };
     case 'integer':
-      if (!INTEGER_PATTERN.test(value)) throw new Error('Enter a base-10 integer');
+      if (!INTEGER_PATTERN.test(value)) throw new Error(mysqlCopy.validation.integer);
       return { type: 'integer', value };
     case 'decimal':
-      if (!DECIMAL_PATTERN.test(value)) throw new Error('Enter a valid decimal');
+      if (!DECIMAL_PATTERN.test(value)) throw new Error(mysqlCopy.validation.decimal);
       return { type: 'decimal', value };
     case 'real':
       if (value.trim() === '' || !Number.isFinite(Number(value))) {
-        throw new Error('Enter a finite real number');
+        throw new Error(mysqlCopy.validation.real);
       }
       return { type: 'real', value };
     case 'json':
       try {
         JSON.parse(value);
       } catch {
-        throw new Error('Enter valid JSON');
+        throw new Error(mysqlCopy.validation.json);
       }
       return { type: 'json', value };
     case 'date':
     case 'time':
     case 'datetime':
     case 'timestamp':
-      if (value.trim() === '') throw new Error(`Enter a ${inputType} value`);
+      if (value.trim() === '') throw new Error(mysqlCopy.validation.temporal(inputType));
       return { type: inputType, value };
     case 'text':
       return { type: 'text', value };

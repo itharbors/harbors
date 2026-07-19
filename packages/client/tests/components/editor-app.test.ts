@@ -1675,6 +1675,33 @@ describe('EditorApp default layout', () => {
     expect(window.localStorage.getItem('itharbors:layout:v1:mock-uuid-1234:%40itharbors%2Fkit-default:default-main')).toBeNull();
   });
 
+  it('invalidates a cached layout when a panel descriptor title changes', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const logPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/log.log"]')!;
+    const logGroup = logPanel.closest('ce-panel-group')!;
+    logGroup.dispatchEvent(new CustomEvent('ce-panel-change', { bubbles: true }));
+    expect(window.localStorage.getItem(
+      'itharbors:layout:v1:mock-uuid-1234:%40itharbors%2Fkit-default:default-main',
+    )).toContain('"layout"');
+
+    el.remove();
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      panels: bootstrapPayload.panels.map((panel) => (
+        panel.name === '@ce/log.log' ? { ...panel, title: '日志' } : panel
+      )),
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    expect(el.querySelector('ce-panel[data-panel-name="@ce/log.log"]')?.getAttribute('title'))
+      .toBe('日志');
+  });
+
   it('splits a target group when a tab drops on the content edge', async () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);

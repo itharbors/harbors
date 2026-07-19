@@ -131,6 +131,24 @@ describe('MySQL workbench panel', () => {
     document.body.innerHTML = '';
   });
 
+  it('renders product-controlled interface copy in Chinese', async () => {
+    await mount();
+    expect(root.textContent).toContain('主机');
+    expect(root.textContent).toContain('端口');
+    expect(root.textContent).toContain('用户名');
+    expect(root.textContent).toContain('密码');
+    expect(root.textContent).toContain('连接');
+    expect(root.textContent).not.toContain('No object selected');
+
+    fillConnection();
+    root.querySelector<HTMLButtonElement>('[data-action="connect"]')!.click();
+    await flush();
+
+    expect(root.textContent).toContain('数据库对象');
+    expect(root.textContent).toContain('新增记录');
+    expect(root.textContent).toContain('150 条记录');
+  });
+
   it('connects, clears the password, and renders the first table', async () => {
     await mount();
     expect(root.querySelector('[data-state="disconnected"]')).not.toBeNull();
@@ -233,12 +251,12 @@ describe('MySQL workbench panel', () => {
     await flush();
     expect(root.querySelector<HTMLButtonElement>('[data-action="add-row"]')!.disabled).toBe(false);
     expect(root.querySelector<HTMLButtonElement>('[data-action="edit-row"]')!.disabled).toBe(true);
-    expect(root.querySelector('[data-capability-notice]')?.textContent).toMatch(/primary key/i);
+    expect(root.querySelector('[data-capability-notice]')?.textContent).toContain('主键');
 
     root.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!.click();
     await flush();
     expect(root.querySelector<HTMLButtonElement>('[data-action="add-row"]')!.disabled).toBe(true);
-    expect(root.querySelector('[data-capability-notice]')?.textContent).toMatch(/read.only/i);
+    expect(root.querySelector('[data-capability-notice]')?.textContent).toContain('只读');
   });
 
   it('executes SQL explicitly and preserves it after an error', async () => {
