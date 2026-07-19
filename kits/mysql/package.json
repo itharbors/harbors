@@ -1,0 +1,29 @@
+{
+  "name": "@itharbors/kit-mysql",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "mysql2": "^3.23.0"
+  },
+  "ce-editor": {
+    "kit": {
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "@itharbors/mysql-workbench"
+      ],
+      "theme": {
+        "--ce-accent": "#4f9fdf"
+      }
+    }
+  }
+}

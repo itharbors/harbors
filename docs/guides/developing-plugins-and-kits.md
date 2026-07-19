@@ -280,6 +280,26 @@ npm run dev -- --kit ./kits/sqlite
 SQL 页每次执行一个语句，可运行查询、DDL 或 DML；结果集最多预览 500 行。所有表格生成的
 写操作使用参数绑定，删除记录前会要求确认。
 
+## MySQL Kit
+
+仓库内置的 `@itharbors/kit-mysql` 提供远程 MySQL 数据库工作台。启动前先构建它的插件：
+
+```bash
+node scripts/ce-plugin.mjs build kits/mysql/plugins/mysql-workbench
+npm run dev -- --kit ./kits/mysql
+```
+
+连接时需要填写主机、端口、用户、密码和数据库名，也可启用 TLS。密码只保留在当前 Server
+会话中，不会写入配置或返回 Panel；连接成功后输入框会立即清空。启用 TLS 时由 MySQL 驱动
+验证服务端证书，证书不受信任会导致连接失败。
+
+左侧列出表与视图，数据页支持分页和记录新增、修改、删除，结构页展示字段、主键、索引、
+外键及建表 SQL。视图始终只读；没有可用主键的表可预览和新增，但不能修改或删除。BLOB
+首版只显示大小与十六进制摘要，二进制主键不参与行编辑。
+
+SQL 页每次显式执行一个语句，可运行查询、DDL 或 DML；结果集最多预览 500 行。表格 CRUD
+使用参数绑定并在事务中校验影响行数，数据库权限仍由所连接的 MySQL 账号控制。
+
 ## 参考实现
 
 - [默认 Kit](../../kits/default/package.json)
