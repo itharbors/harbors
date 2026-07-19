@@ -267,6 +267,16 @@ describe('SqliteService connection and schema', () => {
       CREATE TABLE "odd table" ("odd id" INTEGER PRIMARY KEY);
       CREATE VIEW office_names AS SELECT id FROM offices;
       CREATE TABLE view_reference (office_id INTEGER REFERENCES office_names(id));
+      CREATE TABLE generated_values (
+        base INTEGER,
+        virtual_value INTEGER GENERATED ALWAYS AS (base * 2) VIRTUAL,
+        stored_value INTEGER GENERATED ALWAYS AS (base * 3) STORED
+      );
+      CREATE TABLE "ParentItems" ("ParentID" INTEGER PRIMARY KEY);
+      CREATE TABLE "ChildItems" (
+        "ParentRef" INTEGER,
+        FOREIGN KEY (parentref) REFERENCES parentitems(parentid)
+      );
     `);
     fixture.close();
     service.openDatabase({ path: dbPath, create: false });
@@ -294,6 +304,11 @@ describe('SqliteService connection and schema', () => {
     expect(graph.tables.find((table) => table.name === 'view_reference')?.columns).toEqual([
       { name: 'office_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true },
     ]);
+    expect(graph.tables.find((table) => table.name === 'generated_values')?.columns).toEqual([
+      { name: 'base', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: false },
+      { name: 'virtual_value', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: false },
+      { name: 'stored_value', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: false },
+    ]);
     expect(graph.relationships).toEqual(expect.arrayContaining([
       expect.objectContaining({
         fromTable: 'offices',
@@ -315,6 +330,11 @@ describe('SqliteService connection and schema', () => {
         toTable: 'cycle_a',
         columns: [{ from: 'a_id', to: 'id' }],
       }),
+      expect.objectContaining({
+        fromTable: 'ChildItems',
+        toTable: 'ParentItems',
+        columns: [{ from: 'ParentRef', to: 'ParentID' }],
+      }),
     ]));
     const parallelRelationships = graph.relationships.filter((relationship) => (
       relationship.fromTable === 'parallel_links'
@@ -332,6 +352,23 @@ describe('SqliteService connection and schema', () => {
       relationship.fromTable === 'view_reference'
       || relationship.toTable === 'office_names'
     ))).toBe(false);
+  });
+
+  it('reads relationship graph metadata in a linear number of statements', () => {
+    const fixture = new Database(dbPath);
+    fixture.exec(Array.from({ length: 80 }, (_, index) => (
+      `CREATE TABLE scale_${index} (id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES scale_${Math.max(0, index - 1)}(id));`
+    )).join('\n'));
+    fixture.close();
+    service.openDatabase({ path: dbPath, create: false });
+    const prepare = vi.spyOn(Database.prototype, 'prepare');
+
+    const graph = service.getRelationshipGraph();
+
+    const graphTableCount = graph.tables.length;
+    expect(graphTableCount).toBeGreaterThan(80);
+    expect(graph.tables.map((table) => table.name)).toContain('scale_79');
+    expect(prepare.mock.calls.length).toBeLessThanOrEqual(graphTableCount * 2 + 3);
   });
 
   it('creates a missing database only when explicitly requested', () => {

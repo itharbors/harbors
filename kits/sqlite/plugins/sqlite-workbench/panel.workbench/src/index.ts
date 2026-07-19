@@ -459,7 +459,9 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
     || !state.connection.connected
   ) return;
   viewRequestSequence += 1;
-  resetRelationshipState();
+  const schemaChanged = schemaSnapshotSignature(state.objects)
+    !== schemaSnapshotSignature(result.objects);
+  if (schemaChanged) resetRelationshipState();
   state.objects = result.objects;
   const selectedStillExists = state.objects.some((object) => object.name === state.selectedName);
   if (selectFirst || !selectedStillExists) {
@@ -470,6 +472,19 @@ async function loadSchema(selectFirst: boolean): Promise<void> {
   if (!state.selectedName && state.activeTab !== 'relationships' && state.activeTab !== 'sql') {
     state.activeTab = 'relationships';
   }
+}
+
+function schemaSnapshotSignature(objects: SchemaObject[]): string {
+  return JSON.stringify(objects
+    .map((object) => [
+      object.name,
+      object.kind ?? null,
+      object.type,
+      object.writable,
+      object.readOnlyReason ?? null,
+      object.sql,
+    ])
+    .sort((left, right) => String(left[0]).localeCompare(String(right[0]))));
 }
 
 async function selectObject(name: string): Promise<void> {

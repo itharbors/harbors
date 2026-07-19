@@ -260,6 +260,13 @@ type FileIdentity = {
   inode: number;
 };
 
+type RelationshipTableMetadata = {
+  name: string;
+  kind: 'table' | 'virtual';
+  columns: ColumnSchema[];
+  foreignKeys: ForeignKeySchema[];
+};
+
 export class SqliteService {
   private database: Database.Database | null = null;
   private databasePath: string | null = null;
@@ -468,25 +475,38 @@ export class SqliteService {
   }
 
   getRelationshipGraph(): RelationshipGraph {
-    const objects = this.getSchema().objects.filter(
-      (object): object is SchemaObject & { kind: 'table' | 'virtual' } => (
-        object.kind === 'table' || object.kind === 'virtual'
-      ),
+    const database = this.requireDatabase();
+    const objects = (database.prepare('PRAGMA table_list').all() as TableListRow[])
+      .filter((row): row is TableListRow & { type: 'table' | 'virtual' } => (
+        row.schema === 'main'
+        && !row.name.toLowerCase().startsWith('sqlite_')
+        && (row.type === 'table' || row.type === 'virtual')
+      ))
+      .sort((left, right) => compareSqliteNames(left.name, right.name));
+    const schemas = objects.map((object) => this.readRelationshipTable(database, object));
+    const schemaByIdentifier = new Map(
+      schemas.map((schema) => [sqliteIdentifierKey(schema.name), schema]),
     );
-    const visibleNames = new Set(objects.map((object) => object.name));
-    const schemas = objects.map((object) => this.getObjectSchema({ name: object.name }));
+    const visibleColumnsByIdentifier = new Map(
+      schemas.map((schema) => [
+        sqliteIdentifierKey(schema.name),
+        canonicalVisibleColumnNames(schema.columns),
+      ]),
+    );
     const tables = schemas.map((schema) => {
-      const foreignColumns = new Set(schema.foreignKeys.map((key) => key.from));
+      const foreignColumns = new Set(
+        schema.foreignKeys.map((key) => sqliteIdentifierKey(key.from)),
+      );
       return {
         name: schema.name,
-        kind: schema.kind as 'table' | 'virtual',
+        kind: schema.kind,
         columns: schema.columns
-          .filter((column) => !column.hidden)
+          .filter((column) => !column.hidden || column.generated)
           .map((column) => ({
             name: column.name,
             type: column.type,
             primaryKeyOrder: column.primaryKeyOrder,
-            foreignKey: foreignColumns.has(column.name),
+            foreignKey: foreignColumns.has(sqliteIdentifierKey(column.name)),
           })),
       };
     });
@@ -502,12 +522,21 @@ export class SqliteService {
         .flatMap(([id, keys]) => {
           const ordered = [...keys].sort((left, right) => left.sequence - right.sequence);
           const first = ordered[0];
-          if (!first || !visibleNames.has(first.table)) return [];
+          if (!first) return [];
+          const target = schemaByIdentifier.get(sqliteIdentifierKey(first.table));
+          if (!target) return [];
+          const sourceColumns = visibleColumnsByIdentifier.get(sqliteIdentifierKey(schema.name))!;
+          const targetColumns = visibleColumnsByIdentifier.get(sqliteIdentifierKey(target.name))!;
           return [{
             id: `${schema.name}:${id}`,
             fromTable: schema.name,
-            toTable: first.table,
-            columns: ordered.map((key) => ({ from: key.from, to: key.to })),
+            toTable: target.name,
+            columns: ordered.map((key) => ({
+              from: sourceColumns.get(sqliteIdentifierKey(key.from)) ?? key.from,
+              to: key.to === null
+                ? null
+                : targetColumns.get(sqliteIdentifierKey(key.to)) ?? key.to,
+            })),
             onUpdate: first.onUpdate,
             onDelete: first.onDelete,
           }];
@@ -528,18 +557,7 @@ export class SqliteService {
         .prepare(`PRAGMA table_xinfo(${quoteIdentifier(name)})`)
         .all() as TableInfoRow[];
 
-      const columns = tableInfo.map((row) => {
-        const hiddenValue = Number(row.hidden);
-        return {
-          name: row.name,
-          type: row.type ?? '',
-          notNull: Number(row.notnull) !== 0,
-          primaryKeyOrder: Number(row.pk),
-          defaultValue: row.dflt_value,
-          hidden: hiddenValue !== 0,
-          generated: hiddenValue === 2 || hiddenValue === 3,
-        };
-      });
+      const columns = tableInfo.map(columnSchemaFromTableInfo);
       const primaryKey = [...columns]
         .filter((column) => column.primaryKeyOrder > 0)
         .sort((left, right) => left.primaryKeyOrder - right.primaryKeyOrder)
@@ -1108,6 +1126,21 @@ export class SqliteService {
     }));
   }
 
+  private readRelationshipTable(
+    database: Database.Database,
+    object: Pick<TableListRow, 'name' | 'type'> & { type: 'table' | 'virtual' },
+  ): RelationshipTableMetadata {
+    const rows = database
+      .prepare(`PRAGMA table_xinfo(${quoteIdentifier(object.name)})`)
+      .all() as TableInfoRow[];
+    return {
+      name: object.name,
+      kind: object.type,
+      columns: rows.map(columnSchemaFromTableInfo),
+      foreignKeys: object.type === 'table' ? this.readForeignKeys(database, object.name) : [],
+    };
+  }
+
   private readTriggers(database: Database.Database, tableName: string): TriggerSchema[] {
     const rows = database.prepare(`
       SELECT name, sql
@@ -1344,6 +1377,34 @@ function requireNonEmptyString(value: unknown, name: string): string {
     throw workbenchError('INVALID_INPUT', `${name} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function columnSchemaFromTableInfo(row: TableInfoRow): ColumnSchema {
+  const hiddenValue = Number(row.hidden);
+  return {
+    name: row.name,
+    type: row.type ?? '',
+    notNull: Number(row.notnull) !== 0,
+    primaryKeyOrder: Number(row.pk),
+    defaultValue: row.dflt_value,
+    hidden: hiddenValue !== 0,
+    generated: hiddenValue === 2 || hiddenValue === 3,
+  };
+}
+
+function sqliteIdentifierKey(value: string): string {
+  return value.replace(/[A-Z]/g, (character) => character.toLowerCase());
+}
+
+function canonicalVisibleColumnNames(columns: ColumnSchema[]): Map<string, string> {
+  return new Map(columns
+    .filter((column) => !column.hidden || column.generated)
+    .map((column) => [sqliteIdentifierKey(column.name), column.name]));
+}
+
+function compareSqliteNames(left: string, right: string): number {
+  return left.localeCompare(right, 'en', { sensitivity: 'base' })
+    || left.localeCompare(right, 'en');
 }
 
 function chooseRowidAlias(columnNames: string[]): string {

@@ -443,7 +443,7 @@ describe('SQLite workbench panel', () => {
     expect(root.querySelector('.object-title h1')?.textContent).toBe('example.sqlite');
   });
 
-  it('caches the relationship graph until refresh invalidates the schema snapshot', async () => {
+  it('keeps a warm relationship graph when refresh accepts the same schema snapshot', async () => {
     await connect();
 
     root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
@@ -456,7 +456,103 @@ describe('SQLite workbench panel', () => {
 
     root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();
     await flush();
-    expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(2);
+    expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(1);
+  });
+
+  it('keeps a warm relationship graph across SELECT, CRUD, and undo with an unchanged schema', async () => {
+    await connect();
+    const graphRequestCount = (): number => request.mock.calls
+      .filter((call) => call[1] === 'getRelationshipGraph').length;
+
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+    expect(graphRequestCount()).toBe(1);
+
+    root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
+    const sql = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]')!;
+    sql.value = 'SELECT 42';
+    sql.dispatchEvent(new Event('input', { bubbles: true }));
+    root.querySelector<HTMLButtonElement>('[data-action="execute-sql"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    expect(graphRequestCount()).toBe(1);
+
+    const baseImplementation = request.getMockImplementation()!;
+    request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
+      if (args[1] === 'analyzeSql' && (args[2] as { sql?: string })?.sql === 'UPDATE users SET score = 5') {
+        return {
+          readonly: false,
+          statementType: 'UPDATE',
+          targetObjects: ['users'],
+          risk: 'normal',
+          confirmationToken: 'dml-token',
+        };
+      }
+      if (args[1] === 'executeSql' && (args[2] as { confirmationToken?: string })?.confirmationToken === 'dml-token') {
+        return { kind: 'mutation', changes: 1, lastInsertRowid: null, elapsedMs: 0.2 };
+      }
+      return baseImplementation(...args);
+    });
+    root.querySelector<HTMLButtonElement>('[data-tab="sql"]')!.click();
+    const dml = root.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]')!;
+    dml.value = 'UPDATE users SET score = 5';
+    dml.dispatchEvent(new Event('input', { bubbles: true }));
+    root.querySelector<HTMLButtonElement>('[data-action="execute-sql"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="confirm-write-sql"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    expect(graphRequestCount()).toBe(1);
+
+    root.querySelector<HTMLButtonElement>('[data-tab="data"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="add-row"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="save-record"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    expect(graphRequestCount()).toBe(1);
+
+    root.querySelector<HTMLButtonElement>('[data-tab="data"]')!.click();
+    await flush();
+    root.querySelector<HTMLTableRowElement>('tbody tr')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="edit-row"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="save-record"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    expect(graphRequestCount()).toBe(1);
+
+    root.querySelector<HTMLButtonElement>('[data-tab="data"]')!.click();
+    await flush();
+    root.querySelector<HTMLTableRowElement>('tbody tr')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="delete-row"]')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="confirm-delete"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-action="undo-mutation"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await flush();
+    expect(graphRequestCount()).toBe(1);
+  });
+
+  it('invalidates a warm relationship graph when the connection mode changes', async () => {
+    await connect();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(root.querySelectorAll('[data-relationship-table]')).toHaveLength(3));
+    root.querySelector<HTMLButtonElement>('[data-tab="data"]')!.click();
+    await flush();
+
+    root.querySelector<HTMLButtonElement>('[data-action="unlock-writes"]')!.click();
+    root.querySelector<HTMLButtonElement>('[data-action="confirm-write-mode"]')!.click();
+    await flush();
+    root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
+    await vi.waitFor(() => expect(request.mock.calls
+      .filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(2));
   });
 
   it('reloads the relationship graph after DDL accepts a new schema snapshot', async () => {
@@ -486,6 +582,14 @@ describe('SQLite workbench panel', () => {
       if (args[1] === 'executeSql') {
         return { kind: 'mutation', changes: 0, lastInsertRowid: null, elapsedMs: 0.4 };
       }
+      if (args[1] === 'getSchema') {
+        return {
+          objects: [
+            ...schema.objects,
+            { name: 'audit_log', kind: 'table', type: 'table', writable: true, readOnlyReason: null, sql: 'CREATE TABLE audit_log (id INTEGER PRIMARY KEY)' },
+          ],
+        };
+      }
       if (args[1] === 'getRelationshipGraph') return freshGraph;
       return baseImplementation(...args);
     });
@@ -503,7 +607,7 @@ describe('SQLite workbench panel', () => {
     expect(request.mock.calls.filter((call) => call[1] === 'getRelationshipGraph')).toHaveLength(2);
   });
 
-  it('replaces a graph populated while a schema refresh is pending', async () => {
+  it('keeps a graph populated while an unchanged schema refresh is pending', async () => {
     await connect();
     const baseImplementation = request.getMockImplementation()!;
     let resolveSchema!: (result: unknown) => void;
@@ -526,10 +630,11 @@ describe('SQLite workbench panel', () => {
     root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
     await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="old_snapshot"]')).not.toBeNull());
     resolveSchema(schema);
-    await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="fresh_snapshot"]')).not.toBeNull());
+    await flush();
 
-    expect(root.querySelector('[data-relationship-table="old_snapshot"]')).toBeNull();
-    expect(graphRequests).toBe(2);
+    expect(root.querySelector('[data-relationship-table="old_snapshot"]')).not.toBeNull();
+    expect(root.querySelector('[data-relationship-table="fresh_snapshot"]')).toBeNull();
+    expect(graphRequests).toBe(1);
   });
 
   it('ignores an old graph request that resolves after a newer schema snapshot is accepted', async () => {
@@ -557,7 +662,12 @@ describe('SQLite workbench panel', () => {
     root.querySelector<HTMLButtonElement>('[data-tab="relationships"]')!.click();
     await vi.waitFor(() => expect(graphRequests).toBe(1));
 
-    resolveSchema(schema);
+    resolveSchema({
+      objects: [
+        ...schema.objects,
+        { name: 'fresh_snapshot', kind: 'table', type: 'table', writable: true, readOnlyReason: null, sql: 'CREATE TABLE fresh_snapshot (id INTEGER)' },
+      ],
+    });
     await vi.waitFor(() => expect(root.querySelector('[data-relationship-table="fresh_snapshot"]')).not.toBeNull());
     resolveOldGraph({
       tables: [{ name: 'old_snapshot', kind: 'table', columns: [] }],
@@ -652,6 +762,7 @@ describe('SQLite workbench panel', () => {
     const baseImplementation = request.getMockImplementation()!;
     request.mockImplementation(async (...args: Parameters<typeof baseImplementation>) => {
       if (args[1] === 'getRelationshipGraph') return { tables: [], relationships: [] };
+      if (args[1] === 'getSchema') return { objects: [] };
       return baseImplementation(...args);
     });
     await connect();
@@ -664,6 +775,7 @@ describe('SQLite workbench panel', () => {
       if (args[1] === 'getRelationshipGraph') {
         return { tables: relationshipGraph.tables, relationships: [] };
       }
+      if (args[1] === 'getSchema') return schema;
       return baseImplementation(...args);
     });
     root.querySelector<HTMLButtonElement>('[data-action="refresh"]')!.click();

@@ -1382,7 +1382,7 @@ dialog:not([data-record-dialog]) footer {
 
 .relationship-view {
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr);
+  grid-template-rows: 42px minmax(0, 1fr) auto;
   width: 100%;
   height: 100%;
   min-width: 0;
@@ -1456,6 +1456,11 @@ dialog:not([data-record-dialog]) footer {
   transition: opacity 120ms ease;
 }
 
+.relationship-edges marker path {
+  fill: var(--teal);
+  stroke: none;
+}
+
 .relationship-edges path[data-dimmed="true"] {
   opacity: 0.16;
 }
@@ -1483,6 +1488,45 @@ dialog:not([data-record-dialog]) footer {
   outline: 3px solid var(--amber);
   outline-offset: 3px;
   opacity: 1;
+}
+
+.relationship-details {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+  max-height: 132px;
+  gap: 12px;
+  padding: 8px 12px;
+  overflow: auto;
+  border-top: 1px solid var(--grid-strong);
+  color: var(--text-muted);
+  background: var(--deck);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.relationship-details > strong {
+  color: #edf4f5;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.relationship-details ul {
+  display: grid;
+  min-width: 0;
+  gap: 5px 18px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.relationship-details li {
+  overflow-wrap: anywhere;
+  transition: opacity 120ms ease;
+}
+
+.relationship-details li[data-dimmed="true"] {
+  opacity: 0.28;
 }
 
 .relationship-table-heading {

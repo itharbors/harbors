@@ -89,37 +89,55 @@ function findStronglyConnectedComponents(
   const onStack = new Set<string>();
   const components: string[][] = [];
 
-  const visit = (name: string): void => {
+  const initialize = (name: string): void => {
     indices.set(name, nextIndex);
     lowLinks.set(name, nextIndex);
     nextIndex += 1;
     stack.push(name);
     onStack.add(name);
-
-    for (const child of adjacency.get(name) ?? []) {
-      if (!indices.has(child)) {
-        visit(child);
-        lowLinks.set(name, Math.min(lowLinks.get(name)!, lowLinks.get(child)!));
-      } else if (onStack.has(child)) {
-        lowLinks.set(name, Math.min(lowLinks.get(name)!, indices.get(child)!));
-      }
-    }
-
-    if (lowLinks.get(name) !== indices.get(name)) return;
-    const component: string[] = [];
-    let member: string;
-    do {
-      member = stack.pop()!;
-      onStack.delete(member);
-      component.push(member);
-    } while (member !== name);
-    component.sort(compareNames);
-    components.push(component);
   };
 
-  for (const name of names) {
-    if (!indices.has(name)) visit(name);
+  for (const start of names) {
+    if (indices.has(start)) continue;
+    initialize(start);
+    const frames: Array<{ name: string; nextChild: number; parent: string | null }> = [
+      { name: start, nextChild: 0, parent: null },
+    ];
+
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1];
+      const children = adjacency.get(frame.name) ?? [];
+      if (frame.nextChild < children.length) {
+        const child = children[frame.nextChild++];
+        if (!indices.has(child)) {
+          initialize(child);
+          frames.push({ name: child, nextChild: 0, parent: frame.name });
+        } else if (onStack.has(child)) {
+          lowLinks.set(frame.name, Math.min(lowLinks.get(frame.name)!, indices.get(child)!));
+        }
+        continue;
+      }
+
+      frames.pop();
+      if (frame.parent !== null) {
+        lowLinks.set(
+          frame.parent,
+          Math.min(lowLinks.get(frame.parent)!, lowLinks.get(frame.name)!),
+        );
+      }
+      if (lowLinks.get(frame.name) !== indices.get(frame.name)) continue;
+      const component: string[] = [];
+      let member: string;
+      do {
+        member = stack.pop()!;
+        onStack.delete(member);
+        component.push(member);
+      } while (member !== frame.name);
+      component.sort(compareNames);
+      components.push(component);
+    }
   }
+
   return components.sort((left, right) => compareNames(left[0], right[0]));
 }
 
@@ -480,9 +498,24 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
   edges.setAttribute('height', String(layout.height));
   edges.setAttribute('viewBox', `0 0 ${layout.width} ${layout.height}`);
   edges.setAttribute('aria-hidden', 'true');
+  const definitions = document.createElementNS(SVG_NAMESPACE, 'defs');
+  const marker = document.createElementNS(SVG_NAMESPACE, 'marker');
+  marker.id = 'relationship-arrow';
+  marker.setAttribute('viewBox', '0 0 8 8');
+  marker.setAttribute('refX', '7');
+  marker.setAttribute('refY', '4');
+  marker.setAttribute('markerWidth', '7');
+  marker.setAttribute('markerHeight', '7');
+  marker.setAttribute('orient', 'auto-start-reverse');
+  const arrow = document.createElementNS(SVG_NAMESPACE, 'path');
+  arrow.setAttribute('d', 'M 0 0 L 8 4 L 0 8 Z');
+  marker.append(arrow);
+  definitions.append(marker);
+  edges.append(definitions);
   for (const edge of layout.edges) {
     const path = document.createElementNS(SVG_NAMESPACE, 'path');
     path.setAttribute('d', edge.path);
+    path.setAttribute('marker-end', 'url(#relationship-arrow)');
     path.dataset.relationshipEdge = edge.id;
     path.dataset.dimmed = String(
       query.length > 0
@@ -548,6 +581,29 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
   }
   canvas.append(stage);
   view.append(canvas);
+
+  if (layout.edges.length > 0) {
+    const details = document.createElement('aside');
+    details.className = 'relationship-details';
+    details.setAttribute('aria-label', '关系映射明细');
+    const heading = document.createElement('strong');
+    heading.textContent = `关系明细 (${layout.edges.length})`;
+    const list = document.createElement('ul');
+    for (const edge of layout.edges) {
+      const relationship = relationshipById.get(edge.id)!;
+      const item = document.createElement('li');
+      item.dataset.relationshipDetail = edge.id;
+      item.dataset.dimmed = String(
+        query.length > 0
+        && !matchesRelationshipSearch(edge.fromTable, query)
+        && !matchesRelationshipSearch(edge.toTable, query),
+      );
+      item.textContent = relationshipSummary(relationship);
+      list.append(item);
+    }
+    details.append(heading, list);
+    view.append(details);
+  }
 
   const summaries = document.createElement('ul');
   summaries.className = 'sr-only';

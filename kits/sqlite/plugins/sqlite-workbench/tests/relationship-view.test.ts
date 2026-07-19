@@ -215,6 +215,10 @@ describe('SQLite relationship view', () => {
     expect(view.querySelector('[data-relationship-table="parents"]')?.getAttribute('data-dimmed')).toBe('true');
     expect(view.querySelectorAll('svg [data-relationship-edge]')).toHaveLength(1);
     expect(view.querySelector('[data-relationship-summary]')?.textContent).toContain('children.parent_id → parents.id');
+    expect(view.querySelector('[data-relationship-detail="children:0"]')?.textContent)
+      .toContain('children.parent_id → parents.id');
+    expect(view.querySelector('[data-relationship-edge="children:0"]')?.getAttribute('marker-end'))
+      .toBe('url(#relationship-arrow)');
     const child = view.querySelector<HTMLElement>('[data-relationship-table="children"]')!;
     child.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(onOpenTable).toHaveBeenCalledWith('children');
@@ -412,6 +416,26 @@ describe('SQLite relationship view', () => {
     expect(layoutRelationshipGraph(cyclicGraph)).toEqual(layout);
   });
 
+  it('shows every reciprocal and parallel mapping in a visible relationship list', () => {
+    const view = renderRelationshipView({
+      graph: cyclicGraph,
+      viewport: { x: 0, y: 0, scale: 1 },
+      query: '',
+      onViewportChange: vi.fn(),
+      onOpenTable: vi.fn(),
+    });
+
+    const details = [...view.querySelectorAll<HTMLElement>('[data-relationship-detail]')];
+    expect(details).toHaveLength(cyclicGraph.relationships.length);
+    expect(details.every((detail) => !detail.closest('.sr-only'))).toBe(true);
+    expect(details.map((detail) => detail.textContent)).toEqual(expect.arrayContaining([
+      expect.stringContaining('cycle_a.b_id → cycle_b.id'),
+      expect.stringContaining('cycle_b.a_id → cycle_a.id'),
+      expect.stringContaining('links.primary_target_id → targets.id'),
+      expect.stringContaining('links.backup_target_id → targets.id'),
+    ]));
+  });
+
   it('routes reciprocal same-rank relationships on distinct tracks', () => {
     const layout = layoutRelationshipGraph(crowdedCycleGraph);
     const reciprocal = layout.edges.filter((edge) => edge.fromTable.startsWith('cycle_'));
@@ -441,5 +465,26 @@ describe('SQLite relationship view', () => {
       expect(Math.max(...pathCoordinates(path).map((coordinate) => coordinate.x)))
         .toBeGreaterThan(employee.x + employee.width);
     }
+  });
+
+  it('lays out a five-thousand-table chain without exhausting the call stack', () => {
+    const tables = Array.from({ length: 5_000 }, (_, index) => ({
+      name: `chain_${String(index).padStart(4, '0')}`,
+      kind: 'table' as const,
+      columns: [{ name: 'parent_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: index > 0 }],
+    }));
+    const relationships = tables.slice(1).map((table, index) => ({
+      id: `${table.name}:0`,
+      fromTable: table.name,
+      toTable: tables[index].name,
+      columns: [{ from: 'parent_id', to: 'id' }],
+      onUpdate: 'NO ACTION',
+      onDelete: 'NO ACTION',
+    }));
+
+    const layout = layoutRelationshipGraph({ tables, relationships });
+
+    expect(layout.nodes).toHaveLength(5_000);
+    expect(layout.edges).toHaveLength(4_999);
   });
 });
