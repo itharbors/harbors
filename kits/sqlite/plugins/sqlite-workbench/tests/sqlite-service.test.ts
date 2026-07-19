@@ -231,6 +231,20 @@ describe('SqliteService connection and schema', () => {
     ]);
   });
 
+  it('requires a connection before building a relationship graph', () => {
+    let error: unknown;
+    try {
+      service.getRelationshipGraph();
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(WorkbenchError);
+    expect(toPublicError(error)).toEqual({
+      code: 'NOT_CONNECTED',
+      message: '尚未连接 SQLite 数据库。',
+    });
+  });
+
   it('builds a complete user-table relationship graph', () => {
     const fixture = new Database(dbPath);
     fixture.exec(`
@@ -244,9 +258,15 @@ describe('SqliteService connection and schema', () => {
       );
       CREATE TABLE cycle_a (id INTEGER PRIMARY KEY, b_id INTEGER REFERENCES cycle_b(id));
       CREATE TABLE cycle_b (id INTEGER PRIMARY KEY, a_id INTEGER REFERENCES cycle_a(id));
+      CREATE TABLE parallel_targets (id INTEGER PRIMARY KEY);
+      CREATE TABLE parallel_links (
+        primary_target_id INTEGER REFERENCES parallel_targets(id),
+        backup_target_id INTEGER REFERENCES parallel_targets(id)
+      );
       CREATE TABLE isolated (id INTEGER PRIMARY KEY, note TEXT);
       CREATE TABLE "odd table" ("odd id" INTEGER PRIMARY KEY);
       CREATE VIEW office_names AS SELECT id FROM offices;
+      CREATE TABLE view_reference (office_id INTEGER REFERENCES office_names(id));
     `);
     fixture.close();
     service.openDatabase({ path: dbPath, create: false });
@@ -265,6 +285,15 @@ describe('SqliteService connection and schema', () => {
         { name: 'parent_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true },
       ]),
     });
+    expect(graph.tables.find((table) => table.name === 'odd table')?.columns).toEqual([
+      { name: 'odd id', type: 'INTEGER', primaryKeyOrder: 1, foreignKey: false },
+    ]);
+    expect(graph.tables.find((table) => table.name === 'chunk_fts')?.columns).toEqual([
+      { name: 'body', type: '', primaryKeyOrder: 0, foreignKey: false },
+    ]);
+    expect(graph.tables.find((table) => table.name === 'view_reference')?.columns).toEqual([
+      { name: 'office_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true },
+    ]);
     expect(graph.relationships).toEqual(expect.arrayContaining([
       expect.objectContaining({
         fromTable: 'offices',
@@ -276,7 +305,33 @@ describe('SqliteService connection and schema', () => {
         toTable: 'offices',
         columns: [{ from: 'parent_id', to: 'id' }],
       }),
+      expect.objectContaining({
+        fromTable: 'cycle_a',
+        toTable: 'cycle_b',
+        columns: [{ from: 'b_id', to: 'id' }],
+      }),
+      expect.objectContaining({
+        fromTable: 'cycle_b',
+        toTable: 'cycle_a',
+        columns: [{ from: 'a_id', to: 'id' }],
+      }),
     ]));
+    const parallelRelationships = graph.relationships.filter((relationship) => (
+      relationship.fromTable === 'parallel_links'
+      && relationship.toTable === 'parallel_targets'
+    ));
+    expect(parallelRelationships).toHaveLength(2);
+    expect(new Set(parallelRelationships.map((relationship) => relationship.id)).size).toBe(2);
+    expect(parallelRelationships.map((relationship) => relationship.columns)).toEqual(
+      expect.arrayContaining([
+        [{ from: 'primary_target_id', to: 'id' }],
+        [{ from: 'backup_target_id', to: 'id' }],
+      ]),
+    );
+    expect(graph.relationships.some((relationship) => (
+      relationship.fromTable === 'view_reference'
+      || relationship.toTable === 'office_names'
+    ))).toBe(false);
   });
 
   it('creates a missing database only when explicitly requested', () => {
