@@ -108,6 +108,94 @@ const cyclicGraph: RelationshipGraph = {
   ],
 };
 
+const crowdedCycleGraph: RelationshipGraph = {
+  tables: [
+    {
+      name: 'cycle_a',
+      kind: 'table',
+      columns: [{ name: 'b_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true }],
+    },
+    {
+      name: 'cycle_b',
+      kind: 'table',
+      columns: [{ name: 'a_id', type: 'INTEGER', primaryKeyOrder: 0, foreignKey: true }],
+    },
+    {
+      name: 'employees',
+      kind: 'table',
+      columns: Array.from({ length: 8 }, (_, index) => ({
+        name: `manager_${index}_id`,
+        type: 'INTEGER',
+        primaryKeyOrder: 0,
+        foreignKey: true,
+      })),
+    },
+  ],
+  relationships: [
+    {
+      id: 'cycle_a:0',
+      fromTable: 'cycle_a',
+      toTable: 'cycle_b',
+      columns: [{ from: 'b_id', to: 'id' }],
+      onUpdate: 'NO ACTION',
+      onDelete: 'NO ACTION',
+    },
+    {
+      id: 'cycle_b:0',
+      fromTable: 'cycle_b',
+      toTable: 'cycle_a',
+      columns: [{ from: 'a_id', to: 'id' }],
+      onUpdate: 'NO ACTION',
+      onDelete: 'NO ACTION',
+    },
+    ...Array.from({ length: 8 }, (_, index): RelationshipGraph['relationships'][number] => ({
+      id: `employees:${index}`,
+      fromTable: 'employees',
+      toTable: 'employees',
+      columns: [{ from: `manager_${index}_id`, to: 'id' }],
+      onUpdate: 'NO ACTION',
+      onDelete: 'SET NULL',
+    })),
+  ],
+};
+
+function pathCoordinates(path: string): Array<{ x: number; y: number }> {
+  const tokens = path.match(/[A-Z]|-?\d+(?:\.\d+)?/g) ?? [];
+  const coordinates: Array<{ x: number; y: number }> = [];
+  let x = 0;
+  let y = 0;
+  let index = 0;
+  while (index < tokens.length) {
+    const command = tokens[index++];
+    if (command === 'M') {
+      x = Number(tokens[index++]);
+      y = Number(tokens[index++]);
+      coordinates.push({ x, y });
+    } else if (command === 'H') {
+      x = Number(tokens[index++]);
+      coordinates.push({ x, y });
+    } else if (command === 'V') {
+      y = Number(tokens[index++]);
+      coordinates.push({ x, y });
+    } else if (command === 'C') {
+      for (let point = 0; point < 3; point += 1) {
+        x = Number(tokens[index++]);
+        y = Number(tokens[index++]);
+        coordinates.push({ x, y });
+      }
+    } else {
+      throw new Error(`Unsupported path command: ${command}`);
+    }
+  }
+  return coordinates;
+}
+
+function orthogonalMidpointX(path: string): number {
+  const match = path.match(/ H (-?\d+(?:\.\d+)?) V /);
+  if (!match) throw new Error(`Missing orthogonal midpoint: ${path}`);
+  return Number(match[1]);
+}
+
 describe('SQLite relationship view', () => {
   it('places parents before children and isolated tables below without overlap', () => {
     const first = layoutRelationshipGraph(graph);
@@ -153,5 +241,36 @@ describe('SQLite relationship view', () => {
     ).size).toBe(2);
     expect(layout.nodes.filter((node) => ['cycle_a', 'cycle_b'].includes(node.name))).toHaveLength(2);
     expect(layoutRelationshipGraph(cyclicGraph)).toEqual(layout);
+  });
+
+  it('routes reciprocal same-rank relationships on distinct tracks', () => {
+    const layout = layoutRelationshipGraph(crowdedCycleGraph);
+    const reciprocal = layout.edges.filter((edge) => edge.fromTable.startsWith('cycle_'));
+    expect(new Set(reciprocal.map((edge) => orthogonalMidpointX(edge.path))).size).toBe(2);
+  });
+
+  it('includes every routed edge coordinate inside the declared layout bounds', () => {
+    const layout = layoutRelationshipGraph(crowdedCycleGraph);
+    for (const edge of layout.edges) {
+      for (const coordinate of pathCoordinates(edge.path)) {
+        expect(coordinate.x).toBeGreaterThanOrEqual(0);
+        expect(coordinate.x).toBeLessThanOrEqual(layout.width);
+        expect(coordinate.y).toBeGreaterThanOrEqual(0);
+        expect(coordinate.y).toBeLessThanOrEqual(layout.height);
+      }
+    }
+  });
+
+  it('keeps eight parallel self references distinct and strictly right of their node', () => {
+    const layout = layoutRelationshipGraph(crowdedCycleGraph);
+    const employee = layout.nodes.find((node) => node.name === 'employees')!;
+    const selfPaths = layout.edges
+      .filter((edge) => edge.fromTable === 'employees' && edge.toTable === 'employees')
+      .map((edge) => edge.path);
+    expect(new Set(selfPaths).size).toBe(8);
+    for (const path of selfPaths) {
+      expect(Math.max(...pathCoordinates(path).map((coordinate) => coordinate.x)))
+        .toBeGreaterThan(employee.x + employee.width);
+    }
   });
 });

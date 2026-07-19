@@ -172,7 +172,7 @@ function rankComponents(
 function routeRelationships(
   relationships: Relationship[],
   nodes: RelationshipNodeLayout[],
-): RelationshipEdgeLayout[] {
+): { edges: RelationshipEdgeLayout[]; maxX: number; maxY: number } {
   const nodeByName = new Map(nodes.map((node) => [node.name, node]));
   const sorted = relationships
     .filter((relationship) => (
@@ -182,17 +182,21 @@ function routeRelationships(
     .sort((left, right) => compareNames(left.id, right.id));
   const groups = new Map<string, Relationship[]>();
   for (const relationship of sorted) {
-    const key = `${relationship.fromTable}\u0000${relationship.toTable}`;
+    const pair = [relationship.fromTable, relationship.toTable].sort(compareNames);
+    const key = `${pair[0]}\u0000${pair[1]}`;
     const group = groups.get(key) ?? [];
     group.push(relationship);
     groups.set(key, group);
   }
 
-  return sorted.map((relationship) => {
+  let maxX = 0;
+  let maxY = 0;
+  const edges = sorted.map((relationship) => {
     const from = nodeByName.get(relationship.fromTable)!;
     const to = nodeByName.get(relationship.toTable)!;
-    const group = groups.get(`${relationship.fromTable}\u0000${relationship.toTable}`)!;
-    const parallelOffset = (group.indexOf(relationship) - (group.length - 1) / 2) * PARALLEL_EDGE_GAP;
+    const pair = [relationship.fromTable, relationship.toTable].sort(compareNames);
+    const group = groups.get(`${pair[0]}\u0000${pair[1]}`)!;
+    const parallelOffset = group.indexOf(relationship) * PARALLEL_EDGE_GAP;
     const fromY = from.y + from.height / 2;
     const toY = to.y + to.height / 2;
     let path: string;
@@ -201,16 +205,22 @@ function routeRelationships(
       const right = from.x + from.width;
       const loopWidth = RELATIONSHIP_LAYOUT.padding - 12 + parallelOffset;
       path = `M ${right} ${fromY} C ${right + loopWidth} ${fromY - 36} ${right + loopWidth} ${fromY + 36} ${right} ${fromY}`;
+      maxX = Math.max(maxX, right + loopWidth);
+      maxY = Math.max(maxY, fromY + 36);
     } else if (from.x === to.x) {
       const right = from.x + from.width;
       const midpoint = right + RELATIONSHIP_LAYOUT.layerGap / 2 + parallelOffset;
       path = `M ${right} ${fromY} H ${midpoint} V ${toY} H ${right}`;
+      maxX = Math.max(maxX, midpoint);
+      maxY = Math.max(maxY, fromY, toY);
     } else {
       const targetIsRight = to.x > from.x;
       const fromX = targetIsRight ? from.x + from.width : from.x;
       const toX = targetIsRight ? to.x : to.x + to.width;
       const midpoint = (fromX + toX) / 2 + parallelOffset;
       path = `M ${fromX} ${fromY} H ${midpoint} V ${toY} H ${toX}`;
+      maxX = Math.max(maxX, fromX, midpoint, toX);
+      maxY = Math.max(maxY, fromY, toY);
     }
 
     return {
@@ -220,6 +230,7 @@ function routeRelationships(
       path,
     };
   });
+  return { edges, maxX, maxY };
 }
 
 export function layoutRelationshipGraph(graph: RelationshipGraph): RelationshipLayout {
@@ -307,11 +318,20 @@ export function layoutRelationshipGraph(graph: RelationshipGraph): RelationshipL
   nodes.sort((left, right) => compareNames(left.name, right.name));
   const right = nodes.reduce((maximum, node) => Math.max(maximum, node.x + node.width), 0);
   const bottom = nodes.reduce((maximum, node) => Math.max(maximum, node.y + node.height), 0);
+  const routed = routeRelationships(graph.relationships, nodes);
   return {
-    width: Math.max(RELATIONSHIP_LAYOUT.padding * 2, right + RELATIONSHIP_LAYOUT.padding),
-    height: Math.max(RELATIONSHIP_LAYOUT.padding * 2, bottom + RELATIONSHIP_LAYOUT.padding),
+    width: Math.max(
+      RELATIONSHIP_LAYOUT.padding * 2,
+      right + RELATIONSHIP_LAYOUT.padding,
+      routed.maxX + RELATIONSHIP_LAYOUT.padding,
+    ),
+    height: Math.max(
+      RELATIONSHIP_LAYOUT.padding * 2,
+      bottom + RELATIONSHIP_LAYOUT.padding,
+      routed.maxY + RELATIONSHIP_LAYOUT.padding,
+    ),
     nodes,
-    edges: routeRelationships(graph.relationships, nodes),
+    edges: routed.edges,
   };
 }
 
