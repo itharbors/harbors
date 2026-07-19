@@ -28,7 +28,7 @@
 - Consumes: `WorkbenchState`, `createInitialState()`, `openDatabaseAt()`, `closeDatabase()`, and `renderObjects()` from the existing panel module.
 - Produces: `WorkbenchState.expandedObjectGroups: Set<NonNullable<SchemaObject['kind']>>`; no exported API changes.
 
-- [ ] **Step 1: Write the failing selection regression test**
+- [x] **Step 1: Write the failing selection regression test**
 
 Add this test after the existing object-group heading test:
 
@@ -46,7 +46,7 @@ it('keeps the system object group expanded after selecting a child object', asyn
 });
 ```
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [x] **Step 2: Run the focused test and verify RED**
 
 Run:
 
@@ -56,7 +56,7 @@ npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/pa
 
 Expected: FAIL because the replacement `details` element has `open === false` after `selectObject()` completes.
 
-- [ ] **Step 3: Add expansion state and restore it during rendering**
+- [x] **Step 3: Add expansion state and restore it during rendering**
 
 Add the property to `WorkbenchState`:
 
@@ -83,13 +83,13 @@ if (section instanceof HTMLDetailsElement) {
 }
 ```
 
-- [ ] **Step 4: Run the focused test and verify GREEN**
+- [x] **Step 4: Run the focused test and verify GREEN**
 
 Run the command from Step 2 again.
 
 Expected: PASS; selecting `search_fts_data` replaces the DOM but restores the system group as open.
 
-- [ ] **Step 5: Write the failing connection-reset regression test**
+- [x] **Step 5: Write the failing connection-reset regression test**
 
 Add this second test beside the selection regression:
 
@@ -109,7 +109,7 @@ it('resets the system object group when reconnecting to a database', async () =>
 });
 ```
 
-- [ ] **Step 6: Run the reset test and verify RED**
+- [x] **Step 6: Run the reset test and verify RED**
 
 Run:
 
@@ -119,7 +119,7 @@ npm run test -w @itharbors/kit-sqlite -- --run plugins/sqlite-workbench/tests/pa
 
 Expected: FAIL because the expansion set still contains `shadow` after reconnecting.
 
-- [ ] **Step 7: Reset expansion state at connection boundaries**
+- [x] **Step 7: Reset expansion state at connection boundaries**
 
 In the `openDatabaseAt()` action, immediately after accepting the new connection, add:
 
@@ -133,7 +133,7 @@ In the `closeDatabase()` action, immediately after accepting the disconnected st
 state.expandedObjectGroups.clear();
 ```
 
-- [ ] **Step 8: Run focused and full verification**
+- [x] **Step 8: Run focused and full verification**
 
 Run:
 
@@ -144,9 +144,11 @@ npm run check
 
 Expected: the panel test file passes with both new regressions, and the repository check exits with code 0.
 
-- [ ] **Step 9: Commit the implementation**
+- [x] **Step 9: Commit the implementation**
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench/tests/panel.test.ts kits/sqlite/plugins/sqlite-workbench/panel.workbench/src/index.ts
 git commit -m "[Bug] 保留 SQLite 系统对象展开状态"
 ```
+
+Implementation evidence: commit `3ce8e98` contains the two regressions and the state persistence/reset implementation.
