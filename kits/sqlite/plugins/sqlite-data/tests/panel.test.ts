@@ -156,7 +156,7 @@ describe('SQLite Data panel', () => {
 
     await vi.waitFor(() => expect(document.querySelector('[data-action="undo"]')).not.toBeNull());
     (document.querySelector('[data-action="undo"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'undoLastMutation', { undoToken: 'undo-delete' }));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'undoLastMutation', { token: 'undo-delete' }));
   });
 
   it('applies column filters, paginates, changes page size, and copies the selected row', async () => {
@@ -197,5 +197,11 @@ describe('SQLite Data panel', () => {
     (document.querySelector('[data-row-index="0"]') as HTMLTableRowElement).click();
     (document.querySelector('[data-action="copy-row"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('1\ta@example.com'));
+
+    document.querySelector<HTMLElement>('[data-cell-row="0"][data-cell-column="1"]')!
+      .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(document.querySelector('[data-cell-detail]')?.textContent).toContain('a@example.com');
+    (document.querySelector('[data-action="copy-cell"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('a@example.com'));
   });
 });

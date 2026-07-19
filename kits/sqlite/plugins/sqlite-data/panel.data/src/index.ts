@@ -60,6 +60,7 @@ let error: string | null = null;
 let status = '等待数据库连接';
 let recordDialog: RecordDialog | null = null;
 let deleteDialog: RowRecord | null = null;
+let cellDetail: { column: string; value: SerializedValue } | null = null;
 let undoReceipt: MutationReceipt | null = null;
 let undoTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -140,6 +141,7 @@ function clearObjectState(): void {
   selectedRowIndex = null;
   recordDialog = null;
   deleteDialog = null;
+  cellDetail = null;
   clearUndo();
 }
 
@@ -222,6 +224,7 @@ function render(): void {
     <footer class="status" role="status" aria-live="polite">${escapeHtml(status)}</footer>
     ${recordDialog ? renderRecordDialog(recordDialog) : ''}
     ${deleteDialog ? renderDeleteDialog() : ''}
+    ${cellDetail ? renderCellDetail() : ''}
     ${undoReceipt ? renderUndoToast() : ''}
   </main>`;
   const searchInput = root.querySelector<HTMLInputElement>('[data-field="search"]');
@@ -234,6 +237,17 @@ function render(): void {
   for (const row of Array.from(root.querySelectorAll<HTMLTableRowElement>('[data-row-index]'))) {
     row.addEventListener('click', () => {
       selectedRowIndex = Number(row.dataset.rowIndex);
+      render();
+    });
+  }
+  for (const cell of Array.from(root.querySelectorAll<HTMLElement>('[data-cell-row]'))) {
+    cell.addEventListener('dblclick', () => {
+      const rowIndex = Number(cell.dataset.cellRow);
+      const columnIndex = Number(cell.dataset.cellColumn);
+      const value = rows?.rows[rowIndex]?.values[columnIndex];
+      const column = rows?.columns[columnIndex];
+      if (value === undefined || column === undefined) return;
+      cellDetail = { column, value };
       render();
     });
   }
@@ -260,6 +274,8 @@ function render(): void {
   bindClick('export-csv', () => exportCurrentRows('csv'));
   bindClick('export-json', () => exportCurrentRows('json'));
   bindClick('copy-row', copySelectedRow);
+  bindClick('close-cell-detail', () => { cellDetail = null; render(); });
+  bindClick('copy-cell', copyCellDetail);
   bindClick('apply-filter', applyFilter);
   bindClick('clear-filter', () => {
     filters = [];
@@ -389,6 +405,22 @@ function renderDeleteDialog(): string {
   return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>删除记录</h2><p>确定删除所选记录？此操作可在十秒内撤销。</p><div class="modal-actions"><button type="button" data-action="cancel-delete">取消</button><button type="button" data-action="confirm-delete">确认删除</button></div></section></div>`;
 }
 
+function renderCellDetail(): string {
+  return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" data-cell-detail><h2>${escapeHtml(cellDetail!.column)}</h2><pre>${escapeHtml(formatValue(cellDetail!.value))}</pre><div class="modal-actions"><button type="button" data-action="close-cell-detail">关闭</button><button type="button" data-action="copy-cell">复制</button></div></section></div>`;
+}
+
+async function copyCellDetail(): Promise<void> {
+  if (!cellDetail) return;
+  try {
+    await navigator.clipboard.writeText(formatValue(cellDetail.value));
+    status = '单元格内容已复制';
+    cellDetail = null;
+    render();
+  } catch (caught) {
+    setError(caught);
+  }
+}
+
 async function confirmDelete(): Promise<void> {
   if (!deleteDialog?.identity || !selection.objectName) return;
   try {
@@ -422,7 +454,7 @@ async function undoMutation(): Promise<void> {
   if (!undoReceipt) return;
   const token = undoReceipt.undoToken;
   try {
-    await requestCore('undoLastMutation', { undoToken: token });
+    await requestCore('undoLastMutation', { token });
     clearUndo();
     await loadRows();
   } catch (caught) {
@@ -468,7 +500,7 @@ function renderRows(): string {
   return `<div class="table-wrap"><table><thead><tr><th>#</th>${rows.columns.map((column) => {
     const sort = sorts.find((candidate) => candidate.column === column);
     return `<th><button type="button" data-sort-column="${escapeHtml(column)}" aria-label="按 ${escapeHtml(column)} 排序">${escapeHtml(column)}${sort ? ` ${sort.direction === 'asc' ? '↑' : '↓'}` : ''}</button></th>`;
-  }).join('')}</tr></thead><tbody>${rows.rows.map((row, index) => `<tr data-row-index="${index}" aria-selected="${index === selectedRowIndex}"><td>${index + 1}</td>${row.values.map((value) => `<td>${escapeHtml(formatValue(value))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }).join('')}</tr></thead><tbody>${rows.rows.map((row, index) => `<tr data-row-index="${index}" aria-selected="${index === selectedRowIndex}"><td>${index + 1}</td>${row.values.map((value, columnIndex) => `<td data-cell-row="${index}" data-cell-column="${columnIndex}" title="双击查看完整内容">${escapeHtml(formatValue(value))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 function formatValue(value: SerializedValue): string {

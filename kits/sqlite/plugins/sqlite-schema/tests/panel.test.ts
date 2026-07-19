@@ -13,6 +13,8 @@ describe('SQLite Schema panel', () => {
   });
 
   it('renders the complete schema for the selected object as safe text', async () => {
+    const writeText = vi.fn(async () => undefined);
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
     const request = vi.fn(async (plugin: string, method: string, input?: any) => {
       if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return { connected: true, path: '/tmp/demo.sqlite', mode: 'readonly', sqliteVersion: '3.46', connectionRevision: 1, schemaRevision: 1, dataRevision: 1 };
       if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
@@ -36,6 +38,8 @@ describe('SQLite Schema panel', () => {
     expect(document.body.textContent).toContain('users_touch');
     expect(document.body.textContent).toContain('<script>alert(1)</script>');
     expect(document.querySelector('script')).toBeNull();
+    (document.querySelector('[data-action="copy-ddl"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining('CREATE TABLE users')));
   });
 
   it('loads a newer selection and ignores the older response', async () => {

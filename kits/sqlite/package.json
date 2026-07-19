@@ -16,7 +16,12 @@
         "secondary": "secondary.html"
       },
       "plugin": [
-        "@itharbors/sqlite-workbench"
+        "@itharbors/sqlite-core",
+        "@itharbors/sqlite-explorer",
+        "@itharbors/sqlite-data",
+        "@itharbors/sqlite-schema",
+        "@itharbors/sqlite-relationships",
+        "@itharbors/sqlite-sql"
       ],
       "theme": {
         "--ce-accent": "#56b6a9"

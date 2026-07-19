@@ -5,10 +5,38 @@
       "kind": "main",
       "type": "panel-area",
       "layout": {
-        "type": "leaf",
-        "panel": "@itharbors/sqlite-workbench.workbench"
+        "type": "hsplit",
+        "sizes": [300, 1],
+        "children": [
+          {
+            "type": "leaf",
+            "panel": "@itharbors/sqlite-explorer.explorer"
+          },
+          {
+            "type": "tab",
+            "activeIndex": 0,
+            "children": [
+              {
+                "type": "leaf",
+                "panel": "@itharbors/sqlite-data.data"
+              },
+              {
+                "type": "leaf",
+                "panel": "@itharbors/sqlite-schema.schema"
+              },
+              {
+                "type": "leaf",
+                "panel": "@itharbors/sqlite-relationships.relationships"
+              },
+              {
+                "type": "leaf",
+                "panel": "@itharbors/sqlite-sql.sql"
+              }
+            ]
+          }
+        ]
       }
     }
   ],
-  "activePanel": "@itharbors/sqlite-workbench.workbench"
+  "activePanel": "@itharbors/sqlite-data.data"
 }
