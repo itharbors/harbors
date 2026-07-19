@@ -119,7 +119,7 @@ Expected: all SQLite tests pass and the plugin build exits 0.
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench
-git commit -m '功能：中文化 SQLite Kit'
+git commit -m '[Feature] 中文化 SQLite Kit'
 ```
 
 ---
@@ -224,7 +224,7 @@ Expected: all MySQL tests pass and the plugin build exits 0.
 
 ```bash
 git add kits/mysql/plugins/mysql-workbench
-git commit -m '功能：中文化 MySQL Kit'
+git commit -m '[Feature] 中文化 MySQL Kit'
 ```
 
 ---

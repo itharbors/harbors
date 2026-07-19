@@ -136,7 +136,7 @@ Expected: manifest test PASS; plugin check FAIL only because build outputs do no
 
 ```bash
 git add kits/sqlite
-git commit -m "功能：搭建 SQLite Kit 结构"
+git commit -m "[Feature] 搭建 SQLite Kit 结构"
 ```
 
 ### Task 2: JSON-safe SQLite protocol
@@ -229,7 +229,7 @@ Expected: PASS.
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench/main/src/protocol.ts kits/sqlite/plugins/sqlite-workbench/tests/protocol.test.ts
-git commit -m "功能：定义 SQLite 数据协议"
+git commit -m "[Feature] 定义 SQLite 数据协议"
 ```
 
 ### Task 3: Connection and schema service
@@ -329,7 +329,7 @@ Expected: PASS for lifecycle and schema tests.
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench/main/src/sqlite-service.ts kits/sqlite/plugins/sqlite-workbench/tests/sqlite-service.test.ts
-git commit -m "功能：支持 SQLite 连接与结构读取"
+git commit -m "[Feature] 支持 SQLite 连接与结构读取"
 ```
 
 ### Task 4: Paginated rows and transactional record CRUD
@@ -435,7 +435,7 @@ Expected: PASS for schema, pagination, identity, CRUD, constraint, and stale-row
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench/main/src/sqlite-service.ts kits/sqlite/plugins/sqlite-workbench/tests/sqlite-service.test.ts
-git commit -m "功能：实现 SQLite 记录增删改查"
+git commit -m "[Feature] 实现 SQLite 记录增删改查"
 ```
 
 ### Task 5: SQL execution and plugin lifecycle bridge
@@ -519,7 +519,7 @@ Expected: PASS.
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench/main kits/sqlite/plugins/sqlite-workbench/tests
-git commit -m "功能：接入 SQLite SQL 控制台服务"
+git commit -m "[Feature] 接入 SQLite SQL 控制台服务"
 ```
 
 ### Task 6: Browser value model and complete workbench panel
@@ -623,7 +623,7 @@ Expected: all tests PASS; build and check exit 0 and produce main/panel dist ent
 
 ```bash
 git add kits/sqlite/plugins/sqlite-workbench
-git commit -m "功能：实现 SQLite 可视化工作台"
+git commit -m "[Feature] 实现 SQLite 可视化工作台"
 ```
 
 ### Task 7: Repository gates, documentation, and runtime smoke test
