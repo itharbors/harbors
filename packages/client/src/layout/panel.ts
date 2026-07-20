@@ -92,6 +92,20 @@ export class Panel extends HTMLElement {
           border: 0;
           border-radius: 0;
         }
+        :host([modal-open]) {
+          position: fixed;
+          inset: 0;
+          z-index: 10000;
+          flex: none;
+          width: auto;
+          height: auto;
+          min-width: 0;
+          max-width: none;
+          min-height: 0;
+          max-height: none;
+          border: 0;
+          border-radius: 0;
+        }
         .header {
           display: flex;
           align-items: center;
@@ -137,6 +151,9 @@ export class Panel extends HTMLElement {
         }
         :host([chromeless]) .content {
           background: transparent;
+        }
+        :host([modal-open]) .header {
+          display: none;
         }
       </style>
       ${chromeless ? '' : `
