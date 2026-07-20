@@ -70,6 +70,15 @@ describe('MySQL object explorer panel', () => {
     expect(css).toContain('--ink: #07111d');
     expect(css).toContain('background: #091725');
     expect(css).toContain('box-shadow: inset 2px 0 var(--blue)');
+    expect(css).toMatch(/grid-template-areas:\s*"heading"\s*"search"\s*"error"\s*"tree"/s);
+    expect(css).toMatch(/\.object-tree\s*{[^}]*grid-area:\s*tree;[^}]*min-height:\s*0;[^}]*overflow:\s*auto;/s);
+    expect(Array.from(document.querySelector('.object-rail')!.children).map((child) => child.className)).toEqual([
+      'rail-heading',
+      'object-search',
+      'object-error-slot',
+      'object-tree',
+    ]);
+    expect(document.querySelector('.object-error-slot')?.children).toHaveLength(0);
   });
 
   it('consumes newer snapshots, rejects stale revisions, and distinguishes disconnected from an empty schema', async () => {
@@ -119,8 +128,30 @@ describe('MySQL object explorer panel', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[role="alert"]')?.textContent).toContain('数据库连接已变化');
     });
+    expect(document.querySelector('.object-error-slot > [role="alert"]')).not.toBeNull();
+    expect(document.querySelector('.object-error-slot + .object-tree')).not.toBeNull();
     expect(document.querySelector('[data-object-name="users"]')).not.toBeNull();
     expect(document.querySelector('[data-object-name="active_users"]')).not.toBeNull();
+  });
+
+  it('keeps a long object list inside the dedicated scrollable tree row', async () => {
+    const objects = Array.from({ length: 80 }, (_, index) => ({
+      name: `table_${String(index).padStart(2, '0')}`,
+      type: 'table' as const,
+      insertable: true,
+    }));
+    const request = vi.fn(async () => ({
+      ...objectsSnapshot,
+      objects,
+      selection: { connectionRevision: 1, objectName: objects[0].name },
+    }));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const tree = document.querySelector('.object-tree')!;
+    expect(tree.querySelectorAll('[data-object-name]')).toHaveLength(80);
+    expect(document.querySelector('.object-rail')?.lastElementChild).toBe(tree);
+    expect(Array.from(document.querySelectorAll('[data-object-name]')).every((item) => item.closest('.object-tree') === tree)).toBe(true);
   });
 
   it('does not let late hydration overwrite newer objects or a same-revision selection broadcast', async () => {

@@ -63,7 +63,9 @@ describe('MySQL connection panel', () => {
     expect(css).toContain('--ink: #07111d');
     expect(css).toContain('--deck: #0a1927');
     expect(css).toContain('--cyan: #76d0ec');
-    expect(css).toMatch(/overflow-x:\s*auto/);
+    expect(css).toContain('--connection-deck-min-height: 70px');
+    expect(css).toMatch(/\.connection-shell\s*{[^}]*min-height:\s*var\(--connection-deck-min-height\);[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;/s);
+    expect(css).toMatch(/\.connection-deck\s*{[^}]*height:\s*100%;[^}]*min-height:\s*var\(--connection-deck-min-height\);/s);
   });
 
   it('connects with host, port, user, password, database, and TLS, then clears the password', async () => {
@@ -201,6 +203,66 @@ describe('MySQL connection panel', () => {
     definition.unmount();
     expect(document.querySelector('#panel-root')?.children).toHaveLength(0);
   });
+
+  it.each(['fulfilled', 'rejected'] as const)(
+    'keeps a remounted action busy when an old mount action is %s late',
+    async (oldOutcome) => {
+      let resolveOld: ((value: unknown) => void) | undefined;
+      let rejectOld: ((reason?: unknown) => void) | undefined;
+      let resolveNew: ((value: unknown) => void) | undefined;
+      const oldAction = new Promise<unknown>((resolve, reject) => {
+        resolveOld = resolve;
+        rejectOld = reject;
+      });
+      const newAction = new Promise<unknown>((resolve) => { resolveNew = resolve; });
+      const oldRequest = vi.fn(async (_plugin: string, method: string) => (
+        method === 'getConnectionState' ? disconnected : oldAction
+      ));
+      const newRequest = vi.fn(async (_plugin: string, method: string) => (
+        method === 'getConnectionState' ? disconnected : newAction
+      ));
+      const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+
+      await definition.mount({ message: { request: oldRequest } });
+      setValue('password', 'old-secret');
+      (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+      await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledTimes(2));
+
+      definition.unmount();
+      document.body.innerHTML = '<div id="panel-root"></div>';
+      await definition.mount({ message: { request: newRequest } });
+      setValue('password', 'new-secret');
+      (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+      await vi.waitFor(() => {
+        expect(newRequest).toHaveBeenCalledTimes(2);
+        expect((document.querySelector('[data-action="connect"]') as HTMLButtonElement).disabled).toBe(true);
+      });
+
+      if (oldOutcome === 'fulfilled') {
+        resolveOld?.({ ...connection, endpoint: 'old.local:3306' });
+      } else {
+        rejectOld?.(new Error('old mount action failed late'));
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      expect((document.querySelector('[data-action="connect"]') as HTMLButtonElement).disabled).toBe(true);
+      expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('new-secret');
+      expect(document.querySelector('[role="alert"]')).toBeNull();
+
+      resolveNew?.({
+        ...connection,
+        endpoint: 'new.local:3306',
+        connectionRevision: 2,
+        schemaRevision: 2,
+        dataRevision: 2,
+      });
+      await vi.waitFor(() => {
+        expect((document.querySelector('[data-action="connect"]') as HTMLButtonElement).disabled).toBe(false);
+        expect(document.querySelector('[data-current-endpoint]')?.textContent).toBe('new.local:3306');
+        expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('');
+      });
+    },
+  );
 });
 
 function setValue(field: string, value: string): void {

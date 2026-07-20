@@ -142,7 +142,7 @@ function render(): void {
     <aside class="object-rail" aria-label="MySQL 数据库对象">
       <div class="rail-heading"><span>数据库对象</span><span class="object-count">${snapshot.objects.length}</span></div>
       <label class="object-search"><span class="sr-only">筛选对象</span><input type="search" data-field="object-search" aria-label="筛选对象" placeholder="筛选表和视图" value="${escapeHtml(query)}"${snapshot.connected ? '' : ' disabled'}></label>
-      ${error ? renderError(error) : ''}
+      <div class="object-error-slot">${error ? renderError(error) : ''}</div>
       <div class="object-tree">${renderObjectTree()}</div>
     </aside>`;
 

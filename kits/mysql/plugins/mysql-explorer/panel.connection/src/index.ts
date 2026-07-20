@@ -22,6 +22,12 @@ type ConnectionForm = {
 
 type PanelError = { message: string; detail?: string };
 
+type ActionToken = {
+  mountGeneration: number;
+  actionSequence: number;
+  requestSequence: number;
+};
+
 const DISCONNECTED: ConnectionSnapshot = {
   connected: false,
   endpoint: null,
@@ -40,9 +46,13 @@ let form = defaultForm();
 let busy = false;
 let error: PanelError | null = null;
 let requestSequence = 0;
+let mountGeneration = 0;
+let actionSequence = 0;
+let activeAction: ActionToken | null = null;
 
 const definition = {
   async mount(ctx: PanelContext) {
+    mountGeneration += 1;
     context = ctx;
     root = document.querySelector('#panel-root');
     if (!root) throw new Error('Panel root element #panel-root not found');
@@ -61,7 +71,9 @@ const definition = {
   },
 
   unmount() {
+    mountGeneration += 1;
     requestSequence += 1;
+    activeAction = null;
     root?.replaceChildren();
     root = null;
     context = undefined;
@@ -97,6 +109,7 @@ function resetState(): void {
   form = defaultForm();
   busy = false;
   error = null;
+  activeAction = null;
   requestSequence += 1;
 }
 
@@ -124,44 +137,63 @@ async function connect(): Promise<void> {
     database: form.database,
     tls: form.tls,
   };
-  await runAction(async (sequence) => {
+  await runAction(async (token) => {
     const next = await requestCore<ConnectionSnapshot>('connect', input);
+    if (!isCurrentAction(token)) return;
     form.password = '';
-    if (sequence !== requestSequence || isStale(next)) return;
+    if (!isCurrentActionResult(token) || isStale(next)) return;
     acceptConnection(next);
   });
 }
 
 async function disconnect(): Promise<void> {
-  await runAction(async (sequence) => {
+  await runAction(async (token) => {
     const next = await requestCore<ConnectionSnapshot>('disconnect');
-    if (sequence !== requestSequence || isStale(next)) return;
+    if (!isCurrentActionResult(token) || isStale(next)) return;
     acceptConnection(next);
   });
 }
 
 async function refreshObjects(): Promise<void> {
-  await runAction(async (sequence) => {
+  await runAction(async (token) => {
     await requestExplorer('refreshObjects');
-    if (sequence !== requestSequence) return;
+    if (!isCurrentActionResult(token)) return;
     error = null;
   });
 }
 
-async function runAction(action: (sequence: number) => Promise<void>): Promise<void> {
+async function runAction(action: (token: ActionToken) => Promise<void>): Promise<void> {
   if (busy) return;
   busy = true;
   error = null;
-  const sequence = ++requestSequence;
+  const token: ActionToken = {
+    mountGeneration,
+    actionSequence: ++actionSequence,
+    requestSequence: ++requestSequence,
+  };
+  activeAction = token;
   render();
   try {
-    await action(sequence);
+    await action(token);
   } catch (caught) {
-    if (sequence === requestSequence) error = panelError(caught);
+    if (isCurrentActionResult(token)) error = panelError(caught);
   } finally {
+    if (!isCurrentAction(token)) return;
+    activeAction = null;
     busy = false;
     render();
   }
+}
+
+function isCurrentAction(token: ActionToken): boolean {
+  return activeAction === token
+    && token.mountGeneration === mountGeneration
+    && context !== undefined
+    && root?.isConnected === true;
+}
+
+function isCurrentActionResult(token: ActionToken): boolean {
+  return isCurrentAction(token) && token.requestSequence === requestSequence;
 }
 
 async function requestCore<T>(method: string, input?: unknown): Promise<T> {

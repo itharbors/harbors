@@ -26,7 +26,7 @@ describe('MySQL kit manifest', () => {
     expect(pkg['ce-editor'].kit.plugin).toEqual(pluginNames);
     expect(layout.windows[0].layout).toEqual({
       type: 'vsplit',
-      sizes: [64, 1],
+      sizes: [78, 1],
       children: [
         {
           type: 'leaf',
@@ -74,7 +74,7 @@ describe('MySQL kit manifest', () => {
         entry: './panel.connection/dist/index.html',
         title: 'MySQL 数据库连接',
         minWidth: 320,
-        minHeight: 64,
+        minHeight: 78,
         multiInstance: false,
       },
       explorer: {
