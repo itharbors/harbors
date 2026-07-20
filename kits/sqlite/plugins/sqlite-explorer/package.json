@@ -9,10 +9,17 @@
   "ce-editor": {
     "contribute": {
       "panel": {
+        "connection": {
+          "entry": "./panel.connection/dist/index.html",
+          "title": "SQLite 数据库连接",
+          "minWidth": 320,
+          "minHeight": 64,
+          "multiInstance": false
+        },
         "explorer": {
           "entry": "./panel.explorer/dist/index.html",
-          "title": "SQLite 资源管理器",
-          "minWidth": 240,
+          "title": "SQLite 数据库对象",
+          "minWidth": 200,
           "minHeight": 320,
           "multiInstance": false
         }
@@ -20,11 +27,14 @@
       "message": {
         "request": {
           "getSelection": ["getSelection"],
+          "getObjectsSnapshot": ["getObjectsSnapshot"],
+          "refreshObjects": ["refreshObjects"],
           "selectObject": ["selectObject"]
         },
         "broadcast": {
           "@itharbors/sqlite.connection.changed": ["onConnectionChanged", "panel.onConnectionChanged"],
-          "@itharbors/sqlite.schema.changed": ["onSchemaChanged", "panel.onSchemaChanged"]
+          "@itharbors/sqlite.schema.changed": ["onSchemaChanged"],
+          "@itharbors/sqlite.objects.changed": ["panel.onObjectsChanged"]
         }
       }
     }

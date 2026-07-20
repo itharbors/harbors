@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 const kitRoot = fileURLToPath(new URL('..', import.meta.url));
 
 const panelStyles = [
+  'plugins/sqlite-explorer/panel.connection/src/index.css',
   'plugins/sqlite-explorer/panel.explorer/src/index.css',
   'plugins/sqlite-data/panel.data/src/index.css',
   'plugins/sqlite-schema/panel.schema/src/index.css',
@@ -22,7 +23,7 @@ describe('SQLite split panel accessibility foundations', () => {
 
   it('uses framework tabs instead of reimplementing tab semantics in an iframe', () => {
     const layout = JSON.parse(fs.readFileSync(path.join(kitRoot, 'layout.json'), 'utf8'));
-    const tabGroup = layout.windows[0].layout.children[1];
+    const tabGroup = layout.windows[0].layout.children[1].children[1];
     expect(tabGroup.type).toBe('tab');
     expect(tabGroup.children).toHaveLength(4);
   });

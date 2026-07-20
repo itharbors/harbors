@@ -7,46 +7,51 @@ type PanelDefinition = {
   methods: Record<string, (payload: unknown) => Promise<void> | void>;
 };
 
-const connection = {
+const objectsSnapshot = {
   connected: true,
-  path: '/tmp/demo.sqlite',
-  fileName: 'demo.sqlite',
-  mode: 'readonly' as const,
-  sqliteVersion: '3.46.0',
   connectionRevision: 1,
-  schemaRevision: 1,
-  dataRevision: 1,
+  schemaRevision: 3,
+  objects: [
+    { name: 'users', kind: 'table', type: 'table', writable: false, readOnlyReason: '只读连接', sql: '' },
+    { name: 'active_users', kind: 'view', type: 'view', writable: false, readOnlyReason: '视图只读', sql: '' },
+    { name: 'search_index', kind: 'virtual', type: 'table', writable: false, readOnlyReason: '虚拟表只读', sql: '' },
+    { name: 'search_index_data', kind: 'shadow', type: 'table', writable: false, readOnlyReason: '系统对象只读', sql: '' },
+  ],
+  selection: { connectionRevision: 1, objectName: 'users' },
 };
 
-describe('SQLite Explorer panel', () => {
+describe('SQLite object explorer panel', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="panel-root"></div>';
     vi.resetModules();
   });
 
-  it('renders connection objects and publishes object selection', async () => {
+  it('hydrates only from the main snapshot, groups and filters objects, then publishes selection', async () => {
     const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
-      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return connection;
-      if (plugin === '@itharbors/sqlite-core' && method === 'getSchema') {
-        return { ...connection, objects: [
-          { name: 'users', kind: 'table', type: 'table', writable: false },
-          { name: 'active_users', kind: 'view', type: 'view', writable: false },
-        ] };
-      }
-      if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') {
-        return { connectionRevision: 1, objectName: 'users' };
-      }
-      if (plugin === '@itharbors/sqlite-explorer' && method === 'selectObject') return input;
+      expect(plugin).toBe('@itharbors/sqlite-explorer');
+      if (method === 'getObjectsSnapshot') return objectsSnapshot;
+      if (method === 'selectObject') return input;
       throw new Error(`Unexpected request ${plugin}:${method}`);
     });
     const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
 
     await definition.mount({ message: { request } });
 
-    expect(document.querySelector('[data-current-path]')?.textContent).toBe('/tmp/demo.sqlite');
-    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
-    expect(document.body.textContent).toContain('普通表 · 1');
+    expect(document.querySelector('.object-rail')).not.toBeNull();
+    expect(document.body.textContent).toContain('表 · 1');
     expect(document.body.textContent).toContain('视图 · 1');
+    expect(document.body.textContent).toContain('虚拟表 · 1');
+    expect(document.body.textContent).toContain('系统对象 · 1');
+    expect(document.querySelector('[data-object-kind="virtual"]')?.tagName).toBe('SECTION');
+    expect(document.querySelector('[data-object-kind="shadow"]')?.tagName).toBe('DETAILS');
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(request).not.toHaveBeenCalledWith('@itharbors/sqlite-core', expect.anything(), expect.anything());
+
+    const search = document.querySelector<HTMLInputElement>('[aria-label="搜索数据库对象"]')!;
+    search.value = 'active';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(document.querySelector('[data-object-name="users"]')).toBeNull();
+    expect(document.querySelector('[data-object-name="active_users"]')).not.toBeNull();
 
     (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
     await vi.waitFor(() => {
@@ -54,68 +59,115 @@ describe('SQLite Explorer panel', () => {
         connectionRevision: 1,
         objectName: 'active_users',
       });
+      expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('true');
     });
   });
 
-  it('requires explicit confirmation before enabling writes', async () => {
-    const request = vi.fn(async (plugin: string, method: string) => {
-      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return connection;
-      if (plugin === '@itharbors/sqlite-core' && method === 'getSchema') return { ...connection, objects: [] };
-      if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') {
-        return { connectionRevision: 1, objectName: null };
-      }
-      if (plugin === '@itharbors/sqlite-core' && method === 'setConnectionMode') {
-        return { ...connection, mode: 'readwrite', connectionRevision: 2, schemaRevision: 2, dataRevision: 2 };
-      }
-      throw new Error(`Unexpected request ${plugin}:${method}`);
+  it('consumes newer snapshots, rejects stale revisions, and distinguishes disconnected from an empty database', async () => {
+    const request = vi.fn(async () => ({
+      connected: false,
+      connectionRevision: 0,
+      schemaRevision: 0,
+      objects: [],
+      selection: { connectionRevision: 0, objectName: null },
+    }));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    expect(document.body.textContent).toContain('打开数据库后');
+
+    await definition.methods.onObjectsChanged({
+      connected: true,
+      connectionRevision: 2,
+      schemaRevision: 5,
+      objects: [],
+      selection: { connectionRevision: 2, objectName: null },
+    });
+    expect(document.body.textContent).toContain('数据库中还没有对象');
+
+    await definition.methods.onObjectsChanged({
+      connected: true,
+      connectionRevision: 1,
+      schemaRevision: 99,
+      objects: [{ ...objectsSnapshot.objects[0], name: 'stale' }],
+      selection: { connectionRevision: 1, objectName: 'stale' },
+    });
+    expect(document.body.textContent).not.toContain('stale');
+    expect(document.body.textContent).toContain('数据库中还没有对象');
+  });
+
+  it('keeps the object list available when selection fails', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getObjectsSnapshot') return objectsSnapshot;
+      if (method === 'selectObject') throw new Error('数据库连接已变化');
+      throw new Error(`Unexpected method ${method}`);
     });
     const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
     await definition.mount({ message: { request } });
 
-    (document.querySelector('[data-action="unlock-writes"]') as HTMLButtonElement).click();
-    expect(request).not.toHaveBeenCalledWith('@itharbors/sqlite-core', 'setConnectionMode', expect.anything());
-    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('启用写入');
-
-    (document.querySelector('[data-action="confirm-write"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
     await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'setConnectionMode', {
-        mode: 'readwrite',
-      });
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain('数据库连接已变化');
     });
+    expect(document.querySelector('[data-object-name="users"]')).not.toBeNull();
+    expect(document.querySelector('[data-object-name="active_users"]')).not.toBeNull();
   });
 
-  it('opens an existing database through the controlled file browser', async () => {
-    const disconnected = { ...connection, connected: false, path: null, fileName: null, mode: null };
-    const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
-      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
-      if (plugin === '@itharbors/sqlite-core' && method === 'getRecentDatabases') return [];
-      if (plugin === '@itharbors/sqlite-core' && method === 'listDirectory') {
-        return {
-          currentPath: '/tmp',
-          parentPath: '/',
-          entries: [{ name: 'demo.sqlite', path: '/tmp/demo.sqlite', kind: 'file', sqliteCandidate: true }],
-        };
-      }
-      if (plugin === '@itharbors/sqlite-core' && method === 'openDatabase') return connection;
-      if (plugin === '@itharbors/sqlite-core' && method === 'getSchema') return { ...connection, objects: [] };
-      if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') {
-        return { connectionRevision: 0, objectName: null };
-      }
-      throw new Error(`Unexpected request ${plugin}:${method}:${JSON.stringify(input)}`);
+  it('does not let a late hydration snapshot overwrite a newer broadcast', async () => {
+    let resolveHydration: ((value: unknown) => void) | undefined;
+    const hydration = new Promise<unknown>((resolve) => { resolveHydration = resolve; });
+    const request = vi.fn(async () => hydration);
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    const mounting = definition.mount({ message: { request } });
+
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      connectionRevision: 3,
+      schemaRevision: 8,
+      objects: [{ ...objectsSnapshot.objects[0], name: 'newer' }],
+      selection: { connectionRevision: 3, objectName: 'newer' },
     });
+    resolveHydration?.(objectsSnapshot);
+    await mounting;
+
+    expect(document.querySelector('[data-object-name="newer"]')).not.toBeNull();
+    expect(document.querySelector('[data-object-name="users"]')).toBeNull();
+  });
+
+  it('ignores a late selection response after a newer authoritative snapshot', async () => {
+    let resolveSelection: ((value: unknown) => void) | undefined;
+    const selection = new Promise<unknown>((resolve) => { resolveSelection = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? objectsSnapshot : selection
+    ));
     const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
     await definition.mount({ message: { request } });
 
-    (document.querySelector('[data-action="browse-open"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(document.querySelector('[data-file-path="/tmp/demo.sqlite"]')).not.toBeNull());
-    (document.querySelector('[data-file-path="/tmp/demo.sqlite"]') as HTMLButtonElement).click();
-    (document.querySelector('[data-action="confirm-open"]') as HTMLButtonElement).click();
-
-    await vi.waitFor(() => {
-      expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'openDatabase', {
-        path: '/tmp/demo.sqlite',
-        create: false,
-      });
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      selection: { connectionRevision: 1, objectName: 'users' },
     });
+    resolveSelection?.({ connectionRevision: 1, objectName: 'active_users' });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('resets expanded system groups when the connection changes', async () => {
+    const request = vi.fn(async () => objectsSnapshot);
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    const shadow = document.querySelector<HTMLDetailsElement>('[data-object-kind="shadow"]')!;
+    shadow.open = true;
+    shadow.dispatchEvent(new Event('toggle'));
+
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      connectionRevision: 2,
+      schemaRevision: 4,
+      selection: { connectionRevision: 2, objectName: 'users' },
+    });
+    expect(document.querySelector<HTMLDetailsElement>('[data-object-kind="shadow"]')?.open).toBe(false);
   });
 });
