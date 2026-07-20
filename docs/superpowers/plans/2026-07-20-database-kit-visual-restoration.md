@@ -14,7 +14,7 @@
 - 历史 CSS 从基线提交提取，按现有 Panel 边界迁移，避免凭印象重画。
 - 桌面端优先恢复；窄窗口保证控件可滚动、弹窗可用且不丢功能。
 
-## 任务一：为 Panel 增加可信的全工作区模态能力
+## Task 1：为 Panel 增加可信的全工作区模态能力
 
 **涉及文件**
 
@@ -51,7 +51,7 @@ npm exec -w packages/client -- vitest run tests/components/editor-app.test.ts te
 [Bug] 支持 Panel 全局模态布局
 ```
 
-## 任务二：恢复 SQLite 顶部连接条与左侧对象栏
+## Task 2：恢复 SQLite 顶部连接条与左侧对象栏
 
 **涉及文件**
 
@@ -93,7 +93,7 @@ npm run build -w @itharbors/sqlite-explorer
 [Bug] 还原 SQLite 工作台导航布局
 ```
 
-## 任务三：恢复 SQLite 四个工作区的历史外观
+## Task 3：恢复 SQLite 四个工作区的历史外观
 
 **涉及文件**
 
@@ -132,7 +132,7 @@ npm run build -w @itharbors/sqlite-sql
 [Bug] 还原 SQLite 工作区视觉
 ```
 
-## 任务四：恢复 MySQL 顶部连接条与左侧对象栏
+## Task 4：恢复 MySQL 顶部连接条与左侧对象栏
 
 **涉及文件**
 
@@ -171,7 +171,7 @@ npm run build -w @itharbors/mysql-explorer
 [Bug] 还原 MySQL 工作台导航布局
 ```
 
-## 任务五：恢复 MySQL 四个工作区的历史外观
+## Task 5：恢复 MySQL 四个工作区的历史外观
 
 **涉及文件**
 
@@ -209,7 +209,7 @@ npm run build -w @itharbors/mysql-sql
 [Bug] 还原 MySQL 工作区视觉
 ```
 
-## 任务六：双 Kit 浏览器验收与全量检查
+## Task 6：双 Kit 浏览器验收与全量检查
 
 **自动验证**
 
@@ -234,4 +234,3 @@ npm run check
 - SQLite 弹窗居中覆盖整个工作区，并保留手动地址入口。
 - 聚焦测试、插件构建检查和仓库全量检查通过。
 - `git status --short` 仅包含本任务预期变更。
-
