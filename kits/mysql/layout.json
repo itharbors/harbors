@@ -5,21 +5,33 @@
       "kind": "main",
       "type": "panel-area",
       "layout": {
-        "type": "hsplit",
-        "sizes": [300, 1],
+        "type": "vsplit",
+        "sizes": [78, 1],
         "children": [
           {
             "type": "leaf",
-            "panel": "@itharbors/mysql-explorer.explorer"
+            "panel": "@itharbors/mysql-explorer.connection",
+            "panelType": "simple"
           },
           {
-            "type": "tab",
-            "activeIndex": 0,
+            "type": "hsplit",
+            "sizes": [270, 1],
             "children": [
-              { "type": "leaf", "panel": "@itharbors/mysql-data.data" },
-              { "type": "leaf", "panel": "@itharbors/mysql-schema.schema" },
-              { "type": "leaf", "panel": "@itharbors/mysql-relationships.relationships" },
-              { "type": "leaf", "panel": "@itharbors/mysql-sql.sql" }
+              {
+                "type": "leaf",
+                "panel": "@itharbors/mysql-explorer.explorer",
+                "panelType": "simple"
+              },
+              {
+                "type": "tab",
+                "activeIndex": 0,
+                "children": [
+                  { "type": "leaf", "panel": "@itharbors/mysql-data.data" },
+                  { "type": "leaf", "panel": "@itharbors/mysql-schema.schema" },
+                  { "type": "leaf", "panel": "@itharbors/mysql-relationships.relationships" },
+                  { "type": "leaf", "panel": "@itharbors/mysql-sql.sql" }
+                ]
+              }
             ]
           }
         ]

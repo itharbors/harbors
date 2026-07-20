@@ -7,7 +7,7 @@ const kitRoot = fileURLToPath(new URL('..', import.meta.url));
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 
 describe('SQLite kit manifest', () => {
-  it('declares six focused plugins with Explorer beside a four-panel tab group', () => {
+  it('declares six focused plugins with a connection bar above Explorer and four workspace tabs', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
     const layout = JSON.parse(fs.readFileSync(path.join(kitRoot, 'layout.json'), 'utf8'));
     const mainEntry = fs.readFileSync(path.join(kitRoot, 'main.html'), 'utf8');
@@ -23,21 +23,51 @@ describe('SQLite kit manifest', () => {
       '@itharbors/sqlite-sql',
     ]);
     expect(layout.windows[0].layout).toEqual({
-      type: 'hsplit',
-      sizes: [300, 1],
+      type: 'vsplit',
+      sizes: [78, 1],
       children: [
-        { type: 'leaf', panel: '@itharbors/sqlite-explorer.explorer' },
         {
-          type: 'tab',
-          activeIndex: 0,
+          type: 'leaf',
+          panel: '@itharbors/sqlite-explorer.connection',
+          panelType: 'simple',
+        },
+        {
+          type: 'hsplit',
+          sizes: [250, 1],
           children: [
-            { type: 'leaf', panel: '@itharbors/sqlite-data.data' },
-            { type: 'leaf', panel: '@itharbors/sqlite-schema.schema' },
-            { type: 'leaf', panel: '@itharbors/sqlite-relationships.relationships' },
-            { type: 'leaf', panel: '@itharbors/sqlite-sql.sql' },
+            {
+              type: 'leaf',
+              panel: '@itharbors/sqlite-explorer.explorer',
+              panelType: 'simple',
+            },
+            {
+              type: 'tab',
+              activeIndex: 0,
+              children: [
+                { type: 'leaf', panel: '@itharbors/sqlite-data.data' },
+                { type: 'leaf', panel: '@itharbors/sqlite-schema.schema' },
+                { type: 'leaf', panel: '@itharbors/sqlite-relationships.relationships' },
+                { type: 'leaf', panel: '@itharbors/sqlite-sql.sql' },
+              ],
+            },
           ],
         },
       ],
+    });
+
+    const explorerPackage = JSON.parse(fs.readFileSync(
+      path.join(kitRoot, 'plugins/sqlite-explorer/package.json'),
+      'utf8',
+    ));
+    expect(Object.keys(explorerPackage['ce-editor'].contribute.panel)).toEqual([
+      'connection',
+      'explorer',
+    ]);
+    expect(explorerPackage['ce-editor'].contribute.panel.connection.minWidth).toBe(320);
+    expect(explorerPackage['ce-editor'].contribute.message.broadcast).toMatchObject({
+      '@itharbors/sqlite.connection.changed': ['onConnectionChanged', 'panel.onConnectionChanged'],
+      '@itharbors/sqlite.schema.changed': ['onSchemaChanged'],
+      '@itharbors/sqlite.objects.changed': ['panel.onObjectsChanged'],
     });
     expect(layout.activePanel).toBe('@itharbors/sqlite-data.data');
     expect(mainEntry).toContain('<title>SQLite 工作台</title>');

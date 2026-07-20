@@ -9,10 +9,17 @@
   "ce-editor": {
     "contribute": {
       "panel": {
+        "connection": {
+          "entry": "./panel.connection/dist/index.html",
+          "title": "MySQL 数据库连接",
+          "minWidth": 320,
+          "minHeight": 78,
+          "multiInstance": false
+        },
         "explorer": {
           "entry": "./panel.explorer/dist/index.html",
-          "title": "MySQL 资源管理器",
-          "minWidth": 240,
+          "title": "MySQL 数据库对象",
+          "minWidth": 220,
           "minHeight": 320,
           "multiInstance": false
         }
@@ -20,11 +27,14 @@
       "message": {
         "request": {
           "getSelection": ["getSelection"],
+          "getObjectsSnapshot": ["getObjectsSnapshot"],
+          "refreshObjects": ["refreshObjects"],
           "selectObject": ["selectObject"]
         },
         "broadcast": {
           "@itharbors/mysql.connection.changed": ["onConnectionChanged", "panel.onConnectionChanged"],
-          "@itharbors/mysql.schema.changed": ["onSchemaChanged", "panel.onSchemaChanged"]
+          "@itharbors/mysql.schema.changed": ["onSchemaChanged"],
+          "@itharbors/mysql.objects.changed": ["panel.onObjectsChanged"]
         }
       }
     }

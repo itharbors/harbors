@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
   MysqlRequestError,
+  OBJECTS_CHANGED_TOPIC,
   isMysqlErrorEnvelope,
   unwrapMysqlResponse,
 } from '@itharbors/mysql-contracts';
 
 describe('MySQL shared contracts', () => {
+  it('exposes the explorer objects snapshot topic', () => {
+    expect(OBJECTS_CHANGED_TOPIC).toBe('@itharbors/mysql.objects.changed');
+  });
+
   it('unwraps successful responses and converts public error envelopes', () => {
     expect(unwrapMysqlResponse<{ connected: boolean }>({ connected: true })).toEqual({
       connected: true,

@@ -80,6 +80,24 @@ describe('ce-panel-group', () => {
     expect(styles).toContain('overflow: hidden');
   });
 
+  it('keeps a modal panel visible even when its tab is inactive', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = `
+      <ce-panel title="Files" active>Files content</ce-panel>
+      <ce-panel title="Dialog" modal-open>Dialog content</ce-panel>
+    `;
+
+    document.body.appendChild(group);
+
+    const panels = group.querySelectorAll('ce-panel');
+    const styles = group.shadowRoot!.querySelector('style')!.textContent || '';
+    expect(panels[0].hasAttribute('active')).toBe(true);
+    expect(panels[1].hasAttribute('active')).toBe(false);
+    expect(panels[1].hasAttribute('modal-open')).toBe(true);
+    expect(styles).toContain('::slotted(ce-panel[modal-open])');
+    expect(styles).toMatch(/::slotted\(ce-panel\[modal-open\]\)\s*\{\s*display: flex/);
+  });
+
   it('removes outer border when nested inside layout containers', () => {
     const splitPane = document.createElement('ce-split-pane');
     const group = document.createElement('ce-panel-group');

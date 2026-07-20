@@ -238,6 +238,54 @@ describe('EditorApp default layout', () => {
     expect(outer.style.getPropertyValue('--ce-tab-active-indicator')).toBe('#22d3ee');
   });
 
+  it('keeps a trusted inactive panel modal visible without changing the active tab and restores it on close or tab switch', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const activePanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/log.log"]')!;
+    const modalPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/message-debug.debug"]')!;
+    const modalFrame = modalPanel.shadowRoot!.querySelector('iframe')!;
+    const modalSource = {} as WindowProxy;
+    Object.defineProperty(modalFrame, 'contentWindow', { configurable: true, value: modalSource });
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: true },
+      source: modalSource,
+    }));
+
+    expect(activePanel.hasAttribute('active')).toBe(true);
+    expect(modalPanel.hasAttribute('active')).toBe(false);
+    expect(modalPanel.hasAttribute('modal-open')).toBe(true);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: false },
+      source: {} as WindowProxy,
+    }));
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: false },
+      source: window,
+    }));
+
+    expect(modalPanel.hasAttribute('modal-open')).toBe(true);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: false },
+      source: modalSource,
+    }));
+    expect(modalPanel.hasAttribute('modal-open')).toBe(false);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: true },
+      source: modalSource,
+    }));
+    const group = modalPanel.closest('ce-panel-group')!;
+    (group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement).click();
+
+    expect(modalPanel.hasAttribute('active')).toBe(true);
+    expect(modalPanel.hasAttribute('modal-open')).toBe(false);
+  });
+
   it('renders the window group selected by windowGroupId from a secondary URL', async () => {
     window.location.search = '?sessionId=existing-id&windowGroupId=secondary-window';
     window.location.href = 'http://localhost:8080/?sessionId=existing-id&windowGroupId=secondary-window';

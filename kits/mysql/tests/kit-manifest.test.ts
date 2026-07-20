@@ -25,18 +25,33 @@ describe('MySQL kit manifest', () => {
     expect(pkg.dependencies.mysql2).toBe('^3.23.0');
     expect(pkg['ce-editor'].kit.plugin).toEqual(pluginNames);
     expect(layout.windows[0].layout).toEqual({
-      type: 'hsplit',
-      sizes: [300, 1],
+      type: 'vsplit',
+      sizes: [78, 1],
       children: [
-        { type: 'leaf', panel: '@itharbors/mysql-explorer.explorer' },
         {
-          type: 'tab',
-          activeIndex: 0,
+          type: 'leaf',
+          panel: '@itharbors/mysql-explorer.connection',
+          panelType: 'simple',
+        },
+        {
+          type: 'hsplit',
+          sizes: [270, 1],
           children: [
-            { type: 'leaf', panel: '@itharbors/mysql-data.data' },
-            { type: 'leaf', panel: '@itharbors/mysql-schema.schema' },
-            { type: 'leaf', panel: '@itharbors/mysql-relationships.relationships' },
-            { type: 'leaf', panel: '@itharbors/mysql-sql.sql' },
+            {
+              type: 'leaf',
+              panel: '@itharbors/mysql-explorer.explorer',
+              panelType: 'simple',
+            },
+            {
+              type: 'tab',
+              activeIndex: 0,
+              children: [
+                { type: 'leaf', panel: '@itharbors/mysql-data.data' },
+                { type: 'leaf', panel: '@itharbors/mysql-schema.schema' },
+                { type: 'leaf', panel: '@itharbors/mysql-relationships.relationships' },
+                { type: 'leaf', panel: '@itharbors/mysql-sql.sql' },
+              ],
+            },
           ],
         },
       ],
@@ -52,6 +67,35 @@ describe('MySQL kit manifest', () => {
       if (name === '@itharbors/mysql-core') expect(plugin.dependencies.mysql2).toBe('^3.23.0');
       else expect(plugin.dependencies?.mysql2).toBeUndefined();
     }
+
+    const explorer = readJson(path.join(kitRoot, 'plugins/mysql-explorer/package.json'));
+    expect(explorer['ce-editor'].contribute.panel).toEqual({
+      connection: {
+        entry: './panel.connection/dist/index.html',
+        title: 'MySQL 数据库连接',
+        minWidth: 320,
+        minHeight: 78,
+        multiInstance: false,
+      },
+      explorer: {
+        entry: './panel.explorer/dist/index.html',
+        title: 'MySQL 数据库对象',
+        minWidth: 220,
+        minHeight: 320,
+        multiInstance: false,
+      },
+    });
+    expect(explorer['ce-editor'].contribute.message.request).toEqual({
+      getSelection: ['getSelection'],
+      getObjectsSnapshot: ['getObjectsSnapshot'],
+      refreshObjects: ['refreshObjects'],
+      selectObject: ['selectObject'],
+    });
+    expect(explorer['ce-editor'].contribute.message.broadcast).toMatchObject({
+      '@itharbors/mysql.connection.changed': ['onConnectionChanged', 'panel.onConnectionChanged'],
+      '@itharbors/mysql.schema.changed': ['onSchemaChanged'],
+      '@itharbors/mysql.objects.changed': ['panel.onObjectsChanged'],
+    });
   });
 
   it('runs the MySQL kit tests from the repository test gate', () => {

@@ -585,6 +585,7 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
   if (layout.edges.length > 0) {
     const details = document.createElement('aside');
     details.className = 'relationship-details';
+    details.setAttribute('role', 'region');
     details.setAttribute('aria-label', '关系映射明细');
     const heading = document.createElement('strong');
     heading.textContent = `关系明细 (${layout.edges.length})`;

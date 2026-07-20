@@ -78,6 +78,26 @@ describe('createPanelAssetRouter', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it('injects a boolean-validated API for requesting full-workspace panel modality', () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-modal-test-'));
+    const panelPath = path.join(tmpDir, 'index.js');
+    fs.writeFileSync(panelPath, 'export default { methods: {} };');
+    const panel = new PanelModule();
+    panel.register('@scope/demo.preview', panelPath);
+    const router = createPanelAssetRouter(panel);
+    const { res, body, statusCode } = mockRes();
+
+    router(mockReq('GET', '/api/assets/panel/%40scope%2Fdemo.preview/index.html'), res);
+
+    const html = body();
+    expect(statusCode()).toBe(200);
+    expect(html).toContain('panel: {');
+    expect(html).toContain('setModalOpen(open) {');
+    expect(html).toContain("if (typeof open !== 'boolean') return;");
+    expect(html).toContain("notifyPanelHost({ type: 'ce-panel-modal-state', open });");
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
   it('serves contributed panel HTML files with injected runtime and default export bootstrap', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-html-test-'));
     const panelPath = path.join(tmpDir, 'index.html');
