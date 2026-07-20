@@ -114,8 +114,12 @@ const definition = {
         !isConnectionSnapshot(payload)
         || payload.connectionRevision < connection.connectionRevision
       ) return;
-      requestSequence += 1;
+      const focusTarget = fileDialog?.openerAction ?? (writeDialog ? 'close' : null);
+      if (focusTarget && activeAction && isCurrentAction(activeAction)) {
+        activeAction.focusAction = focusTarget;
+      }
       acceptConnection(payload);
+      if (focusTarget && !busy) queueMicrotask(() => focusAction(focusTarget));
     },
   },
 };

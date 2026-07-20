@@ -187,8 +187,13 @@ describe('SQLite connection panel', () => {
     expect(document.querySelector('[data-write-dialog]')).not.toBeNull();
     expect(setModalOpen).toHaveBeenLastCalledWith(true);
 
-    resolveWrite?.({ ...connection, mode: 'readwrite', connectionRevision: 2 });
-    await vi.waitFor(() => expect(document.querySelector('[data-write-dialog]')).toBeNull());
+    const writable = { ...connection, mode: 'readwrite' as const, connectionRevision: 2 };
+    await definition.methods.onConnectionChanged(writable);
+    resolveWrite?.(writable);
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-write-dialog]')).toBeNull();
+      expect(document.activeElement).toBe(document.querySelector('[data-action="close"]'));
+    });
   });
 
   it('uses the historical default filename when creating a database', async () => {
