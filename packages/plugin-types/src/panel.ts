@@ -14,6 +14,7 @@ export interface PanelContext {
   };
   panel: {
     focus(name: string): void;
+    setModalOpen(open: boolean): void;
   };
 }
 

@@ -196,6 +196,9 @@ export class PanelGroup extends HTMLElement {
           background: transparent;
           overflow: hidden;
         }
+        .content ::slotted(ce-panel[modal-open]) {
+          display: flex;
+        }
         .drop-indicator {
           position: absolute;
           top: 4px;

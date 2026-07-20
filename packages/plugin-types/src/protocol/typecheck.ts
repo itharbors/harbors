@@ -1,7 +1,12 @@
 import type { BootstrapInfo } from './bootstrap.js';
 import type { ApiErrorBody } from './http.js';
 import type { SSEEnvelope } from './message.js';
+import type { PanelContext } from '../panel.js';
 import { PROTOCOL_VERSION } from './version.js';
+
+type Assert<T extends true> = T;
+type PanelModalOpenArgument = Assert<Parameters<PanelContext['panel']['setModalOpen']>[0] extends boolean ? true : false>;
+type GlobalPanelModalOpenArgument = Assert<Parameters<Window['editor']['panel']['setModalOpen']>[0] extends boolean ? true : false>;
 
 const bootstrap: BootstrapInfo = {
   protocolVersion: PROTOCOL_VERSION,

@@ -238,30 +238,28 @@ describe('EditorApp default layout', () => {
     expect(outer.style.getPropertyValue('--ce-tab-active-indicator')).toBe('#22d3ee');
   });
 
-  it('only toggles full-workspace modality for the panel iframe that sent the message', async () => {
+  it('keeps a trusted inactive panel modal visible without changing the active tab and restores it on close or tab switch', async () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);
     await waitForBootstrap();
 
-    const firstPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/plugin-list.list"]')!;
-    const secondPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/log.log"]')!;
-    const firstFrame = firstPanel.shadowRoot!.querySelector('iframe')!;
-    const secondFrame = secondPanel.shadowRoot!.querySelector('iframe')!;
-    const firstSource = {} as WindowProxy;
-    const secondSource = {} as WindowProxy;
-    Object.defineProperty(firstFrame, 'contentWindow', { configurable: true, value: firstSource });
-    Object.defineProperty(secondFrame, 'contentWindow', { configurable: true, value: secondSource });
+    const activePanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/log.log"]')!;
+    const modalPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/message-debug.debug"]')!;
+    const modalFrame = modalPanel.shadowRoot!.querySelector('iframe')!;
+    const modalSource = {} as WindowProxy;
+    Object.defineProperty(modalFrame, 'contentWindow', { configurable: true, value: modalSource });
 
     window.dispatchEvent(new MessageEvent('message', {
       data: { type: 'ce-panel-modal-state', open: true },
-      source: secondSource,
+      source: modalSource,
     }));
 
-    expect(firstPanel.hasAttribute('modal-open')).toBe(false);
-    expect(secondPanel.hasAttribute('modal-open')).toBe(true);
+    expect(activePanel.hasAttribute('active')).toBe(true);
+    expect(modalPanel.hasAttribute('active')).toBe(false);
+    expect(modalPanel.hasAttribute('modal-open')).toBe(true);
 
     window.dispatchEvent(new MessageEvent('message', {
-      data: { type: 'ce-panel-modal-state', open: true },
+      data: { type: 'ce-panel-modal-state', open: false },
       source: {} as WindowProxy,
     }));
     window.dispatchEvent(new MessageEvent('message', {
@@ -269,8 +267,23 @@ describe('EditorApp default layout', () => {
       source: window,
     }));
 
-    expect(firstPanel.hasAttribute('modal-open')).toBe(false);
-    expect(secondPanel.hasAttribute('modal-open')).toBe(true);
+    expect(modalPanel.hasAttribute('modal-open')).toBe(true);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: false },
+      source: modalSource,
+    }));
+    expect(modalPanel.hasAttribute('modal-open')).toBe(false);
+
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { type: 'ce-panel-modal-state', open: true },
+      source: modalSource,
+    }));
+    const group = modalPanel.closest('ce-panel-group')!;
+    (group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement).click();
+
+    expect(modalPanel.hasAttribute('active')).toBe(true);
+    expect(modalPanel.hasAttribute('modal-open')).toBe(false);
   });
 
   it('renders the window group selected by windowGroupId from a secondary URL', async () => {
