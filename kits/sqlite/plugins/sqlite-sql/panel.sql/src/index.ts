@@ -219,10 +219,18 @@ async function cancel(): Promise<void> {
 
 function render(): void {
   if (!root) return;
-  root.innerHTML = '<main class="shell"><div class="editor"><div class="gutter" aria-hidden="true"></div><textarea aria-label="SQL" spellcheck="false"></textarea><div class="completions" role="listbox" aria-label="SQL 补全"></div></div><div class="toolbar"></div><section class="result" aria-live="polite"></section></main>';
+  root.innerHTML = `<main class="workspace">
+    <header class="workspace-heading"><div class="object-title"><small>DATABASE</small><h1>SQL</h1></div></header>
+    <div class="view-host"><section class="sql-view" aria-label="SQLite SQL">
+      <div class="sql-editor"><div class="sql-gutter" aria-hidden="true"></div><textarea aria-label="SQL" spellcheck="false"></textarea><div class="sql-completions" role="listbox" aria-label="SQL 补全"></div></div>
+      <div class="sql-toolbar"></div>
+      <section class="sql-result" aria-live="polite"></section>
+    </section></div>
+    <footer class="status-bar" role="status" aria-live="polite"><span>${escapeHtml(status || (connection?.connected ? 'SQL 控制台就绪' : '等待数据库连接'))}</span><span>${connection?.connected ? 'ONLINE' : 'OFFLINE'}</span></footer>
+  </main>`;
   const textarea = root.querySelector<HTMLTextAreaElement>('textarea')!;
-  const gutter = root.querySelector<HTMLElement>('.gutter')!;
-  const completions = root.querySelector<HTMLElement>('.completions')!;
+  const gutter = root.querySelector<HTMLElement>('.sql-gutter')!;
+  const completions = root.querySelector<HTMLElement>('.sql-completions')!;
   textarea.value = sqlText;
   gutter.textContent = lineNumberText(sqlText);
   textarea.disabled = !connection?.connected;
@@ -239,7 +247,7 @@ function render(): void {
   });
   textarea.addEventListener('scroll', () => { gutter.scrollTop = textarea.scrollTop; });
 
-  const toolbar = root.querySelector<HTMLElement>('.toolbar')!;
+  const toolbar = root.querySelector<HTMLElement>('.sql-toolbar')!;
   toolbar.append(
     button('格式化', 'format-sql', false, () => { sqlText = formatSql(sqlText); render(); }),
     button('运行', 'execute-sql', busy || !connection?.connected, () => void analyzeAndExecute(), 'primary'),
@@ -251,8 +259,8 @@ function render(): void {
   hint.textContent = status || (connection?.connected ? `${connection.mode === 'readwrite' ? '读写' : '只读'} · Ctrl/⌘ + Enter 运行` : '请先连接数据库');
   toolbar.append(hint);
 
-  renderResult(root.querySelector<HTMLElement>('.result')!);
-  if (history.length > 0) renderHistory(root.querySelector('.shell')!);
+  renderResult(root.querySelector<HTMLElement>('.sql-result')!);
+  if (history.length > 0) renderHistory(root.querySelector('.sql-view')!);
   if (writeDialog) renderWriteDialog();
 }
 
@@ -277,21 +285,21 @@ function renderCompletions(textarea: HTMLTextAreaElement, container: HTMLElement
 function renderResult(container: HTMLElement): void {
   if (error) {
     const message = document.createElement('div');
-    message.className = 'error';
+    message.className = 'error-banner';
     message.setAttribute('role', 'alert');
     message.textContent = error;
     container.append(message);
   }
   if (!result) {
     const empty = document.createElement('div');
-    empty.className = 'empty';
+    empty.className = 'empty-state';
     empty.textContent = activeExecutionId ? 'SQL 正在执行…' : '运行 SQL 后在这里查看结果。';
     container.append(empty);
     return;
   }
   if (result.kind === 'mutation') {
     const summary = document.createElement('div');
-    summary.className = 'mutation';
+    summary.className = 'mutation-summary';
     const count = document.createElement('strong');
     count.textContent = String(result.changes);
     const label = document.createElement('span');
@@ -302,7 +310,7 @@ function renderResult(container: HTMLElement): void {
   }
   const rowsResult = result;
   const toolbar = document.createElement('div');
-  toolbar.className = 'result-toolbar';
+  toolbar.className = 'sql-result-toolbar';
   const label = document.createElement('strong');
   label.textContent = `第 ${rowsResult.page} 页`;
   toolbar.append(
@@ -316,7 +324,7 @@ function renderResult(container: HTMLElement): void {
   container.append(toolbar);
   if (rowsResult.truncated) {
     const notice = document.createElement('div');
-    notice.className = 'notice';
+    notice.className = 'result-notice';
     notice.textContent = '结果按每页 50 行返回，可继续查看下一页。';
     container.append(notice);
   }
@@ -332,7 +340,10 @@ function renderResult(container: HTMLElement): void {
     body.append(tr);
   });
   table.append(head, body);
-  container.append(table);
+  const scroller = document.createElement('div');
+  scroller.className = 'table-scroller';
+  scroller.append(table);
+  container.append(scroller);
 }
 
 async function runPage(page: number): Promise<void> {
@@ -373,7 +384,7 @@ function renderWriteDialog(): void {
     button('确认执行', 'confirm-write-sql', false, () => void confirmWrite(), 'primary'),
   );
   dialog.append(title, detail, footer);
-  root!.querySelector('.shell')!.append(dialog);
+  root!.querySelector('.workspace')!.append(dialog);
   if (typeof dialog.showModal === 'function') dialog.showModal();
   else dialog.setAttribute('open', '');
 }
@@ -426,6 +437,10 @@ function displayValue(value: SerializedValue | undefined): string {
   if (value === null || value === undefined) return 'NULL';
   if (typeof value === 'string' || typeof value === 'number') return String(value);
   return value.type === 'integer' ? value.value : `BLOB ${value.size} B · ${value.previewHex}`;
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[character] ?? character);
 }
 
 function setError(value: unknown, rerender = true): void {

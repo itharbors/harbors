@@ -135,6 +135,22 @@ describe('ce-panel', () => {
     expect(styles).toContain('overflow: hidden');
   });
 
+  it('uses a fixed, full-workspace host style while modal-open is set', () => {
+    const el = document.createElement('ce-panel') as Panel;
+    el.setAttribute('modal-open', '');
+    document.body.appendChild(el);
+
+    const styles = el.shadowRoot!.querySelector('style')!.textContent || '';
+    expect(styles).toContain(':host([modal-open]) {');
+    expect(styles).toContain('position: fixed');
+    expect(styles).toContain('inset: 0');
+    expect(styles).toContain('z-index: 10000');
+    expect(styles).toContain('max-width: none');
+    expect(styles).toContain('max-height: none');
+    expect(styles).toContain(':host([modal-open]) .header');
+    expect(styles).toContain('display: none');
+  });
+
   describe('type="simple"', () => {
     it('renders slot content without iframe', () => {
       const el = document.createElement('ce-panel') as Panel;

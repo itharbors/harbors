@@ -293,6 +293,10 @@ function createPanelRuntimeScript(panelName: string, panelPluginName: string, in
         focus(name) {
           window.parent.postMessage({ type: 'panel-focus', panel: name }, '*');
         },
+        setModalOpen(open) {
+          if (typeof open !== 'boolean') return;
+          notifyPanelHost({ type: 'ce-panel-modal-state', open });
+        },
       },
       panelKey: panelName,
     };

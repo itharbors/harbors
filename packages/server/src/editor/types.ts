@@ -78,6 +78,7 @@ export interface PanelRuntime {
   };
   panel: {
     focus(name: string): void;
+    setModalOpen(open: boolean): void;
   };
   openPanel(panelName: string): Promise<BrowserOpenPanelResult>;
 }

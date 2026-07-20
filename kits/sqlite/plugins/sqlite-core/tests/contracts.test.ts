@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CORE_TOPICS,
+  OBJECTS_CHANGED_TOPIC,
   SQLITE_CORE,
   SQLITE_EXPLORER,
   SELECTION_CHANGED_TOPIC,
@@ -18,6 +19,7 @@ describe('SQLite shared plugin contracts', () => {
       dataChanged: '@itharbors/sqlite.data.changed',
     });
     expect(SELECTION_CHANGED_TOPIC).toBe('@itharbors/sqlite.selection.changed');
+    expect(OBJECTS_CHANGED_TOPIC).toBe('@itharbors/sqlite.objects.changed');
   });
 
   it('unwraps successful responses and raises structured request errors', () => {

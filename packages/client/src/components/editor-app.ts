@@ -129,6 +129,7 @@ export class EditorApp extends HTMLElement {
 
   disconnectedCallback() {
     this.initToken += 1;
+    this.clearPanelModalState();
     this.transport?.disconnectSSE();
     this.channel?.removeEventListener('message', this.handleChannelMessageEvent);
     this.channel?.close();
@@ -233,6 +234,7 @@ export class EditorApp extends HTMLElement {
   }
 
   private render() {
+    this.clearPanelModalState();
     const content = this.layout
       ? this.renderEditorLayoutNode(this.layout)
       : this.bootstrap
@@ -260,6 +262,10 @@ export class EditorApp extends HTMLElement {
     `;
     bindResizableSplitPanes(this);
     queueMicrotask(() => this.syncIframeThemes());
+  }
+
+  private clearPanelModalState(): void {
+    this.querySelectorAll('ce-panel[modal-open]').forEach((panel) => panel.removeAttribute('modal-open'));
   }
 
   private get windowGroupKind(): 'main' | 'secondary' {
@@ -320,6 +326,7 @@ export class EditorApp extends HTMLElement {
     const tabId = activePanel?.dataset.tabId;
     if (!groupId || !tabId) return;
 
+    this.clearPanelModalState();
     this.layout = setActiveTab(this.layout, groupId, tabId);
     this.saveCachedLayout();
   }
@@ -340,6 +347,11 @@ export class EditorApp extends HTMLElement {
     if (dispatchResult && this.transport) {
       void this.transport.sendMessageResult(dispatchResult.requestId, dispatchResult.result)
         .catch((error) => console.error('Failed to relay panel dispatch result:', error));
+      return;
+    }
+    const modalState = parseTrustedPanelModalState(event, this.querySelectorAll('ce-panel'));
+    if (modalState) {
+      modalState.panel.toggleAttribute('modal-open', modalState.open);
       return;
     }
     if (event.data?.type === 'panel-focus' && typeof event.data.panel === 'string') {
@@ -1066,6 +1078,18 @@ function parseTrustedDispatchResult(
     return { requestId: event.data.requestId, result: { ok: true, value: event.data.result } };
   }
   return null;
+}
+
+function parseTrustedPanelModalState(
+  event: MessageEvent,
+  panels: NodeListOf<Element>,
+): { panel: HTMLElement; open: boolean } | null {
+  if (!event.data || typeof event.data !== 'object' || event.data.type !== 'ce-panel-modal-state') return null;
+  if (typeof event.data.open !== 'boolean') return null;
+  const panel = Array.from(panels).find((candidate) => (
+    candidate.shadowRoot?.querySelector('iframe')?.contentWindow === event.source
+  ));
+  return panel instanceof HTMLElement ? { panel, open: event.data.open } : null;
 }
 
 function toI18nChangeEvent(event: Record<string, unknown>, snapshot: I18nVisibleSnapshot): I18nChangeEvent {

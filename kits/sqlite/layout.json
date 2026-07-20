@@ -5,32 +5,44 @@
       "kind": "main",
       "type": "panel-area",
       "layout": {
-        "type": "hsplit",
-        "sizes": [300, 1],
+        "type": "vsplit",
+        "sizes": [78, 1],
         "children": [
           {
             "type": "leaf",
-            "panel": "@itharbors/sqlite-explorer.explorer"
+            "panel": "@itharbors/sqlite-explorer.connection",
+            "panelType": "simple"
           },
           {
-            "type": "tab",
-            "activeIndex": 0,
+            "type": "hsplit",
+            "sizes": [250, 1],
             "children": [
               {
                 "type": "leaf",
-                "panel": "@itharbors/sqlite-data.data"
+                "panel": "@itharbors/sqlite-explorer.explorer",
+                "panelType": "simple"
               },
               {
-                "type": "leaf",
-                "panel": "@itharbors/sqlite-schema.schema"
-              },
-              {
-                "type": "leaf",
-                "panel": "@itharbors/sqlite-relationships.relationships"
-              },
-              {
-                "type": "leaf",
-                "panel": "@itharbors/sqlite-sql.sql"
+                "type": "tab",
+                "activeIndex": 0,
+                "children": [
+                  {
+                    "type": "leaf",
+                    "panel": "@itharbors/sqlite-data.data"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "@itharbors/sqlite-schema.schema"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "@itharbors/sqlite-relationships.relationships"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "@itharbors/sqlite-sql.sql"
+                  }
+                ]
               }
             ]
           }
