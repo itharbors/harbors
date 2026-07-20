@@ -45,3 +45,39 @@ new_fixture() {
   git -C "$ORIGIN" symbolic-ref HEAD refs/heads/main
   START="$REPO/.agents/skills/change-workflow/scripts/start-change.sh"
 }
+
+label_for_type() {
+  case "$1" in
+    feature) printf 'Feature\n' ;; bug) printf 'Bug\n' ;; docs) printf 'Docs\n' ;;
+    refactor) printf 'Refactor\n' ;; optimize) printf 'Optimize\n' ;;
+    test) printf 'Test\n' ;; chore) printf 'Chore\n' ;; *) fail "unknown type: $1" ;;
+  esac
+}
+
+install_mocks() {
+  MOCK_BIN="$FIXTURE_ROOT/mock-bin"; GH_LOG="$FIXTURE_ROOT/gh.log"; NPM_LOG="$FIXTURE_ROOT/npm.log"
+  mkdir -p "$MOCK_BIN"; : > "$GH_LOG"; : > "$NPM_LOG"; export GH_LOG NPM_LOG
+  printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$NPM_LOG"\ntest "${NPM_FAIL:-0}" != 1\n' > "$MOCK_BIN/npm"
+  printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$GH_LOG"' \
+    'case "$1 $2" in' \
+    "'auth status') test \"\${GH_AUTH_FAIL:-0}\" != 1 ;;" \
+    "'pr create') printf '%s\\n' 'https://github.com/example/repo/pull/1' ;;" \
+    "'pr view') printf '%s\\t%s\\t%s\\t%s\\n' \"\${GH_VIEW_BASE:-main}\" \"\${GH_VIEW_HEAD:-\$(git branch --show-current)}\" \"\${GH_VIEW_STATE:-OPEN}\" \"\${GH_VIEW_URL:-https://github.com/example/repo/pull/1}\" ;;" \
+    '*) exit 2 ;;' 'esac' > "$MOCK_BIN/gh"
+  chmod +x "$MOCK_BIN/npm" "$MOCK_BIN/gh"
+  export PATH="$MOCK_BIN:$ORIGINAL_PATH"
+}
+
+prepare_change() {
+  local type=${1:-feature}
+  new_fixture
+  "$START" "$type" finish-case >/dev/null
+  WORKTREE="$REPO/.worktrees/$type-finish-case"
+  FINISH="$WORKTREE/.agents/skills/change-workflow/scripts/finish-change.sh"
+  printf 'change\n' > "$WORKTREE/change.txt"
+  git -C "$WORKTREE" add change.txt
+  git -C "$WORKTREE" commit -m "[$(label_for_type "$type")] 添加测试变更" >/dev/null
+  BODY="$FIXTURE_ROOT/pr-body.md"
+  printf '## Summary\n\nChange.\n\n## Testing\n\n- npm run check\n' > "$BODY"
+  install_mocks
+}
