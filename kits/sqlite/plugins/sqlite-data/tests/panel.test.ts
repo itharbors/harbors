@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 type PanelDefinition = {
   mount(context: unknown): Promise<void>;
@@ -66,6 +68,48 @@ describe('SQLite Data panel', () => {
       connectionRevision: 1, schemaRevision: 1, dataRevision: 3, objectName: 'users',
     });
     expect(request.mock.calls.filter((call) => call[1] === 'getRows')).toHaveLength(before + 1);
+  });
+
+  it('restores the historical workspace hierarchy and data grid styling contract', async () => {
+    const request = vi.fn(async (plugin: string, method: string) => {
+      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') {
+        return {
+          connected: true, path: '/tmp/demo.sqlite', mode: 'readonly', sqliteVersion: '3.46',
+          connectionRevision: 1, schemaRevision: 1, dataRevision: 1,
+        };
+      }
+      if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') {
+        return { connectionRevision: 1, objectName: 'users' };
+      }
+      if (method === 'getObjectSchema') {
+        return { name: 'users', writable: false, columns: [], primaryKey: [], indexes: [], hasRowid: true };
+      }
+      if (method === 'getRows') {
+        return {
+          name: 'users', page: 1, pageSize: 25, total: 1, writable: false,
+          columns: ['id'],
+          rows: [{ values: [{ type: 'integer', value: '1' }], identity: null }],
+        };
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-title > small')?.textContent).toBe('TABLE');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-title > h1')?.textContent).toBe('users');
+    expect(workspace?.querySelector(':scope > .view-host > .data-view > .data-toolbar > .data-toolbar-primary')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .view-host > .data-view > .data-toolbar > .data-toolbar-filters')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .view-host > .data-view > .table-scroller > table')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .view-host > .data-view > .pagination[aria-label="数据分页"]')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .status-bar[role="status"]')).not.toBeNull();
+
+    const css = readFileSync(resolve(process.cwd(), 'plugins/sqlite-data/panel.data/src/index.css'), 'utf8');
+    expect(css).toMatch(/--ink:\s*#0b1116/);
+    expect(css).toMatch(/--teal:\s*#57c8b5/);
+    expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*58px minmax\(0,\s*1fr\) 26px/s);
+    expect(css).toMatch(/\.table-scroller\s*\{[^}]*overflow:\s*auto/s);
   });
 
   it('ignores a row response that finishes after object selection changes', async () => {

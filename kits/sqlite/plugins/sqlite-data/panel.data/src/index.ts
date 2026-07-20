@@ -215,13 +215,16 @@ async function requestExplorer<T>(method: string, input?: unknown): Promise<T> {
 function render(): void {
   if (!root) return;
   const objectName = selection.objectName;
-  root.innerHTML = `<main class="data-shell">
-    <header class="data-heading"><h1>${escapeHtml(objectName ?? '数据')}</h1><span class="badge">${objectSchema?.writable && rows?.writable ? '可写' : '只读'}</span></header>
-    ${error ? `<div class="error" role="alert">${escapeHtml(error)}</div>` : ''}
-    ${objectName ? renderToolbar() : ''}
-    ${renderRows()}
-    ${rows ? renderPagination() : ''}
-    <footer class="status" role="status" aria-live="polite">${escapeHtml(status)}</footer>
+  const writable = Boolean(objectSchema?.writable && rows?.writable);
+  root.innerHTML = `<main class="workspace">
+    <header class="workspace-heading"><div class="object-title"><small>${objectName ? 'TABLE' : 'DATABASE'}</small><h1>${escapeHtml(objectName ?? '数据')}</h1>${objectName ? `<span class="${writable ? 'writable-badge' : 'readonly-badge'}">${writable ? '可写' : '只读'}</span>` : ''}</div></header>
+    <div class="view-host"><section class="data-view"${objectName ? ' data-ready="true"' : ''} aria-label="SQLite 数据">
+      ${error ? `<div class="error-banner" role="alert">${escapeHtml(error)}</div>` : ''}
+      ${objectName ? renderToolbar() : ''}
+      ${renderRows()}
+      ${rows ? renderPagination() : ''}
+    </section></div>
+    <footer class="status-bar" role="status" aria-live="polite"><span>${escapeHtml(status)}</span><span>${connection?.connected ? 'ONLINE' : 'OFFLINE'}</span></footer>
     ${recordDialog ? renderRecordDialog(recordDialog) : ''}
     ${deleteDialog ? renderDeleteDialog() : ''}
     ${cellDetail ? renderCellDetail() : ''}
@@ -315,15 +318,20 @@ function render(): void {
 function renderToolbar(): string {
   const writable = Boolean(objectSchema?.writable && rows?.writable);
   const activeFilter = filters[0];
-  return `<div class="toolbar">
-    <button type="button" data-action="add-row"${writable ? '' : ' disabled'}>新增</button><button type="button" data-action="edit-row"${writable && selectedRowIndex !== null ? '' : ' disabled'}>编辑</button><button type="button" data-action="delete-row"${writable && selectedRowIndex !== null ? '' : ' disabled'}>删除</button>
-    <input type="search" data-field="search" aria-label="搜索当前表" placeholder="搜索当前表，按 Enter 应用" value="${escapeHtml(search)}">
-    <button type="button" data-action="copy-row"${selectedRowIndex === null ? ' disabled' : ''}>复制整行</button>
-    <button type="button" data-action="export-csv">导出 CSV</button><button type="button" data-action="export-json">导出 JSON</button>
-    <select data-field="filter-column" aria-label="筛选列"><option value="">筛选列</option>${(rows?.columns ?? []).map((column) => `<option value="${escapeHtml(column)}"${activeFilter?.column === column ? ' selected' : ''}>${escapeHtml(column)}</option>`).join('')}</select>
-    <select data-field="filter-operator" aria-label="筛选方式"><option value="contains">包含</option><option value="equals"${activeFilter?.operator === 'equals' ? ' selected' : ''}>等于</option><option value="is-null"${activeFilter?.operator === 'is-null' ? ' selected' : ''}>为空</option><option value="is-not-null"${activeFilter?.operator === 'is-not-null' ? ' selected' : ''}>不为空</option></select>
-    <input data-field="filter-value" aria-label="筛选值" placeholder="筛选值" value="${escapeHtml(activeFilter?.value ?? '')}">
-    <button type="button" data-action="apply-filter">应用筛选</button><button type="button" data-action="clear-filter"${filters.length ? '' : ' disabled'}>清除筛选</button>
+  return `<div class="data-toolbar">
+    <div class="data-toolbar-row data-toolbar-primary">
+      <button class="primary" type="button" data-action="add-row"${writable ? '' : ' disabled'}>新增</button><button type="button" data-action="edit-row"${writable && selectedRowIndex !== null ? '' : ' disabled'}>编辑</button><button class="danger" type="button" data-action="delete-row"${writable && selectedRowIndex !== null ? '' : ' disabled'}>删除</button>
+      <input type="search" data-field="search" aria-label="搜索当前表" placeholder="搜索当前表，按 Enter 应用" value="${escapeHtml(search)}">
+      <button type="button" data-action="copy-row"${selectedRowIndex === null ? ' disabled' : ''}>复制整行</button>
+      <button type="button" data-action="export-csv">导出 CSV</button><button type="button" data-action="export-json">导出 JSON</button>
+      <span>${rows ? `${rows.total} 条记录` : '正在加载'}</span>
+    </div>
+    <div class="data-toolbar-row data-toolbar-filters">
+      <select data-field="filter-column" aria-label="筛选列"><option value="">筛选列</option>${(rows?.columns ?? []).map((column) => `<option value="${escapeHtml(column)}"${activeFilter?.column === column ? ' selected' : ''}>${escapeHtml(column)}</option>`).join('')}</select>
+      <select data-field="filter-operator" aria-label="筛选方式"><option value="contains">包含</option><option value="equals"${activeFilter?.operator === 'equals' ? ' selected' : ''}>等于</option><option value="is-null"${activeFilter?.operator === 'is-null' ? ' selected' : ''}>为空</option><option value="is-not-null"${activeFilter?.operator === 'is-not-null' ? ' selected' : ''}>不为空</option></select>
+      <input data-field="filter-value" aria-label="筛选值" placeholder="筛选值" value="${escapeHtml(activeFilter?.value ?? '')}">
+      <button type="button" data-action="apply-filter">应用筛选</button><button type="button" data-action="clear-filter"${filters.length ? '' : ' disabled'}>清除筛选</button>
+    </div>
   </div>`;
 }
 
@@ -338,7 +346,9 @@ function applyFilter(): void {
 
 function renderPagination(): string {
   const totalPages = Math.max(1, Math.ceil((rows?.total ?? 0) / pageSize));
-  return `<nav class="pagination" aria-label="数据分页"><button type="button" data-action="previous-page"${page <= 1 ? ' disabled' : ''}>上一页</button><span>第 ${page} / ${totalPages} 页</span><button type="button" data-action="next-page"${page >= totalPages ? ' disabled' : ''}>下一页</button><label>每页 <select data-field="page-size" aria-label="每页记录数"><option value="25"${pageSize === 25 ? ' selected' : ''}>25</option><option value="50"${pageSize === 50 ? ' selected' : ''}>50</option></select></label></nav>`;
+  const start = rows && rows.total > 0 ? (page - 1) * pageSize + 1 : 0;
+  const end = rows ? Math.min(page * pageSize, rows.total) : 0;
+  return `<nav class="pagination" aria-label="数据分页"><span>${start}–${end} / ${rows?.total ?? 0}</span><span class="page-grid" aria-hidden="true"></span><button type="button" data-action="previous-page"${page <= 1 ? ' disabled' : ''}>上一页</button><span>第 ${page} / ${totalPages} 页</span><button type="button" data-action="next-page"${page >= totalPages ? ' disabled' : ''}>下一页</button><label>每页 <select data-field="page-size" aria-label="每页记录数"><option value="25"${pageSize === 25 ? ' selected' : ''}>25</option><option value="50"${pageSize === 50 ? ' selected' : ''}>50</option></select></label></nav>`;
 }
 
 async function copySelectedRow(): Promise<void> {
@@ -406,7 +416,7 @@ function renderDeleteDialog(): string {
 }
 
 function renderCellDetail(): string {
-  return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true" data-cell-detail><h2>${escapeHtml(cellDetail!.column)}</h2><pre>${escapeHtml(formatValue(cellDetail!.value))}</pre><div class="modal-actions"><button type="button" data-action="close-cell-detail">关闭</button><button type="button" data-action="copy-cell">复制</button></div></section></div>`;
+  return `<aside class="cell-detail" role="dialog" aria-modal="true" data-cell-detail><header class="cell-detail-heading"><h2>${escapeHtml(cellDetail!.column)}</h2><span class="cell-detail-readonly">只读预览</span></header><pre>${escapeHtml(formatValue(cellDetail!.value))}</pre><button type="button" data-action="close-cell-detail">关闭</button><button type="button" data-action="copy-cell">复制</button></aside>`;
 }
 
 async function copyCellDetail(): Promise<void> {
@@ -434,7 +444,7 @@ async function confirmDelete(): Promise<void> {
 }
 
 function renderUndoToast(): string {
-  return `<div class="undo" role="status">记录操作已完成 <button type="button" data-action="undo">撤销</button></div>`;
+  return `<div class="undo-toast" role="status">记录操作已完成 <button type="button" data-action="undo">撤销</button></div>`;
 }
 
 function setUndo(receipt: MutationReceipt): void {
@@ -497,10 +507,10 @@ function renderRows(): string {
   if (!selection.objectName) return '<div class="empty">请从资源管理器选择一个数据库对象。</div>';
   if (!rows) return '<div class="empty">正在加载数据…</div>';
   if (rows.rows.length === 0) return `<div class="empty">${rows.total === 0 ? '当前对象没有记录。' : '当前页没有记录。'}</div>`;
-  return `<div class="table-wrap"><table><thead><tr><th>#</th>${rows.columns.map((column) => {
+  return `<div class="table-scroller"><table><thead><tr><th class="row-selector-heading">#</th>${rows.columns.map((column) => {
     const sort = sorts.find((candidate) => candidate.column === column);
     return `<th><button type="button" data-sort-column="${escapeHtml(column)}" aria-label="按 ${escapeHtml(column)} 排序">${escapeHtml(column)}${sort ? ` ${sort.direction === 'asc' ? '↑' : '↓'}` : ''}</button></th>`;
-  }).join('')}</tr></thead><tbody>${rows.rows.map((row, index) => `<tr data-row-index="${index}" aria-selected="${index === selectedRowIndex}"><td>${index + 1}</td>${row.values.map((value, columnIndex) => `<td data-cell-row="${index}" data-cell-column="${columnIndex}" title="双击查看完整内容">${escapeHtml(formatValue(value))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }).join('')}</tr></thead><tbody>${rows.rows.map((row, index) => `<tr class="${index === selectedRowIndex ? 'selected' : ''}" data-row-index="${index}" aria-selected="${index === selectedRowIndex}"><td><span class="row-number">${(page - 1) * pageSize + index + 1}</span></td>${row.values.map((value, columnIndex) => `<td data-cell-row="${index}" data-cell-column="${columnIndex}" title="双击查看完整内容">${escapeHtml(formatValue(value))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 function formatValue(value: SerializedValue): string {

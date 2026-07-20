@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 type PanelDefinition = {
   mount(context: unknown): Promise<void>;
@@ -44,6 +46,35 @@ describe('SQLite SQL panel', () => {
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'executeSql', {
       executionId: 'sql-2', sql: 'SELECT * FROM users', page: 2,
     }));
+  });
+
+  it('restores the historical workspace hierarchy and SQL result styling contract', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return connection;
+      if (method === 'getSchema') return { ...connection, objects: [{ name: 'users' }] };
+      if (method === 'analyzeSql') return { readonly: true, confirmationToken: null, risk: 'normal', statementType: 'SELECT', targetObjects: ['users'] };
+      if (method === 'executeSql') return { kind: 'rows', columns: ['id'], rows: [[{ type: 'integer', value: '1' }]], page: 1, truncated: true, elapsedMs: 2 };
+      throw new Error(`Unexpected ${method}`);
+    });
+    const definition = (await import('../panel.sql/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-action="execute-sql"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'executeSql', expect.anything()));
+
+    const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-title > small')?.textContent).toBe('DATABASE');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-title > h1')?.textContent).toBe('SQL');
+    const sqlView = workspace?.querySelector(':scope > .view-host > .sql-view');
+    expect(sqlView?.querySelector(':scope > .sql-editor > .sql-gutter + textarea[aria-label="SQL"] + .sql-completions')).not.toBeNull();
+    expect(sqlView?.querySelector(':scope > .sql-editor + .sql-toolbar')).not.toBeNull();
+    expect(sqlView?.querySelector(':scope > .sql-result > .sql-result-toolbar + .result-notice + .table-scroller > table')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .status-bar[role="status"]')).not.toBeNull();
+
+    const css = readFileSync(resolve(process.cwd(), 'plugins/sqlite-sql/panel.sql/src/index.css'), 'utf8');
+    expect(css).toMatch(/--ink:\s*#0b1116/);
+    expect(css).toMatch(/--teal:\s*#57c8b5/);
+    expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*58px minmax\(0,\s*1fr\) 26px/s);
+    expect(css).toMatch(/\.sql-result\s*\{[^}]*overflow:\s*auto/s);
   });
 
   it('requires explicit confirmation before executing write SQL', async () => {
