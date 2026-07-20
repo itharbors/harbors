@@ -180,6 +180,30 @@ describe('MySQL Data panel', () => {
       dialogMethods.restore();
     }
   });
+
+  it('clears record dialog state when the native cancel event dismisses it', async () => {
+    const dialogMethods = patchDialogMethods();
+    try {
+      const request = createRequest();
+      const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+      await definition.mount({ message: { request } });
+
+      (document.querySelector('[data-action="add-row"]') as HTMLButtonElement).click();
+      const dialog = document.querySelector<HTMLDialogElement>('dialog[data-record-dialog]')!;
+      const cancelEvent = new Event('cancel', { cancelable: true });
+
+      expect(dialog.dispatchEvent(cancelEvent)).toBe(false);
+      expect(cancelEvent.defaultPrevented).toBe(true);
+      expect(dialogMethods.close).toHaveBeenCalledTimes(1);
+      expect(dialog.open).toBe(false);
+      expect(document.querySelector('dialog[data-record-dialog]')).toBeNull();
+
+      await definition.methods.onDataChanged({ ...connection, dataRevision: 4, objectName: 'users' });
+      expect(document.querySelector('dialog[data-record-dialog]')).toBeNull();
+    } finally {
+      dialogMethods.restore();
+    }
+  });
 });
 
 function createRequest(capabilities?: { rowEditable: boolean; insertable: boolean }) {

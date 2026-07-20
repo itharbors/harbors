@@ -373,7 +373,8 @@ function renderDialog(): void {
     row.querySelector<HTMLSelectElement>('[data-field-type]')!.addEventListener('change', (event) => { field.inputType = (event.currentTarget as HTMLSelectElement).value as FieldInputType; render(); });
     row.querySelector<HTMLInputElement>('[data-field-value]')!.addEventListener('input', (event) => { field.value = (event.currentTarget as HTMLInputElement).value; });
   }
-  element.querySelector('[data-action="cancel-record"]')?.addEventListener('click', () => { closeRecordDialog(element); dialog = null; render(); });
+  element.addEventListener('cancel', (event) => { event.preventDefault(); dismissRecordDialog(element); });
+  element.querySelector('[data-action="cancel-record"]')?.addEventListener('click', () => dismissRecordDialog(element));
   element.querySelector('[data-action="save-record"]')?.addEventListener('click', () => void saveRecord());
 }
 
@@ -385,6 +386,13 @@ function showRecordDialog(element: HTMLDialogElement): void {
 function closeRecordDialog(element: HTMLDialogElement): void {
   if (typeof element.close === 'function') element.close();
   else element.open = false;
+}
+
+function dismissRecordDialog(element: HTMLDialogElement): void {
+  if (root?.querySelector('dialog[data-record-dialog]') !== element) return;
+  dialog = null;
+  if (element.open) closeRecordDialog(element);
+  render();
 }
 
 function bind(): void {
