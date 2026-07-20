@@ -228,6 +228,52 @@ describe('SQLite connection panel', () => {
       expect(setModalOpen).toHaveBeenLastCalledWith(false);
     });
   });
+
+  it('wraps focus forward and backward inside the write modal', async () => {
+    const request = vi.fn(async () => connection);
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { setModalOpen: vi.fn() } });
+
+    (document.querySelector('[data-action="unlock-writes"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector('[data-write-dialog]')?.contains(document.activeElement)).toBe(true));
+    const first = document.querySelector<HTMLButtonElement>('[data-action="cancel-write-mode"]')!;
+    const last = document.querySelector<HTMLButtonElement>('[data-action="confirm-write-mode"]')!;
+
+    last.focus();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    expect(document.activeElement).toBe(first);
+
+    first.focus();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(last);
+  });
+
+  it('wraps focus inside the file modal and keeps the dialog as a focus fallback', async () => {
+    const request = vi.fn(async (plugin: string, method: string) => {
+      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
+      if (plugin === '@itharbors/sqlite-core' && method === 'getRecentDatabases') return [];
+      if (plugin === '@itharbors/sqlite-core' && method === 'listDirectory') {
+        return { currentPath: '/tmp', parentPath: null, entries: [] };
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { setModalOpen: vi.fn() } });
+
+    (document.querySelector('[data-action="browse-create"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector('[data-file-dialog]')?.contains(document.activeElement)).toBe(true));
+    const dialog = document.querySelector<HTMLElement>('[data-file-dialog]')!;
+    const focusable = Array.from(dialog.querySelectorAll<HTMLElement>('input, summary, button:not(:disabled)'));
+    expect(dialog.tabIndex).toBe(-1);
+
+    focusable.at(-1)?.focus();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    expect(document.activeElement).toBe(focusable[0]);
+
+    focusable[0]?.focus();
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(focusable.at(-1));
+  });
 });
 
 function objectsSnapshot(): unknown {

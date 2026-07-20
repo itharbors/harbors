@@ -96,6 +96,7 @@ function acceptSnapshot(next: ObjectsSnapshot<SchemaObject>): void {
     query = '';
     expandedKinds.clear();
   }
+  requestSequence += 1;
   selectionSequence += 1;
   snapshot = cloneSnapshot(next);
   error = null;
@@ -120,17 +121,29 @@ async function chooseObject(objectName: string): Promise<void> {
       objectName,
     }) as SelectionSnapshot;
     if (
-      sequence !== selectionSequence
-      || connectionRevision !== snapshot.connectionRevision
-      || schemaRevision !== snapshot.schemaRevision
+      !isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)
       || selection.connectionRevision !== snapshot.connectionRevision
     ) return;
     snapshot = { ...snapshot, selection: { ...selection } };
     error = null;
+    render();
   } catch (caught) {
+    if (!isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)) return;
     error = panelError(caught);
+    render();
   }
-  render();
+}
+
+function isCurrentSelectionRequest(
+  sequence: number,
+  connectionRevision: number,
+  schemaRevision: number,
+): boolean {
+  return sequence === selectionSequence
+    && connectionRevision === snapshot.connectionRevision
+    && schemaRevision === snapshot.schemaRevision
+    && context !== undefined
+    && root?.isConnected === true;
 }
 
 async function requestExplorer(method: string, input?: unknown): Promise<unknown> {

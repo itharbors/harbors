@@ -28,6 +28,12 @@ type ConnectionEvent = {
   schemaRevision: number;
 };
 
+type RefreshState = {
+  operation: Promise<ObjectsSnapshot<SchemaObject>>;
+  pending: boolean;
+  sequence: number;
+};
+
 const DISCONNECTED_SNAPSHOT: ObjectsSnapshot<SchemaObject> = {
   connected: false,
   connectionRevision: 0,
@@ -40,7 +46,7 @@ let runtime: Runtime | undefined;
 let snapshot = cloneSnapshot(DISCONNECTED_SNAPSHOT);
 let lastPublishedSelection: SelectionSnapshot = { ...DISCONNECTED_SNAPSHOT.selection };
 let refreshSequence = 0;
-let activeRefresh: Promise<ObjectsSnapshot<SchemaObject>> | null = null;
+let activeRefresh: RefreshState | null = null;
 
 function getSelection(): SelectionSnapshot {
   return { ...snapshot.selection };
@@ -55,10 +61,13 @@ async function selectObject(input: unknown): Promise<SelectionSnapshot> {
   if (candidate.connectionRevision !== snapshot.connectionRevision) {
     throw new Error('数据库连接已变化，请重新选择对象。');
   }
-  while (activeRefresh) {
+  while (activeRefresh?.pending) {
     const pendingRefresh = activeRefresh;
-    await pendingRefresh;
-    if (activeRefresh === pendingRefresh) activeRefresh = null;
+    try {
+      await pendingRefresh.operation;
+    } catch (caught) {
+      if (activeRefresh === pendingRefresh) throw caught;
+    }
   }
   if (candidate.connectionRevision !== snapshot.connectionRevision) {
     throw new Error('数据库连接已变化，请重新选择对象。');
@@ -87,11 +96,39 @@ async function refreshObjects(): Promise<ObjectsSnapshot<SchemaObject>> {
 
 async function startRefresh(preferredObjectName: string | null): Promise<ObjectsSnapshot<SchemaObject>> {
   const operation = performRefreshObjects(preferredObjectName);
-  activeRefresh = operation;
-  try {
-    return await operation;
-  } finally {
-    if (activeRefresh === operation) activeRefresh = null;
+  const refresh: RefreshState = {
+    operation,
+    pending: true,
+    sequence: refreshSequence,
+  };
+  activeRefresh = refresh;
+  void operation.then(
+    () => { refresh.pending = false; },
+    () => { refresh.pending = false; },
+  );
+  return awaitLatestRefresh(refresh);
+}
+
+async function awaitLatestRefresh(
+  initialRefresh: RefreshState,
+): Promise<ObjectsSnapshot<SchemaObject>> {
+  let refresh = initialRefresh;
+  let superseded = false;
+  while (true) {
+    try {
+      const result = await refresh.operation;
+      if (activeRefresh === refresh) {
+        return superseded ? getObjectsSnapshot() : result;
+      }
+    } catch (caught) {
+      if (activeRefresh === refresh) throw caught;
+    }
+    superseded = true;
+    if (!activeRefresh) {
+      if (refresh.sequence !== refreshSequence) return getObjectsSnapshot();
+      throw new Error('SQLite 对象刷新状态已失效。');
+    }
+    refresh = activeRefresh;
   }
 }
 

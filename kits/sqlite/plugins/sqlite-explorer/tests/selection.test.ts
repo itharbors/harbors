@@ -287,6 +287,156 @@ describe('SQLite Explorer object snapshot owner', () => {
     await expect(selecting).resolves.toEqual({ connectionRevision: 6, objectName: 'latest' });
   });
 
+  it('converges superseded callers when the newest refresh succeeds before the old one fails', async () => {
+    const definition = await loadDefinition();
+    let rejectOld: ((reason?: unknown) => void) | undefined;
+    let resolveNewest: ((value: unknown) => void) | undefined;
+    const oldSchema = new Promise<unknown>((_resolve, reject) => { rejectOld = reject; });
+    const newestSchema = new Promise<unknown>((resolve) => { resolveNewest = resolve; });
+    const request = vi.fn()
+      .mockResolvedValueOnce({
+        connectionRevision: 9,
+        schemaRevision: 1,
+        dataRevision: 1,
+        objects: [{ name: 'initial', kind: 'table' }],
+      })
+      .mockImplementationOnce(async () => oldSchema)
+      .mockImplementationOnce(async () => newestSchema);
+    definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
+    await definition.methods.onConnectionChanged({
+      connected: true,
+      connectionRevision: 9,
+      schemaRevision: 1,
+    });
+
+    const oldRefresh = definition.methods.refreshObjects();
+    const selecting = definition.methods.selectObject({
+      connectionRevision: 9,
+      objectName: 'latest',
+    });
+    const newestRefresh = definition.methods.refreshObjects();
+    const expected = {
+      connected: true,
+      connectionRevision: 9,
+      schemaRevision: 3,
+      objects: [{ name: 'latest', kind: 'table' }],
+      selection: { connectionRevision: 9, objectName: 'latest' },
+    };
+
+    resolveNewest?.({
+      connectionRevision: 9,
+      schemaRevision: 3,
+      dataRevision: 3,
+      objects: [{ name: 'latest', kind: 'table' }],
+    });
+    await expect(newestRefresh).resolves.toEqual(expected);
+    rejectOld?.(new Error('superseded schema failed late'));
+
+    await expect(oldRefresh).resolves.toEqual(expected);
+    await expect(selecting).resolves.toEqual(expected.selection);
+    expect(definition.methods.getObjectsSnapshot()).toEqual(expected);
+  });
+
+  it('keeps superseded callers pending when the old refresh fails before the newest succeeds', async () => {
+    const definition = await loadDefinition();
+    let rejectOld: ((reason?: unknown) => void) | undefined;
+    let resolveNewest: ((value: unknown) => void) | undefined;
+    const oldSchema = new Promise<unknown>((_resolve, reject) => { rejectOld = reject; });
+    const newestSchema = new Promise<unknown>((resolve) => { resolveNewest = resolve; });
+    const request = vi.fn()
+      .mockResolvedValueOnce({
+        connectionRevision: 10,
+        schemaRevision: 1,
+        dataRevision: 1,
+        objects: [{ name: 'initial', kind: 'table' }],
+      })
+      .mockImplementationOnce(async () => oldSchema)
+      .mockImplementationOnce(async () => newestSchema);
+    definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
+    await definition.methods.onConnectionChanged({
+      connected: true,
+      connectionRevision: 10,
+      schemaRevision: 1,
+    });
+
+    let oldOutcome = 'pending';
+    let selectionOutcome = 'pending';
+    const oldRefresh = definition.methods.refreshObjects().then(
+      (value: unknown) => { oldOutcome = 'resolved'; return value; },
+      (caught: unknown) => { oldOutcome = 'rejected'; throw caught; },
+    );
+    const selecting = definition.methods.selectObject({
+      connectionRevision: 10,
+      objectName: 'latest',
+    }).then(
+      (value: unknown) => { selectionOutcome = 'resolved'; return value; },
+      (caught: unknown) => { selectionOutcome = 'rejected'; throw caught; },
+    );
+    const newestRefresh = definition.methods.refreshObjects();
+
+    rejectOld?.(new Error('superseded schema failed early'));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+    expect(oldOutcome).toBe('pending');
+    expect(selectionOutcome).toBe('pending');
+
+    const expected = {
+      connected: true,
+      connectionRevision: 10,
+      schemaRevision: 4,
+      objects: [{ name: 'latest', kind: 'table' }],
+      selection: { connectionRevision: 10, objectName: 'latest' },
+    };
+    resolveNewest?.({
+      connectionRevision: 10,
+      schemaRevision: 4,
+      dataRevision: 4,
+      objects: [{ name: 'latest', kind: 'table' }],
+    });
+
+    await expect(newestRefresh).resolves.toEqual(expected);
+    await expect(oldRefresh).resolves.toEqual(expected);
+    await expect(selecting).resolves.toEqual(expected.selection);
+    expect(definition.methods.getObjectsSnapshot()).toEqual(expected);
+  });
+
+  it('rejects explicit callers only when the active refresh fails', async () => {
+    const definition = await loadDefinition();
+    let rejectSchema: ((reason?: unknown) => void) | undefined;
+    const failingSchema = new Promise<unknown>((_resolve, reject) => { rejectSchema = reject; });
+    const request = vi.fn()
+      .mockResolvedValueOnce({
+        connectionRevision: 11,
+        schemaRevision: 1,
+        dataRevision: 1,
+        objects: [{ name: 'users', kind: 'table' }],
+      })
+      .mockImplementationOnce(async () => failingSchema);
+    definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
+    await definition.methods.onConnectionChanged({
+      connected: true,
+      connectionRevision: 11,
+      schemaRevision: 1,
+    });
+
+    const refresh = definition.methods.refreshObjects();
+    const selecting = definition.methods.selectObject({
+      connectionRevision: 11,
+      objectName: 'users',
+    });
+    const refreshExpectation = expect(refresh).rejects.toThrow('active schema failed');
+    const selectionExpectation = expect(selecting).rejects.toThrow('active schema failed');
+    rejectSchema?.(new Error('active schema failed'));
+
+    await refreshExpectation;
+    await selectionExpectation;
+    expect(definition.methods.getObjectsSnapshot()).toMatchObject({
+      connectionRevision: 11,
+      schemaRevision: 1,
+      selection: { connectionRevision: 11, objectName: 'users' },
+    });
+  });
+
   it('does not carry a same-named selection across connection revisions', async () => {
     const definition = await loadDefinition();
     let schema = {

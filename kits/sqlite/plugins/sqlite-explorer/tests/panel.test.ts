@@ -133,6 +133,24 @@ describe('SQLite object explorer panel', () => {
     expect(document.querySelector('[data-object-name="users"]')).toBeNull();
   });
 
+  it('invalidates late hydration when a same-revision broadcast changes the selection', async () => {
+    let resolveHydration: ((value: unknown) => void) | undefined;
+    const hydration = new Promise<unknown>((resolve) => { resolveHydration = resolve; });
+    const request = vi.fn(async () => hydration);
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    const mounting = definition.mount({ message: { request } });
+
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      selection: { connectionRevision: 1, objectName: 'active_users' },
+    });
+    resolveHydration?.(objectsSnapshot);
+    await mounting;
+
+    expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
   it('ignores a late selection response after a newer authoritative snapshot', async () => {
     let resolveSelection: ((value: unknown) => void) | undefined;
     const selection = new Promise<unknown>((resolve) => { resolveSelection = resolve; });
@@ -152,6 +170,74 @@ describe('SQLite object explorer panel', () => {
 
     expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
     expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('ignores a late selection rejection after a newer selection request', async () => {
+    let rejectOldSelection: ((reason?: unknown) => void) | undefined;
+    const oldSelection = new Promise<unknown>((_resolve, reject) => { rejectOldSelection = reject; });
+    const request = vi.fn(async (_plugin: string, method: string, input?: unknown) => {
+      if (method === 'getObjectsSnapshot') return objectsSnapshot;
+      if (method === 'selectObject' && (input as { objectName: string }).objectName === 'active_users') {
+        return oldSelection;
+      }
+      if (method === 'selectObject') return input;
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-object-name="search_index"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-object-name="search_index"]')?.getAttribute('aria-pressed')).toBe('true');
+    });
+    rejectOldSelection?.(new Error('old selection failed late'));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('[data-object-name="search_index"]')?.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('ignores a late selection rejection after switching databases', async () => {
+    let rejectSelection: ((reason?: unknown) => void) | undefined;
+    const selection = new Promise<unknown>((_resolve, reject) => { rejectSelection = reject; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? objectsSnapshot : selection
+    ));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      connectionRevision: 2,
+      schemaRevision: 1,
+      objects: [{ ...objectsSnapshot.objects[0], name: 'new_database_table' }],
+      selection: { connectionRevision: 2, objectName: 'new_database_table' },
+    });
+    rejectSelection?.(new Error('old database selection failed late'));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('[data-object-name="new_database_table"]')?.getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('does not render a late selection rejection after unmount', async () => {
+    let rejectSelection: ((reason?: unknown) => void) | undefined;
+    const selection = new Promise<unknown>((_resolve, reject) => { rejectSelection = reject; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? objectsSnapshot : selection
+    ));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    definition.unmount();
+    rejectSelection?.(new Error('unmounted selection failed late'));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('#panel-root')?.children).toHaveLength(0);
+    expect(document.querySelector('[role="alert"]')).toBeNull();
   });
 
   it('resets expanded system groups when the connection changes', async () => {

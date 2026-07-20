@@ -344,7 +344,7 @@ function renderFileDialog(dialog: FileDialog): string {
     ? `<details class="recent-paths"><summary>最近使用 · ${dialog.recentPaths.length}</summary>${dialog.recentPaths.map((path) => `<button type="button" data-recent-path="${escapeHtml(path)}">${escapeHtml(path)}</button>`).join('')}</details>`
     : '';
   return `<div class="modal-backdrop">
-    <section class="modal" data-file-dialog role="dialog" aria-modal="true" aria-labelledby="file-dialog-title">
+    <section class="modal" data-file-dialog role="dialog" aria-modal="true" aria-labelledby="file-dialog-title" tabindex="-1">
       <h2 id="file-dialog-title">${title}</h2>
       <code>${escapeHtml(dialog.currentPath)}</code>
       ${recent}
@@ -366,7 +366,7 @@ function renderFileDialog(dialog: FileDialog): string {
 
 function renderWriteDialog(): string {
   return `<div class="modal-backdrop">
-    <section class="modal" data-write-dialog role="dialog" aria-modal="true" aria-labelledby="write-dialog-title">
+    <section class="modal" data-write-dialog role="dialog" aria-modal="true" aria-labelledby="write-dialog-title" tabindex="-1">
       <h2 id="write-dialog-title">启用数据库写入</h2>
       <p>启用后可新增、编辑、删除记录并执行写 SQL。系统对象仍保持只读。</p>
       ${error ? renderDialogError(error) : ''}
@@ -400,17 +400,42 @@ function closeDialogs(openerAction?: string): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (event.key !== 'Escape' || (!fileDialog && !writeDialog)) return;
-  event.preventDefault();
-  closeDialogs(fileDialog?.openerAction ?? writeDialogOpener);
+  if (!fileDialog && !writeDialog) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    closeDialogs(fileDialog?.openerAction ?? writeDialogOpener);
+    return;
+  }
+  if (event.key === 'Tab') trapModalFocus(event);
 }
 
 function focusModal(): void {
   const modal = root?.querySelector<HTMLElement>('.modal');
   if (!modal || modal.contains(document.activeElement)) return;
-  modal.querySelector<HTMLElement>(
-    '.file-list button:not(:disabled), input:not(:disabled), footer button:not(:disabled)',
-  )?.focus();
+  getModalFocusable(modal)[0]?.focus();
+  if (!modal.contains(document.activeElement)) modal.focus();
+}
+
+function trapModalFocus(event: KeyboardEvent): void {
+  const modal = root?.querySelector<HTMLElement>('.modal');
+  if (!modal) return;
+  const focusable = getModalFocusable(modal);
+  const first = focusable[0] ?? modal;
+  const last = focusable.at(-1) ?? modal;
+  const active = document.activeElement;
+  if (event.shiftKey && (active === first || !modal.contains(active))) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && (active === last || !modal.contains(active))) {
+    event.preventDefault();
+    first.focus();
+  }
+}
+
+function getModalFocusable(modal: HTMLElement): HTMLElement[] {
+  return Array.from(modal.querySelectorAll<HTMLElement>(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), summary, [tabindex]:not([tabindex="-1"])',
+  ));
 }
 
 function setModalOpen(open: boolean): void {
