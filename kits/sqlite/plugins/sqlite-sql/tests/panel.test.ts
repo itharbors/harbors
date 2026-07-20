@@ -74,7 +74,12 @@ describe('SQLite SQL panel', () => {
     expect(css).toMatch(/--ink:\s*#0b1116/);
     expect(css).toMatch(/--teal:\s*#57c8b5/);
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*58px minmax\(0,\s*1fr\) 26px/s);
-    expect(css).toMatch(/\.sql-result\s*\{[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.sql-result\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\)[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.sql-result-toolbar\s*\{[^}]*grid-row:\s*1/s);
+    expect(css).toMatch(/\.result-notice\s*\{[^}]*grid-row:\s*2/s);
+    expect(css).toMatch(/\.sql-result\s*>\s*\.table-scroller\s*\{[^}]*grid-row:\s*3[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/th\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
+    expect(css).toMatch(/\.error-banner\s*\{[^}]*position:\s*absolute[^}]*z-index:\s*4/s);
   });
 
   it('requires explicit confirmation before executing write SQL', async () => {

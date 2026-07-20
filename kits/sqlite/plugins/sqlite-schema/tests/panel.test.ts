@@ -25,7 +25,7 @@ describe('SQLite Schema panel', () => {
         sql: 'CREATE TABLE users (id INTEGER PRIMARY KEY, team_id INTEGER REFERENCES teams(id)); -- <script>alert(1)</script>',
         primaryKey: ['id'],
         columns: [{ name: 'id', type: 'INTEGER', notNull: false, primaryKeyOrder: 1, defaultValue: null, hidden: false, generated: false }],
-        indexes: [{ name: 'users_email', unique: true, origin: 'c', partial: false, columns: ['email'] }],
+        indexes: [{ name: 'users_email', unique: true, origin: 'c', partial: true, columns: ['email'] }],
         foreignKeys: [{ table: 'teams', from: 'team_id', to: 'id', onUpdate: 'NO ACTION', onDelete: 'CASCADE' }],
         triggers: [{ name: 'users_touch', sql: 'CREATE TRIGGER users_touch AFTER UPDATE ON users BEGIN SELECT 1; END' }],
       };
@@ -40,6 +40,14 @@ describe('SQLite Schema panel', () => {
     expect(document.body.textContent).toContain('users_touch');
     expect(document.body.textContent).toContain('<script>alert(1)</script>');
     expect(document.querySelector('script')).toBeNull();
+    const indexRow = document.querySelector('.schema-indexes .index-row');
+    expect(indexRow?.querySelector('strong')?.textContent).toBe('users_email');
+    expect(indexRow?.querySelector('code')?.textContent).toBe('email');
+    expect(indexRow?.querySelector('small')?.textContent).toBe('UNIQUE · C · PARTIAL');
+    const foreignKeyRow = document.querySelector('.schema-foreign-keys .index-row');
+    expect(foreignKeyRow?.querySelector('strong')?.textContent).toBe('team_id');
+    expect(foreignKeyRow?.querySelector('code')?.textContent).toBe('teams.id');
+    expect(foreignKeyRow?.querySelector('small')?.textContent).toBe('ON UPDATE NO ACTION · ON DELETE CASCADE');
     (document.querySelector('[data-action="copy-ddl"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith(expect.stringContaining('CREATE TABLE users')));
   });

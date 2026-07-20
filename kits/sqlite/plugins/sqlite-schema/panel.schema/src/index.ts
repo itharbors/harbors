@@ -47,8 +47,8 @@ function render(){
 }
 function renderSchema(value:Schema){
   const columns=table(['名称','类型','标记','默认值'],value.columns.map(c=>[c.name,c.type||'ANY',[c.primaryKeyOrder?`PK ${c.primaryKeyOrder}`:'',c.notNull?'NOT NULL':'',c.generated?'GENERATED':''].filter(Boolean).join(' · ')||'—',c.defaultValue??'—']));
-  const indexes=value.indexes.map(i=>`<div class="index-row"><strong>${escape(i.name)}</strong><code>${escape(i.columns.join(', '))}</code><small>${escape(i.unique?'UNIQUE':i.origin.toUpperCase())}</small></div>`).join('')||'<div class="empty-state compact">无索引</div>';
-  const foreignKeys=(value.foreignKeys??[]).map(f=>`<div class="index-row"><strong>${escape(f.from)}</strong><code>${escape(`${f.table}.${f.to??'(rowid)'}`)}</code><small>${escape(`ON DELETE ${f.onDelete}`)}</small></div>`).join('')||'<div class="empty-state compact">无外键</div>';
+  const indexes=value.indexes.map(i=>`<div class="index-row"><strong>${escape(i.name)}</strong><code>${escape(i.columns.join(', '))}</code><small>${escape([i.unique?'UNIQUE':'',i.origin.toUpperCase(),i.partial?'PARTIAL':''].filter(Boolean).join(' · '))}</small></div>`).join('')||'<div class="empty-state compact">无索引</div>';
+  const foreignKeys=(value.foreignKeys??[]).map(f=>`<div class="index-row"><strong>${escape(f.from)}</strong><code>${escape(`${f.table}.${f.to??'(rowid)'}`)}</code><small>${escape(`ON UPDATE ${f.onUpdate} · ON DELETE ${f.onDelete}`)}</small></div>`).join('')||'<div class="empty-state compact">无外键</div>';
   const triggers=(value.triggers??[]).map(t=>`<div class="trigger-row"><strong>${escape(t.name)}</strong><pre class="sql-code">${escape(t.sql)}</pre></div>`).join('')||'<div class="empty-state compact">无触发器</div>';
   return `<div class="schema-view">
     <section class="schema-columns">${sectionTitle('字段',value.columns.length)}${columns}</section>

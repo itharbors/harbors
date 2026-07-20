@@ -110,6 +110,58 @@ describe('SQLite Data panel', () => {
     expect(css).toMatch(/--teal:\s*#57c8b5/);
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*58px minmax\(0,\s*1fr\) 26px/s);
     expect(css).toMatch(/\.table-scroller\s*\{[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.record-dialog\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto[^}]*max-height:[^;}]+[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.record-form\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.record-dialog-footer\s*\{[^}]*display:\s*flex/s);
+  });
+
+  it('renders historical add, edit, and delete dialog regions without changing their actions', async () => {
+    const identity = { kind: 'primary-key', values: { id: { type: 'integer', value: '1' } } };
+    const request = vi.fn(async (plugin: string, method: string) => {
+      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') {
+        return { connected: true, path: '/tmp/demo.sqlite', mode: 'readwrite', sqliteVersion: '3.46', connectionRevision: 1, schemaRevision: 1, dataRevision: 1 };
+      }
+      if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') {
+        return { connectionRevision: 1, objectName: 'users' };
+      }
+      if (method === 'getObjectSchema') {
+        return {
+          name: 'users', writable: true, primaryKey: ['id'], indexes: [], hasRowid: true,
+          columns: [
+            { name: 'id', type: 'INTEGER', notNull: true, primaryKeyOrder: 1, defaultValue: null, hidden: false, generated: false },
+            { name: 'email', type: 'TEXT', notNull: true, primaryKeyOrder: 0, defaultValue: null, hidden: false, generated: false },
+          ],
+        };
+      }
+      if (method === 'getRows') {
+        return { name: 'users', page: 1, pageSize: 25, total: 1, writable: true, columns: ['id', 'email'], rows: [{ values: [{ type: 'integer', value: '1' }, 'a@example.com'], identity }] };
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const expectDialog = (mode: 'add' | 'edit' | 'delete') => {
+      const dialog = document.querySelector<HTMLElement>(`.record-dialog[data-record-mode="${mode}"]`);
+      expect(dialog).not.toBeNull();
+      expect(dialog!.querySelector(':scope > .record-dialog-header > h2[id]')).not.toBeNull();
+      expect(dialog!.querySelector(':scope > .record-form')).not.toBeNull();
+      expect(dialog!.querySelector(':scope > .record-dialog-footer')).not.toBeNull();
+      expect(dialog!.getAttribute('aria-labelledby')).toBe(dialog!.querySelector('h2')?.id);
+    };
+
+    (document.querySelector('[data-action="add-row"]') as HTMLButtonElement).click();
+    expectDialog('add');
+    (document.querySelector('[data-action="cancel-record"]') as HTMLButtonElement).click();
+
+    (document.querySelector('[data-row-index="0"]') as HTMLTableRowElement).click();
+    (document.querySelector('[data-action="edit-row"]') as HTMLButtonElement).click();
+    expectDialog('edit');
+    (document.querySelector('[data-action="cancel-record"]') as HTMLButtonElement).click();
+
+    (document.querySelector('[data-action="delete-row"]') as HTMLButtonElement).click();
+    expectDialog('delete');
+    (document.querySelector('[data-action="cancel-delete"]') as HTMLButtonElement).click();
   });
 
   it('ignores a row response that finishes after object selection changes', async () => {
@@ -198,7 +250,7 @@ describe('SQLite Data panel', () => {
     (document.querySelector('[data-action="confirm-delete"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'deleteRow', { name: 'users', identity }));
 
-    await vi.waitFor(() => expect(document.querySelector('[data-action="undo"]')).not.toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('.undo-toast[role="status"] [data-action="undo"]')).not.toBeNull());
     (document.querySelector('[data-action="undo"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'undoLastMutation', { token: 'undo-delete' }));
   });
@@ -244,7 +296,10 @@ describe('SQLite Data panel', () => {
 
     document.querySelector<HTMLElement>('[data-cell-row="0"][data-cell-column="1"]')!
       .dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-    expect(document.querySelector('[data-cell-detail]')?.textContent).toContain('a@example.com');
+    const cellDetail = document.querySelector<HTMLElement>('.cell-detail[role="region"][aria-labelledby="cell-detail-title"]');
+    expect(cellDetail?.hasAttribute('aria-modal')).toBe(false);
+    expect(cellDetail?.querySelector('#cell-detail-title')?.textContent).toBe('email');
+    expect(cellDetail?.textContent).toContain('a@example.com');
     (document.querySelector('[data-action="copy-cell"]') as HTMLButtonElement).click();
     await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith('a@example.com'));
   });

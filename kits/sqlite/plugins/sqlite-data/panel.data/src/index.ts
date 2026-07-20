@@ -389,7 +389,8 @@ function editableValue(value: SerializedValue | undefined, declaredType: string)
 
 function renderRecordDialog(dialog: RecordDialog): string {
   const fields = Object.entries(dialog.values).map(([name, draft]) => `<label class="record-field"><span>${escapeHtml(name)}</span><select data-field-type="${escapeHtml(name)}" aria-label="${escapeHtml(name)} 类型">${(['text', 'integer', 'real', 'null'] as const).map((type) => `<option value="${type}"${draft.type === type ? ' selected' : ''}>${type}</option>`).join('')}</select><input data-field-name="${escapeHtml(name)}" aria-label="${escapeHtml(name)} 值" value="${escapeHtml(draft.value)}"${draft.type === 'null' ? ' disabled' : ''}></label>`).join('');
-  return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>${dialog.mode === 'add' ? '新增记录' : '编辑记录'}</h2>${fields || '<p>此对象没有可编辑字段。</p>'}<div class="modal-actions"><button type="button" data-action="cancel-record">取消</button><button type="button" data-action="save-record">保存</button></div></section></div>`;
+  const title = dialog.mode === 'add' ? '新增记录' : '编辑记录';
+  return `<div class="modal-backdrop"><section class="record-dialog" data-record-mode="${dialog.mode}" role="dialog" aria-modal="true" aria-labelledby="record-dialog-title"><header class="record-dialog-header"><small>RECORD</small><h2 id="record-dialog-title">${title}</h2></header><div class="record-form">${fields || '<p>此对象没有可编辑字段。</p>'}</div><footer class="record-dialog-footer"><button type="button" data-action="cancel-record">取消</button><button class="primary" type="button" data-action="save-record">保存</button></footer></section></div>`;
 }
 
 async function saveRecord(): Promise<void> {
@@ -412,11 +413,11 @@ async function saveRecord(): Promise<void> {
 }
 
 function renderDeleteDialog(): string {
-  return `<div class="modal-backdrop"><section class="modal" role="dialog" aria-modal="true"><h2>删除记录</h2><p>确定删除所选记录？此操作可在十秒内撤销。</p><div class="modal-actions"><button type="button" data-action="cancel-delete">取消</button><button type="button" data-action="confirm-delete">确认删除</button></div></section></div>`;
+  return `<div class="modal-backdrop"><section class="record-dialog delete-dialog" data-record-mode="delete" role="dialog" aria-modal="true" aria-labelledby="delete-dialog-title"><header class="record-dialog-header"><small>DELETE</small><h2 id="delete-dialog-title">删除记录</h2></header><div class="record-form record-dialog-body"><p>确定删除所选记录？此操作可在十秒内撤销。</p></div><footer class="record-dialog-footer"><button type="button" data-action="cancel-delete">取消</button><button class="danger" type="button" data-action="confirm-delete">确认删除</button></footer></section></div>`;
 }
 
 function renderCellDetail(): string {
-  return `<aside class="cell-detail" role="dialog" aria-modal="true" data-cell-detail><header class="cell-detail-heading"><h2>${escapeHtml(cellDetail!.column)}</h2><span class="cell-detail-readonly">只读预览</span></header><pre>${escapeHtml(formatValue(cellDetail!.value))}</pre><button type="button" data-action="close-cell-detail">关闭</button><button type="button" data-action="copy-cell">复制</button></aside>`;
+  return `<aside class="cell-detail" role="region" aria-labelledby="cell-detail-title" data-cell-detail><header class="cell-detail-heading"><h2 id="cell-detail-title">${escapeHtml(cellDetail!.column)}</h2><span class="cell-detail-readonly">只读预览</span></header><pre>${escapeHtml(formatValue(cellDetail!.value))}</pre><button type="button" data-action="close-cell-detail">关闭</button><button type="button" data-action="copy-cell">复制</button></aside>`;
 }
 
 async function copyCellDetail(): Promise<void> {
