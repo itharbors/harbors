@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type PanelDefinition = {
@@ -101,6 +103,59 @@ describe('MySQL Data panel', () => {
     expect(request.mock.calls.filter((call) => call[1] === 'getRows')).toHaveLength(before);
     await definition.methods.onDataChanged({ ...connection, dataRevision: 5, objectName: 'users' });
     expect(request.mock.calls.filter((call) => call[1] === 'getRows')).toHaveLength(before + 1);
+  });
+
+  it('restores the historical workspace hierarchy and data grid styling contract', async () => {
+    const request = createRequest();
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-kind')?.textContent)
+      .toBe('表');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-title')?.textContent)
+      .toBe('users');
+    expect(workspace?.querySelector(':scope > .workspace-heading > .data-actions [data-action="add-row"]'))
+      .not.toBeNull();
+    expect(workspace?.querySelector(':scope > .capability-slot')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .view-host > .data-view > .table-shell > table > thead + tbody'))
+      .not.toBeNull();
+    expect(workspace?.querySelector(':scope > .view-host > .data-view > .pager[aria-label="数据分页"]'))
+      .not.toBeNull();
+    expect(workspace?.querySelector(':scope > .status-deck > [role="status"] + .error-slot')).not.toBeNull();
+
+    const css = readFileSync(resolve(process.cwd(), 'plugins/mysql-data/panel.data/src/index.css'), 'utf8');
+    expect(css).toMatch(/--ink:\s*#07111d/);
+    expect(css).toMatch(/--blue:\s*#4d9bd3/);
+    expect(css).toMatch(/--cyan:\s*#76d0ec/);
+    expect(css).toMatch(/--amber:\s*#f0ba57/);
+    expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\) auto/s);
+    expect(css).toMatch(/\.view-host\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.data-view\s*\{[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\) auto/s);
+    expect(css).toMatch(/\.table-shell\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/th\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
+  });
+
+  it('renders the historical record dialog regions with a constrained scrolling body', async () => {
+    const request = createRequest();
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-action="add-row"]') as HTMLButtonElement).click();
+    const dialog = document.querySelector<HTMLDialogElement>('dialog[data-record-dialog]');
+    expect(dialog?.getAttribute('aria-modal')).toBe('true');
+    expect(dialog?.getAttribute('aria-labelledby')).toBe(dialog?.querySelector('h2')?.id);
+    expect(dialog?.querySelector(':scope > .dialog-header > .dialog-mode + h2[id]')).not.toBeNull();
+    expect(dialog?.querySelector(':scope > .record-form > .record-form-body > .record-field')).not.toBeNull();
+    expect(dialog?.querySelector(':scope > .record-form > .record-form-body + .dialog-actions')).not.toBeNull();
+    expect(dialog?.querySelector('[data-field-include][aria-label="包含 email"]')).not.toBeNull();
+    expect(dialog?.querySelector('[data-field-type][aria-label="email 值类型"]')).not.toBeNull();
+
+    const css = readFileSync(resolve(process.cwd(), 'plugins/mysql-data/panel.data/src/index.css'), 'utf8');
+    expect(css).toMatch(/dialog\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)[^}]*max-height:[^;}]+[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.record-form\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\) auto[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.record-form-body\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.dialog-actions\s*\{[^}]*display:\s*flex/s);
   });
 });
 

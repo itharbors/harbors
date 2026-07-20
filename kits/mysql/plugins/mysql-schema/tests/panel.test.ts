@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type PanelDefinition = {
@@ -61,5 +63,51 @@ describe('MySQL Schema panel', () => {
 
     expect(document.body.textContent).toContain('orders');
     expect(request).toHaveBeenLastCalledWith('@itharbors/mysql-core', 'getObjectSchema', { name: 'orders' });
+  });
+
+  it('restores the historical workspace hierarchy and schema card styling contract', async () => {
+    const schema = {
+      name: 'users', type: 'table', insertable: true, rowEditable: true,
+      columns: [{ name: 'display_name', type: 'varchar(255)', nullable: false, defaultValue: "''", extra: 'VIRTUAL GENERATED', generated: true }],
+      primaryKey: ['id'],
+      indexes: [{ name: 'users_display_name', unique: false, primary: false, type: 'BTREE', columns: ['display_name'], prefixLengths: [32] }],
+      foreignKeys: [{ name: 'users_team_fk', column: 'team_id', referencedTable: 'teams', referencedColumn: 'id', onUpdate: 'CASCADE', onDelete: 'RESTRICT' }],
+      sql: 'CREATE TABLE users (display_name varchar(255))',
+    };
+    const request = vi.fn(async (plugin: string, method: string) => {
+      if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
+      if (plugin === '@itharbors/mysql-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
+      if (plugin === '@itharbors/mysql-core' && method === 'getObjectSchema') return schema;
+      throw new Error(`Unexpected ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.schema/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-kind')?.textContent)
+      .toBe('表');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-title')?.textContent)
+      .toBe('users');
+    const schemaView = workspace?.querySelector(':scope > .view-host > .schema-view');
+    expect(schemaView?.querySelectorAll(':scope > .schema-card')).toHaveLength(4);
+    expect(schemaView?.querySelector(':scope > .schema-columns > h2 + table > thead + tbody')).not.toBeNull();
+    expect(schemaView?.querySelector(':scope > .schema-indexes > h2 + .schema-item')).not.toBeNull();
+    expect(schemaView?.querySelector(':scope > .schema-foreign-keys > h2 + .schema-item')).not.toBeNull();
+    expect(schemaView?.querySelector(':scope > .schema-definition > h2 + pre')).not.toBeNull();
+    expect(schemaView?.textContent).toContain("''");
+    expect(schemaView?.textContent).toContain('VIRTUAL GENERATED');
+    expect(schemaView?.textContent).toContain('BTREE · display_name');
+    expect(schemaView?.textContent).toContain('ON UPDATE CASCADE · ON DELETE RESTRICT');
+    expect(workspace?.querySelector(':scope > .status-deck > [role="status"] + .error-slot')).not.toBeNull();
+
+    const css = readFileSync(resolve(process.cwd(), 'plugins/mysql-schema/panel.schema/src/index.css'), 'utf8');
+    expect(css).toMatch(/--ink:\s*#07111d/);
+    expect(css).toMatch(/--blue:\s*#4d9bd3/);
+    expect(css).toMatch(/--cyan:\s*#76d0ec/);
+    expect(css).toMatch(/--amber:\s*#f0ba57/);
+    expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
+    expect(css).toMatch(/\.view-host\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.schema-view\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.schema-card\s*\{[^}]*border:\s*1px solid var\(--line\)[^}]*background:\s*var\(--panel\)/s);
   });
 });

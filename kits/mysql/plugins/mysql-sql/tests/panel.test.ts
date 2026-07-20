@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 type PanelDefinition = {
@@ -73,5 +75,48 @@ describe('MySQL SQL panel', () => {
     expect(document.querySelector('[data-sql-result]')).toBeNull();
     expect(document.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]')!.value)
       .toBe('UPDATE users SET active = 1');
+  });
+
+  it('restores the historical workspace hierarchy and constrained SQL result styling contract', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return connection;
+      if (method === 'executeSql') return {
+        kind: 'rows', columns: ['id', 'email'],
+        rows: [[{ type: 'integer', mysqlType: 'BIGINT', value: '1' }, 'a@example.com']],
+        truncated: true, elapsedMs: 2,
+      };
+      throw new Error(`Unexpected ${method}`);
+    });
+    const definition = (await import('../panel.sql/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-action="execute-sql"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/mysql-core', 'executeSql', {
+      sql: 'SELECT VERSION() AS version;',
+    }));
+    await vi.waitFor(() => expect(document.querySelector('[data-sql-result]')).not.toBeNull());
+
+    const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-kind')?.textContent)
+      .toBe('数据库');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-title')?.textContent)
+      .toBe('SQL');
+    const sqlView = workspace?.querySelector(':scope > .view-host > .sql-view');
+    expect(sqlView?.querySelector(':scope > .sql-editor > label > textarea[aria-label="SQL"]')).not.toBeNull();
+    expect(sqlView?.querySelector(':scope > .sql-editor > [data-action="execute-sql"]')).not.toBeNull();
+    expect(sqlView?.querySelector(':scope > .sql-result > .table-shell > table > thead + tbody')).not.toBeNull();
+    expect(sqlView?.querySelector(':scope > .sql-result > .truncated-notice')).not.toBeNull();
+    expect(workspace?.querySelector(':scope > .status-deck > [role="status"] + .error-slot')).not.toBeNull();
+
+    const css = readFileSync(resolve(process.cwd(), 'plugins/mysql-sql/panel.sql/src/index.css'), 'utf8');
+    expect(css).toMatch(/--ink:\s*#07111d/);
+    expect(css).toMatch(/--blue:\s*#4d9bd3/);
+    expect(css).toMatch(/--cyan:\s*#76d0ec/);
+    expect(css).toMatch(/--amber:\s*#f0ba57/);
+    expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
+    expect(css).toMatch(/\.view-host\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.sql-view\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/s);
+    expect(css).toMatch(/\.sql-result\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*minmax\(0,\s*1fr\) auto[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.sql-result\s*>\s*\.table-shell\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
+    expect(css).toMatch(/\.sql-result th\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
   });
 });

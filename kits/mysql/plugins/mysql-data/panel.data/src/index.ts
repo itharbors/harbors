@@ -265,17 +265,21 @@ async function explorer<T>(method: string): Promise<T> {
 
 function render(): void {
   if (!root) return;
-  root.innerHTML = '<main class="data-shell"><header><div><small>MYSQL DATA</small><h1></h1></div><div class="actions"></div></header><div class="notice"></div><section class="view-host" data-view="data"></section><div class="error-slot"></div><footer role="status" aria-live="polite"></footer></main>';
-  root.querySelector('h1')!.textContent = selection.objectName ?? '未选择对象';
-  const actions = root.querySelector<HTMLElement>('.actions')!;
+  root.innerHTML = '<main class="workspace"><header class="workspace-heading"><div class="object-identity"><span class="object-kind"></span><strong class="object-title"></strong></div><div class="data-actions"></div></header><div class="capability-slot"></div><section class="view-host" data-view="data"></section><footer class="status-deck"><div role="status" aria-live="polite"></div><div class="error-slot"></div></footer></main>';
+  root.querySelector<HTMLElement>('.object-kind')!.textContent = schema?.type === 'view'
+    ? mysqlCopy.objects.view
+    : selection.objectName ? mysqlCopy.objects.table : mysqlCopy.objects.database;
+  root.querySelector<HTMLElement>('.object-title')!.textContent = selection.objectName ?? mysqlCopy.objects.noneSelected;
+  const actions = root.querySelector<HTMLElement>('.data-actions')!;
   const add = button('新增记录', 'add-row');
   const edit = button('编辑', 'edit-row');
   const remove = button('删除', 'delete-row');
+  remove.className = 'danger-action';
   add.disabled = busy || !schema?.insertable;
   edit.disabled = busy || !schema?.rowEditable || selectedRowIndex === null;
   remove.disabled = edit.disabled;
   actions.append(add, edit, remove);
-  const notice = root.querySelector<HTMLElement>('.notice')!;
+  const notice = root.querySelector<HTMLElement>('.capability-slot')!;
   if (schema?.type === 'view') appendText(notice, 'p', mysqlCopy.capability.readonlyView, 'capability-notice').dataset.capabilityNotice = '';
   else if (schema && !schema.rowEditable) appendText(notice, 'p', mysqlCopy.capability.noPrimaryKey, 'capability-notice').dataset.capabilityNotice = '';
   renderRows(root.querySelector<HTMLElement>('.view-host')!);
@@ -286,22 +290,34 @@ function render(): void {
 }
 
 function renderRows(host: HTMLElement): void {
-  if (!connection.connected) { appendText(host, 'p', '请先连接 MySQL 数据库。', 'empty'); return; }
-  if (!selection.objectName) { appendText(host, 'p', '请在资源管理器中选择表或视图。', 'empty'); return; }
-  if (!rows) { appendText(host, 'p', busy ? '正在加载记录…' : '尚未加载记录。', 'empty'); return; }
+  const view = document.createElement('section');
+  view.dataset.view = 'data';
+  view.className = 'data-view';
+  if (!connection.connected) { appendText(view, 'p', '请先连接 MySQL 数据库。', 'empty'); host.append(view); return; }
+  if (!selection.objectName) { appendText(view, 'p', '请在资源管理器中选择表或视图。', 'empty'); host.append(view); return; }
+  if (!rows) { appendText(view, 'p', busy ? '正在加载记录…' : '尚未加载记录。', 'empty'); host.append(view); return; }
   const shell = document.createElement('div'); shell.className = 'table-shell';
   const table = document.createElement('table');
+  const thead = document.createElement('thead');
   const head = document.createElement('tr');
   for (const column of rows.columns) appendText(head, 'th', column);
-  table.append(head);
+  thead.append(head);
+  const tbody = document.createElement('tbody');
   rows.rows.forEach((record, index) => {
     const row = document.createElement('tr'); row.dataset.rowIndex = String(index); row.tabIndex = 0;
     if (index === selectedRowIndex) row.className = 'selected';
-    for (const value of record.values) appendText(row, 'td', formatValue(value));
-    table.append(row);
+    for (const value of record.values) {
+      const cell = appendText(row, 'td', formatValue(value));
+      if (value === null) cell.className = 'null-value';
+      if (typeof value === 'object' && value !== null) cell.dataset.valueType = value.type;
+    }
+    tbody.append(row);
   });
-  shell.append(table); host.append(shell);
+  table.append(thead, tbody);
+  shell.append(table);
+  if (rows.rows.length === 0) appendText(shell, 'p', mysqlCopy.data.empty, 'empty-table');
   const pager = document.createElement('div'); pager.className = 'pager';
+  pager.setAttribute('aria-label', '数据分页');
   const start = rows.total === 0 ? 0 : (rows.page - 1) * rows.pageSize + 1;
   const end = Math.min(rows.total, rows.page * rows.pageSize);
   appendText(pager, 'span', mysqlCopy.data.range(start, end, rows.total));
@@ -309,25 +325,48 @@ function renderRows(host: HTMLElement): void {
   for (const size of [25, 50, 100, 250]) { const option = document.createElement('option'); option.value = String(size); option.textContent = `${size} 行`; option.selected = size === pageSize; sizes.append(option); }
   const previous = button('上一页', 'previous-page'); previous.disabled = busy || rows.page <= 1;
   const next = button('下一页', 'next-page'); next.disabled = busy || end >= rows.total;
-  pager.append(sizes, previous, next); host.append(pager);
+  pager.append(sizes, previous, next);
+  view.append(shell, pager);
+  host.append(view);
 }
 
 function renderDialog(): void {
   const current = dialog!;
-  const element = document.createElement('dialog'); element.open = true; element.dataset.recordDialog = '';
-  appendText(element, 'h2', current.mode === 'add' ? '新增记录' : '编辑所选记录');
+  const element = document.createElement('dialog');
+  element.open = true;
+  element.dataset.recordDialog = '';
+  element.setAttribute('aria-modal', 'true');
+  element.setAttribute('aria-labelledby', 'record-dialog-title');
+  const header = document.createElement('header');
+  header.className = 'dialog-header';
+  appendText(header, 'span', current.mode === 'add' ? mysqlCopy.dialog.insertMode : mysqlCopy.dialog.updateMode, 'dialog-mode');
+  const title = appendText(header, 'h2', current.mode === 'add' ? mysqlCopy.dialog.add : mysqlCopy.dialog.edit);
+  title.id = 'record-dialog-title';
+  element.append(header);
+  const form = document.createElement('form');
+  form.method = 'dialog';
+  form.className = 'record-form';
+  const body = document.createElement('div');
+  body.className = 'record-form-body';
   for (const field of current.fields) {
     const row = document.createElement('div'); row.className = 'record-field'; row.dataset.fieldName = field.name;
     const include = document.createElement('input'); include.type = 'checkbox'; include.dataset.fieldInclude = ''; include.checked = field.included;
+    include.setAttribute('aria-label', mysqlCopy.dialog.include(field.name));
     const label = document.createElement('label'); appendText(label, 'strong', field.name); appendText(label, 'small', field.dataType);
     const select = document.createElement('select'); select.dataset.fieldType = '';
+    select.setAttribute('aria-label', mysqlCopy.dialog.valueType(field.name));
     for (const type of fieldTypes()) { const option = document.createElement('option'); option.value = type; option.textContent = type.toUpperCase(); option.selected = type === field.inputType; select.append(option); }
-    const input = document.createElement('input'); input.dataset.fieldValue = ''; input.value = field.value; input.disabled = !field.included || ['null', 'default'].includes(field.inputType);
-    row.append(include, label, select, input); element.append(row);
+    const input = document.createElement('input'); input.dataset.fieldValue = ''; input.value = field.value; input.disabled = !field.included || ['null', 'default'].includes(field.inputType); input.setAttribute('aria-label', `${field.name} 值`);
+    row.append(include, label, select, input); body.append(row);
   }
   const buttons = document.createElement('div'); buttons.className = 'dialog-actions';
-  buttons.append(button('取消', 'cancel-record'), button(current.mode === 'add' ? '新增' : '保存更改', 'save-record'));
-  element.append(buttons); root?.querySelector('main')?.append(element);
+  const cancel = button(mysqlCopy.actions.cancel, 'cancel-record');
+  const save = button(current.mode === 'add' ? mysqlCopy.actions.add : mysqlCopy.actions.save, 'save-record');
+  save.className = 'primary-action';
+  buttons.append(cancel, save);
+  form.append(body, buttons);
+  element.append(form);
+  root?.querySelector('.workspace')?.append(element);
   for (const row of Array.from(element.querySelectorAll<HTMLElement>('[data-field-name]'))) {
     const field = current.fields.find((candidate) => candidate.name === row.dataset.fieldName)!;
     row.querySelector<HTMLInputElement>('[data-field-include]')!.addEventListener('change', (event) => { field.included = (event.currentTarget as HTMLInputElement).checked; render(); });
