@@ -8,6 +8,7 @@ export const CORE_TOPICS = {
 } as const;
 
 export const SELECTION_CHANGED_TOPIC = '@itharbors/mysql.selection.changed';
+export const OBJECTS_CHANGED_TOPIC = '@itharbors/mysql.objects.changed';
 
 export type RevisionSnapshot = {
   connectionRevision: number;
@@ -30,6 +31,14 @@ export type SchemaSnapshot<TObject = unknown> = RevisionSnapshot & {
 export type SelectionSnapshot = {
   connectionRevision: number;
   objectName: string | null;
+};
+
+export type ObjectsSnapshot<TObject = unknown> = {
+  connected: boolean;
+  connectionRevision: number;
+  schemaRevision: number;
+  objects: TObject[];
+  selection: SelectionSnapshot;
 };
 
 export type DataChangedEvent = RevisionSnapshot & {
