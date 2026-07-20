@@ -45,6 +45,7 @@ export type ObjectsSnapshot<TObject = unknown> = {
   schemaRevision: number;
   objects: TObject[];
   selection: SelectionSnapshot;
+  error?: { message: string; detail?: string } | null;
 };
 
 export type SqlitePublicError = {

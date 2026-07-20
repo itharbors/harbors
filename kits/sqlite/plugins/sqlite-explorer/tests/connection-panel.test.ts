@@ -134,7 +134,61 @@ describe('SQLite connection panel', () => {
       });
       expect(document.querySelector('[data-file-dialog]')).toBeNull();
       expect(setModalOpen).toHaveBeenLastCalledWith(false);
+      expect(document.activeElement).toBe(document.querySelector('[data-action="browse-open"]'));
     });
+  });
+
+  it('ignores late file-browser work after unmount and remount', async () => {
+    let resolveRecent: ((paths: string[]) => void) | undefined;
+    const pendingRecent = new Promise<string[]>((resolve) => { resolveRecent = resolve; });
+    const oldRequest = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : pendingRecent
+    ));
+    const newRequest = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      throw new Error(`New mount received stale request: ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+
+    await definition.mount({ message: { request: oldRequest }, panel: { setModalOpen: vi.fn() } });
+    (document.querySelector('[data-action="browse-open"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(oldRequest).toHaveBeenCalledWith(
+      '@itharbors/sqlite-core', 'getRecentDatabases', undefined,
+    ));
+
+    definition.unmount();
+    document.body.innerHTML = '<div id="panel-root"></div>';
+    const newSetModalOpen = vi.fn();
+    await definition.mount({ message: { request: newRequest }, panel: { setModalOpen: newSetModalOpen } });
+    resolveRecent?.(['/old/demo.sqlite']);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(newRequest).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-file-dialog]')).toBeNull();
+    expect(newSetModalOpen).toHaveBeenLastCalledWith(false);
+  });
+
+  it('does not dismiss a write confirmation while enabling writes is pending', async () => {
+    let resolveWrite: ((value: unknown) => void) | undefined;
+    const pendingWrite = new Promise<unknown>((resolve) => { resolveWrite = resolve; });
+    const setModalOpen = vi.fn();
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? connection : pendingWrite
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { setModalOpen } });
+
+    (document.querySelector('[data-action="unlock-writes"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="confirm-write-mode"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/sqlite-core', 'setConnectionMode', { mode: 'readwrite' },
+    ));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.querySelector('[data-write-dialog]')).not.toBeNull();
+    expect(setModalOpen).toHaveBeenLastCalledWith(true);
+
+    resolveWrite?.({ ...connection, mode: 'readwrite', connectionRevision: 2 });
+    await vi.waitFor(() => expect(document.querySelector('[data-write-dialog]')).toBeNull());
   });
 
   it('uses the historical default filename when creating a database', async () => {

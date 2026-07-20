@@ -209,6 +209,7 @@ describe('MySQL Explorer object snapshot owner', () => {
       schemaRevision: 6,
       objects: [],
       selection: { connectionRevision: 4, objectName: null },
+      error: { message: 'schema unavailable' },
     };
     await expect(definition.methods.onConnectionChanged({
       connected: true,
@@ -239,14 +240,17 @@ describe('MySQL Explorer object snapshot owner', () => {
       connectionRevision: 5,
       schemaRevision: 7,
     });
-    const beforeFailure = definition.methods.getObjectsSnapshot();
+    const beforeFailure = definition.methods.getObjectsSnapshot() as Record<string, unknown>;
 
     fail = true;
     await expect(definition.methods.onSchemaChanged({
       connectionRevision: 5,
       schemaRevision: 8,
-    })).resolves.toEqual(beforeFailure);
-    expect(definition.methods.getObjectsSnapshot()).toEqual(beforeFailure);
+    })).resolves.toEqual({ ...beforeFailure, error: { message: 'schema unavailable' } });
+    expect(definition.methods.getObjectsSnapshot()).toEqual({
+      ...beforeFailure,
+      error: { message: 'schema unavailable' },
+    });
   });
 
   it('waits for the newest refresh when an in-flight refresh is superseded', async () => {

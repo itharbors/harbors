@@ -84,7 +84,7 @@ function acceptSnapshot(next: ObjectsSnapshot<SchemaObject>): void {
   requestSequence += 1;
   selectionSequence += 1;
   snapshot = cloneSnapshot(next);
-  error = null;
+  error = next.error ? { ...next.error } : null;
   render();
 }
 
@@ -165,6 +165,9 @@ function renderObjectTree(): string {
   if (!snapshot.connected) {
     return '<p class="empty-hint">连接后即可查看表和视图。</p>';
   }
+  if (snapshot.error) {
+    return '<p class="empty-hint">请刷新数据库对象后重试。</p>';
+  }
   if (snapshot.objects.length === 0) {
     return '<p class="empty-hint">此数据库没有表或视图。</p>';
   }
@@ -210,8 +213,15 @@ function isObjectsSnapshot(value: unknown): value is ObjectsSnapshot<SchemaObjec
   if (!isRecord(value) || typeof value.connected !== 'boolean') return false;
   if (!isRevision(value.connectionRevision) || !isRevision(value.schemaRevision)) return false;
   if (!Array.isArray(value.objects) || !value.objects.every(isSchemaObject)) return false;
+  if (value.error !== undefined && value.error !== null && !isPanelError(value.error)) return false;
   if (!isRecord(value.selection) || value.selection.connectionRevision !== value.connectionRevision) return false;
   return value.selection.objectName === null || typeof value.selection.objectName === 'string';
+}
+
+function isPanelError(value: unknown): value is PanelError {
+  return isRecord(value)
+    && typeof value.message === 'string'
+    && (value.detail === undefined || typeof value.detail === 'string');
 }
 
 function isSchemaObject(value: unknown): value is SchemaObject {
@@ -228,6 +238,7 @@ function isRevision(value: unknown): value is number {
 function cloneSnapshot(value: ObjectsSnapshot<SchemaObject>): ObjectsSnapshot<SchemaObject> {
   return {
     ...value,
+    ...(value.error ? { error: { ...value.error } } : {}),
     objects: value.objects.map((object) => ({ ...object })),
     selection: { ...value.selection },
   };

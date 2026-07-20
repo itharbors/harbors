@@ -102,6 +102,28 @@ describe('MySQL connection panel', () => {
     });
   });
 
+  it('clears the password immediately while a connection attempt is pending and after rejection', async () => {
+    let resolveConnect: ((value: unknown) => void) | undefined;
+    const pendingConnect = new Promise<unknown>((resolve) => { resolveConnect = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : pendingConnect
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    setValue('password', 'wrong-secret');
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core', 'connect', expect.objectContaining({ password: 'wrong-secret' }),
+    ));
+    expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('');
+
+    resolveConnect?.({ $mysqlError: { code: 'AUTH_FAILED', message: 'MySQL 身份验证失败' } });
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent)
+      .toContain('MySQL 身份验证失败'));
+    expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('');
+  });
+
   it('refreshes through Explorer, disconnects through core, and keeps the previous connection on failure', async () => {
     let failConnect = false;
     const request = vi.fn(async (plugin: string, method: string) => {
@@ -246,7 +268,7 @@ describe('MySQL connection panel', () => {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
       expect((document.querySelector('[data-action="connect"]') as HTMLButtonElement).disabled).toBe(true);
-      expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('new-secret');
+      expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('');
       expect(document.querySelector('[role="alert"]')).toBeNull();
 
       resolveNew?.({

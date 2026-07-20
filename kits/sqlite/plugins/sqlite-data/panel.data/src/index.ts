@@ -238,9 +238,11 @@ function render(): void {
     void loadRows();
   });
   for (const row of Array.from(root.querySelectorAll<HTMLTableRowElement>('[data-row-index]'))) {
-    row.addEventListener('click', () => {
-      selectedRowIndex = Number(row.dataset.rowIndex);
-      render();
+    row.addEventListener('click', () => selectRow(row, false));
+    row.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      selectRow(row, true);
     });
   }
   for (const cell of Array.from(root.querySelectorAll<HTMLElement>('[data-cell-row]'))) {
@@ -312,6 +314,15 @@ function render(): void {
       if (recordDialog?.values[field]) recordDialog.values[field].type = select.value as EditableType;
       render();
     });
+  }
+}
+
+function selectRow(row: HTMLTableRowElement, restoreFocus: boolean): void {
+  const rowIndex = Number(row.dataset.rowIndex);
+  selectedRowIndex = rowIndex;
+  render();
+  if (restoreFocus) {
+    queueMicrotask(() => root?.querySelector<HTMLElement>(`[data-row-index="${rowIndex}"]`)?.focus());
   }
 }
 
@@ -511,7 +522,7 @@ function renderRows(): string {
   return `<div class="table-scroller"><table><thead><tr><th class="row-selector-heading">#</th>${rows.columns.map((column) => {
     const sort = sorts.find((candidate) => candidate.column === column);
     return `<th><button type="button" data-sort-column="${escapeHtml(column)}" aria-label="按 ${escapeHtml(column)} 排序">${escapeHtml(column)}${sort ? ` ${sort.direction === 'asc' ? '↑' : '↓'}` : ''}</button></th>`;
-  }).join('')}</tr></thead><tbody>${rows.rows.map((row, index) => `<tr class="${index === selectedRowIndex ? 'selected' : ''}" data-row-index="${index}" aria-selected="${index === selectedRowIndex}"><td><span class="row-number">${(page - 1) * pageSize + index + 1}</span></td>${row.values.map((value, columnIndex) => `<td data-cell-row="${index}" data-cell-column="${columnIndex}" title="双击查看完整内容">${escapeHtml(formatValue(value))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+  }).join('')}</tr></thead><tbody>${rows.rows.map((row, index) => `<tr class="${index === selectedRowIndex ? 'selected' : ''}" data-row-index="${index}" tabindex="0" aria-selected="${index === selectedRowIndex}"><td><span class="row-number">${(page - 1) * pageSize + index + 1}</span></td>${row.values.map((value, columnIndex) => `<td data-cell-row="${index}" data-cell-column="${columnIndex}" title="双击查看完整内容">${escapeHtml(formatValue(value))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
 
 function formatValue(value: SerializedValue): string {

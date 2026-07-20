@@ -50,6 +50,12 @@ describe('SQLite Data panel', () => {
     expect(document.body.textContent).toContain('a@example.com');
     expect(document.body.textContent).toContain('只读');
 
+    const firstRow = document.querySelector<HTMLTableRowElement>('[data-row-index="0"]')!;
+    expect(firstRow.tabIndex).toBe(0);
+    firstRow.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(document.querySelector('[data-row-index="0"]')?.getAttribute('aria-selected')).toBe('true');
+    expect((document.querySelector('[data-action="copy-row"]') as HTMLButtonElement).disabled).toBe(false);
+
     (document.querySelector('[data-sort-column="email"]') as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'getRows', {

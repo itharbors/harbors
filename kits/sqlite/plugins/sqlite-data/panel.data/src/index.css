@@ -205,6 +205,7 @@ tbody tr:nth-child(even) td { background: rgb(255 255 255 / 1.2%); }
 tbody tr:hover td,
 tbody tr.selected td { background: #142a2a; }
 tbody tr.selected td { border-bottom-color: #327b70; }
+tbody tr:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
 .row-selector-heading { left: 0; width: 48px; min-width: 48px; }
 tbody td:first-child { position: sticky; z-index: 1; left: 0; width: 48px; background: #111a20; }
 .row-number { color: #61747d; font-family: var(--mono); font-size: var(--font-secondary); }

@@ -194,8 +194,8 @@ async function onConnectionChanged(input: unknown): Promise<ObjectsSnapshot<Sche
   if (event.connected) {
     try {
       return await startRefresh(null);
-    } catch {
-      return getObjectsSnapshot();
+    } catch (caught) {
+      return publishRefreshError(caught);
     }
   }
   return getObjectsSnapshot();
@@ -212,9 +212,21 @@ async function onSchemaChanged(input: unknown): Promise<ObjectsSnapshot<SchemaOb
   }
   try {
     return await refreshObjects();
-  } catch {
-    return getObjectsSnapshot();
+  } catch (caught) {
+    return publishRefreshError(caught);
   }
+}
+
+function publishRefreshError(caught: unknown): ObjectsSnapshot<SchemaObject> {
+  const error = caught instanceof Error
+    ? {
+      message: caught.message,
+      ...('detail' in caught && typeof caught.detail === 'string' ? { detail: caught.detail } : {}),
+    }
+    : { message: String(caught) };
+  snapshot = { ...snapshot, error };
+  publishObjects();
+  return getObjectsSnapshot();
 }
 
 function publishSelection(): void {

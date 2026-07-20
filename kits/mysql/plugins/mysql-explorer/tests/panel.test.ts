@@ -115,6 +115,23 @@ describe('MySQL object explorer panel', () => {
     expect(document.body.textContent).toContain('此数据库没有表或视图');
   });
 
+  it('shows schema refresh failures instead of reporting a connected database as empty', async () => {
+    const objectsSnapshot = {
+      connected: true,
+      connectionRevision: 2,
+      schemaRevision: 3,
+      objects: [],
+      selection: { connectionRevision: 2, objectName: null },
+      error: { message: '无法读取数据库结构', detail: 'schema unavailable' },
+    };
+    const request = vi.fn(async () => objectsSnapshot);
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('无法读取数据库结构');
+    expect(document.body.textContent).not.toContain('此数据库没有表或视图');
+  });
+
   it('keeps the object list available when selection fails', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getObjectsSnapshot') return objectsSnapshot;

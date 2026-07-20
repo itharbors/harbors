@@ -38,6 +38,13 @@ type FileDialog = {
 
 type PanelError = { message: string; detail?: string };
 
+type ActionToken = {
+  mountGeneration: number;
+  actionSequence: number;
+  requestSequence: number;
+  focusAction: string | null;
+};
+
 const DISCONNECTED: ConnectionSnapshot = {
   connected: false,
   path: null,
@@ -60,9 +67,13 @@ let fileDialog: FileDialog | null = null;
 let writeDialog = false;
 let writeDialogOpener = 'unlock-writes';
 let requestSequence = 0;
+let mountGeneration = 0;
+let actionSequence = 0;
+let activeAction: ActionToken | null = null;
 
 const definition = {
   async mount(ctx: PanelContext) {
+    mountGeneration += 1;
     context = ctx;
     root = document.querySelector('#panel-root');
     if (!root) throw new Error('Panel root element #panel-root not found');
@@ -82,7 +93,9 @@ const definition = {
   },
 
   unmount() {
+    mountGeneration += 1;
     requestSequence += 1;
+    activeAction = null;
     window.removeEventListener('keydown', handleKeydown);
     setModalOpen(false);
     root?.replaceChildren();
@@ -115,11 +128,13 @@ function resetState(): void {
   error = null;
   fileDialog = null;
   writeDialog = false;
+  activeAction = null;
   requestSequence += 1;
   setModalOpen(false);
 }
 
 function acceptConnection(next: ConnectionSnapshot, resetDialogs = true): void {
+  requestSequence += 1;
   connection = { ...next };
   error = null;
   if (resetDialogs) {
@@ -131,10 +146,12 @@ function acceptConnection(next: ConnectionSnapshot, resetDialogs = true): void {
 }
 
 async function openFileBrowser(mode: FileDialog['mode'], openerAction: string): Promise<void> {
-  await runAction(async () => {
+  await runAction(async (token) => {
     const recentPaths = await requestCore<string[]>('getRecentDatabases');
+    if (!isCurrentActionResult(token)) return;
     const initialPath = recentPaths[0]?.replace(/[\\/][^\\/]+$/, '') || '.';
     const listing = await listDirectory(initialPath, false);
+    if (!isCurrentActionResult(token)) return;
     fileDialog = {
       mode,
       ...listing,
@@ -153,9 +170,9 @@ async function openFileBrowser(mode: FileDialog['mode'], openerAction: string): 
 async function browseDirectory(path: string): Promise<void> {
   if (!fileDialog) return;
   const currentDialog = fileDialog;
-  await runAction(async () => {
+  await runAction(async (token) => {
     const listing = await listDirectory(path, currentDialog.showAll);
-    if (fileDialog !== currentDialog) return;
+    if (!isCurrentActionResult(token) || fileDialog !== currentDialog) return;
     fileDialog = { ...currentDialog, ...listing, selectedPath: null };
   });
 }
@@ -175,51 +192,77 @@ async function confirmFileDialog(): Promise<void> {
     render();
     return;
   }
-  await runAction(async () => {
+  await runAction(async (token) => {
     const next = await requestCore<ConnectionSnapshot>('openDatabase', {
       path: target,
       create: dialog.mode === 'create',
     });
-    if (fileDialog !== dialog) return;
+    if (!isCurrentActionResult(token) || fileDialog !== dialog) return;
+    token.focusAction = dialog.openerAction;
     acceptConnection(next);
   });
 }
 
 async function confirmWriteMode(): Promise<void> {
-  await runAction(async () => {
+  await runAction(async (token) => {
     const next = await requestCore<ConnectionSnapshot>('setConnectionMode', {
       mode: 'readwrite',
     });
+    if (!isCurrentActionResult(token) || !writeDialog) return;
+    token.focusAction = 'close';
     acceptConnection(next);
   });
 }
 
 async function refreshObjects(): Promise<void> {
-  await runAction(async () => {
+  await runAction(async (token) => {
     await requestExplorer('refreshObjects');
+    if (!isCurrentActionResult(token)) return;
   });
 }
 
 async function closeDatabase(): Promise<void> {
-  await runAction(async () => {
+  await runAction(async (token) => {
     const next = await requestCore<ConnectionSnapshot>('closeDatabase');
+    if (!isCurrentActionResult(token)) return;
     acceptConnection(next);
   });
 }
 
-async function runAction(action: () => Promise<void>): Promise<void> {
+async function runAction(action: (token: ActionToken) => Promise<void>): Promise<void> {
   if (busy) return;
   busy = true;
   error = null;
+  const token: ActionToken = {
+    mountGeneration,
+    actionSequence: ++actionSequence,
+    requestSequence: ++requestSequence,
+    focusAction: null,
+  };
+  activeAction = token;
   render();
   try {
-    await action();
+    await action(token);
   } catch (caught) {
-    error = panelError(caught);
+    if (isCurrentActionResult(token)) error = panelError(caught);
   } finally {
+    if (!isCurrentAction(token)) return;
+    activeAction = null;
     busy = false;
     render();
+    if (token.focusAction) queueMicrotask(() => focusAction(token.focusAction!));
   }
+}
+
+function isCurrentAction(token: ActionToken): boolean {
+  return activeAction === token
+    && token.mountGeneration === mountGeneration
+    && context !== undefined
+    && root?.isConnected === true;
+}
+
+function isCurrentActionResult(token: ActionToken): boolean {
+  return isCurrentAction(token) && token.requestSequence === requestSequence;
 }
 
 async function listDirectory(path: string, showAll: boolean): Promise<{
@@ -389,6 +432,7 @@ function bindAction(action: string, handler: () => void | Promise<void>): void {
 }
 
 function closeDialogs(openerAction?: string): void {
+  if (busy) return;
   fileDialog = null;
   writeDialog = false;
   error = null;
@@ -403,10 +447,17 @@ function handleKeydown(event: KeyboardEvent): void {
   if (!fileDialog && !writeDialog) return;
   if (event.key === 'Escape') {
     event.preventDefault();
+    if (busy) return;
     closeDialogs(fileDialog?.openerAction ?? writeDialogOpener);
     return;
   }
   if (event.key === 'Tab') trapModalFocus(event);
+}
+
+function focusAction(action: string): void {
+  const preferred = root?.querySelector<HTMLElement>(`[data-action="${action}"]`);
+  const fallback = root?.querySelector<HTMLElement>('[data-action="close"]');
+  (preferred ?? fallback)?.focus();
 }
 
 function focusModal(): void {

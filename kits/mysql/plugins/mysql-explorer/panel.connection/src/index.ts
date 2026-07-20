@@ -138,9 +138,11 @@ async function connect(): Promise<void> {
     tls: form.tls,
   };
   await runAction(async (token) => {
-    const next = await requestCore<ConnectionSnapshot>('connect', input);
-    if (!isCurrentAction(token)) return;
+    const pendingConnection = requestCore<ConnectionSnapshot>('connect', input);
     form.password = '';
+    render();
+    const next = await pendingConnection;
+    if (!isCurrentAction(token)) return;
     if (!isCurrentActionResult(token) || isStale(next)) return;
     acceptConnection(next);
   });
