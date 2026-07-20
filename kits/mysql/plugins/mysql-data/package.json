@@ -1,0 +1,28 @@
+{
+  "name": "@itharbors/mysql-data",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": { "@itharbors/mysql-contracts": "0.0.1" },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "data": {
+          "entry": "./panel.data/dist/index.html",
+          "title": "MySQL 数据",
+          "minWidth": 480,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "broadcast": {
+          "@itharbors/mysql.connection.changed": ["panel.onConnectionChanged"],
+          "@itharbors/mysql.selection.changed": ["panel.onSelectionChanged"],
+          "@itharbors/mysql.data.changed": ["panel.onDataChanged"],
+          "@itharbors/mysql.schema.changed": ["panel.onSchemaChanged"]
+        }
+      }
+    }
+  }
+}
