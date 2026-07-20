@@ -86,7 +86,7 @@ describe('MySQL Schema panel', () => {
     const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
     expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-kind')?.textContent)
       .toBe('表');
-    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-title')?.textContent)
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > h1.object-title')?.textContent)
       .toBe('users');
     const schemaView = workspace?.querySelector(':scope > .view-host > .schema-view');
     expect(schemaView?.querySelectorAll(':scope > .schema-card')).toHaveLength(4);
@@ -105,6 +105,7 @@ describe('MySQL Schema panel', () => {
     expect(css).toMatch(/--blue:\s*#4d9bd3/);
     expect(css).toMatch(/--cyan:\s*#76d0ec/);
     expect(css).toMatch(/--amber:\s*#f0ba57/);
+    expect(css).toMatch(/h1\.object-title\s*\{[^}]*margin:\s*0/s);
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
     expect(css).toMatch(/\.view-host\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     expect(css).toMatch(/\.schema-view\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);

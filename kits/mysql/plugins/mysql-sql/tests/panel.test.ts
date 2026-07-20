@@ -98,7 +98,7 @@ describe('MySQL SQL panel', () => {
     const workspace = document.querySelector<HTMLElement>('#panel-root > .workspace');
     expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-kind')?.textContent)
       .toBe('数据库');
-    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-title')?.textContent)
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > h1.object-title')?.textContent)
       .toBe('SQL');
     const sqlView = workspace?.querySelector(':scope > .view-host > .sql-view');
     expect(sqlView?.querySelector(':scope > .sql-editor > label > textarea[aria-label="SQL"]')).not.toBeNull();
@@ -112,6 +112,7 @@ describe('MySQL SQL panel', () => {
     expect(css).toMatch(/--blue:\s*#4d9bd3/);
     expect(css).toMatch(/--cyan:\s*#76d0ec/);
     expect(css).toMatch(/--amber:\s*#f0ba57/);
+    expect(css).toMatch(/h1\.object-title\s*\{[^}]*margin:\s*0/s);
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
     expect(css).toMatch(/\.view-host\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     expect(css).toMatch(/\.sql-view\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/s);

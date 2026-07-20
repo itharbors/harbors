@@ -68,8 +68,9 @@ body { color: var(--text); background: var(--ink); }
   letter-spacing: .12em;
   text-transform: uppercase;
 }
-.object-title {
+h1.object-title {
   overflow: hidden;
+  margin: 0;
   font-family: "Avenir Next Condensed", "Arial Narrow", sans-serif;
   font-size: 21px;
   text-overflow: ellipsis;

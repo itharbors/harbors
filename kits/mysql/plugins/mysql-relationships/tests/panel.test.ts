@@ -60,15 +60,17 @@ describe('MySQL Relationships panel',()=>{
 
     const workspace=document.querySelector<HTMLElement>('#panel-root > .workspace');
     expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-kind')?.textContent).toBe('数据库');
-    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > .object-title')?.textContent).toBe('app');
+    expect(workspace?.querySelector(':scope > .workspace-heading .object-identity > h1.object-title')?.textContent).toBe('app');
     const view=workspace?.querySelector<HTMLElement>(':scope > .view-host > .relationship-view');
     expect(view?.getAttribute('aria-label')).toBe('MySQL 表关系图');
     expect(view?.hasAttribute('aria-labelledby')).toBe(false);
     expect(view?.querySelector(':scope > .relationship-toolbar + .relationship-canvas > .relationship-stage > .relationship-edges')).not.toBeNull();
     expect(view?.querySelector('.relationship-stage > .relationship-table[data-relationship-table="users"]')).not.toBeNull();
-    const details=view?.querySelector<HTMLElement>(':scope > .relationship-details [data-relationship-detail="users-team"]');
-    expect(details).not.toBeNull();
+    const details=view?.querySelector<HTMLElement>(':scope > aside.relationship-details');
+    expect(details?.getAttribute('role')).toBe('region');
+    expect(details?.getAttribute('aria-label')).toBe('关系映射明细');
     expect(details?.hasAttribute('aria-modal')).toBe(false);
+    expect(details?.querySelector('[data-relationship-detail="users-team"]')).not.toBeNull();
     expect(workspace?.querySelector(':scope > .status-deck > [role="status"] + .error-slot')).not.toBeNull();
 
     const css=readFileSync(resolve(process.cwd(),'plugins/mysql-relationships/panel.relationships/src/index.css'),'utf8');
@@ -76,6 +78,7 @@ describe('MySQL Relationships panel',()=>{
     expect(css).toMatch(/--blue:\s*#4d9bd3/);
     expect(css).toMatch(/--cyan:\s*#76d0ec/);
     expect(css).toMatch(/--amber:\s*#f0ba57/);
+    expect(css).toMatch(/h1\.object-title\s*\{[^}]*margin:\s*0/s);
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
     expect(css).toMatch(/\.relationship-view\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
     expect(css).toMatch(/\.relationship-toolbar\s*\{[^}]*overflow-x:\s*auto/s);

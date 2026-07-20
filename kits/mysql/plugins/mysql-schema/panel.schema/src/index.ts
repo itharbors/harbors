@@ -22,7 +22,7 @@ function render(){
   const identity=document.createElement('div');
   identity.className='object-identity';
   append(identity,'span',schema?.type==='view'?'视图':selection.objectName?'表':'数据库').className='object-kind';
-  append(identity,'strong',selection.objectName??'未选择对象').className='object-title';
+  append(identity,'h1',selection.objectName??'未选择对象').className='object-title';
   header.append(identity);
   const host=document.createElement('section');
   host.className='view-host';

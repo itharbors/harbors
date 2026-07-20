@@ -265,7 +265,7 @@ async function explorer<T>(method: string): Promise<T> {
 
 function render(): void {
   if (!root) return;
-  root.innerHTML = '<main class="workspace"><header class="workspace-heading"><div class="object-identity"><span class="object-kind"></span><strong class="object-title"></strong></div><div class="data-actions"></div></header><div class="capability-slot"></div><section class="view-host" data-view="data"></section><footer class="status-deck"><div role="status" aria-live="polite"></div><div class="error-slot"></div></footer></main>';
+  root.innerHTML = '<main class="workspace"><header class="workspace-heading"><div class="object-identity"><span class="object-kind"></span><h1 class="object-title"></h1></div><div class="data-actions"></div></header><div class="capability-slot"></div><section class="view-host" data-view="data"></section><footer class="status-deck"><div role="status" aria-live="polite"></div><div class="error-slot"></div></footer></main>';
   root.querySelector<HTMLElement>('.object-kind')!.textContent = schema?.type === 'view'
     ? mysqlCopy.objects.view
     : selection.objectName ? mysqlCopy.objects.table : mysqlCopy.objects.database;
@@ -333,7 +333,6 @@ function renderRows(host: HTMLElement): void {
 function renderDialog(): void {
   const current = dialog!;
   const element = document.createElement('dialog');
-  element.open = true;
   element.dataset.recordDialog = '';
   element.setAttribute('aria-modal', 'true');
   element.setAttribute('aria-labelledby', 'record-dialog-title');
@@ -367,14 +366,25 @@ function renderDialog(): void {
   form.append(body, buttons);
   element.append(form);
   root?.querySelector('.workspace')?.append(element);
+  showRecordDialog(element);
   for (const row of Array.from(element.querySelectorAll<HTMLElement>('[data-field-name]'))) {
     const field = current.fields.find((candidate) => candidate.name === row.dataset.fieldName)!;
     row.querySelector<HTMLInputElement>('[data-field-include]')!.addEventListener('change', (event) => { field.included = (event.currentTarget as HTMLInputElement).checked; render(); });
     row.querySelector<HTMLSelectElement>('[data-field-type]')!.addEventListener('change', (event) => { field.inputType = (event.currentTarget as HTMLSelectElement).value as FieldInputType; render(); });
     row.querySelector<HTMLInputElement>('[data-field-value]')!.addEventListener('input', (event) => { field.value = (event.currentTarget as HTMLInputElement).value; });
   }
-  element.querySelector('[data-action="cancel-record"]')?.addEventListener('click', () => { dialog = null; render(); });
+  element.querySelector('[data-action="cancel-record"]')?.addEventListener('click', () => { closeRecordDialog(element); dialog = null; render(); });
   element.querySelector('[data-action="save-record"]')?.addEventListener('click', () => void saveRecord());
+}
+
+function showRecordDialog(element: HTMLDialogElement): void {
+  if (typeof element.showModal === 'function') element.showModal();
+  else element.open = true;
+}
+
+function closeRecordDialog(element: HTMLDialogElement): void {
+  if (typeof element.close === 'function') element.close();
+  else element.open = false;
 }
 
 function bind(): void {
