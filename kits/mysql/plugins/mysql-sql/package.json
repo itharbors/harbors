@@ -1,0 +1,26 @@
+{
+  "name": "@itharbors/mysql-sql",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": { "@itharbors/mysql-contracts": "0.0.1" },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "sql": {
+          "entry": "./panel.sql/dist/index.html",
+          "title": "MySQL SQL",
+          "minWidth": 480,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "broadcast": {
+          "@itharbors/mysql.connection.changed": ["panel.onConnectionChanged"],
+          "@itharbors/mysql.schema.changed": ["panel.onSchemaChanged"]
+        }
+      }
+    }
+  }
+}

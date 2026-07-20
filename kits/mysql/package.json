@@ -19,7 +19,12 @@
         "secondary": "secondary.html"
       },
       "plugin": [
-        "@itharbors/mysql-workbench"
+        "@itharbors/mysql-core",
+        "@itharbors/mysql-explorer",
+        "@itharbors/mysql-data",
+        "@itharbors/mysql-schema",
+        "@itharbors/mysql-relationships",
+        "@itharbors/mysql-sql"
       ],
       "theme": {
         "--ce-accent": "#4f9fdf"

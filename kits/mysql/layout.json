@@ -5,10 +5,26 @@
       "kind": "main",
       "type": "panel-area",
       "layout": {
-        "type": "leaf",
-        "panel": "@itharbors/mysql-workbench.workbench"
+        "type": "hsplit",
+        "sizes": [300, 1],
+        "children": [
+          {
+            "type": "leaf",
+            "panel": "@itharbors/mysql-explorer.explorer"
+          },
+          {
+            "type": "tab",
+            "activeIndex": 0,
+            "children": [
+              { "type": "leaf", "panel": "@itharbors/mysql-data.data" },
+              { "type": "leaf", "panel": "@itharbors/mysql-schema.schema" },
+              { "type": "leaf", "panel": "@itharbors/mysql-relationships.relationships" },
+              { "type": "leaf", "panel": "@itharbors/mysql-sql.sql" }
+            ]
+          }
+        ]
       }
     }
   ],
-  "activePanel": "@itharbors/mysql-workbench.workbench"
+  "activePanel": "@itharbors/mysql-data.data"
 }
