@@ -1,4 +1,5 @@
 import {
+  cp,
   mkdtemp,
   mkdir,
   readFile,
@@ -169,6 +170,101 @@ describe('Codex Skill installer', () => {
     });
 
     await expect(failingInstaller.install()).rejects.toThrow('simulated update failure');
+    await expect(readFile(path.join(initial.destination, 'SKILL.md'), 'utf8'))
+      .resolves.toContain('description: initial');
+    await expect(readMarker(initial.destination)).resolves.toMatchObject({ digest: initial.digest });
+    await expect(listInstallerArtifacts(path.join(codexHome, 'skills'))).resolves.toEqual([]);
+  });
+
+  it('rejects a CODEX_HOME or skills directory that is a symbolic link', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const outside = path.join(root, 'outside');
+    await writeSkillSource(sourceDir, 'bundled');
+    await mkdir(outside);
+    const linkedHome = path.join(root, 'linked-codex-home');
+    await symlink(outside, linkedHome);
+
+    await expect(createCodexSkillInstaller({ sourceDir, codexHome: linkedHome }).install())
+      .rejects.toMatchObject({ code: 'SKILL_UNSAFE_PATH' });
+
+    const codexHome = path.join(root, 'codex-home');
+    await mkdir(codexHome);
+    await symlink(outside, path.join(codexHome, 'skills'));
+    await expect(createCodexSkillInstaller({ sourceDir, codexHome }).install())
+      .rejects.toMatchObject({ code: 'SKILL_UNSAFE_PATH' });
+    await expect(readFile(path.join(outside, 'notify-user', 'SKILL.md'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('revalidates the staged copy before committing it', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    await writeSkillSource(sourceDir, 'bundled');
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async cp(from, to, options) {
+        await cp(from, to, options);
+        await rm(path.join(String(to), 'scripts', 'notify.mjs'));
+        await symlink(
+          path.join(String(to), 'SKILL.md'),
+          path.join(String(to), 'scripts', 'notify.mjs'),
+        );
+      },
+    });
+
+    await expect(installer.install()).rejects.toMatchObject({ code: 'SKILL_SOURCE_INVALID' });
+    await expect(readFile(path.join(codexHome, 'skills', 'notify-user', 'SKILL.md'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('validates the exact managed directory moved to backup before replacing it', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    await writeSkillSource(sourceDir, 'initial');
+    const initialInstaller = createCodexSkillInstaller({ sourceDir, codexHome });
+    const initial = await initialInstaller.install();
+    await writeSkillSource(sourceDir, 'updated');
+    let renameCalls = 0;
+    const lateModification = '// modified immediately before update\n';
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async rename(from, to) {
+        renameCalls += 1;
+        if (renameCalls === 1) {
+          await writeFile(path.join(String(from), 'scripts', 'notify.mjs'), lateModification);
+        }
+        await rename(from, to);
+      },
+    });
+
+    await expect(installer.install()).rejects.toMatchObject({ code: 'SKILL_CONFLICT' });
+    await expect(readFile(path.join(initial.destination, 'scripts', 'notify.mjs'), 'utf8'))
+      .resolves.toBe(lateModification);
+    await expect(listInstallerArtifacts(path.join(codexHome, 'skills'))).resolves.toEqual([]);
+  });
+
+  it('restores the previous managed Skill when backup cleanup fails', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    await writeSkillSource(sourceDir, 'initial');
+    const initialInstaller = createCodexSkillInstaller({ sourceDir, codexHome });
+    const initial = await initialInstaller.install();
+    await writeSkillSource(sourceDir, 'updated');
+    const failingInstaller = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async rm(target, options) {
+        if (path.basename(String(target)).startsWith('.notify-user-backup-')) {
+          const error = new Error('simulated backup cleanup failure') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          throw error;
+        }
+        await rm(target, options);
+      },
+    });
+
+    await expect(failingInstaller.install()).rejects.toThrow('simulated backup cleanup failure');
     await expect(readFile(path.join(initial.destination, 'SKILL.md'), 'utf8'))
       .resolves.toContain('description: initial');
     await expect(readMarker(initial.destination)).resolves.toMatchObject({ digest: initial.digest });

@@ -6,7 +6,7 @@
     "dev": "npm run electron --",
     "dev:web": "node scripts/dev.mjs",
     "electron": "electron scripts/electron.mjs",
-    "plugins:build": "node scripts/ce-plugin.mjs build --all",
+    "plugins:build": "node scripts/ce-plugin.mjs build --all && node scripts/prepare-notification-skill-resource.mjs",
     "plugins:check": "node scripts/ce-plugin.mjs check --all",
     "build": "npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/sqlite-contracts && npm run build -w @itharbors/mysql-contracts && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
     "clean": "node scripts/clean.mjs",
