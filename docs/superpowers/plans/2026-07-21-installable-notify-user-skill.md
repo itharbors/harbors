@@ -15,7 +15,7 @@
 - The source is `HARBORS_NOTIFY_SKILL_SOURCE`; the destination is `$CODEX_HOME/skills/notify-user`, falling back to `~/.codex/skills/notify-user`.
 - Never overwrite an existing unmarked Skill or follow a destination Skill symlink.
 - Tests use temporary directories only and never write to the real user Skill directory.
-- Keep `.agents/skills/notify-user` as the development source; packaged Electron resolves `resources/skills/notify-user`.
+- Keep `.agents/skills/notify-user` as the canonical source; every plugin build copies it to `kits/notifications/plugins/notification-center/main/dist/resources/notify-user`, which packaged Electron resolves locally.
 
 ---
 
@@ -111,17 +111,19 @@ Commit: `[Feature] 新增通知 Skill 原子安装器`.
 **Files:**
 - Create: `scripts/lib/codex-skill-resource.mjs`
 - Create: `scripts/lib/codex-skill-resource.test.mjs`
+- Create: `scripts/prepare-notification-skill-resource.mjs`
 - Modify: `scripts/electron.mjs`
 - Modify: `package.json`
 
 **Interfaces:**
-- Produces: `resolveCodexSkillSource({ isPackaged, resourcesPath, rootDir })` returning `<resourcesPath>/skills/notify-user` when packaged and `<rootDir>/.agents/skills/notify-user` in development.
+- Produces: `resolveCodexSkillSource({ isPackaged, resourcesPath, rootDir })` returning the Notification Center plugin's built-in `main/dist/resources/notify-user` directory when packaged and `<rootDir>/.agents/skills/notify-user` in development.
+- Produces: `prepareCodexSkillResource({ sourceDir, destinationDir })` and runs it after every root `plugins:build` so the release-side source is actually present.
 - Consumes: `HARBORS_NOTIFY_SKILL_SOURCE` in Task 3.
 
 ```js
 export function resolveCodexSkillSource({ isPackaged, resourcesPath, rootDir }) {
   return path.resolve(isPackaged
-    ? path.join(resourcesPath, 'skills', 'notify-user')
+    ? path.join(rootDir, 'kits/notifications/plugins/notification-center/main/dist/resources/notify-user')
     : path.join(rootDir, '.agents', 'skills', 'notify-user'));
 }
 ```
@@ -136,9 +138,9 @@ Run: `node --test scripts/lib/codex-skill-resource.test.mjs scripts/lib/electron
 
 Expected: FAIL because the resolver and environment wiring are absent.
 
-- [ ] **Step 3: Implement the resolver and pass it to the Framework child**
+- [ ] **Step 3: Implement resource preparation, the resolver, and Framework child wiring**
 
-Resolve once after Electron readiness using `app.isPackaged`, `process.resourcesPath`, and the existing `rootDir`; add it to the exact child environment. Register the resolver test in the root `npm test` Node test list.
+Copy the canonical Skill into the Notification Center plugin's built resources after every plugin build. Resolve the selected source once after Electron readiness using `app.isPackaged`, `process.resourcesPath`, and the existing `rootDir`; add it to the exact child environment. Register the resolver test in the root `npm test` Node test list.
 
 ```js
 const codexSkillSource = resolveCodexSkillSource({
