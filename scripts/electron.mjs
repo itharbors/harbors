@@ -1,4 +1,3 @@
-import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -20,6 +19,7 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
+  mergeMenuTrees,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
@@ -27,6 +27,11 @@ import {
 } from './lib/electron-launcher.mjs';
 import { resolveCodexSkillSource } from './lib/codex-skill-resource.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
+import {
+  createApplicationRuntimeClient,
+  fetchApplicationBootstrap,
+  triggerApplicationMenu,
+} from './lib/application-runtime-client.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
@@ -59,6 +64,8 @@ let notificationStore;
 let notificationHost;
 let notificationPort;
 let codexSkillSource;
+let applicationMenuTree = [];
+let applicationRuntimeClient;
 let notificationStoreUnsubscribe;
 let notificationStopPromise;
 let toastQueue;
@@ -93,13 +100,19 @@ const ALLOWED_ELECTRON_MENU_ROLES = new Set([
 ]);
 
 export function buildElectronMenuTemplate(sessionId, menuTree, adapters) {
-  return menuTree.map((node) => toElectronTemplate(node, sessionId, adapters));
+  return menuTree.map((node) => toElectronTemplate(
+    node,
+    { scope: 'session', sessionId },
+    adapters,
+  ));
 }
 
-export function buildMultiKitMenuTemplate({ focusedSessionId, sessions }, adapters) {
+export function buildMultiKitMenuTemplate({
+  applicationMenuTree: globalMenuTree,
+  focusedSessionId,
+  sessions,
+}, adapters) {
   const focused = sessions.find((session) => session.sessionId === focusedSessionId) ?? sessions[0];
-  if (!focused) return [];
-
   const kitRoots = sessions
     .filter((session) => session.kitMenuRoot)
     .map((session) => ({
@@ -109,9 +122,14 @@ export function buildMultiKitMenuTemplate({ focusedSessionId, sessions }, adapte
     }));
 
   return [
-    toElectronRootTemplate('APP', focused.applicationMenuTree, focused.sessionId, adapters),
+    toElectronRootTemplate(
+      'APP',
+      mergeMenuTrees(globalMenuTree, focused?.applicationMenuTree ?? []),
+      { scope: 'application' },
+      adapters,
+    ),
     ...kitRoots.map(({ label, children, sessionId }) => (
-      toElectronRootTemplate(label, children, sessionId, adapters)
+      toElectronRootTemplate(label, children, { scope: 'session', sessionId }, adapters)
     )),
   ];
 }
@@ -120,7 +138,7 @@ export function configureElectronApp(electronApp) {
   electronApp.disableHardwareAcceleration();
 }
 
-function toElectronTemplate(node, sessionId, adapters) {
+function toElectronTemplate(node, target, adapters) {
   const nodeType = node.type ?? node.kind;
   if (nodeType === 'separator') {
     return { type: 'separator' };
@@ -136,26 +154,27 @@ function toElectronTemplate(node, sessionId, adapters) {
   }
 
   if (node.children?.length) {
-    item.submenu = node.children.map((child) => toElectronTemplate(child, sessionId, adapters));
+    item.submenu = node.children.map((child) => toElectronTemplate(child, target, adapters));
     return item;
   }
 
   if (node.id) {
     item.click = () => {
-      adapters.sendToWindow({
-        sessionId,
-        menuId: node.id,
-      });
+      if (target.scope === 'application') {
+        adapters.triggerApplication(node.id);
+      } else {
+        adapters.sendToWindow({ sessionId: target.sessionId, menuId: node.id });
+      }
     };
   }
 
   return item;
 }
 
-function toElectronRootTemplate(label, children, sessionId, adapters) {
+function toElectronRootTemplate(label, children, target, adapters) {
   return {
     label,
-    submenu: children.map((child) => toElectronTemplate(child, sessionId, adapters)),
+    submenu: children.map((child) => toElectronTemplate(child, target, adapters)),
     ...(children.length === 0 ? { enabled: false } : {}),
   };
 }
@@ -189,10 +208,17 @@ function startElectronApp() {
       });
       await startNotificationService();
       frameworkProcess = startFramework();
-      await waitForUrl(startUrl);
+      const bootstrap = await waitForApplicationRuntime(startUrl);
+      updateApplicationBootstrap(bootstrap);
+      applicationRuntimeClient = createApplicationRuntimeClient({
+        baseUrl: startUrl,
+        onBootstrap: updateApplicationBootstrap,
+        onError: (error) => console.error('Application event stream failed:', error.message),
+      });
+      applicationRuntimeClient.startEvents();
       registerMenuIpc();
       registerOpenExternalUrlIpc();
-      await prewarmKitWindows();
+      await openKit(kitCatalog[0].name);
       await createApplicationTray();
     })
     .catch((error) => {
@@ -238,6 +264,8 @@ function startElectronApp() {
     tray = undefined;
     unregisterMenuIpc();
     unregisterOpenExternalUrlIpc();
+    applicationRuntimeClient?.close();
+    applicationRuntimeClient = undefined;
     stopFramework();
   });
 }
@@ -250,6 +278,7 @@ function startFramework() {
       ...process.env,
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
       HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
+      HARBORS_HOST_MODE: 'desktop',
     },
     stdio: 'inherit',
   });
@@ -267,29 +296,6 @@ function startFramework() {
   });
 
   return child;
-}
-
-async function prewarmKitWindows() {
-  const results = await Promise.allSettled(kitCatalog.map(async (kit) => {
-    const workspace = await workspaceStore.getOrCreate(kit);
-    const window = await createKitWindow(kit, workspace);
-    kitWindows.set(kit.name, window);
-    return { kit, window };
-  }));
-
-  let visibleWindow = null;
-  results.forEach((result, index) => {
-    if (result.status === 'fulfilled') {
-      visibleWindow ??= result.value.window;
-      return;
-    }
-    console.error(`Failed to open Kit ${kitCatalog[index].name}:`, result.reason);
-  });
-
-  if (visibleWindow) {
-    visibleWindow.show();
-    visibleWindow.focus();
-  }
 }
 
 async function createApplicationTray() {
@@ -654,10 +660,9 @@ function sanitizeExternalUrl(url) {
 }
 
 function applyMenuForWindow(window) {
-  const sessionId = windowSessions.get(window.id);
-  if (!sessionId) {
-    return;
-  }
+  const sessionId = window && !window.isDestroyed()
+    ? windowSessions.get(window.id)
+    : undefined;
 
   const adapters = {
     sendToWindow(payload) {
@@ -665,15 +670,39 @@ function applyMenuForWindow(window) {
         console.error('Failed to dispatch menu action:', error);
       });
     },
+    triggerApplication(menuId) {
+      void triggerApplicationMenu(startUrl, menuId).catch((error) => {
+        console.error('Failed to dispatch application menu action:', error);
+      });
+    },
   };
   const state = sessionMenus.get(sessionId);
   const template = electronOptions?.mode === 'multi'
     ? buildMultiKitMenuTemplate({
+        applicationMenuTree,
         focusedSessionId: sessionId,
         sessions: getOrderedMenuSessions(),
       }, adapters)
-    : buildElectronMenuTemplate(sessionId, state?.menuTree ?? [], adapters);
+    : [
+        toElectronRootTemplate(
+          'APP',
+          applicationMenuTree,
+          { scope: 'application' },
+          adapters,
+        ),
+        ...buildElectronMenuTemplate(sessionId, state?.menuTree ?? [], adapters),
+      ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function updateApplicationBootstrap(bootstrap) {
+  const nextTree = sanitizeMenuNodes(bootstrap?.menu?.tree);
+  if (!nextTree || (bootstrap.phase !== 'ready' && bootstrap.phase !== 'degraded')) return;
+  applicationMenuTree = nextTree;
+  if (bootstrap.phase === 'degraded') {
+    console.warn('Application Runtime started in degraded mode:', bootstrap.diagnostics ?? []);
+  }
+  applyMenuForWindow(BrowserWindow.getFocusedWindow());
 }
 
 function getOrderedMenuSessions() {
@@ -829,42 +858,22 @@ function sanitizeMenuNode(node, depth) {
   };
 }
 
-function waitForUrl(url, timeoutMs = 30000) {
+function waitForApplicationRuntime(url, timeoutMs = 30000) {
   const startedAt = Date.now();
-
-  return new Promise((resolve, reject) => {
-    let done = false;
-
-    const check = () => {
-      const request = http.get(url, (response) => {
-        if (done) return;
-        response.resume();
-        if (response.statusCode && response.statusCode < 500) {
-          done = true;
-          resolve();
-          return;
-        }
-        retry();
-      });
-
-      request.on('error', retry);
-      request.setTimeout(1000, () => {
-        request.destroy();
-      });
-    };
-
-    const retry = () => {
-      if (done) return;
-      if (Date.now() - startedAt > timeoutMs) {
-        done = true;
-        reject(new Error(`Timed out waiting for ${url}`));
-        return;
-      }
-      setTimeout(check, 500);
-    };
-
-    check();
-  });
+  const check = async () => {
+    try {
+      const bootstrap = await fetchApplicationBootstrap(url);
+      if (bootstrap.phase === 'ready' || bootstrap.phase === 'degraded') return bootstrap;
+    } catch {
+      // The gateway or Framework may still be starting.
+    }
+    if (Date.now() - startedAt > timeoutMs) {
+      throw new Error(`Timed out waiting for Application Runtime at ${url}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return check();
+  };
+  return check();
 }
 
 function stopFramework() {

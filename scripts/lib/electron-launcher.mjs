@@ -118,3 +118,18 @@ export function selectMenuWindow(focusedWindow, sourceWindow, windowSessions) {
   }
   return sourceWindow;
 }
+
+export function mergeMenuTrees(primary, secondary) {
+  const merged = structuredClone(Array.isArray(primary) ? primary : []);
+  for (const sourceNode of Array.isArray(secondary) ? secondary : []) {
+    const existing = merged.find((node) => (
+      node.type === 'menu' && sourceNode.type === 'menu' && node.id === sourceNode.id
+    ));
+    if (!existing) {
+      merged.push(structuredClone(sourceNode));
+      continue;
+    }
+    existing.children = mergeMenuTrees(existing.children, sourceNode.children);
+  }
+  return merged;
+}

@@ -6,6 +6,7 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
+  mergeMenuTrees,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
@@ -173,6 +174,33 @@ test('keeps APP menu actions bound to the focused Kit when a hidden Kit syncs', 
   assert.equal(selectMenuWindow(unknown, hiddenSource, windowSessions), hiddenSource);
 });
 
+test('merges global application and focused-session menu trees by id', () => {
+  const merged = mergeMenuTrees(
+    [{
+      type: 'menu',
+      id: 'tools',
+      label: 'Tools',
+      children: [{ type: 'menu', id: 'tools/install', label: 'Install', children: [] }],
+    }],
+    [{
+      type: 'menu',
+      id: 'tools',
+      label: 'Tools',
+      children: [{ type: 'menu', id: 'tools/about', label: 'About', children: [] }],
+    }],
+  );
+
+  assert.deepEqual(merged, [{
+    type: 'menu',
+    id: 'tools',
+    label: 'Tools',
+    children: [
+      { type: 'menu', id: 'tools/install', label: 'Install', children: [] },
+      { type: 'menu', id: 'tools/about', label: 'About', children: [] },
+    ],
+  }]);
+});
+
 test('wires the loopback Host, toast queue and desktop cleanup into Electron', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
 
@@ -186,6 +214,11 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /stopNotificationService\(\)/);
   assert.match(source, /applyNotificationBadgeToWindow\(window\)/);
   assert.match(source, /notification-preload\.cjs/);
+  assert.match(source, /fetchApplicationBootstrap/);
+  assert.match(source, /createApplicationRuntimeClient/);
+  assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
+  assert.doesNotMatch(source, /prewarmKitWindows/);
+  assert.match(source, /await openKit\(kitCatalog\[0\]\.name\)/);
 
   const stopHost = source.indexOf('await notificationHost?.stop()');
   const unsubscribeStore = source.indexOf('notificationStoreUnsubscribe?.()');
