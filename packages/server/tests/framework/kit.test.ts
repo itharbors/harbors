@@ -7,6 +7,7 @@ describe('KitModule', () => {
   const kit: KitDescriptor = {
     name: 'default-kit',
     label: 'Default',
+    menuRoot: { id: 'default', label: 'Default' },
     plugins: ['p'],
     layouts: {
       default: { windows: [] },
@@ -84,6 +85,7 @@ describe('KitModule', () => {
   it('getLayout returns the named layout from the active kit', () => {
     const kitWithLayouts: KitDescriptor = {
       name: 'multi-layout-kit',
+      menuRoot: { id: 'multi-layout', label: 'Multi Layout' },
       plugins: [],
       layouts: {
         default: { windows: [] },
@@ -102,6 +104,7 @@ describe('KitModule', () => {
   it('listLayouts returns all layout names from the active kit', () => {
     const kitWithLayouts: KitDescriptor = {
       name: 'multi-layout-kit',
+      menuRoot: { id: 'multi-layout', label: 'Multi Layout' },
       plugins: [],
       layouts: {
         default: { windows: [] },

@@ -132,6 +132,8 @@ export interface Editor {
   };
   menu: {
     getState(): NormalizedMenuResult;
+    getApplicationState(): NormalizedMenuResult;
+    getKitState(): NormalizedMenuResult;
     trigger(menuId: string): Promise<unknown>;
   };
   window: {

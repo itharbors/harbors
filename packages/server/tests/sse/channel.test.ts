@@ -46,7 +46,12 @@ describe('SSEChannel', () => {
     channel.addClient('s1', good);
     channel.addClient('s1', failed);
 
-    channel.broadcast('s1', { type: 'menu-changed', menuTree: [] });
+    channel.broadcast('s1', {
+      type: 'menu-changed',
+      menuTree: [],
+      applicationMenuTree: [],
+      kitMenuTree: [],
+    });
 
     expect(channel.clientCount('s1')).toBe(1);
     channel.closeSession('s1');
@@ -133,7 +138,12 @@ describe('SSEChannel', () => {
     channel.addClient('s1', res1);
     channel.addClient('s2', res2);
 
-    channel.broadcast('s1', { type: 'menu-changed', menuTree: [] });
+    channel.broadcast('s1', {
+      type: 'menu-changed',
+      menuTree: [],
+      applicationMenuTree: [],
+      kitMenuTree: [],
+    });
 
     expect(received.length).toBe(1);
   });
@@ -144,8 +154,13 @@ describe('SSEChannel', () => {
     res.write = (data: string) => { received.push(data); return true; };
 
     channel.addClient('s1', res);
-    channel.broadcast('s1', { type: 'menu-changed', menuTree: [] });
+    channel.broadcast('s1', {
+      type: 'menu-changed',
+      menuTree: [],
+      applicationMenuTree: [],
+      kitMenuTree: [],
+    });
 
-    expect(received[0]).toBe('data: {"protocolVersion":1,"type":"menu-changed","menuTree":[]}\n\n');
+    expect(received[0]).toBe('data: {"protocolVersion":1,"type":"menu-changed","menuTree":[],"applicationMenuTree":[],"kitMenuTree":[]}\n\n');
   });
 });

@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "ce-editor": {
     "kit": {
+      "menuRoot": {
+        "id": "default",
+        "label": "Default Kit"
+      },
       "layouts": {
         "default": "layout.json"
       },

@@ -4,6 +4,41 @@ import { MenuModule } from '../../src/framework/menu/index';
 import { buildMenuTree, type MenuContributionSource } from '../../src/framework/menu/normalize';
 
 describe('buildMenuTree', () => {
+  it('projects application defaults separately from kit plugin actions', () => {
+    const menu = new MenuModule({ platform: 'linux' });
+    menu.setDefaults('@itharbors/menu', [
+      { type: 'menu', id: 'view', label: 'View' },
+      { type: 'menu', id: 'view/panels', label: 'Panels' },
+    ]);
+    menu.attach('@itharbors/demo-kit-plugin', {
+      menu: [
+        { type: 'menu', id: 'view/panels/demo', label: 'Demo', message: 'openDemo' },
+      ],
+    });
+
+    expect(menu.getApplicationState().tree).toEqual([
+      expect.objectContaining({ id: 'view', children: [expect.objectContaining({ id: 'view/panels' })] }),
+    ]);
+    expect(menu.getKitState().tree).toEqual([
+      expect.objectContaining({
+        id: 'view',
+        children: [expect.objectContaining({
+          id: 'view/panels',
+          children: [expect.objectContaining({ id: 'view/panels/demo' })],
+        })],
+      }),
+    ]);
+    expect(menu.getState().tree).toEqual([
+      expect.objectContaining({
+        id: 'view',
+        children: [expect.objectContaining({
+          id: 'view/panels',
+          children: [expect.objectContaining({ id: 'view/panels/demo' })],
+        })],
+      }),
+    ]);
+  });
+
   it('uses runtime defaults when no external contributions are attached', () => {
     const menu = new MenuModule({
       t: (key: string) => ({ 'menu.edit.copy': 'Copy' })[key] ?? key,

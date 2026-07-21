@@ -33,11 +33,15 @@ export interface LayoutChangedSSEEvent extends ProtocolEnvelope {
 export interface MenuChangedSSEEvent extends ProtocolEnvelope {
   type: 'menu-changed';
   menuTree: MenuTreeNode[];
+  applicationMenuTree: MenuTreeNode[];
+  kitMenuTree: MenuTreeNode[];
 }
 
 export type I18nChangedSSEEvent = ProtocolEnvelope & I18nChangeEvent & {
   i18n: I18nVisibleSnapshot;
   menuTree: MenuTreeNode[];
+  applicationMenuTree: MenuTreeNode[];
+  kitMenuTree: MenuTreeNode[];
 };
 
 export type SSEEnvelope =

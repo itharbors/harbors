@@ -71,6 +71,7 @@ describe('framework routes', () => {
       name: 'routes-menu-kit',
       'ce-editor': {
         kit: {
+          menuRoot: { id: 'routes', label: 'Routes Kit' },
           layouts: { default: 'layout.json' },
           windowEntries: { main: 'main.html', secondary: 'secondary.html' },
           plugin: ['p'],
@@ -87,14 +88,14 @@ describe('framework routes', () => {
           },
           menu: [
             { type: 'menu', id: 'File', label: 'File' },
-            { type: 'menu', id: 'File/plugin.file', label: 'Plugin Action' },
+            { type: 'menu', id: 'File/plugin.file', label: 'Plugin Action', message: 'open' },
           ],
         },
       },
     }));
     mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
     mkdirSync(path.join(pluginDir, 'panel.editor', 'dist'), { recursive: true });
-    writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: {} });');
+    writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: { open() {} } });');
     writeFileSync(path.join(pluginDir, 'panel.editor', 'dist', 'index.html'), '<!doctype html><html><body><div></div></body></html>');
 
     try {
@@ -108,6 +109,7 @@ describe('framework routes', () => {
       expect(data.protocolVersion).toBe(1);
       expect(data.sessionId).toBe('s1');
       expect(data.kitName).toBe('routes-menu-kit');
+      expect(data.kitMenuRoot).toEqual({ id: 'routes', label: 'Routes Kit' });
       expect(data.windowEntries).toEqual({ main: 'main.html', secondary: 'secondary.html' });
       expect(data.panels).toHaveLength(1);
       expect(data.windows).toEqual([
@@ -135,6 +137,13 @@ describe('framework routes', () => {
               children: [],
             },
           ],
+        }),
+      ]));
+      expect(JSON.stringify(data.applicationMenuTree)).not.toContain('plugin.file');
+      expect(data.kitMenuTree).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: 'File',
+          children: [expect.objectContaining({ id: 'File/plugin.file' })],
         }),
       ]));
     } finally {

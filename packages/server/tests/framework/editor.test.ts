@@ -34,12 +34,14 @@ describe('createEditor', () => {
     expect(typeof editor.panel.register).toBe('function');
     expect(typeof editor.message.request).toBe('function');
     expect(typeof editor.kit.switchKit).toBe('function');
-    expect(Object.keys(editor.menu)).toEqual(['getState', 'trigger']);
+    expect(Object.keys(editor.menu)).toEqual(['getState', 'getApplicationState', 'getKitState', 'trigger']);
     expect(typeof editor.menu.getState).toBe('function');
+    expect(typeof editor.menu.getApplicationState).toBe('function');
+    expect(typeof editor.menu.getKitState).toBe('function');
     expect(typeof editor.menu.trigger).toBe('function');
   });
 
-  it('shares config shared scope across editors and isolates editor scope', () => {
+  it('isolates every config scope across workspace editors', () => {
     const left = createEditor('session-config-left', { assembly: testAssembly });
     const right = createEditor('session-config-right', { assembly: testAssembly });
 
@@ -49,7 +51,8 @@ describe('createEditor', () => {
     left.config.set('theme', 'dark', 'global');
     left.config.set('theme', 'light', 'project');
 
-    expect(right.config.get('theme')).toBe('dark');
+    expect(right.config.get('theme')).toBeUndefined();
+    expect(right.config.get('theme', 'global')).toBeUndefined();
     expect(right.config.get('theme', 'project')).toBeUndefined();
     expect(left.config.get('theme')).toBe('light');
   });
@@ -70,6 +73,7 @@ describe('createEditor', () => {
     await editor.kit.switchKit('@itharbors/kit-default');
 
     expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+    expect(editor.kit.getCurrent()?.menuRoot).toEqual({ id: 'default', label: 'Default Kit' });
   });
 
   it('loads the default kit when no kit is specified', async () => {

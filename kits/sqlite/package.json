@@ -8,6 +8,10 @@
   },
   "ce-editor": {
     "kit": {
+      "menuRoot": {
+        "id": "sqlite",
+        "label": "SQLite"
+      },
       "layouts": {
         "default": "layout.json"
       },

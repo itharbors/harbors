@@ -7,6 +7,7 @@ describe('KitModule', () => {
     const kit = new KitModule();
     const descriptor: KitDescriptor = {
       name: '@itharbors/test-kit',
+      menuRoot: { id: 'test', label: 'Test' },
       plugins: [],
       layouts: {
         default: { windows: [] },

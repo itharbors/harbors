@@ -31,6 +31,11 @@ export interface MenuTreeMenuNode {
 
 export type MenuTreeNode = MenuTreeMenuNode | MenuTreeSeparatorNode;
 
+export interface KitMenuRoot {
+  id: string;
+  label: string;
+}
+
 export type I18nChangeEvent =
   | { type: 'locale-changed'; locale: string; version: number }
   | {
@@ -58,5 +63,8 @@ export interface BootstrapInfo {
   panelInstances: PanelInstanceDescriptor[];
   panels: PanelDescriptor[];
   menuTree: MenuTreeNode[];
+  applicationMenuTree: MenuTreeNode[];
+  kitMenuTree: MenuTreeNode[];
+  kitMenuRoot: KitMenuRoot | null;
   i18n: I18nVisibleSnapshot;
 }

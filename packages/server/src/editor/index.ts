@@ -24,8 +24,6 @@ const BUILTIN_PLUGINS = [
   '@itharbors/config',
 ];
 
-const sharedConfigStore: ConfigLayerStore = new Map();
-
 interface KitPackageJson {
   name?: string;
   label?: string;
@@ -35,6 +33,10 @@ interface KitPackageJson {
       layouts?: Record<string, string>;
       theme?: Record<`--ce-${string}`, string>;
       plugin?: string[];
+      menuRoot?: {
+        id?: unknown;
+        label?: unknown;
+      };
       windowEntries?: {
         main?: unknown;
         secondary?: unknown;
@@ -53,7 +55,12 @@ interface CreateEditorOptions {
   dispatchBrowserRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchPanelBroadcast?: (panelKey: string, method: string, args: unknown[]) => void;
   onLayoutChanged?: (sessionId: string, window: WindowDescriptor) => void;
-  onMenuChanged?: (sessionId: string, state: NormalizedMenuResult) => void;
+  onMenuChanged?: (
+    sessionId: string,
+    state: NormalizedMenuResult,
+    applicationState: NormalizedMenuResult,
+    kitState: NormalizedMenuResult,
+  ) => void;
   initialLocale?: string;
   platform?: MenuPlatform;
 }
@@ -63,7 +70,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   const plugin = new PluginModule();
   const panel = new PanelModule();
   const config = new ConfigModule({
-    sharedStore: sharedConfigStore,
+    sharedStore: new Map(),
     editorStore: new Map(),
   });
   const i18n = new I18nModule({
@@ -74,7 +81,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     t: (key) => i18n.t(key),
     subscribe: (listener) => i18n.subscribe(listener),
     platform: options.platform,
-    onChange: (state) => options.onMenuChanged?.(sessionId, state),
+    onChange: (state) => options.onMenuChanged?.(
+      sessionId,
+      state,
+      menu.getApplicationState(),
+      menu.getKitState(),
+    ),
   });
   const runtimeMenu = {
     attach(pluginName: string, contribute: Parameters<MenuModule['attach']>[1]) {
@@ -248,6 +260,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       name: pkg.name,
       label: pkg.label,
       icon: pkg.icon,
+      menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
       theme: pkg['ce-editor'].kit.theme,
       plugins,
       layouts,
@@ -522,6 +535,8 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     },
     menu: {
       getState: () => runtimeMenu.getState(),
+      getApplicationState: () => menu.getApplicationState(),
+      getKitState: () => menu.getKitState(),
       trigger: (menuId: string) => runtimeMenu.trigger(menuId),
     },
     window: {
@@ -554,6 +569,18 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   };
 
   return editor;
+}
+
+function normalizeMenuRoot(
+  packageName: string,
+  packageLabel: string | undefined,
+  input: { id?: unknown; label?: unknown } | undefined,
+): { id: string; label: string } {
+  const fallbackId = packageName.split('/').pop()?.replace(/^kit-/, '') || 'kit';
+  return {
+    id: isNonEmptyString(input?.id) ? input.id : fallbackId,
+    label: isNonEmptyString(input?.label) ? input.label : (packageLabel ?? fallbackId),
+  };
 }
 
 function isNonEmptyString(value: unknown): value is string {

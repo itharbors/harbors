@@ -31,6 +31,9 @@ export function createBootstrapRouter(editorMap: Map<string, Editor>) {
       panelInstances: snapshot.panelInstances,
       panels: editor.panel.list(),
       menuTree: editor.menu.getState().tree,
+      applicationMenuTree: editor.menu.getApplicationState().tree,
+      kitMenuTree: editor.menu.getKitState().tree,
+      kitMenuRoot: kit?.menuRoot ?? null,
       i18n: editor.i18n.getVisibleSnapshot(),
     } satisfies BootstrapInfo;
     sendJson(res, 200, bootstrap);
