@@ -549,7 +549,7 @@ describe('Codex Skill installer', () => {
     const codexHome = path.join(root, 'codex-home');
     const skillsDir = path.join(codexHome, 'skills');
     await writeSkillSource(sourceDir, 'bundled');
-    await mkdir(skillsDir, { recursive: true });
+    await createCodexSkillInstaller({ sourceDir, codexHome }).install();
     await writeFile(
       path.join(skillsDir, '.notify-user-installing.json'),
       `${JSON.stringify({
@@ -558,12 +558,15 @@ describe('Codex Skill installer', () => {
         version: 1,
         token: 'active-test',
         pid: process.pid,
+        createdAt: Date.now(),
         backupDir: null,
       })}\n`,
     );
 
     await expect(createCodexSkillInstaller({ sourceDir, codexHome }).install())
       .rejects.toMatchObject({ code: 'SKILL_CONFLICT' });
+    await expect(readFile(path.join(skillsDir, 'notify-user', 'SKILL.md'), 'utf8'))
+      .resolves.toContain('description: bundled');
   });
 });
 
@@ -610,7 +613,8 @@ async function writeInterruptedJournal(skillsDir: string, backupDir: string | nu
       skill: 'notify-user',
       version: 1,
       token: 'interrupted-test',
-      pid: 2_147_483_647,
+      pid: process.pid,
+      createdAt: 0,
       backupDir,
     })}\n`,
   );
