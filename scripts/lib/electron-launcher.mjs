@@ -1,3 +1,5 @@
+import { formatNotificationKitLabel } from './notification-desktop.mjs';
+
 export function parseElectronOptions(args) {
   let requestedKit = null;
 
@@ -50,10 +52,17 @@ export function createKitWindowUrl(startUrl, kit, workspace, mode) {
   return url.href;
 }
 
-export function buildTrayTemplate({ kits, workspaceRecords }, adapters) {
+export function buildTrayTemplate({
+  kits,
+  workspaceRecords,
+  unreadCount = 0,
+  notificationKitName = null,
+}, adapters) {
   const availableNames = new Set(kits.map((kit) => kit.name));
   const availableEntries = kits.map((kit) => ({
-    label: kit.label,
+    label: kit.name === notificationKitName
+      ? formatNotificationKitLabel(kit.label, unreadCount)
+      : kit.label,
     enabled: true,
     click: () => adapters.openKit(kit.name),
   }));

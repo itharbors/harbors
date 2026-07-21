@@ -96,6 +96,24 @@ test('builds tray entries for available and persisted unavailable Kits', () => {
   assert.equal(quitCount, 1);
 });
 
+test('adds unread count only to the Notification Kit tray entry', () => {
+  const template = buildTrayTemplate({
+    kits: [
+      { name: '@itharbors/kit-default', label: 'Default Kit' },
+      { name: '@itharbors/kit-notifications', label: 'Notifications' },
+    ],
+    workspaceRecords: [],
+    unreadCount: 4,
+    notificationKitName: '@itharbors/kit-notifications',
+  }, {
+    openKit() {},
+    quit() {},
+  });
+
+  assert.equal(template[0].label, 'Default Kit');
+  assert.equal(template[1].label, 'Notifications (4)');
+});
+
 test('focuses an existing Kit window or creates a replacement', async () => {
   const calls = [];
   const existing = {
@@ -153,4 +171,30 @@ test('keeps APP menu actions bound to the focused Kit when a hidden Kit syncs', 
 
   assert.equal(selectMenuWindow(focused, hiddenSource, windowSessions), focused);
   assert.equal(selectMenuWindow(unknown, hiddenSource, windowSessions), hiddenSource);
+});
+
+test('wires the loopback Host, toast queue and desktop cleanup into Electron', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /createNotificationHost/);
+  assert.match(source, /createNotificationStore/);
+  assert.match(source, /createToastQueue/);
+  assert.match(source, /await startNotificationService\(\)/);
+  assert.match(source, /HARBORS_NOTIFICATION_PORT:\s*String\(notificationPort\)/);
+  assert.match(source, /harbors:notification-open-center/);
+  assert.match(source, /harbors:notification-close-toast/);
+  assert.match(source, /stopNotificationService\(\)/);
+  assert.match(source, /applyNotificationBadgeToWindow\(window\)/);
+  assert.match(source, /notification-preload\.cjs/);
+});
+
+test('keeps the notification toast preload bridge intentionally narrow', async () => {
+  const source = await readFile(new URL('../notification-preload.cjs', import.meta.url), 'utf8');
+
+  assert.match(source, /exposeInMainWorld\('notificationToast'/);
+  assert.match(source, /openCenter/);
+  assert.match(source, /closeToast/);
+  assert.match(source, /harbors:notification-open-center/);
+  assert.match(source, /harbors:notification-close-toast/);
+  assert.doesNotMatch(source, /notificationId/);
 });

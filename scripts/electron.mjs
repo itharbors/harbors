@@ -2,8 +2,20 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
 import { discoverKits } from './lib/kit-catalog.mjs';
+import {
+  calculateToastPositions,
+  createBadgeOverlayDataUrl,
+  createNotificationHtml,
+  createToastQueue,
+  formatNotificationTooltip,
+} from './lib/notification-desktop.mjs';
+import {
+  createNotificationHost,
+  createNotificationStore,
+  parseNotificationPort,
+} from './lib/notification-host.mjs';
 import {
   buildTrayTemplate,
   createFrameworkArgs,
@@ -17,13 +29,19 @@ import { WorkspaceStore } from './lib/workspace-store.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
+const notificationPreloadPath = fileURLToPath(new URL('./notification-preload.cjs', import.meta.url));
 const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.svg', import.meta.url));
 const gatewayPort = parsePort(process.env.PORT, 8080);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
+const NOTIFICATION_KIT_NAME = '@itharbors/kit-notifications';
+const TOAST_WIDTH = 360;
+const TOAST_HEIGHT = 176;
 
 let frameworkProcess;
 let tray;
+let trayContextMenu;
+let trayWorkspaceRecords = [];
 let workspaceStore;
 let kitCatalog = [];
 let electronOptions;
@@ -36,6 +54,16 @@ const windowSessions = new Map();
 let menuSyncListenerRegistered = false;
 let menuSyncListener;
 let openExternalUrlListenerRegistered = false;
+let notificationStore;
+let notificationHost;
+let notificationPort;
+let notificationStoreUnsubscribe;
+let notificationStopPromise;
+let toastQueue;
+let toastIpcRegistered = false;
+let currentUnreadCount = 0;
+const toastWindows = new Map();
+const toastWindowNotifications = new Map();
 
 const ALLOWED_ELECTRON_MENU_ROLES = new Set([
   'about',
@@ -152,6 +180,7 @@ function startElectronApp() {
         throw new Error('No valid Kits were discovered');
       }
       workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
+      await startNotificationService();
       frameworkProcess = startFramework();
       await waitForUrl(startUrl);
       registerMenuIpc();
@@ -186,8 +215,15 @@ function startElectronApp() {
       const persist = workspaceStore
         ? persistOpenWindowBounds(kitWindows, workspaceStore)
         : Promise.resolve();
-      void persist
-        .catch((error) => console.error('Failed to persist window bounds before quit:', error))
+      const notificationShutdown = stopNotificationService();
+      void Promise.allSettled([persist, notificationShutdown])
+        .then((results) => {
+          for (const result of results) {
+            if (result.status === 'rejected') {
+              console.error('Failed to complete shutdown step:', result.reason);
+            }
+          }
+        })
         .finally(() => app.quit());
       return;
     }
@@ -203,7 +239,10 @@ function startFramework() {
   console.log('Starting ITHARBORS framework from Electron');
   const child = spawn('npm', frameworkArgs, {
     cwd: rootDir,
-    env: process.env,
+    env: {
+      ...process.env,
+      HARBORS_NOTIFICATION_PORT: String(notificationPort),
+    },
     stdio: 'inherit',
   });
 
@@ -249,16 +288,12 @@ async function createApplicationTray() {
   const image = nativeImage.createFromPath(trayIconPath);
   image.setTemplateImage?.(true);
   tray = new Tray(image);
-  tray.setToolTip('ITHARBORS');
-  const workspaceRecords = await workspaceStore.list(kitCatalog);
-  const template = buildTrayTemplate({ kits: kitCatalog, workspaceRecords }, {
-    openKit,
-    quit: () => app.quit(),
-  });
-  const contextMenu = Menu.buildFromTemplate(template);
-  tray.setContextMenu(contextMenu);
+  trayWorkspaceRecords = await workspaceStore.list(kitCatalog);
+  refreshApplicationTray();
   if (process.platform === 'darwin') {
-    tray.on('click', () => tray?.popUpContextMenu(contextMenu));
+    tray.on('click', () => {
+      if (trayContextMenu) tray?.popUpContextMenu(trayContextMenu);
+    });
   }
 }
 
@@ -297,6 +332,7 @@ async function createKitWindow(kit, workspace) {
 
   windowSessions.set(window.id, workspace.sessionId);
   sessionKits.set(workspace.sessionId, kit.name);
+  applyNotificationBadgeToWindow(window);
   window.on('close', () => {
     if (quitting || window.isDestroyed()) return;
     workspaceStore.updateBounds(kit.name, window.getBounds()).catch((error) => {
@@ -318,6 +354,217 @@ async function createKitWindow(kit, workspace) {
     throw error;
   }
   return window;
+}
+
+async function startNotificationService() {
+  notificationStore = createNotificationStore();
+  toastQueue = createToastQueue({
+    onShow(notification) {
+      void createToastWindow(notification).catch((error) => {
+        console.error(`Failed to show notification ${notification.id}:`, error);
+        toastQueue?.close(notification.id, 'failed');
+      });
+    },
+    onHide(notification) {
+      destroyToastWindow(notification.id);
+    },
+    onError(error) {
+      console.error('Notification toast adapter failed:', error);
+    },
+  });
+  notificationStoreUnsubscribe = notificationStore.subscribe((event) => {
+    try {
+      currentUnreadCount = event.snapshot.unreadCount;
+      if (event.type === 'created' && event.notification) {
+        toastQueue?.enqueue(event.notification);
+      }
+      if (event.type === 'removed' && event.id) {
+        toastQueue?.remove(event.id);
+      }
+      refreshNotificationIndicators();
+    } catch (error) {
+      // Store listeners must never turn a successful state mutation into an HTTP 500.
+      console.error('Failed to apply notification event:', error);
+    }
+  });
+
+  registerNotificationToastIpc();
+  notificationHost = createNotificationHost({
+    store: notificationStore,
+    port: parseNotificationPort(process.env.HARBORS_NOTIFICATION_PORT),
+  });
+  notificationPort = await notificationHost.start();
+  refreshNotificationIndicators();
+  console.log(`Notification Host listening on http://127.0.0.1:${notificationPort}`);
+}
+
+function stopNotificationService() {
+  if (notificationStopPromise) return notificationStopPromise;
+
+  notificationStopPromise = (async () => {
+    notificationStoreUnsubscribe?.();
+    notificationStoreUnsubscribe = undefined;
+    toastQueue?.dispose();
+    toastQueue = undefined;
+    for (const notificationId of Array.from(toastWindows.keys())) {
+      destroyToastWindow(notificationId);
+    }
+    unregisterNotificationToastIpc();
+
+    currentUnreadCount = 0;
+    refreshNotificationIndicators();
+    await notificationHost?.stop();
+    notificationHost = undefined;
+    notificationStore = undefined;
+    notificationPort = undefined;
+  })();
+
+  return notificationStopPromise;
+}
+
+function registerNotificationToastIpc() {
+  if (toastIpcRegistered) return;
+
+  ipcMain.handle('harbors:notification-open-center', async (event) => {
+    const notificationId = toastWindowNotifications.get(event.sender.id);
+    if (!notificationId) return false;
+
+    try {
+      notificationStore?.markRead(notificationId);
+    } catch (error) {
+      console.error(`Failed to mark notification ${notificationId} as read:`, error);
+    }
+    toastQueue?.close(notificationId, 'opened');
+    return Boolean(await openKit(NOTIFICATION_KIT_NAME));
+  });
+  ipcMain.handle('harbors:notification-close-toast', (event) => {
+    const notificationId = toastWindowNotifications.get(event.sender.id);
+    return notificationId ? toastQueue?.close(notificationId, 'closed') ?? false : false;
+  });
+  toastIpcRegistered = true;
+}
+
+function unregisterNotificationToastIpc() {
+  if (!toastIpcRegistered) return;
+  ipcMain.removeHandler('harbors:notification-open-center');
+  ipcMain.removeHandler('harbors:notification-close-toast');
+  toastIpcRegistered = false;
+}
+
+async function createToastWindow(notification) {
+  if (quitting || !toastQueue) return;
+
+  const window = new BrowserWindow({
+    width: TOAST_WIDTH,
+    height: TOAST_HEIGHT,
+    show: false,
+    frame: false,
+    transparent: true,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: notificationPreloadPath,
+    },
+  });
+
+  toastWindows.set(notification.id, window);
+  const webContentsId = window.webContents.id;
+  toastWindowNotifications.set(webContentsId, notification.id);
+  window.on('closed', () => {
+    toastWindowNotifications.delete(webContentsId);
+    if (toastWindows.get(notification.id) === window) {
+      toastWindows.delete(notification.id);
+      toastQueue?.close(notification.id, 'window-closed');
+      reflowToastWindows();
+    }
+  });
+
+  try {
+    const html = createNotificationHtml(notification);
+    await window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    if (!window.isDestroyed()) {
+      reflowToastWindows();
+      window.showInactive();
+    }
+  } catch (error) {
+    destroyToastWindow(notification.id);
+    throw error;
+  }
+}
+
+function destroyToastWindow(notificationId) {
+  const window = toastWindows.get(notificationId);
+  if (!window) return;
+
+  toastWindows.delete(notificationId);
+  if (!window.isDestroyed()) {
+    toastWindowNotifications.delete(window.webContents.id);
+  }
+  if (!window.isDestroyed()) window.destroy();
+  reflowToastWindows();
+}
+
+function reflowToastWindows() {
+  if (!toastQueue || toastWindows.size === 0) return;
+
+  const visibleWindows = toastQueue.snapshot().visible
+    .map((notificationId) => toastWindows.get(notificationId))
+    .filter((window) => window && !window.isDestroyed());
+  if (visibleWindows.length === 0) return;
+
+  const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const positions = calculateToastPositions(
+    display.workArea,
+    visibleWindows.map((window) => window.getBounds().height),
+    { width: TOAST_WIDTH },
+  );
+  visibleWindows.forEach((window, index) => {
+    window.setPosition(positions[index].x, positions[index].y, false);
+  });
+}
+
+function refreshNotificationIndicators() {
+  if (process.platform !== 'win32') {
+    app.setBadgeCount?.(currentUnreadCount);
+  }
+  for (const window of kitWindows.values()) {
+    applyNotificationBadgeToWindow(window);
+  }
+  refreshApplicationTray();
+}
+
+function applyNotificationBadgeToWindow(window) {
+  if (process.platform !== 'win32' || !window || window.isDestroyed()) return;
+
+  const badgeUrl = createBadgeOverlayDataUrl(currentUnreadCount);
+  const image = badgeUrl ? nativeImage.createFromDataURL(badgeUrl) : null;
+  window.setOverlayIcon(image, currentUnreadCount > 0
+    ? `${currentUnreadCount} unread notifications`
+    : '');
+}
+
+function refreshApplicationTray() {
+  if (!tray || tray.isDestroyed()) return;
+
+  const template = buildTrayTemplate({
+    kits: kitCatalog,
+    workspaceRecords: trayWorkspaceRecords,
+    unreadCount: currentUnreadCount,
+    notificationKitName: NOTIFICATION_KIT_NAME,
+  }, {
+    openKit,
+    quit: () => app.quit(),
+  });
+  trayContextMenu = Menu.buildFromTemplate(template);
+  tray.setContextMenu(trayContextMenu);
+  tray.setToolTip(formatNotificationTooltip(currentUnreadCount));
 }
 
 function registerMenuIpc() {
