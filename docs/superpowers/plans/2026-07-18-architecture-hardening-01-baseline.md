@@ -42,7 +42,7 @@
 Run:
 
 ```bash
-node -e "const p=require('./package.json'); if (/npm run dev/.test(p.scripts.check) || !/build -w @ce\/plugin-types/.test(p.scripts.check)) process.exit(1)"
+node -e "const p=require('./package.json'); if (/npm run dev/.test(p.scripts.check) || !/build -w @itharbors\/plugin-types/.test(p.scripts.check)) process.exit(1)"
 ```
 
 Expected: exit code 1 because `check` contains `npm run dev`.
