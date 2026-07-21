@@ -441,6 +441,10 @@ describe('SqliteService connection and schema', () => {
     ]);
   });
 
+  it('uses the current user home as the default file browser directory', () => {
+    expect(service.getDefaultDirectory()).toBe(os.homedir());
+  });
+
   it('keeps only the ten most recently opened database paths', () => {
     const databasePaths = Array.from({ length: 11 }, (_, index) => {
       const databasePath = path.join(tempDir, `recent-${index}.sqlite`);

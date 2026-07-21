@@ -45,6 +45,7 @@ describe('SQLite core plugin main', () => {
       'explainSql',
       'exportRows',
       'getConnectionState',
+      'getDefaultDirectory',
       'getObjectSchema',
       'getRecentDatabases',
       'getRelationshipGraph',

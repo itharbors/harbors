@@ -153,7 +153,9 @@ async function openFileBrowser(mode: FileDialog['mode'], openerAction: string): 
   await runAction(async (token) => {
     const recentPaths = await requestCore<string[]>('getRecentDatabases');
     if (!isCurrentActionResult(token)) return;
-    const initialPath = recentPaths[0]?.replace(/[\\/][^\\/]+$/, '') || '.';
+    const initialPath = recentPaths[0]?.replace(/[\\/][^\\/]+$/, '')
+      || await requestCore<string>('getDefaultDirectory');
+    if (!isCurrentActionResult(token)) return;
     const listing = await listDirectory(initialPath, false);
     if (!isCurrentActionResult(token)) return;
     fileDialog = {

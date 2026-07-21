@@ -138,6 +138,33 @@ describe('SQLite connection panel', () => {
     });
   });
 
+  it('starts first-time file browsing in the user directory', async () => {
+    const setModalOpen = vi.fn();
+    const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
+      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
+      if (plugin === '@itharbors/sqlite-core' && method === 'getRecentDatabases') return [];
+      if (plugin === '@itharbors/sqlite-core' && method === 'getDefaultDirectory') return '/Users/demo';
+      if (plugin === '@itharbors/sqlite-core' && method === 'listDirectory') {
+        expect(input).toEqual({ path: '/Users/demo', showAll: false });
+        return { currentPath: '/Users/demo', parentPath: '/Users', entries: [] };
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}:${JSON.stringify(input)}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { setModalOpen } });
+
+    (document.querySelector('[data-action="browse-open"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(document.querySelector('[data-file-dialog]')).not.toBeNull());
+    expect(request).toHaveBeenCalledWith(
+      '@itharbors/sqlite-core', 'getDefaultDirectory', undefined,
+    );
+    expect(request).toHaveBeenCalledWith('@itharbors/sqlite-core', 'listDirectory', {
+      path: '/Users/demo',
+      showAll: false,
+    });
+  });
+
   it('ignores late file-browser work after unmount and remount', async () => {
     let resolveRecent: ((paths: string[]) => void) | undefined;
     const pendingRecent = new Promise<string[]>((resolve) => { resolveRecent = resolve; });
@@ -201,6 +228,7 @@ describe('SQLite connection panel', () => {
     const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
       if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
       if (plugin === '@itharbors/sqlite-core' && method === 'getRecentDatabases') return [];
+      if (plugin === '@itharbors/sqlite-core' && method === 'getDefaultDirectory') return '/tmp';
       if (plugin === '@itharbors/sqlite-core' && method === 'listDirectory') {
         return { currentPath: '/tmp', parentPath: '/', entries: [] };
       }
@@ -311,6 +339,7 @@ describe('SQLite connection panel', () => {
     const request = vi.fn(async (plugin: string, method: string) => {
       if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
       if (plugin === '@itharbors/sqlite-core' && method === 'getRecentDatabases') return [];
+      if (plugin === '@itharbors/sqlite-core' && method === 'getDefaultDirectory') return '/tmp';
       if (plugin === '@itharbors/sqlite-core' && method === 'listDirectory') {
         return { currentPath: '/tmp', parentPath: null, entries: [] };
       }

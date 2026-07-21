@@ -148,6 +148,7 @@ editor.plugin.define({
   },
   methods: {
     listDirectory: (input: unknown) => callService('listDirectory', input),
+    getDefaultDirectory: () => callService('getDefaultDirectory'),
     getRecentDatabases: () => callService('getRecentDatabases'),
     getConnectionState: () => connectionSnapshot(),
     openDatabase: (input: unknown) => transitionConnection('openDatabase', input),
