@@ -22,15 +22,15 @@
 
 **Files:**
 - Create: `scripts/lib/plugin-namespace.test.mjs`
-- Modify: every tracked source/manifest/test/doc containing plugin package prefix `@itharbors/`
+- Modify: every tracked source/manifest/test/doc containing the legacy CE plugin package scope
 - Modify: `package-lock.json`, `package.json`
 
 **Interfaces:**
-- Produces: zero tracked plugin references using the legacy CE scope; protocol package becomes `@itharbors/plugin-types`.
+- Produces: zero tracked plugin references using the legacy CE scope; protocol package uses the ITHARBORS scope.
 
-- [ ] Add a Node test that scans tracked text files (excluding generated output) and asserts no `@itharbors/` remains.
+- [ ] Add a Node test that scans tracked text files (excluding generated output) and rejects the legacy plugin scope.
 - [ ] Run `node --test scripts/lib/plugin-namespace.test.mjs`; expect failure listing current references.
-- [ ] Mechanically replace `@itharbors/` with `@itharbors/`, refresh lockfile, and update the root build/test scripts.
+- [ ] Mechanically migrate package identifiers to the ITHARBORS scope, refresh lockfile, and update root scripts.
 - [ ] Run build, namespace test, Server/Client/Kit tests; expect green.
 - [ ] Commit `[Feature] 统一插件命名空间`.
 

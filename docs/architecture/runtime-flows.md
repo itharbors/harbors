@@ -3,22 +3,30 @@
 本篇沿端到端路径描述各模块如何协作。接口字段可能继续演进，但状态所有权和清理边界
 应保持与[核心原则](./core-principles.md)一致。
 
-## 1. 开发栈启动
+## 1. Electron 与开发栈启动
 
 ```mermaid
 sequenceDiagram
-    participant CLI as scripts/dev.mjs
+    participant CLI as npm run dev
+    participant E as Electron main
+    participant K as KitCatalog/WorkspaceStore
+    participant Web as scripts/dev.mjs (dev:web)
     participant G as Gateway
     participant S as Server
     participant C as Vite Client
-    CLI->>G: npm run dev -w packages/gateway
-    CLI->>S: npm run dev -w packages/server
-    CLI->>C: npm run dev -w packages/client
+    CLI->>E: 启动默认桌面宿主
+    E->>K: 扫描 Kit + 恢复稳定 session/bounds
+    E->>Web: npm run dev:web
+    Web->>G: npm run dev -w packages/gateway
+    Web->>S: npm run dev -w packages/server
+    Web->>C: npm run dev -w packages/client
+    E->>E: 每 Kit 创建独立 BrowserWindow + 托盘
     Note over G,C: 任一子进程异常退出时停止其余进程
 ```
 
-`--kit` 参数被写入 Server 的 `CE_DEFAULT_KIT` 环境变量。Gateway 默认监听 8080，
-Server 监听 3000，Vite 监听 5173。日常访问始终从 Gateway 进入。
+不带参数时 Electron 启动全部合法 Kit；`--kit` 只保留指定包名或路径并进入单 Kit 菜单
+模式。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听 8080，Server
+监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
 
 ## 2. 会话创建与 bootstrap
 
@@ -31,7 +39,7 @@ sequenceDiagram
     participant E as Editor
     C->>A: GET /api/session/:sessionId
     alt session 不存在
-        C->>A: POST /api/session
+        C->>A: POST /api/session (sessionId + window Kit)
         A->>M: getOrCreate(sessionId)
         A->>R: getOrCreate(sessionId)
         R->>E: createEditor(sessionId)
