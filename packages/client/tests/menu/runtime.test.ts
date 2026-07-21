@@ -61,12 +61,20 @@ describe('mountMenuRuntime', () => {
     const menuTree = [{ type: 'menu' as const, id: 'file', label: 'File', children: [] }];
     const runtime = mountMenuRuntime({
       sessionId: 's1',
+      menuMode: 'multi',
       menuTree,
+      applicationMenuTree: [{ type: 'menu', id: 'app', label: 'APP Menu', children: [] }],
+      kitMenuTree: [{ type: 'menu', id: 'kit', label: 'Kit Menu', children: [] }],
+      kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
     });
 
     expect(syncMenu).toHaveBeenCalledWith({
       sessionId: 's1',
+      menuMode: 'multi',
       menuTree,
+      applicationMenuTree: [{ type: 'menu', id: 'app', label: 'APP Menu', children: [] }],
+      kitMenuTree: [{ type: 'menu', id: 'kit', label: 'Kit Menu', children: [] }],
+      kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
     });
 
     await handler?.({ sessionId: 's1', menuId: 'file/new-session' });

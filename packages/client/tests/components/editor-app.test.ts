@@ -22,8 +22,8 @@ vi.stubGlobal('crypto', { randomUUID: () => 'mock-uuid-1234' });
 // Mock location
 Object.defineProperty(window, 'location', {
   value: {
-    search: '?session=existing-id',
-    href: 'http://localhost:8080/?session=existing-id',
+    search: '?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault',
+    href: 'http://localhost:8080/?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault',
   },
   writable: true,
   configurable: true,
@@ -44,6 +44,13 @@ const bootstrapPayload = {
       children: [],
     },
   ],
+  applicationMenuTree: [
+    { type: 'menu', id: 'app', label: 'ITHARBORS', children: [] },
+  ],
+  kitMenuTree: [
+    { type: 'menu', id: 'view', label: 'View', children: [] },
+  ],
+  kitMenuRoot: { id: 'default', label: 'Default Kit' },
   i18n: {
     locale: 'zh-CN',
     defaultLocale: 'zh-CN',
@@ -1019,6 +1026,8 @@ describe('EditorApp default layout', () => {
       syncMenu,
       onMenuAction: vi.fn(() => () => {}),
     };
+    window.location.search = '?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault';
+    window.location.href = 'http://localhost:8080/?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault';
 
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);
@@ -1026,7 +1035,11 @@ describe('EditorApp default layout', () => {
 
     expect(syncMenu).toHaveBeenCalledWith({
       sessionId: 'existing-id',
+      menuMode: 'multi',
       menuTree: bootstrapPayload.menuTree,
+      applicationMenuTree: bootstrapPayload.applicationMenuTree,
+      kitMenuTree: bootstrapPayload.kitMenuTree,
+      kitMenuRoot: bootstrapPayload.kitMenuRoot,
     });
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
@@ -1068,9 +1081,13 @@ describe('EditorApp default layout', () => {
 
     expect(syncMenu).toHaveBeenLastCalledWith({
       sessionId: 'existing-id',
+      menuMode: 'single',
       menuTree: [
         { type: 'menu', id: 'file', label: 'File', labelKey: 'menu.file', children: [] },
       ],
+      applicationMenuTree: bootstrapPayload.applicationMenuTree,
+      kitMenuTree: bootstrapPayload.kitMenuTree,
+      kitMenuRoot: bootstrapPayload.kitMenuRoot,
     });
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
@@ -1111,11 +1128,18 @@ describe('EditorApp default layout', () => {
             ],
           },
         ],
+        applicationMenuTree: [
+          { type: 'menu', id: 'app', label: 'Translated APP', children: [] },
+        ],
+        kitMenuTree: [
+          { type: 'menu', id: 'kit/action', label: 'Translated Kit Action', children: [] },
+        ],
       }),
     });
 
     expect(syncMenu).toHaveBeenLastCalledWith({
       sessionId: 'existing-id',
+      menuMode: 'single',
       menuTree: [
         {
           type: 'menu',
@@ -1133,6 +1157,13 @@ describe('EditorApp default layout', () => {
           ],
         },
       ],
+      applicationMenuTree: [
+        { type: 'menu', id: 'app', label: 'Translated APP', children: [] },
+      ],
+      kitMenuTree: [
+        { type: 'menu', id: 'kit/action', label: 'Translated Kit Action', children: [] },
+      ],
+      kitMenuRoot: bootstrapPayload.kitMenuRoot,
     });
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;

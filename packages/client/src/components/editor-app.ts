@@ -1,4 +1,4 @@
-import { EditorTransport, getSessionIdFromURL } from '../core/transport';
+import { EditorTransport, getKitFromURL, getSessionIdFromURL } from '../core/transport';
 import type { BootstrapInfo, I18nChangeEvent, I18nVisibleSnapshot, LayoutNode } from '../core/session';
 import { ClientSession } from '../core/session';
 import { I18nClient } from '../i18n/client';
@@ -24,7 +24,7 @@ import {
 import { createWindowLayoutStorage } from '../layout/storage';
 import { DEFAULT_THEME_TOKENS, renderThemeVariables, type ThemeTokens } from '../styles/theme';
 import { applyThemeToDocument } from '../styles/iframe-theme';
-import { mountMenuRuntime } from '../menu/runtime';
+import { getElectronMenuModeFromURL, mountMenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
 import type { FloatingPanelState } from './floating-panel-layer';
 
 export class EditorApp extends HTMLElement {
@@ -89,7 +89,7 @@ export class EditorApp extends HTMLElement {
     }
 
     this.session = new ClientSession(sessionId);
-    this.transport = new EditorTransport(this.session);
+    this.transport = new EditorTransport(this.session, { kit: getKitFromURL() || undefined });
     this.i18nClient = new I18nClient(sessionId);
     this.channel = createSessionBroadcastChannel(sessionId);
     this.channel?.addEventListener('message', this.handleChannelMessageEvent);
@@ -193,7 +193,11 @@ export class EditorApp extends HTMLElement {
       i18nStore.hydrate(bootstrap.i18n ?? createEmptyI18nSnapshot());
       this.mountMenuRuntime({
         sessionId: bootstrap.sessionId,
+        menuMode: getElectronMenuModeFromURL(),
         menuTree: bootstrap.menuTree,
+        applicationMenuTree: bootstrap.applicationMenuTree ?? [],
+        kitMenuTree: bootstrap.kitMenuTree ?? [],
+        kitMenuRoot: bootstrap.kitMenuRoot ?? null,
       });
       this.hostThemeTokens = {
         ...DEFAULT_THEME_TOKENS,
@@ -649,14 +653,26 @@ export class EditorApp extends HTMLElement {
     const record = event as Record<string, unknown>;
     if (!Array.isArray(record.menuTree) || !this.session) return;
     const menuTree = record.menuTree as BootstrapInfo['menuTree'];
-    this.bootstrap = this.bootstrap ? { ...this.bootstrap, menuTree } : this.bootstrap;
+    const applicationMenuTree = Array.isArray(record.applicationMenuTree)
+      ? record.applicationMenuTree as BootstrapInfo['applicationMenuTree']
+      : this.bootstrap?.applicationMenuTree ?? [];
+    const kitMenuTree = Array.isArray(record.kitMenuTree)
+      ? record.kitMenuTree as BootstrapInfo['kitMenuTree']
+      : this.bootstrap?.kitMenuTree ?? [];
+    this.bootstrap = this.bootstrap
+      ? { ...this.bootstrap, menuTree, applicationMenuTree, kitMenuTree }
+      : this.bootstrap;
     this.mountMenuRuntime({
       sessionId: this.session.sessionId,
+      menuMode: getElectronMenuModeFromURL(),
       menuTree,
+      applicationMenuTree,
+      kitMenuTree,
+      kitMenuRoot: this.bootstrap?.kitMenuRoot ?? null,
     });
   }
 
-  private mountMenuRuntime(input: { sessionId: string; menuTree: BootstrapInfo['menuTree'] }): void {
+  private mountMenuRuntime(input: MenuRuntimeInput): void {
     this.menuRuntimeDispose?.();
     const runtime = mountMenuRuntime(input);
     this.menuRuntimeDispose = runtime.dispose;

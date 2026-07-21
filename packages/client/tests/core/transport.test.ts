@@ -106,6 +106,31 @@ describe('EditorTransport', () => {
     expect(info.workspacePath).toBe('/home/user');
   });
 
+  it('uses the window Kit when creating its stable Electron session', async () => {
+    transport = new EditorTransport(session, { kit: '/repo/kits/sqlite' });
+    fetchSpy
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          sessionId: 'test-session-123',
+          workspacePath: '',
+          savedFileList: [],
+          createdAt: 1000,
+          lastAccessAt: 1000,
+        }),
+      } as Response);
+
+    await transport.fetchSessionInfo();
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'test-session-123', kit: '/repo/kits/sqlite' }),
+    });
+  });
+
   it('fetchSessionInfo returns existing session without POST', async () => {
     const existingSession = new ClientSession('existing-session');
     const existingTransport = new EditorTransport(existingSession);

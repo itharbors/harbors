@@ -26,7 +26,9 @@ let kitCatalog = [];
 let electronOptions;
 let quitting = false;
 const kitWindows = new Map();
+const sessionKits = new Map();
 const sessionMenus = new Map();
+const menuSyncWaiters = new Map();
 const windowSessions = new Map();
 let menuSyncListenerRegistered = false;
 let menuSyncListener;
@@ -59,6 +61,34 @@ const ALLOWED_ELECTRON_MENU_ROLES = new Set([
 
 export function buildElectronMenuTemplate(sessionId, menuTree, adapters) {
   return menuTree.map((node) => toElectronTemplate(node, sessionId, adapters));
+}
+
+export function buildMultiKitMenuTemplate({ focusedSessionId, sessions }, adapters) {
+  const focused = sessions.find((session) => session.sessionId === focusedSessionId) ?? sessions[0];
+  if (!focused) return [];
+
+  const applicationRoot = {
+    type: 'menu',
+    id: 'itharbors:application',
+    label: 'APP',
+    children: focused.applicationMenuTree,
+  };
+  const kitRoots = sessions
+    .filter((session) => session.kitMenuRoot)
+    .map((session) => ({
+      node: {
+        type: 'menu',
+        id: `itharbors:kit:${session.kitMenuRoot.id}`,
+        label: session.kitMenuRoot.label,
+        children: session.kitMenuTree,
+      },
+      sessionId: session.sessionId,
+    }));
+
+  return [
+    toElectronTemplate(applicationRoot, focused.sessionId, adapters),
+    ...kitRoots.map(({ node, sessionId }) => toElectronTemplate(node, sessionId, adapters)),
+  ];
 }
 
 export function configureElectronApp(electronApp) {
@@ -253,6 +283,7 @@ async function createKitWindow(kit, workspace) {
   });
 
   windowSessions.set(window.id, workspace.sessionId);
+  sessionKits.set(workspace.sessionId, kit.name);
   window.on('close', () => {
     if (quitting || window.isDestroyed()) return;
     workspaceStore.updateBounds(kit.name, window.getBounds()).catch((error) => {
@@ -289,7 +320,8 @@ function registerMenuIpc() {
     }
 
     windowSessions.set(window.id, sanitizedPayload.sessionId);
-    sessionMenus.set(sanitizedPayload.sessionId, sanitizedPayload.menuTree);
+    sessionMenus.set(sanitizedPayload.sessionId, sanitizedPayload);
+    resolveMenuSyncWaiters(sanitizedPayload.sessionId);
 
     applyMenuForWindow(window);
   };
@@ -352,16 +384,80 @@ function applyMenuForWindow(window) {
     return;
   }
 
-  const menuTree = sessionMenus.get(sessionId) ?? [];
-  const template = buildElectronMenuTemplate(sessionId, menuTree, {
+  const adapters = {
     sendToWindow(payload) {
-      if (window.isDestroyed()) {
-        return;
-      }
-      window.webContents.send('ce:menu-action', payload);
+      void sendMenuActionToSession(payload).catch((error) => {
+        console.error('Failed to dispatch menu action:', error);
+      });
     },
-  });
+  };
+  const state = sessionMenus.get(sessionId);
+  const template = electronOptions?.mode === 'multi'
+    ? buildMultiKitMenuTemplate({
+        focusedSessionId: sessionId,
+        sessions: getOrderedMenuSessions(),
+      }, adapters)
+    : buildElectronMenuTemplate(sessionId, state?.menuTree ?? [], adapters);
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
+}
+
+function getOrderedMenuSessions() {
+  const catalogOrder = new Map(kitCatalog.map((kit, index) => [kit.name, index]));
+  return Array.from(sessionMenus.values()).sort((left, right) => {
+    const leftOrder = catalogOrder.get(sessionKits.get(left.sessionId)) ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = catalogOrder.get(sessionKits.get(right.sessionId)) ?? Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder;
+  });
+}
+
+async function sendMenuActionToSession(payload) {
+  const kitName = sessionKits.get(payload.sessionId);
+  if (!kitName) return;
+
+  let window = kitWindows.get(kitName);
+  let syncWaiter = null;
+  if (!window || window.isDestroyed()) {
+    syncWaiter = createMenuSyncWaiter(payload.sessionId);
+  }
+  window = await openKit(kitName);
+  if (!window) {
+    syncWaiter?.cancel();
+    return;
+  }
+  if (syncWaiter) {
+    await syncWaiter.promise;
+  }
+  if (!window.isDestroyed()) {
+    window.webContents.send('ce:menu-action', payload);
+  }
+}
+
+function createMenuSyncWaiter(sessionId, timeoutMs = 5000) {
+  let done;
+  const promise = new Promise((resolve, reject) => {
+    const waiters = menuSyncWaiters.get(sessionId) ?? new Set();
+    menuSyncWaiters.set(sessionId, waiters);
+    const timeout = setTimeout(() => {
+      waiters.delete(done);
+      if (waiters.size === 0) menuSyncWaiters.delete(sessionId);
+      reject(new Error(`Timed out waiting for menu sync from ${sessionId}`));
+    }, timeoutMs);
+    done = () => {
+      clearTimeout(timeout);
+      waiters.delete(done);
+      if (waiters.size === 0) menuSyncWaiters.delete(sessionId);
+      resolve();
+    };
+    waiters.add(done);
+  });
+  return { promise, cancel: () => done?.() };
+}
+
+function resolveMenuSyncWaiters(sessionId) {
+  const waiters = menuSyncWaiters.get(sessionId);
+  if (!waiters) return;
+  menuSyncWaiters.delete(sessionId);
+  for (const resolve of waiters) resolve();
 }
 
 function sanitizeMenuSyncPayload(payload) {
@@ -372,13 +468,32 @@ function sanitizeMenuSyncPayload(payload) {
   const sessionId = typeof payload.sessionId === 'string' && payload.sessionId.length > 0
     ? payload.sessionId
     : null;
+  const menuMode = payload.menuMode === 'single' || payload.menuMode === 'multi'
+    ? payload.menuMode
+    : null;
   const menuTree = Array.isArray(payload.menuTree) ? sanitizeMenuNodes(payload.menuTree) : null;
+  const applicationMenuTree = Array.isArray(payload.applicationMenuTree)
+    ? sanitizeMenuNodes(payload.applicationMenuTree)
+    : null;
+  const kitMenuTree = Array.isArray(payload.kitMenuTree)
+    ? sanitizeMenuNodes(payload.kitMenuTree)
+    : null;
+  const kitMenuRoot = sanitizeKitMenuRoot(payload.kitMenuRoot);
 
-  if (!sessionId || menuTree === null) {
+  if (!sessionId || !menuMode || menuTree === null || applicationMenuTree === null || kitMenuTree === null) {
     return null;
   }
+  if (menuMode === 'multi' && !kitMenuRoot) return null;
 
-  return { sessionId, menuTree };
+  return { sessionId, menuMode, menuTree, applicationMenuTree, kitMenuTree, kitMenuRoot };
+}
+
+function sanitizeKitMenuRoot(value) {
+  if (value === null || value === undefined) return null;
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.id !== 'string' || value.id.length === 0) return null;
+  if (typeof value.label !== 'string' || value.label.length === 0) return null;
+  return { id: value.id, label: value.label };
 }
 
 function sanitizeMenuNodes(nodes, depth = 0) {

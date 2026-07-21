@@ -4,6 +4,7 @@ export type {
   BootstrapInfo,
   I18nChangeEvent,
   I18nVisibleSnapshot,
+  KitMenuRoot,
   KitWindowEntries,
   LayoutNode,
   MenuTreeMenuNode,
