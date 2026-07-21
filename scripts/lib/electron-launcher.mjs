@@ -34,6 +34,14 @@ export function parseElectronOptions(args) {
     : { mode: 'multi', requestedKit: null };
 }
 
+export function createFrameworkArgs(args) {
+  return [
+    'run',
+    'dev:web',
+    ...(args.length > 0 ? ['--', ...args] : []),
+  ];
+}
+
 export function createKitWindowUrl(startUrl, kit, workspace, mode) {
   const url = new URL(startUrl);
   url.searchParams.set('session', workspace.sessionId);

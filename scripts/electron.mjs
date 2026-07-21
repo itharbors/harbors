@@ -6,6 +6,7 @@ import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'ele
 import { discoverKits } from './lib/kit-catalog.mjs';
 import {
   buildTrayTemplate,
+  createFrameworkArgs,
   createKitWindowUrl,
   openOrFocusKitWindow,
   parseElectronOptions,
@@ -17,7 +18,7 @@ const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.
 const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.svg', import.meta.url));
 const gatewayPort = parsePort(process.env.PORT, 8080);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
-const frameworkArgs = ['run', 'dev', ...(process.argv.slice(2).length > 0 ? ['--', ...process.argv.slice(2)] : [])];
+const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
 
 let frameworkProcess;
 let tray;

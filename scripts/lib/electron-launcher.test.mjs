@@ -1,12 +1,16 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
   buildTrayTemplate,
+  createFrameworkArgs,
   createKitWindowUrl,
   openOrFocusKitWindow,
   parseElectronOptions,
 } from './electron-launcher.mjs';
+
+const rootDir = new URL('../..', import.meta.url);
 
 test('parses default multi-Kit mode and retained --kit single mode', () => {
   assert.deepEqual(parseElectronOptions([]), { mode: 'multi', requestedKit: null });
@@ -24,6 +28,25 @@ test('rejects missing, duplicate and unknown Electron arguments', () => {
   assert.throws(() => parseElectronOptions(['--kit']), /requires/i);
   assert.throws(() => parseElectronOptions(['--kit=a', '--kit=b']), /only be specified once/i);
   assert.throws(() => parseElectronOptions(['--unknown']), /unknown Electron argument/i);
+});
+
+test('starts the Web stack without recursion and forwards single-Kit arguments', () => {
+  assert.deepEqual(createFrameworkArgs([]), ['run', 'dev:web']);
+  assert.deepEqual(createFrameworkArgs(['--kit', './kits/sqlite']), [
+    'run',
+    'dev:web',
+    '--',
+    '--kit',
+    './kits/sqlite',
+  ]);
+});
+
+test('keeps Electron as the default dev entry and Web as an explicit compatibility entry', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
+
+  assert.equal(packageJson.scripts.dev, 'npm run electron --');
+  assert.equal(packageJson.scripts['dev:web'], 'node scripts/dev.mjs');
+  assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
 });
 
 test('creates a per-Kit URL carrying stable session, Kit path and menu mode', () => {
