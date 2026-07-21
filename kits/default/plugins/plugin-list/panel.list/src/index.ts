@@ -196,11 +196,10 @@ function formatPluginName(name: string) {
   if (typeof name !== 'string' || name.length === 0) return 'unknown';
 
   const [scope, packageName] = name.split('/');
-  const shortScope = scope === '@itharbors' ? '@ce' : scope;
   const shortPackageName = packageName?.replace(/^plugin-/, '') ?? '';
 
-  if (!packageName) return shortScope;
-  return `${shortScope}/${shortPackageName}`;
+  if (!packageName) return scope;
+  return `${scope}/${shortPackageName}`;
 }
 
 async function selectPlugin(name: string) {

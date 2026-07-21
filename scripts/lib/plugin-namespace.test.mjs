@@ -1,35 +1,50 @@
 import assert from 'node:assert/strict';
-import { readdir, readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 const projectRoot = fileURLToPath(new URL('../..', import.meta.url));
-const forbiddenPrefixes = [
-  ['@', 'ce/'].join(''),
-  ['%40', 'ce%2F'].join(''),
-  ['%40', 'ce%2f'].join(''),
+const execFileAsync = promisify(execFile);
+const forbiddenNamespacePatterns = [
+  /@c[e](?:%2f|(?![a-z0-9._!~*'()%-]))/i,
+  /%40c[e](?:%2f|(?![a-z0-9._!~*'()%-]))/i,
 ];
-const excludedDirectories = new Set([
-  '.git',
-  '.worktrees',
-  'coverage',
-  'dist',
-  'node_modules',
-]);
-const textExtensions = new Set([
-  '.cjs',
-  '.html',
-  '.js',
-  '.json',
-  '.md',
-  '.mjs',
-  '.ts',
-]);
 
-test('all plugin package references use the itharbors namespace', async () => {
+test('legacy namespace detection respects package-name boundaries', () => {
+  const legacyScope = ['@', 'ce'].join('');
+  const encodedLegacyScope = ['%40', 'ce'].join('');
+
+  assert.equal(hasLegacyNamespace(`${legacyScope}/plugin`), true);
+  assert.equal(hasLegacyNamespace(`${legacyScope}\\/plugin`), true);
+  assert.equal(hasLegacyNamespace(`${legacyScope}%2Fplugin`), true);
+  assert.equal(hasLegacyNamespace(encodedLegacyScope), true);
+  assert.equal(hasLegacyNamespace(`${encodedLegacyScope}%2Fplugin`), true);
+  assert.equal(hasLegacyNamespace(`${legacyScope}nter/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${legacyScope}-tools/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${legacyScope}.tools/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${legacyScope}~tools/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${legacyScope}!tools/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${legacyScope}'tools/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${legacyScope}%7Etools/plugin`), false);
+  assert.equal(hasLegacyNamespace(`${encodedLegacyScope}%7Etools%2Fplugin`), false);
+});
+
+test('all tracked repository references use the itharbors namespace', async () => {
   const violations = [];
-  await visit(projectRoot, violations);
+  const { stdout } = await execFileAsync('git', ['ls-files', '-z'], {
+    cwd: projectRoot,
+    encoding: 'utf8',
+  });
+
+  for (const relativePath of stdout.split('\0').filter(Boolean)) {
+    const content = await readFile(path.join(projectRoot, relativePath), 'utf8');
+    if (!content.includes('\0') && hasLegacyNamespace(content)) {
+      violations.push(relativePath);
+    }
+  }
 
   assert.deepEqual(
     violations,
@@ -38,19 +53,6 @@ test('all plugin package references use the itharbors namespace', async () => {
   );
 });
 
-async function visit(directory, violations) {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    if (entry.isDirectory() && excludedDirectories.has(entry.name)) continue;
-    const absolutePath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      await visit(absolutePath, violations);
-      continue;
-    }
-    if (!entry.isFile() || !textExtensions.has(path.extname(entry.name))) continue;
-    const content = await readFile(absolutePath, 'utf8');
-    if (forbiddenPrefixes.some((prefix) => content.includes(prefix))) {
-      violations.push(path.relative(projectRoot, absolutePath));
-    }
-  }
+function hasLegacyNamespace(content) {
+  return forbiddenNamespacePatterns.some((pattern) => pattern.test(content));
 }
