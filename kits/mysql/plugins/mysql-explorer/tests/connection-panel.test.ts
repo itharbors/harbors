@@ -38,7 +38,7 @@ describe('MySQL connection panel', () => {
     vi.resetModules();
   });
 
-  it('renders the historical horizontal connection deck and all connection fields', async () => {
+  it('renders a two-tier connection deck without clipping controls in the fixed panel height', async () => {
     const request = vi.fn(async () => disconnected);
     const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
 
@@ -63,9 +63,14 @@ describe('MySQL connection panel', () => {
     expect(css).toContain('--ink: #07111d');
     expect(css).toContain('--deck: #0a1927');
     expect(css).toContain('--cyan: #76d0ec');
-    expect(css).toContain('--connection-deck-min-height: 70px');
+    expect(css).toContain('--connection-deck-min-height: 112px');
     expect(css).toMatch(/\.connection-shell\s*{[^}]*min-height:\s*var\(--connection-deck-min-height\);[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;/s);
     expect(css).toMatch(/\.connection-deck\s*{[^}]*height:\s*100%;[^}]*min-height:\s*var\(--connection-deck-min-height\);/s);
+    expect(css).toMatch(/\.connection-deck\s*{[^}]*grid-template-columns:\s*194px minmax\(720px, 1fr\);[^}]*grid-template-rows:\s*50px minmax\(18px, auto\);/s);
+    expect(css).toMatch(/\.brand-block\s*{[^}]*grid-row:\s*1 \/ -1;/s);
+    expect(css).toMatch(/\.connection-form\s*{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;/s);
+    expect(css).toMatch(/\.connection-form button\s*{[^}]*white-space:\s*nowrap;/s);
+    expect(css).toMatch(/\.connection-readout\s*{[^}]*grid-column:\s*2;[^}]*grid-row:\s*2;/s);
   });
 
   it('connects with host, port, user, password, database, and TLS, then clears the password', async () => {
