@@ -6,7 +6,7 @@
       "type": "panel-area",
       "layout": {
         "type": "vsplit",
-        "sizes": [78, 1],
+        "sizes": [112, 1],
         "children": [
           {
             "type": "leaf",

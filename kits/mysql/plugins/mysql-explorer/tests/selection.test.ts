@@ -28,6 +28,7 @@ describe('MySQL Explorer object snapshot owner', () => {
     const definition = await loadDefinition();
     const broadcast = vi.fn();
     const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getDatabases') return databaseList(2, 4);
       if (method === 'getSchema') {
         return {
           connectionRevision: 2,
@@ -56,6 +57,8 @@ describe('MySQL Explorer object snapshot owner', () => {
 
     const expectedSnapshot = {
       connected: true,
+      database: 'app',
+      databases: ['app'],
       connectionRevision: 2,
       schemaRevision: 4,
       objects: [
@@ -92,6 +95,96 @@ describe('MySQL Explorer object snapshot owner', () => {
     });
   });
 
+  it('publishes accessible databases without requesting schema for a server-level connection', async () => {
+    const definition = await loadDefinition();
+    const broadcast = vi.fn();
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getDatabases') {
+        return {
+          connectionRevision: 3,
+          schemaRevision: 3,
+          dataRevision: 3,
+          databases: ['app', 'mysql'],
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    definition.lifecycle?.load?.({ message: { request, broadcast } });
+
+    await expect(definition.methods.onConnectionChanged({
+      connected: true,
+      endpoint: 'db.local:3306',
+      database: null,
+      mysqlVersion: '8.4.1',
+      tls: false,
+      connectionRevision: 3,
+      schemaRevision: 3,
+      dataRevision: 3,
+    })).resolves.toEqual({
+      connected: true,
+      database: null,
+      databases: ['app', 'mysql'],
+      connectionRevision: 3,
+      schemaRevision: 3,
+      objects: [],
+      selection: { connectionRevision: 3, objectName: null },
+    });
+
+    expect(request).toHaveBeenCalledWith('@itharbors/mysql-core', 'getDatabases');
+    expect(request).not.toHaveBeenCalledWith('@itharbors/mysql-core', 'getSchema');
+    expect(broadcast).toHaveBeenCalledWith(OBJECTS_CHANGED_TOPIC, expect.objectContaining({
+      database: null,
+      databases: ['app', 'mysql'],
+    }));
+  });
+
+  it('selects a database through Core and returns the refreshed object snapshot', async () => {
+    const definition = await loadDefinition();
+    let revision = 1;
+    const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
+      expect(plugin).toBe('@itharbors/mysql-core');
+      if (method === 'getDatabases') return databaseList(revision, revision);
+      if (method === 'getSchema') {
+        return {
+          connectionRevision: revision,
+          schemaRevision: revision,
+          dataRevision: revision,
+          objects: [{ name: 'users', type: 'table', insertable: true }],
+        };
+      }
+      if (method === 'selectDatabase') {
+        expect(input).toEqual({ database: 'app' });
+        revision = 2;
+        return {
+          connected: true,
+          endpoint: 'db.local:3306',
+          database: 'app',
+          mysqlVersion: '8.4.1',
+          tls: false,
+          connectionRevision: revision,
+          schemaRevision: revision,
+          dataRevision: revision,
+        };
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
+    await definition.methods.onConnectionChanged({
+      connected: true,
+      database: null,
+      connectionRevision: 1,
+      schemaRevision: 1,
+    });
+
+    await expect(definition.methods.selectDatabase({ database: ' app ' })).resolves.toMatchObject({
+      database: 'app',
+      databases: ['app'],
+      connectionRevision: 2,
+      objects: [{ name: 'users', type: 'table', insertable: true }],
+      selection: { connectionRevision: 2, objectName: 'users' },
+    });
+  });
+
   it('preserves valid selection, repairs invalid selection, and ignores stale connection or refresh state', async () => {
     const definition = await loadDefinition();
     const broadcast = vi.fn();
@@ -105,10 +198,15 @@ describe('MySQL Explorer object snapshot owner', () => {
         { name: 'audit', type: 'view', insertable: false },
       ],
     };
-    const request = vi.fn(async () => schema);
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases'
+        ? databaseList(schema.connectionRevision, schema.schemaRevision)
+        : schema
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast } });
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 1,
       schemaRevision: 1,
     });
@@ -138,19 +236,17 @@ describe('MySQL Explorer object snapshot owner', () => {
     const pendingRefresh = definition.methods.refreshObjects();
     await definition.methods.onConnectionChanged({
       connected: false,
+      database: null,
       connectionRevision: 2,
       schemaRevision: 4,
     });
-    resolveSchema?.({
-      connectionRevision: 1,
-      schemaRevision: 99,
-      dataRevision: 99,
-      objects: [{ name: 'stale', type: 'table', insertable: true }],
-    });
+    resolveSchema?.(databaseList(1, 99));
     await pendingRefresh;
 
     const disconnectedSnapshot = {
       connected: false,
+      database: null,
+      databases: [],
       connectionRevision: 2,
       schemaRevision: 4,
       objects: [],
@@ -161,6 +257,7 @@ describe('MySQL Explorer object snapshot owner', () => {
 
     await definition.methods.onConnectionChanged({
       connected: false,
+      database: null,
       connectionRevision: 1,
       schemaRevision: 99,
     });
@@ -171,11 +268,14 @@ describe('MySQL Explorer object snapshot owner', () => {
     const definition = await loadDefinition();
     let resolveSchema: ((value: unknown) => void) | undefined;
     const schema = new Promise<unknown>((resolve) => { resolveSchema = resolve; });
-    const request = vi.fn(async () => schema);
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases' ? databaseList(3, 5) : schema
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
 
     const refresh = definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 3,
       schemaRevision: 5,
     });
@@ -205,6 +305,8 @@ describe('MySQL Explorer object snapshot owner', () => {
 
     const expected = {
       connected: true,
+      database: 'app',
+      databases: [],
       connectionRevision: 4,
       schemaRevision: 6,
       objects: [],
@@ -213,6 +315,7 @@ describe('MySQL Explorer object snapshot owner', () => {
     };
     await expect(definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 4,
       schemaRevision: 6,
     })).resolves.toEqual(expected);
@@ -225,8 +328,9 @@ describe('MySQL Explorer object snapshot owner', () => {
   it('keeps the last consistent snapshot when a schema-change refresh fails', async () => {
     const definition = await loadDefinition();
     let fail = false;
-    const request = vi.fn(async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
       if (fail) throw new Error('schema unavailable');
+      if (method === 'getDatabases') return databaseList(5, 7);
       return {
         connectionRevision: 5,
         schemaRevision: 7,
@@ -237,6 +341,7 @@ describe('MySQL Explorer object snapshot owner', () => {
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 5,
       schemaRevision: 7,
     });
@@ -259,13 +364,16 @@ describe('MySQL Explorer object snapshot owner', () => {
     let resolveSecond: ((value: unknown) => void) | undefined;
     const firstSchema = new Promise<unknown>((resolve) => { resolveFirst = resolve; });
     const secondSchema = new Promise<unknown>((resolve) => { resolveSecond = resolve; });
-    const request = vi.fn()
-      .mockImplementationOnce(async () => firstSchema)
-      .mockImplementationOnce(async () => secondSchema);
+    const schemas = [firstSchema, secondSchema];
+    let schemaRequest = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases' ? databaseList(6, 9) : schemas[schemaRequest++]
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
 
     const firstRefresh = definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 6,
       schemaRevision: 9,
     });
@@ -306,18 +414,20 @@ describe('MySQL Explorer object snapshot owner', () => {
     let resolveNewest: ((value: unknown) => void) | undefined;
     const oldSchema = new Promise<unknown>((_resolve, reject) => { rejectOld = reject; });
     const newestSchema = new Promise<unknown>((resolve) => { resolveNewest = resolve; });
-    const request = vi.fn()
-      .mockResolvedValueOnce({
+    const schemaResponses = [{
         connectionRevision: 9,
         schemaRevision: 1,
         dataRevision: 1,
         objects: [{ name: 'initial', type: 'table', insertable: true }],
-      })
-      .mockImplementationOnce(async () => oldSchema)
-      .mockImplementationOnce(async () => newestSchema);
+      }, oldSchema, newestSchema];
+    let schemaRequest = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases' ? databaseList(9, 1) : schemaResponses[schemaRequest++]
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 9,
       schemaRevision: 1,
     });
@@ -330,6 +440,8 @@ describe('MySQL Explorer object snapshot owner', () => {
     const newestRefresh = definition.methods.refreshObjects();
     const expected = {
       connected: true,
+      database: 'app',
+      databases: ['app'],
       connectionRevision: 9,
       schemaRevision: 3,
       objects: [{ name: 'latest', type: 'table', insertable: true }],
@@ -356,18 +468,20 @@ describe('MySQL Explorer object snapshot owner', () => {
     let resolveNewest: ((value: unknown) => void) | undefined;
     const oldSchema = new Promise<unknown>((_resolve, reject) => { rejectOld = reject; });
     const newestSchema = new Promise<unknown>((resolve) => { resolveNewest = resolve; });
-    const request = vi.fn()
-      .mockResolvedValueOnce({
+    const schemaResponses = [{
         connectionRevision: 10,
         schemaRevision: 1,
         dataRevision: 1,
         objects: [{ name: 'initial', type: 'table', insertable: true }],
-      })
-      .mockImplementationOnce(async () => oldSchema)
-      .mockImplementationOnce(async () => newestSchema);
+      }, oldSchema, newestSchema];
+    let schemaRequest = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases' ? databaseList(10, 1) : schemaResponses[schemaRequest++]
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 10,
       schemaRevision: 1,
     });
@@ -395,6 +509,8 @@ describe('MySQL Explorer object snapshot owner', () => {
 
     const expected = {
       connected: true,
+      database: 'app',
+      databases: ['app'],
       connectionRevision: 10,
       schemaRevision: 4,
       objects: [{ name: 'latest', type: 'table', insertable: true }],
@@ -417,17 +533,20 @@ describe('MySQL Explorer object snapshot owner', () => {
     const definition = await loadDefinition();
     let rejectSchema: ((reason?: unknown) => void) | undefined;
     const failingSchema = new Promise<unknown>((_resolve, reject) => { rejectSchema = reject; });
-    const request = vi.fn()
-      .mockResolvedValueOnce({
+    const schemaResponses = [{
         connectionRevision: 11,
         schemaRevision: 1,
         dataRevision: 1,
         objects: [{ name: 'users', type: 'table', insertable: true }],
-      })
-      .mockImplementationOnce(async () => failingSchema);
+      }, failingSchema];
+    let schemaRequest = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases' ? databaseList(11, 1) : schemaResponses[schemaRequest++]
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 11,
       schemaRevision: 1,
     });
@@ -458,10 +577,15 @@ describe('MySQL Explorer object snapshot owner', () => {
       dataRevision: 1,
       objects: [{ name: 'shared', type: 'table', insertable: true }],
     };
-    const request = vi.fn(async () => schema);
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getDatabases'
+        ? databaseList(schema.connectionRevision, schema.schemaRevision)
+        : schema
+    ));
     definition.lifecycle?.load?.({ message: { request, broadcast: vi.fn() } });
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 7,
       schemaRevision: 1,
     });
@@ -477,6 +601,7 @@ describe('MySQL Explorer object snapshot owner', () => {
     };
     await definition.methods.onConnectionChanged({
       connected: true,
+      database: 'app',
       connectionRevision: 8,
       schemaRevision: 2,
     });
@@ -487,3 +612,12 @@ describe('MySQL Explorer object snapshot owner', () => {
     });
   });
 });
+
+function databaseList(connectionRevision: number, schemaRevision: number) {
+  return {
+    connectionRevision,
+    schemaRevision,
+    dataRevision: schemaRevision,
+    databases: ['app'],
+  };
+}

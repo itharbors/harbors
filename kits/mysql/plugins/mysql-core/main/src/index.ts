@@ -98,6 +98,27 @@ async function schemaSnapshot(): Promise<unknown> {
   return isErrorEnvelope(result) ? result : withRevisions(result as object);
 }
 
+async function databasesSnapshot(): Promise<unknown> {
+  const result = await callService('getDatabases');
+  return isErrorEnvelope(result) ? result : withRevisions(result as object);
+}
+
+async function selectDatabase(input: unknown): Promise<unknown> {
+  const before = service.getConnectionState();
+  const result = await callService('selectDatabase', input);
+  if (isErrorEnvelope(result)) return result;
+  const next = result as ConnectionState;
+  if (before.database === next.database && before.endpoint === next.endpoint) {
+    return withRevisions(next);
+  }
+  connectionRevision += 1;
+  schemaRevision += 1;
+  dataRevision += 1;
+  const snapshot = withRevisions(next);
+  runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
+  return snapshot;
+}
+
 async function mutateData(method: string, input: unknown): Promise<unknown> {
   const result = await callService(method, input);
   if (isErrorEnvelope(result)) return result;
@@ -190,6 +211,8 @@ editor.plugin.define({
     getConnectionState: () => connectionSnapshot(),
     connect,
     disconnect,
+    getDatabases: () => databasesSnapshot(),
+    selectDatabase,
     getSchema: () => schemaSnapshot(),
     getObjectSchema: (input: unknown) => callService('getObjectSchema', input),
     getRelationshipGraph: () => callService('getRelationshipGraph'),

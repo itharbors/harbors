@@ -85,4 +85,60 @@ describe('MySQL Relationships panel',()=>{
     expect(css).toMatch(/\.relationship-canvas\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
     expect(css).toMatch(/\.relationship-details\s*\{[^}]*overflow:\s*auto/s);
   });
+
+  it('clears an error into a single visible retry request',async()=>{
+    let resolveRetry:((value:unknown)=>void)|undefined;
+    const pendingRetry=new Promise<unknown>((resolve)=>{resolveRetry=resolve;});
+    let graphRequests=0;
+    const request=vi.fn(async(plugin:string,method:string)=>{
+      if(plugin==='@itharbors/mysql-core'&&method==='getConnectionState')return{connected:true,endpoint:'db.local:3306',database:'app',mysqlVersion:'8.4.1',tls:false,connectionRevision:1,schemaRevision:2,dataRevision:3};
+      if(plugin==='@itharbors/mysql-core'&&method==='getRelationshipGraph'){
+        graphRequests+=1;
+        if(graphRequests===1)throw new Error('关系图读取失败');
+        return pendingRetry;
+      }
+      throw new Error(`Unexpected ${plugin}:${method}`);
+    });
+    const definition=(await import('../panel.relationships/src/index')).default as PanelDefinition;
+    await definition.mount({message:{request},panel:{openPanel:vi.fn()}});
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('关系图读取失败');
+
+    (document.querySelector('[data-action="retry"]') as HTMLButtonElement).click();
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在读取关系图…');
+    expect(document.querySelector('.activity-spinner')).not.toBeNull();
+    document.querySelector<HTMLButtonElement>('[data-action="retry"]')?.click();
+    expect(graphRequests).toBe(2);
+
+    resolveRetry?.(graph);
+    await vi.waitFor(()=>expect(document.querySelector('[data-relationship-table="users"]')).not.toBeNull());
+  });
+
+  it('shows table opening progress and blocks duplicate table requests',async()=>{
+    let resolveSelection:((value:unknown)=>void)|undefined;
+    const pendingSelection=new Promise<unknown>((resolve)=>{resolveSelection=resolve;});
+    const request=vi.fn(async(plugin:string,method:string,input?:unknown)=>{
+      if(plugin==='@itharbors/mysql-core'&&method==='getConnectionState')return{connected:true,endpoint:'db.local:3306',database:'app',mysqlVersion:'8.4.1',tls:false,connectionRevision:1,schemaRevision:2,dataRevision:3};
+      if(plugin==='@itharbors/mysql-core'&&method==='getRelationshipGraph')return graph;
+      if(plugin==='@itharbors/mysql-explorer'&&method==='selectObject')return pendingSelection;
+      throw new Error(`Unexpected ${plugin}:${method}:${String(input)}`);
+    });
+    const openPanel=vi.fn();
+    const definition=(await import('../panel.relationships/src/index')).default as PanelDefinition;
+    await definition.mount({message:{request},panel:{openPanel}});
+    const table=document.querySelector('[data-relationship-table="users"]') as HTMLElement;
+
+    table.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在打开 users…');
+    (document.querySelector('[data-relationship-table="users"]') as HTMLElement)
+      .dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+    expect(request.mock.calls.filter((call)=>call[1]==='selectObject')).toHaveLength(1);
+
+    resolveSelection?.({connectionRevision:1,objectName:'users'});
+    await vi.waitFor(()=>expect(openPanel).toHaveBeenCalledWith('@itharbors/mysql-schema.schema'));
+  });
 });
