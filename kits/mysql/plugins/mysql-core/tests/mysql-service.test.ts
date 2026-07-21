@@ -70,6 +70,57 @@ describe('MysqlService connection and schema', () => {
     expect(JSON.stringify(service.getConnectionState())).not.toContain('wrong-secret');
   });
 
+  it('connects at server level, lists accessible databases, and selects one atomically', async () => {
+    const driver = new FakeMysqlDriver();
+    const serverPool = driver.queuePool();
+    serverPool
+      .queueRows([['8.4.1', null]], fields('version', 'database'))
+      .queueRows([['app'], ['mysql']], fields('SCHEMA_NAME'));
+    const databasePool = driver.queuePool();
+    databasePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const service = new MysqlService(driver);
+
+    await expect(service.connect({ ...connectionInput, database: null })).resolves.toMatchObject({
+      connected: true,
+      database: null,
+    });
+    await expect(service.getDatabases()).resolves.toEqual({ databases: ['app', 'mysql'] });
+    expect(serverPool.queries.at(-1)?.sql).toContain('information_schema.SCHEMATA');
+
+    await expect(service.selectDatabase({ database: 'app' })).resolves.toMatchObject({
+      connected: true,
+      database: 'app',
+    });
+    expect(driver.inputs).toEqual([
+      { ...connectionInput, database: null },
+      connectionInput,
+    ]);
+    expect(serverPool.endCalls).toBe(1);
+    expect(databasePool.endCalls).toBe(0);
+    expect(JSON.stringify(service.getConnectionState())).not.toContain(connectionInput.password);
+
+    await service.selectDatabase({ database: 'app' });
+    expect(driver.pools).toHaveLength(2);
+  });
+
+  it('keeps the server connection when selecting a database fails', async () => {
+    const driver = new FakeMysqlDriver();
+    const serverPool = driver.queuePool();
+    serverPool.queueRows([['8.4.1', null]], fields('version', 'database'));
+    const rejectedPool = driver.queuePool();
+    rejectedPool.queueError(mysqlError('ER_BAD_DB_ERROR', 'Unknown database'));
+    const service = new MysqlService(driver);
+
+    await service.connect({ ...connectionInput, database: null });
+    await expect(service.selectDatabase({ database: 'missing' })).rejects.toMatchObject({
+      code: 'DATABASE_NOT_FOUND',
+    });
+
+    expect(service.getConnectionState()).toMatchObject({ connected: true, database: null });
+    expect(serverPool.endCalls).toBe(0);
+    expect(rejectedPool.endCalls).toBe(1);
+  });
+
   it('returns tables and views scoped to the connected database', async () => {
     const { service, pool } = await connectedService();
     pool.queueRows([

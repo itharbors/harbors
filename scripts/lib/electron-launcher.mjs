@@ -29,9 +29,7 @@ export function parseElectronOptions(args) {
     }
   }
 
-  return requestedKit
-    ? { mode: 'single', requestedKit }
-    : { mode: 'multi', requestedKit: null };
+  return { requestedKit };
 }
 
 export function createFrameworkArgs(args) {
@@ -42,11 +40,26 @@ export function createFrameworkArgs(args) {
   ];
 }
 
-export function createKitWindowUrl(startUrl, kit, workspace, mode) {
+export async function initializeKitHost(options, adapters) {
+  await adapters.createTray();
+  adapters.startFramework();
+  adapters.registerIpc();
+  if (options.requestedKit) {
+    await adapters.openKit(options.requestedKit);
+  }
+}
+
+export function showKitChooser(tray) {
+  if (!tray || tray.isDestroyed?.()) return false;
+  tray.popUpContextMenu();
+  return true;
+}
+
+export function createKitWindowUrl(startUrl, kit, workspace) {
   const url = new URL(startUrl);
   url.searchParams.set('session', workspace.sessionId);
   url.searchParams.set('kit', kit.directory);
-  url.searchParams.set('menuMode', mode);
+  url.searchParams.set('menuMode', 'multi');
   return url.href;
 }
 
@@ -72,11 +85,22 @@ export function buildTrayTemplate({ kits, workspaceRecords }, adapters) {
   ];
 }
 
-export async function openOrFocusKitWindow(kitName, registry, createWindow) {
+export async function openOrFocusKitWindow(kitName, registry, pendingLoads, createWindow) {
   let window = registry.get(kitName);
   if (!window || window.isDestroyed()) {
-    window = await createWindow(kitName);
-    registry.set(kitName, window);
+    let pending = pendingLoads.get(kitName);
+    if (!pending) {
+      pending = Promise.resolve(createWindow(kitName))
+        .then((createdWindow) => {
+          registry.set(kitName, createdWindow);
+          return createdWindow;
+        })
+        .finally(() => {
+          pendingLoads.delete(kitName);
+        });
+      pendingLoads.set(kitName, pending);
+    }
+    window = await pending;
   }
   if (window.isMinimized()) {
     window.restore();

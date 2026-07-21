@@ -28,8 +28,10 @@ npm install
 npm run dev
 ```
 
-该命令默认启动 Electron，并扫描 `kits/*` 中所有合法 Kit。每个 Kit 使用独立窗口、稳定
-session 和插件/Panel/消息管线；首个窗口可见，其余窗口预热隐藏，可从系统托盘打开或聚焦。
+该命令默认启动 Electron，并扫描 `kits/*` 中所有合法 Kit。启动后只显示系统托盘图标，
+不会自动打开默认 Kit。单击或右键托盘图标，从列表选择 Default、SQLite 或 MySQL；首次
+选择会按需创建稳定 session、独立窗口和插件/Panel/消息管线，之后再次选择只会打开或聚焦
+已有窗口。
 
 Electron 同时启动以下 Web 开发服务：
 
@@ -49,9 +51,21 @@ npm run dev:web
 
 浏览器访问 Gateway，而不是直接访问 Vite。Gateway 才能把 API 和 SSE 路由到 Server。
 
+Web 栈始终运行统一 Kit 主机，裸地址显示 Kit 选择页，并提供稳定直达地址：
+
+```text
+Kit 选择页   http://localhost:8080/
+Default Kit  http://localhost:8080/kits/default
+SQLite       http://localhost:8080/kits/sqlite
+MySQL        http://localhost:8080/kits/mysql
+```
+
+`/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
+已有 session 首次初始化后以其已加载 Kit 为准，不能通过替换 URL 中的 `kit` 隐式切换。
+
 开发脚本还会列出：
 
-- `/`：工作台；
+- `/`：Kit 选择页；
 - `/?page=layout-kit`：布局组件示例；
 - `/?page=ui-kit`：基础 UI 示例。
 
@@ -62,9 +76,11 @@ npm run dev -- --kit ./kits/default
 npm run dev -- --kit @itharbors/kit-default
 ```
 
-`--kit`、`--kit-path` 和 `--kitPath` 都被 Electron 启动脚本接受。指定后进入单 Kit 模式：
-只创建该 Kit 的窗口，并把菜单平铺到应用主菜单。路径必须包含有效 package；package name
-必须能在 Kit 目录中找到。
+`--kit`、`--kit-path` 和 `--kitPath` 都被 Electron 启动脚本接受。指定参数代表已经显式
+选择 Kit：服务就绪后只自动创建该 Kit 的窗口，其他 Kit 仍保留在 Tray 中并继续懒加载。
+Electron 窗口统一使用多 Kit 聚合菜单。路径必须包含有效 package；package name 必须能在
+Kit 目录中找到。外部路径会临时追加到 Catalog。Web 裸地址 `/` 始终显示选择页；开发脚本
+额外打印 `Requested Kit` 直达地址，供内置浏览器打开。
 
 ## Electron
 
@@ -72,9 +88,9 @@ npm run dev -- --kit @itharbors/kit-default
 npm run electron
 ```
 
-`npm run electron` 是默认开发入口的显式别名。Electron 启动 `npm run dev:web` 子进程，
-等待 Gateway 就绪后创建 BrowserWindow，不会递归启动桌面宿主。传给 Electron 的 Kit
-参数会继续转发给 Web 开发栈：
+`npm run electron` 是默认开发入口的显式别名。Electron 先显示托盘，再启动
+`npm run dev:web` 子进程；选择 Kit 后会等待 Gateway 就绪再创建 BrowserWindow，不会递归
+启动桌面宿主。传给 Electron 的 Kit 参数会继续转发给 Web 开发栈：
 
 ```bash
 npm run electron -- --kit ./kits/default

@@ -3,6 +3,8 @@ import {
   OBJECTS_CHANGED_TOPIC,
   SELECTION_CHANGED_TOPIC,
   unwrapMysqlResponse,
+  type ConnectionSnapshot,
+  type DatabasesSnapshot,
   type ObjectsSnapshot,
   type SchemaSnapshot,
   type SelectionSnapshot,
@@ -25,6 +27,7 @@ type SchemaObject = {
 
 type ConnectionEvent = {
   connected: boolean;
+  database: string | null;
   connectionRevision: number;
   schemaRevision: number;
 };
@@ -37,6 +40,8 @@ type RefreshState = {
 
 const DISCONNECTED_SNAPSHOT: ObjectsSnapshot<SchemaObject> = {
   connected: false,
+  database: null,
+  databases: [],
   connectionRevision: 0,
   schemaRevision: 0,
   objects: [],
@@ -95,6 +100,24 @@ async function refreshObjects(): Promise<ObjectsSnapshot<SchemaObject>> {
   return startRefresh(snapshot.selection.objectName);
 }
 
+async function selectDatabase(input: unknown): Promise<ObjectsSnapshot<SchemaObject>> {
+  if (!isRecord(input) || typeof input.database !== 'string' || input.database.trim() === '') {
+    throw new Error('数据库名称无效。');
+  }
+  if (!runtime) throw new Error('MySQL Explorer 尚未加载。');
+  const response = unwrapMysqlResponse<ConnectionSnapshot>(
+    await runtime.message.request(MYSQL_CORE, 'selectDatabase', { database: input.database.trim() }),
+  );
+  if (response.connectionRevision < snapshot.connectionRevision) return getObjectsSnapshot();
+  if (
+    response.connectionRevision === snapshot.connectionRevision
+    && response.database === snapshot.database
+  ) {
+    return activeRefresh?.pending ? awaitLatestRefresh(activeRefresh) : getObjectsSnapshot();
+  }
+  return onConnectionChanged(response);
+}
+
 async function startRefresh(preferredObjectName: string | null): Promise<ObjectsSnapshot<SchemaObject>> {
   const operation = performRefreshObjects(preferredObjectName);
   const refresh: RefreshState = {
@@ -139,28 +162,36 @@ async function performRefreshObjects(
   if (!snapshot.connected) return getObjectsSnapshot();
   const sequence = ++refreshSequence;
   const expectedConnectionRevision = snapshot.connectionRevision;
-  const schema = await getSchema();
+  const expectedDatabase = snapshot.database;
+  const databases = await getDatabases();
+  const schema = expectedDatabase === null ? null : await getSchema();
   if (
     sequence !== refreshSequence
     || !snapshot.connected
-    || schema.connectionRevision !== expectedConnectionRevision
+    || databases.connectionRevision !== expectedConnectionRevision
+    || (schema !== null && schema.connectionRevision !== expectedConnectionRevision)
     || snapshot.connectionRevision !== expectedConnectionRevision
-    || schema.schemaRevision < snapshot.schemaRevision
+    || snapshot.database !== expectedDatabase
+    || databases.schemaRevision < snapshot.schemaRevision
+    || (schema !== null && schema.schemaRevision < snapshot.schemaRevision)
   ) {
     return getObjectsSnapshot();
   }
 
-  const preferred = schema.objects.some((object) => object.name === preferredObjectName)
+  const objects = schema?.objects ?? [];
+  const preferred = objects.some((object) => object.name === preferredObjectName)
     ? preferredObjectName
-    : schema.objects.find((object) => object.type === 'table')?.name
-      ?? schema.objects[0]?.name
+    : objects.find((object) => object.type === 'table')?.name
+      ?? objects[0]?.name
       ?? null;
   snapshot = {
     connected: true,
-    connectionRevision: schema.connectionRevision,
-    schemaRevision: schema.schemaRevision,
-    objects: schema.objects.map((object) => ({ ...object })),
-    selection: { connectionRevision: schema.connectionRevision, objectName: preferred },
+    database: expectedDatabase,
+    databases: [...databases.databases],
+    connectionRevision: expectedConnectionRevision,
+    schemaRevision: Math.max(databases.schemaRevision, schema?.schemaRevision ?? 0),
+    objects: objects.map((object) => ({ ...object })),
+    selection: { connectionRevision: expectedConnectionRevision, objectName: preferred },
   };
   publishSelection();
   publishObjects();
@@ -182,6 +213,8 @@ async function onConnectionChanged(input: unknown): Promise<ObjectsSnapshot<Sche
   activeRefresh = null;
   snapshot = {
     connected: event.connected,
+    database: event.database,
+    databases: [],
     connectionRevision: event.connectionRevision,
     schemaRevision: event.schemaRevision,
     objects: [],
@@ -249,6 +282,12 @@ async function getSchema(): Promise<SchemaSnapshot<SchemaObject>> {
   return unwrapMysqlResponse<SchemaSnapshot<SchemaObject>>(response);
 }
 
+async function getDatabases(): Promise<DatabasesSnapshot> {
+  if (!runtime) throw new Error('MySQL Explorer 尚未加载。');
+  const response = await runtime.message.request(MYSQL_CORE, 'getDatabases');
+  return unwrapMysqlResponse<DatabasesSnapshot>(response);
+}
+
 function parseSelection(input: unknown): SelectionSnapshot {
   if (!isRecord(input) || !isRevision(input.connectionRevision)) {
     throw new Error('对象选择缺少有效的连接版本。');
@@ -264,10 +303,14 @@ function parseSelection(input: unknown): SelectionSnapshot {
 
 function parseConnectionEvent(input: unknown): ConnectionEvent {
   const event = parseRevisionEvent(input);
-  if (!isRecord(input) || typeof input.connected !== 'boolean') {
+  if (
+    !isRecord(input)
+    || typeof input.connected !== 'boolean'
+    || (input.database !== null && typeof input.database !== 'string')
+  ) {
     throw new Error('连接变化事件缺少连接状态。');
   }
-  return { ...event, connected: input.connected };
+  return { ...event, connected: input.connected, database: input.database as string | null };
 }
 
 function parseRevisionEvent(input: unknown): { connectionRevision: number; schemaRevision: number } {
@@ -287,6 +330,7 @@ function parseRevisionEvent(input: unknown): { connectionRevision: number; schem
 function cloneSnapshot(value: ObjectsSnapshot<SchemaObject>): ObjectsSnapshot<SchemaObject> {
   return {
     ...value,
+    databases: [...value.databases],
     objects: value.objects.map((object) => ({ ...object })),
     selection: { ...value.selection },
   };
@@ -317,6 +361,7 @@ editor.plugin.define({
     getSelection,
     getObjectsSnapshot,
     selectObject,
+    selectDatabase,
     refreshObjects,
     onConnectionChanged,
     onSchemaChanged,

@@ -27,7 +27,7 @@ describe('MySQL kit manifest', () => {
     expect(pkg['ce-editor'].kit.plugin).toEqual(pluginNames);
     expect(layout.windows[0].layout).toEqual({
       type: 'vsplit',
-      sizes: [78, 1],
+      sizes: [112, 1],
       children: [
         {
           type: 'leaf',
@@ -70,12 +70,17 @@ describe('MySQL kit manifest', () => {
     }
 
     const explorer = readJson(path.join(kitRoot, 'plugins/mysql-explorer/package.json'));
+    const core = readJson(path.join(kitRoot, 'plugins/mysql-core/package.json'));
+    expect(core['ce-editor'].contribute.message.request).toMatchObject({
+      getDatabases: ['getDatabases'],
+      selectDatabase: ['selectDatabase'],
+    });
     expect(explorer['ce-editor'].contribute.panel).toEqual({
       connection: {
         entry: './panel.connection/dist/index.html',
         title: 'MySQL 数据库连接',
         minWidth: 320,
-        minHeight: 78,
+        minHeight: 112,
         multiInstance: false,
       },
       explorer: {
@@ -90,6 +95,7 @@ describe('MySQL kit manifest', () => {
       getSelection: ['getSelection'],
       getObjectsSnapshot: ['getObjectsSnapshot'],
       refreshObjects: ['refreshObjects'],
+      selectDatabase: ['selectDatabase'],
       selectObject: ['selectObject'],
     });
     expect(explorer['ce-editor'].contribute.message.broadcast).toMatchObject({

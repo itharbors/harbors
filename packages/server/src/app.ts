@@ -19,9 +19,11 @@ import { createWindowEntryRouter } from './routes/window-entry';
 import { createWindowGroupRouter } from './routes/window-group';
 import type { AssemblyConfig, AssemblyConfigOverride } from './assembly/config';
 import { normalizeAssemblyConfig } from './assembly/config';
+import { discoverKitCatalog } from './assembly/kit-catalog';
 import { SessionRuntimeRegistry } from './session/runtime-registry';
 import { HttpError } from './http/errors';
 import { sendHttpError } from './http/json';
+import { createKitCatalogRouter } from './routes/kit-catalog';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
@@ -41,6 +43,7 @@ export function createApp(
     appOptions.assembly,
     appOptions.override,
   );
+  const kitCatalogPromise = discoverKitCatalog(assembly);
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
     const editor = createEditor(session.sessionId, {
         assembly,
@@ -99,8 +102,13 @@ export function createApp(
   });
   const editorMap = registry.editors as Map<string, Editor>;
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
+    const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
+    const catalogEntry = requestedKit
+      ? (await kitCatalogPromise).find((entry) => entry.name === requestedKit)
+      : undefined;
     await registry.getOrCreate(session.sessionId, {
       ...options,
+      ...(catalogEntry ? { kit: catalogEntry.directory } : {}),
       workspacePath: session.workspacePath,
     });
   }, async (sessionId) => {
@@ -119,6 +127,7 @@ export function createApp(
   const windowGroupRouter = createWindowGroupRouter(editorMap);
   const panelOpenRouter = createPanelOpenRouter(editorMap);
   const panelInstanceRouter = createPanelInstanceRouter(editorMap);
+  const kitCatalogRouter = createKitCatalogRouter(kitCatalogPromise);
 
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';
@@ -134,6 +143,11 @@ export function createApp(
       res.statusCode = 200;
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ status: 'ok', uptime: process.uptime() }));
+      return;
+    }
+
+    if (url === '/api/kits' || url.startsWith('/api/kits?') || url.startsWith('/kits/')) {
+      await kitCatalogRouter(req, res);
       return;
     }
 
@@ -223,6 +237,7 @@ const INDEX_HTML = `<!DOCTYPE html>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#111722">
   <title>ITHARBORS</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -234,7 +249,7 @@ const INDEX_HTML = `<!DOCTYPE html>
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      background: #1e1e1e;
+      background: #111722;
       color: #d4d4d4;
     }
     #app {
@@ -245,9 +260,7 @@ const INDEX_HTML = `<!DOCTYPE html>
   </style>
 </head>
 <body>
-  <div id="app">
-    <editor-app></editor-app>
-  </div>
+  <div id="app"></div>
   <script type="module" src="/assets/index.js"></script>
 </body>
 </html>`;

@@ -7,6 +7,7 @@ export async function discoverKits({ rootDir, requestedKit } = {}) {
   }
 
   const catalog = await discoverRepositoryKits(rootDir);
+  catalog.sort(compareKits);
   assertUniqueCatalog(catalog);
 
   if (!requestedKit) {
@@ -15,24 +16,42 @@ export async function discoverKits({ rootDir, requestedKit } = {}) {
 
   const packageMatch = catalog.find((kit) => kit.name === requestedKit);
   if (packageMatch) {
-    return [packageMatch];
+    return catalog;
   }
 
   const requestedPath = path.resolve(rootDir, requestedKit);
   const pathMatch = catalog.find((kit) => kit.directory === requestedPath);
   if (pathMatch) {
-    return [pathMatch];
+    return catalog;
   }
 
   const explicitEntry = await readKitEntry(requestedPath);
   if (explicitEntry.status === 'valid') {
-    return [explicitEntry.entry];
+    const combined = [...catalog, explicitEntry.entry].sort(compareKits);
+    assertUniqueCatalog(combined);
+    return combined;
   }
   if (explicitEntry.status === 'invalid') {
     throw new Error(`Invalid Kit manifest at ${requestedPath}: ${explicitEntry.reason}`);
   }
 
   throw new Error(`Requested Kit "${requestedKit}" not found`);
+}
+
+export function resolveRequestedKitName(catalog, requestedKit, rootDir) {
+  if (!requestedKit) return null;
+  const requestedPath = path.resolve(rootDir, requestedKit);
+  const match = catalog.find((kit) => (
+    kit.name === requestedKit || kit.directory === requestedPath
+  ));
+  if (!match) {
+    throw new Error(`Requested Kit "${requestedKit}" not found in Catalog`);
+  }
+  return match.name;
+}
+
+function compareKits(left, right) {
+  return left.label.localeCompare(right.label) || left.name.localeCompare(right.name);
 }
 
 async function discoverRepositoryKits(rootDir) {
