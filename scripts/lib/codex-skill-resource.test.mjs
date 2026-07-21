@@ -26,7 +26,7 @@ test('resolves the repository Skill in development and application resources whe
     resourcesPath: '/Applications/Harbors.app/Contents/Resources',
     rootDir: '/workspace/harbors',
   }), path.resolve(
-    '/workspace/harbors/kits/notifications/plugins/notification-center/main/dist/resources/notify-user',
+    '/workspace/harbors/kits/notifications/plugins/notification-background/main/dist/resources/notify-user',
   ));
 });
 

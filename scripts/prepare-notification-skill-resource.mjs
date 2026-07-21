@@ -10,7 +10,7 @@ const destinationDir = path.join(
   'kits',
   'notifications',
   'plugins',
-  'notification-center',
+  'notification-background',
   'main',
   'dist',
   'resources',

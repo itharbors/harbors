@@ -25,6 +25,9 @@ describe('Notification Kit manifest', () => {
     expect(pkg['ce-editor'].kit.plugin).toEqual([
       '@itharbors/notification-center',
     ]);
+    expect(pkg['ce-editor'].kit.startup.plugins).toEqual([
+      '@itharbors/notification-background',
+    ]);
     expect(pkg['ce-editor'].kit.layouts).toEqual({ default: 'layout.json' });
     expect(pkg['ce-editor'].kit.windowEntries).toEqual({
       main: 'main.html',
@@ -51,19 +54,12 @@ describe('Notification Kit manifest', () => {
     });
     expect(plugin['ce-editor'].contribute.message.request).toEqual({
       getSnapshot: ['getSnapshot'],
-      installCodexSkill: ['installCodexSkill'],
       markRead: ['markRead'],
       markAllRead: ['markAllRead'],
       removeNotification: ['removeNotification'],
       openCenterPanel: ['openCenterPanel'],
     });
-    expect(plugin['ce-editor'].contribute.menu).toContainEqual({
-      type: 'menu',
-      id: 'install-codex-notification-skill',
-      message: 'installCodexSkill',
-      order: 10,
-      label: 'Install or Update Codex Notification Skill…',
-    });
+    expect(JSON.stringify(plugin['ce-editor'].contribute.menu)).not.toContain('installCodexSkill');
     expect(mainEntry).toContain('<title>Notifications</title>');
     expect(secondaryEntry).toContain('<title>Notification Window</title>');
   });

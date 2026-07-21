@@ -19,6 +19,11 @@
         "main": "main.html",
         "secondary": "secondary.html"
       },
+      "startup": {
+        "plugins": [
+          "@itharbors/notification-background"
+        ]
+      },
       "plugin": [
         "@itharbors/notification-center"
       ],

@@ -17,7 +17,6 @@
       "message": {
         "request": {
           "getSnapshot": ["getSnapshot"],
-          "installCodexSkill": ["installCodexSkill"],
           "markRead": ["markRead"],
           "markAllRead": ["markAllRead"],
           "removeNotification": ["removeNotification"],
@@ -25,13 +24,6 @@
         }
       },
       "menu": [
-        {
-          "type": "menu",
-          "id": "install-codex-notification-skill",
-          "message": "installCodexSkill",
-          "order": 10,
-          "label": "Install or Update Codex Notification Skill…"
-        },
         {
           "type": "menu",
           "id": "view/panels/notification-center",

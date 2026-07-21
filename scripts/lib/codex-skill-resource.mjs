@@ -19,7 +19,7 @@ export function resolveCodexSkillSource({
         'kits',
         'notifications',
         'plugins',
-        'notification-center',
+        'notification-background',
         'main',
         'dist',
         'resources',
