@@ -77,7 +77,7 @@ HTTP Router
 
 `SessionRuntimeRegistry` 是 Session 持久数据和 Editor 运行时实例之间的唯一协调点。路由不再直接分别修改 `SessionManager` 和 `editorMap`。Editor 对外提供幂等 `dispose()`，内部模块的清理顺序由 Editor 负责。
 
-跨端数据结构由 `@ce/plugin-types` 提供。服务端生成 bootstrap、SSE 和 HTTP 响应，客户端只消费同一份协议类型。
+跨端数据结构由 `@itharbors/plugin-types` 提供。服务端生成 bootstrap、SSE 和 HTTP 响应，客户端只消费同一份协议类型。
 
 ## 6. 插件运行时与 Kit 事务
 
@@ -160,7 +160,7 @@ Kit 切换分为准备、替换、提交三个阶段：
 
 ## 8. 跨端协议
 
-`@ce/plugin-types` 成为以下结构的唯一权威来源：
+`@itharbors/plugin-types` 成为以下结构的唯一权威来源：
 
 - bootstrap snapshot；
 - Kit、布局、Window 和 Panel instance descriptor；

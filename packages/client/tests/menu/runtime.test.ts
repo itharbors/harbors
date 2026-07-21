@@ -61,12 +61,20 @@ describe('mountMenuRuntime', () => {
     const menuTree = [{ type: 'menu' as const, id: 'file', label: 'File', children: [] }];
     const runtime = mountMenuRuntime({
       sessionId: 's1',
+      menuMode: 'multi',
       menuTree,
+      applicationMenuTree: [{ type: 'menu', id: 'app', label: 'APP Menu', children: [] }],
+      kitMenuTree: [{ type: 'menu', id: 'kit', label: 'Kit Menu', children: [] }],
+      kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
     });
 
     expect(syncMenu).toHaveBeenCalledWith({
       sessionId: 's1',
+      menuMode: 'multi',
       menuTree,
+      applicationMenuTree: [{ type: 'menu', id: 'app', label: 'APP Menu', children: [] }],
+      kitMenuTree: [{ type: 'menu', id: 'kit', label: 'Kit Menu', children: [] }],
+      kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
     });
 
     await handler?.({ sessionId: 's1', menuId: 'file/new-session' });
@@ -89,7 +97,7 @@ describe('mountMenuRuntime', () => {
         result: {
           disposition: 'open-window-group',
           panelInstanceId: 'panel-1',
-          panelName: '@ce/log.log',
+          panelName: '@itharbors/log.log',
           windowGroupId: 'wg-1',
           carrier: 'window-group',
           url: '/api/window-entry/secondary?sessionId=s1&windowGroupId=wg-1',
@@ -111,7 +119,7 @@ describe('mountMenuRuntime', () => {
       type: 'ce-open-panel-result',
       payload: expect.objectContaining({
         panelInstanceId: 'panel-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
       }),
     }, '*');
   });
@@ -126,7 +134,7 @@ describe('mountMenuRuntime', () => {
           result: {
             disposition: 'open-window-group',
             panelInstanceId: 'panel-1',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             windowGroupId: 'wg-1',
             carrier: 'window-group',
             url: '/api/window-entry/secondary?sessionId=s1&windowGroupId=wg-1',
@@ -138,7 +146,7 @@ describe('mountMenuRuntime', () => {
         status: 200,
         json: async () => ({
           id: 'panel-1',
-          panelName: '@ce/log.log',
+          panelName: '@itharbors/log.log',
           state: 'open',
           carrier: 'floating',
           windowGroupId: null,
@@ -160,7 +168,7 @@ describe('mountMenuRuntime', () => {
       type: 'ce-open-panel-floating',
       payload: expect.objectContaining({
         id: 'panel-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
       }),
     }, '*');
   });

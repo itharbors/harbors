@@ -8,17 +8,17 @@ describe('floating-panel-layer', () => {
     layer.setAttribute('data-state', JSON.stringify([
       {
         id: 'p-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         title: 'Log',
-        src: '/api/assets/panel/%40ce%2Flog.log.html?sessionId=s1',
+        src: '/api/assets/panel/%40itharbors%2Flog.log.html?sessionId=s1',
         state: 'open',
         position: { x: 80, y: 60 },
       },
       {
         id: 'p-2',
-        panelName: '@ce/plugin-detail.detail',
+        panelName: '@itharbors/plugin-detail.detail',
         title: 'Detail',
-        src: '/api/assets/panel/%40ce%2Fplugin-detail.detail.html?sessionId=s1',
+        src: '/api/assets/panel/%40itharbors%2Fplugin-detail.detail.html?sessionId=s1',
         state: 'minimized',
         edge: 'left',
       },
@@ -44,18 +44,18 @@ describe('floating-panel-layer', () => {
     layer.setAttribute('data-state', JSON.stringify([
       {
         id: 'p-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         title: 'Log',
         titleKey: 'panel.log.title',
-        src: '/api/assets/panel/%40ce%2Flog.log.html?sessionId=s1',
+        src: '/api/assets/panel/%40itharbors%2Flog.log.html?sessionId=s1',
         state: 'open',
       },
       {
         id: 'p-2',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         title: 'Log',
         titleKey: 'panel.log.title',
-        src: '/api/assets/panel/%40ce%2Flog.log.html?sessionId=s1',
+        src: '/api/assets/panel/%40itharbors%2Flog.log.html?sessionId=s1',
         state: 'minimized',
       },
     ]));
@@ -88,16 +88,16 @@ describe('floating-panel-layer', () => {
     layer.setAttribute('data-state', JSON.stringify([
       {
         id: 'p-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         title: 'Log',
-        src: '/api/assets/panel/%40ce%2Flog.log.html?sessionId=s1',
+        src: '/api/assets/panel/%40itharbors%2Flog.log.html?sessionId=s1',
         state: 'open',
       },
       {
         id: 'p-2',
-        panelName: '@ce/plugin-detail.detail',
+        panelName: '@itharbors/plugin-detail.detail',
         title: 'Detail',
-        src: '/api/assets/panel/%40ce%2Fplugin-detail.detail.html?sessionId=s1',
+        src: '/api/assets/panel/%40itharbors%2Fplugin-detail.detail.html?sessionId=s1',
         state: 'minimized',
       },
     ]));

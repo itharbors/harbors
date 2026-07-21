@@ -1,5 +1,6 @@
-import type { MenuTreeNode } from '../core/session';
+import type { KitMenuRoot, MenuTreeNode } from '../core/session';
 import { onElectronMenuAction, openExternalUrl, syncElectronMenu } from '../electron/bridge';
+import type { ElectronMenuMode } from '../electron/types';
 
 interface MenuTriggerResponse {
   result?: unknown;
@@ -18,10 +19,23 @@ interface MenuOpenCurrentUrlResult {
   type: 'open-current-url';
 }
 
-export function mountMenuRuntime(input: { sessionId: string; menuTree: MenuTreeNode[] }): { dispose: () => void } {
+export interface MenuRuntimeInput {
+  sessionId: string;
+  menuMode?: ElectronMenuMode;
+  menuTree: MenuTreeNode[];
+  applicationMenuTree?: MenuTreeNode[];
+  kitMenuTree?: MenuTreeNode[];
+  kitMenuRoot?: KitMenuRoot | null;
+}
+
+export function mountMenuRuntime(input: MenuRuntimeInput): { dispose: () => void } {
   syncElectronMenu({
     sessionId: input.sessionId,
+    menuMode: input.menuMode ?? 'single',
     menuTree: input.menuTree,
+    applicationMenuTree: input.applicationMenuTree ?? [],
+    kitMenuTree: input.kitMenuTree ?? [],
+    kitMenuRoot: input.kitMenuRoot ?? null,
   });
 
   const dispose = onElectronMenuAction(async (payload) => {
@@ -49,6 +63,12 @@ export function mountMenuRuntime(input: { sessionId: string; menuTree: MenuTreeN
   });
 
   return { dispose };
+}
+
+export function getElectronMenuModeFromURL(): ElectronMenuMode {
+  return new URLSearchParams(window.location.search).get('menuMode') === 'multi'
+    ? 'multi'
+    : 'single';
 }
 
 async function handleMenuOpenPanelResult(sessionId: string, payload: MenuOpenPanelResult): Promise<void> {

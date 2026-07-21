@@ -1,5 +1,5 @@
 {
-  "name": "@ce/log",
+  "name": "@itharbors/log",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",

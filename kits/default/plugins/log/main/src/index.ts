@@ -33,7 +33,7 @@ editor.plugin.define({
   },
   methods: {
     openLogPanel() {
-      return runtime.window.openPanel('@ce/log.log');
+      return runtime.window.openPanel('@itharbors/log.log');
     },
     getLogs() {
       return [...logs];

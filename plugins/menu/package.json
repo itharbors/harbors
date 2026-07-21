@@ -1,5 +1,5 @@
 {
-  "name": "@ce/menu",
+  "name": "@itharbors/menu",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",

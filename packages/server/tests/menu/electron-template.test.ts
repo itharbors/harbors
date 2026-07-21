@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 // @ts-expect-error The Electron dev script is an ESM runtime entry without declarations.
-import { buildElectronMenuTemplate, configureElectronApp } from '../../../../scripts/electron.mjs';
+import { buildElectronMenuTemplate, buildMultiKitMenuTemplate, configureElectronApp } from '../../../../scripts/electron.mjs';
 
 describe('configureElectronApp', () => {
   it('disables hardware acceleration before Electron becomes ready', () => {
@@ -161,5 +161,61 @@ describe('buildElectronMenuTemplate', () => {
     expect(template[2].submenu.map((item: { role?: string }) => item.role)).toEqual(['reload', 'toggleDevTools', 'resetZoom', 'zoomIn', 'zoomOut', 'togglefullscreen']);
     expect(template[3].submenu.slice(0, 6).map((item: { role?: string }) => item.role)).toEqual(['copy', 'cut', 'paste', 'redo', 'undo', 'selectAll']);
     expect(template[3].submenu[6].role).toBeUndefined();
+  });
+});
+
+describe('buildMultiKitMenuTemplate', () => {
+  it('aggregates APP and Kit roots while routing each action to its own session', () => {
+    const sendToWindow = vi.fn();
+    const template = buildMultiKitMenuTemplate({
+      focusedSessionId: 'session-a',
+      sessions: [
+        {
+          sessionId: 'session-a',
+          applicationMenuTree: [{ type: 'menu', id: 'file', label: 'File', children: [] }],
+          kitMenuTree: [{ type: 'menu', id: 'a/action', label: 'Action A', children: [] }],
+          kitMenuRoot: { id: 'a', label: 'AKit' },
+        },
+        {
+          sessionId: 'session-b',
+          applicationMenuTree: [{ type: 'menu', id: 'file', label: 'File', children: [] }],
+          kitMenuTree: [{ type: 'menu', id: 'b/action', label: 'Action B', children: [] }],
+          kitMenuRoot: { id: 'b', label: 'BKit' },
+        },
+      ],
+    }, { sendToWindow });
+
+    expect(template.map((item: { label: string }) => item.label)).toEqual(['APP', 'AKit', 'BKit']);
+    template[0].submenu[0].click();
+    template[1].submenu[0].click();
+    template[2].submenu[0].click();
+    expect(sendToWindow.mock.calls).toEqual([
+      [{ sessionId: 'session-a', menuId: 'file' }],
+      [{ sessionId: 'session-a', menuId: 'a/action' }],
+      [{ sessionId: 'session-b', menuId: 'b/action' }],
+    ]);
+  });
+
+  it('renders an empty Kit root as a disabled submenu instead of a synthetic action', () => {
+    const sendToWindow = vi.fn();
+    const template = buildMultiKitMenuTemplate({
+      focusedSessionId: 'session-sqlite',
+      sessions: [
+        {
+          sessionId: 'session-sqlite',
+          applicationMenuTree: [{ type: 'menu', id: 'file', label: 'File', children: [] }],
+          kitMenuTree: [],
+          kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
+        },
+      ],
+    }, { sendToWindow });
+
+    expect(template[1]).toMatchObject({
+      label: 'SQLite',
+      enabled: false,
+      submenu: [],
+    });
+    expect(template[1].click).toBeUndefined();
+    expect(sendToWindow).not.toHaveBeenCalled();
   });
 });

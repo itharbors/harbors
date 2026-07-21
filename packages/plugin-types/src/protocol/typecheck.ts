@@ -18,6 +18,9 @@ const bootstrap: BootstrapInfo = {
   panelInstances: [],
   panels: [],
   menuTree: [],
+  applicationMenuTree: [],
+  kitMenuTree: [],
+  kitMenuRoot: null,
   i18n: {
     locale: 'zh-CN',
     defaultLocale: 'zh-CN',

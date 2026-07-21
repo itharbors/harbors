@@ -10,7 +10,7 @@ editor.plugin.define({
   },
   methods: {
     openTitlePanel() {
-      return runtime.window.openPanel('@ce/title-bar.title');
+      return runtime.window.openPanel('@itharbors/title-bar.title');
     },
     getTitle() {
       const activeKit = runtime.kit.getCurrent();

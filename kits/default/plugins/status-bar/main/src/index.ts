@@ -11,7 +11,7 @@ editor.plugin.define({
   },
   methods: {
     openStatusPanel() {
-      return runtime.window.openPanel('@ce/status-bar.status');
+      return runtime.window.openPanel('@itharbors/status-bar.status');
     },
     getStatus() {
       return {

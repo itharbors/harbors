@@ -1,8 +1,14 @@
-import type { MenuTreeNode } from '../core/session';
+import type { KitMenuRoot, MenuTreeNode } from '../core/session';
+
+export type ElectronMenuMode = 'single' | 'multi';
 
 export interface ElectronMenuSyncPayload {
   sessionId: string;
+  menuMode: ElectronMenuMode;
   menuTree: MenuTreeNode[];
+  applicationMenuTree: MenuTreeNode[];
+  kitMenuTree: MenuTreeNode[];
+  kitMenuRoot: KitMenuRoot | null;
 }
 
 export interface ElectronMenuActionPayload {

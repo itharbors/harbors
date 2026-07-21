@@ -3,6 +3,10 @@
   "version": "0.0.1",
   "ce-editor": {
     "kit": {
+      "menuRoot": {
+        "id": "default",
+        "label": "Default Kit"
+      },
       "layouts": {
         "default": "layout.json"
       },
@@ -11,12 +15,12 @@
         "secondary": "secondary.html"
       },
       "plugin": [
-        "@ce/log",
-        "@ce/message-debug",
-        "@ce/plugin-detail",
-        "@ce/plugin-list",
-        "@ce/status-bar",
-        "@ce/title-bar"
+        "@itharbors/log",
+        "@itharbors/message-debug",
+        "@itharbors/plugin-detail",
+        "@itharbors/plugin-list",
+        "@itharbors/status-bar",
+        "@itharbors/title-bar"
       ]
     }
   }

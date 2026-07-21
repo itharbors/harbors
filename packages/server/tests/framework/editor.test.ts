@@ -34,12 +34,14 @@ describe('createEditor', () => {
     expect(typeof editor.panel.register).toBe('function');
     expect(typeof editor.message.request).toBe('function');
     expect(typeof editor.kit.switchKit).toBe('function');
-    expect(Object.keys(editor.menu)).toEqual(['getState', 'trigger']);
+    expect(Object.keys(editor.menu)).toEqual(['getState', 'getApplicationState', 'getKitState', 'trigger']);
     expect(typeof editor.menu.getState).toBe('function');
+    expect(typeof editor.menu.getApplicationState).toBe('function');
+    expect(typeof editor.menu.getKitState).toBe('function');
     expect(typeof editor.menu.trigger).toBe('function');
   });
 
-  it('shares config shared scope across editors and isolates editor scope', () => {
+  it('isolates every config scope across workspace editors', () => {
     const left = createEditor('session-config-left', { assembly: testAssembly });
     const right = createEditor('session-config-right', { assembly: testAssembly });
 
@@ -49,7 +51,8 @@ describe('createEditor', () => {
     left.config.set('theme', 'dark', 'global');
     left.config.set('theme', 'light', 'project');
 
-    expect(right.config.get('theme')).toBe('dark');
+    expect(right.config.get('theme')).toBeUndefined();
+    expect(right.config.get('theme', 'global')).toBeUndefined();
     expect(right.config.get('theme', 'project')).toBeUndefined();
     expect(left.config.get('theme')).toBe('light');
   });
@@ -70,6 +73,7 @@ describe('createEditor', () => {
     await editor.kit.switchKit('@itharbors/kit-default');
 
     expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+    expect(editor.kit.getCurrent()?.menuRoot).toEqual({ id: 'default', label: 'Default Kit' });
   });
 
   it('loads the default kit when no kit is specified', async () => {
@@ -84,15 +88,15 @@ describe('createEditor', () => {
       state: 'open',
       panelInstanceIds: [],
     });
-    expect(editor.plugin.listLoaded()).toContain('@ce/status-bar');
-    expect(editor.plugin.listLoaded()).toContain('@ce/plugin-list');
-    expect(editor.plugin.listLoaded()).toContain('@ce/log');
-    expect(editor.plugin.listLoaded()).toContain('@ce/message-debug');
-    expect(editor.panel.getInfo('@ce/status-bar.status')).toMatchObject({
-      name: '@ce/status-bar.status',
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/status-bar');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/plugin-list');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/message-debug');
+    expect(editor.panel.getInfo('@itharbors/status-bar.status')).toMatchObject({
+      name: '@itharbors/status-bar.status',
     });
-    expect(editor.panel.getInfo('@ce/log.log')).toMatchObject({
-      name: '@ce/log.log',
+    expect(editor.panel.getInfo('@itharbors/log.log')).toMatchObject({
+      name: '@itharbors/log.log',
     });
   });
 
@@ -121,10 +125,10 @@ describe('createEditor', () => {
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
 
-    expect(editor.plugin.listLoaded()).toContain('@ce/panel');
-    expect(editor.plugin.listLoaded()).toContain('@ce/message');
-    expect(editor.plugin.listLoaded()).toContain('@ce/menu');
-    expect(editor.plugin.listLoaded()).toContain('@ce/config');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/panel');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/message');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/menu');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/config');
     expect(editor.plugin.listLoaded()).toContain('empty-plugin');
   });
 
@@ -154,7 +158,7 @@ describe('createEditor', () => {
 
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
-    await editor.plugin.unload('@ce/config');
+    await editor.plugin.unload('@itharbors/config');
 
     const spy = vi.spyOn(editor.message, 'broadcast');
 
@@ -167,8 +171,8 @@ describe('createEditor', () => {
   it('loads the default kit with built-in menu state', async () => {
     await editor.kit.load();
 
-    expect(editor.plugin.listLoaded()).toContain('@ce/menu');
-    expect(editor.plugin.getInfo('@ce/menu')?.path).toContain('/plugins/menu');
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/menu');
+    expect(editor.plugin.getInfo('@itharbors/menu')?.path).toContain('/plugins/menu');
     const state = editor.menu.getState();
 
     expect(state.tree).toEqual(expect.arrayContaining([
@@ -417,7 +421,7 @@ describe('createEditor', () => {
     await expect(editor.message.request('calc', 'double', 21)).resolves.toBe(42);
     editor.message.broadcast('@demo.assets.changed', { id: 1 });
 
-    const snapshot = await editor.message.request('@ce/message-debug', 'getSnapshot') as {
+    const snapshot = await editor.message.request('@itharbors/message-debug', 'getSnapshot') as {
       messages?: Array<{ type: string; payload: unknown }>;
     };
 
@@ -434,7 +438,7 @@ describe('createEditor', () => {
 
     await expect(editor.message.request('calc', 'ping')).resolves.toBe('pong');
 
-    const snapshot = await editor.message.request('@ce/message-debug', 'getSnapshot') as {
+    const snapshot = await editor.message.request('@itharbors/message-debug', 'getSnapshot') as {
       messages?: Array<{ type: string; payload: unknown }>;
     };
 
@@ -458,11 +462,11 @@ describe('createEditor', () => {
     const mainBefore = snapshotBefore.windows.find((w) => w.kind === 'main');
     expect(mainBefore).toBeDefined();
 
-    editor.kit.applyLayout({ type: 'leaf', panel: '@ce/status-bar.status' } as LayoutNode);
+    editor.kit.applyLayout({ type: 'leaf', panel: '@itharbors/status-bar.status' } as LayoutNode);
 
     const snapshotAfter = editor.window.getSnapshot();
     const mainAfter = snapshotAfter.windows.find((w) => w.kind === 'main');
-    expect(mainAfter?.layout).toEqual({ type: 'leaf', panel: '@ce/status-bar.status' });
+    expect(mainAfter?.layout).toEqual({ type: 'leaf', panel: '@itharbors/status-bar.status' });
   });
 
   it('applyLayout throws when there is no active kit', () => {
@@ -483,7 +487,7 @@ describe('createEditor', () => {
     expect(mainBefore).toBeDefined();
 
     // applyLayout should not throw
-    expect(() => editor.kit.applyLayout({ type: 'leaf', panel: '@ce/status-bar.status' } as LayoutNode)).not.toThrow();
+    expect(() => editor.kit.applyLayout({ type: 'leaf', panel: '@itharbors/status-bar.status' } as LayoutNode)).not.toThrow();
   });
 
   it('disposes plugins exactly once and rejects later mutations', async () => {

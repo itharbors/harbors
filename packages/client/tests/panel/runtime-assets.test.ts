@@ -3,8 +3,8 @@ import { createPanelAssetUrl, encodePanelAssetPath } from '../../src/panel/runti
 
 describe('createPanelAssetUrl', () => {
   it('creates plugin-owned asset URLs for the current panel session', () => {
-    expect(createPanelAssetUrl('@ce/scene-viewport', 'session 1', '/models/cube model.glb')).toBe(
-      '/api/assets/plugin/%40ce%2Fscene-viewport/models/cube%20model.glb?sessionId=session%201',
+    expect(createPanelAssetUrl('@itharbors/scene-viewport', 'session 1', '/models/cube model.glb')).toBe(
+      '/api/assets/plugin/%40itharbors%2Fscene-viewport/models/cube%20model.glb?sessionId=session%201',
     );
   });
 });

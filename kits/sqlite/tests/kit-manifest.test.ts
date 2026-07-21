@@ -14,6 +14,7 @@ describe('SQLite kit manifest', () => {
     const secondaryEntry = fs.readFileSync(path.join(kitRoot, 'secondary.html'), 'utf8');
 
     expect(pkg.name).toBe('@itharbors/kit-sqlite');
+    expect(pkg['ce-editor'].kit.menuRoot).toEqual({ id: 'sqlite', label: 'SQLite' });
     expect(pkg['ce-editor'].kit.plugin).toEqual([
       '@itharbors/sqlite-core',
       '@itharbors/sqlite-explorer',

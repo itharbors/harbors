@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { BrowserDispatchResultInput } from '@ce/plugin-types';
+import type { BrowserDispatchResultInput } from '@itharbors/plugin-types';
 import type { BrowserRequestBroker } from '../framework/browser-request-broker';
 import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';

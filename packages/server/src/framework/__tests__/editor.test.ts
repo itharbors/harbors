@@ -63,11 +63,11 @@ describe('panel plugin contributions', () => {
 
     await editor.kit.load('@itharbors/kit-default');
 
-    const opened = editor.window.openPanel('@ce/log.log');
+    const opened = editor.window.openPanel('@itharbors/log.log');
 
     expect(opened).toMatchObject({
       disposition: 'open-window-group',
-      panelName: '@ce/log.log',
+      panelName: '@itharbors/log.log',
       carrier: 'window-group',
     });
     expect(editor.window.getSnapshot().windows).toEqual(

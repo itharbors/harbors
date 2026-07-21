@@ -1,5 +1,5 @@
 {
-  "name": "@ce/plugin-detail",
+  "name": "@itharbors/plugin-detail",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",

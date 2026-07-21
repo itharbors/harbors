@@ -22,10 +22,10 @@ SessionManager 的 `getOrCreate` 负责持久元数据；`SessionRuntimeRegistry
 - PanelModule、MessageModule、MenuModule；
 - KitModule 与当前 Kit；
 - WindowManager；
-- editor 级 config layer 与 i18n 状态。
+- config 各层 store 与 i18n 状态。
 
-当前实现有一个显式例外：config 的 shared layer store 位于装配模块级，可被多个 Editor
-共享。新增共享状态应同样明确命名和约束，不能依赖全局变量的偶然可见性。
+即使配置层名为 shared/global，其可变 store 也只在当前 Editor 内共享，不跨 session。
+只有 Electron 的 KitCatalog、托盘、窗口注册表等明确的应用服务属于 application scope。
 
 ## Kit manifest
 
@@ -36,6 +36,10 @@ Kit package 的核心结构：
   "name": "@itharbors/kit-default",
   "ce-editor": {
     "kit": {
+      "menuRoot": {
+        "id": "default",
+        "label": "Default Kit"
+      },
       "layouts": {
         "default": "layout.json"
       },
@@ -44,8 +48,8 @@ Kit package 的核心结构：
         "secondary": "secondary.html"
       },
       "plugin": [
-        "@ce/log",
-        "@ce/plugin-list"
+        "@itharbors/log",
+        "@itharbors/plugin-list"
       ],
       "theme": {
         "--ce-bg-primary": "#1e1e1e"
@@ -58,6 +62,7 @@ Kit package 的核心结构：
 约束：
 
 - `name` 和 `ce-editor.kit` 必须存在。
+- `menuRoot.id` 和 `menuRoot.label` 必须是非空字符串；目录内 root id 必须唯一。
 - `layouts` 必须是对象且包含 `default`。
 - `windowEntries.main` 与 `secondary` 必须是非空字符串。
 - `plugin` 缺省为空数组。
@@ -71,11 +76,15 @@ Kit package 的核心结构：
 默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
 
+Electron 默认通过 KitCatalog 扫描 `kits/*`，为每个合法 Kit 创建独立稳定 session；
+`--kit <name-or-path>` 则只选择一个 Kit。缺失或损坏的持久 Kit 记录保留并在托盘标记为
+不可用，不会污染其他 Kit 的窗口和运行时。
+
 ## 插件范围
 
 ### 内置插件
 
-`@ce/panel`、`@ce/message`、`@ce/menu`、`@ce/config` 由 Editor 装配层确保装载。
+`@itharbors/panel`、`@itharbors/message`、`@itharbors/menu`、`@itharbors/config` 由 Editor 装配层确保装载。
 它们提供框架级贡献点，在 Kit 切换时保持可用。
 
 ### Kit 外部插件

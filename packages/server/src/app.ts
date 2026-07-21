@@ -64,10 +64,12 @@ export function createApp(
             window,
           });
         },
-        onMenuChanged: (_sessionId, state) => {
+        onMenuChanged: (_sessionId, state, applicationState, kitState) => {
           channel.broadcast(session.sessionId, {
             type: 'menu-changed',
             menuTree: state.tree,
+            applicationMenuTree: applicationState.tree,
+            kitMenuTree: kitState.tree,
           });
         },
     });
@@ -76,6 +78,8 @@ export function createApp(
           ...event,
           i18n: editor.i18n.getVisibleSnapshot(),
           menuTree: editor.menu.getState().tree,
+          applicationMenuTree: editor.menu.getApplicationState().tree,
+          kitMenuTree: editor.menu.getKitState().tree,
         });
     });
     try {

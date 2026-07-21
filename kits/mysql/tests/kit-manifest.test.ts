@@ -22,6 +22,7 @@ describe('MySQL kit manifest', () => {
     const secondaryEntry = fs.readFileSync(path.join(kitRoot, 'secondary.html'), 'utf8');
 
     expect(pkg.name).toBe('@itharbors/kit-mysql');
+    expect(pkg['ce-editor'].kit.menuRoot).toEqual({ id: 'mysql', label: 'MySQL' });
     expect(pkg.dependencies.mysql2).toBe('^3.23.0');
     expect(pkg['ce-editor'].kit.plugin).toEqual(pluginNames);
     expect(layout.windows[0].layout).toEqual({

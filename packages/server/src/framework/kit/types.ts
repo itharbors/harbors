@@ -1,7 +1,7 @@
 import type { LegacyWindowDescriptorInput, WindowDescriptor } from '../window/types';
-import type { KitWindowEntries } from '@ce/plugin-types';
+import type { KitMenuRoot, KitWindowEntries } from '@itharbors/plugin-types';
 
-export type { KitWindowEntries } from '@ce/plugin-types';
+export type { KitMenuRoot, KitWindowEntries } from '@itharbors/plugin-types';
 
 export interface KitLayoutConfig {
   windows: WindowDescriptor[];
@@ -17,6 +17,7 @@ export interface KitDescriptor {
   name: string;
   label?: string;
   icon?: string;
+  menuRoot: KitMenuRoot;
   theme?: Record<`--ce-${string}`, string>;
   plugins: string[];
   layouts: Record<string, KitLayoutConfig>;

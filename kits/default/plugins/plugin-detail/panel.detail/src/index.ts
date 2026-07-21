@@ -35,7 +35,7 @@ const definition: PanelDefinition = {
     if (!rootElement) throw new Error('Panel root element #panel-root not found');
 
     try {
-      const detail = await ctx.message.request('@ce/plugin-list', 'getSelectedPlugin');
+      const detail = await ctx.message.request('@itharbors/plugin-list', 'getSelectedPlugin');
       renderDetail(detail as PluginDetail | null);
     } catch (err) {
       renderError(err);

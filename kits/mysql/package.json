@@ -11,6 +11,10 @@
   },
   "ce-editor": {
     "kit": {
+      "menuRoot": {
+        "id": "mysql",
+        "label": "MySQL"
+      },
       "layouts": {
         "default": "layout.json"
       },

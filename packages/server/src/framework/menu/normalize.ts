@@ -216,7 +216,7 @@ export function buildMenuTreeWithActions(
         label: node.labelKey ? translate(node.labelKey) : (node.label ?? node.id.split('/').pop() ?? node.id),
         ...(node.labelKey === undefined ? {} : { labelKey: node.labelKey }),
         ...(node.message === undefined ? {} : { message: node.message }),
-        ...(node.message === undefined ? {} : { pluginName: source.pluginName }),
+        ...(node.message === undefined && node.role === undefined ? {} : { pluginName: source.pluginName }),
         ...(node.role === undefined ? {} : { role: node.role }),
         ...(node.accelerator === undefined ? {} : { accelerator: node.accelerator }),
         children: [],

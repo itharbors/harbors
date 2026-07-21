@@ -95,8 +95,10 @@ BrowserWindow 配置：
 - `nodeIntegration: false`；
 - preload 只暴露 `syncMenu`、`onMenuAction`、`openExternalUrl`。
 
-主进程会清洗菜单 payload，限制菜单 role，并只接受 HTTP(S) 外部 URL。页面和 Panel
-仍通过 Web 接口工作，不直接导入 Electron。
+菜单 payload 携带 combined/application/kit 三棵树、Kit 根和单/多 Kit 模式。主进程会清洗
+payload、限制菜单 role；单 Kit 直接使用 combined tree，多 Kit 聚合 `APP` 与各 Kit root，
+并按 session 路由动作。外部 URL 只接受 HTTP(S)。页面和 Panel 仍通过 Web 接口工作，
+不直接导入 Electron。
 
 ## UI 变更准则
 

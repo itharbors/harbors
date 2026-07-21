@@ -26,7 +26,7 @@ const definition: PanelDefinition = {
     rootElement.innerHTML = '';
     rootElement.append(createToolbar(), createList());
 
-    const logs = await ctx.message.request('@ce/log', 'getLogs');
+    const logs = await ctx.message.request('@itharbors/log', 'getLogs');
     renderLogs(Array.isArray(logs) ? logs : []);
   },
   methods: {
@@ -49,7 +49,7 @@ function createToolbar() {
   const add = document.createElement('button');
   add.textContent = 'Add sample';
   add.addEventListener('click', () => {
-    void context.message.request('@ce/log', 'appendLog', {
+    void context.message.request('@itharbors/log', 'appendLog', {
       level: 'info',
       message: 'Sample log from panel',
       meta: { source: context.panelKey },
@@ -59,7 +59,7 @@ function createToolbar() {
   const clear = document.createElement('button');
   clear.textContent = 'Clear';
   clear.addEventListener('click', () => {
-    void context.message.request('@ce/log', 'clearLogs');
+    void context.message.request('@itharbors/log', 'clearLogs');
   });
 
   toolbar.append(title, add, clear);

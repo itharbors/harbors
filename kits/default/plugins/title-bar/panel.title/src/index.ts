@@ -41,7 +41,7 @@ async function refreshTitle() {
   if (!context || !rootElement) return;
 
   try {
-    const title = await context.message.request('@ce/title-bar', 'getTitle') as TitlePayload;
+    const title = await context.message.request('@itharbors/title-bar', 'getTitle') as TitlePayload;
     renderTitle(title);
   } catch (err) {
     rootElement.innerHTML = '';

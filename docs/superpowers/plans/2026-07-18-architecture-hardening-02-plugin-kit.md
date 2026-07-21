@@ -203,7 +203,7 @@ await expect(editor.kit.switchKit(failingKit.path)).rejects.toThrow('bad plugin 
 
 expect(editor.kit.getCurrent()).toEqual(previousKit);
 expect(editor.window.getSnapshot()).toEqual(previousSnapshot);
-expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@ce/log']));
+expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@itharbors/log']));
 expect(editor.isUsable()).toBe(true);
 ```
 

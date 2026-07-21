@@ -16,7 +16,7 @@ const messagesContainer = document.getElementById('messages');
 const definition: PanelDefinition = {
   async mount(ctx) {
     try {
-      const snapshot = await ctx.message.request('@ce/message-debug', 'getSnapshot');
+      const snapshot = await ctx.message.request('@itharbors/message-debug', 'getSnapshot');
       renderSnapshot(snapshot as MessageSnapshot);
     } catch (err) {
       renderError(err);

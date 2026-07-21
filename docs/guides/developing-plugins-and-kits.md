@@ -196,6 +196,10 @@ kits/my-kit/
   "version": "0.0.1",
   "ce-editor": {
     "kit": {
+      "menuRoot": {
+        "id": "my-kit",
+        "label": "My Kit"
+      },
       "layouts": {
         "default": "layout.json"
       },
@@ -214,7 +218,8 @@ kits/my-kit/
 }
 ```
 
-`default` layout 与两个 window entry 是必需项。Kit 下的插件仍需先生成 dist。
+`menuRoot`、`default` layout 与两个 window entry 是必需项。单 Kit 启动时忽略 menuRoot 并
+平铺菜单；多 Kit 启动时 menuRoot label 成为顶层菜单名。Kit 下的插件仍需先生成 dist。
 
 ### layout
 

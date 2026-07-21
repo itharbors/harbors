@@ -5,26 +5,29 @@ import {
   type BrowserOpenPanelResult,
   type SSEEnvelope,
   type SessionInfo,
-} from '@ce/plugin-types';
+} from '@itharbors/plugin-types';
 import type { ClientSession } from './session';
 
 export type OpenPanelResult = BrowserOpenPanelResult;
 
+interface EditorTransportOptions {
+  kit?: string;
+}
+
 export class EditorTransport {
   private eventSource: EventSource | null = null;
 
-  constructor(private session: ClientSession) {}
+  constructor(
+    private session: ClientSession,
+    private options: EditorTransportOptions = {},
+  ) {}
 
   async fetchSessionInfo(): Promise<SessionInfo> {
     let resp = await fetch(`/api/session/${this.session.sessionId}`);
 
     // Auto-create session on server if it doesn't exist yet
     if (resp.status === 404) {
-      resp = await fetch('/api/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: this.session.sessionId }),
-      });
+      resp = await this.createSession();
     }
 
     if (!resp.ok) {
@@ -66,7 +69,10 @@ export class EditorTransport {
     return fetch('/api/session', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: this.session.sessionId }),
+      body: JSON.stringify({
+        sessionId: this.session.sessionId,
+        ...(this.options.kit ? { kit: this.options.kit } : {}),
+      }),
     });
   }
 
@@ -201,6 +207,10 @@ function toError(error: unknown): Error {
 export function getSessionIdFromURL(): string {
   const params = new URLSearchParams(window.location.search);
   return params.get('session') || params.get('sessionId') || '';
+}
+
+export function getKitFromURL(): string {
+  return new URLSearchParams(window.location.search).get('kit') || '';
 }
 
 function delay(ms: number): Promise<void> {

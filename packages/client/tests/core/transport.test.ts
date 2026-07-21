@@ -106,6 +106,31 @@ describe('EditorTransport', () => {
     expect(info.workspacePath).toBe('/home/user');
   });
 
+  it('uses the window Kit when creating its stable Electron session', async () => {
+    transport = new EditorTransport(session, { kit: '/repo/kits/sqlite' });
+    fetchSpy
+      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 201,
+        json: async () => ({
+          sessionId: 'test-session-123',
+          workspacePath: '',
+          savedFileList: [],
+          createdAt: 1000,
+          lastAccessAt: 1000,
+        }),
+      } as Response);
+
+    await transport.fetchSessionInfo();
+
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/session', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'test-session-123', kit: '/repo/kits/sqlite' }),
+    });
+  });
+
   it('fetchSessionInfo returns existing session without POST', async () => {
     const existingSession = new ClientSession('existing-session');
     const existingTransport = new EditorTransport(existingSession);
@@ -269,19 +294,19 @@ describe('EditorTransport', () => {
       json: async () => ({
         disposition: 'open-window-group',
         panelInstanceId: 'panel-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         windowGroupId: 'group-1',
         carrier: 'window-group',
         url: '/api/window-entry/secondary?sessionId=test-session-123&windowGroupId=group-1',
       }),
     } as Response);
 
-    const result = await transport.openPanel('@ce/log.log');
+    const result = await transport.openPanel('@itharbors/log.log');
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/panel/open', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'test-session-123', panelName: '@ce/log.log' }),
+      body: JSON.stringify({ sessionId: 'test-session-123', panelName: '@itharbors/log.log' }),
     });
     expect(result.windowGroupId).toBe('group-1');
   });
@@ -308,7 +333,7 @@ describe('EditorTransport', () => {
       status: 200,
       json: async () => ({
         id: 'panel-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         carrier: 'floating',
         state: 'open',
         windowGroupId: null,
