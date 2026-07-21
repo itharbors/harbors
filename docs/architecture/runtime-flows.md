@@ -34,6 +34,11 @@ sequenceDiagram
 单 Kit 菜单模式。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听
 8080，Server 监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
 
+Web 客户端启动时先读取 `GET /api/kits`。多 Kit 裸根地址只显示 Catalog 选择页，不进入
+SessionManager；稳定路径 `/kits/<id>` 由 Server 精确匹配公开 id 后重定向到
+`/?kit=<package-name>`。带 `session`、`sessionId` 或 `kit` 的地址直接进入现有 Editor
+初始化路径。单 Kit 模式的裸根地址也直接进入 Editor，保持显式 `--kit` 的开发调试行为。
+
 ## 2. 会话创建与 bootstrap
 
 ```mermaid

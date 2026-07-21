@@ -70,6 +70,42 @@ describe('Framework Integration', () => {
     expect(data.panels.some((panel: { name: string }) => panel.name === 'test.editor')).toBe(true);
   });
 
+  it('GET /api/kits exposes the multi-Kit catalog without creating a session', async () => {
+    const before = editorMap.size;
+
+    const resp = await fetch(`${baseURL}/api/kits`);
+    const data = await resp.json();
+
+    expect(resp.status).toBe(200);
+    expect(data.mode).toBe('multi');
+    expect(data.kits).toEqual(expect.arrayContaining([
+      { id: 'default', name: '@itharbors/kit-default', label: 'Default Kit' },
+      { id: 'sqlite', name: '@itharbors/kit-sqlite', label: 'SQLite' },
+      { id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' },
+    ]));
+    expect(data.kits.every((kit: Record<string, unknown>) => !('directory' in kit))).toBe(true);
+    expect(editorMap.size).toBe(before);
+  });
+
+  it('single-Kit mode exposes only the explicitly selected Kit', async () => {
+    const server = createServer({
+      defaultKit: '@itharbors/kit-mysql',
+      kitMode: 'single',
+    });
+    const customPort = await server.start(0);
+    try {
+      const resp = await fetch(`http://localhost:${customPort}/api/kits`);
+      expect(resp.status).toBe(200);
+      await expect(resp.json()).resolves.toEqual({
+        mode: 'single',
+        kits: [{ id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' }],
+      });
+      expect(server.editorMap.size).toBe(0);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('GET /api/bootstrap/:sessionId returns session-specific menuTree without leaking menu state across sessions', async () => {
     await createSession('menu-a');
     await createSession('menu-b');

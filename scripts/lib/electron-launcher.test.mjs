@@ -13,6 +13,7 @@ import {
   selectMenuWindow,
   showKitChooser,
 } from './electron-launcher.mjs';
+import { createDevPages, createDevServerEnv } from './dev-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
 
@@ -42,6 +43,30 @@ test('starts the Web stack without recursion and forwards single-Kit arguments',
     '--',
     '--kit',
     './kits/sqlite',
+  ]);
+});
+
+test('passes an explicit Kit host mode to the Web server without leaking stale defaults', () => {
+  const base = { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' };
+
+  assert.deepEqual(createDevServerEnv(base, ''), {
+    PATH: '/bin',
+    CE_KIT_MODE: 'multi',
+  });
+  assert.deepEqual(createDevServerEnv(base, '@itharbors/kit-mysql'), {
+    PATH: '/bin',
+    CE_DEFAULT_KIT: '@itharbors/kit-mysql',
+    CE_KIT_MODE: 'single',
+  });
+  assert.deepEqual(base, { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' });
+});
+
+test('prints the chooser as the multi-Kit Web root and the editor as the single-Kit root', () => {
+  assert.deepEqual(createDevPages('multi')[0], ['Kit chooser', '/']);
+  assert.deepEqual(createDevPages('single')[0], ['Editor', '/']);
+  assert.deepEqual(createDevPages('multi').slice(1), [
+    ['Layout Kit', '/?page=layout-kit'],
+    ['UI Kit', '/?page=ui-kit'],
   ]);
 });
 

@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
+import { createDevPages, createDevServerEnv } from './lib/dev-launcher.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -18,22 +19,15 @@ if (parsed.errors.length > 0) {
 
 const defaultKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const serverEnv = { ...baseEnv };
+const serverEnv = createDevServerEnv(baseEnv, defaultKit);
 const gatewayPort = parsePort(baseEnv.PORT, 8080);
-const devPages = [
-  ['Editor', '/'],
-  ['Layout Kit', '/?page=layout-kit'],
-  ['UI Kit', '/?page=ui-kit'],
-];
-
-if (defaultKit) {
-  serverEnv.CE_DEFAULT_KIT = defaultKit;
-}
+const devPages = createDevPages(serverEnv.CE_KIT_MODE);
 
 console.log('Starting ITHARBORS dev stack');
 if (defaultKit) {
   console.log(`Default kit: ${defaultKit}`);
 }
+console.log(`Kit host mode: ${serverEnv.CE_KIT_MODE}`);
 printDevPages(gatewayPort, devPages);
 
 const children = [

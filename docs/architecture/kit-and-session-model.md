@@ -82,6 +82,16 @@ sessionId 并加载对应窗口；未选择的 Kit 不创建新 workspace、Serv
 `--kit <name-or-path>` 代表显式选择，因此只对指定 Kit 进入同一按需加载路径。缺失或损坏的
 持久 Kit 记录保留并在托盘标记为不可用，不会污染其他 Kit 的窗口和运行时。
 
+Web 主机通过 `GET /api/kits` 读取同一 assembly 边界内的公开 Catalog 投影，只返回
+`id`、`name` 和 `label`，不暴露本地目录、manifest 路径或插件列表。多 Kit 模式的裸根页面
+只渲染选择器，不创建 session；`/kits/<menuRoot.id>` 重定向到现有 `?kit=<package-name>`
+加载路径。单 Kit 模式的 Catalog 只包含显式 Kit，裸根页面继续直接创建或恢复该 Kit 的
+session。
+
+Kit 选择器生成的新浏览器 session 与 Electron Workspace session 采用同一隔离模型，但不
+写入 Electron 的 WorkspaceStore。session 一旦建立 runtime，其 Kit 即为该 session 的权威
+状态；URL 中后续出现的其他 Kit 参数不会触发隐式切换。
+
 ## 插件范围
 
 ### 内置插件

@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { selectGatewayTarget } from './routing';
 
 const PORT = parseInt(process.env.PORT || '8080', 10);
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '3000', 10);
@@ -37,14 +38,7 @@ function proxy(req: http.IncomingMessage, res: http.ServerResponse, targetPort: 
 const server = http.createServer((req, res) => {
   const url = req.url || '/';
 
-  // API and SSE go to editor server
-  if (url.startsWith('/api/') || url.startsWith('/sse/')) {
-    proxy(req, res, SERVER_PORT);
-    return;
-  }
-
-  // Static assets and HTML
-  if (IS_PROD) {
+  if (selectGatewayTarget(url, IS_PROD) === 'server') {
     proxy(req, res, SERVER_PORT);
   } else {
     proxy(req, res, CLIENT_PORT);

@@ -51,9 +51,21 @@ npm run dev:web
 
 浏览器访问 Gateway，而不是直接访问 Vite。Gateway 才能把 API 和 SSE 路由到 Server。
 
+不带 `--kit` 时 Web 栈运行在多 Kit 模式，裸地址显示 Kit 选择页，并提供稳定直达地址：
+
+```text
+Kit 选择页   http://localhost:8080/
+Default Kit  http://localhost:8080/kits/default
+SQLite       http://localhost:8080/kits/sqlite
+MySQL        http://localhost:8080/kits/mysql
+```
+
+`/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
+已有 session 首次初始化后以其已加载 Kit 为准，不能通过替换 URL 中的 `kit` 隐式切换。
+
 开发脚本还会列出：
 
-- `/`：工作台；
+- `/`：多 Kit 选择页，或单 Kit 工作台；
 - `/?page=layout-kit`：布局组件示例；
 - `/?page=ui-kit`：基础 UI 示例。
 
@@ -66,7 +78,8 @@ npm run dev -- --kit @itharbors/kit-default
 
 `--kit`、`--kit-path` 和 `--kitPath` 都被 Electron 启动脚本接受。指定参数代表已经显式
 选择 Kit：服务就绪后只创建该 Kit 的窗口，并把菜单平铺到应用主菜单。路径必须包含有效
-package；package name 必须能在 Kit 目录中找到。
+package；package name 必须能在 Kit 目录中找到。此时 Web 裸地址 `/` 也直接打开指定 Kit，
+不会显示多 Kit 选择页。
 
 ## Electron
 
