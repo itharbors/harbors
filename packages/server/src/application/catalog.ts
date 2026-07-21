@@ -118,7 +118,7 @@ async function readKitDeclaration(
   const name = isRecord(manifest) ? manifest.name : undefined;
   const editorConfig = isRecord(manifest) ? manifest['ce-editor'] : undefined;
   const kit = isRecord(editorConfig) ? editorConfig.kit : undefined;
-  if (typeof name !== 'string' || !isRecord(kit)) {
+  if (!isNonEmptyString(name) || !isRecord(kit)) {
     diagnostics.push({
       code: 'INVALID_KIT_MANIFEST',
       message: `Kit at ${kitPath} must define name and ce-editor.kit`,
@@ -126,6 +126,23 @@ async function readKitDeclaration(
     return undefined;
   }
   const startup = kit.startup;
+  if (startup !== undefined && !isRecord(startup)) {
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: name,
+      message: `Kit "${name}" startup must be an object`,
+    });
+    return undefined;
+  }
+  const shellValidationError = validateKitShell(kit);
+  if (shellValidationError) {
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: name,
+      message: `Kit "${name}" ${shellValidationError}`,
+    });
+    return undefined;
+  }
   const startupPlugins = isRecord(startup) ? startup.plugins : undefined;
   if (startupPlugins === undefined) {
     return { name, path: kitPath, startupPlugins: [] };
@@ -161,6 +178,20 @@ async function readKitDeclaration(
   return { name, path: kitPath, startupPlugins };
 }
 
+function validateKitShell(kit: Record<string, unknown>): string | undefined {
+  const menuRoot = kit.menuRoot;
+  if (!isRecord(menuRoot) || !isNonEmptyString(menuRoot.id)) return 'menuRoot.id is required';
+  if (!isNonEmptyString(menuRoot.label)) return 'menuRoot.label is required';
+  const layouts = kit.layouts;
+  if (!isRecord(layouts) || !isNonEmptyString(layouts.default)) return 'layouts.default is required';
+  const windowEntries = kit.windowEntries;
+  if (!isRecord(windowEntries) || !isNonEmptyString(windowEntries.main)) {
+    return 'windowEntries.main is required';
+  }
+  if (!isNonEmptyString(windowEntries.secondary)) return 'windowEntries.secondary is required';
+  return undefined;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
@@ -168,6 +199,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value)
     && value.every((item) => typeof item === 'string' && item.trim().length > 0);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
 }
 
 function errorMessage(error: unknown): string {

@@ -54,6 +54,9 @@ describe('discoverApplicationPlugins', () => {
       name,
       'ce-editor': {
         kit: {
+          menuRoot: { id: `${dirName}-root`, label: dirName },
+          layouts: { default: 'default' },
+          windowEntries: { main: 'main', secondary: 'secondary' },
           startup: { plugins: startupPlugins },
           plugin: ordinaryPlugins,
         },
@@ -124,6 +127,40 @@ describe('discoverApplicationPlugins', () => {
     expect(result.diagnostics.map((item) => item.code)).toEqual([
       'INVALID_STARTUP_PLUGINS',
       'STARTUP_PLUGIN_OVERLAP',
+    ]);
+  });
+
+  it('does not execute startup plugins from a Kit rejected by the desktop catalog', async () => {
+    const pluginPath = createPlugin(assembly.pluginsDir, 'background', '@scope/background');
+    const kitDir = createKit('invalid-shell', '@scope/invalid-shell', ['@scope/background']);
+    const manifestPath = path.join(kitDir, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    delete manifest['ce-editor'].kit.windowEntries.secondary;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).not.toContainEqual(expect.objectContaining({ path: pluginPath }));
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'INVALID_KIT_MANIFEST', kit: '@scope/invalid-shell' }),
+    ]);
+  });
+
+  it('rejects malformed startup objects and whitespace-only Kit names', async () => {
+    createPlugin(assembly.pluginsDir, 'background', '@scope/background');
+    const malformedDir = createKit('malformed-startup', '@scope/malformed', ['@scope/background']);
+    const malformedPath = path.join(malformedDir, 'package.json');
+    const malformed = JSON.parse(fs.readFileSync(malformedPath, 'utf8'));
+    malformed['ce-editor'].kit.startup = [];
+    fs.writeFileSync(malformedPath, JSON.stringify(malformed));
+    createKit('blank-name', '   ', ['@scope/background']);
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([]);
+    expect(result.diagnostics.map((item) => item.code)).toEqual([
+      'INVALID_KIT_MANIFEST',
+      'INVALID_KIT_MANIFEST',
     ]);
   });
 });

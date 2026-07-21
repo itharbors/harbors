@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
 import { discoverKits } from './lib/kit-catalog.mjs';
@@ -23,6 +24,7 @@ import {
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
+  shutdownDesktopServices,
 } from './lib/electron-launcher.mjs';
 import { resolveCodexSkillSource } from './lib/codex-skill-resource.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
@@ -39,11 +41,13 @@ const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.svg', import.meta
 const gatewayPort = parsePort(process.env.PORT, 8080);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
+const applicationControlToken = randomBytes(32).toString('hex');
 const NOTIFICATION_KIT_NAME = '@itharbors/kit-notifications';
 const TOAST_WIDTH = 360;
 const TOAST_HEIGHT = 176;
 
 let frameworkProcess;
+let frameworkStopPromise;
 let tray;
 let trayContextMenu;
 let trayWorkspaceRecords = [];
@@ -271,11 +275,13 @@ function startElectronApp() {
     if (!quitting) {
       event.preventDefault();
       quitting = true;
-      const persist = workspaceStore
-        ? persistOpenWindowBounds(kitWindows, workspaceStore)
-        : Promise.resolve();
-      const notificationShutdown = stopNotificationService();
-      void Promise.allSettled([persist, notificationShutdown])
+      void shutdownDesktopServices({
+        persistWorkspace: () => workspaceStore
+          ? persistOpenWindowBounds(kitWindows, workspaceStore)
+          : Promise.resolve(),
+        stopFramework,
+        stopNotificationService,
+      })
         .then((results) => {
           for (const result of results) {
             if (result.status === 'rejected') {
@@ -292,7 +298,6 @@ function startElectronApp() {
     unregisterOpenExternalUrlIpc();
     applicationRuntimeClient?.close();
     applicationRuntimeClient = undefined;
-    stopFramework();
   });
 }
 
@@ -305,9 +310,13 @@ function startFramework() {
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
       HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
       HARBORS_HOST_MODE: 'desktop',
+      HARBORS_APPLICATION_TOKEN: applicationControlToken,
+      HARBORS_BIND_HOST: '127.0.0.1',
     },
     stdio: 'inherit',
   });
+
+  frameworkStopPromise = undefined;
 
   child.on('error', (error) => {
     console.error('Failed to start framework:', error.message);
@@ -697,7 +706,7 @@ function applyMenuForWindow(window) {
       });
     },
     triggerApplication(menuId) {
-      void triggerApplicationMenu(startUrl, menuId).catch((error) => {
+      void triggerApplicationMenu(startUrl, menuId, applicationControlToken).catch((error) => {
         console.error('Failed to dispatch application menu action:', error);
       });
     },
@@ -903,9 +912,28 @@ function waitForApplicationRuntime(url, timeoutMs = 30000) {
 }
 
 function stopFramework() {
-  if (frameworkProcess && !frameworkProcess.killed) {
-    frameworkProcess.kill('SIGTERM');
+  if (frameworkStopPromise) return frameworkStopPromise;
+  const child = frameworkProcess;
+  if (!child || child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
   }
+  frameworkStopPromise = new Promise((resolve) => {
+    let forceStopTimer;
+    const finish = () => {
+      if (forceStopTimer) clearTimeout(forceStopTimer);
+      child.off('exit', finish);
+      resolve();
+    };
+    child.once('exit', finish);
+    if (!child.kill('SIGTERM')) {
+      finish();
+      return;
+    }
+    forceStopTimer = setTimeout(() => {
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }, 10_000);
+  });
+  return frameworkStopPromise;
 }
 
 function parsePort(value, fallback) {

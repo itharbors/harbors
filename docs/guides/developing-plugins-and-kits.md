@@ -261,6 +261,9 @@ Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser me
 其 `lifecycle.load(ctx)` 只收到 `plugin`、`menu`、`message`、`service` 和 `host`。`host.mode`
 为 `desktop` 或 `web`；依赖 Electron 的方法在 web 模式应返回明确错误。启动失败会在
 `GET /api/application/bootstrap` 中显示为 `degraded`，但不阻止其他插件或 Kit 启动。
+`menu` 只允许启动插件 attach/detach 自己的贡献和读取当前状态，不提供清空全局菜单的能力。
+应用菜单的 HTTP 触发接口是 Electron 内部控制面，要求每次启动生成的令牌，不能作为普通网页
+或外部工具 API 使用。
 
 ### layout
 

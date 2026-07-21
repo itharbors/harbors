@@ -31,6 +31,7 @@ export interface AppOptions {
   assembly: AssemblyConfig;
   override?: AssemblyConfigOverride;
   applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'triggerMenu' | 'subscribe'>;
+  applicationControlToken?: string;
 }
 
 export function createApp(
@@ -126,7 +127,10 @@ export function createApp(
   const panelInstanceRouter = createPanelInstanceRouter(editorMap);
   const applicationBootstrapRouter = createApplicationBootstrapRouter(appOptions.applicationRuntime);
   const applicationEventsRouter = createApplicationEventsRouter(appOptions.applicationRuntime);
-  const applicationMenuTriggerRouter = createApplicationMenuTriggerRouter(appOptions.applicationRuntime);
+  const applicationMenuTriggerRouter = createApplicationMenuTriggerRouter(
+    appOptions.applicationRuntime,
+    { controlToken: appOptions.applicationControlToken },
+  );
 
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';

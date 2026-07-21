@@ -81,11 +81,28 @@ export function buildTrayTemplate({
   ];
 }
 
+const pendingKitWindows = new WeakMap();
+
 export async function openOrFocusKitWindow(kitName, registry, createWindow) {
   let window = registry.get(kitName);
   if (!window || window.isDestroyed()) {
-    window = await createWindow(kitName);
-    registry.set(kitName, window);
+    let pendingByKit = pendingKitWindows.get(registry);
+    if (!pendingByKit) {
+      pendingByKit = new Map();
+      pendingKitWindows.set(registry, pendingByKit);
+    }
+    let pending = pendingByKit.get(kitName);
+    if (!pending) {
+      pending = Promise.resolve()
+        .then(() => createWindow(kitName))
+        .then((created) => {
+          registry.set(kitName, created);
+          return created;
+        })
+        .finally(() => pendingByKit.delete(kitName));
+      pendingByKit.set(kitName, pending);
+    }
+    window = await pending;
   }
   if (window.isMinimized()) {
     window.restore();
@@ -93,6 +110,21 @@ export async function openOrFocusKitWindow(kitName, registry, createWindow) {
   window.show();
   window.focus();
   return window;
+}
+
+export async function shutdownDesktopServices({
+  persistWorkspace,
+  stopFramework,
+  stopNotificationService,
+}) {
+  const frameworkResults = await Promise.allSettled([
+    persistWorkspace(),
+    stopFramework(),
+  ]);
+  const notificationResults = await Promise.allSettled([
+    stopNotificationService(),
+  ]);
+  return [...frameworkResults, ...notificationResults];
 }
 
 export async function persistOpenWindowBounds(registry, workspaceStore) {

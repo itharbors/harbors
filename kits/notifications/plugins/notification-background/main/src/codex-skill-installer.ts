@@ -30,6 +30,7 @@ export type CodexSkillInstallResult = {
 };
 
 export type CodexSkillInstallErrorCode =
+  | 'SKILL_DESKTOP_REQUIRED'
   | 'SKILL_SOURCE_INVALID'
   | 'SKILL_CONFLICT'
   | 'SKILL_UNSAFE_PATH';

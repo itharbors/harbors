@@ -132,7 +132,8 @@ stateDiagram-v2
 
 Editor 在 Kit 切换时还会按 owner 清理 Panel、Message 和 Menu 注册，形成第二道清理边界。
 ApplicationRuntime 对每个启动插件同样按 owner 清理 service、message 和 menu；一个插件失败
-只令应用进入 `degraded`，其他插件继续加载。应用退出时按成功加载顺序的逆序卸载。
+只令应用进入 `degraded`，其他插件继续加载。应用启动插件不能调用全局 `menu.reset()`，只能
+增删自己的菜单贡献，避免失败插件清空其他 owner 的菜单。应用退出时按成功加载顺序的逆序卸载。
 
 ### unregister
 

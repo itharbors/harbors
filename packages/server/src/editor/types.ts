@@ -64,7 +64,7 @@ export type ApplicationHostMode = 'desktop' | 'web';
 
 export interface ApplicationPluginRuntime {
   plugin: PluginRuntime['plugin'];
-  menu: Pick<PluginRuntime['menu'], 'attach' | 'detach' | 'reset' | 'getState'>;
+  menu: Pick<PluginRuntime['menu'], 'attach' | 'detach' | 'getState'>;
   message: PluginRuntime['message'];
   service: {
     register(name: string, value: unknown): void;

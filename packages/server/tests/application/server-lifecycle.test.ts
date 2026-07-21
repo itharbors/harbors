@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AddressInfo } from 'node:net';
+import { ApplicationRuntime } from '../../src/application/runtime';
 import { createServer } from '../../src/server';
 
 describe('application server lifecycle', () => {
@@ -69,5 +71,48 @@ describe('application server lifecycle', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ phase: 'degraded' });
+  });
+
+  it('binds the desktop control plane to loopback and protects application mutations', async () => {
+    const server = createServer({
+      host: '127.0.0.1',
+      applicationControlToken: 'launch-secret',
+      applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'desktop' }),
+    });
+
+    const port = await server.start(0);
+    const address = server.server.address() as AddressInfo;
+    const unauthorized = await fetch(`http://127.0.0.1:${port}/api/application/menu/trigger`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ menuId: 'install' }),
+    });
+    const authorized = await fetch(`http://127.0.0.1:${port}/api/application/menu/trigger`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-harbors-application-token': 'launch-secret',
+      },
+      body: JSON.stringify({ menuId: 'install' }),
+    });
+    await Promise.all([server.stop(), server.stop()]);
+
+    expect(address.address).toBe('127.0.0.1');
+    expect(unauthorized.status).toBe(403);
+    expect(authorized.status).toBe(404);
+  });
+
+  it('finishes graceful shutdown while an application event stream is connected', async () => {
+    const server = createServer({
+      applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'desktop' }),
+    });
+    const port = await server.start(0);
+    const response = await fetch(`http://127.0.0.1:${port}/sse/application`);
+
+    await expect(server.stop()).resolves.toBeUndefined();
+    const body = await response.text();
+
+    expect(body).toContain('"phase":"ready"');
+    expect(body).toContain('"phase":"stopped"');
   });
 });

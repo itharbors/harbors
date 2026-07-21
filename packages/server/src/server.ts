@@ -18,6 +18,8 @@ export interface ServerOptions {
   defaultKit?: string;
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
+  applicationControlToken?: string;
+  host?: string;
   applicationRuntime?: Pick<
     ApplicationRuntime,
     'start' | 'getBootstrap' | 'triggerMenu' | 'subscribe' | 'dispose'
@@ -45,6 +47,7 @@ export function createServer(options: ServerOptions = {}) {
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,
     applicationRuntime,
+    applicationControlToken: options.applicationControlToken,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -64,7 +67,7 @@ export function createServer(options: ServerOptions = {}) {
     await applicationRuntime.start();
     return new Promise((resolve, reject) => {
       const p = port || options.port || 0;
-      server.listen(p, () => {
+      server.listen(p, options.host, () => {
         const addr = server.address();
         if (addr && typeof addr === 'object') {
           resolve(addr.port);
@@ -76,8 +79,23 @@ export function createServer(options: ServerOptions = {}) {
     });
   };
 
-  const stop = async (): Promise<void> => {
+  let stopPromise: Promise<void> | undefined;
+  const stop = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopPromise = stopInternal();
+    return stopPromise;
+  };
+
+  const stopInternal = async (): Promise<void> => {
     const errors: unknown[] = [];
+    const closePromise = server.listening
+      ? new Promise<void>((resolve) => {
+          server.close((error) => {
+            if (error) errors.push(error);
+            resolve();
+          });
+        })
+      : Promise.resolve();
     try {
       await registry.disposeAll();
     } catch (error) {
@@ -104,9 +122,8 @@ export function createServer(options: ServerOptions = {}) {
     } catch (error) {
       errors.push(error);
     }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => error ? reject(error) : resolve());
-    });
+    server.closeIdleConnections();
+    await closePromise;
     if (errors.length > 0) {
       throw new AggregateError(errors, 'Server shutdown failed');
     }

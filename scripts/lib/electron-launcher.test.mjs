@@ -11,6 +11,7 @@ import {
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
+  shutdownDesktopServices,
 } from './electron-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
@@ -147,6 +148,59 @@ test('focuses an existing Kit window or creates a replacement', async () => {
   assert.deepEqual(calls.slice(-2), ['replacement-show', 'replacement-focus']);
 });
 
+test('coalesces concurrent opens while a lazy Kit window is being created', async () => {
+  const registry = new Map();
+  let resolveCreate;
+  let createCount = 0;
+  const created = {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    show() {},
+    focus() {},
+  };
+  const createWindow = async () => {
+    createCount += 1;
+    await new Promise((resolve) => { resolveCreate = resolve; });
+    return created;
+  };
+
+  const first = openOrFocusKitWindow('notifications', registry, createWindow);
+  const second = openOrFocusKitWindow('notifications', registry, createWindow);
+  await Promise.resolve();
+  resolveCreate();
+
+  assert.equal(await first, created);
+  assert.equal(await second, created);
+  assert.equal(createCount, 1);
+  assert.equal(registry.get('notifications'), created);
+});
+
+test('stops the Framework before tearing down Electron-owned notification services', async () => {
+  const events = [];
+  let releaseFramework;
+  const shutdown = shutdownDesktopServices({
+    persistWorkspace: async () => { events.push('persist'); },
+    stopFramework: async () => {
+      events.push('framework:start');
+      await new Promise((resolve) => { releaseFramework = resolve; });
+      events.push('framework:stopped');
+    },
+    stopNotificationService: async () => { events.push('notification:stopped'); },
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(events, ['persist', 'framework:start']);
+  releaseFramework();
+  await shutdown;
+
+  assert.deepEqual(events, [
+    'persist',
+    'framework:start',
+    'framework:stopped',
+    'notification:stopped',
+  ]);
+});
+
 test('persists every live Kit window before the tray application quits', async () => {
   const updates = [];
   const windows = new Map([
@@ -217,6 +271,8 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /fetchApplicationBootstrap/);
   assert.match(source, /createApplicationRuntimeClient/);
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
+  assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
+  assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
   assert.doesNotMatch(source, /prewarmKitWindows/);
   assert.match(source, /await openKit\(kitCatalog\[0\]\.name\)/);
 

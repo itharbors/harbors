@@ -411,7 +411,6 @@ function createApplicationPluginRuntime(
         application.menu.attach(resolveOwner(pluginName, ownerName, MENU_OWNER), contribute),
       detach: (pluginName) =>
         application.menu.detach(resolveOwner(pluginName, ownerName, MENU_OWNER)),
-      reset: () => application.menu.reset(),
       getState: () => application.menu.getState(),
     },
     message: {

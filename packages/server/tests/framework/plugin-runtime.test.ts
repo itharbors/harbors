@@ -54,7 +54,6 @@ function applicationRuntimeHost(): ApplicationPluginRuntimeHost {
     menu: {
       attach: vi.fn(),
       detach: vi.fn(),
-      reset: vi.fn(),
       getState: vi.fn(() => ({ tree: [], warnings: [] })),
     },
     message: {
@@ -234,11 +233,13 @@ describe('PluginModule', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-application-runtime-'));
     const pluginDir = mkPlugin(root, 'background', 'background', `
       let runtimeKeys;
+      let menuKeys;
       let hostMode;
       editor.plugin.define({
         lifecycle: {
           load(runtime) {
             runtimeKeys = Object.keys(runtime).sort();
+            menuKeys = Object.keys(runtime.menu).sort();
             hostMode = runtime.host.mode;
             runtime.service.register('notification-client', { ready: true });
           },
@@ -246,6 +247,9 @@ describe('PluginModule', () => {
         methods: {
           runtimeKeys() {
             return runtimeKeys;
+          },
+          menuKeys() {
+            return menuKeys;
           },
           hostMode() {
             return hostMode;
@@ -261,6 +265,9 @@ describe('PluginModule', () => {
 
     expect(plugin.callPlugin('background', 'runtimeKeys')).toEqual([
       'host', 'menu', 'message', 'plugin', 'service',
+    ]);
+    expect(plugin.callPlugin('background', 'menuKeys')).toEqual([
+      'attach', 'detach', 'getState',
     ]);
     expect(plugin.callPlugin('background', 'hostMode')).toBe('desktop');
     expect(host.service.register).toHaveBeenCalledWith('background', 'notification-client', { ready: true });

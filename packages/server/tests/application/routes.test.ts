@@ -10,14 +10,19 @@ import { createApplicationEventsRouter } from '../../src/routes/application-even
 import { createApplicationMenuTriggerRouter } from '../../src/routes/application-menu-trigger';
 import type { ApplicationBootstrap, ApplicationEvent } from '../../src/application/types';
 
-function request(method: string, url: string, body?: unknown): IncomingMessage {
+function request(
+  method: string,
+  url: string,
+  body?: unknown,
+  headers: Record<string, string> = {},
+): IncomingMessage {
   const stream = new Readable({
     read() {
       if (body !== undefined) this.push(typeof body === 'string' ? body : JSON.stringify(body));
       this.push(null);
     },
   });
-  return Object.assign(stream, { method, url, headers: {} }) as IncomingMessage;
+  return Object.assign(stream, { method, url, headers }) as IncomingMessage;
 }
 
 function response() {
@@ -78,17 +83,47 @@ describe('application routes', () => {
         return { menuId };
       }),
     };
-    const router = createApplicationMenuTriggerRouter(runtime);
+    const router = createApplicationMenuTriggerRouter(runtime, { controlToken: 'launch-secret' });
     const success = response();
     const missing = response();
 
-    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'tools/install' }), success.res);
-    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'missing' }), missing.res);
+    const headers = {
+      'content-type': 'application/json',
+      'x-harbors-application-token': 'launch-secret',
+    };
+    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'tools/install' }, headers), success.res);
+    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'missing' }, headers), missing.res);
 
     expect(success.res.statusCode).toBe(200);
     expect(JSON.parse(success.text())).toEqual({ result: { menuId: 'tools/install' } });
     expect(missing.res.statusCode).toBe(404);
     expect(JSON.parse(missing.text())).toMatchObject({ error: { code: 'MENU_ITEM_NOT_FOUND' } });
+  });
+
+  it('rejects unauthenticated, browser-originated, and non-JSON menu mutations', async () => {
+    const runtime = { triggerMenu: vi.fn() };
+    const router = createApplicationMenuTriggerRouter(runtime, { controlToken: 'launch-secret' });
+    const missingToken = response();
+    const browserOrigin = response();
+    const wrongType = response();
+
+    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'install' }, {
+      'content-type': 'application/json',
+    }), missingToken.res);
+    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'install' }, {
+      'content-type': 'application/json',
+      'x-harbors-application-token': 'launch-secret',
+      origin: 'https://attacker.example',
+    }), browserOrigin.res);
+    await invoke(router, request('POST', '/api/application/menu/trigger', { menuId: 'install' }, {
+      'content-type': 'text/plain',
+      'x-harbors-application-token': 'launch-secret',
+    }), wrongType.res);
+
+    expect(missingToken.res.statusCode).toBe(403);
+    expect(browserOrigin.res.statusCode).toBe(403);
+    expect(wrongType.res.statusCode).toBe(415);
+    expect(runtime.triggerMenu).not.toHaveBeenCalled();
   });
 
   it('streams an initial bootstrap and later application events', async () => {
@@ -106,11 +141,14 @@ describe('application routes', () => {
 
     await router(request('GET', '/sse/application'), res);
     listener?.({ type: 'application-bootstrap', bootstrap: { ...bootstrap, phase: 'degraded' } });
+    listener?.({ type: 'application-bootstrap', bootstrap: { ...bootstrap, phase: 'stopped' } });
     (res as unknown as EventEmitter).emit('close');
 
     expect(res.statusCode).toBe(200);
     expect(text()).toContain('"phase":"ready"');
     expect(text()).toContain('"phase":"degraded"');
+    expect(text()).toContain('"phase":"stopped"');
+    expect(res.end).toHaveBeenCalledOnce();
     expect(unsubscribe).toHaveBeenCalledOnce();
   });
 });

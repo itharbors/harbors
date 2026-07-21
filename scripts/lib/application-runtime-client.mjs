@@ -11,10 +11,18 @@ export async function fetchApplicationBootstrap(baseUrl, fetchImpl = globalThis.
   return payload;
 }
 
-export async function triggerApplicationMenu(baseUrl, menuId, fetchImpl = globalThis.fetch) {
+export async function triggerApplicationMenu(
+  baseUrl,
+  menuId,
+  controlToken,
+  fetchImpl = globalThis.fetch,
+) {
   const response = await fetchImpl(new URL('/api/application/menu/trigger', baseUrl), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-harbors-application-token': controlToken,
+    },
     body: JSON.stringify({ menuId }),
   });
   const payload = await readJson(response);

@@ -147,7 +147,6 @@ export class ApplicationRuntime {
       menu: {
         attach: (owner, contribute) => this.menu.attach(owner, contribute),
         detach: (owner) => this.menu.detach(owner),
-        reset: () => this.menu.reset(),
         getState: () => this.menu.getState(),
       },
       message: {

@@ -78,9 +78,28 @@ describe('notification-background plugin main', () => {
     await expect(readFile(path.join(destination, 'SKILL.md'), 'utf8')).resolves.toBe('custom\n');
     expect(notifications).toEqual([expect.objectContaining({ level: 'error', persistent: true })]);
   });
+
+  it('refuses installation outside the desktop application host', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-background-web-'));
+    tempRoots.push(root);
+    const definition = await loadDefinition({
+      sourceDir: path.join(root, 'resources', 'notify-user'),
+      hostMode: 'web',
+    });
+    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: 'failure' }, 201)));
+
+    await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
+      status: 'failed',
+      code: 'SKILL_DESKTOP_REQUIRED',
+    });
+  });
 });
 
-async function loadDefinition(options: { sourceDir?: string; codexHome?: string } = {}) {
+async function loadDefinition(options: {
+  sourceDir?: string;
+  codexHome?: string;
+  hostMode?: 'desktop' | 'web';
+} = {}) {
   vi.stubEnv('HARBORS_NOTIFICATION_PORT', '19001');
   if (options.sourceDir) vi.stubEnv('HARBORS_NOTIFY_SKILL_SOURCE', options.sourceDir);
   if (options.codexHome) vi.stubEnv('CODEX_HOME', options.codexHome);
@@ -89,7 +108,7 @@ async function loadDefinition(options: { sourceDir?: string; codexHome?: string 
     plugin: { define(value: PluginDefinition) { definition = value; } },
   };
   await import('../main/src/index');
-  definition!.lifecycle?.load?.({ host: { mode: 'desktop' } });
+  definition!.lifecycle?.load?.({ host: { mode: options.hostMode ?? 'desktop' } });
   return definition!;
 }
 

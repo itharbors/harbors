@@ -100,7 +100,13 @@ Server 启动时创建一个无 Session 的 ApplicationRuntime，收集全部 Ki
 - `POST /api/application/menu/trigger`；
 - `GET /sse/application`。
 
+两个读取接口只公开启动状态和菜单快照。菜单触发属于桌面控制面：Electron 每次启动生成随机
+令牌并通过请求头提交，Server 拒绝无令牌、带浏览器 `Origin` 或非 JSON 的写请求；Electron
+启动的 Gateway 与 Server 同时只绑定 `127.0.0.1`。
+
 启动插件失败会按 owner 回滚并令 phase 变为 `degraded`，不会创建 Session 或阻止普通 Kit。
+应用退出时先停止接收新请求，再按逆序卸载启动插件；Electron 等待 Framework 完成退出后才
+关闭通知 Host 等桌面服务。
 
 ### 内置插件
 

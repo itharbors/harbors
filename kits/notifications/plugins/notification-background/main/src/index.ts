@@ -11,11 +11,13 @@ declare const editor: any;
 
 const DEFAULT_NOTIFICATION_PORT = 17896;
 let skillInstaller: ReturnType<typeof createCodexSkillInstaller> | null = null;
+let applicationHostMode: 'desktop' | 'web' = 'web';
 
 editor.plugin.define({
   lifecycle: {
-    load() {
+    load(runtime: { host: { mode: 'desktop' | 'web' } }) {
       skillInstaller = null;
+      applicationHostMode = runtime.host.mode;
     },
   },
   methods: {
@@ -40,6 +42,12 @@ type SkillInstallFailure = {
 
 function getSkillInstaller() {
   if (skillInstaller) return skillInstaller;
+  if (applicationHostMode !== 'desktop') {
+    throw new CodexSkillInstallError(
+      'SKILL_DESKTOP_REQUIRED',
+      'Codex Skill installation is available only in Harbors Electron desktop mode',
+    );
+  }
   const sourceDir = process.env.HARBORS_NOTIFY_SKILL_SOURCE;
   if (!sourceDir || !path.isAbsolute(sourceDir)) {
     throw new CodexSkillInstallError(

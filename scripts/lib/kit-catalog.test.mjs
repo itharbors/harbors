@@ -102,6 +102,7 @@ test('ignores invalid manifests during multi-Kit discovery', async () => {
       'ce-editor': { kit: { layouts: { default: 'layout.json' } } },
     },
   });
+  await createKit(rootDir, 'blank-name', { name: '   ' });
   const brokenDir = path.join(rootDir, 'kits', 'broken-json');
   await mkdir(brokenDir, { recursive: true });
   await writeFile(path.join(brokenDir, 'package.json'), '{');

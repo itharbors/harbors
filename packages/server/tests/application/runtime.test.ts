@@ -97,6 +97,35 @@ describe('ApplicationRuntime', () => {
     await runtime.dispose();
   });
 
+  it('does not let a failing plugin reset a previously loaded owner menu', async () => {
+    const healthy = createPlugin('healthy-menu', '@scope/healthy-menu', `
+      editor.plugin.define({ methods: { ping() { return 'pong'; } } });
+    `, {
+      menu: [
+        { type: 'menu', id: 'healthy', label: 'Healthy' },
+        { type: 'menu', id: 'healthy/ping', label: 'Ping', message: 'ping' },
+      ],
+      message: { request: { ping: ['ping'] } },
+    });
+    const failing = createPlugin('resetter', '@scope/resetter', `
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) { runtime.menu.reset(); },
+        },
+        methods: {},
+      });
+    `);
+    const runtime = new ApplicationRuntime({ plugins: [healthy, failing], hostMode: 'desktop' });
+
+    const bootstrap = await runtime.start();
+
+    expect(bootstrap.phase).toBe('degraded');
+    expect(bootstrap.plugins[1]).toEqual(expect.objectContaining({ status: 'failed' }));
+    expect(JSON.stringify(bootstrap.menu.tree)).toContain('healthy/ping');
+    await expect(runtime.triggerMenu('healthy/ping')).resolves.toBe('pong');
+    await runtime.dispose();
+  });
+
   it('unloads successful plugins in reverse order and emits phase changes', async () => {
     const first = createPlugin('first', '@scope/first', `
       editor.plugin.define({

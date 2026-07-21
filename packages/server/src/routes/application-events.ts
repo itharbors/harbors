@@ -28,13 +28,21 @@ export function createApplicationEventsRouter(runtime: ApplicationEventSource) {
       bootstrap: runtime.getBootstrap(),
     });
 
-    const unsubscribe = runtime.subscribe((event) => writeEvent(res, event));
     let closed = false;
+    let unsubscribe: () => void = () => undefined;
     const close = () => {
       if (closed) return;
       closed = true;
       unsubscribe();
     };
+    unsubscribe = runtime.subscribe((event) => {
+      writeEvent(res, event);
+      if (event.bootstrap.phase === 'stopped') {
+        close();
+        res.end();
+      }
+    });
+    if (closed) unsubscribe();
     req.once('close', close);
     res.once('close', close);
   };

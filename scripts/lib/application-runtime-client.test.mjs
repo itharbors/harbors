@@ -28,12 +28,14 @@ test('fetches bootstrap and triggers application menus without a session id', as
   const result = await triggerApplicationMenu(
     'http://localhost:8080/editor',
     'install-skill',
+    'launch-secret',
     fetchImpl,
   );
 
   assert.equal(bootstrap.phase, 'ready');
   assert.deepEqual(result, { status: 'installed' });
   assert.deepEqual(JSON.parse(calls[1].init.body), { menuId: 'install-skill' });
+  assert.equal(calls[1].init.headers['x-harbors-application-token'], 'launch-secret');
   assert.equal('sessionId' in JSON.parse(calls[1].init.body), false);
 });
 
