@@ -22,6 +22,8 @@ type ConnectionForm = {
 
 type PanelError = { message: string; detail?: string };
 type ConnectionActivity = 'hydrate' | 'connect' | 'disconnect' | 'refresh' | null;
+type RequiredConnectionField = 'host' | 'port' | 'user';
+type ConnectionValidation = { field: RequiredConnectionField; message: string };
 
 type ActionToken = {
   mountGeneration: number;
@@ -46,6 +48,7 @@ let connection: ConnectionSnapshot = { ...DISCONNECTED };
 let form = defaultForm();
 let activity: ConnectionActivity = null;
 let error: PanelError | null = null;
+let invalidField: RequiredConnectionField | null = null;
 let requestSequence = 0;
 let mountGeneration = 0;
 let actionSequence = 0;
@@ -85,6 +88,7 @@ const definition = {
     form = defaultForm();
     activity = null;
     error = null;
+    invalidField = null;
   },
 
   methods: {
@@ -113,6 +117,7 @@ function resetState(): void {
   form = defaultForm();
   activity = null;
   error = null;
+  invalidField = null;
   activeAction = null;
   requestSequence += 1;
 }
@@ -122,6 +127,7 @@ function acceptConnection(next: ConnectionSnapshot): void {
   if (activity === 'hydrate') activity = null;
   connection = { ...next };
   error = null;
+  invalidField = null;
   render();
 }
 
@@ -134,10 +140,21 @@ function isStale(next: ConnectionSnapshot): boolean {
 }
 
 async function connect(): Promise<void> {
+  const validation = validateConnectionForm();
+  if (validation) {
+    invalidField = validation.field;
+    error = { message: validation.message };
+    render();
+    queueMicrotask(() => {
+      root?.querySelector<HTMLInputElement>(`[data-field="${validation.field}"]`)?.focus();
+    });
+    return;
+  }
+  invalidField = null;
   const input = {
-    host: form.host,
+    host: form.host.trim(),
     port: Number(form.port),
-    user: form.user,
+    user: form.user.trim(),
     password: form.password,
     database: form.database.trim() || null,
     tls: form.tls,
@@ -151,6 +168,16 @@ async function connect(): Promise<void> {
     if (!isCurrentActionResult(token) || isStale(next)) return;
     acceptConnection(next);
   });
+}
+
+function validateConnectionForm(): ConnectionValidation | null {
+  if (!form.host.trim()) return { field: 'host', message: '请输入 MySQL 主机。' };
+  const port = Number(form.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    return { field: 'port', message: '端口必须是 1 到 65535 之间的整数。' };
+  }
+  if (!form.user.trim()) return { field: 'user', message: '请输入 MySQL 用户名。' };
+  return null;
 }
 
 async function disconnect(): Promise<void> {
@@ -237,7 +264,7 @@ function render(): void {
         </form>
         <div class="connection-readout" data-connection="${connection.connected ? 'connected' : 'disconnected'}" role="status" aria-live="polite">
           ${renderConnectionReadout()}
-          ${error ? `<span class="connection-error" role="alert" title="${escapeHtml(error.detail ?? error.message)}">${escapeHtml(error.message)}</span>` : ''}
+          ${error ? `<span id="connection-error" class="connection-error" role="alert" title="${escapeHtml(error.detail ?? error.message)}">${escapeHtml(error.message)}</span>` : ''}
         </div>
       </header>
     </main>`;
@@ -252,6 +279,12 @@ function render(): void {
   for (const name of ['host', 'port', 'user', 'password', 'database'] as const) {
     root.querySelector<HTMLInputElement>(`[data-field="${name}"]`)?.addEventListener('input', (event) => {
       form[name] = (event.currentTarget as HTMLInputElement).value;
+      if (invalidField === name) {
+        invalidField = null;
+        error = null;
+        render();
+        queueMicrotask(() => root?.querySelector<HTMLInputElement>(`[data-field="${name}"]`)?.focus());
+      }
     });
   }
   root.querySelector<HTMLInputElement>('[data-field="tls"]')?.addEventListener('change', (event) => {
@@ -305,7 +338,9 @@ function field(
   className = '',
   disabled = false,
 ): string {
-  return `<label${className ? ` class="${className}"` : ''}>${label}<input data-field="${name}" name="${name}" type="${type}" value="${escapeHtml(value)}" autocomplete="${autocomplete}"${name === 'port' ? ' min="1" max="65535"' : ''}${name === 'database' ? ' placeholder="连接后选择…"' : ''}${disabled ? ' disabled' : ''}></label>`;
+  const required = name === 'host' || name === 'port' || name === 'user';
+  const invalid = invalidField === name;
+  return `<label${className ? ` class="${className}"` : ''}>${label}<input data-field="${name}" name="${name}" type="${type}" value="${escapeHtml(value)}" autocomplete="${autocomplete}"${name === 'port' ? ' min="1" max="65535"' : ''}${name === 'database' ? ' placeholder="连接后选择…"' : ''}${required ? ' required' : ''}${invalid ? ' aria-invalid="true" aria-describedby="connection-error"' : ''}${disabled ? ' disabled' : ''}></label>`;
 }
 
 function panelError(caught: unknown): PanelError {

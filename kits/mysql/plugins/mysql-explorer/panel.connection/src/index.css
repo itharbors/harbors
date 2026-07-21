@@ -199,6 +199,10 @@ input:focus-visible {
   border-color: var(--blue);
 }
 
+.connection-form input[aria-invalid="true"] {
+  border-color: var(--danger);
+}
+
 .tls-field {
   display: flex;
   height: 32px;
