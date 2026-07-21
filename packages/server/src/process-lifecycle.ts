@@ -27,3 +27,31 @@ export function registerServerShutdown(
     signalSource.off('SIGTERM', shutdown);
   };
 }
+
+export async function startServerUntilShutdown(
+  start: () => Promise<number>,
+  stop: () => Promise<void>,
+  signalSource: ProcessSignalSource = process,
+  onError?: (error: unknown) => void,
+): Promise<number | undefined> {
+  let shutdownRequested = false;
+  let shutdownPromise: Promise<void> | undefined;
+  const stopForSignal = () => {
+    shutdownRequested = true;
+    if (!shutdownPromise) shutdownPromise = Promise.resolve().then(stop);
+    return shutdownPromise;
+  };
+  if (onError) {
+    registerServerShutdown(stopForSignal, signalSource, onError);
+  } else {
+    registerServerShutdown(stopForSignal, signalSource);
+  }
+
+  try {
+    return await start();
+  } catch (error) {
+    if (!shutdownRequested) throw error;
+    await shutdownPromise;
+    return undefined;
+  }
+}

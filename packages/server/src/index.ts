@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { createServer } from './server';
-import { registerServerShutdown } from './process-lifecycle';
+import { startServerUntilShutdown } from './process-lifecycle';
 
 const PORT = parseInt(process.env.PORT || '3000', 10);
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), '.editor.db');
@@ -16,11 +16,12 @@ const { start, stop } = createServer({
   applicationControlToken: process.env.HARBORS_APPLICATION_TOKEN,
   host: HOST,
 });
-registerServerShutdown(stop);
 
-const port = await start(PORT);
-console.log(`Editor server running on http://localhost:${port}`);
-console.log(`Database: ${DB_PATH}`);
-if (DEFAULT_KIT) {
-  console.log(`Default kit: ${DEFAULT_KIT}`);
+const port = await startServerUntilShutdown(() => start(PORT), stop);
+if (port !== undefined) {
+  console.log(`Editor server running on http://localhost:${port}`);
+  console.log(`Database: ${DB_PATH}`);
+  if (DEFAULT_KIT) {
+    console.log(`Default kit: ${DEFAULT_KIT}`);
+  }
 }
