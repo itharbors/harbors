@@ -25,6 +25,7 @@ import {
   persistOpenWindowBounds,
   selectMenuWindow,
 } from './lib/electron-launcher.mjs';
+import { resolveCodexSkillSource } from './lib/codex-skill-resource.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
@@ -57,6 +58,7 @@ let openExternalUrlListenerRegistered = false;
 let notificationStore;
 let notificationHost;
 let notificationPort;
+let codexSkillSource;
 let notificationStoreUnsubscribe;
 let notificationStopPromise;
 let toastQueue;
@@ -180,6 +182,11 @@ function startElectronApp() {
         throw new Error('No valid Kits were discovered');
       }
       workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
+      codexSkillSource = resolveCodexSkillSource({
+        isPackaged: app.isPackaged,
+        resourcesPath: process.resourcesPath,
+        rootDir,
+      });
       await startNotificationService();
       frameworkProcess = startFramework();
       await waitForUrl(startUrl);
@@ -242,6 +249,7 @@ function startFramework() {
     env: {
       ...process.env,
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
+      HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
     },
     stdio: 'inherit',
   });
