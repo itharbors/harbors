@@ -1,0 +1,4 @@
+interface:
+  display_name: "Change Workflow"
+  short_description: "Start and finish isolated typed change worktrees"
+  default_prompt: "Use $change-workflow to start a typed Harbors change in an isolated worktree."
