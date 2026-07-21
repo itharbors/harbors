@@ -1,0 +1,30 @@
+{
+  "name": "@itharbors/kit-notifications",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": {
+        "id": "notifications",
+        "label": "Notifications"
+      },
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "@itharbors/notification-center"
+      ],
+      "theme": {
+        "--ce-accent": "#76d0ec"
+      }
+    }
+  }
+}
