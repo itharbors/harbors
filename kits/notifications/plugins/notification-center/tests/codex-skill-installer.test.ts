@@ -375,6 +375,63 @@ describe('Codex Skill installer', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
+  it('verifies published bytes when a staging symlink is inserted and restored during copy', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    let replacedSource = false;
+    await writeSkillSource(sourceDir, 'bundled');
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async copyFile(from, to, mode) {
+        if (!replacedSource && String(from).endsWith(path.join('scripts', 'notify.mjs'))) {
+          replacedSource = true;
+          const original = await readFile(from);
+          await rm(from);
+          await symlink(path.join(String(from), '..', '..', 'SKILL.md'), from);
+          await copyFile(from, to, mode);
+          await rm(from);
+          await writeFile(from, original);
+          return;
+        }
+        await copyFile(from, to, mode);
+      },
+    });
+
+    await expect(installer.install()).rejects.toMatchObject({ code: 'SKILL_SOURCE_INVALID' });
+    await expect(readFile(path.join(codexHome, 'skills', 'notify-user', 'SKILL.md'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('rejects publication when the skills parent is replaced and restored during copy', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    const skillsDir = path.join(codexHome, 'skills');
+    const movedSkillsDir = path.join(codexHome, 'moved-skills');
+    const outsideSkillsDir = path.join(root, 'outside-skills');
+    let replacedParent = false;
+    await writeSkillSource(sourceDir, 'bundled');
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async copyFile(from, to, mode) {
+        if (!replacedParent && String(from).endsWith(path.join('agents', 'openai.yaml'))) {
+          replacedParent = true;
+          await rename(skillsDir, movedSkillsDir);
+          await mkdir(path.join(outsideSkillsDir, 'notify-user', 'agents'), { recursive: true });
+          await symlink(outsideSkillsDir, skillsDir);
+          await copyFile(from, to, mode);
+          await rm(skillsDir);
+          await rename(movedSkillsDir, skillsDir);
+          return;
+        }
+        await copyFile(from, to, mode);
+      },
+    });
+
+    await expect(installer.install()).rejects.toThrow();
+    await expect(readFile(path.join(skillsDir, 'notify-user', 'SKILL.md'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('quarantines a partial update and restores the previous version when cleanup fails', async () => {
     const root = await createTempRoot();
     const sourceDir = path.join(root, 'bundled', 'notify-user');

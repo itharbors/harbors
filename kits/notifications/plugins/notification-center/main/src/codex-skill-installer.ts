@@ -408,7 +408,7 @@ async function commitStagedSkill({
       createDirectory,
       deferRootFiles: new Set(['SKILL.md', MARKER_FILE]),
     });
-    await assertStagedSkillIntegrity(stagingDir, digest);
+    await assertSkillIntegrity(stagingDir, digest, 'Staged');
     for (const name of ['SKILL.md', MARKER_FILE]) {
       await copyFileEntry(
         path.join(stagingDir, name),
@@ -416,7 +416,8 @@ async function commitStagedSkill({
         fsConstants.COPYFILE_EXCL,
       );
     }
-    await assertStagedSkillIntegrity(stagingDir, digest);
+    await assertSkillIntegrity(stagingDir, digest, 'Staged');
+    await assertSkillIntegrity(destination, digest, 'Published');
     await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
   } catch (error) {
     try {
@@ -440,19 +441,23 @@ async function commitStagedSkill({
   }
 }
 
-async function assertStagedSkillIntegrity(stagingDir: string, expectedDigest: string) {
-  await assertNoSymlinks(stagingDir, stagingDir, 'SKILL_SOURCE_INVALID');
-  if (await digestDirectory(stagingDir) !== expectedDigest) {
+async function assertSkillIntegrity(
+  skillDir: string,
+  expectedDigest: string,
+  label: 'Staged' | 'Published',
+) {
+  await assertNoSymlinks(skillDir, skillDir, 'SKILL_SOURCE_INVALID');
+  if (await digestDirectory(skillDir) !== expectedDigest) {
     throw new CodexSkillInstallError(
       'SKILL_SOURCE_INVALID',
-      'Staged Skill changed while it was being published',
+      `${label} Skill content does not match the bundled source`,
     );
   }
-  const marker = await readManagedMarker(stagingDir);
+  const marker = await readManagedMarker(skillDir);
   if (marker?.digest !== expectedDigest) {
     throw new CodexSkillInstallError(
       'SKILL_SOURCE_INVALID',
-      'Staged Skill management metadata changed while it was being published',
+      `${label} Skill management metadata does not match the bundled source`,
     );
   }
 }
