@@ -25,12 +25,14 @@ test('Skill instructions are independent of the current project directory', asyn
   assert.match(instructions, /absolute path/i);
 });
 
-test('README documents user-level installation from the bundled Skill source', async () => {
+test('README documents offline installation from the Harbors Notification menu', async () => {
   const readme = await readFile(path.join(repositoryRoot, 'readme.md'), 'utf8');
 
-  assert.match(readme, /https:\/\/github\.com\/itharbors\/harbors\/tree\/main\/\.agents\/skills\/notify-user/);
+  assert.match(readme, /Install or Update Codex Notification Skill/);
   assert.match(readme, /~\/\.codex\/skills\/notify-user/);
-  assert.match(readme, /安装为用户级 Codex Skill/);
+  assert.match(readme, /内置.*notify-user|notify-user.*内置/s);
+  assert.match(readme, /不需要网络/);
+  assert.doesNotMatch(readme, /安装为用户级 Codex Skill/);
 });
 
 test('parses a transient notification with safe defaults', () => {

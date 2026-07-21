@@ -63,11 +63,13 @@ npm run dev -- --kit ./kits/sqlite
 
 ### Agent 通知
 
-Electron 运行时，Agent 可使用仓库内置的 `notify-user` Skill 发送通知。若希望本机所有项目中的
-Codex Agent 都能使用它，可以把 [Skill 源目录](https://github.com/itharbors/harbors/tree/main/.agents/skills/notify-user)
-安装到 `~/.codex/skills/notify-user`。无需专用安装器，直接对本地 Codex 说：
+Harbors Electron 已内置 `notify-user` Skill。若希望本机所有项目中的 Codex Agent 都能使用它，
+打开主菜单 **Notifications → Install or Update Codex Notification Skill…**。Harbors 会直接把
+软件内置版本安装到 `~/.codex/skills/notify-user`，不需要网络、GitHub 或外部安装器。
 
-> 请把 https://github.com/itharbors/harbors/tree/main/.agents/skills/notify-user 安装为用户级 Codex Skill，安装到 ~/.codex/skills/notify-user，安装后验证 Skill 是否有效。
+安装、更新、已经是最新版本或同名冲突都会通过桌面通知反馈。Harbors 不覆盖用户自定义的同名
+Skill；安装成功后，`notify-user` 从下一轮 Codex 对话开始可用。仅启动 `npm run dev:web` 时没有
+Electron 内置资源，因此不能执行菜单安装。
 
 安装后，Agent 会先定位 Skill 自身目录，再执行其中的脚本，因此不要求当前项目是 Harbors。
 实际调用等价于：
