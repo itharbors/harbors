@@ -40,17 +40,26 @@ const LEVEL_LABELS: Record<NotificationLevel, string> = {
 let context: PanelContext | null = null;
 let rootElement: HTMLElement | null = null;
 let pollTimer: number | null = null;
-let requestInFlight = false;
 let mounted = false;
+let lifecycleVersion = 0;
+let requestGeneration = 0;
+let refreshPromise: Promise<void> | null = null;
+let mutationToken: object | null = null;
+let lastSnapshotSignature: string | null = null;
 
 const definition: PanelDefinition = {
   async mount(ctx) {
+    lifecycleVersion += 1;
+    requestGeneration += 1;
     context = ctx;
     rootElement = document.getElementById('panel-root');
     if (!rootElement) {
       throw new Error('Panel root element #panel-root not found');
     }
     mounted = true;
+    refreshPromise = null;
+    mutationToken = null;
+    lastSnapshotSignature = null;
     renderLoading();
     await refresh();
     if (mounted) {
@@ -61,11 +70,15 @@ const definition: PanelDefinition = {
   },
   unmount() {
     mounted = false;
+    lifecycleVersion += 1;
+    requestGeneration += 1;
     if (pollTimer !== null) {
       window.clearInterval(pollTimer);
       pollTimer = null;
     }
-    requestInFlight = false;
+    refreshPromise = null;
+    mutationToken = null;
+    lastSnapshotSignature = null;
     context = null;
     rootElement = null;
   },
@@ -73,27 +86,61 @@ const definition: PanelDefinition = {
 
 export default definition;
 
-async function refresh() {
-  if (!mounted || !context || requestInFlight) return;
-  requestInFlight = true;
-  try {
-    const value = await context.message.request(PLUGIN_NAME, 'getSnapshot');
-    if (mounted) renderSnapshot(normalizeSnapshot(value));
-  } catch (error) {
-    if (mounted) renderUnavailable(error);
-  } finally {
-    requestInFlight = false;
-  }
+function refresh(): Promise<void> {
+  if (!mounted || !context || mutationToken) return Promise.resolve();
+  if (refreshPromise) return refreshPromise;
+
+  const version = lifecycleVersion;
+  const generation = ++requestGeneration;
+  const activeContext = context;
+  let operation: Promise<void>;
+  operation = (async () => {
+    try {
+      const value = await activeContext.message.request(PLUGIN_NAME, 'getSnapshot');
+      if (isCurrentRequest(version, generation)) {
+        renderSnapshotIfChanged(normalizeSnapshot(value));
+      }
+    } catch (error) {
+      if (isCurrentRequest(version, generation)) renderUnavailable(error);
+    } finally {
+      if (refreshPromise === operation) refreshPromise = null;
+    }
+  })();
+  refreshPromise = operation;
+  return operation;
 }
 
 async function runAction(method: string, ...args: unknown[]) {
-  if (!mounted || !context) return;
+  if (!mounted || !context || mutationToken) return;
+  const token = {};
+  const version = lifecycleVersion;
+  const activeContext = context;
+  mutationToken = token;
+  requestGeneration += 1;
+  refreshPromise = null;
+  setActionButtonsDisabled(true);
   try {
-    await context.message.request(PLUGIN_NAME, method, ...args);
+    await activeContext.message.request(PLUGIN_NAME, method, ...args);
+    if (!mounted || lifecycleVersion !== version) return;
+    if (mutationToken === token) mutationToken = null;
     await refresh();
   } catch (error) {
-    if (mounted) renderUnavailable(error);
+    if (mounted && lifecycleVersion === version) renderUnavailable(error);
+  } finally {
+    if (mutationToken === token) mutationToken = null;
   }
+}
+
+function isCurrentRequest(version: number, generation: number) {
+  return mounted
+    && lifecycleVersion === version
+    && requestGeneration === generation;
+}
+
+function setActionButtonsDisabled(disabled: boolean) {
+  rootElement?.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
+    button.disabled = disabled;
+  });
 }
 
 function renderLoading() {
@@ -127,6 +174,13 @@ function renderSnapshot(snapshot: NotificationSnapshot) {
 
   workspace.append(content, status);
   rootElement.replaceChildren(workspace);
+}
+
+function renderSnapshotIfChanged(snapshot: NotificationSnapshot) {
+  const signature = JSON.stringify(snapshot);
+  if (signature === lastSnapshotSignature) return;
+  lastSnapshotSignature = signature;
+  renderSnapshot(snapshot);
 }
 
 function createHeader(unreadCount: number) {
@@ -226,6 +280,7 @@ function createEmptyState() {
 
 function renderUnavailable(error: unknown) {
   if (!rootElement) return;
+  lastSnapshotSignature = null;
   const message = error instanceof Error ? error.message : String(error);
   const state = createState('Desktop notification service is unavailable', 'unavailable');
   const detail = document.createElement('p');

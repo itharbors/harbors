@@ -186,6 +186,10 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /stopNotificationService\(\)/);
   assert.match(source, /applyNotificationBadgeToWindow\(window\)/);
   assert.match(source, /notification-preload\.cjs/);
+
+  const stopHost = source.indexOf('await notificationHost?.stop()');
+  const unsubscribeStore = source.indexOf('notificationStoreUnsubscribe?.()');
+  assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
 });
 
 test('keeps the notification toast preload bridge intentionally narrow', async () => {

@@ -75,7 +75,8 @@ export function createNotificationStore({
     notifications.push(notification);
     if (notifications.length > maxEntries) {
       const readIndex = notifications.findIndex((entry) => entry.read);
-      notifications.splice(readIndex >= 0 ? readIndex : 0, 1);
+      const [evicted] = notifications.splice(readIndex >= 0 ? readIndex : 0, 1);
+      emit('removed', { id: evicted.id });
     }
     emit('created', { notification: cloneNotification(notification) });
     return cloneNotification(notification);
@@ -224,7 +225,7 @@ function normalizeNotificationInput(input) {
   if (typeof persistent !== 'boolean') {
     throw badRequest('persistent must be a boolean');
   }
-  const durationMs = input.durationMs ?? DEFAULT_DURATION_MS;
+  const durationMs = input.durationMs === undefined ? DEFAULT_DURATION_MS : input.durationMs;
   if (!Number.isInteger(durationMs) || durationMs < 1000 || durationMs > 60000) {
     throw badRequest('durationMs must be between 1000 and 60000');
   }
@@ -251,7 +252,7 @@ function normalizeRequiredString(value, name, maxLength) {
 }
 
 function normalizeOptionalString(value, name, maxLength, fallback, trim = false) {
-  if (value === undefined || value === null) return fallback;
+  if (value === undefined) return fallback;
   if (typeof value !== 'string') {
     throw badRequest(`${name} must be a string`);
   }
@@ -311,6 +312,7 @@ async function dispatchRequest(request, response, store) {
       return;
     }
     if (request.method === 'POST') {
+      assertTrustedMutation(request, { requireJson: true });
       const input = await readJsonBody(request);
       sendJson(response, 201, store.create(input));
       return;
@@ -320,6 +322,7 @@ async function dispatchRequest(request, response, store) {
 
   if (pathname === '/v1/notifications/read-all') {
     assertMethod(request, 'POST');
+    assertTrustedMutation(request);
     sendJson(response, 200, store.markAllRead());
     return;
   }
@@ -327,6 +330,7 @@ async function dispatchRequest(request, response, store) {
   const readMatch = pathname.match(/^\/v1\/notifications\/([^/]+)\/read$/u);
   if (readMatch) {
     assertMethod(request, 'POST');
+    assertTrustedMutation(request);
     sendJson(response, 200, store.markRead(decodePathId(readMatch[1])));
     return;
   }
@@ -334,6 +338,7 @@ async function dispatchRequest(request, response, store) {
   const itemMatch = pathname.match(/^\/v1\/notifications\/([^/]+)$/u);
   if (itemMatch) {
     assertMethod(request, 'DELETE');
+    assertTrustedMutation(request);
     store.remove(decodePathId(itemMatch[1]));
     response.statusCode = 204;
     response.end();
@@ -349,6 +354,26 @@ function assertMethod(request, expected) {
 
 function methodNotAllowed() {
   return new NotificationError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
+}
+
+function assertTrustedMutation(request, { requireJson = false } = {}) {
+  if (request.headers.origin !== undefined) {
+    throw new NotificationError(
+      403,
+      'BROWSER_REQUEST_REJECTED',
+      'Browser-originated notification mutations are not allowed',
+    );
+  }
+  if (requireJson) {
+    const mediaType = request.headers['content-type']?.split(';', 1)[0].trim().toLowerCase();
+    if (mediaType !== 'application/json') {
+      throw new NotificationError(
+        415,
+        'UNSUPPORTED_MEDIA_TYPE',
+        'Content-Type must be application/json',
+      );
+    }
+  }
 }
 
 function decodePathId(value) {

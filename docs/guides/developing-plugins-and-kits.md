@@ -341,7 +341,9 @@ node .agents/skills/notify-user/scripts/notify.mjs \
 | `DELETE` | `/v1/notifications/:id` | 删除通知 |
 
 默认端口是 `17896`，可用 `HARBORS_NOTIFICATION_PORT` 修改；无论端口如何配置，Host 都只绑定
-`127.0.0.1`。通知是桌面应用生命周期内的内存状态，不承诺跨重启保存。
+`127.0.0.1`。创建请求必须使用 `application/json`；Host 会拒绝所有带 `Origin` 的写请求，
+因此浏览器 Panel 必须经 server-side plugin 调用，不能直接 fetch Host。通知是桌面应用生命周期
+内的内存状态，不承诺跨重启保存。
 
 ## 参考实现
 

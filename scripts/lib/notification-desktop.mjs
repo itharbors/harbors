@@ -7,7 +7,7 @@ export function createToastQueue({
   limit = 3,
   schedule = (callback, delay) => setTimeout(callback, delay),
   cancelSchedule = (token) => clearTimeout(token),
-  onShow = () => {},
+  onShow = (_notification, markShown) => markShown(),
   onHide = () => {},
   onError = (error) => console.error('Notification toast adapter failed:', error),
 } = {}) {
@@ -37,17 +37,24 @@ export function createToastQueue({
   }
 
   function activate(notification) {
-    let timer = null;
-    if (!notification.persistent) {
-      const duration = Number.isInteger(notification.durationMs)
-        ? notification.durationMs
+    const active = { notification, timer: null, shown: false };
+    visible.set(notification.id, active);
+    safelyCall(onShow, [notification, () => markShown(notification.id, active)], onError);
+  }
+
+  function markShown(id, expected) {
+    const active = visible.get(id);
+    if (disposed || active !== expected || active.shown) return false;
+    active.shown = true;
+    if (!active.notification.persistent) {
+      const duration = Number.isInteger(active.notification.durationMs)
+        ? active.notification.durationMs
         : DEFAULT_TOAST_DURATION_MS;
-      timer = schedule(() => {
-        close(notification.id, 'expired');
+      active.timer = schedule(() => {
+        close(id, 'expired');
       }, duration);
     }
-    visible.set(notification.id, { notification, timer });
-    safelyCall(onShow, [notification], onError);
+    return true;
   }
 
   function close(id, reason = 'closed') {

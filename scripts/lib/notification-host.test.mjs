@@ -66,10 +66,13 @@ test('rejects invalid and undeclared notification fields', () => {
     [{}, /title is required/],
     [{ title: ' '.repeat(2) }, /title is required/],
     [{ title: 'x'.repeat(121) }, /title must be at most 120/],
+    [{ title: 'x', body: null }, /body must be a string/],
     [{ title: 'x', body: 'x'.repeat(2001) }, /body must be at most 2000/],
     [{ title: 'x', level: 'debug' }, /level must be one of/],
     [{ title: 'x', source: 'x'.repeat(81) }, /source must be at most 80/],
+    [{ title: 'x', source: null }, /source must be a string/],
     [{ title: 'x', persistent: 'yes' }, /persistent must be a boolean/],
+    [{ title: 'x', durationMs: null }, /durationMs must be between 1000 and 60000/],
     [{ title: 'x', durationMs: 999 }, /durationMs must be between 1000 and 60000/],
     [{ title: 'x', durationMs: 60001 }, /durationMs must be between 1000 and 60000/],
     [{ title: 'x', extra: true }, /Unknown notification field: extra/],
@@ -123,6 +126,8 @@ test('evicts the oldest read notification before an older unread notification', 
   store.create({ title: 'Read middle' });
   store.markRead('id-2');
   store.create({ title: 'Unread newest' });
+  const overflowEvents = [];
+  store.subscribe((event) => overflowEvents.push(event));
   store.create({ title: 'Overflow' });
 
   assert.deepEqual(
@@ -130,6 +135,10 @@ test('evicts the oldest read notification before an older unread notification', 
     ['id-4', 'id-3', 'id-1'],
   );
   assert.equal(store.snapshot().unreadCount, 3);
+  assert.deepEqual(
+    overflowEvents.map((event) => [event.type, event.id ?? event.notification?.id]),
+    [['removed', 'id-2'], ['created', 'id-4']],
+  );
 });
 
 test('dispose is idempotent and clears state and listeners', () => {
@@ -214,6 +223,40 @@ test('returns structured HTTP errors for invalid requests', async (t) => {
     assert.equal(body.error.code, code);
     assert.equal(typeof body.error.message, 'string');
   }
+});
+
+test('rejects browser-origin mutations and non-JSON notification creation', async (t) => {
+  const store = createNotificationStore();
+  const host = createNotificationHost({ store, port: 0 });
+  const port = await host.start();
+  t.after(() => host.stop());
+  const url = (pathname) => `http://127.0.0.1:${port}${pathname}`;
+
+  const crossOriginCreate = await fetch(url('/v1/notifications'), {
+    method: 'POST',
+    headers: {
+      origin: 'https://malicious.example',
+      'content-type': 'text/plain',
+    },
+    body: JSON.stringify({ title: 'Browser injected' }),
+  });
+  assert.equal(crossOriginCreate.status, 403);
+  assert.equal((await crossOriginCreate.json()).error.code, 'BROWSER_REQUEST_REJECTED');
+
+  const wrongContentType = await fetch(url('/v1/notifications'), {
+    method: 'POST',
+    headers: { 'content-type': 'text/plain' },
+    body: JSON.stringify({ title: 'Plain text JSON' }),
+  });
+  assert.equal(wrongContentType.status, 415);
+  assert.equal((await wrongContentType.json()).error.code, 'UNSUPPORTED_MEDIA_TYPE');
+
+  const crossOriginReadAll = await fetch(url('/v1/notifications/read-all'), {
+    method: 'POST',
+    headers: { origin: 'https://malicious.example' },
+  });
+  assert.equal(crossOriginReadAll.status, 403);
+  assert.deepEqual(store.snapshot(), { notifications: [], unreadCount: 0 });
 });
 
 test('rejects non-loopback binding and starts and stops idempotently', async () => {

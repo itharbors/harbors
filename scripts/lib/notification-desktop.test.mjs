@@ -40,6 +40,7 @@ test('shows three toasts and promotes FIFO overflow after a close', () => {
 
 test('expires transient toasts but never schedules persistent toasts', () => {
   const timers = new Map();
+  const markShown = new Map();
   let nextTimer = 0;
   const hidden = [];
   const queue = createToastQueue({
@@ -49,11 +50,15 @@ test('expires transient toasts but never schedules persistent toasts', () => {
       return id;
     },
     cancelSchedule: (id) => timers.delete(id),
+    onShow: (item, ready) => markShown.set(item.id, ready),
     onHide: (item, reason) => hidden.push([item.id, reason]),
   });
 
   queue.enqueue(notification('transient', { durationMs: 1500 }));
   queue.enqueue(notification('persistent', { persistent: true }));
+  assert.equal(timers.size, 0);
+  markShown.get('transient')();
+  markShown.get('persistent')();
   assert.deepEqual(Array.from(timers.values()).map((timer) => timer.delay), [1500]);
   Array.from(timers.values())[0].callback();
 

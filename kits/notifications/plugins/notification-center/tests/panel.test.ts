@@ -180,6 +180,120 @@ describe('Notification Center panel', () => {
     await vi.advanceTimersByTimeAsync(2000);
     expect(request).toHaveBeenCalledTimes(2);
   });
+
+  it('preserves focused DOM when a poll returns an unchanged snapshot', async () => {
+    vi.useFakeTimers();
+    const snapshot: Snapshot = { notifications: [second], unreadCount: 1 };
+    const request = vi.fn(async () => snapshot);
+    const definition = await loadPanel();
+    await definition.mount({ message: { request } });
+
+    const originalCard = document.querySelector<HTMLElement>('[data-notification-id="n-2"]')!;
+    const originalButton = originalCard.querySelector<HTMLButtonElement>('[data-action="mark-read"]')!;
+    originalButton.focus();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('[data-notification-id="n-2"]')).toBe(originalCard);
+    expect(document.activeElement).toBe(originalButton);
+    definition.unmount();
+  });
+
+  it('serializes duplicate mutation clicks', async () => {
+    let snapshot: Snapshot = { notifications: [first], unreadCount: 0 };
+    let resolveDelete: (() => void) | undefined;
+    const deleteResult = new Promise<void>((resolve) => { resolveDelete = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot;
+      if (method === 'removeNotification') {
+        await deleteResult;
+        snapshot = { notifications: [], unreadCount: 0 };
+        return undefined;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const definition = await loadPanel();
+    await definition.mount({ message: { request } });
+
+    const deleteButton = document.querySelector<HTMLButtonElement>('[data-action="remove"]')!;
+    deleteButton.click();
+    deleteButton.click();
+    expect(request.mock.calls.filter((call) => call[1] === 'removeNotification')).toHaveLength(1);
+    expect(deleteButton.disabled).toBe(true);
+
+    resolveDelete!();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-state="empty"]')).not.toBeNull();
+    });
+    expect(document.querySelector('[data-state="unavailable"]')).toBeNull();
+    definition.unmount();
+  });
+
+  it('discards a stale poll after a newer mutation', async () => {
+    vi.useFakeTimers();
+    let snapshot: Snapshot = { notifications: [first], unreadCount: 0 };
+    let resolveStalePoll: ((value: Snapshot) => void) | undefined;
+    let snapshotCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') {
+        snapshotCalls += 1;
+        if (snapshotCalls === 2) {
+          return new Promise<Snapshot>((resolve) => { resolveStalePoll = resolve; });
+        }
+        return snapshot;
+      }
+      if (method === 'removeNotification') {
+        snapshot = { notifications: [], unreadCount: 0 };
+        return undefined;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const definition = await loadPanel();
+    await definition.mount({ message: { request } });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    document.querySelector<HTMLButtonElement>('[data-action="remove"]')!.click();
+    await Promise.resolve();
+    resolveStalePoll!({ notifications: [first], unreadCount: 0 });
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-state="empty"]')).not.toBeNull();
+    });
+    expect(document.querySelector('[data-notification-id="n-1"]')).toBeNull();
+    definition.unmount();
+  });
+
+  it('does not report a stale poll failure after a successful mutation', async () => {
+    vi.useFakeTimers();
+    let snapshot: Snapshot = { notifications: [first], unreadCount: 0 };
+    let rejectStalePoll: ((error: Error) => void) | undefined;
+    let snapshotCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') {
+        snapshotCalls += 1;
+        if (snapshotCalls === 2) {
+          return new Promise<Snapshot>((_resolve, reject) => { rejectStalePoll = reject; });
+        }
+        return snapshot;
+      }
+      if (method === 'removeNotification') {
+        snapshot = { notifications: [], unreadCount: 0 };
+        return undefined;
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const definition = await loadPanel();
+    await definition.mount({ message: { request } });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    document.querySelector<HTMLButtonElement>('[data-action="remove"]')!.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-state="empty"]')).not.toBeNull();
+    });
+    rejectStalePoll!(new Error('Obsolete poll failed'));
+    await Promise.resolve();
+    expect(document.querySelector('[data-state="unavailable"]')).toBeNull();
+    definition.unmount();
+  });
 });
 
 async function loadPanel() {

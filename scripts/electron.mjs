@@ -359,11 +359,13 @@ async function createKitWindow(kit, workspace) {
 async function startNotificationService() {
   notificationStore = createNotificationStore();
   toastQueue = createToastQueue({
-    onShow(notification) {
-      void createToastWindow(notification).catch((error) => {
-        console.error(`Failed to show notification ${notification.id}:`, error);
-        toastQueue?.close(notification.id, 'failed');
-      });
+    onShow(notification, markShown) {
+      void createToastWindow(notification)
+        .then(() => markShown())
+        .catch((error) => {
+          console.error(`Failed to show notification ${notification.id}:`, error);
+          toastQueue?.close(notification.id, 'failed');
+        });
     },
     onHide(notification) {
       destroyToastWindow(notification.id);
@@ -402,6 +404,8 @@ function stopNotificationService() {
   if (notificationStopPromise) return notificationStopPromise;
 
   notificationStopPromise = (async () => {
+    // Stop accepting and drain HTTP requests before detaching their UI observers.
+    await notificationHost?.stop();
     notificationStoreUnsubscribe?.();
     notificationStoreUnsubscribe = undefined;
     toastQueue?.dispose();
@@ -413,7 +417,6 @@ function stopNotificationService() {
 
     currentUnreadCount = 0;
     refreshNotificationIndicators();
-    await notificationHost?.stop();
     notificationHost = undefined;
     notificationStore = undefined;
     notificationPort = undefined;
