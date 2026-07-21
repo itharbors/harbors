@@ -66,7 +66,7 @@ describe('resolver uses explicit directories only', () => {
       activeKitPluginsDir: null,
     });
 
-    expect(resolved).toBe(path.join(builtinPluginsDir, 'menu'));
+    expect(resolved).toBe(fs.realpathSync(path.join(builtinPluginsDir, 'menu')));
   });
 
   it('does not scan every kit plugin directory globally', async () => {

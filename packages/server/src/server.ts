@@ -7,12 +7,21 @@ import { SSEChannel } from './sse/channel';
 import { BrowserRequestBroker } from './framework/browser-request-broker';
 import type { Editor } from './editor/types';
 import { createApp } from './app';
-import { createDefaultAssemblyConfig } from './assembly/config';
+import { createDefaultAssemblyConfig, type AssemblyConfig } from './assembly/config';
+import { discoverApplicationPlugins } from './application/catalog';
+import { ApplicationRuntime } from './application/runtime';
+import type { ApplicationHostMode } from './editor/types';
 
 export interface ServerOptions {
   port?: number;
   dbPath?: string;
   defaultKit?: string;
+  assembly?: AssemblyConfig;
+  applicationHostMode?: ApplicationHostMode;
+  applicationRuntime?: Pick<
+    ApplicationRuntime,
+    'start' | 'getBootstrap' | 'triggerMenu' | 'subscribe' | 'dispose'
+  >;
 }
 
 export function createServer(options: ServerOptions = {}) {
@@ -22,11 +31,20 @@ export function createServer(options: ServerOptions = {}) {
   const channel = new SSEChannel();
   const broker = new BrowserRequestBroker();
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
-  const assembly = createDefaultAssemblyConfig(path.resolve(serverDir, '../../..'), {
-    defaultKit: options.defaultKit,
+  const assembly = options.assembly ?? createDefaultAssemblyConfig(
+    path.resolve(serverDir, '../../..'),
+    { defaultKit: options.defaultKit },
+  );
+  const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
+    hostMode: options.applicationHostMode ?? 'web',
+    catalogLoader: () => discoverApplicationPlugins({
+      assembly,
+      selectedKit: options.defaultKit,
+    }),
   });
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,
+    applicationRuntime,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -42,7 +60,8 @@ export function createServer(options: ServerOptions = {}) {
     }
   });
 
-  const start = (port?: number): Promise<number> => {
+  const start = async (port?: number): Promise<number> => {
+    await applicationRuntime.start();
     return new Promise((resolve, reject) => {
       const p = port || options.port || 0;
       server.listen(p, () => {
@@ -61,6 +80,11 @@ export function createServer(options: ServerOptions = {}) {
     const errors: unknown[] = [];
     try {
       await registry.disposeAll();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await applicationRuntime.dispose();
     } catch (error) {
       errors.push(error);
     }
@@ -88,5 +112,15 @@ export function createServer(options: ServerOptions = {}) {
     }
   };
 
-  return { server, start, stop, manager, channel, broker, registry, editorMap };
+  return {
+    server,
+    start,
+    stop,
+    manager,
+    channel,
+    broker,
+    registry,
+    editorMap,
+    applicationRuntime,
+  };
 }

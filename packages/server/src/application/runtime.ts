@@ -13,10 +13,14 @@ import type {
   ApplicationPluginState,
 } from './types';
 
-interface ApplicationRuntimeOptions {
-  plugins: ApplicationPluginSpec[];
+export interface ApplicationRuntimeOptions {
+  plugins?: ApplicationPluginSpec[];
   diagnostics?: ApplicationDiagnostic[];
   hostMode: ApplicationHostMode;
+  catalogLoader?: () => Promise<{
+    plugins: ApplicationPluginSpec[];
+    diagnostics: ApplicationDiagnostic[];
+  }>;
 }
 
 export class ApplicationRuntime {
@@ -25,14 +29,18 @@ export class ApplicationRuntime {
   private readonly message = new MessageModule();
   private readonly service = new ApplicationServiceRegistry();
   private readonly menu: MenuModule;
-  private readonly pluginStates: ApplicationPluginState[];
+  private readonly pluginStates: ApplicationPluginState[] = [];
+  private pluginSpecs: ApplicationPluginSpec[];
+  private diagnostics: ApplicationDiagnostic[];
   private readonly listeners = new Set<(event: ApplicationEvent) => void>();
   private readonly loaded: ApplicationPluginSpec[] = [];
   private startPromise: Promise<ApplicationBootstrap> | undefined;
   private disposePromise: Promise<void> | undefined;
 
   constructor(private readonly options: ApplicationRuntimeOptions) {
-    this.pluginStates = options.plugins.map((spec) => ({ ...spec, kits: [...spec.kits], status: 'pending' }));
+    this.pluginSpecs = [...(options.plugins ?? [])];
+    this.diagnostics = [...(options.diagnostics ?? [])];
+    this.resetPluginStates();
     this.menu = new MenuModule({ onChange: () => this.emit() });
   }
 
@@ -45,7 +53,7 @@ export class ApplicationRuntime {
     return {
       phase: this.phase,
       plugins: this.pluginStates.map((state) => ({ ...state, kits: [...state.kits] })),
-      diagnostics: (this.options.diagnostics ?? []).map((item) => ({ ...item })),
+      diagnostics: this.diagnostics.map((item) => ({ ...item })),
       menu: structuredClone(this.menu.getState()),
     };
   }
@@ -82,7 +90,22 @@ export class ApplicationRuntime {
   private async startInternal(): Promise<ApplicationBootstrap> {
     this.phase = 'starting';
     this.emit();
-    for (const spec of this.options.plugins) {
+    if (this.options.catalogLoader) {
+      try {
+        const catalog = await this.options.catalogLoader();
+        this.pluginSpecs = [...catalog.plugins];
+        this.diagnostics = [...this.diagnostics, ...catalog.diagnostics];
+        this.resetPluginStates();
+      } catch (error) {
+        this.pluginSpecs = [];
+        this.resetPluginStates();
+        this.diagnostics.push({
+          code: 'INVALID_KIT_MANIFEST',
+          message: `Application plugin discovery failed: ${errorMessage(error)}`,
+        });
+      }
+    }
+    for (const spec of this.pluginSpecs) {
       const state = this.pluginStates.find((item) => item.name === spec.name)!;
       try {
         await this.plugin.register(spec.path, { kind: 'external' });
@@ -103,7 +126,7 @@ export class ApplicationRuntime {
       this.emit();
     }
     this.phase = this.pluginStates.some((state) => state.status === 'failed')
-      || (this.options.diagnostics?.length ?? 0) > 0
+      || this.diagnostics.length > 0
       ? 'degraded'
       : 'ready';
     this.emit();
@@ -239,6 +262,15 @@ export class ApplicationRuntime {
     if (this.listeners.size === 0) return;
     const event: ApplicationEvent = { type: 'application-bootstrap', bootstrap: this.getBootstrap() };
     for (const listener of this.listeners) listener(event);
+  }
+
+  private resetPluginStates(): void {
+    this.pluginStates.length = 0;
+    this.pluginStates.push(...this.pluginSpecs.map((spec) => ({
+      ...spec,
+      kits: [...spec.kits],
+      status: 'pending' as const,
+    })));
   }
 }
 

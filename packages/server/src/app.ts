@@ -22,10 +22,15 @@ import { normalizeAssemblyConfig } from './assembly/config';
 import { SessionRuntimeRegistry } from './session/runtime-registry';
 import { HttpError } from './http/errors';
 import { sendHttpError } from './http/json';
+import type { ApplicationRuntime } from './application/runtime';
+import { createApplicationBootstrapRouter } from './routes/application-bootstrap';
+import { createApplicationEventsRouter } from './routes/application-events';
+import { createApplicationMenuTriggerRouter } from './routes/application-menu-trigger';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
   override?: AssemblyConfigOverride;
+  applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'triggerMenu' | 'subscribe'>;
 }
 
 export function createApp(
@@ -119,11 +124,19 @@ export function createApp(
   const windowGroupRouter = createWindowGroupRouter(editorMap);
   const panelOpenRouter = createPanelOpenRouter(editorMap);
   const panelInstanceRouter = createPanelInstanceRouter(editorMap);
+  const applicationBootstrapRouter = createApplicationBootstrapRouter(appOptions.applicationRuntime);
+  const applicationEventsRouter = createApplicationEventsRouter(appOptions.applicationRuntime);
+  const applicationMenuTriggerRouter = createApplicationMenuTriggerRouter(appOptions.applicationRuntime);
 
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';
 
-    // SSE endpoint
+    if (url.startsWith('/sse/application')) {
+      applicationEventsRouter(req, res);
+      return;
+    }
+
+    // Session SSE endpoint
     if (url.startsWith('/sse/')) {
       handleSSE(req, res, channel);
       return;
@@ -138,6 +151,14 @@ export function createApp(
     }
 
     // Framework routes
+    if (url.startsWith('/api/application/bootstrap')) {
+      applicationBootstrapRouter(req, res);
+      return;
+    }
+    if (url.startsWith('/api/application/menu/trigger')) {
+      await applicationMenuTriggerRouter(req, res);
+      return;
+    }
     if (url.startsWith('/api/bootstrap/')) {
       await bootstrapRouter(req, res);
       return;
