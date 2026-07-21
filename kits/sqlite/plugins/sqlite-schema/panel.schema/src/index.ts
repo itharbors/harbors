@@ -32,7 +32,8 @@ function render(){
   let content:string;
   let status='等待数据库连接';
   if(error){content=`<div class="empty-state error" role="alert">${escape(error)}</div>`;status='结构加载失败';}
-  else if(!connection?.connected||!selection.objectName){content='<div class="empty-state">请先连接数据库并选择对象。</div>';}
+  else if(!connection?.connected){content='<div class="empty-state">请先打开 SQLite 数据库。</div>';}
+  else if(!selection.objectName){content='<div class="empty-state">请从资源管理器选择一个数据库对象。</div>';status='等待选择数据库对象';}
   else if(!schema){content=`<div class="empty-state">正在加载 ${escape(selection.objectName)} 的结构…</div>`;status=`正在加载 ${selection.objectName}`;}
   else{content=renderSchema(schema);status=`${schema.columns.length} 个字段`;}
   root.innerHTML=`<main class="workspace">

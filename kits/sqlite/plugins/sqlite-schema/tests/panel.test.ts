@@ -14,6 +14,44 @@ describe('SQLite Schema panel', () => {
     vi.resetModules();
   });
 
+  it('distinguishes a disconnected database from a missing object selection', async () => {
+    const disconnected = {
+      connected: false,
+      path: null,
+      mode: null,
+      sqliteVersion: null,
+      connectionRevision: 0,
+      schemaRevision: 0,
+      dataRevision: 0,
+    };
+    const request = vi.fn(async (plugin: string, method: string) => {
+      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
+      if (plugin === '@itharbors/sqlite-explorer' && method === 'getSelection') {
+        return { connectionRevision: 0, objectName: null };
+      }
+      throw new Error(`Unexpected ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.schema/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    expect(document.querySelector('.empty-state')?.textContent).toBe('请先打开 SQLite 数据库。');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('等待数据库连接');
+
+    await definition.methods.onConnectionChanged({
+      ...disconnected,
+      connected: true,
+      path: '/tmp/demo.sqlite',
+      mode: 'readonly',
+      sqliteVersion: '3.46',
+      connectionRevision: 1,
+      schemaRevision: 1,
+      dataRevision: 1,
+    });
+
+    expect(document.querySelector('.empty-state')?.textContent).toBe('请从资源管理器选择一个数据库对象。');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('等待选择数据库对象');
+  });
+
   it('renders the complete schema for the selected object as safe text', async () => {
     const writeText = vi.fn(async () => undefined);
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText } });
