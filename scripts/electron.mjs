@@ -19,7 +19,7 @@ import { WorkspaceStore } from './lib/workspace-store.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
-const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.svg', import.meta.url));
+const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.png', import.meta.url));
 const gatewayPort = parsePort(process.env.PORT, 8080);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));

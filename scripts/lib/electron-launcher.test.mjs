@@ -53,6 +53,24 @@ test('keeps Electron as the default dev entry and Web as an explicit compatibili
   assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
 });
 
+test('uses visible PNG tray icon assets at standard and Retina densities', async () => {
+  const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.match(electronSource, /assets\/tray-icon\.png/);
+  assert.doesNotMatch(electronSource, /assets\/tray-icon\.svg/);
+
+  for (const [fileName, expectedSize] of [
+    ['tray-icon.png', 18],
+    ['tray-icon@2x.png', 36],
+  ]) {
+    const icon = await readFile(new URL(`../assets/${fileName}`, import.meta.url));
+    assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(icon.readUInt32BE(16), expectedSize);
+    assert.equal(icon.readUInt32BE(20), expectedSize);
+    assert.ok(icon.length > 100, `${fileName} must not be empty`);
+  }
+});
+
 test('initializes the Tray host without opening a default Kit', async () => {
   const calls = [];
   await initializeKitHost({ mode: 'multi', requestedKit: null }, {
