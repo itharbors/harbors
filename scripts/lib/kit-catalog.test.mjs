@@ -16,6 +16,8 @@ async function createKit(rootDir, directoryName, options = {}) {
         menuRoot: options.menuRoot ?? { id: directoryName, label: directoryName.toUpperCase() },
         layouts: { default: 'layout.json' },
         windowEntries: { main: 'main.html', secondary: 'secondary.html' },
+        ...(options.plugins ? { plugin: options.plugins } : {}),
+        ...(options.startupPlugins ? { startup: { plugins: options.startupPlugins } } : {}),
       },
     },
   };
@@ -43,6 +45,52 @@ test('discovers valid Kit manifests in deterministic order', async () => {
     },
   ]);
   assert.equal(kits[0].directory, path.join(rootDir, 'kits', 'default'));
+});
+
+test('returns startup plugins in manifest order', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'notifications', {
+    plugins: ['@itharbors/notification-center'],
+    startupPlugins: ['@itharbors/notification-background', '@itharbors/telemetry-background'],
+  });
+
+  const [kit] = await discoverKits({ rootDir });
+
+  assert.deepEqual(kit.startupPlugins, [
+    '@itharbors/notification-background',
+    '@itharbors/telemetry-background',
+  ]);
+});
+
+test('ignores manifests with malformed, duplicate, or overlapping startup plugins', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'valid');
+  await createKit(rootDir, 'malformed', { startupPlugins: ['@itharbors/background', 42] });
+  await createKit(rootDir, 'duplicate', {
+    startupPlugins: ['@itharbors/background', '@itharbors/background'],
+  });
+  await createKit(rootDir, 'overlap', {
+    plugins: ['@itharbors/background'],
+    startupPlugins: ['@itharbors/background'],
+  });
+
+  const kits = await discoverKits({ rootDir });
+
+  assert.deepEqual(kits.map((kit) => kit.name), ['@itharbors/kit-valid']);
+  assert.deepEqual(kits[0].startupPlugins, []);
+});
+
+test('reports invalid startup plugins for an explicitly requested Kit', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  const kitDir = await createKit(rootDir, 'invalid', {
+    plugins: ['@itharbors/background'],
+    startupPlugins: ['@itharbors/background'],
+  });
+
+  await assert.rejects(
+    discoverKits({ rootDir, requestedKit: kitDir }),
+    /startup plugin.*ordinary plugin/i,
+  );
 });
 
 test('ignores invalid manifests during multi-Kit discovery', async () => {

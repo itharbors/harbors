@@ -73,6 +73,7 @@ async function readKitEntry(directory) {
   }
 
   const menuRoot = manifest['ce-editor'].kit.menuRoot;
+  const startupPlugins = manifest['ce-editor'].kit.startup?.plugins ?? [];
   return {
     status: 'valid',
     entry: {
@@ -81,6 +82,7 @@ async function readKitEntry(directory) {
       menuRoot: { id: menuRoot.id, label: menuRoot.label },
       directory: path.resolve(directory),
       manifestPath: path.resolve(manifestPath),
+      startupPlugins: [...startupPlugins],
     },
   };
 }
@@ -95,6 +97,26 @@ function validateManifest(manifest) {
   if (typeof kit.layouts?.default !== 'string' || kit.layouts.default.length === 0) return 'layouts.default is required';
   if (typeof kit.windowEntries?.main !== 'string' || kit.windowEntries.main.length === 0) return 'windowEntries.main is required';
   if (typeof kit.windowEntries?.secondary !== 'string' || kit.windowEntries.secondary.length === 0) return 'windowEntries.secondary is required';
+  const ordinaryPluginsReason = validatePluginList(kit.plugin, 'plugin');
+  if (ordinaryPluginsReason) return ordinaryPluginsReason;
+  if (kit.startup !== undefined && (!kit.startup || typeof kit.startup !== 'object' || Array.isArray(kit.startup))) {
+    return 'startup must be an object';
+  }
+  const startupPluginsReason = validatePluginList(kit.startup?.plugins, 'startup.plugins');
+  if (startupPluginsReason) return startupPluginsReason;
+  const ordinaryPlugins = new Set(kit.plugin ?? []);
+  const overlap = (kit.startup?.plugins ?? []).find((name) => ordinaryPlugins.has(name));
+  if (overlap) return `startup plugin "${overlap}" must not also be an ordinary plugin`;
+  return null;
+}
+
+function validatePluginList(value, field) {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) return `${field} must be an array`;
+  if (value.some((item) => typeof item !== 'string' || item.length === 0)) {
+    return `${field} must contain non-empty strings`;
+  }
+  if (new Set(value).size !== value.length) return `${field} must not contain duplicates`;
   return null;
 }
 
