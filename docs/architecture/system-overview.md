@@ -12,6 +12,9 @@ flowchart LR
     Browser["浏览器"]
     Tray["Electron Tray / KitCatalog"]
     Electron["按需 Kit BrowserWindow"]
+    Host["Notification Host 127.0.0.1:17896"]
+    Agent["Agent / notify-user Skill"]
+    Toast["桌面弹窗 / 任务栏角标"]
     Gateway["Gateway :8080"]
     Server["Server :3000"]
     Client["Vite Client :5173"]
@@ -20,6 +23,9 @@ flowchart LR
 
     User --> Browser
     User --> Tray
+    Agent --> Host
+    Host --> Toast
+    Host --> Electron
     Tray --> Electron
     Browser --> Gateway
     Electron --> Gateway
@@ -42,8 +48,9 @@ flowchart LR
 | `packages/client` | 工作台、Web Components、布局交互、主题、HTTP/SSE 客户端 | 插件装载和权威窗口状态 |
 | `packages/plugin-types` | 插件与 Panel 可见的共享 TypeScript 协议 | 运行时实现 |
 | `plugins` | 始终可用的框架级插件：panel、message、menu、config | 具体 Kit 的产品能力 |
-| `kits` | 会话可选择的插件集合、布局、主题和窗口入口 | Framework 通用实现 |
-| `scripts` | 开发栈、Electron 宿主、插件构建与校验 | 运行时业务状态 |
+| `kits` | 会话可选择的插件集合、布局、主题和窗口入口；包含通知中心 | Framework 通用实现 |
+| `scripts` | 开发栈、Electron 宿主、通知 Host、插件构建与校验 | Server 会话业务状态 |
+| `.agents/skills/notify-user` | Agent 发送桌面通知的受控 CLI 与使用策略 | 启动 Electron 或绕过 Host 直接操作桌面 |
 
 ## Server 内部装配
 
@@ -98,6 +105,7 @@ flowchart TD
 | tab 拖动、临时 resize | Client DOM/控制器 | 当前页面交互 |
 | Kit 目录与窗口注册表 | Electron main process | 应用生命周期 |
 | Kit sessionId 与窗口 bounds | Electron userData `workspaces.json` | 跨 Electron 重启 |
+| 通知、未读数与弹窗队列 | Electron main process 的 Notification Host | 当前桌面应用生命周期，最多 500 条 |
 
 ## Web 与 Electron
 
@@ -113,8 +121,14 @@ Electron 额外提供：
 - 所有 Kit 窗口统一把菜单聚合为 `APP / <Kit...>`；
 - 把原生菜单点击送回对应 session 的窗口，发送前先显示目标窗口；
 - 只允许通过系统浏览器打开 `http:` 或 `https:` URL。
+- 在 `127.0.0.1` 暴露 Notification Host，驱动最多三个并发弹窗、系统未读角标与托盘标签；
+- 用独立且窄化的 preload 处理弹窗点击，通知 ID 由主进程按来源窗口反查。
 
 这些能力通过 context-isolated preload 暴露，不改变核心运行时边界。
+
+Notification Host 不经过 Gateway 或 Server，也不监听外部网卡。Notification Center 插件的
+server-side main 和 `notify-user` Skill 都只访问该 loopback 接口；Electron 会把实际端口通过
+`HARBORS_NOTIFICATION_PORT` 传给 Web 子进程。通知当前不持久化，桌面应用退出时清空。
 
 ## 源码索引
 
@@ -126,6 +140,8 @@ Electron 额外提供：
 - [Client 工作台入口](../../packages/client/src/components/editor-app.ts)
 - [Client transport](../../packages/client/src/core/transport.ts)
 - [Electron 宿主](../../scripts/electron.mjs)
+- [Notification Host](../../scripts/lib/notification-host.mjs)
+- [Agent 通知 Skill](../../.agents/skills/notify-user/SKILL.md)
 
 关联阅读：[核心运行流程](./runtime-flows.md) ·
 [Kit 与会话模型](./kit-and-session-model.md)

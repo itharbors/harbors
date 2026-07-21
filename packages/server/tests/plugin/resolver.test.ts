@@ -63,7 +63,7 @@ describe('resolvePlugin', () => {
 
     const result = await resolvePlugin('@scope/code-editor', pluginContext());
 
-    expect(result).toBe(dir);
+    expect(result).toBe(fs.realpathSync(dir));
   });
 
   it('finds a plugin bundled under kits/*/plugins', async () => {
@@ -71,7 +71,24 @@ describe('resolvePlugin', () => {
 
     const result = await resolvePlugin('@scope/status-bar', pluginContext(path.join(projectRoot, 'kits', 'default', 'plugins')));
 
-    expect(result).toBe(dir);
+    expect(result).toBe(fs.realpathSync(dir));
+  });
+
+  it('returns a canonical real path for a plugin reached through a symlink', async () => {
+    const realPluginsDir = path.join(projectRoot, 'real-plugins');
+    const realPluginDir = path.join(realPluginsDir, 'background');
+    fs.mkdirSync(realPluginDir, { recursive: true });
+    fs.writeFileSync(path.join(realPluginDir, 'package.json'), JSON.stringify({
+      name: '@scope/background',
+      main: 'index.js',
+      'ce-editor': { contribute: {} },
+    }));
+    fs.writeFileSync(path.join(realPluginDir, 'index.js'), '');
+    fs.symlinkSync(realPluginDir, path.join(pluginsDir, 'background'));
+
+    const result = await resolvePlugin('@scope/background', pluginContext());
+
+    expect(result).toBe(fs.realpathSync(realPluginDir));
   });
 
   it('does not fall back to node_modules when explicit directories do not contain the plugin', async () => {

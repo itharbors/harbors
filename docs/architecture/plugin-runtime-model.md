@@ -69,13 +69,28 @@ my-plugin/
 Plugin resolver 只在 assembly 明确给出的目录中枚举一级子目录，并按 package `name`
 匹配。它不依赖当前工作目录的隐式 Node resolution。
 
-每个 Editor 的 PluginModule 同时维护：
+Session Editor 与进程级 ApplicationRuntime 各自拥有 PluginModule。每个 PluginModule 同时维护：
 
 - path map：已注册的磁盘路径；
 - name map：当前已装载并运行的插件名。
 
 同名的新路径被装载时，已有运行实例会先卸载。`kind` 区分 `builtin` 与 `external`，
 用于表达装配来源；两者仍走同一 PluginModule。
+
+## 两种运行时作用域
+
+普通 Kit 插件在 Session scope 中加载，可以访问 `sessionId`、Kit、Panel、Window、菜单和消息。
+Kit 的 `startup.plugins` 在 application scope 中加载，只能访问：
+
+- `plugin`：定义和调用应用级插件方法；
+- `menu`：注册全局菜单贡献；
+- `message`：注册或调用仅在 Server 执行的消息；
+- `service`：按 owner 注册和查询进程级服务；
+- `host`：读取 `desktop` / `web` 运行模式。
+
+application runtime 由白名单直接构造，不先创建完整 Editor 再删字段，因此不会泄漏
+`sessionId`、Kit、Panel、Window、Layout 或 Session config。Panel 贡献、`panel.*` 方法和
+browser message 在导入插件前即被拒绝。
 
 ## 生命周期
 
@@ -116,6 +131,9 @@ stateDiagram-v2
 4. 从 name map 删除实例并回到 Idle；多项失败以 `AggregateError` 返回。
 
 Editor 在 Kit 切换时还会按 owner 清理 Panel、Message 和 Menu 注册，形成第二道清理边界。
+ApplicationRuntime 对每个启动插件同样按 owner 清理 service、message 和 menu；一个插件失败
+只令应用进入 `degraded`，其他插件继续加载。应用启动插件不能调用全局 `menu.reset()`，只能
+增删自己的菜单贡献，避免失败插件清空其他 owner 的菜单。应用退出时按成功加载顺序的逆序卸载。
 
 ### unregister
 
@@ -181,6 +199,9 @@ manifest 和现有产物。
 ## 源码索引
 
 - [PluginModule](../../packages/server/src/framework/plugin/index.ts)
+- [ApplicationRuntime](../../packages/server/src/application/runtime.ts)
+- [应用启动插件发现](../../packages/server/src/application/catalog.ts)
+- [应用服务注册表](../../packages/server/src/application/service-registry.ts)
 - [插件类型](../../packages/server/src/framework/plugin/types.ts)
 - [插件 resolver](../../packages/server/src/plugin/resolver.ts)
 - [Panel 资源与 runtime 注入](../../packages/server/src/routes/panel-asset.ts)

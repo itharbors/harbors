@@ -5,6 +5,7 @@ import path from 'node:path';
 import { PluginModule } from '../../src/framework/plugin/index';
 import { createEditor } from '../../src/editor/index';
 import type { PluginRuntimeHost } from '../../src/editor/types';
+import type { ApplicationPluginRuntimeHost } from '../../src/editor/types';
 import { testAssembly } from '../helpers/assembly';
 
 const assembly = testAssembly;
@@ -37,6 +38,39 @@ function withRuntimeMenu(editor: ReturnType<typeof createEditor>): PluginRuntime
       clearDefaults: vi.fn(),
       reset: vi.fn(),
       getState: () => editor.menu.getState(),
+    },
+  };
+}
+
+function applicationRuntimeHost(): ApplicationPluginRuntimeHost {
+  return {
+    plugin: {
+      define: vi.fn(),
+      getInfo: vi.fn(),
+      listLoaded: vi.fn(() => []),
+      listRegistered: vi.fn(() => []),
+      callPlugin: vi.fn(),
+    },
+    menu: {
+      attach: vi.fn(),
+      detach: vi.fn(),
+      getState: vi.fn(() => ({ tree: [], warnings: [] })),
+    },
+    message: {
+      registerRequest: vi.fn(),
+      registerBroadcast: vi.fn(),
+      unregisterRequest: vi.fn(),
+      unregisterBroadcast: vi.fn(),
+      request: vi.fn(),
+      broadcast: vi.fn(),
+    },
+    service: {
+      register: vi.fn(),
+      unregister: vi.fn(),
+      get: vi.fn(),
+    },
+    host: {
+      mode: 'desktop',
     },
   };
 }
@@ -193,6 +227,73 @@ describe('PluginModule', () => {
     expect(runtimeHost.menu.attach).toHaveBeenCalledWith('menu-owner', {
       menu: [{ type: 'menu', id: 'tools', label: 'Tools' }],
     });
+  });
+
+  it('constructs application plugin runtimes from an explicit whitelist', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-application-runtime-'));
+    const pluginDir = mkPlugin(root, 'background', 'background', `
+      let runtimeKeys;
+      let menuKeys;
+      let hostMode;
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) {
+            runtimeKeys = Object.keys(runtime).sort();
+            menuKeys = Object.keys(runtime.menu).sort();
+            hostMode = runtime.host.mode;
+            runtime.service.register('notification-client', { ready: true });
+          },
+        },
+        methods: {
+          runtimeKeys() {
+            return runtimeKeys;
+          },
+          menuKeys() {
+            return menuKeys;
+          },
+          hostMode() {
+            return hostMode;
+          },
+        },
+      });
+    `);
+    const plugin = new PluginModule();
+    const host = applicationRuntimeHost();
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    await plugin.load(pluginDir, { scope: 'application', host });
+
+    expect(plugin.callPlugin('background', 'runtimeKeys')).toEqual([
+      'host', 'menu', 'message', 'plugin', 'service',
+    ]);
+    expect(plugin.callPlugin('background', 'menuKeys')).toEqual([
+      'attach', 'detach', 'getState',
+    ]);
+    expect(plugin.callPlugin('background', 'hostMode')).toBe('desktop');
+    expect(host.service.register).toHaveBeenCalledWith('background', 'notification-client', { ready: true });
+  });
+
+  it('rejects browser and panel message routes from application plugins', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-application-message-'));
+    const pluginDir = mkPlugin(root, 'background', 'background', `
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) {
+            runtime.message.registerRequest('', 'open', () => undefined, 'browser', ['panel.open']);
+          },
+        },
+        methods: {},
+      });
+    `);
+    const plugin = new PluginModule();
+
+    await plugin.register(pluginDir, { kind: 'external' });
+
+    await expect(plugin.load(pluginDir, {
+      scope: 'application',
+      host: applicationRuntimeHost(),
+    })).rejects.toThrow(/application plugin.*server message/i);
+    expect(plugin.listLoaded()).not.toContain('background');
   });
 
   it('loads builtin menu plugin from main/dist entry', async () => {

@@ -1,0 +1,24 @@
+{
+  "name": "@itharbors/notification-background",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "installCodexSkill": ["installCodexSkill"]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "install-codex-notification-skill",
+          "message": "installCodexSkill",
+          "order": 10,
+          "label": "Install or Update Codex Notification Skill…"
+        }
+      ]
+    }
+  }
+}

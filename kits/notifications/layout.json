@@ -1,0 +1,14 @@
+{
+  "windows": [
+    {
+      "id": "notifications-main",
+      "type": "panel-area",
+      "layout": {
+        "type": "leaf",
+        "panel": "@itharbors/notification-center.center",
+        "panelType": "simple"
+      }
+    }
+  ],
+  "activePanel": "@itharbors/notification-center.center"
+}

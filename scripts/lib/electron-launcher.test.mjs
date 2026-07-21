@@ -6,11 +6,13 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
+  mergeMenuTrees,
   initializeKitHost,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
+  shutdownDesktopServices,
   showKitChooser,
 } from './electron-launcher.mjs';
 import { createDevPages, createDevServerEnv } from './dev-launcher.mjs';
@@ -192,6 +194,24 @@ test('builds tray entries for available and persisted unavailable Kits', () => {
   assert.equal(quitCount, 1);
 });
 
+test('adds unread count only to the Notification Kit tray entry', () => {
+  const template = buildTrayTemplate({
+    kits: [
+      { name: '@itharbors/kit-default', label: 'Default Kit' },
+      { name: '@itharbors/kit-notifications', label: 'Notifications' },
+    ],
+    workspaceRecords: [],
+    unreadCount: 4,
+    notificationKitName: '@itharbors/kit-notifications',
+  }, {
+    openKit() {},
+    quit() {},
+  });
+
+  assert.equal(template[0].label, 'Default Kit');
+  assert.equal(template[1].label, 'Notifications (4)');
+});
+
 test('focuses an existing Kit window or creates a replacement', async () => {
   const calls = [];
   const existing = {
@@ -268,7 +288,6 @@ test('clears a failed Kit load so the next selection can retry', async () => {
     show() {},
     focus() {},
   };
-
   await assert.rejects(
     openOrFocusKitWindow('sqlite', registry, pendingLoads, async () => {
       createCount += 1;
@@ -289,6 +308,32 @@ test('clears a failed Kit load so the next selection can retry', async () => {
   assert.equal(retried, createdWindow);
   assert.equal(createCount, 2);
   assert.equal(pendingLoads.size, 0);
+});
+
+test('stops the Framework before tearing down Electron-owned notification services', async () => {
+  const events = [];
+  let releaseFramework;
+  const shutdown = shutdownDesktopServices({
+    persistWorkspace: async () => { events.push('persist'); },
+    stopFramework: async () => {
+      events.push('framework:start');
+      await new Promise((resolve) => { releaseFramework = resolve; });
+      events.push('framework:stopped');
+    },
+    stopNotificationService: async () => { events.push('notification:stopped'); },
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(events, ['persist', 'framework:start']);
+  releaseFramework();
+  await shutdown;
+
+  assert.deepEqual(events, [
+    'persist',
+    'framework:start',
+    'framework:stopped',
+    'notification:stopped',
+  ]);
 });
 
 test('persists every live Kit window before the tray application quits', async () => {
@@ -316,4 +361,69 @@ test('keeps APP menu actions bound to the focused Kit when a hidden Kit syncs', 
 
   assert.equal(selectMenuWindow(focused, hiddenSource, windowSessions), focused);
   assert.equal(selectMenuWindow(unknown, hiddenSource, windowSessions), hiddenSource);
+});
+
+test('merges global application and focused-session menu trees by id', () => {
+  const merged = mergeMenuTrees(
+    [{
+      type: 'menu',
+      id: 'tools',
+      label: 'Tools',
+      children: [{ type: 'menu', id: 'tools/install', label: 'Install', children: [] }],
+    }],
+    [{
+      type: 'menu',
+      id: 'tools',
+      label: 'Tools',
+      children: [{ type: 'menu', id: 'tools/about', label: 'About', children: [] }],
+    }],
+  );
+
+  assert.deepEqual(merged, [{
+    type: 'menu',
+    id: 'tools',
+    label: 'Tools',
+    children: [
+      { type: 'menu', id: 'tools/install', label: 'Install', children: [] },
+      { type: 'menu', id: 'tools/about', label: 'About', children: [] },
+    ],
+  }]);
+});
+
+test('wires the loopback Host, toast queue and desktop cleanup into Electron', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /createNotificationHost/);
+  assert.match(source, /createNotificationStore/);
+  assert.match(source, /createToastQueue/);
+  assert.match(source, /await startNotificationService\(\)/);
+  assert.match(source, /HARBORS_NOTIFICATION_PORT:\s*String\(notificationPort\)/);
+  assert.match(source, /harbors:notification-open-center/);
+  assert.match(source, /harbors:notification-close-toast/);
+  assert.match(source, /stopNotificationService\(\)/);
+  assert.match(source, /applyNotificationBadgeToWindow\(window\)/);
+  assert.match(source, /notification-preload\.cjs/);
+  assert.match(source, /fetchApplicationBootstrap/);
+  assert.match(source, /createApplicationRuntimeClient/);
+  assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
+  assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
+  assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
+  assert.doesNotMatch(source, /prewarmKitWindows/);
+  assert.match(source, /initializeKitHost/);
+  assert.doesNotMatch(source, /openKit\(kitCatalog\[0\]\.name\)/);
+
+  const stopHost = source.indexOf('await notificationHost?.stop()');
+  const unsubscribeStore = source.indexOf('notificationStoreUnsubscribe?.()');
+  assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
+});
+
+test('keeps the notification toast preload bridge intentionally narrow', async () => {
+  const source = await readFile(new URL('../notification-preload.cjs', import.meta.url), 'utf8');
+
+  assert.match(source, /exposeInMainWorld\('notificationToast'/);
+  assert.match(source, /openCenter/);
+  assert.match(source, /closeToast/);
+  assert.match(source, /harbors:notification-open-center/);
+  assert.match(source, /harbors:notification-close-toast/);
+  assert.doesNotMatch(source, /notificationId/);
 });
