@@ -98,3 +98,14 @@ export async function persistOpenWindowBounds(registry, workspaceStore) {
     throw new AggregateError(errors, 'Failed to persist Kit window bounds');
   }
 }
+
+export function selectMenuWindow(focusedWindow, sourceWindow, windowSessions) {
+  if (
+    focusedWindow
+    && !focusedWindow.isDestroyed()
+    && windowSessions.has(focusedWindow.id)
+  ) {
+    return focusedWindow;
+  }
+  return sourceWindow;
+}

@@ -195,4 +195,27 @@ describe('buildMultiKitMenuTemplate', () => {
       [{ sessionId: 'session-b', menuId: 'b/action' }],
     ]);
   });
+
+  it('renders an empty Kit root as a disabled submenu instead of a synthetic action', () => {
+    const sendToWindow = vi.fn();
+    const template = buildMultiKitMenuTemplate({
+      focusedSessionId: 'session-sqlite',
+      sessions: [
+        {
+          sessionId: 'session-sqlite',
+          applicationMenuTree: [{ type: 'menu', id: 'file', label: 'File', children: [] }],
+          kitMenuTree: [],
+          kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
+        },
+      ],
+    }, { sendToWindow });
+
+    expect(template[1]).toMatchObject({
+      label: 'SQLite',
+      enabled: false,
+      submenu: [],
+    });
+    expect(template[1].click).toBeUndefined();
+    expect(sendToWindow).not.toHaveBeenCalled();
+  });
 });

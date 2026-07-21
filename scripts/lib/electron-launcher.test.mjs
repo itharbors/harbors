@@ -9,6 +9,7 @@ import {
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
+  selectMenuWindow,
 } from './electron-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
@@ -142,4 +143,14 @@ test('persists every live Kit window before the tray application quits', async (
     kitName: 'sqlite',
     bounds: { x: 1, y: 2, width: 800, height: 600 },
   }]);
+});
+
+test('keeps APP menu actions bound to the focused Kit when a hidden Kit syncs', () => {
+  const focused = { id: 1, isDestroyed: () => false };
+  const hiddenSource = { id: 2, isDestroyed: () => false };
+  const unknown = { id: 3, isDestroyed: () => false };
+  const windowSessions = new Map([[1, 'focused-session'], [2, 'hidden-session']]);
+
+  assert.equal(selectMenuWindow(focused, hiddenSource, windowSessions), focused);
+  assert.equal(selectMenuWindow(unknown, hiddenSource, windowSessions), hiddenSource);
 });

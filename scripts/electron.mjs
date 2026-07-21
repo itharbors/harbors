@@ -11,6 +11,7 @@ import {
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
+  selectMenuWindow,
 } from './lib/electron-launcher.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
 
@@ -69,27 +70,19 @@ export function buildMultiKitMenuTemplate({ focusedSessionId, sessions }, adapte
   const focused = sessions.find((session) => session.sessionId === focusedSessionId) ?? sessions[0];
   if (!focused) return [];
 
-  const applicationRoot = {
-    type: 'menu',
-    id: 'itharbors:application',
-    label: 'APP',
-    children: focused.applicationMenuTree,
-  };
   const kitRoots = sessions
     .filter((session) => session.kitMenuRoot)
     .map((session) => ({
-      node: {
-        type: 'menu',
-        id: `itharbors:kit:${session.kitMenuRoot.id}`,
-        label: session.kitMenuRoot.label,
-        children: session.kitMenuTree,
-      },
+      label: session.kitMenuRoot.label,
+      children: session.kitMenuTree,
       sessionId: session.sessionId,
     }));
 
   return [
-    toElectronTemplate(applicationRoot, focused.sessionId, adapters),
-    ...kitRoots.map(({ node, sessionId }) => toElectronTemplate(node, sessionId, adapters)),
+    toElectronRootTemplate('APP', focused.applicationMenuTree, focused.sessionId, adapters),
+    ...kitRoots.map(({ label, children, sessionId }) => (
+      toElectronRootTemplate(label, children, sessionId, adapters)
+    )),
   ];
 }
 
@@ -127,6 +120,14 @@ function toElectronTemplate(node, sessionId, adapters) {
   }
 
   return item;
+}
+
+function toElectronRootTemplate(label, children, sessionId, adapters) {
+  return {
+    label,
+    submenu: children.map((child) => toElectronTemplate(child, sessionId, adapters)),
+    ...(children.length === 0 ? { enabled: false } : {}),
+  };
 }
 
 if (shouldStartElectronApp()) {
@@ -335,7 +336,11 @@ function registerMenuIpc() {
     sessionMenus.set(sanitizedPayload.sessionId, sanitizedPayload);
     resolveMenuSyncWaiters(sanitizedPayload.sessionId);
 
-    applyMenuForWindow(window);
+    applyMenuForWindow(selectMenuWindow(
+      BrowserWindow.getFocusedWindow(),
+      window,
+      windowSessions,
+    ));
   };
   ipcMain.on('ce:menu-sync', menuSyncListener);
   menuSyncListenerRegistered = true;

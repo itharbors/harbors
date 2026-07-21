@@ -157,6 +157,63 @@ describe('Framework Integration', () => {
     }
   });
 
+  it('isolates built-in and external runtime pipelines across concurrent Kits', async () => {
+    const [defaultResponse, sqliteResponse] = await Promise.all([
+      fetch(`${baseURL}/api/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'multi-kit-default',
+          kit: '@itharbors/kit-default',
+        }),
+      }),
+      fetch(`${baseURL}/api/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'multi-kit-sqlite',
+          kit: '@itharbors/kit-sqlite',
+        }),
+      }),
+    ]);
+
+    expect(defaultResponse.status).toBe(201);
+    expect(sqliteResponse.status).toBe(201);
+
+    const defaultEditor = editorMap.get('multi-kit-default')!;
+    const sqliteEditor = editorMap.get('multi-kit-sqlite')!;
+    expect(defaultEditor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+    expect(sqliteEditor.kit.getCurrent()?.name).toBe('@itharbors/kit-sqlite');
+
+    for (const builtin of ['@itharbors/panel', '@itharbors/message', '@itharbors/menu', '@itharbors/config']) {
+      expect(defaultEditor.plugin.listLoaded()).toContain(builtin);
+      expect(sqliteEditor.plugin.listLoaded()).toContain(builtin);
+    }
+    expect(defaultEditor.plugin.listLoaded()).toContain('@itharbors/log');
+    expect(defaultEditor.plugin.listLoaded()).not.toContain('@itharbors/sqlite-core');
+    expect(sqliteEditor.plugin.listLoaded()).toContain('@itharbors/sqlite-core');
+    expect(sqliteEditor.plugin.listLoaded()).not.toContain('@itharbors/log');
+
+    expect(defaultEditor.panel.getInfo('@itharbors/log.log')).toBeDefined();
+    expect(() => defaultEditor.panel.getInfo('@itharbors/sqlite-explorer.explorer')).toThrow(/not registered/);
+    expect(sqliteEditor.panel.getInfo('@itharbors/sqlite-explorer.explorer')).toBeDefined();
+    expect(() => sqliteEditor.panel.getInfo('@itharbors/log.log')).toThrow(/not registered/);
+
+    defaultEditor.message.registerRequest('default-only', 'ping', () => 'default');
+    await expect(defaultEditor.message.request('default-only', 'ping')).resolves.toBe('default');
+    await expect(sqliteEditor.message.request('default-only', 'ping')).rejects.toThrow(/No request route registered/);
+
+    const configTypes = [{ name: 'global', priority: 0, scope: 'shared' as const }];
+    defaultEditor.config.registerTypes(configTypes);
+    sqliteEditor.config.registerTypes(configTypes);
+    defaultEditor.config.set('owner', 'default', 'global');
+    sqliteEditor.config.set('owner', 'sqlite', 'global');
+    expect(defaultEditor.config.get('owner', 'global')).toBe('default');
+    expect(sqliteEditor.config.get('owner', 'global')).toBe('sqlite');
+
+    expect(defaultEditor.menu.getKitState().tree).not.toEqual(sqliteEditor.menu.getKitState().tree);
+  });
+
   it('GET /api/bootstrap/:sessionId includes the default kit menu contribution', async () => {
     await createSession('default-kit-menu');
 
