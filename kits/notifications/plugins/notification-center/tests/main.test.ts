@@ -1,3 +1,6 @@
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 type PluginDefinition = {
@@ -8,11 +11,16 @@ type PluginDefinition = {
 };
 
 describe('notification-center plugin main', () => {
-  afterEach(() => {
+  const tempRoots: string[] = [];
+
+  afterEach(async () => {
     vi.unstubAllEnvs();
     vi.unstubAllGlobals();
     vi.resetModules();
     delete (globalThis as typeof globalThis & { editor?: unknown }).editor;
+    await Promise.all(tempRoots.splice(0).map((root) => (
+      rm(root, { recursive: true, force: true })
+    )));
   });
 
   it('maps plugin methods to the loopback Notification Host', async () => {
@@ -36,6 +44,7 @@ describe('notification-center plugin main', () => {
 
     expect(Object.keys(definition.methods).sort()).toEqual([
       'getSnapshot',
+      'installCodexSkill',
       'markAllRead',
       'markRead',
       'openCenterPanel',
@@ -89,10 +98,87 @@ describe('notification-center plugin main', () => {
       'Desktop notification service is unavailable',
     );
   });
+
+  it('installs, checks, and updates the bundled Skill with Host feedback', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-plugin-install-'));
+    tempRoots.push(root);
+    const sourceDir = path.join(root, 'resources', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    await writeSkillSource(sourceDir);
+    const definition = await loadDefinition({ sourceDir, codexHome });
+    const notifications: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+      expect(url).toBe('http://127.0.0.1:19001/v1/notifications');
+      notifications.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ id: `install-result-${notifications.length}` }, 201);
+    }));
+
+    await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
+      status: 'installed',
+      destination: path.join(codexHome, 'skills', 'notify-user'),
+    });
+    await expect(readFile(path.join(codexHome, 'skills', 'notify-user', 'SKILL.md'), 'utf8'))
+      .resolves.toContain('name: notify-user');
+    await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
+      status: 'current',
+    });
+    await writeFile(path.join(sourceDir, 'scripts', 'notify.mjs'), '// updated\n', 'utf8');
+    await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
+      status: 'updated',
+    });
+    expect(notifications).toEqual([
+      expect.objectContaining({
+        title: 'Codex notification Skill installed',
+        body: expect.stringMatching(/next Codex turn/i),
+        level: 'success',
+        source: 'Harbors',
+        persistent: false,
+      }),
+      expect.objectContaining({
+        title: 'Codex notification Skill is up to date',
+        level: 'info',
+        persistent: false,
+      }),
+      expect.objectContaining({
+        title: 'Codex notification Skill updated',
+        level: 'success',
+        persistent: false,
+      }),
+    ]);
+  });
+
+  it('preserves an unmanaged same-name Skill and reports a persistent conflict', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-plugin-conflict-'));
+    tempRoots.push(root);
+    const sourceDir = path.join(root, 'resources', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    const destination = path.join(codexHome, 'skills', 'notify-user');
+    await writeSkillSource(sourceDir);
+    await mkdir(destination, { recursive: true });
+    await writeFile(path.join(destination, 'SKILL.md'), 'custom\n', 'utf8');
+    const definition = await loadDefinition({ sourceDir, codexHome });
+    const notifications: Array<Record<string, unknown>> = [];
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, init?: RequestInit) => {
+      notifications.push(JSON.parse(String(init?.body)));
+      return jsonResponse({ id: 'install-conflict' }, 201);
+    }));
+
+    await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
+      status: 'failed',
+      code: 'SKILL_CONFLICT',
+    });
+    await expect(readFile(path.join(destination, 'SKILL.md'), 'utf8')).resolves.toBe('custom\n');
+    expect(notifications).toEqual([expect.objectContaining({
+      level: 'error',
+      persistent: true,
+    })]);
+  });
 });
 
-async function loadDefinition() {
+async function loadDefinition(options: { sourceDir?: string; codexHome?: string } = {}) {
   vi.stubEnv('HARBORS_NOTIFICATION_PORT', '19001');
+  if (options.sourceDir) vi.stubEnv('HARBORS_NOTIFY_SKILL_SOURCE', options.sourceDir);
+  if (options.codexHome) vi.stubEnv('CODEX_HOME', options.codexHome);
   let definition: PluginDefinition | undefined;
   (globalThis as typeof globalThis & { editor?: unknown }).editor = {
     plugin: {
@@ -103,6 +189,18 @@ async function loadDefinition() {
   };
   await import('../main/src/index');
   return definition!;
+}
+
+async function writeSkillSource(sourceDir: string) {
+  await mkdir(path.join(sourceDir, 'agents'), { recursive: true });
+  await mkdir(path.join(sourceDir, 'scripts'), { recursive: true });
+  await writeFile(
+    path.join(sourceDir, 'SKILL.md'),
+    '---\nname: notify-user\ndescription: bundled\n---\n',
+    'utf8',
+  );
+  await writeFile(path.join(sourceDir, 'agents', 'openai.yaml'), 'display_name: Notify User\n');
+  await writeFile(path.join(sourceDir, 'scripts', 'notify.mjs'), '// bundled\n');
 }
 
 function jsonResponse(value: unknown, status = 200) {

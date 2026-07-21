@@ -51,10 +51,18 @@ describe('Notification Kit manifest', () => {
     });
     expect(plugin['ce-editor'].contribute.message.request).toEqual({
       getSnapshot: ['getSnapshot'],
+      installCodexSkill: ['installCodexSkill'],
       markRead: ['markRead'],
       markAllRead: ['markAllRead'],
       removeNotification: ['removeNotification'],
       openCenterPanel: ['openCenterPanel'],
+    });
+    expect(plugin['ce-editor'].contribute.menu).toContainEqual({
+      type: 'menu',
+      id: 'install-codex-notification-skill',
+      message: 'installCodexSkill',
+      order: 10,
+      label: 'Install or Update Codex Notification Skill…',
     });
     expect(mainEntry).toContain('<title>Notifications</title>');
     expect(secondaryEntry).toContain('<title>Notification Window</title>');
