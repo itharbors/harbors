@@ -204,6 +204,140 @@ describe('MySQL Data panel', () => {
       dialogMethods.restore();
     }
   });
+
+  it('shows paging progress, blocks the grid, and does not queue another page request', async () => {
+    let resolvePage: ((value: unknown) => void) | undefined;
+    const pendingPage = new Promise<unknown>((resolve) => { resolvePage = resolve; });
+    let rowRequests = 0;
+    const request = vi.fn(async (plugin: string, method: string, input?: any) => {
+      if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
+      if (plugin === '@itharbors/mysql-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
+      if (plugin === '@itharbors/mysql-core' && method === 'getObjectSchema') return usersSchema;
+      if (plugin === '@itharbors/mysql-core' && method === 'getRows') {
+        rowRequests += 1;
+        return rowRequests === 1 ? usersRows : pendingPage;
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-action="next-page"]') as HTMLButtonElement).click();
+
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('.data-activity-layer .activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在加载下一页…');
+    expect(document.querySelectorAll('[role="status"]')).toHaveLength(1);
+    expect(document.querySelector<HTMLSelectElement>('[data-action="page-size"]')?.disabled).toBe(true);
+    (document.querySelector('[data-action="next-page"]') as HTMLButtonElement).click();
+    expect(rowRequests).toBe(2);
+
+    resolvePage?.({ ...usersRows, page: 2 });
+    await vi.waitFor(() => expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('false'));
+  });
+
+  it('locks the record dialog with save progress and preserves input after failure', async () => {
+    let rejectSave: ((reason?: unknown) => void) | undefined;
+    const pendingSave = new Promise<unknown>((_resolve, reject) => { rejectSave = reject; });
+    const request = createRequest();
+    request.mockImplementation(async (plugin: string, method: string, input?: any) => {
+      if (plugin === '@itharbors/mysql-core' && method === 'insertRow') return pendingSave;
+      if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
+      if (plugin === '@itharbors/mysql-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
+      if (plugin === '@itharbors/mysql-core' && method === 'getObjectSchema') return usersSchema;
+      if (plugin === '@itharbors/mysql-core' && method === 'getRows') return { ...usersRows, page: input.page };
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-action="add-row"]') as HTMLButtonElement).click();
+    let dialog = document.querySelector<HTMLDialogElement>('dialog[data-record-dialog]')!;
+    setDialogValue(dialog, 'email', 'pending@example.com');
+
+    (dialog.querySelector('[data-action="save-record"]') as HTMLButtonElement).click();
+
+    dialog = document.querySelector<HTMLDialogElement>('dialog[data-record-dialog]')!;
+    expect(dialog.getAttribute('aria-busy')).toBe('true');
+    expect(dialog.querySelector('[data-action="save-record"]')?.textContent).toContain('添加中…');
+    expect(dialog.querySelector('.activity-spinner')).not.toBeNull();
+    expect(Array.from(dialog.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select'))
+      .every((control) => control.disabled)).toBe(true);
+    expect((dialog.querySelector('[data-action="cancel-record"]') as HTMLButtonElement).disabled).toBe(true);
+    (dialog.querySelector('[data-action="save-record"]') as HTMLButtonElement).click();
+    expect(request.mock.calls.filter((call) => call[1] === 'insertRow')).toHaveLength(1);
+
+    rejectSave?.(new Error('保存失败'));
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('保存失败'));
+    dialog = document.querySelector<HTMLDialogElement>('dialog[data-record-dialog]')!;
+    expect(dialog.querySelector<HTMLInputElement>('[data-field-name="email"] [data-field-value]')?.value)
+      .toBe('pending@example.com');
+    expect(dialog.getAttribute('aria-busy')).toBe('false');
+  });
+
+  it('shows delete progress and prevents duplicate deletion', async () => {
+    let resolveDelete: ((value: unknown) => void) | undefined;
+    const pendingDelete = new Promise<unknown>((resolve) => { resolveDelete = resolve; });
+    const request = createRequest();
+    request.mockImplementation(async (plugin: string, method: string, input?: any) => {
+      if (plugin === '@itharbors/mysql-core' && method === 'deleteRow') return pendingDelete;
+      if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
+      if (plugin === '@itharbors/mysql-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
+      if (plugin === '@itharbors/mysql-core' && method === 'getObjectSchema') return usersSchema;
+      if (plugin === '@itharbors/mysql-core' && method === 'getRows') return { ...usersRows, page: input.page };
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-row-index="0"]') as HTMLElement).click();
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    (document.querySelector('[data-action="delete-row"]') as HTMLButtonElement).click();
+
+    const pendingButton = document.querySelector<HTMLButtonElement>('[data-action="delete-row"]')!;
+    expect(pendingButton.textContent).toContain('删除中…');
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在删除记录…');
+    pendingButton.click();
+    expect(request.mock.calls.filter((call) => call[1] === 'deleteRow')).toHaveLength(1);
+
+    resolveDelete?.({ changes: 1 });
+    await vi.waitFor(() => expect(document.querySelector('[role="status"]')?.textContent).toContain('已删除'));
+  });
+
+  it('lets a newer object load own and clear activity while an older load finishes late', async () => {
+    let resolveOldSchema: ((value: unknown) => void) | undefined;
+    let resolveOldRows: ((value: unknown) => void) | undefined;
+    const oldSchema = new Promise<unknown>((resolve) => { resolveOldSchema = resolve; });
+    const oldRows = new Promise<unknown>((resolve) => { resolveOldRows = resolve; });
+    const request = vi.fn(async (plugin: string, method: string, input?: any) => {
+      if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
+      if (plugin === '@itharbors/mysql-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
+      if (plugin === '@itharbors/mysql-core' && method === 'getObjectSchema') {
+        return input.name === 'users' ? oldSchema : { ...usersSchema, name: 'orders' };
+      }
+      if (plugin === '@itharbors/mysql-core' && method === 'getRows') {
+        return input.name === 'users' ? oldRows : { ...usersRows, name: 'orders' };
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.data/src/index')).default as PanelDefinition;
+    const mounting = definition.mount({ message: { request } });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/mysql-core', 'getRows', {
+      name: 'users', page: 1, pageSize: 100,
+    }));
+
+    await definition.methods.onSelectionChanged({ connectionRevision: 1, objectName: 'orders' });
+
+    expect(document.querySelector('.object-title')?.textContent).toBe('orders');
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('false');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('已加载 orders');
+
+    resolveOldSchema?.(usersSchema);
+    resolveOldRows?.(usersRows);
+    await mounting;
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('false');
+    expect(document.querySelector('.object-title')?.textContent).toBe('orders');
+  });
 });
 
 function createRequest(capabilities?: { rowEditable: boolean; insertable: boolean }) {

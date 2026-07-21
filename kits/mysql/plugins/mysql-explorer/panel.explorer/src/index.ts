@@ -17,6 +17,7 @@ type SchemaObject = {
 };
 
 type PanelError = { message: string; detail?: string };
+type ExplorerActivity = { kind: 'hydrate' | 'database' | 'object'; name?: string } | null;
 
 const EMPTY_SNAPSHOT: ObjectsSnapshot<SchemaObject> = {
   connected: false,
@@ -33,6 +34,7 @@ let root: HTMLElement | null = null;
 let snapshot = cloneSnapshot(EMPTY_SNAPSHOT);
 let query = '';
 let error: PanelError | null = null;
+let activity: ExplorerActivity = null;
 let requestSequence = 0;
 let selectionSequence = 0;
 
@@ -42,6 +44,7 @@ const definition = {
     root = document.querySelector('#panel-root');
     if (!root) throw new Error('Panel root element #panel-root not found');
     resetState();
+    activity = { kind: 'hydrate' };
     render();
     const sequence = ++requestSequence;
     try {
@@ -50,6 +53,7 @@ const definition = {
       acceptSnapshot(value);
     } catch (caught) {
       if (sequence !== requestSequence) return;
+      activity = null;
       error = panelError(caught);
       render();
     }
@@ -77,6 +81,7 @@ function resetState(): void {
   snapshot = cloneSnapshot(EMPTY_SNAPSHOT);
   query = '';
   error = null;
+  activity = null;
   requestSequence += 1;
   selectionSequence += 1;
 }
@@ -85,6 +90,7 @@ function acceptSnapshot(next: ObjectsSnapshot<SchemaObject>): void {
   if (next.connectionRevision !== snapshot.connectionRevision) query = '';
   requestSequence += 1;
   selectionSequence += 1;
+  activity = null;
   snapshot = cloneSnapshot(next);
   error = next.error ? { ...next.error } : null;
   render();
@@ -99,9 +105,14 @@ function isStale(next: ObjectsSnapshot<SchemaObject>): boolean {
 }
 
 async function chooseObject(objectName: string): Promise<void> {
+  if (activity !== null) return;
   const sequence = ++selectionSequence;
   const connectionRevision = snapshot.connectionRevision;
   const schemaRevision = snapshot.schemaRevision;
+  const pending: Exclude<ExplorerActivity, null> = { kind: 'object', name: objectName };
+  activity = pending;
+  error = null;
+  render();
   try {
     const selection = await requestExplorer('selectObject', {
       connectionRevision,
@@ -111,20 +122,32 @@ async function chooseObject(objectName: string): Promise<void> {
       !isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)
       || selection.connectionRevision !== snapshot.connectionRevision
     ) return;
+    activity = null;
     snapshot = { ...snapshot, selection: { ...selection } };
     error = null;
     render();
   } catch (caught) {
     if (!isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)) return;
+    activity = null;
     error = panelError(caught);
     render();
+  } finally {
+    if (activity === pending && isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)) {
+      activity = null;
+      render();
+    }
   }
 }
 
 async function chooseDatabase(database: string): Promise<void> {
+  if (activity !== null) return;
   const sequence = ++selectionSequence;
   const connectionRevision = snapshot.connectionRevision;
   const schemaRevision = snapshot.schemaRevision;
+  const pending: Exclude<ExplorerActivity, null> = { kind: 'database', name: database };
+  activity = pending;
+  error = null;
+  render();
   try {
     const next = await requestExplorer('selectDatabase', { database });
     if (
@@ -135,8 +158,14 @@ async function chooseDatabase(database: string): Promise<void> {
     acceptSnapshot(next);
   } catch (caught) {
     if (!isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)) return;
+    activity = null;
     error = panelError(caught);
     render();
+  } finally {
+    if (activity === pending && isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)) {
+      activity = null;
+      render();
+    }
   }
 }
 
@@ -160,10 +189,10 @@ async function requestExplorer(method: string, input?: unknown): Promise<unknown
 function render(): void {
   if (!root) return;
   root.innerHTML = `
-    <aside class="object-rail" aria-label="MySQL 数据库对象">
+    <aside class="object-rail" aria-label="MySQL 数据库对象" aria-busy="${activity !== null}">
       <div class="rail-heading"><span>数据库对象</span><span class="object-count">${snapshot.objects.length}</span></div>
-      <label class="object-search"><span class="sr-only">筛选对象</span><input type="search" data-field="object-search" aria-label="筛选对象" placeholder="筛选当前库对象" value="${escapeHtml(query)}"${snapshot.connected && snapshot.database !== null ? '' : ' disabled'}></label>
-      <div class="object-error-slot">${error ? renderError(error) : ''}</div>
+      <label class="object-search"><span class="sr-only">筛选对象</span><input type="search" data-field="object-search" aria-label="筛选对象" placeholder="筛选当前库对象" value="${escapeHtml(query)}"${snapshot.connected && snapshot.database !== null && activity === null ? '' : ' disabled'}></label>
+      <div class="object-error-slot">${error ? renderError(error) : renderActivity()}</div>
       <div class="object-tree">${renderObjectTree()}</div>
     </aside>`;
 
@@ -186,6 +215,9 @@ function render(): void {
 }
 
 function renderObjectTree(): string {
+  if (activity?.kind === 'hydrate') {
+    return '<p class="empty-hint">正在读取数据库对象…</p>';
+  }
   if (!snapshot.connected) {
     return '<p class="empty-hint">连接后即可查看表和视图。</p>';
   }
@@ -226,18 +258,34 @@ function renderDatabases(): string {
 
 function renderDatabase(database: string): string {
   const selected = database === snapshot.database;
-  return `<button type="button" class="${selected ? 'selected' : ''}" data-database-name="${escapeHtml(database)}" aria-pressed="${selected}">
-    <span class="database-icon" aria-hidden="true"></span>
+  const pending = activity?.kind === 'database' && activity.name === database;
+  return `<button type="button" class="${selected ? 'selected' : ''}" data-database-name="${escapeHtml(database)}" aria-pressed="${selected}"${activity !== null ? ' disabled' : ''}>
+    ${pending ? spinner() : '<span class="database-icon" aria-hidden="true"></span>'}
     <span>${escapeHtml(database)}</span>
   </button>`;
 }
 
 function renderObject(object: SchemaObject): string {
   const selected = object.name === snapshot.selection.objectName;
-  return `<button type="button" class="${selected ? 'selected' : ''}" data-object-name="${escapeHtml(object.name)}" aria-pressed="${selected}">
-    <span class="object-dot ${object.type}" aria-hidden="true"></span>
+  const pending = activity?.kind === 'object' && activity.name === object.name;
+  return `<button type="button" class="${selected ? 'selected' : ''}" data-object-name="${escapeHtml(object.name)}" aria-pressed="${selected}"${activity !== null ? ' disabled' : ''}>
+    ${pending ? spinner() : `<span class="object-dot ${object.type}" aria-hidden="true"></span>`}
     <span>${escapeHtml(object.name)}</span>
   </button>`;
+}
+
+function renderActivity(): string {
+  if (!activity) return '';
+  const message = activity.kind === 'database'
+    ? `正在切换数据库 ${activity.name ?? ''}…`
+    : activity.kind === 'object'
+      ? `正在选择 ${activity.name ?? ''}…`
+      : '正在读取数据库对象…';
+  return `<div class="rail-activity" role="status" aria-live="polite">${spinner()}<span>${escapeHtml(message)}</span></div>`;
+}
+
+function spinner(): string {
+  return '<span class="activity-spinner" aria-hidden="true"></span>';
 }
 
 function renderError(panelErrorValue: PanelError): string {
