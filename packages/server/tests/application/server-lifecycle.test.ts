@@ -115,4 +115,37 @@ describe('application server lifecycle', () => {
     expect(body).toContain('"phase":"ready"');
     expect(body).toContain('"phase":"stopped"');
   });
+
+  it('cannot begin listening after shutdown starts during application startup', async () => {
+    let releaseStart: (() => void) | undefined;
+    const applicationRuntime = {
+      start: vi.fn(() => new Promise<any>((resolve) => {
+        releaseStart = () => resolve({
+          phase: 'ready',
+          plugins: [],
+          diagnostics: [],
+          menu: { tree: [], warnings: [] },
+        });
+      })),
+      getBootstrap: vi.fn(() => ({
+        phase: 'ready' as const,
+        plugins: [],
+        diagnostics: [],
+        menu: { tree: [], warnings: [] },
+      })),
+      triggerMenu: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+      dispose: vi.fn(async () => undefined),
+    };
+    const server = createServer({ applicationRuntime });
+
+    const starting = server.start(0);
+    const stopping = server.stop();
+    releaseStart?.();
+
+    await expect(starting).rejects.toThrow(/stopping/i);
+    await expect(stopping).resolves.toBeUndefined();
+    expect(server.server.listening).toBe(false);
+    expect(applicationRuntime.dispose).toHaveBeenCalledOnce();
+  });
 });

@@ -28,7 +28,9 @@ editor.plugin.define({
       } catch (error) {
         result = normalizeInstallFailure(error);
       }
-      await sendInstallResultNotification(result);
+      if (applicationHostMode === 'desktop') {
+        await sendInstallResultNotification(result);
+      }
       return result;
     },
   },

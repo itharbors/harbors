@@ -163,4 +163,21 @@ describe('discoverApplicationPlugins', () => {
       'INVALID_KIT_MANIFEST',
     ]);
   });
+
+  it('does not execute startup code when ordinary plugin names are duplicated', async () => {
+    createPlugin(assembly.pluginsDir, 'background', '@scope/background');
+    createKit(
+      'duplicate-ordinary',
+      '@scope/duplicate-ordinary',
+      ['@scope/background'],
+      ['@scope/center', '@scope/center'],
+    );
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([]);
+    expect(result.diagnostics).toEqual([
+      expect.objectContaining({ code: 'INVALID_KIT_MANIFEST', kit: '@scope/duplicate-ordinary' }),
+    ]);
+  });
 });

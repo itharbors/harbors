@@ -63,9 +63,18 @@ export function createServer(options: ServerOptions = {}) {
     }
   });
 
-  const start = async (port?: number): Promise<number> => {
+  let startPromise: Promise<number> | undefined;
+  let stopping = false;
+  const start = (port?: number): Promise<number> => {
+    if (stopping) return Promise.reject(new Error('Editor server is stopping'));
+    if (!startPromise) startPromise = startInternal(port);
+    return startPromise;
+  };
+
+  const startInternal = async (port?: number): Promise<number> => {
     await applicationRuntime.start();
-    return new Promise((resolve, reject) => {
+    if (stopping) throw new Error('Editor server is stopping');
+    const listeningPort = await new Promise<number>((resolve, reject) => {
       const p = port || options.port || 0;
       server.listen(p, options.host, () => {
         const addr = server.address();
@@ -77,17 +86,27 @@ export function createServer(options: ServerOptions = {}) {
       });
       server.once('error', reject);
     });
+    if (stopping) throw new Error('Editor server is stopping');
+    return listeningPort;
   };
 
   let stopPromise: Promise<void> | undefined;
   const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
+    stopping = true;
     stopPromise = stopInternal();
     return stopPromise;
   };
 
   const stopInternal = async (): Promise<void> => {
     const errors: unknown[] = [];
+    if (startPromise) {
+      try {
+        await startPromise;
+      } catch {
+        // Startup reports its own failure; shutdown still owns resource cleanup.
+      }
+    }
     const closePromise = server.listening
       ? new Promise<void>((resolve) => {
           server.close((error) => {

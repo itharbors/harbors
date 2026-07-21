@@ -175,6 +175,31 @@ test('coalesces concurrent opens while a lazy Kit window is being created', asyn
   assert.equal(registry.get('notifications'), created);
 });
 
+test('clears a failed lazy-open so the Kit can be retried', async () => {
+  const registry = new Map();
+  const created = {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    show() {},
+    focus() {},
+  };
+  let attempts = 0;
+  const createWindow = async () => {
+    attempts += 1;
+    if (attempts === 1) throw new Error('window failed');
+    return created;
+  };
+
+  await assert.rejects(
+    openOrFocusKitWindow('notifications', registry, createWindow),
+    /window failed/,
+  );
+  const retried = await openOrFocusKitWindow('notifications', registry, createWindow);
+
+  assert.equal(retried, created);
+  assert.equal(attempts, 2);
+});
+
 test('stops the Framework before tearing down Electron-owned notification services', async () => {
   const events = [];
   let releaseFramework;

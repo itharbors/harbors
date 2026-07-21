@@ -143,6 +143,18 @@ async function readKitDeclaration(
     });
     return undefined;
   }
+  const ordinaryPlugins = kit.plugin;
+  if (
+    ordinaryPlugins !== undefined
+    && (!isStringArray(ordinaryPlugins) || new Set(ordinaryPlugins).size !== ordinaryPlugins.length)
+  ) {
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: name,
+      message: `Kit "${name}" plugin must contain unique non-empty strings`,
+    });
+    return undefined;
+  }
   const startupPlugins = isRecord(startup) ? startup.plugins : undefined;
   if (startupPlugins === undefined) {
     return { name, path: kitPath, startupPlugins: [] };
@@ -152,15 +164,6 @@ async function readKitDeclaration(
       code: 'INVALID_STARTUP_PLUGINS',
       kit: name,
       message: `Kit "${name}" startup.plugins must contain unique non-empty strings`,
-    });
-    return undefined;
-  }
-  const ordinaryPlugins = kit.plugin;
-  if (ordinaryPlugins !== undefined && !isStringArray(ordinaryPlugins)) {
-    diagnostics.push({
-      code: 'INVALID_KIT_MANIFEST',
-      kit: name,
-      message: `Kit "${name}" plugin must contain non-empty strings`,
     });
     return undefined;
   }

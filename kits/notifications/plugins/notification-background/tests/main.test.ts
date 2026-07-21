@@ -86,12 +86,14 @@ describe('notification-background plugin main', () => {
       sourceDir: path.join(root, 'resources', 'notify-user'),
       hostMode: 'web',
     });
-    vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({ id: 'failure' }, 201)));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
 
     await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
       status: 'failed',
       code: 'SKILL_DESKTOP_REQUIRED',
     });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
