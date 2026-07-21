@@ -19,7 +19,6 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
-  mergeMenuTrees,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
@@ -121,13 +120,17 @@ export function buildMultiKitMenuTemplate({
       sessionId: session.sessionId,
     }));
 
-  return [
-    toElectronRootTemplate(
-      'APP',
-      mergeMenuTrees(globalMenuTree, focused?.applicationMenuTree ?? []),
-      { scope: 'application' },
+  const applicationItems = mergeElectronMenuTemplates(
+    globalMenuTree.map((node) => toElectronTemplate(node, { scope: 'application' }, adapters)),
+    (focused?.applicationMenuTree ?? []).map((node) => toElectronTemplate(
+      node,
+      { scope: 'session', sessionId: focused.sessionId },
       adapters,
-    ),
+    )),
+  );
+
+  return [
+    electronRootTemplate('APP', applicationItems),
     ...kitRoots.map(({ label, children, sessionId }) => (
       toElectronRootTemplate(label, children, { scope: 'session', sessionId }, adapters)
     )),
@@ -145,6 +148,7 @@ function toElectronTemplate(node, target, adapters) {
   }
 
   const item = {
+    id: node.id,
     label: node.label,
     ...(node.accelerator ? { accelerator: node.accelerator } : {}),
   };
@@ -172,11 +176,33 @@ function toElectronTemplate(node, target, adapters) {
 }
 
 function toElectronRootTemplate(label, children, target, adapters) {
+  return electronRootTemplate(
+    label,
+    children.map((child) => toElectronTemplate(child, target, adapters)),
+  );
+}
+
+function electronRootTemplate(label, submenu) {
   return {
     label,
-    submenu: children.map((child) => toElectronTemplate(child, target, adapters)),
-    ...(children.length === 0 ? { enabled: false } : {}),
+    submenu,
+    ...(submenu.length === 0 ? { enabled: false } : {}),
   };
+}
+
+function mergeElectronMenuTemplates(primary, secondary) {
+  const merged = [...primary];
+  for (const item of secondary) {
+    const existing = item.id
+      ? merged.find((candidate) => candidate.id === item.id)
+      : undefined;
+    if (existing?.submenu && item.submenu) {
+      existing.submenu = mergeElectronMenuTemplates(existing.submenu, item.submenu);
+    } else if (!existing) {
+      merged.push(item);
+    }
+  }
+  return merged;
 }
 
 if (shouldStartElectronApp()) {

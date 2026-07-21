@@ -165,9 +165,16 @@ describe('buildElectronMenuTemplate', () => {
 });
 
 describe('buildMultiKitMenuTemplate', () => {
-  it('aggregates APP and Kit roots while routing each action to its own session', () => {
+  it('aggregates APP and Kit roots while preserving application and session action scopes', () => {
     const sendToWindow = vi.fn();
+    const triggerApplication = vi.fn();
     const template = buildMultiKitMenuTemplate({
+      applicationMenuTree: [{
+        type: 'menu',
+        id: 'tools',
+        label: 'Tools',
+        children: [{ type: 'menu', id: 'tools/install', label: 'Install', children: [] }],
+      }],
       focusedSessionId: 'session-a',
       sessions: [
         {
@@ -183,12 +190,14 @@ describe('buildMultiKitMenuTemplate', () => {
           kitMenuRoot: { id: 'b', label: 'BKit' },
         },
       ],
-    }, { sendToWindow });
+    }, { sendToWindow, triggerApplication });
 
     expect(template.map((item: { label: string }) => item.label)).toEqual(['APP', 'AKit', 'BKit']);
-    template[0].submenu[0].click();
+    template[0].submenu[0].submenu[0].click();
+    template[0].submenu[1].click();
     template[1].submenu[0].click();
     template[2].submenu[0].click();
+    expect(triggerApplication).toHaveBeenCalledWith('tools/install');
     expect(sendToWindow.mock.calls).toEqual([
       [{ sessionId: 'session-a', menuId: 'file' }],
       [{ sessionId: 'session-a', menuId: 'a/action' }],
@@ -199,6 +208,7 @@ describe('buildMultiKitMenuTemplate', () => {
   it('renders an empty Kit root as a disabled submenu instead of a synthetic action', () => {
     const sendToWindow = vi.fn();
     const template = buildMultiKitMenuTemplate({
+      applicationMenuTree: [],
       focusedSessionId: 'session-sqlite',
       sessions: [
         {
@@ -208,7 +218,7 @@ describe('buildMultiKitMenuTemplate', () => {
           kitMenuRoot: { id: 'sqlite', label: 'SQLite' },
         },
       ],
-    }, { sendToWindow });
+    }, { sendToWindow, triggerApplication: vi.fn() });
 
     expect(template[1]).toMatchObject({
       label: 'SQLite',
