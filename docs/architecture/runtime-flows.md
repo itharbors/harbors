@@ -9,6 +9,7 @@
 sequenceDiagram
     participant CLI as npm run dev
     participant E as Electron main
+    participant N as Notification Host
     participant K as KitCatalog/WorkspaceStore
     participant Web as scripts/dev.mjs (dev:web)
     participant G as Gateway
@@ -16,11 +17,12 @@ sequenceDiagram
     participant C as Vite Client
     CLI->>E: 启动默认桌面宿主
     E->>K: 扫描 Kit + 恢复稳定 session/bounds
+    E->>N: 绑定 127.0.0.1 并订阅通知状态
     E->>Web: npm run dev:web
     Web->>G: npm run dev -w packages/gateway
     Web->>S: npm run dev -w packages/server
     Web->>C: npm run dev -w packages/client
-    E->>E: 每 Kit 创建独立 BrowserWindow + 托盘
+    E->>E: 每 Kit 创建独立 BrowserWindow + 托盘/角标
     Note over G,C: 任一子进程异常退出时停止其余进程
 ```
 
@@ -28,7 +30,40 @@ sequenceDiagram
 模式。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听 8080，Server
 监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
 
-## 2. 会话创建与 bootstrap
+Notification Host 默认监听 `127.0.0.1:17896`，先于 Web 子进程启动，并通过
+`HARBORS_NOTIFICATION_PORT` 将实际端口传入子进程。它不属于 Gateway 路由；只启动
+`npm run dev:web` 时不会创建该 Host。
+
+## 2. Agent 桌面通知
+
+```mermaid
+sequenceDiagram
+    participant A as Agent / notify-user Skill
+    participant H as Notification Host
+    participant Q as Toast Queue
+    participant D as Desktop Indicators
+    participant K as Notification Center Kit
+    A->>H: POST /v1/notifications
+    H->>H: 校验并写入内存，unread +1
+    H-->>A: 201 + notification id
+    H->>Q: created event
+    H->>D: 更新 Dock/Linux badge、Windows overlay、托盘标签
+    Q->>D: 显示弹窗，最多 3 个，其余 FIFO 等待
+    alt 临时通知
+        Q->>D: durationMs 后关闭弹窗
+    else 常驻通知
+        Q->>D: 等待用户关闭或打开
+    end
+    K->>H: GET /v1/notifications
+    H-->>K: 历史 + unreadCount
+    K->>H: read / read-all / DELETE
+```
+
+弹窗超时或关闭只改变桌面呈现，不改变未读状态；点击弹窗会标记该通知已读并打开通知中心。
+通知中心每秒刷新，可逐条已读、全部已读或删除。Host 只接受声明字段，JSON body 上限 16 KiB，
+历史最多保留 500 条，并优先淘汰最旧的已读通知。
+
+## 3. 会话创建与 bootstrap
 
 ```mermaid
 sequenceDiagram
@@ -58,7 +93,7 @@ Editor 是两层不同状态。Client 在应用 bootstrap 前校验 `protocolVer
 失败边界：Kit 无法解析或装载时，session 创建请求返回错误，Client 不应假定存在可用
 bootstrap。
 
-## 3. Request
+## 4. Request
 
 Panel 或 Client 将 `sessionId`、插件名、消息名和参数提交到
 `POST /api/message/request`。
@@ -73,7 +108,7 @@ Panel 或 Client 将 `sessionId`、插件名、消息名和参数提交到
 
 request 是一对一、有返回值的调用，不应使用 broadcast 模拟。
 
-## 4. Broadcast 与 SSE
+## 5. Broadcast 与 SSE
 
 `POST /api/message/broadcast` 触发同 topic 的全部订阅者及 `*` 订阅者。
 
@@ -94,7 +129,7 @@ Panel iframe 执行结果只接受来自当前已渲染 iframe 的 `postMessage`
 序列化错误连同 Session 和 request ID 回传；错误 Session 返回 409，重复或迟到结果返回
 404。Broker 默认 10 秒超时。
 
-## 5. Kit 装载与切换
+## 6. Kit 装载与切换
 
 ```mermaid
 flowchart TD
@@ -117,7 +152,7 @@ flowchart TD
 内置插件只装载一次并保持可用。切换成功后 WindowManager 以新 Kit 的 default layout
 重新创建，因此旧 Kit 的窗口状态不会跨 Kit 自动继承。
 
-## 6. 打开 Panel
+## 7. 打开 Panel
 
 1. 调用方提交 `panelName`。
 2. Editor 从 PanelModule 获取约束和 `multiInstance`。
@@ -130,7 +165,7 @@ flowchart TD
 关闭最后一个 PanelInstance 会同时删除对应的 secondary WindowGroup；main window 不走
 这一销毁规则。
 
-## 7. 布局变化
+## 8. 布局变化
 
 Kit layout 在装载时标准化为 WindowDescriptor。`kit.applyLayout(name|LayoutNode)`
 只重排 main window 的 layout，并通过 `onLayoutChanged` 发送 SSE。Client 接收后重新
@@ -153,6 +188,8 @@ Client 内部的 divider resize 与 tab drag 先在当前 DOM/布局控制器中
 | broadcast handler 抛错 | 忽略该 handler，继续其他订阅者 |
 | 单实例 Panel 已打开 | 返回已有实例，不重复创建 |
 | 新窗口被阻止 | 转为 Client 内浮层承载 |
+| 通知字段、method 或 body 非法 | Host 返回稳定的 4xx JSON 错误 |
+| Notification Host 未运行 | Skill 与通知中心明确报告服务不可用，不伪造成功 |
 
 ## 源码索引
 
@@ -166,3 +203,6 @@ Client 内部的 divider resize 与 tab drag 先在当前 DOM/布局控制器中
 - [SSE channel](../../packages/server/src/sse/channel.ts)
 - [Browser request broker](../../packages/server/src/framework/browser-request-broker.ts)
 - [共享协议](../../packages/plugin-types/src/protocol/version.ts)
+- [Notification Host](../../scripts/lib/notification-host.mjs)
+- [桌面通知适配](../../scripts/lib/notification-desktop.mjs)
+- [通知 Skill CLI](../../.agents/skills/notify-user/scripts/notify.mjs)
