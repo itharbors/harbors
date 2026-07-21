@@ -17,6 +17,7 @@ import path from 'node:path';
 const SKILL_NAME = 'notify-user';
 const MARKER_FILE = '.harbors-skill.json';
 const MARKER_VERSION = 1;
+const JOURNAL_FILE = '.notify-user-installing.json';
 
 export type CodexSkillInstallStatus = 'installed' | 'updated' | 'current';
 
@@ -103,6 +104,7 @@ async function installCodexSkill({
   const destination = path.join(parentDir, SKILL_NAME);
   await ensureSafeDirectory(codexHome, 'CODEX_HOME');
   const parentIdentity = await ensureSafeDirectory(parentDir, 'Codex skills directory');
+  await recoverInterruptedInstall({ parentDir, destination, renameEntry, removeEntry });
 
   const destinationStat = await optionalLstat(destination);
   if (destinationStat?.isSymbolicLink()) {
@@ -159,6 +161,13 @@ async function installCodexSkill({
     copyEntry,
     removeEntry,
   });
+  let journal;
+  try {
+    journal = await acquireInstallJournal(parentDir, null);
+  } catch (error) {
+    await removeEntry(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
   try {
     await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
     await commitStagedSkill({
@@ -173,6 +182,7 @@ async function installCodexSkill({
       removeEntry,
     });
   } finally {
+    await releaseInstallJournal(journal, removeEntry);
     await removeEntry(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   }
 
@@ -329,6 +339,13 @@ async function updateManagedSkill({
     removeEntry,
   });
   const backupDir = path.join(parentDir, `.notify-user-backup-${randomUUID()}`);
+  let journal;
+  try {
+    journal = await acquireInstallJournal(parentDir, backupDir);
+  } catch (error) {
+    await removeEntry(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
   let movedExisting = false;
   try {
     try {
@@ -362,7 +379,159 @@ async function updateManagedSkill({
     }
     await removeEntry(backupDir, { recursive: true, force: true }).catch(() => undefined);
   } finally {
+    await releaseInstallJournal(journal, removeEntry);
     await removeEntry(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function acquireInstallJournal(parentDir: string, backupDir: string | null) {
+  const journalPath = path.join(parentDir, JOURNAL_FILE);
+  const token = randomUUID();
+  try {
+    await writeFile(
+      journalPath,
+      `${JSON.stringify({
+        owner: 'itharbors',
+        skill: SKILL_NAME,
+        version: 1,
+        token,
+        pid: process.pid,
+        backupDir,
+      }, null, 2)}\n`,
+      { encoding: 'utf8', flag: 'wx' },
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new CodexSkillInstallError(
+        'SKILL_CONFLICT',
+        'Another notify-user Skill installation is already in progress',
+      );
+    }
+    throw error;
+  }
+  return { journalPath, token };
+}
+
+async function releaseInstallJournal(
+  journal: { journalPath: string; token: string },
+  removeEntry: typeof rm,
+) {
+  const current = await readInstallJournal(journal.journalPath);
+  if (current?.token === journal.token) {
+    await removeEntry(journal.journalPath, { force: true }).catch(() => undefined);
+  }
+}
+
+async function recoverInterruptedInstall({
+  parentDir,
+  destination,
+  renameEntry,
+  removeEntry,
+}: {
+  parentDir: string;
+  destination: string;
+  renameEntry: typeof rename;
+  removeEntry: typeof rm;
+}) {
+  const journalPath = path.join(parentDir, JOURNAL_FILE);
+  const journalStat = await optionalLstat(journalPath);
+  if (!journalStat) return;
+  if (!journalStat.isFile() || journalStat.isSymbolicLink()) {
+    throw new CodexSkillInstallError(
+      'SKILL_UNSAFE_PATH',
+      `Invalid notify-user installation journal at ${journalPath}`,
+    );
+  }
+  const journal = await readInstallJournal(journalPath);
+  if (!journal) {
+    throw new CodexSkillInstallError(
+      'SKILL_CONFLICT',
+      `Unrecognized notify-user installation journal at ${journalPath}`,
+    );
+  }
+  const backupDir = journal.backupDir;
+  if (backupDir !== null && (
+    !path.isAbsolute(backupDir)
+    || path.dirname(backupDir) !== parentDir
+    || !path.basename(backupDir).startsWith('.notify-user-backup-')
+  )) {
+    throw new CodexSkillInstallError(
+      'SKILL_UNSAFE_PATH',
+      `Invalid recovery backup path in ${journalPath}`,
+    );
+  }
+
+  const activeProcess = isProcessAlive(journal.pid);
+  const destinationStat = await optionalLstat(destination);
+  if (destinationStat) {
+    const marker = destinationStat.isDirectory() && !destinationStat.isSymbolicLink()
+      ? await readManagedMarker(destination)
+      : null;
+    let complete = false;
+    if (marker) {
+      try {
+        await assertNoSymlinks(destination, destination, 'SKILL_UNSAFE_PATH');
+        complete = await digestDirectory(destination) === marker.digest;
+      } catch {
+        complete = false;
+      }
+    }
+    if (complete) {
+      if (backupDir) {
+        await removeEntry(backupDir, { recursive: true, force: true }).catch(() => undefined);
+      }
+      await removeEntry(journalPath, { force: true });
+      return;
+    }
+    if (activeProcess) {
+      throw new CodexSkillInstallError(
+        'SKILL_CONFLICT',
+        `notify-user Skill installation is active in process ${journal.pid}`,
+      );
+    }
+    const partialDir = path.join(parentDir, `.notify-user-partial-${randomUUID()}`);
+    await renameEntry(destination, partialDir);
+  } else if (activeProcess) {
+    throw new CodexSkillInstallError(
+      'SKILL_CONFLICT',
+      `notify-user Skill installation is active in process ${journal.pid}`,
+    );
+  }
+
+  if (backupDir && await optionalLstat(backupDir)) {
+    await renameEntry(backupDir, destination);
+  }
+  await removeEntry(journalPath, { force: true });
+}
+
+async function readInstallJournal(journalPath: string): Promise<{
+  token: string;
+  pid: number;
+  backupDir: string | null;
+} | null> {
+  try {
+    const value = JSON.parse(await readFile(journalPath, 'utf8'));
+    if (value?.owner !== 'itharbors'
+      || value?.skill !== SKILL_NAME
+      || value?.version !== 1
+      || typeof value?.token !== 'string'
+      || !Number.isSafeInteger(value?.pid)
+      || (value?.backupDir !== null && typeof value?.backupDir !== 'string')) {
+      return null;
+    }
+    return { token: value.token, pid: value.pid, backupDir: value.backupDir };
+  } catch {
+    return null;
+  }
+}
+
+function isProcessAlive(pid: number) {
+  if (pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== 'ESRCH';
   }
 }
 

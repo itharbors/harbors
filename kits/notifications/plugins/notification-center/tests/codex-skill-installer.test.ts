@@ -496,6 +496,75 @@ describe('Codex Skill installer', () => {
     const entries = await listAllEntries(path.join(codexHome, 'skills'));
     expect(entries.some((entry) => entry.startsWith('.notify-user-partial-'))).toBe(true);
   });
+
+  it('recovers an interrupted first install before retrying', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    const skillsDir = path.join(codexHome, 'skills');
+    const destination = path.join(skillsDir, 'notify-user');
+    await writeSkillSource(sourceDir, 'bundled');
+    await mkdir(path.join(destination, 'scripts'), { recursive: true });
+    await writeFile(path.join(destination, 'scripts', 'partial.mjs'), '// interrupted\n');
+    await writeInterruptedJournal(skillsDir, null);
+
+    const result = await createCodexSkillInstaller({ sourceDir, codexHome }).install();
+
+    expect(result.status).toBe('installed');
+    await expect(readFile(path.join(destination, 'SKILL.md'), 'utf8'))
+      .resolves.toContain('description: bundled');
+    await expect(readFile(path.join(skillsDir, '.notify-user-installing.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    const entries = await listAllEntries(skillsDir);
+    expect(entries.some((entry) => entry.startsWith('.notify-user-partial-'))).toBe(true);
+  });
+
+  it('restores the previous version after an interrupted update before retrying', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    const skillsDir = path.join(codexHome, 'skills');
+    const destination = path.join(skillsDir, 'notify-user');
+    const backupDir = path.join(skillsDir, '.notify-user-backup-interrupted');
+    await writeSkillSource(sourceDir, 'initial');
+    await createCodexSkillInstaller({ sourceDir, codexHome }).install();
+    await rename(destination, backupDir);
+    await mkdir(destination);
+    await writeFile(path.join(destination, 'partial.txt'), 'interrupted\n');
+    await writeInterruptedJournal(skillsDir, backupDir);
+    await writeSkillSource(sourceDir, 'updated');
+
+    const result = await createCodexSkillInstaller({ sourceDir, codexHome }).install();
+
+    expect(result.status).toBe('updated');
+    await expect(readFile(path.join(destination, 'SKILL.md'), 'utf8'))
+      .resolves.toContain('description: updated');
+    await expect(readFile(path.join(skillsDir, '.notify-user-installing.json'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('does not recover over an installation owned by a live process', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    const skillsDir = path.join(codexHome, 'skills');
+    await writeSkillSource(sourceDir, 'bundled');
+    await mkdir(skillsDir, { recursive: true });
+    await writeFile(
+      path.join(skillsDir, '.notify-user-installing.json'),
+      `${JSON.stringify({
+        owner: 'itharbors',
+        skill: 'notify-user',
+        version: 1,
+        token: 'active-test',
+        pid: process.pid,
+        backupDir: null,
+      })}\n`,
+    );
+
+    await expect(createCodexSkillInstaller({ sourceDir, codexHome }).install())
+      .rejects.toMatchObject({ code: 'SKILL_CONFLICT' });
+  });
 });
 
 
@@ -531,4 +600,18 @@ async function listInstallerArtifacts(parent: string) {
 async function listAllEntries(parent: string) {
   const { readdir } = await import('node:fs/promises');
   return readdir(parent);
+}
+
+async function writeInterruptedJournal(skillsDir: string, backupDir: string | null) {
+  await writeFile(
+    path.join(skillsDir, '.notify-user-installing.json'),
+    `${JSON.stringify({
+      owner: 'itharbors',
+      skill: 'notify-user',
+      version: 1,
+      token: 'interrupted-test',
+      pid: 2_147_483_647,
+      backupDir,
+    })}\n`,
+  );
 }
