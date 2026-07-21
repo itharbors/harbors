@@ -63,15 +63,23 @@ npm run dev -- --kit ./kits/sqlite
 
 ### Agent 通知
 
-Electron 运行时，Agent 可使用仓库内置的 `notify-user` Skill 发送通知：
+Electron 运行时，Agent 可使用仓库内置的 `notify-user` Skill 发送通知。若希望本机所有项目中的
+Codex Agent 都能使用它，可以把 [Skill 源目录](https://github.com/itharbors/harbors/tree/main/.agents/skills/notify-user)
+安装到 `~/.codex/skills/notify-user`。无需专用安装器，直接对本地 Codex 说：
+
+> 请把 https://github.com/itharbors/harbors/tree/main/.agents/skills/notify-user 安装为用户级 Codex Skill，安装到 ~/.codex/skills/notify-user，安装后验证 Skill 是否有效。
+
+安装后，Agent 会先定位 Skill 自身目录，再执行其中的脚本，因此不要求当前项目是 Harbors。
+实际调用等价于：
 
 ```bash
-node .agents/skills/notify-user/scripts/notify.mjs \
+node "<skill-directory>/scripts/notify.mjs" \
   --title "Task completed" \
   --body "Build and tests passed" \
   --level success
 ```
 
+其中 `<skill-directory>` 是已安装 `SKILL.md` 所在目录，不是需要原样输入的文本。
 需要用户处理的事项可添加 `--persistent`。通知会进入 Notification Center 历史和未读计数；
 临时弹窗消失不会自动标记为已读。仅启动 `npm run dev:web` 时没有桌面 Host，发送命令会明确失败。
 

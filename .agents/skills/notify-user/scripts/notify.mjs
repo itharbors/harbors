@@ -1,5 +1,6 @@
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 
 const LEVELS = new Set(['info', 'success', 'warning', 'error']);
 const VALUE_OPTIONS = new Map([
@@ -83,6 +84,9 @@ export async function sendNotification(input, {
       ?? `Notification Host returned HTTP ${response.status}`;
     throw new Error(message);
   }
+  if (typeof payload?.id !== 'string' || payload.id.trim().length === 0) {
+    throw new Error('Notification Host returned a success response without a notification id');
+  }
   return payload;
 }
 
@@ -111,17 +115,17 @@ async function main() {
   try {
     const input = parseNotifyArgs(process.argv.slice(2));
     const notification = await sendNotification(input);
-    process.stdout.write(`Notification sent: ${notification?.id ?? 'unknown'}\n`);
+    process.stdout.write(`Notification sent: ${notification.id}\n`);
   } catch (error) {
     process.stderr.write(`Notification failed: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   }
 }
 
-const entryUrl = process.argv[1]
-  ? pathToFileURL(path.resolve(process.argv[1])).href
+const entryPath = process.argv[1]
+  ? realpathSync(path.resolve(process.argv[1]))
   : null;
 
-if (entryUrl === import.meta.url) {
+if (entryPath === realpathSync(fileURLToPath(import.meta.url))) {
   await main();
 }

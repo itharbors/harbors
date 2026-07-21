@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
+import { cp, mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
 import http from 'node:http';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -12,6 +14,24 @@ import {
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const scriptPath = path.resolve(testDir, '../scripts/notify.mjs');
+const skillDir = path.resolve(testDir, '..');
+const repositoryRoot = path.resolve(skillDir, '../../..');
+
+test('Skill instructions are independent of the current project directory', async () => {
+  const instructions = await readFile(path.join(skillDir, 'SKILL.md'), 'utf8');
+
+  assert.doesNotMatch(instructions, /Run from the repository root/i);
+  assert.match(instructions, /directory containing (?:the loaded |this )?`SKILL\.md`/i);
+  assert.match(instructions, /absolute path/i);
+});
+
+test('README documents user-level installation from the bundled Skill source', async () => {
+  const readme = await readFile(path.join(repositoryRoot, 'readme.md'), 'utf8');
+
+  assert.match(readme, /https:\/\/github\.com\/itharbors\/harbors\/tree\/main\/\.agents\/skills\/notify-user/);
+  assert.match(readme, /~\/\.codex\/skills\/notify-user/);
+  assert.match(readme, /安装为用户级 Codex Skill/);
+});
 
 test('parses a transient notification with safe defaults', () => {
   assert.deepEqual(parseNotifyArgs([
@@ -98,6 +118,18 @@ test('surfaces structured Host errors and connection failures', async () => {
   );
 });
 
+test('rejects successful Host responses without a notification id', async () => {
+  await assert.rejects(
+    sendNotification({ title: 'Missing id' }, {
+      fetchImpl: async () => new Response('{}', {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
+    }),
+    /success response without a notification id/,
+  );
+});
+
 test('validates the configured Host port before sending', async () => {
   await assert.rejects(
     sendNotification({ title: 'Bad port' }, { port: 'not-a-port', fetchImpl: async () => null }),
@@ -126,6 +158,34 @@ test('CLI prints the created id and exits zero on success', async (t) => {
   assert.equal(result.stderr, '');
 });
 
+test('installed Skill CLI runs from an unrelated working directory', async (t) => {
+  const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'notify-user-skill-'));
+  const installedSkillDir = path.join(tempRoot, 'user-skills', 'notify-user');
+  const unrelatedCwd = path.join(tempRoot, 'other-project');
+  await cp(skillDir, installedSkillDir, { recursive: true });
+  await mkdir(unrelatedCwd, { recursive: true });
+  t.after(() => rm(tempRoot, { recursive: true, force: true }));
+
+  const server = http.createServer((_request, response) => {
+    response.statusCode = 201;
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify({ id: 'installed-1', title: 'Installed Skill' }));
+  });
+  const port = await listen(server);
+  t.after(() => close(server));
+
+  const result = await runCli(['--title', 'Installed Skill'], {
+    HARBORS_NOTIFICATION_PORT: String(port),
+  }, {
+    cwd: unrelatedCwd,
+    cliPath: path.join(installedSkillDir, 'scripts', 'notify.mjs'),
+  });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Notification sent: installed-1/);
+  assert.equal(result.stderr, '');
+});
+
 test('CLI exits non-zero and writes an actionable Host error', async (t) => {
   const server = http.createServer((_request, response) => {
     response.statusCode = 503;
@@ -144,9 +204,10 @@ test('CLI exits non-zero and writes an actionable Host error', async (t) => {
   assert.match(result.stderr, /Notification failed: Host is shutting down/);
 });
 
-function runCli(args, env) {
+function runCli(args, env, options = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...args], {
+    const child = spawn(process.execPath, [options.cliPath ?? scriptPath, ...args], {
+      cwd: options.cwd,
       env: { ...process.env, ...env },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

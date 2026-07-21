@@ -1,32 +1,35 @@
 ---
 name: notify-user
-description: Use when an Agent completes long-running work, encounters an asynchronous failure, or needs the user to notice or act on an important state outside the active conversation.
+description: Use when the user explicitly requests a desktop notification, or when an Agent completes meaningful long-running work, encounters an asynchronous failure or blocker, or needs the user to notice or act outside the active conversation.
 ---
 
 # Notify User
 
 ## Overview
 
-Send desktop notifications through the ITHARBORS Notification Host. Always use the bundled script so notifications participate in unread counts, desktop toasts, and Notification Kit history.
+Send desktop notifications through the ITHARBORS Notification Host. Use the bundled script so notifications participate in unread counts, desktop toasts, and Notification Center history.
 
 ## Send a Notification
 
-Run from the repository root:
+Locate the directory containing the loaded `SKILL.md`, then execute its bundled `scripts/notify.mjs` by absolute path. Never assume the current working directory is Harbors or the Skill installation directory.
 
 ```bash
-node .agents/skills/notify-user/scripts/notify.mjs \
+node "<skill-directory>/scripts/notify.mjs" \
   --title "Task completed" \
   --body "Build and tests passed" \
-  --level success
+  --level success \
+  --source "Codex"
 ```
 
-Treat `Notification sent: <id>` and exit code 0 as success. If the command fails, report that notification delivery failed. Do not replace it with `osascript`, `notify-send`, PowerShell, or hand-written HTTP, and do not claim the user was notified.
+Replace `<skill-directory>` with the absolute directory containing this file; do not type the placeholder literally.
+
+Treat exit code 0 together with `Notification sent: <id>` as success. If delivery fails, say so honestly and do not claim the user was notified. Unless notification delivery is itself the requested task, this failure does not make the completed main task fail.
 
 ## Choose Delivery
 
 | Situation | Options |
 | --- | --- |
-| Significant completion or useful background update | Default transient notification |
+| User explicitly asks to be notified, or meaningful long-running work completes | Default transient notification |
 | Failure, blocker, approval, credential, or other required user action | Add `--persistent` and use `warning` or `error` |
 | Routine progress already visible in the active conversation | Do not notify |
 
@@ -44,17 +47,18 @@ Avoid duplicate notifications for the same event. Keep the title specific and pu
 For required attention:
 
 ```bash
-node .agents/skills/notify-user/scripts/notify.mjs \
+node "<skill-directory>/scripts/notify.mjs" \
   --title "Approval required" \
   --body "The release is waiting for production approval" \
   --level warning \
   --persistent
 ```
 
-The Electron desktop app must be running. The script uses `127.0.0.1` and reads `HARBORS_NOTIFICATION_PORT`, defaulting to `17896`.
+The Harbors Electron desktop app must be running. The script uses `127.0.0.1` and reads `HARBORS_NOTIFICATION_PORT`, defaulting to `17896`.
 
 ## Common Mistakes
 
 - Sending frequent progress notifications creates noise; reserve them for meaningful state changes.
 - A persistent toast is for user action, not simply a longer informational message.
 - A successful final chat response does not prove desktop delivery; check the script result.
+- Do not replace the bundled script with hand-written HTTP, `osascript`, `notify-send`, or PowerShell.

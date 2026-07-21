@@ -1,4 +1,4 @@
 interface:
   display_name: "Notify User"
-  short_description: "Send desktop alerts when Agent work needs attention"
-  default_prompt: "Use $notify-user to send a desktop notification when this task needs attention."
+  short_description: "Send Harbors desktop alerts when work needs attention"
+  default_prompt: "Use $notify-user to notify me on the Harbors desktop when this task completes."
