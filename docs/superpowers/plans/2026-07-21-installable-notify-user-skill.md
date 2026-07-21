@@ -4,7 +4,7 @@
 
 **Goal:** Let users install or update the Harbors-bundled `notify-user` Skill by clicking a Notification Kit main-menu command, without network access or an external installer.
 
-**Architecture:** The existing Kit menu pipeline invokes a zero-argument `installCodexSkill` method in the Notification Center server plugin. A focused Node installer copies the Electron-provided bundled Skill into `$CODEX_HOME/skills/notify-user` atomically, records Harbors ownership and a content digest, rejects unmanaged conflicts, and reports the result through the existing Notification Host.
+**Architecture:** The existing Kit menu pipeline invokes a zero-argument `installCodexSkill` method in the Notification Center server plugin. A focused Node installer stages and validates the Electron-provided bundled Skill, exclusively reserves `$CODEX_HOME/skills/notify-user`, publishes `SKILL.md` last, records Harbors ownership and a content digest, rejects unmanaged conflicts, and reports the result through the existing Notification Host.
 
 **Tech Stack:** TypeScript server plugin, Node.js filesystem/crypto APIs, Electron process environment, Vitest, existing Harbors menu and Notification Host protocols.
 
@@ -82,7 +82,7 @@ Run the Task 1 focused command. Expected: first-install and current-version case
 
 - [ ] **Step 5: Add failing update, unmanaged-conflict, modified-managed, and concurrency tests**
 
-Assert a marked older digest updates atomically; an unmarked directory and a managed directory modified after installation are preserved with `SKILL_CONFLICT`; a destination symlink is rejected; two immediate `install()` calls return the same in-flight Promise and one result.
+Assert a marked older digest updates with a recoverable backup; an unmarked directory and a managed directory modified after installation are preserved with `SKILL_CONFLICT`; a destination symlink is rejected; two immediate `install()` calls return the same in-flight Promise and one result.
 
 ```ts
 const first = installer.install();
@@ -98,7 +98,7 @@ Expected: new update/conflict/concurrency cases FAIL while first-install cases r
 
 - [ ] **Step 7: Implement minimal update, rollback, conflict, and in-flight behavior**
 
-Rename the old managed directory to a same-parent backup, rename the staged directory into place, remove the backup after success, and restore it if the second rename fails. Treat installed content whose digest no longer matches its marker as a conflict. Cache and clear the in-flight Promise in the installer closure.
+Rename the old managed directory to a same-parent backup, exclusively create the destination, copy validated staged entries without overwriting, and publish `SKILL.md` plus the marker last. Restore the backup if publication fails and the destination remains absent; if an unmanaged destination races the update, preserve it and retain the backup for recovery. Treat installed content whose digest no longer matches its marker as a conflict. Cache and clear the in-flight Promise in the installer closure.
 
 - [ ] **Step 8: Run focused tests and commit the installer**
 

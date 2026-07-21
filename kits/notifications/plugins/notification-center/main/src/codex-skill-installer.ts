@@ -1,6 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { constants as fsConstants } from 'node:fs';
 import {
   cp,
+  copyFile,
   lstat,
   mkdir,
   mkdtemp,
@@ -47,6 +49,8 @@ export function createCodexSkillInstaller({
   codexHome: string;
 }, operations: {
   cp?: typeof cp;
+  copyFile?: typeof copyFile;
+  mkdir?: typeof mkdir;
   rename?: typeof rename;
   rm?: typeof rm;
 } = {}): { install(): Promise<CodexSkillInstallResult> } {
@@ -62,6 +66,8 @@ export function createCodexSkillInstaller({
         sourceDir,
         codexHome,
         copyEntry: operations.cp ?? cp,
+        copyFileEntry: operations.copyFile ?? copyFile,
+        createDirectory: operations.mkdir ?? mkdir,
         renameEntry: operations.rename ?? rename,
         removeEntry: operations.rm ?? rm,
       })
@@ -78,12 +84,16 @@ async function installCodexSkill({
   sourceDir,
   codexHome,
   copyEntry,
+  copyFileEntry,
+  createDirectory,
   renameEntry,
   removeEntry,
 }: {
   sourceDir: string;
   codexHome: string;
   copyEntry: typeof cp;
+  copyFileEntry: typeof copyFile;
+  createDirectory: typeof mkdir;
   renameEntry: typeof rename;
   removeEntry: typeof rm;
 }): Promise<CodexSkillInstallResult> {
@@ -92,7 +102,7 @@ async function installCodexSkill({
   const parentDir = path.join(codexHome, 'skills');
   const destination = path.join(parentDir, SKILL_NAME);
   await ensureSafeDirectory(codexHome, 'CODEX_HOME');
-  await ensureSafeDirectory(parentDir, 'Codex skills directory');
+  const parentIdentity = await ensureSafeDirectory(parentDir, 'Codex skills directory');
 
   const destinationStat = await optionalLstat(destination);
   if (destinationStat?.isSymbolicLink()) {
@@ -132,7 +142,10 @@ async function installCodexSkill({
       destination,
       digest,
       installedDigest,
+      parentIdentity,
       copyEntry,
+      copyFileEntry,
+      createDirectory,
       renameEntry,
       removeEntry,
     });
@@ -147,13 +160,14 @@ async function installCodexSkill({
     removeEntry,
   });
   try {
-    if (await optionalLstat(destination)) {
-      throw new CodexSkillInstallError(
-        'SKILL_CONFLICT',
-        `A Skill appeared at ${destination} while installation was in progress`,
-      );
-    }
-    await renameEntry(stagingDir, destination);
+    await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
+    await commitStagedSkill({
+      stagingDir,
+      destination,
+      copyFileEntry,
+      createDirectory,
+      removeEntry,
+    });
   } finally {
     await removeEntry(tempRoot, { recursive: true, force: true }).catch(() => undefined);
   }
@@ -199,6 +213,24 @@ async function ensureSafeDirectory(directory: string, label: string) {
   await mkdir(directory, { recursive: true });
   const after = await lstat(directory);
   if (after.isSymbolicLink() || !after.isDirectory()) {
+    throw new CodexSkillInstallError(
+      'SKILL_UNSAFE_PATH',
+      `${label} changed while installation was in progress: ${directory}`,
+    );
+  }
+  return { dev: after.dev, ino: after.ino };
+}
+
+async function assertDirectoryIdentity(
+  directory: string,
+  expected: { dev: number; ino: number },
+  label: string,
+) {
+  const current = await optionalLstat(directory);
+  if (!current?.isDirectory()
+    || current.isSymbolicLink()
+    || current.dev !== expected.dev
+    || current.ino !== expected.ino) {
     throw new CodexSkillInstallError(
       'SKILL_UNSAFE_PATH',
       `${label} changed while installation was in progress: ${directory}`,
@@ -266,7 +298,10 @@ async function updateManagedSkill({
   destination,
   digest,
   installedDigest,
+  parentIdentity,
   copyEntry,
+  copyFileEntry,
+  createDirectory,
   renameEntry,
   removeEntry,
 }: {
@@ -275,7 +310,10 @@ async function updateManagedSkill({
   destination: string;
   digest: string;
   installedDigest: string;
+  parentIdentity: { dev: number; ino: number };
   copyEntry: typeof cp;
+  copyFileEntry: typeof copyFile;
+  createDirectory: typeof mkdir;
   renameEntry: typeof rename;
   removeEntry: typeof rm;
 }) {
@@ -287,38 +325,126 @@ async function updateManagedSkill({
     removeEntry,
   });
   const backupDir = path.join(parentDir, `.notify-user-backup-${randomUUID()}`);
+  let movedExisting = false;
   try {
-    await renameEntry(destination, backupDir);
-    const backupDigest = await digestDirectory(backupDir);
-    if (backupDigest !== installedDigest) {
-      const conflict = new CodexSkillInstallError(
-        'SKILL_CONFLICT',
-        `The Harbors-managed Skill at ${destination} changed during installation`,
-      );
-      await restoreBackup({ backupDir, destination, renameEntry, originalError: conflict });
-      throw conflict;
-    }
     try {
-      await renameEntry(stagingDir, destination);
+      await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
+      await renameEntry(destination, backupDir);
+      movedExisting = true;
+      const backupDigest = await digestDirectory(backupDir);
+      if (backupDigest !== installedDigest) {
+        throw new CodexSkillInstallError(
+          'SKILL_CONFLICT',
+          `The Harbors-managed Skill at ${destination} changed during installation`,
+        );
+      }
+      await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
+      await commitStagedSkill({
+        stagingDir,
+        destination,
+        copyFileEntry,
+        createDirectory,
+        removeEntry,
+      });
     } catch (error) {
-      await restoreBackup({ backupDir, destination, renameEntry, originalError: error });
+      if (movedExisting && !await optionalLstat(destination)) {
+        await restoreBackup({ backupDir, destination, renameEntry, originalError: error });
+      }
       throw error;
     }
-    try {
-      await removeEntry(backupDir, { recursive: true, force: true });
-    } catch (cleanupError) {
-      await rollbackCommittedUpdate({
-        backupDir,
-        destination,
-        parentDir,
-        renameEntry,
-        removeEntry,
-        cleanupError,
-      });
-      throw cleanupError;
-    }
+    await removeEntry(backupDir, { recursive: true, force: true }).catch(() => undefined);
   } finally {
     await removeEntry(tempRoot, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+async function commitStagedSkill({
+  stagingDir,
+  destination,
+  copyFileEntry,
+  createDirectory,
+  removeEntry,
+}: {
+  stagingDir: string;
+  destination: string;
+  copyFileEntry: typeof copyFile;
+  createDirectory: typeof mkdir;
+  removeEntry: typeof rm;
+}) {
+  try {
+    await createDirectory(destination);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      throw new CodexSkillInstallError(
+        'SKILL_CONFLICT',
+        `A Skill appeared at ${destination} while installation was in progress`,
+      );
+    }
+    throw error;
+  }
+
+  try {
+    await copyStagedEntries({
+      sourceDir: stagingDir,
+      destinationDir: destination,
+      copyFileEntry,
+      createDirectory,
+      deferRootFiles: new Set(['SKILL.md', MARKER_FILE]),
+    });
+    for (const name of ['SKILL.md', MARKER_FILE]) {
+      await copyFileEntry(
+        path.join(stagingDir, name),
+        path.join(destination, name),
+        fsConstants.COPYFILE_EXCL,
+      );
+    }
+  } catch (error) {
+    await removeEntry(destination, { recursive: true, force: true }).catch(() => undefined);
+    throw error;
+  }
+}
+
+async function copyStagedEntries({
+  sourceDir,
+  destinationDir,
+  copyFileEntry,
+  createDirectory,
+  deferRootFiles,
+}: {
+  sourceDir: string;
+  destinationDir: string;
+  copyFileEntry: typeof copyFile;
+  createDirectory: typeof mkdir;
+  deferRootFiles?: Set<string>;
+}) {
+  const entries = await readdir(sourceDir, { withFileTypes: true });
+  entries.sort((left, right) => left.name.localeCompare(right.name));
+  for (const entry of entries) {
+    if (deferRootFiles?.has(entry.name)) continue;
+    const source = path.join(sourceDir, entry.name);
+    const target = path.join(destinationDir, entry.name);
+    if (entry.isSymbolicLink()) {
+      throw new CodexSkillInstallError(
+        'SKILL_SOURCE_INVALID',
+        `Staged Skill contains a symbolic link: ${entry.name}`,
+      );
+    }
+    if (entry.isDirectory()) {
+      await createDirectory(target);
+      await copyStagedEntries({
+        sourceDir: source,
+        destinationDir: target,
+        copyFileEntry,
+        createDirectory,
+      });
+    } else if (entry.isFile()) {
+      await copyFileEntry(source, target, fsConstants.COPYFILE_EXCL);
+    } else {
+      throw new CodexSkillInstallError(
+        'SKILL_SOURCE_INVALID',
+        `Staged Skill contains an unsupported entry: ${entry.name}`,
+      );
+    }
   }
 }
 
@@ -339,34 +465,6 @@ async function restoreBackup({
     throw new AggregateError(
       [originalError, restoreError],
       `Skill update failed and the previous version remains at ${backupDir}`,
-    );
-  }
-}
-
-async function rollbackCommittedUpdate({
-  backupDir,
-  destination,
-  parentDir,
-  renameEntry,
-  removeEntry,
-  cleanupError,
-}: {
-  backupDir: string;
-  destination: string;
-  parentDir: string;
-  renameEntry: typeof rename;
-  removeEntry: typeof rm;
-  cleanupError: unknown;
-}) {
-  const failedNewDir = path.join(parentDir, `.notify-user-install-failed-${randomUUID()}`);
-  try {
-    await renameEntry(destination, failedNewDir);
-    await renameEntry(backupDir, destination);
-    await removeEntry(failedNewDir, { recursive: true, force: true }).catch(() => undefined);
-  } catch (rollbackError) {
-    throw new AggregateError(
-      [cleanupError, rollbackError],
-      `Skill update cleanup and rollback failed; recovery data remains at ${backupDir}`,
     );
   }
 }

@@ -317,9 +317,11 @@ Notification Host。Agent 应使用 `notify-user` Skill 的脚本，不要自行
 `~/.codex/skills/notify-user`。正式用户流程完全离线，不访问 GitHub，也不依赖 Codex CLI。
 
 菜单动作使用 Kit 现有的 `menuId -> message -> plugin method` 链路。Electron 将开发态仓库路径
-或打包态 `resources/skills/notify-user` 通过 `HARBORS_NOTIFY_SKILL_SOURCE` 传给 Framework；
-插件方法不接受调用方提供的源路径或目标路径。安装器使用同目录临时文件和 rename 原子切换，
-只自动更新带 Harbors 管理标记且未被用户修改的版本；其他同名目录保持不变并报告冲突。
+或打包态 `kits/notifications/plugins/notification-center/main/dist/resources/notify-user` 通过
+`HARBORS_NOTIFY_SKILL_SOURCE` 传给 Framework；插件方法不接受调用方提供的源路径或目标路径。
+安装器先在同一父目录暂存和校验内容，再独占创建目标目录并最后写入 `SKILL.md` 与管理标记；
+更新前会将旧版本原子移动到备份。安装器只自动更新带 Harbors 管理标记且未被用户修改的版本；
+其他同名目录保持不变并报告冲突。
 
 Skill 必须定位已加载 `SKILL.md` 的目录，再用绝对路径运行脚本：
 
