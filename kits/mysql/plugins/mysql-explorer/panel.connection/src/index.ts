@@ -134,7 +134,7 @@ async function connect(): Promise<void> {
     port: Number(form.port),
     user: form.user,
     password: form.password,
-    database: form.database,
+    database: form.database.trim() || null,
     tls: form.tls,
   };
   await runAction(async (token) => {
@@ -222,7 +222,7 @@ function render(): void {
           ${field('port', '端口', form.port, 'number', 'off', 'port-field')}
           ${field('user', '用户名', form.user, 'text', 'username')}
           ${field('password', '密码', form.password, 'password', 'current-password')}
-          ${field('database', '数据库', form.database, 'text', 'off')}
+          ${field('database', '数据库（可选）', form.database, 'text', 'off')}
           <label class="tls-field"><input data-field="tls" type="checkbox"${form.tls ? ' checked' : ''}><span>TLS</span></label>
           <button class="primary-action" data-action="connect" type="button">连接</button>
           <button data-action="disconnect" type="button"${connection.connected ? '' : ' disabled'}>断开连接</button>
@@ -259,7 +259,7 @@ function renderConnectionReadout(): string {
   }
   return `<span class="connection-state">已连接</span>
     <strong data-current-endpoint>${escapeHtml(connection.endpoint ?? 'MySQL')}</strong>
-    <span class="connection-database">${escapeHtml(connection.database ?? '')}</span>
+    <span class="connection-database">${connection.database ? escapeHtml(connection.database) : '未选择数据库'}</span>
     <span>MySQL ${escapeHtml(connection.mysqlVersion ?? '未知版本')}</span>
     ${connection.tls ? '<span class="secure-badge">TLS 已验证</span>' : ''}`;
 }
@@ -272,7 +272,7 @@ function field(
   autocomplete: string,
   className = '',
 ): string {
-  return `<label${className ? ` class="${className}"` : ''}>${label}<input data-field="${name}" type="${type}" value="${escapeHtml(value)}" autocomplete="${autocomplete}"${name === 'port' ? ' min="1" max="65535"' : ''}></label>`;
+  return `<label${className ? ` class="${className}"` : ''}>${label}<input data-field="${name}" type="${type}" value="${escapeHtml(value)}" autocomplete="${autocomplete}"${name === 'port' ? ' min="1" max="65535"' : ''}${name === 'database' ? ' placeholder="连接后选择"' : ''}></label>`;
 }
 
 function panelError(caught: unknown): PanelError {

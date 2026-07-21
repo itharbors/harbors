@@ -75,11 +75,13 @@ describe('MySQL core plugin main', () => {
       'disconnect',
       'executeSql',
       'getConnectionState',
+      'getDatabases',
       'getObjectSchema',
       'getRelationshipGraph',
       'getRows',
       'getSchema',
       'insertRow',
+      'selectDatabase',
       'updateRow',
     ]);
 
@@ -138,5 +140,50 @@ describe('MySQL core plugin main', () => {
     await definition!.lifecycle?.unload?.();
 
     expect(dispose).toHaveBeenCalledTimes(1);
+  });
+
+  it('revision-wraps database lists and broadcasts successful database switches', async () => {
+    const serverConnection = {
+      connected: true,
+      endpoint: 'db.local:3306',
+      database: null,
+      mysqlVersion: '8.4.1',
+      tls: true,
+    };
+    const selectedConnection = { ...serverConnection, database: 'app' };
+    const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
+    vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
+    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(serverConnection);
+    vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(serverConnection);
+    vi.spyOn(FreshMysqlService.prototype, 'getDatabases').mockResolvedValue({ databases: ['app', 'mysql'] });
+    const selectDatabase = vi.spyOn(FreshMysqlService.prototype, 'selectDatabase')
+      .mockResolvedValue(selectedConnection);
+
+    let definition: PluginDefinition | undefined;
+    (globalThis as typeof globalThis & { editor?: unknown }).editor = {
+      plugin: { define(value: PluginDefinition) { definition = value; } },
+    };
+    await import('../main/src/index');
+    const broadcast = vi.fn();
+    definition!.lifecycle?.load?.({ message: { broadcast } });
+
+    await definition!.methods.connect({});
+    await expect(definition!.methods.getDatabases()).resolves.toEqual({
+      databases: ['app', 'mysql'],
+      connectionRevision: 1,
+      schemaRevision: 1,
+      dataRevision: 1,
+    });
+    await expect(definition!.methods.selectDatabase({ database: 'app' })).resolves.toMatchObject({
+      database: 'app',
+      connectionRevision: 2,
+      schemaRevision: 2,
+      dataRevision: 2,
+    });
+    expect(selectDatabase).toHaveBeenCalledWith({ database: 'app' });
+    expect(broadcast).toHaveBeenLastCalledWith(
+      CORE_TOPICS.connectionChanged,
+      expect.objectContaining({ database: 'app', connectionRevision: 2 }),
+    );
   });
 });

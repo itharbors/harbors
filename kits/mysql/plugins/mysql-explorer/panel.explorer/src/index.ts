@@ -20,6 +20,8 @@ type PanelError = { message: string; detail?: string };
 
 const EMPTY_SNAPSHOT: ObjectsSnapshot<SchemaObject> = {
   connected: false,
+  database: null,
+  databases: [],
   connectionRevision: 0,
   schemaRevision: 0,
   objects: [],
@@ -119,6 +121,25 @@ async function chooseObject(objectName: string): Promise<void> {
   }
 }
 
+async function chooseDatabase(database: string): Promise<void> {
+  const sequence = ++selectionSequence;
+  const connectionRevision = snapshot.connectionRevision;
+  const schemaRevision = snapshot.schemaRevision;
+  try {
+    const next = await requestExplorer('selectDatabase', { database });
+    if (
+      !isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)
+      || !isObjectsSnapshot(next)
+      || isStale(next)
+    ) return;
+    acceptSnapshot(next);
+  } catch (caught) {
+    if (!isCurrentSelectionRequest(sequence, connectionRevision, schemaRevision)) return;
+    error = panelError(caught);
+    render();
+  }
+}
+
 function isCurrentSelectionRequest(
   sequence: number,
   connectionRevision: number,
@@ -141,7 +162,7 @@ function render(): void {
   root.innerHTML = `
     <aside class="object-rail" aria-label="MySQL 数据库对象">
       <div class="rail-heading"><span>数据库对象</span><span class="object-count">${snapshot.objects.length}</span></div>
-      <label class="object-search"><span class="sr-only">筛选对象</span><input type="search" data-field="object-search" aria-label="筛选对象" placeholder="筛选表和视图" value="${escapeHtml(query)}"${snapshot.connected ? '' : ' disabled'}></label>
+      <label class="object-search"><span class="sr-only">筛选对象</span><input type="search" data-field="object-search" aria-label="筛选对象" placeholder="筛选当前库对象" value="${escapeHtml(query)}"${snapshot.connected && snapshot.database !== null ? '' : ' disabled'}></label>
       <div class="object-error-slot">${error ? renderError(error) : ''}</div>
       <div class="object-tree">${renderObjectTree()}</div>
     </aside>`;
@@ -159,17 +180,24 @@ function render(): void {
   for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>('[data-object-name]'))) {
     button.addEventListener('click', () => { void chooseObject(button.dataset.objectName!); });
   }
+  for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>('[data-database-name]'))) {
+    button.addEventListener('click', () => { void chooseDatabase(button.dataset.databaseName!); });
+  }
 }
 
 function renderObjectTree(): string {
   if (!snapshot.connected) {
     return '<p class="empty-hint">连接后即可查看表和视图。</p>';
   }
+  const databases = renderDatabases();
   if (snapshot.error) {
-    return '<p class="empty-hint">请刷新数据库对象后重试。</p>';
+    return `${databases}<p class="empty-hint">请刷新数据库对象后重试。</p>`;
+  }
+  if (snapshot.database === null) {
+    return `${databases}<p class="empty-hint">选择数据库后查看表和视图。</p>`;
   }
   if (snapshot.objects.length === 0) {
-    return '<p class="empty-hint">此数据库没有表或视图。</p>';
+    return `${databases}<p class="empty-hint">此数据库没有表或视图。</p>`;
   }
 
   const normalizedQuery = query.trim().toLocaleLowerCase();
@@ -180,12 +208,28 @@ function renderObjectTree(): string {
     const objects = filtered.filter((object) => object.type === type);
     if (objects.length === 0) return '';
     const label = type === 'table' ? '表' : '视图';
-    return `<section class="object-group" data-object-type="${type}">
+    return `<section class="rail-group object-group" data-object-type="${type}">
       <h3>${label}</h3>
       ${objects.map((object) => renderObject(object)).join('')}
     </section>`;
   }).join('');
-  return groups || '<p class="empty-hint">没有符合筛选条件的对象。</p>';
+  return `${databases}${groups || '<p class="empty-hint">没有符合筛选条件的对象。</p>'}`;
+}
+
+function renderDatabases(): string {
+  if (snapshot.databases.length === 0) {
+    return '<section class="rail-group database-group"><h3>数据库</h3><p class="empty-hint">当前账号没有可访问的数据库。</p></section>';
+  }
+  return `<section class="rail-group database-group"><h3>数据库</h3>${snapshot.databases
+    .map((database) => renderDatabase(database)).join('')}</section>`;
+}
+
+function renderDatabase(database: string): string {
+  const selected = database === snapshot.database;
+  return `<button type="button" class="${selected ? 'selected' : ''}" data-database-name="${escapeHtml(database)}" aria-pressed="${selected}">
+    <span class="database-icon" aria-hidden="true"></span>
+    <span>${escapeHtml(database)}</span>
+  </button>`;
 }
 
 function renderObject(object: SchemaObject): string {
@@ -211,6 +255,8 @@ function panelError(caught: unknown): PanelError {
 
 function isObjectsSnapshot(value: unknown): value is ObjectsSnapshot<SchemaObject> {
   if (!isRecord(value) || typeof value.connected !== 'boolean') return false;
+  if (value.database !== null && typeof value.database !== 'string') return false;
+  if (!Array.isArray(value.databases) || !value.databases.every((database) => typeof database === 'string')) return false;
   if (!isRevision(value.connectionRevision) || !isRevision(value.schemaRevision)) return false;
   if (!Array.isArray(value.objects) || !value.objects.every(isSchemaObject)) return false;
   if (value.error !== undefined && value.error !== null && !isPanelError(value.error)) return false;
@@ -239,6 +285,7 @@ function cloneSnapshot(value: ObjectsSnapshot<SchemaObject>): ObjectsSnapshot<Sc
   return {
     ...value,
     ...(value.error ? { error: { ...value.error } } : {}),
+    databases: [...value.databases],
     objects: value.objects.map((object) => ({ ...object })),
     selection: { ...value.selection },
   };

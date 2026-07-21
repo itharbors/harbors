@@ -49,7 +49,7 @@ describe('MySQL connection panel', () => {
     expect(document.querySelector('.brand-copy strong')?.textContent).toBe('MySQL 工作台');
     expect(document.querySelector('.brand-copy small')?.textContent).toBe('直连数据库');
     expect(Array.from(document.querySelectorAll('.connection-form label')).map((label) => label.textContent?.trim())).toEqual([
-      '主机', '端口', '用户名', '密码', '数据库', 'TLS',
+      '主机', '端口', '用户名', '密码', '数据库（可选）', 'TLS',
     ]);
     expect(document.querySelector<HTMLInputElement>('[data-field="host"]')?.value).toBe('127.0.0.1');
     expect(document.querySelector<HTMLInputElement>('[data-field="port"]')?.value).toBe('3306');
@@ -124,6 +124,26 @@ describe('MySQL connection panel', () => {
       'connect',
       expect.objectContaining({ database: 'app' }),
     ));
+  });
+
+  it('connects at server level when the optional database is blank', async () => {
+    const serverConnection = { ...connection, database: null };
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : serverConnection
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core',
+      'connect',
+      expect.objectContaining({ database: null }),
+    ));
+    await vi.waitFor(() => {
+      expect(document.querySelector('.connection-readout')?.textContent).toContain('未选择数据库');
+    });
   });
 
   it('clears the password immediately while a connection attempt is pending and after rejection', async () => {

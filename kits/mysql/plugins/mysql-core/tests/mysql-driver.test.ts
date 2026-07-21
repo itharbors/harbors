@@ -82,6 +82,18 @@ describe('Mysql2Driver', () => {
     expect(rawConnection.release).toHaveBeenCalledOnce();
     expect(rawPool.end).toHaveBeenCalledOnce();
   });
+
+  it('omits the mysql2 database option for a server-level connection', () => {
+    const rawPool = createRawPool();
+    const createPool = vi.fn(() => rawPool);
+    const driver = new Mysql2Driver(createPool as never);
+
+    driver.createPool({
+      host: 'db', port: 3306, user: 'u', password: 'secret', database: null, tls: false,
+    });
+
+    expect(createPool.mock.calls[0]?.[0]).not.toHaveProperty('database');
+  });
 });
 
 function createRawPool() {

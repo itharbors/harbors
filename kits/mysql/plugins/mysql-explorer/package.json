@@ -29,6 +29,7 @@
           "getSelection": ["getSelection"],
           "getObjectsSnapshot": ["getObjectsSnapshot"],
           "refreshObjects": ["refreshObjects"],
+          "selectDatabase": ["selectDatabase"],
           "selectObject": ["selectObject"]
         },
         "broadcast": {

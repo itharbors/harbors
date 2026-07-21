@@ -70,6 +70,11 @@ describe('MySQL kit manifest', () => {
     }
 
     const explorer = readJson(path.join(kitRoot, 'plugins/mysql-explorer/package.json'));
+    const core = readJson(path.join(kitRoot, 'plugins/mysql-core/package.json'));
+    expect(core['ce-editor'].contribute.message.request).toMatchObject({
+      getDatabases: ['getDatabases'],
+      selectDatabase: ['selectDatabase'],
+    });
     expect(explorer['ce-editor'].contribute.panel).toEqual({
       connection: {
         entry: './panel.connection/dist/index.html',
@@ -90,6 +95,7 @@ describe('MySQL kit manifest', () => {
       getSelection: ['getSelection'],
       getObjectsSnapshot: ['getObjectsSnapshot'],
       refreshObjects: ['refreshObjects'],
+      selectDatabase: ['selectDatabase'],
       selectObject: ['selectObject'],
     });
     expect(explorer['ce-editor'].contribute.message.broadcast).toMatchObject({

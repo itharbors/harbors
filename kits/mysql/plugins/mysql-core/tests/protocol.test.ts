@@ -34,6 +34,15 @@ describe('MySQL protocol', () => {
     })).toThrow(/user/);
   });
 
+  it('normalizes an omitted database to a server-level connection', () => {
+    const base = {
+      host: 'db.local', port: 3306, user: 'reader', password: 'secret', tls: false,
+    };
+
+    expect(parseConnectionInput({ ...base, database: '   ' })).toMatchObject({ database: null });
+    expect(parseConnectionInput({ ...base, database: null })).toMatchObject({ database: null });
+  });
+
   it('serializes MySQL values without losing type information', () => {
     expect(serializeMysqlValue(null, 'VAR_STRING')).toBeNull();
     expect(serializeMysqlValue('9007199254740993', 'LONGLONG')).toEqual({
