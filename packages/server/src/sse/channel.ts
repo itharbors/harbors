@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { PROTOCOL_VERSION, type SSEEnvelope, type UnversionedSSEEnvelope } from '@ce/plugin-types';
+import { PROTOCOL_VERSION, type SSEEnvelope, type UnversionedSSEEnvelope } from '@itharbors/plugin-types';
 
 const HEARTBEAT_INTERVAL_MS = 15_000;
 const MAX_QUEUED_EVENTS = 64;

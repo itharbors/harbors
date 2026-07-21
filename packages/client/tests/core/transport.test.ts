@@ -269,19 +269,19 @@ describe('EditorTransport', () => {
       json: async () => ({
         disposition: 'open-window-group',
         panelInstanceId: 'panel-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         windowGroupId: 'group-1',
         carrier: 'window-group',
         url: '/api/window-entry/secondary?sessionId=test-session-123&windowGroupId=group-1',
       }),
     } as Response);
 
-    const result = await transport.openPanel('@ce/log.log');
+    const result = await transport.openPanel('@itharbors/log.log');
 
     expect(fetchSpy).toHaveBeenCalledWith('/api/panel/open', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'test-session-123', panelName: '@ce/log.log' }),
+      body: JSON.stringify({ sessionId: 'test-session-123', panelName: '@itharbors/log.log' }),
     });
     expect(result.windowGroupId).toBe('group-1');
   });
@@ -308,7 +308,7 @@ describe('EditorTransport', () => {
       status: 200,
       json: async () => ({
         id: 'panel-1',
-        panelName: '@ce/log.log',
+        panelName: '@itharbors/log.log',
         carrier: 'floating',
         state: 'open',
         windowGroupId: null,

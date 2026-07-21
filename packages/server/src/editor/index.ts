@@ -18,10 +18,10 @@ import path from 'node:path';
 import fs from 'node:fs';
 
 const BUILTIN_PLUGINS = [
-  '@ce/panel',
-  '@ce/message',
-  '@ce/menu',
-  '@ce/config',
+  '@itharbors/panel',
+  '@itharbors/message',
+  '@itharbors/menu',
+  '@itharbors/config',
 ];
 
 const sharedConfigStore: ConfigLayerStore = new Map();
@@ -84,10 +84,10 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       return menu.detach(pluginName);
     },
     setDefaults(items: MenuContributionNode[]) {
-      return menu.setDefaults('@ce/menu', items);
+      return menu.setDefaults('@itharbors/menu', items);
     },
     clearDefaults() {
-      return menu.clearDefaults('@ce/menu');
+      return menu.clearDefaults('@itharbors/menu');
     },
     reset() {
       return menu.reset();

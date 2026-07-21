@@ -55,7 +55,7 @@ it('resolves only from the owning session and rejects late results', async () =>
   const dispatch = vi.fn();
   const broker = new BrowserRequestBroker();
   const pending = broker.request('session-a', dispatch, {
-    panel: '@ce/log.log', method: 'getLogs', args: [],
+    panel: '@itharbors/log.log', method: 'getLogs', args: [],
   });
   const requestId = dispatch.mock.calls[0][0].requestId;
 

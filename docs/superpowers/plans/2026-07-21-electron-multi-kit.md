@@ -22,15 +22,15 @@
 
 **Files:**
 - Create: `scripts/lib/plugin-namespace.test.mjs`
-- Modify: every tracked source/manifest/test/doc containing plugin package prefix `@ce/`
+- Modify: every tracked source/manifest/test/doc containing plugin package prefix `@itharbors/`
 - Modify: `package-lock.json`, `package.json`
 
 **Interfaces:**
-- Produces: zero tracked plugin references matching `@ce/`; protocol package becomes `@itharbors/plugin-types`.
+- Produces: zero tracked plugin references using the legacy CE scope; protocol package becomes `@itharbors/plugin-types`.
 
-- [ ] Add a Node test that scans tracked text files (excluding generated output) and asserts no `@ce/` remains.
+- [ ] Add a Node test that scans tracked text files (excluding generated output) and asserts no `@itharbors/` remains.
 - [ ] Run `node --test scripts/lib/plugin-namespace.test.mjs`; expect failure listing current references.
-- [ ] Mechanically replace `@ce/` with `@itharbors/`, refresh lockfile, and update the root build/test scripts.
+- [ ] Mechanically replace `@itharbors/` with `@itharbors/`, refresh lockfile, and update the root build/test scripts.
 - [ ] Run build, namespace test, Server/Client/Kit tests; expect green.
 - [ ] Commit `[Feature] 统一插件命名空间`.
 
@@ -140,4 +140,3 @@
 - [ ] Inspect `git status --short`, `git diff`, `git diff --cached`, and search for forbidden plugin namespace references.
 - [ ] Commit final documentation with `[Feature] 完善多 Kit 工作台文档` when documentation changed after prior commits.
 - [ ] Use `finish-change.sh` only after the complete requirement audit succeeds.
-

@@ -1,5 +1,5 @@
 {
-  "name": "@ce/message-debug",
+  "name": "@itharbors/message-debug",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
@@ -26,7 +26,7 @@
           "*": [
             "onAnyBroadcast"
           ],
-          "@ce/message-debug.messages.changed": [
+          "@itharbors/message-debug.messages.changed": [
             "panel.onMessagesChanged"
           ]
         }

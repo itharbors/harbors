@@ -15,7 +15,7 @@ export interface PanelRegistration {
   owner: string;
 }
 
-export type { PanelDescriptor } from '@ce/plugin-types';
+export type { PanelDescriptor } from '@itharbors/plugin-types';
 
 export interface PanelDefinition {
   mount?(ctx: import('../../editor/types').PanelRuntime): void | Promise<void>;

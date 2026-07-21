@@ -48,13 +48,13 @@ Window 描述承载区域，PanelInstance 描述一次具体打开行为。Panel
   "type": "hsplit",
   "sizes": [240, 1],
   "children": [
-    { "type": "leaf", "panel": "@ce/plugin-list.default" },
+    { "type": "leaf", "panel": "@itharbors/plugin-list.default" },
     {
       "type": "tab",
       "activeIndex": 0,
       "children": [
-        { "type": "leaf", "panel": "@ce/log.default" },
-        { "type": "leaf", "panel": "@ce/plugin-detail.default" }
+        { "type": "leaf", "panel": "@itharbors/log.default" },
+        { "type": "leaf", "panel": "@itharbors/plugin-detail.default" }
       ]
     }
   ]

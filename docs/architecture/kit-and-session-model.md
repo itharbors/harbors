@@ -44,8 +44,8 @@ Kit package 的核心结构：
         "secondary": "secondary.html"
       },
       "plugin": [
-        "@ce/log",
-        "@ce/plugin-list"
+        "@itharbors/log",
+        "@itharbors/plugin-list"
       ],
       "theme": {
         "--ce-bg-primary": "#1e1e1e"
@@ -75,7 +75,7 @@ Kit package 的核心结构：
 
 ### 内置插件
 
-`@ce/panel`、`@ce/message`、`@ce/menu`、`@ce/config` 由 Editor 装配层确保装载。
+`@itharbors/panel`、`@itharbors/message`、`@itharbors/menu`、`@itharbors/config` 由 Editor 装配层确保装载。
 它们提供框架级贡献点，在 Kit 切换时保持可用。
 
 ### Kit 外部插件

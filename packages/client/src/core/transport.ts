@@ -5,7 +5,7 @@ import {
   type BrowserOpenPanelResult,
   type SSEEnvelope,
   type SessionInfo,
-} from '@ce/plugin-types';
+} from '@itharbors/plugin-types';
 import type { ClientSession } from './session';
 
 export type OpenPanelResult = BrowserOpenPanelResult;

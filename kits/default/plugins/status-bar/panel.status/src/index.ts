@@ -51,7 +51,7 @@ async function refreshStatus() {
   if (!context || !rootElement) return;
 
   try {
-    const status = await context.message.request('@ce/status-bar', 'getStatus') as StatusPayload;
+    const status = await context.message.request('@itharbors/status-bar', 'getStatus') as StatusPayload;
     latestStatus = status;
     latestStatusAt = Date.now();
     renderStatus(status);

@@ -167,8 +167,8 @@ describe('framework routes', () => {
     const kitDir = mkdtempSync(path.join(tmpdir(), 'routes-multi-window-kit-'));
     writeFileSync(path.join(kitDir, 'layout.json'), JSON.stringify({
       windows: [
-        { id: 'main', type: 'panel-area', layout: { type: 'leaf', panel: '@ce/log.log' } },
-        { id: 'secondary-default', type: 'panel-area', layout: { type: 'leaf', panel: '@ce/message-debug.debug' } },
+        { id: 'main', type: 'panel-area', layout: { type: 'leaf', panel: '@itharbors/log.log' } },
+        { id: 'secondary-default', type: 'panel-area', layout: { type: 'leaf', panel: '@itharbors/message-debug.debug' } },
       ],
     }));
     writeFileSync(path.join(kitDir, 'package.json'), JSON.stringify({
@@ -232,7 +232,7 @@ describe('framework routes', () => {
   it('window entry route acknowledges the loaded secondary window-group', async () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load('@itharbors/kit-default');
-    const opened = editor.window.openPanel('@ce/log.log');
+    const opened = editor.window.openPanel('@itharbors/log.log');
     if (!opened.windowGroupId) throw new Error('expected openPanel to create a window-group');
 
     expect(editor.window.getSnapshot().windows).toEqual(expect.arrayContaining([
@@ -266,7 +266,7 @@ describe('framework routes', () => {
     const { res, body, statusCode } = mockRes();
     await router(mockReq('POST', '/api/panel/open', {
       sessionId: 's1',
-      panelName: '@ce/log.log',
+      panelName: '@itharbors/log.log',
     }), res);
 
     const data = JSON.parse(await body());
@@ -274,7 +274,7 @@ describe('framework routes', () => {
     expect(data).toMatchObject({
       disposition: 'open-window-group',
       carrier: 'window-group',
-      panelName: '@ce/log.log',
+      panelName: '@itharbors/log.log',
     });
     expect(data.url).toContain('/api/window-entry/secondary?sessionId=s1');
     expect(data.url).toContain(`windowGroupId=${encodeURIComponent(data.windowGroupId)}`);
@@ -288,13 +288,13 @@ describe('framework routes', () => {
     const { res, body, statusCode } = mockRes();
     await router(mockReq('POST', '/api/panel/open', {
       session: 's1',
-      panelName: '@ce/log.log',
+      panelName: '@itharbors/log.log',
     }), res);
 
     expect(statusCode()).toBe(200);
     expect(JSON.parse(await body())).toMatchObject({
       disposition: 'open-window-group',
-      panelName: '@ce/log.log',
+      panelName: '@itharbors/log.log',
     });
   });
 
@@ -302,7 +302,7 @@ describe('framework routes', () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load('@itharbors/kit-default');
 
-    const opened = editor.window.openPanel('@ce/log.log');
+    const opened = editor.window.openPanel('@itharbors/log.log');
     const router = createPanelInstanceRouter(new Map([['s1', editor]]));
     const { res, body, statusCode } = mockRes();
     await router(mockReq('POST', '/api/panel-instance/fallback', {
@@ -321,7 +321,7 @@ describe('framework routes', () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load('@itharbors/kit-default');
 
-    const opened = editor.window.openPanel('@ce/log.log');
+    const opened = editor.window.openPanel('@itharbors/log.log');
     editor.window.markPanelInstanceFloating(opened.panelInstanceId);
     const router = createPanelInstanceRouter(new Map([['s1', editor]]));
     const minimized = mockRes();
@@ -354,7 +354,7 @@ describe('framework routes', () => {
   it('window group close route removes the secondary group and avoids ghost reuse', async () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load('@itharbors/kit-default');
-    const first = editor.window.openPanel('@ce/log.log');
+    const first = editor.window.openPanel('@itharbors/log.log');
     if (!first.windowGroupId) throw new Error('expected openPanel to create a window-group');
 
     const router = createWindowGroupRouter(new Map([['s1', editor]]));
@@ -372,7 +372,7 @@ describe('framework routes', () => {
       expect.objectContaining({ id: first.panelInstanceId }),
     ]));
 
-    const second = editor.window.openPanel('@ce/log.log');
+    const second = editor.window.openPanel('@itharbors/log.log');
     expect(second.disposition).toBe('open-window-group');
     expect(second.panelInstanceId).not.toBe(first.panelInstanceId);
   });
@@ -383,7 +383,7 @@ describe('framework routes', () => {
 
     const router = createPanelAssetRouter(new Map([['s1', editor]]));
     const { res, body, statusCode } = mockRes();
-    router(mockReq('GET', '/api/assets/panel/%40ce%2Flog.log/index.html?sessionId=s1'), res);
+    router(mockReq('GET', '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=s1'), res);
 
     const html = await body();
     expect(statusCode()).toBe(200);
@@ -469,7 +469,7 @@ describe('framework routes', () => {
     expect(statusCode()).toBe(200);
     expect(data.result).toEqual(expect.objectContaining({
       disposition: 'open-window-group',
-      panelName: '@ce/log.log',
+      panelName: '@itharbors/log.log',
       carrier: 'window-group',
     }));
     expect(data.result.url).toContain('/api/window-entry/secondary?sessionId=s1&windowGroupId=');

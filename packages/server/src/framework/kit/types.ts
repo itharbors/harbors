@@ -1,7 +1,7 @@
 import type { LegacyWindowDescriptorInput, WindowDescriptor } from '../window/types';
-import type { KitWindowEntries } from '@ce/plugin-types';
+import type { KitWindowEntries } from '@itharbors/plugin-types';
 
-export type { KitWindowEntries } from '@ce/plugin-types';
+export type { KitWindowEntries } from '@itharbors/plugin-types';
 
 export interface KitLayoutConfig {
   windows: WindowDescriptor[];

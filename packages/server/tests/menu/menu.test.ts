@@ -10,7 +10,7 @@ describe('buildMenuTree', () => {
       platform: 'win32',
     });
 
-    menu.setDefaults('@ce/menu', [
+    menu.setDefaults('@itharbors/menu', [
       { type: 'menu', id: 'file', label: 'File' },
       { type: 'menu', id: 'file/new-session', label: 'New Session', message: 'newSession' },
     ]);
@@ -474,7 +474,7 @@ describe('buildMenuTree', () => {
   it('restores runtime defaults after detaching the last external contribution', () => {
     const menu = new MenuModule({ platform: 'win32' });
 
-    menu.setDefaults('@ce/menu', [{ type: 'menu', id: 'file', label: 'File' }]);
+    menu.setDefaults('@itharbors/menu', [{ type: 'menu', id: 'file', label: 'File' }]);
     menu.attach('plugin-menu', {
       menu: [
         { type: 'menu', id: 'tools', label: 'Tools' },

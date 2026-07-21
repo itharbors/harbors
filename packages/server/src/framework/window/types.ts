@@ -4,7 +4,7 @@ import type {
   PanelInstanceDescriptor,
   WindowDescriptor,
   WindowSnapshot,
-} from '@ce/plugin-types';
+} from '@itharbors/plugin-types';
 
 export type {
   LayoutNode,
@@ -12,7 +12,7 @@ export type {
   PanelInstanceDescriptor,
   WindowDescriptor,
   WindowSnapshot,
-} from '@ce/plugin-types';
+} from '@itharbors/plugin-types';
 
 export interface LegacyWindowDescriptorInput {
   id?: string;

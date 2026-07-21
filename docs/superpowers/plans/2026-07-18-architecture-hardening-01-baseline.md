@@ -52,7 +52,7 @@ Expected: exit code 1 because `check` contains `npm run dev`.
 Set the root script to:
 
 ```json
-"check": "npm run build -w @ce/plugin-types && npm test && npm run plugins:check"
+"check": "npm run build -w @itharbors/plugin-types && npm test && npm run plugins:check"
 ```
 
 - [ ] **Step 3: Verify the script shape**
@@ -60,7 +60,7 @@ Set the root script to:
 Run:
 
 ```bash
-node -e "const p=require('./package.json'); if (p.scripts.check !== 'npm run build -w @ce/plugin-types && npm test && npm run plugins:check') process.exit(1)"
+node -e "const p=require('./package.json'); if (p.scripts.check !== 'npm run build -w @itharbors/plugin-types && npm test && npm run plugins:check') process.exit(1)"
 ```
 
 Expected: exit code 0.
@@ -210,7 +210,7 @@ it('POST /api/session uses the server default kit when one is configured', async
     expect(resp.status).toBe(200);
     expect(data.kitName).toBe('@itharbors/kit-default');
     expect(data.panels.map((panel: { name: string }) => panel.name)).toEqual(
-      expect.arrayContaining(['@ce/status-bar.status', '@ce/log.log']),
+      expect.arrayContaining(['@itharbors/status-bar.status', '@itharbors/log.log']),
     );
   } finally {
     await server.stop();

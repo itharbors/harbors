@@ -49,7 +49,7 @@ describe('PluginModule', () => {
 
   it('keeps registration state instance-scoped', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-module-'));
-    const pluginDir = mkPlugin(root, 'menu', '@ce/menu');
+    const pluginDir = mkPlugin(root, 'menu', '@itharbors/menu');
     const left = new PluginModule();
     const right = new PluginModule();
 
@@ -203,9 +203,9 @@ describe('PluginModule', () => {
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
 
-    expect(editor.plugin.getInfo('@ce/menu')?.path).toContain(`${path.sep}plugins${path.sep}menu`);
-    expect(editor.plugin.listLoaded()).toContain('@ce/menu');
-    expect(editor.plugin.callPlugin('@ce/menu', 'newSession')).toEqual({ ok: true, action: 'newSession' });
+    expect(editor.plugin.getInfo('@itharbors/menu')?.path).toContain(`${path.sep}plugins${path.sep}menu`);
+    expect(editor.plugin.listLoaded()).toContain('@itharbors/menu');
+    expect(editor.plugin.callPlugin('@itharbors/menu', 'newSession')).toEqual({ ok: true, action: 'newSession' });
   });
 
   it('prevents loaded plugins from registering message routes as another owner', async () => {

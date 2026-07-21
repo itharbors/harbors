@@ -12,7 +12,7 @@ editor.plugin.define({
   },
   methods: {
     openListPanel() {
-      return runtime.window.openPanel('@ce/plugin-list.list');
+      return runtime.window.openPanel('@itharbors/plugin-list.list');
     },
     getPlugins() {
       return getLoadedPlugins();

@@ -50,20 +50,20 @@ describe('panel assets', () => {
       panel: {
         getRegistration() {
           return {
-            name: '@ce/scene-viewport.viewport',
+            name: '@itharbors/scene-viewport.viewport',
             module: path.join(pluginDir, 'panel.html'),
-            owner: '@ce/scene-viewport',
+            owner: '@itharbors/scene-viewport',
             constraints: {},
           };
         },
       },
       plugin: {
         listLoaded() {
-          return ['@ce/scene-viewport'];
+          return ['@itharbors/scene-viewport'];
         },
         getInfo() {
           return {
-            name: '@ce/scene-viewport',
+            name: '@itharbors/scene-viewport',
             path: pluginDir,
             kind: 'builtin',
             assets: { public: ['./assets'] },
@@ -79,22 +79,22 @@ describe('panel assets', () => {
 
     const router = createPanelAssetRouter(source as never);
     const ok = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/icon.svg?sessionId=s1' } as never, ok.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/icon.svg?sessionId=s1' } as never, ok.res);
     expect(ok.statusCode()).toBe(200);
     expect(ok.header('content-type')).toBe('image/svg+xml; charset=utf-8');
     expect(ok.body()).toContain('<svg');
 
     const nested = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/icons/empty%20scene.svg?sessionId=s1' } as never, nested.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/icons/empty%20scene.svg?sessionId=s1' } as never, nested.res);
     expect(nested.statusCode()).toBe(200);
     expect(nested.body()).toContain('nested');
 
     const blocked = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/..%2Fsecret.txt?sessionId=s1' } as never, blocked.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/..%2Fsecret.txt?sessionId=s1' } as never, blocked.res);
     expect(blocked.statusCode()).toBe(404);
 
     const symlink = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/linked-secret.svg?sessionId=s1' } as never, symlink.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/linked-secret.svg?sessionId=s1' } as never, symlink.res);
     expect(symlink.statusCode()).toBe(404);
 
     const malformed = mockRes();
@@ -119,20 +119,20 @@ describe('panel assets', () => {
       panel: {
         getRegistration() {
           return {
-            name: '@ce/scene-viewport.viewport',
+            name: '@itharbors/scene-viewport.viewport',
             module: path.join(pluginDir, 'panel.html'),
-            owner: '@ce/scene-viewport',
+            owner: '@itharbors/scene-viewport',
             constraints: {},
           };
         },
       },
       plugin: {
         listLoaded() {
-          return ['@ce/scene-viewport'];
+          return ['@itharbors/scene-viewport'];
         },
         getInfo() {
           return {
-            name: '@ce/scene-viewport',
+            name: '@itharbors/scene-viewport',
             path: pluginDir,
             kind: 'builtin',
             assets: { public: ['./assets'] },
@@ -148,7 +148,7 @@ describe('panel assets', () => {
 
     const router = createPanelAssetRouter(source as never);
     const res = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/secret.svg?sessionId=s1' } as never, res.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/secret.svg?sessionId=s1' } as never, res.res);
     expect(res.statusCode()).toBe(404);
 
     fs.rmSync(root, { recursive: true, force: true });
@@ -166,9 +166,9 @@ describe('panel assets', () => {
       panel: {
         getRegistration() {
           return {
-            name: '@ce/scene-viewport.viewport',
+            name: '@itharbors/scene-viewport.viewport',
             module: path.join(pluginDir, 'panel.html'),
-            owner: '@ce/scene-viewport',
+            owner: '@itharbors/scene-viewport',
             constraints: {},
           };
         },
@@ -179,7 +179,7 @@ describe('panel assets', () => {
         },
         getInfo() {
           return {
-            name: '@ce/scene-viewport',
+            name: '@itharbors/scene-viewport',
             path: pluginDir,
             kind: 'builtin',
             assets: { public: ['./assets'] },
@@ -195,7 +195,7 @@ describe('panel assets', () => {
 
     const router = createPanelAssetRouter(source as never);
     const res = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/icon.svg?sessionId=s1' } as never, res.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/icon.svg?sessionId=s1' } as never, res.res);
     expect(res.statusCode()).toBe(404);
 
     fs.rmSync(root, { recursive: true, force: true });
@@ -215,16 +215,16 @@ describe('panel assets', () => {
       panel: {
         getRegistration() {
           return {
-            name: '@ce/scene-viewport.viewport',
+            name: '@itharbors/scene-viewport.viewport',
             module: path.join(panelDistDir, 'index.html'),
-            owner: '@ce/scene-viewport',
+            owner: '@itharbors/scene-viewport',
             constraints: {},
           };
         },
       },
       plugin: {
         listLoaded() {
-          return ['@ce/scene-viewport'];
+          return ['@itharbors/scene-viewport'];
         },
       },
       i18n: {
@@ -237,7 +237,7 @@ describe('panel assets', () => {
     const router = createPanelAssetRouter(source as never);
     const ok = mockRes();
     router(
-      { method: 'GET', url: '/api/assets/panel/%40ce%2Fscene-viewport.viewport/mesh.glb?sessionId=s1' } as never,
+      { method: 'GET', url: '/api/assets/panel/%40itharbors%2Fscene-viewport.viewport/mesh.glb?sessionId=s1' } as never,
       ok.res,
     );
 
@@ -256,7 +256,7 @@ describe('panel assets', () => {
 
     const source = new Map();
     const pluginInfo = {
-      name: '@ce/scene-viewport',
+      name: '@itharbors/scene-viewport',
       path: pluginDir,
       kind: 'builtin',
       assets: { public: './assets' },
@@ -266,16 +266,16 @@ describe('panel assets', () => {
       panel: {
         getRegistration() {
           return {
-            name: '@ce/scene-viewport.viewport',
+            name: '@itharbors/scene-viewport.viewport',
             module: path.join(pluginDir, 'panel.html'),
-            owner: '@ce/scene-viewport',
+            owner: '@itharbors/scene-viewport',
             constraints: {},
           };
         },
       },
       plugin: {
         listLoaded() {
-          return ['@ce/scene-viewport'];
+          return ['@itharbors/scene-viewport'];
         },
         getInfo() {
           return pluginInfo;
@@ -290,12 +290,12 @@ describe('panel assets', () => {
 
     const router = createPanelAssetRouter(source as never);
     const malformedRoot = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/icon.svg?sessionId=s1' } as never, malformedRoot.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/icon.svg?sessionId=s1' } as never, malformedRoot.res);
     expect(malformedRoot.statusCode()).toBe(404);
 
     pluginInfo.assets.public = [null, './assets'] as never;
     const mixedRoots = mockRes();
-    router({ method: 'GET', url: '/api/assets/plugin/%40ce%2Fscene-viewport/icon.svg?sessionId=s1' } as never, mixedRoots.res);
+    router({ method: 'GET', url: '/api/assets/plugin/%40itharbors%2Fscene-viewport/icon.svg?sessionId=s1' } as never, mixedRoots.res);
     expect(mixedRoots.statusCode()).toBe(200);
     expect(mixedRoots.body()).toContain('<svg');
 

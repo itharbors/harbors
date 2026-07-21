@@ -10,7 +10,7 @@
     "test": "npm run typecheck && node ./scripts/test.mjs"
   },
   "dependencies": {
-    "@ce/plugin-types": "0.0.1",
+    "@itharbors/plugin-types": "0.0.1",
     "three": "^0.176.0"
   },
   "devDependencies": {

@@ -74,7 +74,7 @@ function createKit(name: string, plugins: TestPlugin[]): string {
 function createDefaultKitFixture(): string {
   return createKit('@itharbors/kit-default', [
     {
-      name: '@ce/log',
+      name: '@itharbors/log',
       dir: 'log',
       contribute: {
         panel: {
@@ -102,7 +102,7 @@ function createDefaultKitFixture(): string {
       `,
     },
     {
-      name: '@ce/plugin-list',
+      name: '@itharbors/plugin-list',
       dir: 'plugin-list',
     },
   ]);
@@ -111,7 +111,7 @@ function createDefaultKitFixture(): string {
 function createAlternateKitFixture(): string {
   return createKit('@itharbors/kit-alternate', [
     {
-      name: '@ce/alternate-header',
+      name: '@itharbors/alternate-header',
       dir: 'alternate-header',
     },
   ]);
@@ -236,19 +236,19 @@ describe('kit lifecycle', () => {
     try {
       await editor.kit.load(defaultKit);
       const before = editor.plugin.listLoaded();
-      expect(before).toEqual(expect.arrayContaining(['@ce/menu', '@ce/log', '@ce/plugin-list']));
-      expect(editor.panel.getRegistration('@ce/log.log')).toMatchObject({ owner: '@ce/log' });
-      expect(editor.message.queryRequest('@ce/log', 'getLogs')).toBeDefined();
+      expect(before).toEqual(expect.arrayContaining(['@itharbors/menu', '@itharbors/log', '@itharbors/plugin-list']));
+      expect(editor.panel.getRegistration('@itharbors/log.log')).toMatchObject({ owner: '@itharbors/log' });
+      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
 
       await editor.kit.switchKit(alternateKit);
       const after = editor.plugin.listLoaded();
 
-      expect(after).toContain('@ce/menu');
-      expect(after).toContain('@ce/alternate-header');
-      expect(after).not.toContain('@ce/log');
-      expect(after).not.toContain('@ce/plugin-list');
-      expect(editor.panel.list().some((panel) => panel.name === '@ce/log.log')).toBe(false);
-      expect(editor.message.queryRequest('@ce/log', 'getLogs')).toBeUndefined();
+      expect(after).toContain('@itharbors/menu');
+      expect(after).toContain('@itharbors/alternate-header');
+      expect(after).not.toContain('@itharbors/log');
+      expect(after).not.toContain('@itharbors/plugin-list');
+      expect(editor.panel.list().some((panel) => panel.name === '@itharbors/log.log')).toBe(false);
+      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeUndefined();
     } finally {
       removeKits(defaultKit, alternateKit);
     }
@@ -283,7 +283,7 @@ describe('kit lifecycle', () => {
     try {
       await expect(editor.kit.load(kitDir)).rejects.toThrow('bad plugin load failed');
 
-      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@ce/menu', '@ce/panel', '@ce/message']));
+      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@itharbors/menu', '@itharbors/panel', '@itharbors/message']));
       expect(editor.plugin.listLoaded()).not.toContain('good-plugin');
       expect(editor.plugin.listLoaded()).not.toContain('bad-plugin');
       expect(editor.panel.getRegistration('good-plugin.main')).toBeUndefined();
@@ -305,21 +305,21 @@ describe('kit lifecycle', () => {
     try {
       await editor.kit.load(defaultKit);
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
-      expect(editor.plugin.listLoaded()).toContain('@ce/log');
-      expect(editor.panel.getRegistration('@ce/log.log')).toBeDefined();
-      expect(editor.message.queryRequest('@ce/log', 'getLogs')).toBeDefined();
+      expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
+      expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
+      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
 
       await expect(editor.kit.switchKit(failingKit)).rejects.toThrow('bad plugin load failed');
 
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
-      expect(editor.plugin.listLoaded()).toContain('@ce/log');
-      expect(editor.plugin.listLoaded()).toContain('@ce/plugin-list');
+      expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
+      expect(editor.plugin.listLoaded()).toContain('@itharbors/plugin-list');
       expect(editor.plugin.listLoaded()).not.toContain('good-plugin');
       expect(editor.plugin.listLoaded()).not.toContain('bad-plugin');
-      expect(editor.panel.getRegistration('@ce/log.log')).toBeDefined();
+      expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
       expect(editor.panel.getRegistration('good-plugin.main')).toBeUndefined();
       expect(editor.panel.getRegistration('bad-plugin.main')).toBeUndefined();
-      expect(editor.message.queryRequest('@ce/log', 'getLogs')).toBeDefined();
+      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
       expect(editor.message.queryRequest('good-plugin', 'ping')).toBeUndefined();
       expect(editor.message.queryRequest('bad-plugin', 'ping')).toBeUndefined();
     } finally {
@@ -340,9 +340,9 @@ describe('kit lifecycle', () => {
 
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
       expect(editor.window.getSnapshot()).toEqual(previousSnapshot);
-      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@ce/log', '@ce/plugin-list']));
-      expect(editor.panel.getRegistration('@ce/log.log')).toBeDefined();
-      expect(editor.message.queryRequest('@ce/log', 'getLogs')).toBeDefined();
+      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@itharbors/log', '@itharbors/plugin-list']));
+      expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
+      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
     } finally {
       removeKits(defaultKit, unresolvableKit);
     }

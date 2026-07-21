@@ -1,4 +1,4 @@
-import type { BootstrapInfo, PanelInstanceDescriptor, SessionInfo } from '@ce/plugin-types';
+import type { BootstrapInfo, PanelInstanceDescriptor, SessionInfo } from '@itharbors/plugin-types';
 
 export type {
   BootstrapInfo,
@@ -13,9 +13,9 @@ export type {
   PanelInstanceDescriptor,
   SessionInfo,
   WindowDescriptor,
-} from '@ce/plugin-types';
+} from '@itharbors/plugin-types';
 
-/** @deprecated Use PanelInstanceDescriptor from @ce/plugin-types. */
+/** @deprecated Use PanelInstanceDescriptor from @itharbors/plugin-types. */
 export type PanelInstanceSnapshot = PanelInstanceDescriptor;
 
 export class ClientSession {

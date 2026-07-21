@@ -15,11 +15,11 @@ import {
 } from '../../src/layout/tab-layout';
 
 const panelMap = new Map<string, PanelDescriptor>([
-  ['@ce/files.list', { name: '@ce/files.list', entry: '/files.html' }],
-  ['@ce/search.search', { name: '@ce/search.search', entry: '/search.html' }],
-  ['@ce/editor.main', { name: '@ce/editor.main', entry: '/editor.html' }],
-  ['@ce/preview.preview', { name: '@ce/preview.preview', entry: '/preview.html' }],
-  ['@ce/status-bar.status', { name: '@ce/status-bar.status', entry: '/status.html' }],
+  ['@itharbors/files.list', { name: '@itharbors/files.list', entry: '/files.html' }],
+  ['@itharbors/search.search', { name: '@itharbors/search.search', entry: '/search.html' }],
+  ['@itharbors/editor.main', { name: '@itharbors/editor.main', entry: '/editor.html' }],
+  ['@itharbors/preview.preview', { name: '@itharbors/preview.preview', entry: '/preview.html' }],
+  ['@itharbors/status-bar.status', { name: '@itharbors/status-bar.status', entry: '/status.html' }],
 ]);
 
 function createLayout(): LayoutNode {
@@ -31,16 +31,16 @@ function createLayout(): LayoutNode {
         type: 'tab',
         activeIndex: 0,
         children: [
-          { type: 'leaf', panel: '@ce/files.list' },
-          { type: 'leaf', panel: '@ce/search.search' },
+          { type: 'leaf', panel: '@itharbors/files.list' },
+          { type: 'leaf', panel: '@itharbors/search.search' },
         ],
       },
       {
         type: 'tab',
         activeIndex: 0,
         children: [
-          { type: 'leaf', panel: '@ce/editor.main' },
-          { type: 'leaf', panel: '@ce/preview.preview' },
+          { type: 'leaf', panel: '@itharbors/editor.main' },
+          { type: 'leaf', panel: '@itharbors/preview.preview' },
         ],
       },
     ],
@@ -114,8 +114,8 @@ describe('tab-layout', () => {
       type: 'hsplit',
       sizes: [1, 1],
       children: [
-        { type: 'leaf', panel: '@ce/files.list' },
-        { type: 'leaf', panel: '@ce/editor.main' },
+        { type: 'leaf', panel: '@itharbors/files.list' },
+        { type: 'leaf', panel: '@itharbors/editor.main' },
       ],
     }, panelMap, 'session-a', 'window-main');
 
@@ -171,10 +171,10 @@ describe('tab-layout', () => {
       tab: {
         title: 'Search',
         titleKey: undefined,
-        panelName: '@ce/search.search',
+        panelName: '@itharbors/search.search',
         panelType: 'iframe',
         src: '/search.html',
-        content: { type: 'leaf', panel: '@ce/search.search' },
+        content: { type: 'leaf', panel: '@itharbors/search.search' },
       },
     });
     expect(payload?.tab).not.toHaveProperty('tabId');
@@ -240,9 +240,9 @@ describe('tab-layout', () => {
       windowId: 'window-target',
       groupId: targetGroup.groupId,
       title: 'Search',
-      panelName: '@ce/search.search',
+      panelName: '@itharbors/search.search',
       panelType: 'iframe',
-      content: { type: 'leaf', panel: '@ce/search.search' },
+      content: { type: 'leaf', panel: '@itharbors/search.search' },
     }));
     expect(inserted.tabId).not.toBe(sourceGroup.tabs[1].tabId);
     expect(inserted.content).not.toBe(payload?.tab.content);
@@ -318,13 +318,13 @@ describe('tab-layout', () => {
         type: 'hsplit',
         sizes: [240, 1],
         children: [
-          { type: 'leaf', panel: '@ce/files.list' },
+          { type: 'leaf', panel: '@itharbors/files.list' },
           {
             type: 'tab',
             activeIndex: 1,
             children: [
-              { type: 'leaf', panel: '@ce/editor.main' },
-              { type: 'leaf', panel: '@ce/preview.preview' },
+              { type: 'leaf', panel: '@itharbors/editor.main' },
+              { type: 'leaf', panel: '@itharbors/preview.preview' },
             ],
           },
         ],
@@ -366,13 +366,13 @@ describe('tab-layout', () => {
         type: 'hsplit',
         sizes: [240, 1],
         children: [
-          { type: 'leaf', panel: '@ce/files.list' },
+          { type: 'leaf', panel: '@itharbors/files.list' },
           {
             type: 'tab',
             activeIndex: 1,
             children: [
-              { type: 'leaf', panel: '@ce/editor.main' },
-              { type: 'leaf', panel: '@ce/preview.preview' },
+              { type: 'leaf', panel: '@itharbors/editor.main' },
+              { type: 'leaf', panel: '@itharbors/preview.preview' },
             ],
           },
         ],
@@ -433,11 +433,11 @@ describe('tab-layout', () => {
       },
       {
         ...payload!,
-        tab: { ...payload!.tab, content: { type: 'tab', activeIndex: -1, children: [{ type: 'leaf', panel: '@ce/files.list' }] } },
+        tab: { ...payload!.tab, content: { type: 'tab', activeIndex: -1, children: [{ type: 'leaf', panel: '@itharbors/files.list' }] } },
       },
       {
         ...payload!,
-        tab: { ...payload!.tab, content: { type: 'tab', activeIndex: 1, children: [{ type: 'leaf', panel: '@ce/files.list' }] } },
+        tab: { ...payload!.tab, content: { type: 'tab', activeIndex: 1, children: [{ type: 'leaf', panel: '@itharbors/files.list' }] } },
       },
       {
         ...payload!,
@@ -450,8 +450,8 @@ describe('tab-layout', () => {
           content: {
             type: 'vsplit',
             children: [
-              { type: 'leaf', panel: '@ce/files.list' },
-              { type: 'leaf', panel: '@ce/search.search' },
+              { type: 'leaf', panel: '@itharbors/files.list' },
+              { type: 'leaf', panel: '@itharbors/search.search' },
             ],
             sizes: [1],
           },
@@ -464,8 +464,8 @@ describe('tab-layout', () => {
           content: {
             type: 'vsplit',
             children: [
-              { type: 'leaf', panel: '@ce/files.list' },
-              { type: 'leaf', panel: '@ce/search.search' },
+              { type: 'leaf', panel: '@itharbors/files.list' },
+              { type: 'leaf', panel: '@itharbors/search.search' },
             ],
             sizes: [Number.NaN, 1],
           },
@@ -478,8 +478,8 @@ describe('tab-layout', () => {
           content: {
             type: 'vsplit',
             children: [
-              { type: 'leaf', panel: '@ce/files.list' },
-              { type: 'leaf', panel: '@ce/search.search' },
+              { type: 'leaf', panel: '@itharbors/files.list' },
+              { type: 'leaf', panel: '@itharbors/search.search' },
             ],
             sizes: [Number.POSITIVE_INFINITY, 1],
           },
@@ -565,8 +565,8 @@ describe('tab-layout', () => {
       type: 'hsplit',
       sizes: [1, 1],
       children: [
-        { type: 'leaf', panel: '@ce/files.list' },
-        { type: 'leaf', panel: '@ce/editor.main' },
+        { type: 'leaf', panel: '@itharbors/files.list' },
+        { type: 'leaf', panel: '@itharbors/editor.main' },
       ],
     }, panelMap, 'session-a', 'window-main');
 
@@ -582,7 +582,7 @@ describe('tab-layout', () => {
     const target = firstGroup(layout).tabs[0];
 
     const next = dockFloatingPanel(layout, {
-      panelName: '@ce/preview.preview',
+      panelName: '@itharbors/preview.preview',
       title: 'Preview',
       src: '/preview.html?sessionId=session-a',
     }, {
@@ -599,7 +599,7 @@ describe('tab-layout', () => {
     expect(left.activeTabId).toBe(left.tabs[1].tabId);
     expect(left.tabs[1]).toEqual(expect.objectContaining({
       tabId: expect.stringMatching(/^tab-floating-/),
-      panelName: '@ce/preview.preview',
+      panelName: '@itharbors/preview.preview',
       sessionId: 'session-a',
       windowId: 'window-main',
       groupId: firstGroup(layout).groupId,

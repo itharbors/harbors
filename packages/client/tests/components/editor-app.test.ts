@@ -62,18 +62,18 @@ const bootstrapPayload = {
       type: 'vsplit',
       sizes: [40, 1],
       children: [
-        { type: 'leaf', panel: '@ce/status-bar.status', panelType: 'simple' },
+        { type: 'leaf', panel: '@itharbors/status-bar.status', panelType: 'simple' },
         {
           type: 'hsplit',
           sizes: [260, 1],
           children: [
-            { type: 'leaf', panel: '@ce/plugin-list.list' },
+            { type: 'leaf', panel: '@itharbors/plugin-list.list' },
             {
               type: 'tab',
               activeIndex: 0,
               children: [
-                { type: 'leaf', panel: '@ce/log.log' },
-                { type: 'leaf', panel: '@ce/message-debug.debug' },
+                { type: 'leaf', panel: '@itharbors/log.log' },
+                { type: 'leaf', panel: '@itharbors/message-debug.debug' },
               ],
             },
           ],
@@ -84,20 +84,20 @@ const bootstrapPayload = {
   panelInstances: [],
   panels: [
     {
-      name: '@ce/status-bar.status',
-      entry: '/api/assets/panel/%40ce%2Fstatus-bar.status/index.html',
+      name: '@itharbors/status-bar.status',
+      entry: '/api/assets/panel/%40itharbors%2Fstatus-bar.status/index.html',
     },
     {
-      name: '@ce/plugin-list.list',
-      entry: '/api/assets/panel/%40ce%2Fplugin-list.list/index.html',
+      name: '@itharbors/plugin-list.list',
+      entry: '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html',
     },
     {
-      name: '@ce/log.log',
-      entry: '/api/assets/panel/%40ce%2Flog.log/index.html',
+      name: '@itharbors/log.log',
+      entry: '/api/assets/panel/%40itharbors%2Flog.log/index.html',
     },
     {
-      name: '@ce/message-debug.debug',
-      entry: '/api/assets/panel/%40ce%2Fmessage-debug.debug/index.html',
+      name: '@itharbors/message-debug.debug',
+      entry: '/api/assets/panel/%40itharbors%2Fmessage-debug.debug/index.html',
     },
   ],
 };
@@ -243,8 +243,8 @@ describe('EditorApp default layout', () => {
     document.body.appendChild(el);
     await waitForBootstrap();
 
-    const activePanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/log.log"]')!;
-    const modalPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/message-debug.debug"]')!;
+    const activePanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@itharbors/log.log"]')!;
+    const modalPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@itharbors/message-debug.debug"]')!;
     const modalFrame = modalPanel.shadowRoot!.querySelector('iframe')!;
     const modalSource = {} as WindowProxy;
     Object.defineProperty(modalFrame, 'contentWindow', { configurable: true, value: modalSource });
@@ -300,7 +300,7 @@ describe('EditorApp default layout', () => {
           entry: 'secondary.html',
           state: 'open',
           panelInstanceIds: [],
-          layout: { type: 'leaf', panel: '@ce/log.log' },
+          layout: { type: 'leaf', panel: '@itharbors/log.log' },
         },
       ],
     }));
@@ -311,7 +311,7 @@ describe('EditorApp default layout', () => {
 
     const group = el.querySelector('ce-panel-group') as HTMLElement | null;
     expect(group?.dataset.windowId).toBe('secondary-window');
-    expect(group?.querySelector('ce-panel')?.getAttribute('data-panel-name')).toBe('@ce/log.log');
+    expect(group?.querySelector('ce-panel')?.getAttribute('data-panel-name')).toBe('@itharbors/log.log');
   });
 
   it('renders floating fallback instances from BroadcastChannel messages in main mode', async () => {
@@ -344,7 +344,7 @@ describe('EditorApp default layout', () => {
           type: 'ce-open-panel-floating',
           payload: {
             id: 'panel-floating-1',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             carrier: 'floating',
             state: 'open',
             windowGroupId: null,
@@ -399,7 +399,7 @@ describe('EditorApp default layout', () => {
       await Promise.resolve();
 
       expect(Array.from(el.querySelectorAll('ce-panel')).some((panel) => (
-        panel.getAttribute('data-panel-name') === '@ce/plugin-list.list'
+        panel.getAttribute('data-panel-name') === '@itharbors/plugin-list.list'
       ))).toBe(false);
     } finally {
       if (previousBroadcastChannel) {
@@ -443,7 +443,7 @@ describe('EditorApp default layout', () => {
       await Promise.resolve();
 
       expect(Array.from(el.querySelectorAll('ce-panel')).some((panel) => (
-        panel.getAttribute('data-panel-name') === '@ce/plugin-list.list'
+        panel.getAttribute('data-panel-name') === '@itharbors/plugin-list.list'
       ))).toBe(true);
     } finally {
       if (previousBroadcastChannel) {
@@ -487,7 +487,7 @@ describe('EditorApp default layout', () => {
       await Promise.resolve();
 
       expect(Array.from(el.querySelectorAll('ce-panel')).some((panel) => (
-        panel.getAttribute('data-panel-name') === '@ce/plugin-list.list'
+        panel.getAttribute('data-panel-name') === '@itharbors/plugin-list.list'
       ))).toBe(true);
     } finally {
       if (previousBroadcastChannel) {
@@ -528,8 +528,8 @@ describe('EditorApp default layout', () => {
             type: 'tab',
             activeIndex: 0,
             children: [
-              { type: 'leaf', panel: '@ce/log.log' },
-              { type: 'leaf', panel: '@ce/message-debug.debug' },
+              { type: 'leaf', panel: '@itharbors/log.log' },
+              { type: 'leaf', panel: '@itharbors/message-debug.debug' },
             ],
           },
         },
@@ -556,7 +556,7 @@ describe('EditorApp default layout', () => {
       await Promise.resolve();
 
       const remaining = Array.from(el.querySelectorAll('ce-panel')).map((panel) => panel.getAttribute('data-panel-name'));
-      expect(remaining).toEqual(['@ce/message-debug.debug']);
+      expect(remaining).toEqual(['@itharbors/message-debug.debug']);
     } finally {
       if (previousBroadcastChannel) {
         vi.stubGlobal('BroadcastChannel', previousBroadcastChannel);
@@ -585,7 +585,7 @@ describe('EditorApp default layout', () => {
           entry: 'secondary.html',
           state: 'open',
           panelInstanceIds: ['panel-secondary'],
-          layout: { type: 'leaf', panel: '@ce/log.log' },
+          layout: { type: 'leaf', panel: '@itharbors/log.log' },
         },
       ],
     }));
@@ -628,27 +628,27 @@ describe('EditorApp default layout', () => {
       panelInstances: [
         {
           id: 'floating-open',
-          panelName: '@ce/log.log',
+          panelName: '@itharbors/log.log',
           carrier: 'floating',
           state: 'open',
           windowGroupId: null,
         },
         {
           id: 'floating-minimized',
-          panelName: '@ce/log.log',
+          panelName: '@itharbors/log.log',
           carrier: 'floating',
           state: 'minimized',
           windowGroupId: null,
         },
         {
           id: 'floating-closed',
-          panelName: '@ce/log.log',
+          panelName: '@itharbors/log.log',
           carrier: 'floating',
           state: 'closed',
           windowGroupId: null,
         },
       ],
-      panels: bootstrapPayload.panels.map((panel) => panel.name === '@ce/log.log'
+      panels: bootstrapPayload.panels.map((panel) => panel.name === '@itharbors/log.log'
         ? { ...panel, titleKey: 'panel.log.title' }
         : panel),
     }));
@@ -672,7 +672,7 @@ describe('EditorApp default layout', () => {
       panelInstances: [
         {
           id: 'floating-open',
-          panelName: '@ce/log.log',
+          panelName: '@itharbors/log.log',
           carrier: 'floating',
           state: 'open',
           windowGroupId: null,
@@ -750,7 +750,7 @@ describe('EditorApp default layout', () => {
           payload: {
             disposition: 'reuse',
             panelInstanceId: 'panel-floating-reuse',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             carrier: 'floating',
             windowGroupId: null,
             url: null,
@@ -786,7 +786,7 @@ describe('EditorApp default layout', () => {
           payload: {
             disposition: 'reuse',
             panelInstanceId: 'panel-floating-window-message',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             carrier: 'floating',
             windowGroupId: null,
             url: null,
@@ -840,7 +840,7 @@ describe('EditorApp default layout', () => {
           type: 'ce-open-panel-floating',
           payload: {
             id: 'panel-floating-1',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             carrier: 'floating',
             state: 'open',
             windowGroupId: null,
@@ -870,7 +870,7 @@ describe('EditorApp default layout', () => {
 
       expect(el.querySelector('floating-panel-layer')?.getAttribute('data-count')).toBe('0');
       expect(Array.from(el.querySelectorAll('ce-panel')).filter((panel) => (
-        panel.getAttribute('data-panel-name') === '@ce/log.log'
+        panel.getAttribute('data-panel-name') === '@itharbors/log.log'
       ))).toHaveLength(2);
       expect(mockFetch).toHaveBeenCalledWith('/api/panel-instance/close', expect.objectContaining({
         method: 'POST',
@@ -907,7 +907,7 @@ describe('EditorApp default layout', () => {
           type: 'ce-open-panel-floating',
           payload: {
             id: 'panel-floating-post-message',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             carrier: 'floating',
             state: 'open',
             windowGroupId: null,
@@ -974,7 +974,7 @@ describe('EditorApp default layout', () => {
           entry: 'secondary.html',
           state: 'open',
           panelInstanceIds: [],
-          layout: { type: 'leaf', panel: '@ce/log.log' },
+          layout: { type: 'leaf', panel: '@itharbors/log.log' },
         },
       ],
     }));
@@ -991,7 +991,7 @@ describe('EditorApp default layout', () => {
           type: 'ce-open-panel-floating',
           payload: {
             id: 'panel-floating-1',
-            panelName: '@ce/log.log',
+            panelName: '@itharbors/log.log',
             carrier: 'floating',
             state: 'open',
             windowGroupId: null,
@@ -1186,7 +1186,7 @@ describe('EditorApp default layout', () => {
 
     const panels = el.querySelectorAll('ce-panel');
     const statusBar = Array.from(panels).find(
-      (p) => p.getAttribute('src') === '/api/assets/panel/%40ce%2Fstatus-bar.status/index.html?sessionId=existing-id'
+      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fstatus-bar.status/index.html?sessionId=existing-id'
     ) as HTMLElement | undefined;
     expect(statusBar).not.toBeNull();
     expect(statusBar!.getAttribute('type')).toBe('simple');
@@ -1201,7 +1201,7 @@ describe('EditorApp default layout', () => {
 
     const panels = el.querySelectorAll('ce-panel');
     const pluginList = Array.from(panels).find(
-      (p) => p.getAttribute('src') === '/api/assets/panel/%40ce%2Fplugin-list.list/index.html?sessionId=existing-id'
+      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html?sessionId=existing-id'
     );
     expect(pluginList).not.toBeNull();
   });
@@ -1216,7 +1216,7 @@ describe('EditorApp default layout', () => {
         currentMessages: { 'panel.plugin-list.title': '插件列表' },
         defaultMessages: { 'panel.plugin-list.title': '插件列表' },
       },
-      panels: bootstrapPayload.panels.map((panel) => panel.name === '@ce/plugin-list.list'
+      panels: bootstrapPayload.panels.map((panel) => panel.name === '@itharbors/plugin-list.list'
         ? { ...panel, titleKey: 'panel.plugin-list.title' }
         : panel),
     }));
@@ -1260,7 +1260,7 @@ describe('EditorApp default layout', () => {
     await waitForBootstrap();
 
     const pluginListPanel = Array.from(el.querySelectorAll('ce-panel')).find(
-      (panel) => panel.getAttribute('src') === '/api/assets/panel/%40ce%2Fplugin-list.list/index.html?sessionId=existing-id'
+      (panel) => panel.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html?sessionId=existing-id'
     ) as HTMLElement | undefined;
     expect(pluginListPanel).toBeDefined();
 
@@ -1311,7 +1311,7 @@ describe('EditorApp default layout', () => {
 
     const panels = el.querySelectorAll('ce-panel');
     const logPanel = Array.from(panels).find(
-      (p) => p.getAttribute('src') === '/api/assets/panel/%40ce%2Flog.log/index.html?sessionId=existing-id'
+      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id'
     );
     expect(logPanel).not.toBeNull();
   });
@@ -1322,7 +1322,7 @@ describe('EditorApp default layout', () => {
     await waitForBootstrap();
 
     const logPanel = Array.from(el.querySelectorAll('ce-panel')).find(
-      (panel) => panel.getAttribute('data-panel-name') === '@ce/log.log'
+      (panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log'
     ) as HTMLElement | undefined;
     expect(logPanel).toBeDefined();
 
@@ -1342,7 +1342,7 @@ describe('EditorApp default layout', () => {
       data: JSON.stringify({
         protocolVersion: 1,
         type: 'panel-dispatch',
-        panel: '@ce/log.log',
+        panel: '@itharbors/log.log',
         method: 'append',
         args: ['hello'],
         requestId: 'req-1',
@@ -1351,7 +1351,7 @@ describe('EditorApp default layout', () => {
 
     expect(postMessage).toHaveBeenCalledWith({
       type: 'panel-dispatch',
-      panel: '@ce/log.log',
+      panel: '@itharbors/log.log',
       method: 'append',
       args: ['hello'],
       requestId: 'req-1',
@@ -1365,7 +1365,7 @@ describe('EditorApp default layout', () => {
     mockFetch.mockClear();
 
     const iframe = Array.from(el.querySelectorAll('ce-panel'))
-      .find((panel) => panel.getAttribute('data-panel-name') === '@ce/log.log')
+      .find((panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log')
       ?.shadowRoot?.querySelector('iframe');
     const trustedSource = {} as Window;
     Object.defineProperty(iframe!, 'contentWindow', { configurable: true, value: trustedSource });
@@ -1400,7 +1400,7 @@ describe('EditorApp default layout', () => {
     mockFetch.mockClear();
 
     const iframe = Array.from(el.querySelectorAll('ce-panel'))
-      .find((panel) => panel.getAttribute('data-panel-name') === '@ce/log.log')
+      .find((panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log')
       ?.shadowRoot?.querySelector('iframe');
     const trustedSource = {} as Window;
     Object.defineProperty(iframe!, 'contentWindow', { configurable: true, value: trustedSource });
@@ -1425,11 +1425,11 @@ describe('EditorApp default layout', () => {
     await waitForBootstrap();
 
     window.dispatchEvent(new MessageEvent('message', {
-      data: { type: 'panel-focus', panel: '@ce/message-debug.debug' },
+      data: { type: 'panel-focus', panel: '@itharbors/message-debug.debug' },
     }));
 
-    const logPanel = el.querySelector('[data-panel-name="@ce/log.log"]');
-    const debugPanel = el.querySelector('[data-panel-name="@ce/message-debug.debug"]');
+    const logPanel = el.querySelector('[data-panel-name="@itharbors/log.log"]');
+    const debugPanel = el.querySelector('[data-panel-name="@itharbors/message-debug.debug"]');
     expect(logPanel?.hasAttribute('active')).toBe(false);
     expect(debugPanel?.hasAttribute('active')).toBe(true);
   });
@@ -1708,9 +1708,9 @@ describe('EditorApp default layout', () => {
           windowId: 'default-main',
           groupId: 'group-stale',
           title: 'Stale',
-          panelName: '@ce/stale',
+          panelName: '@itharbors/stale',
           panelType: 'iframe',
-          content: { type: 'leaf', panel: '@ce/stale' },
+          content: { type: 'leaf', panel: '@itharbors/stale' },
         }],
       },
     }));
@@ -1728,7 +1728,7 @@ describe('EditorApp default layout', () => {
     document.body.appendChild(el);
     await waitForBootstrap();
 
-    const logPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@ce/log.log"]')!;
+    const logPanel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@itharbors/log.log"]')!;
     const logGroup = logPanel.closest('ce-panel-group')!;
     logGroup.dispatchEvent(new CustomEvent('ce-panel-change', { bubbles: true }));
     expect(window.localStorage.getItem(
@@ -1739,14 +1739,14 @@ describe('EditorApp default layout', () => {
     bootstrapResponse = () => Promise.resolve(createJsonResponse({
       ...bootstrapPayload,
       panels: bootstrapPayload.panels.map((panel) => (
-        panel.name === '@ce/log.log' ? { ...panel, title: '日志' } : panel
+        panel.name === '@itharbors/log.log' ? { ...panel, title: '日志' } : panel
       )),
     }));
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);
     await waitForBootstrap();
 
-    expect(el.querySelector('ce-panel[data-panel-name="@ce/log.log"]')?.getAttribute('title'))
+    expect(el.querySelector('ce-panel[data-panel-name="@itharbors/log.log"]')?.getAttribute('title'))
       .toBe('日志');
   });
 

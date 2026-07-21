@@ -76,7 +76,7 @@ npm run build
 
 根构建顺序：
 
-1. `@ce/plugin-types`；
+1. `@itharbors/plugin-types`；
 2. Client TypeScript 与 Vite；
 3. Server TypeScript；
 4. 所有插件。

@@ -150,7 +150,7 @@ describe('Framework Integration', () => {
       expect(resp.status).toBe(200);
       expect(data.kitName).toBe('@itharbors/kit-default');
       expect(data.panels.map((panel: { name: string }) => panel.name)).toEqual(
-        expect.arrayContaining(['@ce/status-bar.status', '@ce/log.log']),
+        expect.arrayContaining(['@itharbors/status-bar.status', '@itharbors/log.log']),
       );
     } finally {
       await server.stop();

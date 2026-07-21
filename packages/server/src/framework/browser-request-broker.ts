@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { BrowserDispatchResult } from '@ce/plugin-types';
+import type { BrowserDispatchResult } from '@itharbors/plugin-types';
 
 export interface BrowserRequestTarget {
   panel: string;

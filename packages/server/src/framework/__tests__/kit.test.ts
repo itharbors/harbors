@@ -6,7 +6,7 @@ describe('KitModule', () => {
   it('stores windowEntries when registering a kit', () => {
     const kit = new KitModule();
     const descriptor: KitDescriptor = {
-      name: '@ce/test-kit',
+      name: '@itharbors/test-kit',
       plugins: [],
       layouts: {
         default: { windows: [] },
@@ -19,7 +19,7 @@ describe('KitModule', () => {
 
     kit.register(descriptor);
 
-    expect(kit.get('@ce/test-kit')).toMatchObject({
+    expect(kit.get('@itharbors/test-kit')).toMatchObject({
       windowEntries: {
         main: 'main.html',
         secondary: 'secondary.html',

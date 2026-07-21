@@ -10,7 +10,7 @@ editor.plugin.define({
   },
   methods: {
     openDetailPanel() {
-      return runtime.window.openPanel('@ce/plugin-detail.detail');
+      return runtime.window.openPanel('@itharbors/plugin-detail.detail');
     },
   },
 });

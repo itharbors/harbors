@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make `@ce/plugin-types` the single source of truth for browser/server data and add explicit protocol-version validation.
+**Goal:** Make `@itharbors/plugin-types` the single source of truth for browser/server data and add explicit protocol-version validation.
 
 **Architecture:** Move only serializable DTOs into focused protocol files, export a literal protocol version, and map server domain snapshots to those DTOs at transport boundaries. ClientSession and transports import shared DTOs instead of maintaining structurally similar interfaces.
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- The authoritative package name is `@ce/plugin-types`.
+- The authoritative package name is `@itharbors/plugin-types`.
 - Protocol version starts at the numeric literal `1`.
 - Only serializable data enters the protocol package; runtime classes, functions and server paths remain local.
 - Existing wire fields remain stable during the first migration step.
@@ -97,7 +97,7 @@ void [bootstrap, event, error];
 - [ ] **Step 2: Run the package build and verify failure**
 
 ```bash
-npm run build -w @ce/plugin-types
+npm run build -w @itharbors/plugin-types
 ```
 
 Expected: FAIL because protocol modules and exports do not exist.
@@ -162,7 +162,7 @@ Expose both artifacts:
 Then run:
 
 ```bash
-npm run build -w @ce/plugin-types
+npm run build -w @itharbors/plugin-types
 ```
 
 Expected: PASS and `packages/plugin-types/dist` contains JavaScript plus declarations for all protocol files.
@@ -216,7 +216,7 @@ Expected: FAIL because responses do not contain `protocolVersion`.
 Add to server dependencies:
 
 ```json
-"@ce/plugin-types": "0.0.1"
+"@itharbors/plugin-types": "0.0.1"
 ```
 
 Run `npm install --package-lock-only` to update the workspace lock metadata without downloading new packages.
@@ -232,7 +232,7 @@ import type {
   PanelInstanceDescriptor,
   WindowDescriptor,
   WindowSnapshot,
-} from '@ce/plugin-types';
+} from '@itharbors/plugin-types';
 
 export type { LayoutNode, OpenPanelResult, PanelInstanceDescriptor, WindowDescriptor, WindowSnapshot };
 ```
@@ -271,7 +271,7 @@ git commit -m "refactor: use shared protocol on server boundaries"
 - Test: `packages/client/tests/core/session.test.ts`
 
 **Interfaces:**
-- Consumes: `BootstrapInfo`, `SSEEnvelope`, and `isSupportedProtocolVersion` from `@ce/plugin-types`.
+- Consumes: `BootstrapInfo`, `SSEEnvelope`, and `isSupportedProtocolVersion` from `@itharbors/plugin-types`.
 - Produces: client state that only stores supported protocol data.
 
 - [ ] **Step 1: Add mismatch tests**
@@ -300,7 +300,7 @@ Expected: FAIL because version validation is absent.
 
 - [ ] **Step 3: Add dependency and remove duplicates**
 
-Add `"@ce/plugin-types": "0.0.1"` to client dependencies and update the lockfile. Replace DTO declarations in `core/session.ts` with type imports/re-exports, leaving only `ClientSession` as implementation state.
+Add `"@itharbors/plugin-types": "0.0.1"` to client dependencies and update the lockfile. Replace DTO declarations in `core/session.ts` with type imports/re-exports, leaving only `ClientSession` as implementation state.
 
 - [ ] **Step 4: Validate all incoming envelopes**
 
@@ -319,7 +319,7 @@ Call it immediately after JSON parsing and before mutating ClientSession or noti
 - [ ] **Step 5: Run client and shared package checks**
 
 ```bash
-npm run build -w @ce/plugin-types
+npm run build -w @itharbors/plugin-types
 npm run test -w packages/client
 ```
 
