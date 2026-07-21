@@ -38,7 +38,7 @@ describe('MySQL connection panel', () => {
     vi.resetModules();
   });
 
-  it('renders the historical horizontal connection deck and all connection fields', async () => {
+  it('renders a two-tier connection deck without clipping controls in the fixed panel height', async () => {
     const request = vi.fn(async () => disconnected);
     const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
 
@@ -49,11 +49,13 @@ describe('MySQL connection panel', () => {
     expect(document.querySelector('.brand-copy strong')?.textContent).toBe('MySQL 工作台');
     expect(document.querySelector('.brand-copy small')?.textContent).toBe('直连数据库');
     expect(Array.from(document.querySelectorAll('.connection-form label')).map((label) => label.textContent?.trim())).toEqual([
-      '主机', '端口', '用户名', '密码', '数据库', 'TLS',
+      '主机', '端口', '用户名', '密码', '数据库（可选）', 'TLS',
     ]);
     expect(document.querySelector<HTMLInputElement>('[data-field="host"]')?.value).toBe('127.0.0.1');
+    expect(document.querySelector<HTMLInputElement>('[data-field="host"]')?.name).toBe('host');
     expect(document.querySelector<HTMLInputElement>('[data-field="port"]')?.value).toBe('3306');
     expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.type).toBe('password');
+    expect(document.querySelector<HTMLInputElement>('[data-field="database"]')?.placeholder).toBe('连接后选择…');
     expect(document.querySelector('.connection-readout')?.textContent).toContain('凭据仅保留在当前服务端会话中');
 
     const css = fs.readFileSync(path.join(
@@ -63,9 +65,15 @@ describe('MySQL connection panel', () => {
     expect(css).toContain('--ink: #07111d');
     expect(css).toContain('--deck: #0a1927');
     expect(css).toContain('--cyan: #76d0ec');
-    expect(css).toContain('--connection-deck-min-height: 70px');
+    expect(css).toContain('--connection-deck-min-height: 112px');
     expect(css).toMatch(/\.connection-shell\s*{[^}]*min-height:\s*var\(--connection-deck-min-height\);[^}]*overflow-x:\s*auto;[^}]*overflow-y:\s*hidden;/s);
     expect(css).toMatch(/\.connection-deck\s*{[^}]*height:\s*100%;[^}]*min-height:\s*var\(--connection-deck-min-height\);/s);
+    expect(css).toMatch(/\.connection-deck\s*{[^}]*grid-template-columns:\s*194px minmax\(720px, 1fr\);[^}]*grid-template-rows:\s*50px minmax\(18px, auto\);/s);
+    expect(css).toMatch(/\.brand-block\s*{[^}]*grid-row:\s*1 \/ -1;/s);
+    expect(css).toMatch(/\.connection-form\s*{[^}]*grid-column:\s*2;[^}]*grid-row:\s*1;/s);
+    expect(css).toMatch(/\.connection-actions\s*{[^}]*display:\s*flex;/s);
+    expect(css).toMatch(/\.connection-form button\s*{[^}]*white-space:\s*nowrap;/s);
+    expect(css).toMatch(/\.connection-readout\s*{[^}]*grid-column:\s*2;[^}]*grid-row:\s*2;/s);
   });
 
   it('connects with host, port, user, password, database, and TLS, then clears the password', async () => {
@@ -102,6 +110,133 @@ describe('MySQL connection panel', () => {
     });
   });
 
+  it('connects without relying on native form submission inside a sandboxed panel', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : connection
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    setValue('database', 'app');
+    const connectButton = document.querySelector('[data-action="connect"]') as HTMLButtonElement;
+    connectButton.addEventListener('click', (event) => event.preventDefault(), { capture: true });
+    connectButton.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core',
+      'connect',
+      expect.objectContaining({ database: 'app' }),
+    ));
+  });
+
+  it('connects when the form receives an Enter-style submit event', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : connection
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const submit = new Event('submit', { bubbles: true, cancelable: true });
+    expect(document.querySelector('[data-connection-form]')?.dispatchEvent(submit)).toBe(false);
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core',
+      'connect',
+      expect.objectContaining({ host: '127.0.0.1', port: 3306 }),
+    ));
+    expect(submit.defaultPrevented).toBe(true);
+  });
+
+  it('connects at server level when the optional database is blank', async () => {
+    const serverConnection = { ...connection, database: null };
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : serverConnection
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core',
+      'connect',
+      expect.objectContaining({ database: null }),
+    ));
+    await vi.waitFor(() => {
+      expect(document.querySelector('.connection-readout')?.textContent).toContain('未选择数据库');
+    });
+  });
+
+  it('renders connect and disconnect actions as mutually exclusive states', async () => {
+    const request = vi.fn(async () => disconnected);
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    expect(document.querySelector('[data-action="connect"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="disconnect"]')).toBeNull();
+    expect(document.querySelector('[data-action="refresh"]')).toBeNull();
+
+    await definition.methods.onConnectionChanged(connection);
+
+    expect(document.querySelector('[data-action="connect"]')).toBeNull();
+    expect(document.querySelector('[data-action="disconnect"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="refresh"]')).not.toBeNull();
+    expect(Array.from(document.querySelectorAll<HTMLInputElement>('[data-field]'))
+      .every((input) => input.disabled)).toBe(true);
+  });
+
+  it('shows immediate connection progress and blocks duplicate submissions', async () => {
+    let resolveConnect: ((value: unknown) => void) | undefined;
+    const pendingConnect = new Promise<unknown>((resolve) => { resolveConnect = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : pendingConnect
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+
+    const pendingButton = document.querySelector<HTMLButtonElement>('[data-action="connect"]')!;
+    expect(pendingButton.textContent).toContain('连接中…');
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[data-connection-form]')?.getAttribute('aria-busy')).toBe('true');
+    expect(Array.from(document.querySelectorAll<HTMLInputElement>('[data-field]'))
+      .every((input) => input.disabled)).toBe(true);
+    pendingButton.click();
+    expect(request.mock.calls.filter((call) => call[1] === 'connect')).toHaveLength(1);
+
+    resolveConnect?.(connection);
+    await vi.waitFor(() => expect(document.querySelector('[data-action="disconnect"]')).not.toBeNull());
+  });
+
+  it.each([
+    ['disconnect', '断开中…'],
+    ['refresh', '刷新中…'],
+  ] as const)('shows immediate %s progress and blocks another action', async (method, label) => {
+    let resolveAction: ((value: unknown) => void) | undefined;
+    const pendingAction = new Promise<unknown>((resolve) => { resolveAction = resolve; });
+    const request = vi.fn(async (plugin: string, name: string) => {
+      if (plugin === '@itharbors/mysql-core' && name === 'getConnectionState') return connection;
+      if (name === method || (method === 'refresh' && name === 'refreshObjects')) return pendingAction;
+      throw new Error(`Unexpected request ${plugin}:${name}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector(`[data-action="${method}"]`) as HTMLButtonElement).click();
+
+    const pendingButton = document.querySelector<HTMLButtonElement>(`[data-action="${method}"]`)!;
+    expect(pendingButton.textContent).toContain(label);
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[data-connection-form]')?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelectorAll<HTMLButtonElement>('button:disabled').length).toBeGreaterThan(0);
+
+    resolveAction?.(method === 'disconnect' ? { ...disconnected, connectionRevision: 2 } : {});
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-connection-form]')?.getAttribute('aria-busy')).toBe('false');
+    });
+  });
+
   it('clears the password immediately while a connection attempt is pending and after rejection', async () => {
     let resolveConnect: ((value: unknown) => void) | undefined;
     const pendingConnect = new Promise<unknown>((resolve) => { resolveConnect = resolve; });
@@ -124,8 +259,7 @@ describe('MySQL connection panel', () => {
     expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('');
   });
 
-  it('refreshes through Explorer, disconnects through core, and keeps the previous connection on failure', async () => {
-    let failConnect = false;
+  it('refreshes through Explorer and disconnects through core', async () => {
     const request = vi.fn(async (plugin: string, method: string) => {
       if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
       if (plugin === '@itharbors/mysql-explorer' && method === 'refreshObjects') return {};
@@ -135,12 +269,6 @@ describe('MySQL connection panel', () => {
         schemaRevision: 2,
         dataRevision: 2,
       };
-      if (plugin === '@itharbors/mysql-core' && method === 'connect') {
-        if (failConnect) {
-          return { $mysqlError: { code: 'AUTH_FAILED', message: 'MySQL 身份验证失败' } };
-        }
-        return connection;
-      }
       throw new Error(`Unexpected request ${plugin}:${method}`);
     });
     const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
@@ -149,15 +277,8 @@ describe('MySQL connection panel', () => {
     (document.querySelector('[data-action="refresh"]') as HTMLButtonElement).click();
     await vi.waitFor(() => {
       expect(request).toHaveBeenCalledWith('@itharbors/mysql-explorer', 'refreshObjects', undefined);
-      expect((document.querySelector('[data-action="connect"]') as HTMLButtonElement).disabled).toBe(false);
+      expect((document.querySelector('[data-action="disconnect"]') as HTMLButtonElement).disabled).toBe(false);
     });
-
-    failConnect = true;
-    setValue('password', 'wrong');
-    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent)
-      .toContain('MySQL 身份验证失败'));
-    expect(document.querySelector('[data-current-endpoint]')?.textContent).toBe('db.local:3306');
 
     (document.querySelector('[data-action="disconnect"]') as HTMLButtonElement).click();
     await vi.waitFor(() => {
@@ -279,7 +400,8 @@ describe('MySQL connection panel', () => {
         dataRevision: 2,
       });
       await vi.waitFor(() => {
-        expect((document.querySelector('[data-action="connect"]') as HTMLButtonElement).disabled).toBe(false);
+        expect(document.querySelector('[data-action="connect"]')).toBeNull();
+        expect((document.querySelector('[data-action="disconnect"]') as HTMLButtonElement).disabled).toBe(false);
         expect(document.querySelector('[data-current-endpoint]')?.textContent).toBe('new.local:3306');
         expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('');
       });

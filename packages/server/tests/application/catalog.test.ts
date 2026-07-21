@@ -47,8 +47,9 @@ describe('discoverApplicationPlugins', () => {
     name: string,
     startupPlugins: unknown,
     ordinaryPlugins: unknown = [],
+    parent = assembly.kitsDir,
   ): string {
-    const kitDir = path.join(assembly.kitsDir, dirName);
+    const kitDir = path.join(parent, dirName);
     fs.mkdirSync(path.join(kitDir, 'plugins'), { recursive: true });
     fs.writeFileSync(path.join(kitDir, 'package.json'), JSON.stringify({
       name,
@@ -99,22 +100,60 @@ describe('discoverApplicationPlugins', () => {
     ]);
   });
 
-  it('limits discovery to the explicitly selected Kit', async () => {
+  it('does not filter startup plugins to the configured default Kit', async () => {
     const aPath = createPlugin(assembly.pluginsDir, 'a-background', '@scope/a-background');
-    createPlugin(assembly.pluginsDir, 'b-background', '@scope/b-background');
+    const bPath = createPlugin(assembly.pluginsDir, 'b-background', '@scope/b-background');
     createKit('a', '@scope/kit-a', ['@scope/a-background']);
     createKit('b', '@scope/kit-b', ['@scope/b-background']);
+    assembly.defaultKit = '@scope/kit-a';
 
-    const result = await discoverApplicationPlugins({
-      assembly,
-      selectedKit: '@scope/kit-a',
-    });
+    const result = await discoverApplicationPlugins({ assembly });
 
-    expect(result.plugins).toEqual([{
-      name: '@scope/a-background',
-      path: aPath,
-      kits: ['@scope/kit-a'],
-    }]);
+    expect(result.plugins).toEqual([
+      {
+        name: '@scope/a-background',
+        path: aPath,
+        kits: ['@scope/kit-a'],
+      },
+      {
+        name: '@scope/b-background',
+        path: bPath,
+        kits: ['@scope/kit-b'],
+      },
+    ]);
+  });
+
+  it('adds startup plugins from an external configured Kit to repository plugins', async () => {
+    const repositoryPath = createPlugin(assembly.pluginsDir, 'repository', '@scope/repository');
+    createKit('repository', '@scope/kit-repository', ['@scope/repository']);
+    const externalKit = createKit(
+      'external-kit',
+      '@scope/kit-external',
+      ['@scope/external'],
+      [],
+      root,
+    );
+    const externalPath = createPlugin(
+      path.join(externalKit, 'plugins'),
+      'external',
+      '@scope/external',
+    );
+    assembly.defaultKit = externalKit;
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([
+      {
+        name: '@scope/repository',
+        path: repositoryPath,
+        kits: ['@scope/kit-repository'],
+      },
+      {
+        name: '@scope/external',
+        path: externalPath,
+        kits: ['@scope/kit-external'],
+      },
+    ]);
   });
 
   it('reports malformed and overlapping declarations as diagnostics', async () => {

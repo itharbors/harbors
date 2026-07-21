@@ -120,4 +120,30 @@ describe('MySQL SQL panel', () => {
     expect(css).toMatch(/\.sql-result\s*>\s*\.table-shell\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
     expect(css).toMatch(/\.sql-result th\s*\{[^}]*position:\s*sticky[^}]*top:\s*0/s);
   });
+
+  it('locks the SQL draft with immediate execution progress and blocks duplicates', async () => {
+    let resolveExecution: ((value: unknown) => void) | undefined;
+    const pendingExecution = new Promise<unknown>((resolve) => { resolveExecution = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? connection : pendingExecution
+    ));
+    const definition = (await import('../panel.sql/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-action="execute-sql"]') as HTMLButtonElement).click();
+
+    const textarea = document.querySelector<HTMLTextAreaElement>('textarea[aria-label="SQL"]')!;
+    const button = document.querySelector<HTMLButtonElement>('[data-action="execute-sql"]')!;
+    expect(textarea.disabled).toBe(true);
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain('执行中…');
+    expect(button.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('.sql-view')?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在执行 SQL…');
+    button.click();
+    expect(request.mock.calls.filter((call) => call[1] === 'executeSql')).toHaveLength(1);
+
+    resolveExecution?.({ kind: 'rows', columns: ['value'], rows: [[1]], truncated: false, elapsedMs: 1 });
+    await vi.waitFor(() => expect(document.querySelector('.sql-view')?.getAttribute('aria-busy')).toBe('false'));
+  });
 });

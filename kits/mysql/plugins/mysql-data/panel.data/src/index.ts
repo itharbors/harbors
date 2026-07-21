@@ -35,6 +35,7 @@ type RowsResult = {
   rowEditable: boolean; columns: string[]; rows: RowRecord[];
 };
 type RecordDialog = { mode: 'add' | 'edit'; fields: RecordFieldDraft[]; identity: RowIdentity | null };
+type DataActivity = 'load' | 'page' | 'save' | 'delete' | null;
 
 const DISCONNECTED: ConnectionSnapshot = {
   connected: false, endpoint: null, database: null, mysqlVersion: null, tls: false,
@@ -50,10 +51,11 @@ let page = 1;
 let pageSize = 100;
 let selectedRowIndex: number | null = null;
 let dialog: RecordDialog | null = null;
-let busy = false;
+let activity: DataActivity = null;
 let status = '等待选择数据库对象';
 let error: string | null = null;
 let requestSequence = 0;
+let activitySequence = 0;
 
 const definition = {
   async mount(ctx: PanelContext) {
@@ -90,6 +92,8 @@ const definition = {
       if (!isConnectionSnapshot(payload)) return;
       connection = payload;
       selection = { connectionRevision: payload.connectionRevision, objectName: null };
+      activitySequence += 1;
+      activity = null;
       clearObjectState();
       render();
     },
@@ -117,10 +121,11 @@ function reset(): void {
   connection = { ...DISCONNECTED };
   selection = { connectionRevision: 0, objectName: null };
   clearObjectState();
-  busy = false;
+  activity = null;
   status = '等待选择数据库对象';
   error = null;
   requestSequence += 1;
+  activitySequence += 1;
 }
 function clearObjectState(): void {
   schema = null;
@@ -139,8 +144,10 @@ async function loadSelected(): Promise<void> {
     return;
   }
   const sequence = ++requestSequence;
+  const activityToken = ++activitySequence;
   const objectName = selection.objectName;
-  busy = true;
+  activity = activity === 'save' || activity === 'delete' ? activity : 'load';
+  status = `正在加载 ${objectName}…`;
   render();
   try {
     const [nextSchema, nextRows] = await Promise.all([
@@ -156,7 +163,7 @@ async function loadSelected(): Promise<void> {
   } catch (caught) {
     if (sequence === requestSequence) setError(caught, false);
   } finally {
-    if (sequence === requestSequence) busy = false;
+    if (sequence === requestSequence && activityToken === activitySequence) activity = null;
   }
   render();
 }
@@ -178,8 +185,13 @@ async function loadRows(): Promise<void> {
 }
 
 async function changePage(delta: number): Promise<void> {
-  page = Math.max(1, page + delta);
-  await runAction(loadRows);
+  if (activity !== null) return;
+  const nextPage = Math.max(1, page + delta);
+  await runAction('page', delta > 0 ? '正在加载下一页…' : '正在加载上一页…', async () => {
+    page = nextPage;
+    await loadRows();
+    status = `已加载 ${selection.objectName ?? '对象'} 第 ${page} 页`;
+  });
 }
 
 function openAddDialog(): void {
@@ -218,7 +230,7 @@ async function saveRecord(): Promise<void> {
       render();
       return;
     }
-    await runAction(async () => {
+    await runAction('save', current.mode === 'add' ? '正在添加记录…' : '正在保存记录…', async () => {
       if (current.mode === 'add') {
         await core('insertRow', { name: objectName, values });
         status = mysqlCopy.data.added;
@@ -238,20 +250,31 @@ async function deleteSelected(): Promise<void> {
   if (!schema?.rowEditable || selectedRowIndex === null || !rows || !selection.objectName) return;
   const record = rows.rows[selectedRowIndex];
   if (!record?.identity || !window.confirm(mysqlCopy.data.confirmDelete(selection.objectName))) return;
-  await runAction(async () => {
+  await runAction('delete', '正在删除记录…', async () => {
     await core('deleteRow', { name: selection.objectName, identity: record.identity });
     await loadRows();
     status = mysqlCopy.data.deleted;
   });
 }
 
-async function runAction(action: () => Promise<void>): Promise<void> {
-  if (busy) return;
-  busy = true;
+async function runAction(
+  kind: Exclude<DataActivity, null>,
+  progress: string,
+  action: () => Promise<void>,
+): Promise<void> {
+  if (activity !== null) return;
+  const activityToken = ++activitySequence;
+  activity = kind;
+  status = progress;
   error = null;
   render();
   try { await action(); } catch (caught) { setError(caught, false); }
-  finally { busy = false; render(); }
+  finally {
+    if (activityToken === activitySequence) {
+      activity = null;
+      render();
+    }
+  }
 }
 
 async function core<T = unknown>(method: string, input?: unknown): Promise<T> {
@@ -265,7 +288,8 @@ async function explorer<T>(method: string): Promise<T> {
 
 function render(): void {
   if (!root) return;
-  root.innerHTML = '<main class="workspace"><header class="workspace-heading"><div class="object-identity"><span class="object-kind"></span><h1 class="object-title"></h1></div><div class="data-actions"></div></header><div class="capability-slot"></div><section class="view-host" data-view="data"></section><footer class="status-deck"><div role="status" aria-live="polite"></div><div class="error-slot"></div></footer></main>';
+  const busy = activity !== null;
+  root.innerHTML = `<main class="workspace" aria-busy="${busy}"><header class="workspace-heading"><div class="object-identity"><span class="object-kind"></span><h1 class="object-title"></h1></div><div class="data-actions"></div></header><div class="capability-slot"></div><section class="view-host" data-view="data" aria-busy="${busy}"></section><footer class="status-deck"><div role="status" aria-live="polite"></div><div class="error-slot"></div></footer></main>`;
   root.querySelector<HTMLElement>('.object-kind')!.textContent = schema?.type === 'view'
     ? mysqlCopy.objects.view
     : selection.objectName ? mysqlCopy.objects.table : mysqlCopy.objects.database;
@@ -278,18 +302,22 @@ function render(): void {
   add.disabled = busy || !schema?.insertable;
   edit.disabled = busy || !schema?.rowEditable || selectedRowIndex === null;
   remove.disabled = edit.disabled;
+  if (activity === 'delete') remove.innerHTML = `${spinner()}<span>删除中…</span>`;
   actions.append(add, edit, remove);
   const notice = root.querySelector<HTMLElement>('.capability-slot')!;
   if (schema?.type === 'view') appendText(notice, 'p', mysqlCopy.capability.readonlyView, 'capability-notice').dataset.capabilityNotice = '';
   else if (schema && !schema.rowEditable) appendText(notice, 'p', mysqlCopy.capability.noPrimaryKey, 'capability-notice').dataset.capabilityNotice = '';
-  renderRows(root.querySelector<HTMLElement>('.view-host')!);
+  const host = root.querySelector<HTMLElement>('.view-host')!;
+  renderRows(host);
+  if (busy) renderActivityLayer(host);
   if (error) appendText(root.querySelector('.error-slot')!, 'div', error).setAttribute('role', 'alert');
-  root.querySelector<HTMLElement>('[role="status"]')!.textContent = busy ? '处理中…' : status;
+  root.querySelector<HTMLElement>('.status-deck > [role="status"]')!.textContent = status;
   if (dialog) renderDialog();
   bind();
 }
 
 function renderRows(host: HTMLElement): void {
+  const busy = activity !== null;
   const view = document.createElement('section');
   view.dataset.view = 'data';
   view.className = 'data-view';
@@ -323,6 +351,7 @@ function renderRows(host: HTMLElement): void {
   appendText(pager, 'span', mysqlCopy.data.range(start, end, rows.total));
   const sizes = document.createElement('select'); sizes.dataset.action = 'page-size'; sizes.setAttribute('aria-label', '每页行数');
   for (const size of [25, 50, 100, 250]) { const option = document.createElement('option'); option.value = String(size); option.textContent = `${size} 行`; option.selected = size === pageSize; sizes.append(option); }
+  sizes.disabled = busy;
   const previous = button('上一页', 'previous-page'); previous.disabled = busy || rows.page <= 1;
   const next = button('下一页', 'next-page'); next.disabled = busy || end >= rows.total;
   pager.append(sizes, previous, next);
@@ -332,10 +361,12 @@ function renderRows(host: HTMLElement): void {
 
 function renderDialog(): void {
   const current = dialog!;
+  const busy = activity !== null;
   const element = document.createElement('dialog');
   element.dataset.recordDialog = '';
   element.setAttribute('aria-modal', 'true');
   element.setAttribute('aria-labelledby', 'record-dialog-title');
+  element.setAttribute('aria-busy', String(busy));
   const header = document.createElement('header');
   header.className = 'dialog-header';
   appendText(header, 'span', current.mode === 'add' ? mysqlCopy.dialog.insertMode : mysqlCopy.dialog.updateMode, 'dialog-mode');
@@ -350,18 +381,26 @@ function renderDialog(): void {
   for (const field of current.fields) {
     const row = document.createElement('div'); row.className = 'record-field'; row.dataset.fieldName = field.name;
     const include = document.createElement('input'); include.type = 'checkbox'; include.dataset.fieldInclude = ''; include.checked = field.included;
+    include.disabled = busy;
     include.setAttribute('aria-label', mysqlCopy.dialog.include(field.name));
     const label = document.createElement('label'); appendText(label, 'strong', field.name); appendText(label, 'small', field.dataType);
     const select = document.createElement('select'); select.dataset.fieldType = '';
+    select.disabled = busy;
     select.setAttribute('aria-label', mysqlCopy.dialog.valueType(field.name));
     for (const type of fieldTypes()) { const option = document.createElement('option'); option.value = type; option.textContent = type.toUpperCase(); option.selected = type === field.inputType; select.append(option); }
-    const input = document.createElement('input'); input.dataset.fieldValue = ''; input.value = field.value; input.disabled = !field.included || ['null', 'default'].includes(field.inputType); input.setAttribute('aria-label', `${field.name} 值`);
+    const input = document.createElement('input'); input.dataset.fieldValue = ''; input.value = field.value; input.disabled = busy || !field.included || ['null', 'default'].includes(field.inputType); input.setAttribute('aria-label', `${field.name} 值`);
     row.append(include, label, select, input); body.append(row);
   }
   const buttons = document.createElement('div'); buttons.className = 'dialog-actions';
   const cancel = button(mysqlCopy.actions.cancel, 'cancel-record');
-  const save = button(current.mode === 'add' ? mysqlCopy.actions.add : mysqlCopy.actions.save, 'save-record');
+  const saveLabel = activity === 'save'
+    ? current.mode === 'add' ? '添加中…' : '保存中…'
+    : current.mode === 'add' ? mysqlCopy.actions.add : mysqlCopy.actions.save;
+  const save = button(saveLabel, 'save-record');
   save.className = 'primary-action';
+  cancel.disabled = busy;
+  save.disabled = busy;
+  if (activity === 'save') save.prepend(spinnerElement());
   buttons.append(cancel, save);
   form.append(body, buttons);
   element.append(form);
@@ -401,12 +440,40 @@ function bind(): void {
   root?.querySelector('[data-action="delete-row"]')?.addEventListener('click', () => void deleteSelected());
   root?.querySelector('[data-action="previous-page"]')?.addEventListener('click', () => void changePage(-1));
   root?.querySelector('[data-action="next-page"]')?.addEventListener('click', () => void changePage(1));
-  root?.querySelector<HTMLSelectElement>('[data-action="page-size"]')?.addEventListener('change', (event) => { pageSize = Number((event.currentTarget as HTMLSelectElement).value); page = 1; void runAction(loadRows); });
+  root?.querySelector<HTMLSelectElement>('[data-action="page-size"]')?.addEventListener('change', (event) => {
+    if (activity !== null) return;
+    const nextPageSize = Number((event.currentTarget as HTMLSelectElement).value);
+    void runAction('page', '正在更新每页行数…', async () => {
+      pageSize = nextPageSize;
+      page = 1;
+      await loadRows();
+      status = `已加载 ${selection.objectName ?? '对象'} 第 1 页`;
+    });
+  });
   for (const row of Array.from(root?.querySelectorAll<HTMLElement>('[data-row-index]') ?? [])) {
-    const select = () => { selectedRowIndex = Number(row.dataset.rowIndex); render(); };
+    const select = () => { if (activity === null) { selectedRowIndex = Number(row.dataset.rowIndex); render(); } };
     row.addEventListener('click', select);
     row.addEventListener('keydown', (event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); select(); } });
   }
+}
+
+function renderActivityLayer(host: HTMLElement): void {
+  const layer = document.createElement('div');
+  layer.className = 'data-activity-layer';
+  layer.setAttribute('aria-hidden', 'true');
+  layer.append(spinnerElement(), document.createTextNode(status));
+  host.append(layer);
+}
+
+function spinner(): string {
+  return '<span class="activity-spinner" aria-hidden="true"></span>';
+}
+
+function spinnerElement(): HTMLSpanElement {
+  const value = document.createElement('span');
+  value.className = 'activity-spinner';
+  value.setAttribute('aria-hidden', 'true');
+  return value;
 }
 
 function button(label: string, action: string): HTMLButtonElement { const value = document.createElement('button'); value.type = 'button'; value.dataset.action = action; value.textContent = label; return value; }

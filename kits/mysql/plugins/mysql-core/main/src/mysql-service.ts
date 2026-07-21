@@ -13,6 +13,7 @@ import {
   quoteIdentifier,
   serializeMysqlValue,
   type DatabaseValue,
+  type ConnectionInput,
   type SerializedValue,
 } from './protocol.js';
 import type { RelationshipGraph } from '@itharbors/mysql-contracts';
@@ -127,6 +128,7 @@ export class MysqlService {
   private database: string | null = null;
   private mysqlVersion: string | null = null;
   private tls = false;
+  private connectionInput: ConnectionInput | null = null;
 
   constructor(private readonly driver: MysqlDriver = new Mysql2Driver()) {}
 
@@ -154,8 +156,8 @@ export class MysqlService {
       const probe = await candidate.query('SELECT VERSION() AS version, DATABASE() AS database_name');
       const rows = expectRows(probe, 'Connection probe');
       const version = requireCellString(rows[0]?.[0], 'MySQL version');
-      const database = requireCellString(rows[0]?.[1], 'database');
-      if (database !== parsed.database) {
+      const database = nullableCellString(rows[0]?.[1], 'database');
+      if (parsed.database !== null && database !== parsed.database) {
         throw new MysqlWorkbenchError('DATABASE_NOT_FOUND', 'MySQL did not select the requested database');
       }
 
@@ -165,6 +167,7 @@ export class MysqlService {
       this.database = database;
       this.mysqlVersion = version;
       this.tls = parsed.tls;
+      this.connectionInput = { ...parsed };
       candidate = null;
       if (previous) await endQuietly(previous);
       return this.getConnectionState();
@@ -181,6 +184,7 @@ export class MysqlService {
     this.database = null;
     this.mysqlVersion = null;
     this.tls = false;
+    this.connectionInput = null;
     if (previous) {
       try {
         await previous.end();
@@ -193,6 +197,54 @@ export class MysqlService {
 
   async dispose(): Promise<void> {
     await this.disconnect();
+  }
+
+  async getDatabases(): Promise<{ databases: string[] }> {
+    const result = await this.requirePool().query(
+      `SELECT SCHEMA_NAME
+         FROM information_schema.SCHEMATA
+        ORDER BY SCHEMA_NAME`,
+    );
+    return {
+      databases: expectRows(result, 'Databases query')
+        .map((row) => requireCellString(row[0], 'database name')),
+    };
+  }
+
+  async selectDatabase(input: unknown): Promise<ConnectionState> {
+    if (!isRecord(input) || typeof input.database !== 'string' || input.database.trim() === '') {
+      throw new MysqlWorkbenchError('INVALID_INPUT', 'database must be a non-empty string');
+    }
+    this.requirePool();
+    const activeInput = this.connectionInput;
+    if (!activeInput) throw new MysqlWorkbenchError('NOT_CONNECTED', 'Connect to a MySQL server first');
+    const database = input.database.trim();
+    if (database === this.database) return this.getConnectionState();
+
+    const nextInput: ConnectionInput = { ...activeInput, database };
+    let candidate: MysqlPool | null = null;
+    try {
+      candidate = this.driver.createPool(nextInput);
+      const probe = await candidate.query('SELECT VERSION() AS version, DATABASE() AS database_name');
+      const rows = expectRows(probe, 'Connection probe');
+      const version = requireCellString(rows[0]?.[0], 'MySQL version');
+      const selectedDatabase = nullableCellString(rows[0]?.[1], 'database');
+      if (selectedDatabase !== database) {
+        throw new MysqlWorkbenchError('DATABASE_NOT_FOUND', 'MySQL did not select the requested database');
+      }
+
+      const previous = this.pool;
+      this.pool = candidate;
+      this.database = selectedDatabase;
+      this.mysqlVersion = version;
+      this.connectionInput = nextInput;
+      candidate = null;
+      if (previous) await endQuietly(previous);
+      return this.getConnectionState();
+    } catch (error) {
+      if (candidate) await endQuietly(candidate);
+      throw normalizeMysqlError(error);
+    }
   }
 
   async getSchema(): Promise<{ objects: SchemaObject[] }> {
@@ -535,7 +587,7 @@ export class MysqlService {
   }
 
   private requirePool(): MysqlPool {
-    if (!this.pool) throw new MysqlWorkbenchError('NOT_CONNECTED', 'Connect to a MySQL database first');
+    if (!this.pool) throw new MysqlWorkbenchError('NOT_CONNECTED', 'Connect to a MySQL server first');
     return this.pool;
   }
 
@@ -621,7 +673,7 @@ export class MysqlService {
   }
 
   private requireDatabase(): string {
-    if (!this.database) throw new MysqlWorkbenchError('NOT_CONNECTED', 'Connect to a MySQL database first');
+    if (!this.database) throw new MysqlWorkbenchError('NOT_CONNECTED', 'Select a MySQL database first');
     return this.database;
   }
 
@@ -789,6 +841,10 @@ function requireCellString(value: unknown, name: string): string {
     throw new MysqlWorkbenchError('MYSQL_ERROR', `MySQL returned an invalid ${name}`);
   }
   return value;
+}
+
+function nullableCellString(value: unknown, name: string): string | null {
+  return value === null ? null : requireCellString(value, name);
 }
 
 function optionalCellString(value: unknown): string {

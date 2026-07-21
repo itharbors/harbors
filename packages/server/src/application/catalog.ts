@@ -7,7 +7,6 @@ import type { ApplicationDiagnostic, ApplicationPluginSpec } from './types';
 
 interface DiscoverApplicationPluginsOptions {
   assembly: AssemblyConfig;
-  selectedKit?: string;
 }
 
 interface KitStartupDeclaration {
@@ -20,9 +19,7 @@ export async function discoverApplicationPlugins(
   options: DiscoverApplicationPluginsOptions,
 ): Promise<{ plugins: ApplicationPluginSpec[]; diagnostics: ApplicationDiagnostic[] }> {
   const diagnostics: ApplicationDiagnostic[] = [];
-  const kitPaths = options.selectedKit
-    ? [await resolveKit(options.selectedKit, options.assembly)]
-    : await discoverKitPaths(options.assembly);
+  const kitPaths = await discoverKitPaths(options.assembly);
   const declarations: KitStartupDeclaration[] = [];
 
   for (const kitPath of kitPaths) {
@@ -97,6 +94,12 @@ async function discoverKitPaths(assembly: AssemblyConfig): Promise<string[]> {
       seen.add(canonical);
       result.push(canonical);
     }
+  }
+  try {
+    const configuredKit = await realpath(await resolveKit(assembly.defaultKit, assembly));
+    if (!seen.has(configuredKit)) result.push(configuredKit);
+  } catch {
+    // The regular Kit catalog owns reporting an invalid configured Kit.
   }
   return result;
 }

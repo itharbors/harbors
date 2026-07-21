@@ -11,6 +11,8 @@ type PanelDefinition = {
 
 const objectsSnapshot = {
   connected: true,
+  database: 'app',
+  databases: ['app', 'mysql'],
   connectionRevision: 1,
   schemaRevision: 3,
   objects: [
@@ -40,10 +42,13 @@ describe('MySQL object explorer panel', () => {
     expect(document.querySelector('.object-rail')).not.toBeNull();
     expect(document.querySelector('.rail-heading')?.textContent).toContain('数据库对象');
     expect(document.querySelector('.object-count')?.textContent).toBe('2');
-    expect(Array.from(document.querySelectorAll('.object-group h3')).map((heading) => heading.textContent)).toEqual([
+    expect(Array.from(document.querySelectorAll('.rail-group h3')).map((heading) => heading.textContent)).toEqual([
+      '数据库',
       '表',
       '视图',
     ]);
+    expect(document.querySelector('[data-database-name="app"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-database-name="mysql"]')?.getAttribute('aria-pressed')).toBe('false');
     expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
     expect(document.querySelector('.object-dot.view')).not.toBeNull();
     expect(request).not.toHaveBeenCalledWith('@itharbors/mysql-core', expect.anything(), expect.anything());
@@ -84,6 +89,8 @@ describe('MySQL object explorer panel', () => {
   it('consumes newer snapshots, rejects stale revisions, and distinguishes disconnected from an empty schema', async () => {
     const request = vi.fn(async () => ({
       connected: false,
+      database: null,
+      databases: [],
       connectionRevision: 0,
       schemaRevision: 0,
       objects: [],
@@ -96,20 +103,36 @@ describe('MySQL object explorer panel', () => {
 
     await definition.methods.onObjectsChanged({
       connected: true,
+      database: null,
+      databases: ['app', 'mysql'],
       connectionRevision: 2,
       schemaRevision: 5,
       objects: [],
       selection: { connectionRevision: 2, objectName: null },
+    });
+    expect(document.body.textContent).toContain('选择数据库后查看表和视图');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(true);
+
+    await definition.methods.onObjectsChanged({
+      connected: true,
+      database: 'app',
+      databases: ['app', 'mysql'],
+      connectionRevision: 3,
+      schemaRevision: 6,
+      objects: [],
+      selection: { connectionRevision: 3, objectName: null },
     });
     expect(document.body.textContent).toContain('此数据库没有表或视图');
     expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(false);
 
     await definition.methods.onObjectsChanged({
       connected: true,
-      connectionRevision: 1,
+      database: 'stale',
+      databases: ['stale'],
+      connectionRevision: 2,
       schemaRevision: 99,
       objects: [{ name: 'stale', type: 'table', insertable: true }],
-      selection: { connectionRevision: 1, objectName: 'stale' },
+      selection: { connectionRevision: 2, objectName: 'stale' },
     });
     expect(document.body.textContent).not.toContain('stale');
     expect(document.body.textContent).toContain('此数据库没有表或视图');
@@ -118,6 +141,8 @@ describe('MySQL object explorer panel', () => {
   it('shows schema refresh failures instead of reporting a connected database as empty', async () => {
     const objectsSnapshot = {
       connected: true,
+      database: 'app',
+      databases: ['app'],
       connectionRevision: 2,
       schemaRevision: 3,
       objects: [],
@@ -130,6 +155,61 @@ describe('MySQL object explorer panel', () => {
 
     expect(document.querySelector('[role="alert"]')?.textContent).toContain('无法读取数据库结构');
     expect(document.body.textContent).not.toContain('此数据库没有表或视图');
+  });
+
+  it('selects a database while keeping the database list visible', async () => {
+    const request = vi.fn(async (_plugin: string, method: string, input?: unknown) => {
+      if (method === 'getObjectsSnapshot') return { ...objectsSnapshot, database: null, objects: [], selection: { connectionRevision: 1, objectName: null } };
+      if (method === 'selectDatabase') {
+        expect(input).toEqual({ database: 'app' });
+        return objectsSnapshot;
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-database-name="app"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith('@itharbors/mysql-explorer', 'selectDatabase', { database: 'app' });
+      expect(document.querySelector('[data-database-name="app"]')?.getAttribute('aria-pressed')).toBe('true');
+      expect(document.querySelector('[data-object-name="users"]')).not.toBeNull();
+    });
+  });
+
+  it('shows database switch progress and blocks duplicate object rail requests', async () => {
+    let rejectSelection: ((reason?: unknown) => void) | undefined;
+    const pendingSelection = new Promise<unknown>((_resolve, reject) => { rejectSelection = reject; });
+    const serverSnapshot = {
+      ...objectsSnapshot,
+      database: null,
+      objects: [],
+      selection: { connectionRevision: 1, objectName: null },
+    };
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? serverSnapshot : pendingSelection
+    ));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-database-name="app"]') as HTMLButtonElement).click();
+
+    const pendingButton = document.querySelector<HTMLButtonElement>('[data-database-name="app"]')!;
+    expect(document.querySelector('.object-rail')?.getAttribute('aria-busy')).toBe('true');
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在切换数据库 app');
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('.rail-group button'))
+      .every((button) => button.disabled)).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(true);
+    (document.querySelector('[data-database-name="mysql"]') as HTMLButtonElement).click();
+    expect(request.mock.calls.filter((call) => call[1] === 'selectDatabase')).toHaveLength(1);
+
+    rejectSelection?.(new Error('切换数据库失败'));
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent)
+      .toContain('切换数据库失败'));
+    expect(document.querySelector('[data-database-name="app"]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(document.querySelector('.activity-spinner')).toBeNull();
   });
 
   it('keeps the object list available when selection fails', async () => {
@@ -229,9 +309,9 @@ describe('MySQL object explorer panel', () => {
     expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('false');
   });
 
-  it('ignores a late selection rejection after a newer selection request', async () => {
-    let rejectOldSelection: ((reason?: unknown) => void) | undefined;
-    const oldSelection = new Promise<unknown>((_resolve, reject) => { rejectOldSelection = reject; });
+  it('shows object selection progress and blocks another selection until it completes', async () => {
+    let resolveSelection: ((value: unknown) => void) | undefined;
+    const pendingSelection = new Promise<unknown>((resolve) => { resolveSelection = resolve; });
     const nextSnapshot = {
       ...objectsSnapshot,
       objects: [
@@ -242,7 +322,7 @@ describe('MySQL object explorer panel', () => {
     const request = vi.fn(async (_plugin: string, method: string, input?: unknown) => {
       if (method === 'getObjectsSnapshot') return nextSnapshot;
       if (method === 'selectObject' && (input as { objectName: string }).objectName === 'active_users') {
-        return oldSelection;
+        return pendingSelection;
       }
       if (method === 'selectObject') return input;
       throw new Error(`Unexpected method ${method}`);
@@ -251,15 +331,21 @@ describe('MySQL object explorer panel', () => {
     await definition.mount({ message: { request } });
 
     (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    const pendingButton = document.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!;
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在选择 active_users');
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('.rail-group button'))
+      .every((button) => button.disabled)).toBe(true);
     (document.querySelector('[data-object-name="audit"]') as HTMLButtonElement).click();
-    await vi.waitFor(() => {
-      expect(document.querySelector('[data-object-name="audit"]')?.getAttribute('aria-pressed')).toBe('true');
-    });
-    rejectOldSelection?.(new Error('old selection failed late'));
-    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    expect(request.mock.calls.filter((call) => call[1] === 'selectObject')).toHaveLength(1);
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
+
+    resolveSelection?.({ connectionRevision: 1, objectName: 'active_users' });
+    await vi.waitFor(() => expect(document.querySelector('[data-object-name="active_users"]')
+      ?.getAttribute('aria-pressed')).toBe('true'));
 
     expect(document.querySelector('[role="alert"]')).toBeNull();
-    expect(document.querySelector('[data-object-name="audit"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('.activity-spinner')).toBeNull();
   });
 
   it('ignores a late selection rejection after switching connections or unmounting', async () => {

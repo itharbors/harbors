@@ -223,9 +223,10 @@ kits/my-kit/
 }
 ```
 
-`menuRoot`、`default` layout 与两个 window entry 是必需项。`startup.plugins` 缺省为空，
-`plugin` 仍是普通 Session 插件。两者不能在同一 Kit 中包含同一 package name。多 Kit 模式
-只自动打开默认 Kit，其他 Kit 首次从 Tray 打开时才创建 Session；Kit 下的插件仍需先生成 dist。
+`menuRoot`、`default` layout 与两个 window entry 是必需项。Electron 窗口统一使用聚合菜单，
+`menuRoot.label` 成为该 Kit 的顶层菜单名。`startup.plugins` 缺省为空，`plugin` 仍是普通
+Session 插件，两者不能在同一 Kit 中包含同一 package name。Electron 默认不自动打开 Kit，
+用户首次从 Tray 选择或通过 `--kit` 直达时才创建 Session；Kit 下的插件仍需先生成 dist。
 
 ### 应用启动插件
 
@@ -303,6 +304,10 @@ Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser me
 node scripts/ce-plugin.mjs build kits/my-kit/plugins/my-plugin
 npm run dev -- --kit ./kits/my-kit
 ```
+
+`--kit` 是直达快捷方式：它把外部 Kit 临时追加到 Catalog，并在服务就绪后只自动打开该 Kit；
+它不会隐藏仓库中的其他 Kit，也不会改变 Web 根页面。使用内置浏览器调试时，从启动日志复制
+`Requested Kit` 地址。
 
 检查：
 

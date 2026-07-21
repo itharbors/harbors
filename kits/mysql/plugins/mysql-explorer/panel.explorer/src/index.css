@@ -130,6 +130,16 @@ summary:focus-visible {
   min-height: 0;
 }
 
+.rail-activity {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  margin: 0 4px 10px;
+  color: var(--cyan);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
 .object-tree {
   grid-area: tree;
   min-height: 0;
@@ -137,11 +147,12 @@ summary:focus-visible {
   scrollbar-color: #31516a transparent;
 }
 
-.object-group + .object-group {
+.rail-group + .rail-group,
+.database-group + .empty-hint {
   margin-top: 19px;
 }
 
-.object-group h3 {
+.rail-group h3 {
   margin: 0 7px 5px;
   color: #6f899d;
   font-size: 10px;
@@ -149,7 +160,7 @@ summary:focus-visible {
   text-transform: uppercase;
 }
 
-.object-group button {
+.rail-group button {
   display: flex;
   width: 100%;
   height: 32px;
@@ -167,17 +178,26 @@ summary:focus-visible {
   text-align: left;
 }
 
-.object-group button span:last-child {
+.rail-group button span:last-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.object-group button.selected {
+.rail-group button.selected {
   border-color: #28516e;
   color: #fff;
   background: #122e44;
   box-shadow: inset 2px 0 var(--blue);
+}
+
+.database-icon {
+  width: 10px;
+  height: 8px;
+  flex: 0 0 auto;
+  border: 1px solid var(--cyan);
+  border-radius: 50%;
+  box-shadow: inset 0 -2px rgb(118 208 236 / 18%);
 }
 
 .object-dot {
@@ -191,6 +211,20 @@ summary:focus-visible {
 .object-dot.view {
   border-radius: 50%;
   color: var(--amber);
+}
+
+.activity-spinner {
+  width: 10px;
+  height: 10px;
+  flex: 0 0 auto;
+  border: 2px solid rgb(118 208 236 / 28%);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: activity-spin 680ms linear infinite;
+}
+
+@keyframes activity-spin {
+  to { transform: rotate(360deg); }
 }
 
 .empty-hint {
@@ -238,5 +272,10 @@ summary:focus-visible {
   *::before,
   *::after {
     transition-duration: .01ms !important;
+  }
+
+  .activity-spinner {
+    animation: none;
+    border-color: var(--cyan);
   }
 }

@@ -22,6 +22,6 @@ if (port !== undefined) {
   console.log(`Editor server running on http://localhost:${port}`);
   console.log(`Database: ${DB_PATH}`);
   if (DEFAULT_KIT) {
-    console.log(`Default kit: ${DEFAULT_KIT}`);
+    console.log(`Session fallback Kit: ${DEFAULT_KIT}`);
   }
 }

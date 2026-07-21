@@ -83,17 +83,29 @@ Kit package 的核心结构：
 默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
 
-Electron 默认通过 KitCatalog 扫描 `kits/*`，但启动时只创建默认 Kit 的稳定 session 与可见
-窗口。其他 Kit 保留在托盘中，用户首次打开时才创建窗口和 Session Runtime；再次打开复用
-稳定 sessionId。`--kit <name-or-path>` 只选择一个 Kit。缺失或损坏的持久 Kit 记录保留并在
-托盘标记为不可用，不会污染其他 Kit 的窗口和运行时。
+Electron 默认通过 KitCatalog 扫描 `kits/*`，但启动时只保留静态目录并读取已有 workspace
+记录。首次从 Tray 选择 Kit 时才调用 `WorkspaceStore.getOrCreate()`，创建或恢复稳定
+sessionId 并加载对应窗口；未选择的 Kit 不创建新 workspace、Server session 或运行时。
+`--kit <name-or-path>` 代表显式选择，因此启动就绪后只自动打开指定 Kit；Catalog 和 Tray
+仍保留其他仓库 Kit，未打开的 Kit 不创建运行时。显式外部路径经校验后临时追加到 Catalog。
+缺失或损坏的持久 Kit 记录保留并在托盘标记为不可用，不会污染其他 Kit 的窗口和运行时。
+
+Web 主机通过 `GET /api/kits` 读取同一 assembly 边界内的公开 Catalog 投影，只返回
+`id`、`name` 和 `label`，不暴露本地目录、manifest 路径或插件列表。裸根页面始终只渲染
+选择器，不创建 session；`/kits/<menuRoot.id>` 重定向到现有 `?kit=<package-name>` 加载路径。
+`--kit` 仅增加直达目标，不能切换主机模式或缩减 Catalog。
+
+Kit 选择器生成的新浏览器 session 与 Electron Workspace session 采用同一隔离模型，但不
+写入 Electron 的 WorkspaceStore。session 一旦建立 runtime，其 Kit 即为该 session 的权威
+状态；URL 中后续出现的其他 Kit 参数不会触发隐式切换。
 
 ## 插件范围
 
 ### 应用启动插件
 
-Server 启动时创建一个无 Session 的 ApplicationRuntime，收集全部 Kit 的 `startup.plugins`；
-单 Kit 模式只收集被选择 Kit。相同 name 和真实路径只加载一次，相同 name 解析到不同路径时
+Server 启动时创建一个无 Session 的 ApplicationRuntime，收集完整 Catalog 中全部 Kit 的
+`startup.plugins`。`--kit` 只是窗口直达快捷方式，不会缩减这份启动插件目录。相同 name 和
+真实路径只加载一次，相同 name 解析到不同路径时
 拒绝冲突插件。ApplicationRuntime 维护独立全局菜单，并通过以下协议供 Electron 使用：
 
 - `GET /api/application/bootstrap`；

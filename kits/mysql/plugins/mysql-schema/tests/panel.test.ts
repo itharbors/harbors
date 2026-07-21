@@ -111,4 +111,28 @@ describe('MySQL Schema panel', () => {
     expect(css).toMatch(/\.schema-view\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*auto/s);
     expect(css).toMatch(/\.schema-card\s*\{[^}]*border:\s*1px solid var\(--line\)[^}]*background:\s*var\(--panel\)/s);
   });
+
+  it('marks the schema view busy while an object schema request is pending', async () => {
+    let resolveSchema: ((value: unknown) => void) | undefined;
+    const pendingSchema = new Promise<unknown>((resolve) => { resolveSchema = resolve; });
+    const request = vi.fn(async (plugin: string, method: string) => {
+      if (plugin === '@itharbors/mysql-core' && method === 'getConnectionState') return connection;
+      if (plugin === '@itharbors/mysql-explorer' && method === 'getSelection') return { connectionRevision: 1, objectName: 'users' };
+      if (plugin === '@itharbors/mysql-core' && method === 'getObjectSchema') return pendingSchema;
+      throw new Error(`Unexpected ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.schema/src/index')).default as PanelDefinition;
+    const mounting = definition.mount({ message: { request } });
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith('@itharbors/mysql-core', 'getObjectSchema', { name: 'users' }));
+
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('true');
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在读取结构…');
+
+    resolveSchema?.({
+      name: 'users', type: 'table', insertable: true, rowEditable: true,
+      columns: [], primaryKey: [], indexes: [], foreignKeys: [], sql: 'CREATE TABLE users',
+    });
+    await mounting;
+    expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('false');
+  });
 });

@@ -132,10 +132,40 @@ h1.object-title {
 }
 
 .view-host {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
   scrollbar-color: #31516a transparent;
+}
+
+.data-activity-layer {
+  position: absolute;
+  z-index: 4;
+  inset: 0;
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  justify-content: center;
+  color: var(--cyan);
+  background: rgb(7 17 29 / 48%);
+  font-family: var(--mono);
+  font-size: 11px;
+  pointer-events: auto;
+}
+
+.activity-spinner {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+  border: 2px solid rgb(118 208 236 / 28%);
+  border-top-color: var(--cyan);
+  border-radius: 50%;
+  animation: activity-spin 680ms linear infinite;
+}
+
+@keyframes activity-spin {
+  to { transform: rotate(360deg); }
 }
 
 .data-view {
@@ -297,4 +327,9 @@ dialog::backdrop { background: rgb(2 8 13 / 72%); }
   *,
   *::before,
   *::after { transition-duration: .01ms !important; }
+
+  .activity-spinner {
+    animation: none;
+    border-color: var(--cyan);
+  }
 }

@@ -24,6 +24,10 @@ export type ConnectionSnapshot = RevisionSnapshot & {
   tls: boolean;
 };
 
+export type DatabasesSnapshot = RevisionSnapshot & {
+  databases: string[];
+};
+
 export type SchemaSnapshot<TObject = unknown> = RevisionSnapshot & {
   objects: TObject[];
 };
@@ -35,6 +39,8 @@ export type SelectionSnapshot = {
 
 export type ObjectsSnapshot<TObject = unknown> = {
   connected: boolean;
+  database: string | null;
+  databases: string[];
   connectionRevision: number;
   schemaRevision: number;
   objects: TObject[];

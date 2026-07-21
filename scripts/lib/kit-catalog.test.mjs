@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { discoverKits } from './kit-catalog.mjs';
+import { discoverKits, resolveRequestedKitName } from './kit-catalog.mjs';
 
 async function createKit(rootDir, directoryName, options = {}) {
   const kitDir = path.join(rootDir, 'kits', directoryName);
@@ -112,7 +112,7 @@ test('ignores invalid manifests during multi-Kit discovery', async () => {
   assert.deepEqual(kits.map((kit) => kit.name), ['@itharbors/kit-valid']);
 });
 
-test('filters single mode by package name or Kit directory path', async () => {
+test('keeps the full repository Catalog when a Kit is requested by package or path', async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
   const sqliteDir = await createKit(rootDir, 'sqlite');
   await createKit(rootDir, 'mysql');
@@ -120,20 +120,55 @@ test('filters single mode by package name or Kit directory path', async () => {
   const byPackage = await discoverKits({ rootDir, requestedKit: '@itharbors/kit-mysql' });
   const byPath = await discoverKits({ rootDir, requestedKit: sqliteDir });
 
-  assert.deepEqual(byPackage.map((kit) => kit.name), ['@itharbors/kit-mysql']);
-  assert.deepEqual(byPath.map((kit) => kit.name), ['@itharbors/kit-sqlite']);
+  assert.deepEqual(byPackage.map((kit) => kit.name), [
+    '@itharbors/kit-mysql',
+    '@itharbors/kit-sqlite',
+  ]);
+  assert.deepEqual(byPath.map((kit) => kit.name), [
+    '@itharbors/kit-mysql',
+    '@itharbors/kit-sqlite',
+  ]);
 });
 
-test('loads a valid requested Kit path outside the repository catalog', async () => {
+test('appends a valid requested Kit path outside the repository catalog', async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'default', { menuRoot: { id: 'default', label: 'Default Kit' } });
+  await createKit(rootDir, 'sqlite', { menuRoot: { id: 'sqlite', label: 'SQLite' } });
   const externalRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-external-kit-'));
-  const externalKit = await createKit(externalRoot, 'external');
+  const externalKit = await createKit(externalRoot, 'external', {
+    name: '@example/kit-external',
+    menuRoot: { id: 'external', label: 'External Kit' },
+  });
 
   const kits = await discoverKits({ rootDir, requestedKit: externalKit });
 
-  assert.equal(kits.length, 1);
-  assert.equal(kits[0].name, '@itharbors/kit-external');
-  assert.equal(kits[0].directory, externalKit);
+  assert.deepEqual(kits.map((kit) => kit.name), [
+    '@itharbors/kit-default',
+    '@example/kit-external',
+    '@itharbors/kit-sqlite',
+  ]);
+  assert.equal(kits[1].directory, externalKit);
+});
+
+test('resolves package and path shortcuts to the canonical Catalog name', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  const sqliteDir = await createKit(rootDir, 'sqlite');
+  const catalog = await discoverKits({ rootDir });
+
+  assert.equal(
+    resolveRequestedKitName(catalog, '@itharbors/kit-sqlite', rootDir),
+    '@itharbors/kit-sqlite',
+  );
+  assert.equal(
+    resolveRequestedKitName(catalog, './kits/sqlite', rootDir),
+    '@itharbors/kit-sqlite',
+  );
+  assert.equal(resolveRequestedKitName(catalog, sqliteDir, rootDir), '@itharbors/kit-sqlite');
+  assert.equal(resolveRequestedKitName(catalog, null, rootDir), null);
+  assert.throws(
+    () => resolveRequestedKitName(catalog, './kits/missing', rootDir),
+    /requested Kit.*not found/i,
+  );
 });
 
 test('rejects an unknown or invalid explicitly requested Kit', async () => {

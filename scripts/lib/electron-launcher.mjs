@@ -31,9 +31,7 @@ export function parseElectronOptions(args) {
     }
   }
 
-  return requestedKit
-    ? { mode: 'single', requestedKit }
-    : { mode: 'multi', requestedKit: null };
+  return { requestedKit };
 }
 
 export function createFrameworkArgs(args) {
@@ -44,11 +42,26 @@ export function createFrameworkArgs(args) {
   ];
 }
 
-export function createKitWindowUrl(startUrl, kit, workspace, mode) {
+export async function initializeKitHost(options, adapters) {
+  await adapters.createTray();
+  await adapters.startFramework();
+  adapters.registerIpc();
+  if (options.requestedKit) {
+    await adapters.openKit(options.requestedKit);
+  }
+}
+
+export function showKitChooser(tray) {
+  if (!tray || tray.isDestroyed?.()) return false;
+  tray.popUpContextMenu();
+  return true;
+}
+
+export function createKitWindowUrl(startUrl, kit, workspace) {
   const url = new URL(startUrl);
   url.searchParams.set('session', workspace.sessionId);
   url.searchParams.set('kit', kit.directory);
-  url.searchParams.set('menuMode', mode);
+  url.searchParams.set('menuMode', 'multi');
   return url.href;
 }
 
@@ -81,26 +94,20 @@ export function buildTrayTemplate({
   ];
 }
 
-const pendingKitWindows = new WeakMap();
-
-export async function openOrFocusKitWindow(kitName, registry, createWindow) {
+export async function openOrFocusKitWindow(kitName, registry, pendingLoads, createWindow) {
   let window = registry.get(kitName);
   if (!window || window.isDestroyed()) {
-    let pendingByKit = pendingKitWindows.get(registry);
-    if (!pendingByKit) {
-      pendingByKit = new Map();
-      pendingKitWindows.set(registry, pendingByKit);
-    }
-    let pending = pendingByKit.get(kitName);
+    let pending = pendingLoads.get(kitName);
     if (!pending) {
-      pending = Promise.resolve()
-        .then(() => createWindow(kitName))
-        .then((created) => {
-          registry.set(kitName, created);
-          return created;
+      pending = Promise.resolve(createWindow(kitName))
+        .then((createdWindow) => {
+          registry.set(kitName, createdWindow);
+          return createdWindow;
         })
-        .finally(() => pendingByKit.delete(kitName));
-      pendingByKit.set(kitName, pending);
+        .finally(() => {
+          pendingLoads.delete(kitName);
+        });
+      pendingLoads.set(kitName, pending);
     }
     window = await pending;
   }

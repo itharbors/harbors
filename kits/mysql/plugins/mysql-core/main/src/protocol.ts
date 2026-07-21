@@ -30,7 +30,7 @@ export type ConnectionInput = {
   port: number;
   user: string;
   password: string;
-  database: string;
+  database: string | null;
   tls: boolean;
 };
 
@@ -53,7 +53,7 @@ export function parseConnectionInput(input: unknown): ConnectionInput {
   if (typeof input.password !== 'string') {
     throw new Error('password must be a string');
   }
-  const database = requireTrimmedString(input.database, 'database');
+  const database = optionalTrimmedString(input.database, 'database');
   if (typeof input.tls !== 'boolean') {
     throw new Error('tls must be a boolean');
   }
@@ -204,6 +204,12 @@ function requireTrimmedString(value: unknown, name: string): string {
     throw new Error(`${name} must be a non-empty string`);
   }
   return value.trim();
+}
+
+function optionalTrimmedString(value: unknown, name: string): string | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') throw new Error(`${name} must be a string or null`);
+  return value.trim() || null;
 }
 
 function requireValueString(value: unknown, type: string): string {

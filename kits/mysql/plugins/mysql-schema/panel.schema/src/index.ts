@@ -9,7 +9,7 @@ const DISCONNECTED: ConnectionSnapshot = { connected:false,endpoint:null,databas
 let context:Context|undefined;let root:HTMLElement|null=null;let connection:ConnectionSnapshot={...DISCONNECTED};let selection:SelectionSnapshot={connectionRevision:0,objectName:null};let schema:ObjectSchema|null=null;let error:string|null=null;let sequence=0;
 const definition={async mount(ctx:Context){context=ctx;root=document.querySelector('#panel-root');if(!root)throw new Error('Panel root element #panel-root not found');reset();render();const current=++sequence;try{const[nextConnection,nextSelection]=await Promise.all([core<ConnectionSnapshot>('getConnectionState'),explorer<SelectionSnapshot>('getSelection')]);if(current!==sequence)return;connection=nextConnection;selection=nextSelection.connectionRevision===nextConnection.connectionRevision?nextSelection:{connectionRevision:nextConnection.connectionRevision,objectName:null};await load();}catch(caught){if(current===sequence)setError(caught);}},unmount(){sequence++;root?.replaceChildren();root=null;context=undefined;reset();},methods:{async onConnectionChanged(payload:unknown){if(!isConnection(payload))return;connection=payload;selection={connectionRevision:payload.connectionRevision,objectName:null};schema=null;error=null;sequence++;render();},async onSelectionChanged(payload:unknown){if(!isSelection(payload)||payload.connectionRevision!==connection.connectionRevision)return;selection=payload;schema=null;await load();},async onSchemaChanged(payload:unknown){if(!isRevision(payload)||payload.connectionRevision!==connection.connectionRevision)return;connection={...connection,schemaRevision:payload.schemaRevision,dataRevision:payload.dataRevision};await load();}}};export default definition;
 function reset(){connection={...DISCONNECTED};selection={connectionRevision:0,objectName:null};schema=null;error=null;sequence++;}
-async function load(){if(!connection.connected||!selection.objectName){schema=null;render();return;}const current=++sequence;const name=selection.objectName;try{const next=await core<ObjectSchema>('getObjectSchema',{name});if(current!==sequence||name!==selection.objectName)return;schema=next;error=null;}catch(caught){if(current!==sequence)return;setError(caught,false);}render();}
+async function load(){if(!connection.connected||!selection.objectName){schema=null;render();return;}const current=++sequence;const name=selection.objectName;schema=null;error=null;render();try{const next=await core<ObjectSchema>('getObjectSchema',{name});if(current!==sequence||name!==selection.objectName)return;schema=next;error=null;}catch(caught){if(current!==sequence)return;setError(caught,false);}render();}
 async function core<T>(method:string,input?:unknown):Promise<T>{if(!context)throw new Error('MySQL 结构面板尚未挂载');return unwrapMysqlResponse<T>(await context.message.request(MYSQL_CORE,method,input));}
 async function explorer<T>(method:string):Promise<T>{if(!context)throw new Error('MySQL 结构面板尚未挂载');return context.message.request(MYSQL_EXPLORER,method) as Promise<T>;}
 function render(){
@@ -17,6 +17,8 @@ function render(){
   root.replaceChildren();
   const workspace=document.createElement('main');
   workspace.className='workspace';
+  const loading=!error&&connection.connected&&selection.objectName!==null&&schema===null;
+  workspace.setAttribute('aria-busy',String(loading));
   const header=document.createElement('header');
   header.className='workspace-heading';
   const identity=document.createElement('div');
@@ -26,6 +28,7 @@ function render(){
   header.append(identity);
   const host=document.createElement('section');
   host.className='view-host';
+  host.setAttribute('aria-busy',String(loading));
   const footer=document.createElement('footer');
   footer.className='status-deck';
   const status=append(footer,'div',schema?`已加载 ${schema.name} 结构`:connection.connected&&selection.objectName?'正在读取结构…':'等待选择数据库对象');

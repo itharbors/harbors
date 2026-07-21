@@ -39,10 +39,7 @@ export function createServer(options: ServerOptions = {}) {
   );
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',
-    catalogLoader: () => discoverApplicationPlugins({
-      assembly,
-      selectedKit: options.defaultKit,
-    }),
+    catalogLoader: () => discoverApplicationPlugins({ assembly }),
   });
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,

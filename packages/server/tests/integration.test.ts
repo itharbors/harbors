@@ -20,13 +20,15 @@ describe('Server Integration', () => {
     await stop();
   });
 
-  it('GET / returns HTML page with editor-app component', async () => {
+  it('GET / returns an empty app host so client bootstrap chooses picker or editor first', async () => {
     const resp = await fetch(`${baseURL}/`);
     const html = await resp.text();
 
     expect(resp.status).toBe(200);
     expect(resp.headers.get('content-type')).toContain('text/html');
-    expect(html).toContain('<editor-app>');
+    expect(html).toContain('<div id="app"></div>');
+    expect(html).not.toContain('<editor-app>');
+    expect(html).toContain('<meta name="theme-color" content="#111722">');
     expect(html).toContain('ITHARBORS');
   });
 

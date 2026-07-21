@@ -12,23 +12,36 @@ sequenceDiagram
     participant N as Notification Host
     participant K as KitCatalog/WorkspaceStore
     participant Web as scripts/dev.mjs (dev:web)
+    participant U as User
     participant G as Gateway
     participant S as Server
     participant C as Vite Client
     CLI->>E: 启动默认桌面宿主
-    E->>K: 扫描 Kit + 恢复稳定 session/bounds
+    E->>K: 扫描 Kit manifest + 读取已有记录
+    E->>E: 创建 Tray（无 BrowserWindow）
     E->>N: 绑定 127.0.0.1 并订阅通知状态
     E->>Web: npm run dev:web
     Web->>G: npm run dev -w packages/gateway
     Web->>S: npm run dev -w packages/server
     Web->>C: npm run dev -w packages/client
-    E->>E: 每 Kit 创建独立 BrowserWindow + 托盘/角标
+    S->>S: 加载全部 Kit 的 startup.plugins
+    U->>E: 从 Tray 选择 Kit
+    E->>E: 等待 Gateway ready
+    E->>K: getOrCreate workspace
+    E->>E: create/load Kit BrowserWindow
     Note over G,C: 任一子进程异常退出时停止其余进程
 ```
 
-不带参数时 Electron 启动全部合法 Kit；`--kit` 只保留指定包名或路径并进入单 Kit 菜单
-模式。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听 8080，Server
-监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
+不带参数时 Electron 只扫描全部合法 Kit 并显示 Tray，不创建新 workspace、session 或窗口。
+用户首次选择 Kit 时才进入加载路径；`--kit` 只代表一次显式选择，服务就绪后自动打开该 Kit，
+但 Catalog 和 Tray 仍保留其他 Kit。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听
+8080，Server 监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
+
+Web 客户端启动时先读取 `GET /api/kits`。裸根地址始终只显示 Catalog 选择页，不进入
+SessionManager；稳定路径 `/kits/<id>` 由 Server 精确匹配公开 id 后重定向到
+`/?kit=<package-name>`。带 `session`、`sessionId` 或 `kit` 的地址直接进入现有 Editor
+初始化路径。`dev:web -- --kit <name-or-path>` 只追加并打印 Requested Kit 直达地址，不改变
+裸根页面或过滤 Catalog。
 
 Notification Host 默认监听 `127.0.0.1:17896`，先于 Web 子进程启动，并通过
 `HARBORS_NOTIFICATION_PORT` 将实际端口传入子进程。它不属于 Gateway 路由；只启动

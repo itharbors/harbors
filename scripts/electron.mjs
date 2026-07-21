@@ -3,7 +3,7 @@ import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
-import { discoverKits } from './lib/kit-catalog.mjs';
+import { discoverKits, resolveRequestedKitName } from './lib/kit-catalog.mjs';
 import {
   calculateToastPositions,
   createBadgeOverlayDataUrl,
@@ -20,11 +20,13 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
+  initializeKitHost,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
   shutdownDesktopServices,
+  showKitChooser,
 } from './lib/electron-launcher.mjs';
 import { resolveCodexSkillSource } from './lib/codex-skill-resource.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
@@ -37,7 +39,7 @@ import {
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
 const notificationPreloadPath = fileURLToPath(new URL('./notification-preload.cjs', import.meta.url));
-const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.svg', import.meta.url));
+const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.png', import.meta.url));
 const gatewayPort = parsePort(process.env.PORT, 8080);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
@@ -48,6 +50,7 @@ const TOAST_HEIGHT = 176;
 
 let frameworkProcess;
 let frameworkStopPromise;
+let frameworkReadyPromise;
 let tray;
 let trayContextMenu;
 let trayWorkspaceRecords = [];
@@ -56,6 +59,7 @@ let kitCatalog = [];
 let electronOptions;
 let quitting = false;
 const kitWindows = new Map();
+const kitWindowLoads = new Map();
 const sessionKits = new Map();
 const sessionMenus = new Map();
 const menuSyncWaiters = new Map();
@@ -227,6 +231,14 @@ function startElectronApp() {
         rootDir,
         requestedKit: electronOptions.requestedKit ?? undefined,
       });
+      electronOptions = {
+        ...electronOptions,
+        requestedKit: resolveRequestedKitName(
+          kitCatalog,
+          electronOptions.requestedKit,
+          rootDir,
+        ),
+      };
       if (kitCatalog.length === 0) {
         throw new Error('No valid Kits were discovered');
       }
@@ -236,20 +248,15 @@ function startElectronApp() {
         resourcesPath: process.resourcesPath,
         rootDir,
       });
-      await startNotificationService();
-      frameworkProcess = startFramework();
-      const bootstrap = await waitForApplicationRuntime(startUrl);
-      updateApplicationBootstrap(bootstrap);
-      applicationRuntimeClient = createApplicationRuntimeClient({
-        baseUrl: startUrl,
-        onBootstrap: updateApplicationBootstrap,
-        onError: (error) => console.error('Application event stream failed:', error.message),
+      await initializeKitHost(electronOptions, {
+        createTray: createApplicationTray,
+        startFramework: startFrameworkAndTrackReadiness,
+        registerIpc() {
+          registerMenuIpc();
+          registerOpenExternalUrlIpc();
+        },
+        openKit,
       });
-      applicationRuntimeClient.startEvents();
-      registerMenuIpc();
-      registerOpenExternalUrlIpc();
-      await openKit(kitCatalog[0].name);
-      await createApplicationTray();
     })
     .catch((error) => {
       console.error(error.message);
@@ -264,11 +271,8 @@ function startElectronApp() {
     // The tray owns the application lifecycle; closing a Kit window keeps its runtime alive.
   });
 
-  app.on('activate', async () => {
-    const defaultKit = kitCatalog[0];
-    if (defaultKit) {
-      await openKit(defaultKit.name);
-    }
+  app.on('activate', () => {
+    showKitChooser(tray);
   });
 
   app.on('before-quit', (event) => {
@@ -333,29 +337,46 @@ function startFramework() {
   return child;
 }
 
+async function startFrameworkAndTrackReadiness() {
+  await startNotificationService();
+  frameworkProcess = startFramework();
+  frameworkReadyPromise = waitForApplicationRuntime(startUrl);
+  const bootstrap = await frameworkReadyPromise;
+  updateApplicationBootstrap(bootstrap);
+  applicationRuntimeClient = createApplicationRuntimeClient({
+    baseUrl: startUrl,
+    onBootstrap: updateApplicationBootstrap,
+    onError: (error) => console.error('Application event stream failed:', error.message),
+  });
+  applicationRuntimeClient.startEvents();
+}
+
 async function createApplicationTray() {
   const image = nativeImage.createFromPath(trayIconPath);
   image.setTemplateImage?.(true);
   tray = new Tray(image);
+  tray.setToolTip('ITHARBORS');
   trayWorkspaceRecords = await workspaceStore.list(kitCatalog);
   refreshApplicationTray();
-  if (process.platform === 'darwin') {
-    tray.on('click', () => {
-      if (trayContextMenu) tray?.popUpContextMenu(trayContextMenu);
-    });
-  }
+  tray.on('click', () => showKitChooser(tray));
 }
 
 async function openKit(kitName) {
   try {
-    return await openOrFocusKitWindow(kitName, kitWindows, async () => {
-      const kit = kitCatalog.find((candidate) => candidate.name === kitName);
-      if (!kit) {
-        throw new Error(`Kit "${kitName}" is unavailable`);
-      }
-      const workspace = await workspaceStore.getOrCreate(kit);
-      return createKitWindow(kit, workspace);
-    });
+    await frameworkReadyPromise;
+    return await openOrFocusKitWindow(
+      kitName,
+      kitWindows,
+      kitWindowLoads,
+      async () => {
+        const kit = kitCatalog.find((candidate) => candidate.name === kitName);
+        if (!kit) {
+          throw new Error(`Kit "${kitName}" is unavailable`);
+        }
+        const workspace = await workspaceStore.getOrCreate(kit);
+        return createKitWindow(kit, workspace);
+      },
+    );
   } catch (error) {
     console.error(`Failed to open Kit ${kitName}:`, error);
     return null;
@@ -395,7 +416,7 @@ async function createKitWindow(kit, workspace) {
     }
   });
 
-  const url = createKitWindowUrl(startUrl, kit, workspace, electronOptions.mode);
+  const url = createKitWindowUrl(startUrl, kit, workspace);
   try {
     await window.loadURL(url);
   } catch (error) {
@@ -711,22 +732,11 @@ function applyMenuForWindow(window) {
       });
     },
   };
-  const state = sessionMenus.get(sessionId);
-  const template = electronOptions?.mode === 'multi'
-    ? buildMultiKitMenuTemplate({
-        applicationMenuTree,
-        focusedSessionId: sessionId,
-        sessions: getOrderedMenuSessions(),
-      }, adapters)
-    : [
-        toElectronRootTemplate(
-          'APP',
-          applicationMenuTree,
-          { scope: 'application' },
-          adapters,
-        ),
-        ...buildElectronMenuTemplate(sessionId, state?.menuTree ?? [], adapters),
-      ];
+  const template = buildMultiKitMenuTemplate({
+    applicationMenuTree,
+    focusedSessionId: sessionId,
+    sessions: getOrderedMenuSessions(),
+  }, adapters);
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

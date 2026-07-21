@@ -81,7 +81,7 @@ export class Mysql2Driver implements MysqlDriver {
       port: input.port,
       user: input.user,
       password: input.password,
-      database: input.database,
+      ...(input.database === null ? {} : { database: input.database }),
       connectionLimit: 4,
       connectTimeout: 10_000,
       multipleStatements: false,

@@ -11,7 +11,7 @@ flowchart LR
     User["用户"]
     Browser["浏览器"]
     Tray["Electron Tray / KitCatalog"]
-    Electron["每 Kit 一个 BrowserWindow"]
+    Electron["按需 Kit BrowserWindow"]
     Host["Notification Host 127.0.0.1:17896"]
     Agent["Agent / notify-user Skill"]
     Toast["桌面弹窗 / 任务栏角标"]
@@ -110,13 +110,15 @@ flowchart TD
 ## Web 与 Electron
 
 `npm run dev` 默认启动 Electron；`npm run electron` 是同一入口，`npm run dev:web` 才直接
-启动 Gateway、Server 和 Client。Electron 扫描全部合法 Kit，为每个 Kit 绑定稳定 session
-并创建独立 BrowserWindow；首个窗口可见，其余窗口预热隐藏。
+启动 Gateway、Server 和 Client。Electron 启动时只扫描合法 Kit 的静态 manifest 并创建
+系统 Tray，不创建 Kit workspace、session 或 BrowserWindow。用户从 Tray 首次选择 Kit 时，
+Electron 才创建或恢复该 Kit 的稳定 workspace，等待 Gateway ready 并加载独立
+BrowserWindow；之后再次选择只打开或聚焦已有窗口。
 
 Electron 额外提供：
 
 - 通过系统托盘打开或聚焦 Kit，并持久化窗口 bounds；
-- 单 Kit 模式平铺组合菜单，多 Kit 模式聚合为 `APP / <Kit...>`；
+- 所有 Kit 窗口统一把菜单聚合为 `APP / <Kit...>`；
 - 把原生菜单点击送回对应 session 的窗口，发送前先显示目标窗口；
 - 只允许通过系统浏览器打开 `http:` 或 `https:` URL。
 - 在 `127.0.0.1` 暴露 Notification Host，驱动最多三个并发弹窗、系统未读角标与托盘标签；

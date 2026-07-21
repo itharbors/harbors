@@ -7,23 +7,24 @@ import {
   createFrameworkArgs,
   createKitWindowUrl,
   mergeMenuTrees,
+  initializeKitHost,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
   shutdownDesktopServices,
+  showKitChooser,
 } from './electron-launcher.mjs';
+import { createDevPages, createDevServerEnv } from './dev-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
 
-test('parses default multi-Kit mode and retained --kit single mode', () => {
-  assert.deepEqual(parseElectronOptions([]), { mode: 'multi', requestedKit: null });
+test('parses an optional requested Kit without creating a host mode', () => {
+  assert.deepEqual(parseElectronOptions([]), { requestedKit: null });
   assert.deepEqual(parseElectronOptions(['--kit', '@itharbors/kit-sqlite']), {
-    mode: 'single',
     requestedKit: '@itharbors/kit-sqlite',
   });
   assert.deepEqual(parseElectronOptions(['--kit=./kits/mysql']), {
-    mode: 'single',
     requestedKit: './kits/mysql',
   });
 });
@@ -34,7 +35,7 @@ test('rejects missing, duplicate and unknown Electron arguments', () => {
   assert.throws(() => parseElectronOptions(['--unknown']), /unknown Electron argument/i);
 });
 
-test('starts the Web stack without recursion and forwards single-Kit arguments', () => {
+test('starts the Web stack without recursion and forwards requested Kit arguments', () => {
   assert.deepEqual(createFrameworkArgs([]), ['run', 'dev:web']);
   assert.deepEqual(createFrameworkArgs(['--kit', './kits/sqlite']), [
     'run',
@@ -42,6 +43,33 @@ test('starts the Web stack without recursion and forwards single-Kit arguments',
     '--',
     '--kit',
     './kits/sqlite',
+  ]);
+});
+
+test('passes only an explicit requested Kit to the Web server without leaking stale host state', () => {
+  const base = { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' };
+
+  assert.deepEqual(createDevServerEnv(base, ''), {
+    PATH: '/bin',
+  });
+  assert.deepEqual(createDevServerEnv(base, '@itharbors/kit-mysql'), {
+    PATH: '/bin',
+    CE_DEFAULT_KIT: '@itharbors/kit-mysql',
+  });
+  assert.deepEqual(base, { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' });
+});
+
+test('always prints the chooser and adds an encoded requested Kit shortcut', () => {
+  assert.deepEqual(createDevPages(''), [
+    ['Kit chooser', '/'],
+    ['Layout Kit', '/?page=layout-kit'],
+    ['UI Kit', '/?page=ui-kit'],
+  ]);
+  assert.deepEqual(createDevPages('@itharbors/kit-mysql'), [
+    ['Kit chooser', '/'],
+    ['Requested Kit', '/?kit=%40itharbors%2Fkit-mysql'],
+    ['Layout Kit', '/?page=layout-kit'],
+    ['UI Kit', '/?page=ui-kit'],
   ]);
 });
 
@@ -53,12 +81,72 @@ test('keeps Electron as the default dev entry and Web as an explicit compatibili
   assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
 });
 
+test('uses visible PNG tray icon assets at standard and Retina densities', async () => {
+  const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.match(electronSource, /assets\/tray-icon\.png/);
+  assert.doesNotMatch(electronSource, /assets\/tray-icon\.svg/);
+
+  for (const [fileName, expectedSize] of [
+    ['tray-icon.png', 18],
+    ['tray-icon@2x.png', 36],
+  ]) {
+    const icon = await readFile(new URL(`../assets/${fileName}`, import.meta.url));
+    assert.deepEqual([...icon.subarray(0, 8)], [137, 80, 78, 71, 13, 10, 26, 10]);
+    assert.equal(icon.readUInt32BE(16), expectedSize);
+    assert.equal(icon.readUInt32BE(20), expectedSize);
+    assert.ok(icon.length > 100, `${fileName} must not be empty`);
+  }
+});
+
+test('initializes the Tray host without opening a default Kit', async () => {
+  const calls = [];
+  await initializeKitHost({ requestedKit: null }, {
+    createTray: async () => { calls.push('tray'); },
+    startFramework: () => { calls.push('framework'); },
+    registerIpc: () => { calls.push('ipc'); },
+    openKit: async (kitName) => { calls.push(`open:${kitName}`); },
+  });
+
+  assert.deepEqual(calls, ['tray', 'framework', 'ipc']);
+});
+
+test('opens only an explicitly requested Kit after host services start', async () => {
+  const calls = [];
+  await initializeKitHost({ requestedKit: '@itharbors/kit-sqlite' }, {
+    createTray: async () => { calls.push('tray'); },
+    startFramework: () => { calls.push('framework'); },
+    registerIpc: () => { calls.push('ipc'); },
+    openKit: async (kitName) => { calls.push(`open:${kitName}`); },
+  });
+
+  assert.deepEqual(calls, [
+    'tray',
+    'framework',
+    'ipc',
+    'open:@itharbors/kit-sqlite',
+  ]);
+});
+
+test('shows the Kit chooser without selecting a default Kit', () => {
+  let popupCount = 0;
+  const tray = {
+    isDestroyed: () => false,
+    popUpContextMenu: () => { popupCount += 1; },
+  };
+
+  assert.equal(showKitChooser(tray), true);
+  assert.equal(popupCount, 1);
+  assert.equal(showKitChooser(null), false);
+  assert.equal(showKitChooser({ isDestroyed: () => true }), false);
+});
+
 test('creates a per-Kit URL carrying stable session, Kit path and menu mode', () => {
+  assert.equal(createKitWindowUrl.length, 3);
   const url = new URL(createKitWindowUrl(
     'http://localhost:8080/?page=editor',
     { directory: '/repo/kits/sqlite' },
     { sessionId: 'sqlite session' },
-    'multi',
   ));
 
   assert.equal(url.origin, 'http://localhost:8080');
@@ -66,6 +154,14 @@ test('creates a per-Kit URL carrying stable session, Kit path and menu mode', ()
   assert.equal(url.searchParams.get('session'), 'sqlite session');
   assert.equal(url.searchParams.get('kit'), '/repo/kits/sqlite');
   assert.equal(url.searchParams.get('menuMode'), 'multi');
+});
+
+test('uses aggregate multi-Kit menus for every Electron window', async () => {
+  const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(electronSource, /electronOptions\?\.mode|electronOptions\.mode/);
+  assert.match(electronSource, /const template = buildMultiKitMenuTemplate\(/);
+  assert.match(electronSource, /requestedKit: resolveRequestedKitName\(/);
 });
 
 test('builds tray entries for available and persisted unavailable Kits', () => {
@@ -127,7 +223,7 @@ test('focuses an existing Kit window or creates a replacement', async () => {
   };
   const registry = new Map([['sqlite', existing]]);
 
-  const focused = await openOrFocusKitWindow('sqlite', registry, async () => {
+  const focused = await openOrFocusKitWindow('sqlite', registry, new Map(), async () => {
     throw new Error('must not create');
   });
 
@@ -141,18 +237,24 @@ test('focuses an existing Kit window or creates a replacement', async () => {
     show: () => calls.push('replacement-show'),
     focus: () => calls.push('replacement-focus'),
   };
-  const created = await openOrFocusKitWindow('sqlite', registry, async () => replacement);
+  const created = await openOrFocusKitWindow(
+    'sqlite',
+    registry,
+    new Map(),
+    async () => replacement,
+  );
 
   assert.equal(created, replacement);
   assert.equal(registry.get('sqlite'), replacement);
   assert.deepEqual(calls.slice(-2), ['replacement-show', 'replacement-focus']);
 });
 
-test('coalesces concurrent opens while a lazy Kit window is being created', async () => {
+test('deduplicates concurrent first opens of the same Kit', async () => {
   const registry = new Map();
-  let resolveCreate;
+  const pendingLoads = new Map();
   let createCount = 0;
-  const created = {
+  let finishCreate;
+  const createdWindow = {
     isDestroyed: () => false,
     isMinimized: () => false,
     show() {},
@@ -160,44 +262,52 @@ test('coalesces concurrent opens while a lazy Kit window is being created', asyn
   };
   const createWindow = async () => {
     createCount += 1;
-    await new Promise((resolve) => { resolveCreate = resolve; });
-    return created;
+    return new Promise((resolve) => { finishCreate = () => resolve(createdWindow); });
   };
 
-  const first = openOrFocusKitWindow('notifications', registry, createWindow);
-  const second = openOrFocusKitWindow('notifications', registry, createWindow);
-  await Promise.resolve();
-  resolveCreate();
-
-  assert.equal(await first, created);
-  assert.equal(await second, created);
+  const first = openOrFocusKitWindow('sqlite', registry, pendingLoads, createWindow);
+  const second = openOrFocusKitWindow('sqlite', registry, pendingLoads, createWindow);
   assert.equal(createCount, 1);
-  assert.equal(registry.get('notifications'), created);
+  assert.equal(pendingLoads.size, 1);
+
+  finishCreate();
+  const [firstWindow, secondWindow] = await Promise.all([first, second]);
+  assert.equal(firstWindow, createdWindow);
+  assert.equal(secondWindow, createdWindow);
+  assert.equal(registry.get('sqlite'), createdWindow);
+  assert.equal(pendingLoads.size, 0);
 });
 
-test('clears a failed lazy-open so the Kit can be retried', async () => {
+test('clears a failed Kit load so the next selection can retry', async () => {
   const registry = new Map();
-  const created = {
+  const pendingLoads = new Map();
+  let createCount = 0;
+  const createdWindow = {
     isDestroyed: () => false,
     isMinimized: () => false,
     show() {},
     focus() {},
   };
-  let attempts = 0;
-  const createWindow = async () => {
-    attempts += 1;
-    if (attempts === 1) throw new Error('window failed');
-    return created;
-  };
-
   await assert.rejects(
-    openOrFocusKitWindow('notifications', registry, createWindow),
-    /window failed/,
+    openOrFocusKitWindow('sqlite', registry, pendingLoads, async () => {
+      createCount += 1;
+      throw new Error('load failed');
+    }),
+    /load failed/,
   );
-  const retried = await openOrFocusKitWindow('notifications', registry, createWindow);
+  const retried = await openOrFocusKitWindow(
+    'sqlite',
+    registry,
+    pendingLoads,
+    async () => {
+      createCount += 1;
+      return createdWindow;
+    },
+  );
 
-  assert.equal(retried, created);
-  assert.equal(attempts, 2);
+  assert.equal(retried, createdWindow);
+  assert.equal(createCount, 2);
+  assert.equal(pendingLoads.size, 0);
 });
 
 test('stops the Framework before tearing down Electron-owned notification services', async () => {
@@ -299,7 +409,8 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
   assert.doesNotMatch(source, /prewarmKitWindows/);
-  assert.match(source, /await openKit\(kitCatalog\[0\]\.name\)/);
+  assert.match(source, /initializeKitHost/);
+  assert.doesNotMatch(source, /openKit\(kitCatalog\[0\]\.name\)/);
 
   const stopHost = source.indexOf('await notificationHost?.stop()');
   const unsubscribeStore = source.indexOf('notificationStoreUnsubscribe?.()');
