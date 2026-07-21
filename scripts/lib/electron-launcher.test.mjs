@@ -151,7 +151,7 @@ test('focuses an existing Kit window or creates a replacement', async () => {
   };
   const registry = new Map([['sqlite', existing]]);
 
-  const focused = await openOrFocusKitWindow('sqlite', registry, async () => {
+  const focused = await openOrFocusKitWindow('sqlite', registry, new Map(), async () => {
     throw new Error('must not create');
   });
 
@@ -165,11 +165,78 @@ test('focuses an existing Kit window or creates a replacement', async () => {
     show: () => calls.push('replacement-show'),
     focus: () => calls.push('replacement-focus'),
   };
-  const created = await openOrFocusKitWindow('sqlite', registry, async () => replacement);
+  const created = await openOrFocusKitWindow(
+    'sqlite',
+    registry,
+    new Map(),
+    async () => replacement,
+  );
 
   assert.equal(created, replacement);
   assert.equal(registry.get('sqlite'), replacement);
   assert.deepEqual(calls.slice(-2), ['replacement-show', 'replacement-focus']);
+});
+
+test('deduplicates concurrent first opens of the same Kit', async () => {
+  const registry = new Map();
+  const pendingLoads = new Map();
+  let createCount = 0;
+  let finishCreate;
+  const createdWindow = {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    show() {},
+    focus() {},
+  };
+  const createWindow = async () => {
+    createCount += 1;
+    return new Promise((resolve) => { finishCreate = () => resolve(createdWindow); });
+  };
+
+  const first = openOrFocusKitWindow('sqlite', registry, pendingLoads, createWindow);
+  const second = openOrFocusKitWindow('sqlite', registry, pendingLoads, createWindow);
+  assert.equal(createCount, 1);
+  assert.equal(pendingLoads.size, 1);
+
+  finishCreate();
+  const [firstWindow, secondWindow] = await Promise.all([first, second]);
+  assert.equal(firstWindow, createdWindow);
+  assert.equal(secondWindow, createdWindow);
+  assert.equal(registry.get('sqlite'), createdWindow);
+  assert.equal(pendingLoads.size, 0);
+});
+
+test('clears a failed Kit load so the next selection can retry', async () => {
+  const registry = new Map();
+  const pendingLoads = new Map();
+  let createCount = 0;
+  const createdWindow = {
+    isDestroyed: () => false,
+    isMinimized: () => false,
+    show() {},
+    focus() {},
+  };
+
+  await assert.rejects(
+    openOrFocusKitWindow('sqlite', registry, pendingLoads, async () => {
+      createCount += 1;
+      throw new Error('load failed');
+    }),
+    /load failed/,
+  );
+  const retried = await openOrFocusKitWindow(
+    'sqlite',
+    registry,
+    pendingLoads,
+    async () => {
+      createCount += 1;
+      return createdWindow;
+    },
+  );
+
+  assert.equal(retried, createdWindow);
+  assert.equal(createCount, 2);
+  assert.equal(pendingLoads.size, 0);
 });
 
 test('persists every live Kit window before the tray application quits', async () => {

@@ -87,11 +87,22 @@ export function buildTrayTemplate({ kits, workspaceRecords }, adapters) {
   ];
 }
 
-export async function openOrFocusKitWindow(kitName, registry, createWindow) {
+export async function openOrFocusKitWindow(kitName, registry, pendingLoads, createWindow) {
   let window = registry.get(kitName);
   if (!window || window.isDestroyed()) {
-    window = await createWindow(kitName);
-    registry.set(kitName, window);
+    let pending = pendingLoads.get(kitName);
+    if (!pending) {
+      pending = Promise.resolve(createWindow(kitName))
+        .then((createdWindow) => {
+          registry.set(kitName, createdWindow);
+          return createdWindow;
+        })
+        .finally(() => {
+          pendingLoads.delete(kitName);
+        });
+      pendingLoads.set(kitName, pending);
+    }
+    window = await pending;
   }
   if (window.isMinimized()) {
     window.restore();

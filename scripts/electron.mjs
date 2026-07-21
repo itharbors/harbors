@@ -32,6 +32,7 @@ let kitCatalog = [];
 let electronOptions;
 let quitting = false;
 const kitWindows = new Map();
+const kitWindowLoads = new Map();
 const sessionKits = new Map();
 const sessionMenus = new Map();
 const menuSyncWaiters = new Map();
@@ -252,14 +253,19 @@ async function createApplicationTray() {
 async function openKit(kitName) {
   try {
     await frameworkReadyPromise;
-    return await openOrFocusKitWindow(kitName, kitWindows, async () => {
-      const kit = kitCatalog.find((candidate) => candidate.name === kitName);
-      if (!kit) {
-        throw new Error(`Kit "${kitName}" is unavailable`);
-      }
-      const workspace = await workspaceStore.getOrCreate(kit);
-      return createKitWindow(kit, workspace);
-    });
+    return await openOrFocusKitWindow(
+      kitName,
+      kitWindows,
+      kitWindowLoads,
+      async () => {
+        const kit = kitCatalog.find((candidate) => candidate.name === kitName);
+        if (!kit) {
+          throw new Error(`Kit "${kitName}" is unavailable`);
+        }
+        const workspace = await workspaceStore.getOrCreate(kit);
+        return createKitWindow(kit, workspace);
+      },
+    );
   } catch (error) {
     console.error(`Failed to open Kit ${kitName}:`, error);
     return null;
