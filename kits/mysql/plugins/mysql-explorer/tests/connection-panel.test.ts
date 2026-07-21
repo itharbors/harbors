@@ -102,6 +102,25 @@ describe('MySQL connection panel', () => {
     });
   });
 
+  it('connects without relying on native form submission inside a sandboxed panel', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getConnectionState' ? disconnected : connection
+    ));
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    setValue('database', 'app');
+    const connectButton = document.querySelector('[data-action="connect"]') as HTMLButtonElement;
+    connectButton.addEventListener('click', (event) => event.preventDefault(), { capture: true });
+    connectButton.click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core',
+      'connect',
+      expect.objectContaining({ database: 'app' }),
+    ));
+  });
+
   it('clears the password immediately while a connection attempt is pending and after rejection', async () => {
     let resolveConnect: ((value: unknown) => void) | undefined;
     const pendingConnect = new Promise<unknown>((resolve) => { resolveConnect = resolve; });

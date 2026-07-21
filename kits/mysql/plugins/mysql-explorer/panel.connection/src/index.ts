@@ -224,7 +224,7 @@ function render(): void {
           ${field('password', '密码', form.password, 'password', 'current-password')}
           ${field('database', '数据库', form.database, 'text', 'off')}
           <label class="tls-field"><input data-field="tls" type="checkbox"${form.tls ? ' checked' : ''}><span>TLS</span></label>
-          <button class="primary-action" data-action="connect" type="submit">连接</button>
+          <button class="primary-action" data-action="connect" type="button">连接</button>
           <button data-action="disconnect" type="button"${connection.connected ? '' : ' disabled'}>断开连接</button>
           <button class="icon-action" data-action="refresh" type="button" aria-label="刷新数据库"${connection.connected ? '' : ' disabled'}>↻</button>
         </form>
@@ -235,10 +235,7 @@ function render(): void {
       </header>
     </main>`;
 
-  root.querySelector<HTMLFormElement>('[data-connection-form]')?.addEventListener('submit', (event) => {
-    event.preventDefault();
-    void connect();
-  });
+  root.querySelector('[data-action="connect"]')?.addEventListener('click', () => void connect());
   root.querySelector('[data-action="disconnect"]')?.addEventListener('click', () => void disconnect());
   root.querySelector('[data-action="refresh"]')?.addEventListener('click', () => void refreshObjects());
   for (const name of ['host', 'port', 'user', 'password', 'database'] as const) {
