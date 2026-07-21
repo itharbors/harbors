@@ -1,0 +1,4 @@
+interface:
+  display_name: "Notify User"
+  short_description: "Send desktop alerts when Agent work needs attention"
+  default_prompt: "Use $notify-user to send a desktop notification when this task needs attention."
