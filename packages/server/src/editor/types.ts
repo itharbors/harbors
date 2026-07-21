@@ -60,6 +60,34 @@ export interface PluginRuntime {
   };
 }
 
+export type ApplicationHostMode = 'desktop' | 'web';
+
+export interface ApplicationPluginRuntime {
+  plugin: PluginRuntime['plugin'];
+  menu: Pick<PluginRuntime['menu'], 'attach' | 'detach' | 'reset' | 'getState'>;
+  message: PluginRuntime['message'];
+  service: {
+    register(name: string, value: unknown): void;
+    unregister(name: string): void;
+    get<T = unknown>(name: string): T | undefined;
+  };
+  host: Readonly<{
+    mode: ApplicationHostMode;
+  }>;
+}
+
+export interface ApplicationPluginRuntimeHost {
+  plugin: PluginRuntime['plugin'];
+  menu: ApplicationPluginRuntime['menu'];
+  message: PluginRuntime['message'];
+  service: {
+    register(owner: string, name: string, value: unknown): void;
+    unregister(owner: string, name: string): void;
+    get<T = unknown>(name: string): T | undefined;
+  };
+  host: ApplicationPluginRuntime['host'];
+}
+
 export interface PanelRuntime {
   readonly sessionId: string;
   panelKey: string;
@@ -150,6 +178,10 @@ export interface Editor {
 export type PluginRuntimeHost = Omit<Editor, 'menu'> & {
   menu: PluginRuntime['menu'];
 };
+
+export type PluginLoadOptions =
+  | { scope: 'session'; host: PluginRuntimeHost }
+  | { scope: 'application'; host: ApplicationPluginRuntimeHost };
 
 export interface BrowserEditor {
   readonly sessionId: string;

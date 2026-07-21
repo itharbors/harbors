@@ -5,7 +5,13 @@ import type {
   PluginKind,
   PluginModule as LoadedPluginModule,
 } from './types';
-import type { PluginRuntime, PluginRuntimeHost } from '../../editor/types';
+import type {
+  ApplicationPluginRuntime,
+  ApplicationPluginRuntimeHost,
+  PluginLoadOptions,
+  PluginRuntime,
+  PluginRuntimeHost,
+} from '../../editor/types';
 import { PluginStatus } from './types';
 import { Plugin } from './plugin';
 import { existsSync, statSync } from 'node:fs';
@@ -126,7 +132,10 @@ export class PluginModule {
     this.pathMap.set(absPath, new Plugin(info));
   }
 
-  async load(pluginPath: string, editor?: PluginRuntimeHost): Promise<void> {
+  async load(
+    pluginPath: string,
+    runtimeInput?: PluginRuntimeHost | PluginLoadOptions,
+  ): Promise<void> {
     const absPath = path.resolve(pluginPath);
     const registeredPlugin = this.pathMap.get(absPath);
     if (!registeredPlugin) {
@@ -149,9 +158,12 @@ export class PluginModule {
     const entryPath = resolveLoadEntryPath(absPath, registeredPlugin.info.entry);
 
     let definition: LoadedPluginModule['definition'];
-    const runtimeEditor = editor
-      ? createPluginRuntime(editor, registeredPlugin.name)
-      : undefined;
+    const runtimeOptions = normalizeLoadOptions(runtimeInput);
+    const runtimeEditor = runtimeOptions?.scope === 'application'
+      ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
+      : runtimeOptions?.scope === 'session'
+        ? createPluginRuntime(runtimeOptions.host, registeredPlugin.name)
+        : undefined;
 
     if (runtimeEditor) {
       runtimeEditor.plugin.define = (nextDefinition) => {
@@ -164,7 +176,9 @@ export class PluginModule {
 
     try {
       await withPluginDefinitionLock(async () => {
-        const globalScope = globalThis as typeof globalThis & { editor?: PluginRuntime };
+        const globalScope = globalThis as typeof globalThis & {
+          editor?: PluginRuntime | ApplicationPluginRuntime;
+        };
         const previousEditor = globalScope.editor;
         if (runtimeEditor) {
           globalScope.editor = runtimeEditor;
@@ -200,7 +214,7 @@ export class PluginModule {
 
     try {
       if (definition.lifecycle?.load) {
-        await definition.lifecycle.load(runtimeEditor as PluginRuntime);
+        await definition.lifecycle.load(runtimeEditor as PluginRuntime | ApplicationPluginRuntime);
       }
 
       for (const otherPlugin of this.nameMap.values()) {
@@ -308,6 +322,14 @@ export class PluginModule {
   }
 }
 
+function normalizeLoadOptions(
+  input: PluginRuntimeHost | PluginLoadOptions | undefined,
+): PluginLoadOptions | undefined {
+  if (!input) return undefined;
+  if ('scope' in input && 'host' in input) return input;
+  return { scope: 'session', host: input };
+}
+
 function createPluginRuntime(
   editor: PluginRuntimeHost,
   ownerName: string,
@@ -370,6 +392,73 @@ function createPluginRuntime(
         editor.message.broadcast(topic, ...args),
     },
   };
+}
+
+function createApplicationPluginRuntime(
+  application: ApplicationPluginRuntimeHost,
+  ownerName: string,
+): ApplicationPluginRuntime {
+  return {
+    plugin: {
+      define: application.plugin.define,
+      getInfo: application.plugin.getInfo,
+      listLoaded: application.plugin.listLoaded,
+      listRegistered: application.plugin.listRegistered,
+      callPlugin: application.plugin.callPlugin,
+    },
+    menu: {
+      attach: (pluginName, contribute) =>
+        application.menu.attach(resolveOwner(pluginName, ownerName, MENU_OWNER), contribute),
+      detach: (pluginName) =>
+        application.menu.detach(resolveOwner(pluginName, ownerName, MENU_OWNER)),
+      reset: () => application.menu.reset(),
+      getState: () => application.menu.getState(),
+    },
+    message: {
+      registerRequest: (pluginName, name, handler, location, methods) => {
+        assertApplicationMessageRoute(ownerName, location, methods);
+        application.message.registerRequest(
+          resolveOwner(pluginName, ownerName, MESSAGE_OWNER),
+          name,
+          handler,
+          'server',
+          methods,
+        );
+      },
+      registerBroadcast: (pluginName, topic, handler, location, methods) => {
+        assertApplicationMessageRoute(ownerName, location, methods);
+        application.message.registerBroadcast(
+          resolveOwner(pluginName, ownerName, MESSAGE_OWNER),
+          topic,
+          handler,
+          'server',
+          methods,
+        );
+      },
+      unregisterRequest: (pluginName, name) =>
+        application.message.unregisterRequest(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), name),
+      unregisterBroadcast: (pluginName, topic) =>
+        application.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic),
+      request: (pluginName, name, ...args) => application.message.request(pluginName, name, ...args),
+      broadcast: (topic, ...args) => application.message.broadcast(topic, ...args),
+    },
+    service: {
+      register: (name, value) => application.service.register(ownerName, name, value),
+      unregister: (name) => application.service.unregister(ownerName, name),
+      get: (name) => application.service.get(name),
+    },
+    host: Object.freeze({ ...application.host }),
+  };
+}
+
+function assertApplicationMessageRoute(
+  ownerName: string,
+  location: import('../message/types').MessageLocation | undefined,
+  methods: string[] | undefined,
+): void {
+  if ((location && location !== 'server') || methods?.some((method) => method.startsWith('panel.'))) {
+    throw new Error(`Application plugin "${ownerName}" can register only server message routes`);
+  }
 }
 
 function resolveOwner(requestedOwner: string, runtimeOwner: string, delegateOwner: string): string {
