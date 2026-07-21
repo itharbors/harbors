@@ -42,6 +42,21 @@ export function createFrameworkArgs(args) {
   ];
 }
 
+export async function initializeKitHost(options, adapters) {
+  await adapters.createTray();
+  adapters.startFramework();
+  adapters.registerIpc();
+  if (options.requestedKit) {
+    await adapters.openKit(options.requestedKit);
+  }
+}
+
+export function showKitChooser(tray) {
+  if (!tray || tray.isDestroyed?.()) return false;
+  tray.popUpContextMenu();
+  return true;
+}
+
 export function createKitWindowUrl(startUrl, kit, workspace, mode) {
   const url = new URL(startUrl);
   url.searchParams.set('session', workspace.sessionId);

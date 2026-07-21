@@ -8,10 +8,12 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
+  initializeKitHost,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
+  showKitChooser,
 } from './lib/electron-launcher.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
 
@@ -23,6 +25,7 @@ const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPo
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
 
 let frameworkProcess;
+let frameworkReadyPromise;
 let tray;
 let workspaceStore;
 let kitCatalog = [];
@@ -152,12 +155,15 @@ function startElectronApp() {
         throw new Error('No valid Kits were discovered');
       }
       workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
-      frameworkProcess = startFramework();
-      await waitForUrl(startUrl);
-      registerMenuIpc();
-      registerOpenExternalUrlIpc();
-      await prewarmKitWindows();
-      await createApplicationTray();
+      await initializeKitHost(electronOptions, {
+        createTray: createApplicationTray,
+        startFramework: startFrameworkAndTrackReadiness,
+        registerIpc() {
+          registerMenuIpc();
+          registerOpenExternalUrlIpc();
+        },
+        openKit,
+      });
     })
     .catch((error) => {
       console.error(error.message);
@@ -172,11 +178,8 @@ function startElectronApp() {
     // The tray owns the application lifecycle; closing a Kit window keeps its runtime alive.
   });
 
-  app.on('activate', async () => {
-    const defaultKit = kitCatalog[0];
-    if (defaultKit) {
-      await openKit(defaultKit.name);
-    }
+  app.on('activate', () => {
+    showKitChooser(tray);
   });
 
   app.on('before-quit', (event) => {
@@ -222,27 +225,13 @@ function startFramework() {
   return child;
 }
 
-async function prewarmKitWindows() {
-  const results = await Promise.allSettled(kitCatalog.map(async (kit) => {
-    const workspace = await workspaceStore.getOrCreate(kit);
-    const window = await createKitWindow(kit, workspace);
-    kitWindows.set(kit.name, window);
-    return { kit, window };
-  }));
-
-  let visibleWindow = null;
-  results.forEach((result, index) => {
-    if (result.status === 'fulfilled') {
-      visibleWindow ??= result.value.window;
-      return;
-    }
-    console.error(`Failed to open Kit ${kitCatalog[index].name}:`, result.reason);
+function startFrameworkAndTrackReadiness() {
+  frameworkProcess = startFramework();
+  frameworkReadyPromise = waitForUrl(startUrl);
+  void frameworkReadyPromise.catch((error) => {
+    console.error(error.message);
+    app.quit();
   });
-
-  if (visibleWindow) {
-    visibleWindow.show();
-    visibleWindow.focus();
-  }
 }
 
 async function createApplicationTray() {
@@ -257,13 +246,12 @@ async function createApplicationTray() {
   });
   const contextMenu = Menu.buildFromTemplate(template);
   tray.setContextMenu(contextMenu);
-  if (process.platform === 'darwin') {
-    tray.on('click', () => tray?.popUpContextMenu(contextMenu));
-  }
+  tray.on('click', () => showKitChooser(tray));
 }
 
 async function openKit(kitName) {
   try {
+    await frameworkReadyPromise;
     return await openOrFocusKitWindow(kitName, kitWindows, async () => {
       const kit = kitCatalog.find((candidate) => candidate.name === kitName);
       if (!kit) {

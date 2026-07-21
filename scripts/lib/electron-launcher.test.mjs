@@ -6,10 +6,12 @@ import {
   buildTrayTemplate,
   createFrameworkArgs,
   createKitWindowUrl,
+  initializeKitHost,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
+  showKitChooser,
 } from './electron-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
@@ -49,6 +51,48 @@ test('keeps Electron as the default dev entry and Web as an explicit compatibili
   assert.equal(packageJson.scripts.dev, 'npm run electron --');
   assert.equal(packageJson.scripts['dev:web'], 'node scripts/dev.mjs');
   assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
+});
+
+test('initializes the Tray host without opening a default Kit', async () => {
+  const calls = [];
+  await initializeKitHost({ mode: 'multi', requestedKit: null }, {
+    createTray: async () => { calls.push('tray'); },
+    startFramework: () => { calls.push('framework'); },
+    registerIpc: () => { calls.push('ipc'); },
+    openKit: async (kitName) => { calls.push(`open:${kitName}`); },
+  });
+
+  assert.deepEqual(calls, ['tray', 'framework', 'ipc']);
+});
+
+test('opens only an explicitly requested Kit after host services start', async () => {
+  const calls = [];
+  await initializeKitHost({ mode: 'single', requestedKit: '@itharbors/kit-sqlite' }, {
+    createTray: async () => { calls.push('tray'); },
+    startFramework: () => { calls.push('framework'); },
+    registerIpc: () => { calls.push('ipc'); },
+    openKit: async (kitName) => { calls.push(`open:${kitName}`); },
+  });
+
+  assert.deepEqual(calls, [
+    'tray',
+    'framework',
+    'ipc',
+    'open:@itharbors/kit-sqlite',
+  ]);
+});
+
+test('shows the Kit chooser without selecting a default Kit', () => {
+  let popupCount = 0;
+  const tray = {
+    isDestroyed: () => false,
+    popUpContextMenu: () => { popupCount += 1; },
+  };
+
+  assert.equal(showKitChooser(tray), true);
+  assert.equal(popupCount, 1);
+  assert.equal(showKitChooser(null), false);
+  assert.equal(showKitChooser({ isDestroyed: () => true }), false);
 });
 
 test('creates a per-Kit URL carrying stable session, Kit path and menu mode', () => {
