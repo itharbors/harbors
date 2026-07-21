@@ -58,6 +58,12 @@ describe('SQLite core plugin main', () => {
       'undoLastMutation',
       'updateRow',
     ]);
+    const pluginPackage = JSON.parse(
+      fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { 'ce-editor': { contribute: { message: { request: Record<string, string[]> } } } };
+    expect(pluginPackage['ce-editor'].contribute.message.request.getDefaultDirectory).toEqual([
+      'getDefaultDirectory',
+    ]);
 
     const broadcast = vi.fn();
     definition!.lifecycle?.load?.({ message: { broadcast } });
