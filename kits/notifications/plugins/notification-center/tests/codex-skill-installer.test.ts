@@ -1,7 +1,6 @@
 import {
   cp,
   copyFile,
-  lstat,
   mkdtemp,
   mkdir,
   readFile,
@@ -331,28 +330,117 @@ describe('Codex Skill installer', () => {
       .rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('never commits a symlink inserted into staging at the final rename boundary', async () => {
+  it('revalidates the skills parent after exclusively creating the destination', async () => {
     const root = await createTempRoot();
     const sourceDir = path.join(root, 'bundled', 'notify-user');
     const codexHome = path.join(root, 'codex-home');
-    let renameCalls = 0;
+    const skillsDir = path.join(codexHome, 'skills');
+    const movedSkillsDir = path.join(codexHome, 'moved-skills');
+    const destination = path.join(skillsDir, 'notify-user');
     await writeSkillSource(sourceDir, 'bundled');
     const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
-      async rename(from, to) {
-        renameCalls += 1;
-        await rm(path.join(String(from), 'scripts', 'notify.mjs'));
-        await symlink(path.join(String(from), 'SKILL.md'), path.join(String(from), 'scripts', 'notify.mjs'));
-        await rename(from, to);
+      async mkdir(target, options) {
+        if (String(target) === destination) {
+          await rename(skillsDir, movedSkillsDir);
+          await symlink(movedSkillsDir, skillsDir);
+        }
+        await mkdir(target, options);
       },
     });
 
-    const installed = await installer.install();
+    await expect(installer.install()).rejects.toMatchObject({ code: 'SKILL_UNSAFE_PATH' });
+    await expect(readFile(path.join(movedSkillsDir, 'notify-user', 'SKILL.md'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
 
-    expect(installed.status).toBe('installed');
-    expect(renameCalls).toBe(0);
-    expect((await lstat(path.join(installed.destination, 'scripts', 'notify.mjs'))).isFile()).toBe(true);
+  it('rejects a symlink inserted into staging at the final copy boundary', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    let insertedLink = false;
+    await writeSkillSource(sourceDir, 'bundled');
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async copyFile(from, to, mode) {
+        if (!insertedLink && String(from).endsWith(path.join('scripts', 'notify.mjs'))) {
+          insertedLink = true;
+          await rm(from);
+          await symlink(path.join(String(from), '..', '..', 'SKILL.md'), from);
+        }
+        await copyFile(from, to, mode);
+      },
+    });
+
+    await expect(installer.install()).rejects.toMatchObject({ code: 'SKILL_SOURCE_INVALID' });
+    await expect(readFile(path.join(codexHome, 'skills', 'notify-user', 'SKILL.md'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('quarantines a partial update and restores the previous version when cleanup fails', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    await writeSkillSource(sourceDir, 'initial');
+    const initial = await createCodexSkillInstaller({ sourceDir, codexHome }).install();
+    await writeSkillSource(sourceDir, 'updated');
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async copyFile(from, to, mode) {
+        if (String(from).endsWith(path.join('scripts', 'notify.mjs'))) {
+          const error = new Error('simulated publish failure') as NodeJS.ErrnoException;
+          error.code = 'EIO';
+          throw error;
+        }
+        await copyFile(from, to, mode);
+      },
+      async rm(target, options) {
+        if (String(target) === initial.destination) {
+          const error = new Error('simulated partial cleanup failure') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          throw error;
+        }
+        await rm(target, options);
+      },
+    });
+
+    await expect(installer.install()).rejects.toThrow('simulated publish failure');
+    await expect(readFile(path.join(initial.destination, 'SKILL.md'), 'utf8'))
+      .resolves.toContain('description: initial');
+    const entries = await listAllEntries(path.join(codexHome, 'skills'));
+    expect(entries.some((entry) => entry.startsWith('.notify-user-partial-'))).toBe(true);
+  });
+
+  it('quarantines a partial first install so a later retry is not blocked', async () => {
+    const root = await createTempRoot();
+    const sourceDir = path.join(root, 'bundled', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    const destination = path.join(codexHome, 'skills', 'notify-user');
+    await writeSkillSource(sourceDir, 'bundled');
+    const installer = createCodexSkillInstaller({ sourceDir, codexHome }, {
+      async copyFile(from, to, mode) {
+        if (String(from).endsWith(path.join('scripts', 'notify.mjs'))) {
+          const error = new Error('simulated first publish failure') as NodeJS.ErrnoException;
+          error.code = 'EIO';
+          throw error;
+        }
+        await copyFile(from, to, mode);
+      },
+      async rm(target, options) {
+        if (String(target) === destination) {
+          const error = new Error('simulated first cleanup failure') as NodeJS.ErrnoException;
+          error.code = 'EACCES';
+          throw error;
+        }
+        await rm(target, options);
+      },
+    });
+
+    await expect(installer.install()).rejects.toThrow('simulated first publish failure');
+    await expect(readFile(path.join(destination, 'SKILL.md'), 'utf8'))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+    const entries = await listAllEntries(path.join(codexHome, 'skills'));
+    expect(entries.some((entry) => entry.startsWith('.notify-user-partial-'))).toBe(true);
   });
 });
+
 
 async function createTempRoot() {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-skill-installer-'));
@@ -377,9 +465,13 @@ async function readMarker(destination: string) {
 }
 
 async function listInstallerArtifacts(parent: string) {
-  const { readdir } = await import('node:fs/promises');
-  const entries = await readdir(parent);
+  const entries = await listAllEntries(parent);
   return entries.filter((entry) => (
     entry.startsWith('.notify-user-install-') || entry.startsWith('.notify-user-backup-')
   ));
+}
+
+async function listAllEntries(parent: string) {
+  const { readdir } = await import('node:fs/promises');
+  return readdir(parent);
 }

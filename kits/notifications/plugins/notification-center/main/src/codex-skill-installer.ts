@@ -164,8 +164,12 @@ async function installCodexSkill({
     await commitStagedSkill({
       stagingDir,
       destination,
+      digest,
+      parentDir,
+      parentIdentity,
       copyFileEntry,
       createDirectory,
+      renameEntry,
       removeEntry,
     });
   } finally {
@@ -342,8 +346,12 @@ async function updateManagedSkill({
       await commitStagedSkill({
         stagingDir,
         destination,
+        digest,
+        parentDir,
+        parentIdentity,
         copyFileEntry,
         createDirectory,
+        renameEntry,
         removeEntry,
       });
     } catch (error) {
@@ -361,14 +369,22 @@ async function updateManagedSkill({
 async function commitStagedSkill({
   stagingDir,
   destination,
+  digest,
+  parentDir,
+  parentIdentity,
   copyFileEntry,
   createDirectory,
+  renameEntry,
   removeEntry,
 }: {
   stagingDir: string;
   destination: string;
+  digest: string;
+  parentDir: string;
+  parentIdentity: { dev: number; ino: number };
   copyFileEntry: typeof copyFile;
   createDirectory: typeof mkdir;
+  renameEntry: typeof rename;
   removeEntry: typeof rm;
 }) {
   try {
@@ -384,6 +400,7 @@ async function commitStagedSkill({
   }
 
   try {
+    await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
     await copyStagedEntries({
       sourceDir: stagingDir,
       destinationDir: destination,
@@ -391,6 +408,7 @@ async function commitStagedSkill({
       createDirectory,
       deferRootFiles: new Set(['SKILL.md', MARKER_FILE]),
     });
+    await assertStagedSkillIntegrity(stagingDir, digest);
     for (const name of ['SKILL.md', MARKER_FILE]) {
       await copyFileEntry(
         path.join(stagingDir, name),
@@ -398,10 +416,49 @@ async function commitStagedSkill({
         fsConstants.COPYFILE_EXCL,
       );
     }
+    await assertStagedSkillIntegrity(stagingDir, digest);
+    await assertDirectoryIdentity(parentDir, parentIdentity, 'Codex skills directory');
   } catch (error) {
-    await removeEntry(destination, { recursive: true, force: true }).catch(() => undefined);
+    try {
+      await removeEntry(destination, { recursive: true, force: true });
+    } catch (cleanupError) {
+      const partialDir = path.join(parentDir, `.notify-user-partial-${randomUUID()}`);
+      try {
+        await renameEntry(destination, partialDir);
+      } catch (quarantineError) {
+        throw new AggregateError(
+          [error, cleanupError, quarantineError],
+          `Skill publication failed and a partial installation remains at ${destination}`,
+        );
+      }
+      throw new AggregateError(
+        [error, cleanupError],
+        `Skill publication failed: ${errorMessage(error)}; partial data was retained at ${partialDir}`,
+      );
+    }
     throw error;
   }
+}
+
+async function assertStagedSkillIntegrity(stagingDir: string, expectedDigest: string) {
+  await assertNoSymlinks(stagingDir, stagingDir, 'SKILL_SOURCE_INVALID');
+  if (await digestDirectory(stagingDir) !== expectedDigest) {
+    throw new CodexSkillInstallError(
+      'SKILL_SOURCE_INVALID',
+      'Staged Skill changed while it was being published',
+    );
+  }
+  const marker = await readManagedMarker(stagingDir);
+  if (marker?.digest !== expectedDigest) {
+    throw new CodexSkillInstallError(
+      'SKILL_SOURCE_INVALID',
+      'Staged Skill management metadata changed while it was being published',
+    );
+  }
+}
+
+function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function copyStagedEntries({
