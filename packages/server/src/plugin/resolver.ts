@@ -97,7 +97,7 @@ async function findPluginInDir(name: string, pluginsDir: string): Promise<string
     try {
       const pkg = JSON.parse(await readFile(pkgPath, 'utf-8'));
       if (pkg.name === name && pkg['ce-editor']) {
-        return path.join(pluginsDir, entry);
+        return fs.promises.realpath(path.join(pluginsDir, entry));
       }
     } catch {
       continue;

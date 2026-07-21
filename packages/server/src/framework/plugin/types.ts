@@ -37,7 +37,7 @@ export interface PluginInfo {
 }
 
 export interface PluginLifecycle {
-  load?(ctx: import('../../editor/types').PluginRuntime): void | Promise<void>;
+  load?(ctx: import('../../editor/types').PluginRuntime | import('../../editor/types').ApplicationPluginRuntime): void | Promise<void>;
   unload?(): void | Promise<void>;
   attach?(pluginName: string, contribute: ContributeData): void | Promise<void>;
   detach?(pluginName: string): void | Promise<void>;

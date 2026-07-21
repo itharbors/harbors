@@ -1,3 +1,5 @@
+import { formatNotificationKitLabel } from './notification-desktop.mjs';
+
 export function parseElectronOptions(args) {
   let requestedKit = null;
 
@@ -42,7 +44,7 @@ export function createFrameworkArgs(args) {
 
 export async function initializeKitHost(options, adapters) {
   await adapters.createTray();
-  adapters.startFramework();
+  await adapters.startFramework();
   adapters.registerIpc();
   if (options.requestedKit) {
     await adapters.openKit(options.requestedKit);
@@ -63,10 +65,17 @@ export function createKitWindowUrl(startUrl, kit, workspace) {
   return url.href;
 }
 
-export function buildTrayTemplate({ kits, workspaceRecords }, adapters) {
+export function buildTrayTemplate({
+  kits,
+  workspaceRecords,
+  unreadCount = 0,
+  notificationKitName = null,
+}, adapters) {
   const availableNames = new Set(kits.map((kit) => kit.name));
   const availableEntries = kits.map((kit) => ({
-    label: kit.label,
+    label: kit.name === notificationKitName
+      ? formatNotificationKitLabel(kit.label, unreadCount)
+      : kit.label,
     enabled: true,
     click: () => adapters.openKit(kit.name),
   }));
@@ -110,6 +119,21 @@ export async function openOrFocusKitWindow(kitName, registry, pendingLoads, crea
   return window;
 }
 
+export async function shutdownDesktopServices({
+  persistWorkspace,
+  stopFramework,
+  stopNotificationService,
+}) {
+  const frameworkResults = await Promise.allSettled([
+    persistWorkspace(),
+    stopFramework(),
+  ]);
+  const notificationResults = await Promise.allSettled([
+    stopNotificationService(),
+  ]);
+  return [...frameworkResults, ...notificationResults];
+}
+
 export async function persistOpenWindowBounds(registry, workspaceStore) {
   const results = await Promise.allSettled(Array.from(registry.entries()).map(([kitName, window]) => {
     if (window.isDestroyed()) return undefined;
@@ -132,4 +156,19 @@ export function selectMenuWindow(focusedWindow, sourceWindow, windowSessions) {
     return focusedWindow;
   }
   return sourceWindow;
+}
+
+export function mergeMenuTrees(primary, secondary) {
+  const merged = structuredClone(Array.isArray(primary) ? primary : []);
+  for (const sourceNode of Array.isArray(secondary) ? secondary : []) {
+    const existing = merged.find((node) => (
+      node.type === 'menu' && sourceNode.type === 'menu' && node.id === sourceNode.id
+    ));
+    if (!existing) {
+      merged.push(structuredClone(sourceNode));
+      continue;
+    }
+    existing.children = mergeMenuTrees(existing.children, sourceNode.children);
+  }
+  return merged;
 }

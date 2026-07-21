@@ -47,6 +47,11 @@ Kit package 的核心结构：
         "main": "main.html",
         "secondary": "secondary.html"
       },
+      "startup": {
+        "plugins": [
+          "@itharbors/background-service"
+        ]
+      },
       "plugin": [
         "@itharbors/log",
         "@itharbors/plugin-list"
@@ -65,7 +70,9 @@ Kit package 的核心结构：
 - `menuRoot.id` 和 `menuRoot.label` 必须是非空字符串；目录内 root id 必须唯一。
 - `layouts` 必须是对象且包含 `default`。
 - `windowEntries.main` 与 `secondary` 必须是非空字符串。
+- `startup.plugins` 缺省为空数组，只允许唯一非空 package name。
 - `plugin` 缺省为空数组。
+- 同一 package name 不能同时出现在 `startup.plugins` 与 `plugin`。
 - theme key 使用 `--ce-*` token。
 
 ## Kit 解析
@@ -93,6 +100,25 @@ Kit 选择器生成的新浏览器 session 与 Electron Workspace session 采用
 状态；URL 中后续出现的其他 Kit 参数不会触发隐式切换。
 
 ## 插件范围
+
+### 应用启动插件
+
+Server 启动时创建一个无 Session 的 ApplicationRuntime，收集完整 Catalog 中全部 Kit 的
+`startup.plugins`。`--kit` 只是窗口直达快捷方式，不会缩减这份启动插件目录。相同 name 和
+真实路径只加载一次，相同 name 解析到不同路径时
+拒绝冲突插件。ApplicationRuntime 维护独立全局菜单，并通过以下协议供 Electron 使用：
+
+- `GET /api/application/bootstrap`；
+- `POST /api/application/menu/trigger`；
+- `GET /sse/application`。
+
+两个读取接口只公开启动状态和菜单快照。菜单触发属于桌面控制面：Electron 每次启动生成随机
+令牌并通过请求头提交，Server 拒绝无令牌、带浏览器 `Origin` 或非 JSON 的写请求；Electron
+启动的 Gateway 与 Server 同时只绑定 `127.0.0.1`。
+
+启动插件失败会按 owner 回滚并令 phase 变为 `degraded`，不会创建 Session 或阻止普通 Kit。
+应用退出时先停止接收新请求，再按逆序卸载启动插件；Electron 等待 Framework 完成退出后才
+关闭通知 Host 等桌面服务。
 
 ### 内置插件
 
