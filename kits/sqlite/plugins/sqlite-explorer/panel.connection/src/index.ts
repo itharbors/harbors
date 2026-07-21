@@ -153,7 +153,7 @@ async function openFileBrowser(mode: FileDialog['mode'], openerAction: string): 
   await runAction(async (token) => {
     const recentPaths = await requestCore<string[]>('getRecentDatabases');
     if (!isCurrentActionResult(token)) return;
-    const initialPath = recentPaths[0]?.replace(/[\\/][^\\/]+$/, '')
+    const initialPath = (recentPaths[0] ? databaseDirectory(recentPaths[0]) : null)
       || await requestCore<string>('getDefaultDirectory');
     if (!isCurrentActionResult(token)) return;
     const listing = await listDirectory(initialPath, false);
@@ -171,6 +171,16 @@ async function openFileBrowser(mode: FileDialog['mode'], openerAction: string): 
     writeDialog = false;
     setModalOpen(true);
   });
+}
+
+function databaseDirectory(databasePath: string): string | null {
+  const separatorIndex = Math.max(databasePath.lastIndexOf('/'), databasePath.lastIndexOf('\\'));
+  if (separatorIndex < 0) return null;
+  if (separatorIndex === 0) return databasePath.slice(0, 1);
+  if (separatorIndex === 2 && /^[A-Za-z]:[\\/]/.test(databasePath)) {
+    return databasePath.slice(0, 3);
+  }
+  return databasePath.slice(0, separatorIndex);
 }
 
 async function browseDirectory(path: string): Promise<void> {

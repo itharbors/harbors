@@ -165,6 +165,30 @@ describe('SQLite connection panel', () => {
     });
   });
 
+  it.each([
+    ['/demo.sqlite', '/'],
+    ['C:\\demo.sqlite', 'C:\\'],
+  ])('preserves the root directory for a recent database at %s', async (recentPath, expectedDirectory) => {
+    const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
+      if (plugin === '@itharbors/sqlite-core' && method === 'getConnectionState') return disconnected;
+      if (plugin === '@itharbors/sqlite-core' && method === 'getRecentDatabases') return [recentPath];
+      if (plugin === '@itharbors/sqlite-core' && method === 'getDefaultDirectory') return '/Users/demo';
+      if (plugin === '@itharbors/sqlite-core' && method === 'listDirectory') {
+        const directory = (input as { path: string }).path;
+        return { currentPath: directory, parentPath: null, entries: [] };
+      }
+      throw new Error(`Unexpected request ${plugin}:${method}:${JSON.stringify(input)}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { setModalOpen: vi.fn() } });
+
+    (document.querySelector('[data-action="browse-open"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/sqlite-core', 'listDirectory', { path: expectedDirectory, showAll: false },
+    ));
+  });
+
   it('ignores late file-browser work after unmount and remount', async () => {
     let resolveRecent: ((paths: string[]) => void) | undefined;
     const pendingRecent = new Promise<string[]>((resolve) => { resolveRecent = resolve; });
