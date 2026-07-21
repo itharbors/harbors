@@ -8,6 +8,7 @@ import {
   createKitWindowUrl,
   openOrFocusKitWindow,
   parseElectronOptions,
+  persistOpenWindowBounds,
 } from './electron-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
@@ -124,4 +125,21 @@ test('focuses an existing Kit window or creates a replacement', async () => {
   assert.equal(created, replacement);
   assert.equal(registry.get('sqlite'), replacement);
   assert.deepEqual(calls.slice(-2), ['replacement-show', 'replacement-focus']);
+});
+
+test('persists every live Kit window before the tray application quits', async () => {
+  const updates = [];
+  const windows = new Map([
+    ['sqlite', { isDestroyed: () => false, getBounds: () => ({ x: 1, y: 2, width: 800, height: 600 }) }],
+    ['removed', { isDestroyed: () => true, getBounds: () => ({ width: 1, height: 1 }) }],
+  ]);
+
+  await persistOpenWindowBounds(windows, {
+    updateBounds: async (kitName, bounds) => { updates.push({ kitName, bounds }); },
+  });
+
+  assert.deepEqual(updates, [{
+    kitName: 'sqlite',
+    bounds: { x: 1, y: 2, width: 800, height: 600 },
+  }]);
 });

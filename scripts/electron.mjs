@@ -10,6 +10,7 @@ import {
   createKitWindowUrl,
   openOrFocusKitWindow,
   parseElectronOptions,
+  persistOpenWindowBounds,
 } from './lib/electron-launcher.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
 
@@ -177,8 +178,18 @@ function startElectronApp() {
     }
   });
 
-  app.on('before-quit', () => {
-    quitting = true;
+  app.on('before-quit', (event) => {
+    if (!quitting) {
+      event.preventDefault();
+      quitting = true;
+      const persist = workspaceStore
+        ? persistOpenWindowBounds(kitWindows, workspaceStore)
+        : Promise.resolve();
+      void persist
+        .catch((error) => console.error('Failed to persist window bounds before quit:', error))
+        .finally(() => app.quit());
+      return;
+    }
     tray?.destroy();
     tray = undefined;
     unregisterMenuIpc();

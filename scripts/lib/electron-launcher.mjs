@@ -85,3 +85,16 @@ export async function openOrFocusKitWindow(kitName, registry, createWindow) {
   window.focus();
   return window;
 }
+
+export async function persistOpenWindowBounds(registry, workspaceStore) {
+  const results = await Promise.allSettled(Array.from(registry.entries()).map(([kitName, window]) => {
+    if (window.isDestroyed()) return undefined;
+    return workspaceStore.updateBounds(kitName, window.getBounds());
+  }));
+  const errors = results.flatMap((result) => (
+    result.status === 'rejected' ? [result.reason] : []
+  ));
+  if (errors.length > 0) {
+    throw new AggregateError(errors, 'Failed to persist Kit window bounds');
+  }
+}
