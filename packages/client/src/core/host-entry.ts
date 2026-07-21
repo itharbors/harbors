@@ -1,9 +1,8 @@
-import type { KitCatalogResponse, KitHostMode } from '@itharbors/plugin-types';
+import type { KitCatalogResponse } from '@itharbors/plugin-types';
 
 export type HostEntry = 'picker' | 'editor';
 
-export function selectHostEntry(mode: KitHostMode, url: URL): HostEntry {
-  if (mode === 'single') return 'editor';
+export function selectHostEntry(url: URL): HostEntry {
   if (url.pathname !== '/') return 'editor';
   for (const parameter of ['session', 'sessionId', 'kit', 'page']) {
     if (url.searchParams.has(parameter)) return 'editor';
@@ -12,7 +11,7 @@ export function selectHostEntry(mode: KitHostMode, url: URL): HostEntry {
 }
 
 export function isKitCatalogResponse(value: unknown): value is KitCatalogResponse {
-  if (!isRecord(value) || (value.mode !== 'single' && value.mode !== 'multi')) return false;
+  if (!isRecord(value)) return false;
   return Array.isArray(value.kits) && value.kits.every((entry) => (
     isRecord(entry)
     && isNonEmptyString(entry.id)

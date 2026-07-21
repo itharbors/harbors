@@ -14,14 +14,13 @@ const catalog = Promise.resolve([
 describe('Kit catalog routes', () => {
   it('returns a sanitized public catalog without local directories', async () => {
     const response = mockResponse();
-    const router = createKitCatalogRouter('multi', catalog);
+    const router = createKitCatalogRouter(catalog);
 
     await router(mockRequest('GET', '/api/kits'), response.res);
 
     expect(response.status()).toBe(200);
     expect(response.header('content-type')).toBe('application/json; charset=utf-8');
     expect(JSON.parse(response.body())).toEqual({
-      mode: 'multi',
       kits: [{ id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' }],
     });
     expect(response.body()).not.toContain('/private/repository');
@@ -29,7 +28,7 @@ describe('Kit catalog routes', () => {
 
   it('redirects a stable Kit id to the existing package-name entry path', async () => {
     const response = mockResponse();
-    const router = createKitCatalogRouter('multi', catalog);
+    const router = createKitCatalogRouter(catalog);
 
     await router(mockRequest('GET', '/kits/mysql'), response.res);
 
@@ -39,14 +38,14 @@ describe('Kit catalog routes', () => {
   });
 
   it('rejects unknown Kit ids without treating them as filesystem paths', async () => {
-    const router = createKitCatalogRouter('multi', catalog);
+    const router = createKitCatalogRouter(catalog);
 
     await expect(router(mockRequest('GET', '/kits/..%2Fsecret'), mockResponse().res))
       .rejects.toMatchObject({ status: 404, code: 'KIT_NOT_FOUND' });
   });
 
   it('allows only GET requests', async () => {
-    const router = createKitCatalogRouter('multi', catalog);
+    const router = createKitCatalogRouter(catalog);
 
     await expect(router(mockRequest('POST', '/api/kits'), mockResponse().res))
       .rejects.toMatchObject({ status: 405, code: 'METHOD_NOT_ALLOWED' });

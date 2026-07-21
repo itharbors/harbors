@@ -83,6 +83,10 @@ Server 的 `discoverKitCatalog(assembly)` 执行以下步骤：
 `GET /api/kits` 始终返回 `{ kits }`。失败和空 Catalog 继续停留在选择页状态，不回退到默认
 Editor。
 
+当 session 创建请求中的 Kit package name 命中 Catalog 时，Server 在内部把它映射为已验证
+目录再交给 resolver。这样外部 Kit 的稳定 `/kits/<id>` 链接仍可使用 package name 重定向，
+同时不会在 Catalog 响应或 Location header 中暴露本地路径。
+
 ## `--kit` 快捷方式
 
 ### Web 开发栈

@@ -95,10 +95,10 @@ BrowserWindow 配置：
 - `nodeIntegration: false`；
 - preload 只暴露 `syncMenu`、`onMenuAction`、`openExternalUrl`。
 
-菜单 payload 携带 combined/application/kit 三棵树、Kit 根和单/多 Kit 模式。主进程会清洗
-payload、限制菜单 role；单 Kit 直接使用 combined tree，多 Kit 聚合 `APP` 与各 Kit root，
-并按 session 路由动作。外部 URL 只接受 HTTP(S)。页面和 Panel 仍通过 Web 接口工作，
-不直接导入 Electron。
+菜单 payload 为兼容现有协议仍携带 combined/application/kit 三棵树、Kit 根和菜单模式。
+主进程会清洗 payload、限制菜单 role；当前所有 Electron Kit 窗口统一发送 `multi`，聚合
+`APP` 与各 Kit root，并按 session 路由动作。外部 URL 只接受 HTTP(S)。页面和 Panel 仍通过
+Web 接口工作，不直接导入 Electron。
 
 ## UI 变更准则
 

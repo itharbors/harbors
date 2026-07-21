@@ -110,7 +110,7 @@ BrowserWindow；之后再次选择只打开或聚焦已有窗口。
 Electron 额外提供：
 
 - 通过系统托盘打开或聚焦 Kit，并持久化窗口 bounds；
-- 单 Kit 模式平铺组合菜单，多 Kit 模式聚合为 `APP / <Kit...>`；
+- 所有 Kit 窗口统一把菜单聚合为 `APP / <Kit...>`；
 - 把原生菜单点击送回对应 session 的窗口，发送前先显示目标窗口；
 - 只允许通过系统浏览器打开 `http:` 或 `https:` URL。
 

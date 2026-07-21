@@ -17,14 +17,12 @@ import { createDevPages, createDevServerEnv } from './dev-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
 
-test('parses default multi-Kit mode and retained --kit single mode', () => {
-  assert.deepEqual(parseElectronOptions([]), { mode: 'multi', requestedKit: null });
+test('parses an optional requested Kit without creating a host mode', () => {
+  assert.deepEqual(parseElectronOptions([]), { requestedKit: null });
   assert.deepEqual(parseElectronOptions(['--kit', '@itharbors/kit-sqlite']), {
-    mode: 'single',
     requestedKit: '@itharbors/kit-sqlite',
   });
   assert.deepEqual(parseElectronOptions(['--kit=./kits/mysql']), {
-    mode: 'single',
     requestedKit: './kits/mysql',
   });
 });
@@ -35,7 +33,7 @@ test('rejects missing, duplicate and unknown Electron arguments', () => {
   assert.throws(() => parseElectronOptions(['--unknown']), /unknown Electron argument/i);
 });
 
-test('starts the Web stack without recursion and forwards single-Kit arguments', () => {
+test('starts the Web stack without recursion and forwards requested Kit arguments', () => {
   assert.deepEqual(createFrameworkArgs([]), ['run', 'dev:web']);
   assert.deepEqual(createFrameworkArgs(['--kit', './kits/sqlite']), [
     'run',
@@ -46,25 +44,28 @@ test('starts the Web stack without recursion and forwards single-Kit arguments',
   ]);
 });
 
-test('passes an explicit Kit host mode to the Web server without leaking stale defaults', () => {
+test('passes only an explicit requested Kit to the Web server without leaking stale host state', () => {
   const base = { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' };
 
   assert.deepEqual(createDevServerEnv(base, ''), {
     PATH: '/bin',
-    CE_KIT_MODE: 'multi',
   });
   assert.deepEqual(createDevServerEnv(base, '@itharbors/kit-mysql'), {
     PATH: '/bin',
     CE_DEFAULT_KIT: '@itharbors/kit-mysql',
-    CE_KIT_MODE: 'single',
   });
   assert.deepEqual(base, { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' });
 });
 
-test('prints the chooser as the multi-Kit Web root and the editor as the single-Kit root', () => {
-  assert.deepEqual(createDevPages('multi')[0], ['Kit chooser', '/']);
-  assert.deepEqual(createDevPages('single')[0], ['Editor', '/']);
-  assert.deepEqual(createDevPages('multi').slice(1), [
+test('always prints the chooser and adds an encoded requested Kit shortcut', () => {
+  assert.deepEqual(createDevPages(''), [
+    ['Kit chooser', '/'],
+    ['Layout Kit', '/?page=layout-kit'],
+    ['UI Kit', '/?page=ui-kit'],
+  ]);
+  assert.deepEqual(createDevPages('@itharbors/kit-mysql'), [
+    ['Kit chooser', '/'],
+    ['Requested Kit', '/?kit=%40itharbors%2Fkit-mysql'],
     ['Layout Kit', '/?page=layout-kit'],
     ['UI Kit', '/?page=ui-kit'],
   ]);
@@ -98,7 +99,7 @@ test('uses visible PNG tray icon assets at standard and Retina densities', async
 
 test('initializes the Tray host without opening a default Kit', async () => {
   const calls = [];
-  await initializeKitHost({ mode: 'multi', requestedKit: null }, {
+  await initializeKitHost({ requestedKit: null }, {
     createTray: async () => { calls.push('tray'); },
     startFramework: () => { calls.push('framework'); },
     registerIpc: () => { calls.push('ipc'); },
@@ -110,7 +111,7 @@ test('initializes the Tray host without opening a default Kit', async () => {
 
 test('opens only an explicitly requested Kit after host services start', async () => {
   const calls = [];
-  await initializeKitHost({ mode: 'single', requestedKit: '@itharbors/kit-sqlite' }, {
+  await initializeKitHost({ requestedKit: '@itharbors/kit-sqlite' }, {
     createTray: async () => { calls.push('tray'); },
     startFramework: () => { calls.push('framework'); },
     registerIpc: () => { calls.push('ipc'); },
@@ -139,11 +140,11 @@ test('shows the Kit chooser without selecting a default Kit', () => {
 });
 
 test('creates a per-Kit URL carrying stable session, Kit path and menu mode', () => {
+  assert.equal(createKitWindowUrl.length, 3);
   const url = new URL(createKitWindowUrl(
     'http://localhost:8080/?page=editor',
     { directory: '/repo/kits/sqlite' },
     { sessionId: 'sqlite session' },
-    'multi',
   ));
 
   assert.equal(url.origin, 'http://localhost:8080');
@@ -151,6 +152,14 @@ test('creates a per-Kit URL carrying stable session, Kit path and menu mode', ()
   assert.equal(url.searchParams.get('session'), 'sqlite session');
   assert.equal(url.searchParams.get('kit'), '/repo/kits/sqlite');
   assert.equal(url.searchParams.get('menuMode'), 'multi');
+});
+
+test('uses aggregate multi-Kit menus for every Electron window', async () => {
+  const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.doesNotMatch(electronSource, /electronOptions\?\.mode|electronOptions\.mode/);
+  assert.match(electronSource, /const template = buildMultiKitMenuTemplate\(/);
+  assert.match(electronSource, /requestedKit: resolveRequestedKitName\(/);
 });
 
 test('builds tray entries for available and persisted unavailable Kits', () => {

@@ -218,8 +218,8 @@ kits/my-kit/
 }
 ```
 
-`menuRoot`、`default` layout 与两个 window entry 是必需项。单 Kit 启动时忽略 menuRoot 并
-平铺菜单；多 Kit 启动时 menuRoot label 成为顶层菜单名。Kit 下的插件仍需先生成 dist。
+`menuRoot`、`default` layout 与两个 window entry 是必需项。Electron 窗口统一使用聚合菜单，
+menuRoot label 成为该 Kit 的顶层菜单名。Kit 下的插件仍需先生成 dist。
 
 ### layout
 
@@ -259,6 +259,10 @@ kits/my-kit/
 node scripts/ce-plugin.mjs build kits/my-kit/plugins/my-plugin
 npm run dev -- --kit ./kits/my-kit
 ```
+
+`--kit` 是直达快捷方式：它把外部 Kit 临时追加到 Catalog，并在服务就绪后只自动打开该 Kit；
+它不会隐藏仓库中的其他 Kit，也不会改变 Web 根页面。使用内置浏览器调试时，从启动日志复制
+`Requested Kit` 地址。
 
 检查：
 

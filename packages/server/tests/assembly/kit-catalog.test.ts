@@ -36,7 +36,7 @@ describe('Kit catalog discovery', () => {
     fs.mkdirSync(path.join(kitsDir, 'invalid'), { recursive: true });
     fs.writeFileSync(path.join(kitsDir, 'invalid', 'package.json'), JSON.stringify({ name: 'invalid' }));
 
-    const catalog = await discoverKitCatalog(assembly(), 'multi');
+    const catalog = await discoverKitCatalog(assembly());
 
     expect(catalog).toEqual([
       {
@@ -65,13 +65,14 @@ describe('Kit catalog discovery', () => {
       ...assembly(),
       builtinKitsDir: kitsDir,
       kitsDir,
-    }, 'multi');
+      defaultKit: '@itharbors/kit-sqlite',
+    });
 
     expect(catalog).toHaveLength(1);
     expect(catalog[0]?.name).toBe('@itharbors/kit-sqlite');
   });
 
-  it('returns only an explicitly selected Kit outside the repository catalog in single mode', async () => {
+  it('appends an explicitly selected Kit outside the repository catalog', async () => {
     createKit(kitsDir, 'default', {
       name: '@itharbors/kit-default',
       id: 'default',
@@ -86,14 +87,59 @@ describe('Kit catalog discovery', () => {
     const catalog = await discoverKitCatalog({
       ...assembly(),
       defaultKit: externalDirectory,
-    }, 'single');
+    });
 
-    expect(catalog).toEqual([{
-      id: 'external',
-      name: '@example/external-kit',
-      label: 'External Kit',
-      directory: externalDirectory,
-    }]);
+    expect(catalog).toEqual([
+      {
+        id: 'default',
+        name: '@itharbors/kit-default',
+        label: 'Default Kit',
+        directory: path.join(kitsDir, 'default'),
+      },
+      {
+        id: 'external',
+        name: '@example/external-kit',
+        label: 'External Kit',
+        directory: externalDirectory,
+      },
+    ]);
+  });
+
+  it('does not filter repository Kits when one is explicitly selected', async () => {
+    createKit(builtinKitsDir, 'default', {
+      name: '@itharbors/kit-default',
+      id: 'default',
+      label: 'Default Kit',
+    });
+    createKit(kitsDir, 'mysql', {
+      name: '@itharbors/kit-mysql',
+      id: 'mysql',
+      label: 'MySQL',
+    });
+
+    const catalog = await discoverKitCatalog({
+      ...assembly(),
+      defaultKit: '@itharbors/kit-mysql',
+    });
+
+    expect(catalog.map((entry) => entry.name)).toEqual([
+      '@itharbors/kit-default',
+      '@itharbors/kit-mysql',
+    ]);
+  });
+
+  it('rejects an invalid explicitly selected Kit instead of ignoring it', async () => {
+    const directory = path.join(root, 'invalid-selected');
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+      name: '@example/invalid',
+      'ce-editor': { kit: {} },
+    }));
+
+    await expect(discoverKitCatalog({
+      ...assembly(),
+      defaultKit: directory,
+    })).rejects.toThrow('Invalid Kit manifest for selected Kit');
   });
 
   it.each([
@@ -107,7 +153,12 @@ describe('Kit catalog discovery', () => {
     });
     createKit(kitsDir, 'two', second);
 
-    await expect(discoverKitCatalog(assembly(), 'multi')).rejects.toThrow(message);
+    await expect(discoverKitCatalog({
+      ...assembly(),
+      defaultKit: second.name === '@itharbors/duplicate'
+        ? '@itharbors/duplicate'
+        : '@itharbors/kit-one',
+    })).rejects.toThrow(message);
   });
 
   function assembly(): AssemblyConfig {

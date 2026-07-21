@@ -1,6 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
-import type { KitHostMode, PublicKitCatalogEntry } from '@itharbors/plugin-types';
+import type { PublicKitCatalogEntry } from '@itharbors/plugin-types';
 import type { AssemblyConfig } from './config';
 import { resolveKit } from '../plugin/resolver';
 
@@ -8,22 +8,7 @@ export interface KitCatalogEntry extends PublicKitCatalogEntry {
   directory: string;
 }
 
-export async function discoverKitCatalog(
-  assembly: AssemblyConfig,
-  mode: KitHostMode,
-): Promise<KitCatalogEntry[]> {
-  if (mode === 'single') {
-    const directory = await resolveKit(assembly.defaultKit, {
-      builtinKitsDir: assembly.builtinKitsDir,
-      kitsDir: assembly.kitsDir,
-    });
-    const entry = await readKitEntry(directory);
-    if (!entry) {
-      throw new Error(`Invalid Kit manifest for selected Kit "${assembly.defaultKit}"`);
-    }
-    return [entry];
-  }
-
+export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitCatalogEntry[]> {
   const directories = new Set<string>();
   for (const kitsDirectory of new Set([
     path.resolve(assembly.builtinKitsDir),
@@ -41,9 +26,22 @@ export async function discoverKitCatalog(
     }
   }
 
-  const entries = (await Promise.all(Array.from(directories, readKitEntry)))
-    .filter((entry): entry is KitCatalogEntry => entry !== null)
-    .sort(compareEntries);
+  const selectedDirectory = path.resolve(await resolveKit(assembly.defaultKit, {
+    builtinKitsDir: assembly.builtinKitsDir,
+    kitsDir: assembly.kitsDir,
+  }));
+  directories.add(selectedDirectory);
+
+  const entries: KitCatalogEntry[] = [];
+  for (const directory of directories) {
+    const entry = await readKitEntry(directory);
+    if (entry) {
+      entries.push(entry);
+    } else if (directory === selectedDirectory) {
+      throw new Error(`Invalid Kit manifest for selected Kit "${assembly.defaultKit}"`);
+    }
+  }
+  entries.sort(compareEntries);
   assertUnique(entries, (entry) => entry.name, 'Duplicate Kit package name');
   assertUnique(entries, (entry) => entry.id, 'Duplicate Kit menu root');
   return entries;

@@ -1,14 +1,15 @@
-export function createDevServerEnv(baseEnv, defaultKit) {
+export function createDevServerEnv(baseEnv, requestedKit) {
   const serverEnv = { ...baseEnv };
   delete serverEnv.CE_DEFAULT_KIT;
-  serverEnv.CE_KIT_MODE = defaultKit ? 'single' : 'multi';
-  if (defaultKit) serverEnv.CE_DEFAULT_KIT = defaultKit;
+  delete serverEnv.CE_KIT_MODE;
+  if (requestedKit) serverEnv.CE_DEFAULT_KIT = requestedKit;
   return serverEnv;
 }
 
-export function createDevPages(mode) {
+export function createDevPages(requestedKit) {
   return [
-    [mode === 'single' ? 'Editor' : 'Kit chooser', '/'],
+    ['Kit chooser', '/'],
+    ...(requestedKit ? [['Requested Kit', `/?kit=${encodeURIComponent(requestedKit)}`]] : []),
     ['Layout Kit', '/?page=layout-kit'],
     ['UI Kit', '/?page=ui-kit'],
   ];

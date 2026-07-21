@@ -3,7 +3,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
-import { discoverKits } from './lib/kit-catalog.mjs';
+import { discoverKits, resolveRequestedKitName } from './lib/kit-catalog.mjs';
 import {
   buildTrayTemplate,
   createFrameworkArgs,
@@ -152,6 +152,14 @@ function startElectronApp() {
         rootDir,
         requestedKit: electronOptions.requestedKit ?? undefined,
       });
+      electronOptions = {
+        ...electronOptions,
+        requestedKit: resolveRequestedKitName(
+          kitCatalog,
+          electronOptions.requestedKit,
+          rootDir,
+        ),
+      };
       if (kitCatalog.length === 0) {
         throw new Error('No valid Kits were discovered');
       }
@@ -304,7 +312,7 @@ async function createKitWindow(kit, workspace) {
     }
   });
 
-  const url = createKitWindowUrl(startUrl, kit, workspace, electronOptions.mode);
+  const url = createKitWindowUrl(startUrl, kit, workspace);
   try {
     await window.loadURL(url);
   } catch (error) {
@@ -402,13 +410,10 @@ function applyMenuForWindow(window) {
       });
     },
   };
-  const state = sessionMenus.get(sessionId);
-  const template = electronOptions?.mode === 'multi'
-    ? buildMultiKitMenuTemplate({
-        focusedSessionId: sessionId,
-        sessions: getOrderedMenuSessions(),
-      }, adapters)
-    : buildElectronMenuTemplate(sessionId, state?.menuTree ?? [], adapters);
+  const template = buildMultiKitMenuTemplate({
+    focusedSessionId: sessionId,
+    sessions: getOrderedMenuSessions(),
+  }, adapters);
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 

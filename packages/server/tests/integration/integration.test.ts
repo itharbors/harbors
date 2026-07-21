@@ -77,7 +77,6 @@ describe('Framework Integration', () => {
     const data = await resp.json();
 
     expect(resp.status).toBe(200);
-    expect(data.mode).toBe('multi');
     expect(data.kits).toEqual(expect.arrayContaining([
       { id: 'default', name: '@itharbors/kit-default', label: 'Default Kit' },
       { id: 'sqlite', name: '@itharbors/kit-sqlite', label: 'SQLite' },
@@ -87,20 +86,60 @@ describe('Framework Integration', () => {
     expect(editorMap.size).toBe(before);
   });
 
-  it('single-Kit mode exposes only the explicitly selected Kit', async () => {
+  it('a configured external Kit augments the repository catalog without creating a session', async () => {
+    const externalKit = mkdtempSync(path.join(tmpdir(), 'harbors-external-catalog-'));
+    tempDirs.push(externalKit);
+    writeFileSync(path.join(externalKit, 'package.json'), JSON.stringify({
+      name: '@example/external-kit',
+      'ce-editor': {
+        kit: {
+          menuRoot: { id: 'external', label: 'External Kit' },
+          layouts: { default: 'layout.json' },
+          windowEntries: { main: 'main.html', secondary: 'secondary.html' },
+        },
+      },
+    }));
+    writeFileSync(path.join(externalKit, 'layout.json'), JSON.stringify({
+      windows: [{
+        id: 'external-main',
+        type: 'panel-area',
+        layout: { type: 'leaf', panel: 'external.empty' },
+      }],
+    }));
     const server = createServer({
-      defaultKit: '@itharbors/kit-mysql',
-      kitMode: 'single',
+      defaultKit: externalKit,
     });
     const customPort = await server.start(0);
     try {
       const resp = await fetch(`http://localhost:${customPort}/api/kits`);
       expect(resp.status).toBe(200);
-      await expect(resp.json()).resolves.toEqual({
-        mode: 'single',
-        kits: [{ id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' }],
+      const data = await resp.json();
+      expect(data).toEqual({
+        kits: expect.arrayContaining([
+          { id: 'default', name: '@itharbors/kit-default', label: 'Default Kit' },
+          { id: 'external', name: '@example/external-kit', label: 'External Kit' },
+          { id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' },
+          { id: 'sqlite', name: '@itharbors/kit-sqlite', label: 'SQLite' },
+        ]),
       });
       expect(server.editorMap.size).toBe(0);
+
+      const createResponse = await fetch(`http://localhost:${customPort}/api/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: 'external-catalog-session',
+          kit: '@example/external-kit',
+        }),
+      });
+      expect(createResponse.status).toBe(201);
+      const bootstrapResponse = await fetch(
+        `http://localhost:${customPort}/api/bootstrap/external-catalog-session`,
+      );
+      expect(bootstrapResponse.status).toBe(200);
+      await expect(bootstrapResponse.json()).resolves.toMatchObject({
+        kitName: '@example/external-kit',
+      });
     } finally {
       await server.stop();
     }

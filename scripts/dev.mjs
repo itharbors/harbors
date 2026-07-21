@@ -17,17 +17,16 @@ if (parsed.errors.length > 0) {
   process.exit(1);
 }
 
-const defaultKit = normalizeKitArgument(parsed.kit);
+const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const serverEnv = createDevServerEnv(baseEnv, defaultKit);
+const serverEnv = createDevServerEnv(baseEnv, requestedKit);
 const gatewayPort = parsePort(baseEnv.PORT, 8080);
-const devPages = createDevPages(serverEnv.CE_KIT_MODE);
+const devPages = createDevPages(requestedKit);
 
 console.log('Starting ITHARBORS dev stack');
-if (defaultKit) {
-  console.log(`Default kit: ${defaultKit}`);
+if (requestedKit) {
+  console.log(`Requested Kit: ${requestedKit}`);
 }
-console.log(`Kit host mode: ${serverEnv.CE_KIT_MODE}`);
 printDevPages(gatewayPort, devPages);
 
 const children = [

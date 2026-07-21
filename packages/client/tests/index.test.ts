@@ -11,6 +11,7 @@ describe('client main entry', () => {
     expect(source).toContain("fetch('/api/kits'");
     expect(source).toContain('isKitCatalogResponse');
     expect(source).toContain('selectHostEntry');
+    expect(source).not.toContain('catalog.mode');
     expect(source).toContain('renderKitPicker');
     expect(source).toContain("'<editor-app></editor-app>'");
     expect(source).toContain('renderKitPickerError');

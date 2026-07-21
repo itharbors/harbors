@@ -1,5 +1,3 @@
-export type KitHostMode = 'single' | 'multi';
-
 export interface PublicKitCatalogEntry {
   id: string;
   name: string;
@@ -7,6 +5,5 @@ export interface PublicKitCatalogEntry {
 }
 
 export interface KitCatalogResponse {
-  mode: KitHostMode;
   kits: PublicKitCatalogEntry[];
 }

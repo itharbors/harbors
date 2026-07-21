@@ -8,13 +8,11 @@ import { BrowserRequestBroker } from './framework/browser-request-broker';
 import type { Editor } from './editor/types';
 import { createApp } from './app';
 import { createDefaultAssemblyConfig } from './assembly/config';
-import type { KitHostMode } from '@itharbors/plugin-types';
 
 export interface ServerOptions {
   port?: number;
   dbPath?: string;
   defaultKit?: string;
-  kitMode?: KitHostMode;
 }
 
 export function createServer(options: ServerOptions = {}) {
@@ -27,10 +25,8 @@ export function createServer(options: ServerOptions = {}) {
   const assembly = createDefaultAssemblyConfig(path.resolve(serverDir, '../../..'), {
     defaultKit: options.defaultKit,
   });
-  const kitMode = options.kitMode ?? (options.defaultKit ? 'single' : 'multi');
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,
-    kitMode,
   }, broker);
 
   const server = http.createServer(async (req, res) => {

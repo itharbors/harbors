@@ -24,12 +24,10 @@ import { SessionRuntimeRegistry } from './session/runtime-registry';
 import { HttpError } from './http/errors';
 import { sendHttpError } from './http/json';
 import { createKitCatalogRouter } from './routes/kit-catalog';
-import type { KitHostMode } from '@itharbors/plugin-types';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
   override?: AssemblyConfigOverride;
-  kitMode?: KitHostMode;
 }
 
 export function createApp(
@@ -45,8 +43,7 @@ export function createApp(
     appOptions.assembly,
     appOptions.override,
   );
-  const kitMode = appOptions.kitMode ?? 'multi';
-  const kitCatalogPromise = discoverKitCatalog(assembly, kitMode);
+  const kitCatalogPromise = discoverKitCatalog(assembly);
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
     const editor = createEditor(session.sessionId, {
         assembly,
@@ -105,8 +102,13 @@ export function createApp(
   });
   const editorMap = registry.editors as Map<string, Editor>;
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
+    const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
+    const catalogEntry = requestedKit
+      ? (await kitCatalogPromise).find((entry) => entry.name === requestedKit)
+      : undefined;
     await registry.getOrCreate(session.sessionId, {
       ...options,
+      ...(catalogEntry ? { kit: catalogEntry.directory } : {}),
       workspacePath: session.workspacePath,
     });
   }, async (sessionId) => {
@@ -125,7 +127,7 @@ export function createApp(
   const windowGroupRouter = createWindowGroupRouter(editorMap);
   const panelOpenRouter = createPanelOpenRouter(editorMap);
   const panelInstanceRouter = createPanelInstanceRouter(editorMap);
-  const kitCatalogRouter = createKitCatalogRouter(kitMode, kitCatalogPromise);
+  const kitCatalogRouter = createKitCatalogRouter(kitCatalogPromise);
 
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';

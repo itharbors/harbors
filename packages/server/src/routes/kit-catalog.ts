@@ -1,11 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import type { KitHostMode } from '@itharbors/plugin-types';
 import type { KitCatalogEntry } from '../assembly/kit-catalog';
 import { HttpError } from '../http/errors';
 import { sendJson } from '../http/json';
 
 export function createKitCatalogRouter(
-  mode: KitHostMode,
   catalogPromise: Promise<KitCatalogEntry[]>,
 ) {
   return async function kitCatalogRouter(
@@ -26,7 +24,6 @@ export function createKitCatalogRouter(
     const catalog = await catalogPromise;
     if (isCatalog) {
       sendJson(res, 200, {
-        mode,
         kits: catalog.map(({ id, name, label }) => ({ id, name, label })),
       });
       return;

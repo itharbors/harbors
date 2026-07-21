@@ -51,7 +51,7 @@ npm run dev:web
 
 浏览器访问 Gateway，而不是直接访问 Vite。Gateway 才能把 API 和 SSE 路由到 Server。
 
-不带 `--kit` 时 Web 栈运行在多 Kit 模式，裸地址显示 Kit 选择页，并提供稳定直达地址：
+Web 栈始终运行统一 Kit 主机，裸地址显示 Kit 选择页，并提供稳定直达地址：
 
 ```text
 Kit 选择页   http://localhost:8080/
@@ -65,7 +65,7 @@ MySQL        http://localhost:8080/kits/mysql
 
 开发脚本还会列出：
 
-- `/`：多 Kit 选择页，或单 Kit 工作台；
+- `/`：Kit 选择页；
 - `/?page=layout-kit`：布局组件示例；
 - `/?page=ui-kit`：基础 UI 示例。
 
@@ -77,9 +77,10 @@ npm run dev -- --kit @itharbors/kit-default
 ```
 
 `--kit`、`--kit-path` 和 `--kitPath` 都被 Electron 启动脚本接受。指定参数代表已经显式
-选择 Kit：服务就绪后只创建该 Kit 的窗口，并把菜单平铺到应用主菜单。路径必须包含有效
-package；package name 必须能在 Kit 目录中找到。此时 Web 裸地址 `/` 也直接打开指定 Kit，
-不会显示多 Kit 选择页。
+选择 Kit：服务就绪后只自动创建该 Kit 的窗口，其他 Kit 仍保留在 Tray 中并继续懒加载。
+Electron 窗口统一使用多 Kit 聚合菜单。路径必须包含有效 package；package name 必须能在
+Kit 目录中找到。外部路径会临时追加到 Catalog。Web 裸地址 `/` 始终显示选择页；开发脚本
+额外打印 `Requested Kit` 直达地址，供内置浏览器打开。
 
 ## Electron
 

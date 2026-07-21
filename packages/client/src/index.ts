@@ -26,7 +26,7 @@ export async function startClientApp(): Promise<void> {
     const catalog: unknown = await response.json();
     if (!isKitCatalogResponse(catalog)) throw new Error('Kit catalog response is invalid');
 
-    if (selectHostEntry(catalog.mode, new URL(window.location.href)) === 'editor') {
+    if (selectHostEntry(new URL(window.location.href)) === 'editor') {
       app.innerHTML = '<editor-app></editor-app>';
       return;
     }

@@ -29,9 +29,7 @@ export function parseElectronOptions(args) {
     }
   }
 
-  return requestedKit
-    ? { mode: 'single', requestedKit }
-    : { mode: 'multi', requestedKit: null };
+  return { requestedKit };
 }
 
 export function createFrameworkArgs(args) {
@@ -57,11 +55,11 @@ export function showKitChooser(tray) {
   return true;
 }
 
-export function createKitWindowUrl(startUrl, kit, workspace, mode) {
+export function createKitWindowUrl(startUrl, kit, workspace) {
   const url = new URL(startUrl);
   url.searchParams.set('session', workspace.sessionId);
   url.searchParams.set('kit', kit.directory);
-  url.searchParams.set('menuMode', mode);
+  url.searchParams.set('menuMode', 'multi');
   return url.href;
 }
 
