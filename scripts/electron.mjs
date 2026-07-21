@@ -2,16 +2,30 @@ import http from 'node:http';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, ipcMain, Menu, shell } from 'electron';
+import { app, BrowserWindow, ipcMain, Menu, nativeImage, shell, Tray } from 'electron';
+import { discoverKits } from './lib/kit-catalog.mjs';
+import {
+  buildTrayTemplate,
+  createKitWindowUrl,
+  openOrFocusKitWindow,
+  parseElectronOptions,
+} from './lib/electron-launcher.mjs';
+import { WorkspaceStore } from './lib/workspace-store.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
+const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.svg', import.meta.url));
 const gatewayPort = parsePort(process.env.PORT, 8080);
 const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
 const frameworkArgs = ['run', 'dev', ...(process.argv.slice(2).length > 0 ? ['--', ...process.argv.slice(2)] : [])];
 
 let frameworkProcess;
-let mainWindow;
+let tray;
+let workspaceStore;
+let kitCatalog = [];
+let electronOptions;
+let quitting = false;
+const kitWindows = new Map();
 const sessionMenus = new Map();
 const windowSessions = new Map();
 let menuSyncListenerRegistered = false;
@@ -96,12 +110,21 @@ function startElectronApp() {
   configureElectronApp(app);
   app.whenReady()
     .then(async () => {
+      electronOptions = parseElectronOptions(process.argv.slice(2));
+      kitCatalog = await discoverKits({
+        rootDir,
+        requestedKit: electronOptions.requestedKit ?? undefined,
+      });
+      if (kitCatalog.length === 0) {
+        throw new Error('No valid Kits were discovered');
+      }
+      workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
       frameworkProcess = startFramework();
       await waitForUrl(startUrl);
       registerMenuIpc();
       registerOpenExternalUrlIpc();
-      mainWindow = createMainWindow();
-      await mainWindow.loadURL(startUrl);
+      await prewarmKitWindows();
+      await createApplicationTray();
     })
     .catch((error) => {
       console.error(error.message);
@@ -113,19 +136,20 @@ function startElectronApp() {
   });
 
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') {
-      app.quit();
-    }
+    // The tray owns the application lifecycle; closing a Kit window keeps its runtime alive.
   });
 
   app.on('activate', async () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      mainWindow = createMainWindow();
-      await mainWindow.loadURL(startUrl);
+    const defaultKit = kitCatalog[0];
+    if (defaultKit) {
+      await openKit(defaultKit.name);
     }
   });
 
   app.on('before-quit', () => {
+    quitting = true;
+    tray?.destroy();
+    tray = undefined;
     unregisterMenuIpc();
     unregisterOpenExternalUrlIpc();
     stopFramework();
@@ -155,13 +179,72 @@ function startFramework() {
   return child;
 }
 
-function createMainWindow() {
+async function prewarmKitWindows() {
+  const results = await Promise.allSettled(kitCatalog.map(async (kit) => {
+    const workspace = await workspaceStore.getOrCreate(kit);
+    const window = await createKitWindow(kit, workspace);
+    kitWindows.set(kit.name, window);
+    return { kit, window };
+  }));
+
+  let visibleWindow = null;
+  results.forEach((result, index) => {
+    if (result.status === 'fulfilled') {
+      visibleWindow ??= result.value.window;
+      return;
+    }
+    console.error(`Failed to open Kit ${kitCatalog[index].name}:`, result.reason);
+  });
+
+  if (visibleWindow) {
+    visibleWindow.show();
+    visibleWindow.focus();
+  }
+}
+
+async function createApplicationTray() {
+  const image = nativeImage.createFromPath(trayIconPath);
+  image.setTemplateImage?.(true);
+  tray = new Tray(image);
+  tray.setToolTip('ITHARBORS');
+  const workspaceRecords = await workspaceStore.list(kitCatalog);
+  const template = buildTrayTemplate({ kits: kitCatalog, workspaceRecords }, {
+    openKit,
+    quit: () => app.quit(),
+  });
+  const contextMenu = Menu.buildFromTemplate(template);
+  tray.setContextMenu(contextMenu);
+  if (process.platform === 'darwin') {
+    tray.on('click', () => tray?.popUpContextMenu(contextMenu));
+  }
+}
+
+async function openKit(kitName) {
+  try {
+    return await openOrFocusKitWindow(kitName, kitWindows, async () => {
+      const kit = kitCatalog.find((candidate) => candidate.name === kitName);
+      if (!kit) {
+        throw new Error(`Kit "${kitName}" is unavailable`);
+      }
+      const workspace = await workspaceStore.getOrCreate(kit);
+      return createKitWindow(kit, workspace);
+    });
+  } catch (error) {
+    console.error(`Failed to open Kit ${kitName}:`, error);
+    return null;
+  }
+}
+
+async function createKitWindow(kit, workspace) {
+  const savedBounds = workspace.bounds ?? {};
   const window = new BrowserWindow({
     width: 1440,
     height: 960,
+    ...savedBounds,
     minWidth: 1024,
     minHeight: 720,
-    show: true,
+    show: false,
+    title: `ITHARBORS — ${kit.label}`,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -169,14 +252,27 @@ function createMainWindow() {
     },
   });
 
+  windowSessions.set(window.id, workspace.sessionId);
+  window.on('close', () => {
+    if (quitting || window.isDestroyed()) return;
+    workspaceStore.updateBounds(kit.name, window.getBounds()).catch((error) => {
+      console.error(`Failed to persist bounds for ${kit.name}:`, error);
+    });
+  });
   window.on('closed', () => {
-    const sessionId = windowSessions.get(window.id);
     windowSessions.delete(window.id);
-    if (sessionId && !Array.from(windowSessions.values()).includes(sessionId)) {
-      sessionMenus.delete(sessionId);
+    if (kitWindows.get(kit.name) === window) {
+      kitWindows.delete(kit.name);
     }
   });
 
+  const url = createKitWindowUrl(startUrl, kit, workspace, electronOptions.mode);
+  try {
+    await window.loadURL(url);
+  } catch (error) {
+    window.destroy();
+    throw error;
+  }
   return window;
 }
 
