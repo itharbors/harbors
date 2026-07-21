@@ -11,22 +11,28 @@ sequenceDiagram
     participant E as Electron main
     participant K as KitCatalog/WorkspaceStore
     participant Web as scripts/dev.mjs (dev:web)
+    participant U as User
     participant G as Gateway
     participant S as Server
     participant C as Vite Client
     CLI->>E: 启动默认桌面宿主
-    E->>K: 扫描 Kit + 恢复稳定 session/bounds
+    E->>K: 扫描 Kit manifest + 读取已有记录
+    E->>E: 创建 Tray（无 BrowserWindow）
     E->>Web: npm run dev:web
     Web->>G: npm run dev -w packages/gateway
     Web->>S: npm run dev -w packages/server
     Web->>C: npm run dev -w packages/client
-    E->>E: 每 Kit 创建独立 BrowserWindow + 托盘
+    U->>E: 从 Tray 选择 Kit
+    E->>E: 等待 Gateway ready
+    E->>K: getOrCreate workspace
+    E->>E: create/load Kit BrowserWindow
     Note over G,C: 任一子进程异常退出时停止其余进程
 ```
 
-不带参数时 Electron 启动全部合法 Kit；`--kit` 只保留指定包名或路径并进入单 Kit 菜单
-模式。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听 8080，Server
-监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
+不带参数时 Electron 只扫描全部合法 Kit 并显示 Tray，不创建新 workspace、session 或窗口。
+用户首次选择 Kit 时才进入加载路径；`--kit` 只保留指定包名或路径，代表一次显式选择并进入
+单 Kit 菜单模式。`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。Gateway 默认监听
+8080，Server 监听 3000，Vite 监听 5173；所有页面请求仍从 Gateway 进入。
 
 ## 2. 会话创建与 bootstrap
 

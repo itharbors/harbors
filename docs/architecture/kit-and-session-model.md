@@ -76,9 +76,11 @@ Kit package 的核心结构：
 默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
 
-Electron 默认通过 KitCatalog 扫描 `kits/*`，为每个合法 Kit 创建独立稳定 session；
-`--kit <name-or-path>` 则只选择一个 Kit。缺失或损坏的持久 Kit 记录保留并在托盘标记为
-不可用，不会污染其他 Kit 的窗口和运行时。
+Electron 默认通过 KitCatalog 扫描 `kits/*`，但启动时只保留静态目录并读取已有 workspace
+记录。首次从 Tray 选择 Kit 时才调用 `WorkspaceStore.getOrCreate()`，创建或恢复稳定
+sessionId 并加载对应窗口；未选择的 Kit 不创建新 workspace、Server session 或运行时。
+`--kit <name-or-path>` 代表显式选择，因此只对指定 Kit 进入同一按需加载路径。缺失或损坏的
+持久 Kit 记录保留并在托盘标记为不可用，不会污染其他 Kit 的窗口和运行时。
 
 ## 插件范围
 
