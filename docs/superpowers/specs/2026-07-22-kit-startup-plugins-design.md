@@ -77,9 +77,9 @@ PluginModule 的 definition 捕获、所有权清理和 load/unload 状态机，
 启动插件的 manifest 可以贡献 Server request 和应用级 menu。若贡献 Panel、浏览器端
 message 或其他 Session 能力，校验阶段直接失败，而不是在运行时静默忽略。
 
-ApplicationRuntime 先加载框架内置的 application-service、application-message 和
-application-menu 控制器，再加载 Kit 声明的启动插件。控制器沿用 owner 清理规则，但不加入
-任何 Session Editor；启动插件之间的方法调用只能通过显式 service 或 message 标识完成。
+ApplicationRuntime 直接持有独立的 ServiceRegistry、MessageModule 和 MenuModule，再加载 Kit
+声明的启动插件。这些模块沿用 owner 清理规则，但不加入任何 Session Editor；启动插件之间的
+方法调用只能通过显式 service 或 message 标识完成。
 
 ### Session Runtime
 

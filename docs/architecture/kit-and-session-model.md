@@ -47,6 +47,11 @@ Kit package 的核心结构：
         "main": "main.html",
         "secondary": "secondary.html"
       },
+      "startup": {
+        "plugins": [
+          "@itharbors/background-service"
+        ]
+      },
       "plugin": [
         "@itharbors/log",
         "@itharbors/plugin-list"
@@ -65,7 +70,9 @@ Kit package 的核心结构：
 - `menuRoot.id` 和 `menuRoot.label` 必须是非空字符串；目录内 root id 必须唯一。
 - `layouts` 必须是对象且包含 `default`。
 - `windowEntries.main` 与 `secondary` 必须是非空字符串。
+- `startup.plugins` 缺省为空数组，只允许唯一非空 package name。
 - `plugin` 缺省为空数组。
+- 同一 package name 不能同时出现在 `startup.plugins` 与 `plugin`。
 - theme key 使用 `--ce-*` token。
 
 ## Kit 解析
@@ -76,11 +83,24 @@ Kit package 的核心结构：
 默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
 
-Electron 默认通过 KitCatalog 扫描 `kits/*`，为每个合法 Kit 创建独立稳定 session；
-`--kit <name-or-path>` 则只选择一个 Kit。缺失或损坏的持久 Kit 记录保留并在托盘标记为
-不可用，不会污染其他 Kit 的窗口和运行时。
+Electron 默认通过 KitCatalog 扫描 `kits/*`，但启动时只创建默认 Kit 的稳定 session 与可见
+窗口。其他 Kit 保留在托盘中，用户首次打开时才创建窗口和 Session Runtime；再次打开复用
+稳定 sessionId。`--kit <name-or-path>` 只选择一个 Kit。缺失或损坏的持久 Kit 记录保留并在
+托盘标记为不可用，不会污染其他 Kit 的窗口和运行时。
 
 ## 插件范围
+
+### 应用启动插件
+
+Server 启动时创建一个无 Session 的 ApplicationRuntime，收集全部 Kit 的 `startup.plugins`；
+单 Kit 模式只收集被选择 Kit。相同 name 和真实路径只加载一次，相同 name 解析到不同路径时
+拒绝冲突插件。ApplicationRuntime 维护独立全局菜单，并通过以下协议供 Electron 使用：
+
+- `GET /api/application/bootstrap`；
+- `POST /api/application/menu/trigger`；
+- `GET /sse/application`。
+
+启动插件失败会按 owner 回滚并令 phase 变为 `degraded`，不会创建 Session 或阻止普通 Kit。
 
 ### 内置插件
 
