@@ -235,7 +235,7 @@
 
 - [ ] **Step 3: 验证开发 Gateway 与端口隔离**
 
-  Run: `curl --fail --silent http://127.0.0.1:49380/health && lsof -nP -iTCP:48380 -sTCP:LISTEN`
+  Run: `curl --fail --silent http://127.0.0.1:49380/health && (lsof -nP -iTCP:48380 -sTCP:LISTEN || true)`
 
   Expected: health 请求成功；`lsof` 只会显示已有稳定实例（若存在），开发 Web 栈本身不占用 `48380`。
 
@@ -249,5 +249,4 @@
 
   Run: `git status --short && git log --oneline origin/main..HEAD`
 
-  Expected: 工作树干净，日志包含本计划的三个 `[Feature]` 提交以及设计与计划提交。
-
+  Expected: 工作树干净，日志包含本计划的三个实现 `[Feature]` 提交以及设计与计划提交。
