@@ -61,14 +61,17 @@ test('passes only an explicit requested Kit to the Web server without leaking st
 
 test('isolates each Web child process from inherited legacy port variables', () => {
   const stack = createDevStackEnvironments({ PORT: '8080', SERVER_PORT: '3000', CLIENT_PORT: '5173' }, '', 'development');
-  assert.deepEqual(stack.ports, { gateway: 18080, server: 13000, client: 15173, notification: 17897 });
-  assert.equal(stack.gatewayEnv.PORT, '18080');
-  assert.equal(stack.gatewayEnv.SERVER_PORT, '13000');
-  assert.equal(stack.gatewayEnv.CLIENT_PORT, '15173');
-  assert.equal(stack.serverEnv.PORT, '13000');
+  assert.deepEqual(stack.ports, { gateway: 49380, server: 49381, client: 49382, notification: 49383 });
+  assert.equal(stack.gatewayEnv.PORT, '49380');
+  assert.equal(stack.gatewayEnv.SERVER_PORT, '49381');
+  assert.equal(stack.gatewayEnv.CLIENT_PORT, '49382');
+  assert.equal(stack.serverEnv.PORT, '49381');
   assert.equal(stack.serverEnv.SERVER_PORT, undefined);
-  assert.equal(stack.clientEnv.CLIENT_PORT, '15173');
+  assert.equal(stack.clientEnv.CLIENT_PORT, '49382');
   assert.equal(stack.clientEnv.PORT, undefined);
+  assert.equal(stack.gatewayEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  assert.equal(stack.serverEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  assert.equal(stack.clientEnv.HARBORS_NOTIFICATION_PORT, '49383');
 });
 
 test('always prints the chooser and adds an encoded requested Kit shortcut', () => {
@@ -88,7 +91,8 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
+  assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
+  assert.equal(packageJson.scripts.electron, 'npm run start --');
   assert.equal(packageJson.scripts.dev, 'node scripts/dev-electron.mjs');
   const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   assert.match(electronSource, /resolveRuntimePorts/);
@@ -98,12 +102,34 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
 test('limits the default cleanup command to development ports', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.match(packageJson.scripts.kill, /lsof -ti:18080/);
-  assert.match(packageJson.scripts.kill, /lsof -ti:13000/);
-  assert.match(packageJson.scripts.kill, /lsof -ti:15173/);
-  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:8080(?:\s|$)/);
-  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:3000(?:\s|$)/);
-  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:5173(?:\s|$)/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:49380/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:49381/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:49382/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48380(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48381(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48382(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48383(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:49383(?:\s|$)/);
+});
+
+test('documents the stable start command and isolated high ports', async () => {
+  const documents = await Promise.all([
+    readFile(new URL('../../readme.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../docs/guides/development-workflow.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../docs/architecture/runtime-flows.md', import.meta.url), 'utf8'),
+  ]);
+
+  for (const document of documents) {
+    assert.match(document, /npm run start/);
+    assert.match(document, /48380/);
+    assert.match(document, /48381/);
+    assert.match(document, /48382/);
+    assert.match(document, /48383/);
+    assert.match(document, /49380/);
+    assert.match(document, /49381/);
+    assert.match(document, /49382/);
+    assert.match(document, /49383/);
+  }
 });
 
 test('uses visible PNG tray icon assets at standard and Retina densities', async () => {

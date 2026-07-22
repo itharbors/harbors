@@ -54,7 +54,7 @@ node "<skill-directory>/scripts/notify.mjs" \
   --persistent
 ```
 
-The Harbors Electron desktop app must be running. The script uses `127.0.0.1` and reads `HARBORS_NOTIFICATION_PORT`, defaulting to `17896`.
+The Harbors Electron desktop app must be running. The script uses `127.0.0.1` and reads `HARBORS_NOTIFICATION_PORT`, defaulting to `48383`.
 
 ## Common Mistakes
 

@@ -24,10 +24,10 @@ npm install
 
 ## 启动 Electron 多 Kit 工作台
 
-`npm run electron` 是稳定 Electron 入口：
+`npm run start` 是稳定 Electron 入口；`npm run electron` 保留为兼容入口：
 
 ```bash
-npm run electron
+npm run start
 ```
 
 它扫描 `kits/*` 中所有合法 Kit。启动后只显示系统托盘图标，
@@ -47,10 +47,10 @@ npm run dev
 
 | 服务 | 稳定 Electron | 隔离开发 Electron | 说明 |
 | --- | --- | --- | --- |
-| Gateway | `http://localhost:8080` | `http://localhost:18080` | 对外统一入口 |
-| Server | `http://localhost:3000` | `http://localhost:13000` | API、SSE 与运行时 |
-| Client | `http://localhost:5173` | `http://localhost:15173` | Vite 开发服务 |
-| Notification Host | `127.0.0.1:17896` | `127.0.0.1:17897` | 本机通知与桌面提示 |
+| Gateway | `http://localhost:48380` | `http://localhost:49380` | 对外统一入口 |
+| Server | `http://localhost:48381` | `http://localhost:49381` | API、SSE 与运行时 |
+| Client | `http://localhost:48382` | `http://localhost:49382` | Vite 开发服务 |
+| Notification Host | `127.0.0.1:48383` | `127.0.0.1:49383` | 本机通知与桌面提示 |
 
 需要浏览器调试入口时显式运行：
 
@@ -59,15 +59,15 @@ npm run dev:web
 ```
 
 浏览器访问 Gateway，而不是直接访问 Vite。`npm run dev:web` 默认使用隔离开发端口，因此访问
-`http://localhost:18080`；Gateway 才能把 API 和 SSE 路由到 Server。
+`http://localhost:49380`；Gateway 才能把 API 和 SSE 路由到 Server。
 
 Web 栈始终运行统一 Kit 主机，裸地址显示 Kit 选择页，并提供开发直达地址：
 
 ```text
-Kit 选择页   http://localhost:18080/
-Default Kit  http://localhost:18080/kits/default
-SQLite       http://localhost:18080/kits/sqlite
-MySQL        http://localhost:18080/kits/mysql
+Kit 选择页   http://localhost:49380/
+Default Kit  http://localhost:49380/kits/default
+SQLite       http://localhost:49380/kits/sqlite
+MySQL        http://localhost:49380/kits/mysql
 ```
 
 `/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
@@ -95,16 +95,16 @@ Kit 目录中找到。外部路径会临时追加到 Catalog。Web 裸地址 `/`
 ## Electron
 
 ```bash
-npm run electron
+npm run start
 ```
 
-`npm run electron` 是稳定桌面入口，使用旧端口 8080、3000、5173 和 17896。`npm run dev` 是
-隔离开发入口，使用 18080、13000、15173 和 17897。Electron 先显示托盘，再启动
+`npm run start` 是稳定桌面入口，`npm run electron` 为兼容入口，使用 Gateway 48380、Server 48381、Client 48382 和 Notification Host 48383。`npm run dev` 是
+隔离开发入口，使用 Gateway 49380、Server 49381、Client 49382 和 Notification Host 49383。Electron 先显示托盘，再启动
 `npm run dev:web` 子进程；选择 Kit 后会等待 Gateway 就绪再创建 BrowserWindow，不会递归
 启动桌面宿主。传给 Electron 的 Kit 参数会继续转发给 Web 开发栈：
 
 ```bash
-npm run electron -- --kit ./kits/default
+npm run start -- --kit ./kits/default
 ```
 
 ## 构建
@@ -178,13 +178,13 @@ Server 开发入口默认把 SQLite 文件写到 Server workspace 的 `.editor.d
 先确认隔离开发端口的占用者：
 
 ```bash
-lsof -i :18080
-lsof -i :13000
-lsof -i :15173
+lsof -i :49380
+lsof -i :49381
+lsof -i :49382
 ```
 
 仓库提供 `npm run kill`，但它会对这三个开发端口上的所有进程发送 `SIGKILL`，不会关闭
-稳定 Electron 的 8080、3000、5173 或 17896 端口。只有确认进程确属本项目后才使用。
+稳定 Electron 的 48380、48381、48382 或 48383 端口，也不清理开发 Notification Host 的 49383 端口。只有确认进程确属本项目后才使用。
 
 可用 `HARBORS_GATEWAY_PORT`、`HARBORS_SERVER_PORT`、`HARBORS_CLIENT_PORT` 和
 `HARBORS_NOTIFICATION_PORT` 分别覆盖 Gateway、Server、Client 和 Notification Host 端口。
@@ -214,7 +214,7 @@ lsof -i :15173
 
 ### bootstrap 失败
 
-先检查对应入口的 Gateway health 地址（隔离开发默认是 `http://localhost:18080/api/health`），再看 Server 日志中的 Kit/插件装载错误。
+先检查对应入口的 Gateway health 地址（隔离开发默认是 `http://localhost:49380/api/health`），再看 Server 日志中的 Kit/插件装载错误。
 Client 会尝试创建 session 并重试一次，但不会掩盖持续装载错误。
 
 ## 提交信息规范

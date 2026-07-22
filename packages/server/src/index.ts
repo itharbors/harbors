@@ -2,7 +2,7 @@ import path from 'node:path';
 import { createServer } from './server';
 import { startServerUntilShutdown } from './process-lifecycle';
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT || '48381', 10);
 const DB_PATH = process.env.DB_PATH || path.join(process.cwd(), '.editor.db');
 const DEFAULT_KIT = process.env.CE_DEFAULT_KIT || process.env.KIT || process.env.DEFAULT_KIT;
 
