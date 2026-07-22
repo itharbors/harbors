@@ -69,6 +69,9 @@ test('isolates each Web child process from inherited legacy port variables', () 
   assert.equal(stack.serverEnv.SERVER_PORT, undefined);
   assert.equal(stack.clientEnv.CLIENT_PORT, '49382');
   assert.equal(stack.clientEnv.PORT, undefined);
+  assert.equal(stack.gatewayEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  assert.equal(stack.serverEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  assert.equal(stack.clientEnv.HARBORS_NOTIFICATION_PORT, '49383');
 });
 
 test('always prints the chooser and adds an encoded requested Kit shortcut', () => {

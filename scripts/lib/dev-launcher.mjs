@@ -11,7 +11,11 @@ export function createDevServerEnv(baseEnv, requestedKit) {
 export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'development') {
   const runtimeProfile = resolveRuntimeProfile(baseEnv.HARBORS_RUNTIME_PROFILE, profile);
   const ports = resolveRuntimePorts(baseEnv, runtimeProfile);
-  const common = { ...baseEnv, HARBORS_RUNTIME_PROFILE: runtimeProfile };
+  const common = {
+    ...baseEnv,
+    HARBORS_RUNTIME_PROFILE: runtimeProfile,
+    HARBORS_NOTIFICATION_PORT: String(ports.notification),
+  };
   delete common.PORT;
   delete common.SERVER_PORT;
   delete common.CLIENT_PORT;

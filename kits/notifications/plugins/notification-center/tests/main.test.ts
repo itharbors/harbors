@@ -60,6 +60,21 @@ describe('notification-center plugin main', () => {
     ]);
   });
 
+  it('uses the stable Notification Host port without an environment override', async () => {
+    const definition = await loadDefinition(null);
+    const fetchMock = vi.fn(async () => jsonResponse({ notifications: [], unreadCount: 0 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(definition.methods.getSnapshot()).resolves.toEqual({
+      notifications: [],
+      unreadCount: 0,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:48383/v1/notifications',
+      undefined,
+    );
+  });
+
   it('surfaces structured Host errors and validates notification ids', async () => {
     const definition = await loadDefinition();
     vi.stubGlobal('fetch', vi.fn(async () => jsonResponse({
@@ -83,8 +98,12 @@ describe('notification-center plugin main', () => {
   });
 });
 
-async function loadDefinition() {
-  vi.stubEnv('HARBORS_NOTIFICATION_PORT', '19001');
+async function loadDefinition(notificationPort: string | null = '19001') {
+  if (notificationPort === null) {
+    delete process.env.HARBORS_NOTIFICATION_PORT;
+  } else {
+    vi.stubEnv('HARBORS_NOTIFICATION_PORT', notificationPort);
+  }
   let definition: PluginDefinition | undefined;
   (globalThis as typeof globalThis & { editor?: unknown }).editor = {
     plugin: { define(value: PluginDefinition) { definition = value; } },

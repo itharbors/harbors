@@ -55,6 +55,26 @@ describe('notification-background plugin main', () => {
     ]);
   });
 
+  it('uses the stable Notification Host port for desktop installation without an override', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-background-default-port-'));
+    tempRoots.push(root);
+    const sourceDir = path.join(root, 'resources', 'notify-user');
+    const codexHome = path.join(root, 'codex-home');
+    await writeSkillSource(sourceDir);
+    const definition = await loadDefinition({ sourceDir, codexHome, notificationPort: null });
+    const fetchMock = vi.fn(async () => jsonResponse({ id: 'install-result' }, 201));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(definition.methods.installCodexSkill()).resolves.toMatchObject({
+      status: 'installed',
+      destination: path.join(codexHome, 'skills', 'notify-user'),
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      'http://127.0.0.1:48383/v1/notifications',
+      expect.any(Object),
+    );
+  });
+
   it('preserves an unmanaged same-name Skill and reports a persistent conflict', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-background-conflict-'));
     tempRoots.push(root);
@@ -101,8 +121,13 @@ async function loadDefinition(options: {
   sourceDir?: string;
   codexHome?: string;
   hostMode?: 'desktop' | 'web';
+  notificationPort?: string | null;
 } = {}) {
-  vi.stubEnv('HARBORS_NOTIFICATION_PORT', '19001');
+  if (options.notificationPort === null) {
+    delete process.env.HARBORS_NOTIFICATION_PORT;
+  } else {
+    vi.stubEnv('HARBORS_NOTIFICATION_PORT', options.notificationPort ?? '19001');
+  }
   if (options.sourceDir) vi.stubEnv('HARBORS_NOTIFY_SKILL_SOURCE', options.sourceDir);
   if (options.codexHome) vi.stubEnv('CODEX_HOME', options.codexHome);
   let definition: PluginDefinition | undefined;

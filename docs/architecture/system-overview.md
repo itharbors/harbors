@@ -109,8 +109,9 @@ flowchart TD
 
 ## Web 与 Electron
 
-`npm run dev` 默认启动 Electron；`npm run electron` 是同一入口，`npm run dev:web` 才直接
-启动 Gateway、Server 和 Client。Electron 启动时只扫描合法 Kit 的静态 manifest 并创建
+`npm run start` 启动稳定 Electron，`npm run electron` 是其兼容别名；`npm run dev`
+启动隔离开发 Electron，`npm run dev:web` 才直接启动隔离的 Gateway、Server 和 Client。
+Electron 启动时只扫描合法 Kit 的静态 manifest 并创建
 系统 Tray，不创建 Kit workspace、session 或 BrowserWindow。用户从 Tray 首次选择 Kit 时，
 Electron 才创建或恢复该 Kit 的稳定 workspace，等待 Gateway ready 并加载独立
 BrowserWindow；之后再次选择只打开或聚焦已有窗口。
