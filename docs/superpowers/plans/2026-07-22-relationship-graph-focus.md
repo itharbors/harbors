@@ -325,7 +325,7 @@ git commit -m '[Optimize] 强化表关系选中视觉层级'
 - Verifies the complete follow-up against the existing PR.
 - Produces a clean pushed branch with PR #14 updated.
 
-- [ ] **Step 1: Run fresh full verification**
+- [x] **Step 1: Run fresh full verification**
 
 Run:
 
@@ -339,7 +339,7 @@ git status --short
 
 Expected: all commands PASS, only the existing guarded MySQL runtime test is skipped, and the worktree is clean.
 
-- [ ] **Step 2: Inspect focus and curve ownership**
+- [x] **Step 2: Inspect focus and curve ownership**
 
 Run:
 
@@ -350,7 +350,7 @@ gh pr view 14 --json state,headRefName,url
 
 Expected: routing/focus semantics live in the shared package, theme/state integration lives in each Panel, and PR #14 is OPEN on `optimize/database-relationship-graph-layout`.
 
-- [ ] **Step 3: Push the existing branch**
+- [x] **Step 3: Push the existing branch**
 
 Run: `git push`
 
