@@ -66,9 +66,10 @@ describe('relationship graph layout', () => {
 
     const layout = layoutRelationshipGraph(graph, { width: 900, height: 600 });
     expect(layout.edges).toHaveLength(4);
-    expect(layout.edges.find((edge) => edge.id === 'employee:self')!.path).toContain('C');
     expect(new Set(layout.edges.map((edge) => edge.path)).size).toBe(4);
     for (const edge of layout.edges) {
+      expect(edge.path).toContain(' C ');
+      if (edge.fromTable !== edge.toTable) expect(edge.path).not.toContain(' L ');
       for (const coordinate of pathCoordinates(edge.path)) {
         expect(coordinate.x).toBeGreaterThanOrEqual(0);
         expect(coordinate.y).toBeGreaterThanOrEqual(0);

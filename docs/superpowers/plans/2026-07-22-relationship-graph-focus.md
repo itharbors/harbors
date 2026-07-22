@@ -30,7 +30,7 @@
 - Consumes: `routeRelationshipEdges(relationships, nodes)` and existing `RelationshipEdgeLayout.path`.
 - Produces: deterministic SVG cubic paths whose bounds include endpoints and control points.
 
-- [ ] **Step 1: Strengthen the routing test before implementation**
+- [x] **Step 1: Strengthen the routing test before implementation**
 
 In the cycle/self/parallel test, require every path to use `C`, require no non-self path to use `L`, and add a same-column graph whose edge also uses a cubic path:
 
@@ -46,13 +46,13 @@ const sameColumn = rebuildRelationshipLayout(graph, [
 expect(sameColumn.edges[0].path).toContain(' C ');
 ```
 
-- [ ] **Step 2: Run the focused test and observe the orthogonal-route failure**
+- [x] **Step 2: Run the focused test and observe the orthogonal-route failure**
 
 Run: `npm test -w @itharbors/relationship-graph -- --run tests/layout.test.ts`
 
 Expected: FAIL because non-self edges contain `L` commands.
 
-- [ ] **Step 3: Replace orthogonal segments with cubic control points**
+- [x] **Step 3: Replace orthogonal segments with cubic control points**
 
 For horizontal relationships, derive the nearest side endpoints and a bounded tangent:
 
@@ -86,13 +86,13 @@ function cubicPath(points: Array<{ x: number; y: number }>): string {
 }
 ```
 
-- [ ] **Step 4: Run layout tests**
+- [x] **Step 4: Run layout tests**
 
 Run: `npm test -w @itharbors/relationship-graph -- --run tests/layout.test.ts`
 
 Expected: all layout tests PASS, including the 5,000-table chain.
 
-- [ ] **Step 5: Commit cubic routing**
+- [x] **Step 5: Commit cubic routing**
 
 ```bash
 git add packages/relationship-graph/src/edges.ts packages/relationship-graph/tests/layout.test.ts

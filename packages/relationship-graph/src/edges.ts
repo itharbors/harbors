@@ -79,19 +79,21 @@ export function routeRelationshipEdges(
         { x: lane, y: toY },
         { x: to.x + to.width, y: toY },
       ];
-      path = polylinePath(points);
+      path = cubicPath(points);
     } else {
       const targetIsRight = to.x > from.x;
       const fromX = targetIsRight ? from.x + from.width : from.x;
       const toX = targetIsRight ? to.x : to.x + to.width;
-      const lane = (fromX + toX) / 2 + offset;
+      const distance = Math.abs(toX - fromX);
+      const tangent = Math.max(48, Math.min(180, distance * 0.45));
+      const direction = targetIsRight ? 1 : -1;
       points = [
         { x: fromX, y: fromY },
-        { x: lane, y: fromY },
-        { x: lane, y: toY },
+        { x: fromX + direction * tangent, y: fromY + offset },
+        { x: toX - direction * tangent, y: toY + offset },
         { x: toX, y: toY },
       ];
-      path = polylinePath(points);
+      path = cubicPath(points);
     }
     include(points);
     return {
@@ -106,8 +108,6 @@ export function routeRelationshipEdges(
   return { edges, minX, minY, maxX, maxY };
 }
 
-function polylinePath(points: Array<{ x: number; y: number }>): string {
-  return points.map((point, index) => (
-    `${index === 0 ? 'M' : 'L'} ${point.x} ${point.y}`
-  )).join(' ');
+function cubicPath(points: Array<{ x: number; y: number }>): string {
+  return `M ${points[0].x} ${points[0].y} C ${points[1].x} ${points[1].y} ${points[2].x} ${points[2].y} ${points[3].x} ${points[3].y}`;
 }
