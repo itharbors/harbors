@@ -409,7 +409,7 @@ git commit -m '[Optimize] 实现名称聚类与视口自适应布局'
 - `RelationshipGraphSession` exposes `snapshot`, `moveNode`, `setViewport`, `fit`, `autoArrange`, `updateGraph`, `flush`, and `dispose`.
 - Consumes: Task 2 store and Task 3 layout functions.
 
-- [ ] **Step 1: Write failing lifecycle and reconciliation tests**
+- [x] **Step 1: Write failing lifecycle and reconciliation tests**
 
 Use the exact public interface:
 
@@ -434,13 +434,13 @@ expect(restored.snapshot.viewport).toEqual({ x: 11, y: 12, scale: 0.8 });
 
 Then update to a graph that removes one table and adds `user_preferences`. Assert surviving positions are identical, the deleted node is absent, the new node does not overlap, and its center is closer to the user group than the order group. Add invalid cached viewport fallback, `fit` preserving node coordinates, `autoArrange` changing coordinates according to a new narrow canvas, debounced save coalescing, and idempotent `dispose` flushing once. Stale graph/session creation is covered at each Panel's connection-generation boundary in Tasks 6 and 7, where a still-pending factory Promise can actually race a database switch.
 
-- [ ] **Step 2: Run the session test and verify the API is missing**
+- [x] **Step 2: Run the session test and verify the API is missing**
 
 Run: `npx vitest run --config packages/relationship-graph/vitest.config.ts packages/relationship-graph/tests/session.test.ts`
 
 Expected: FAIL because `createRelationshipGraphSession` is not exported.
 
-- [ ] **Step 3: Implement the session state machine**
+- [x] **Step 3: Implement the session state machine**
 
 Define the public surface exactly:
 
@@ -467,7 +467,7 @@ Initialization loads cache, validates current table names, and either restores o
 
 Save a cloned `PersistedRelationshipStateV1` after a 150 ms debounce; `flush` cancels the timer and awaits the current save. `dispose` is idempotent, flushes once, and prevents later mutation. All public viewport/coordinate input is clamped to finite values before entering state.
 
-- [ ] **Step 4: Run session and full package tests**
+- [x] **Step 4: Run session and full package tests**
 
 Run:
 
@@ -478,7 +478,7 @@ npm test -w @itharbors/relationship-graph
 
 Expected: session suite and all package tests PASS.
 
-- [ ] **Step 5: Commit the state layer**
+- [x] **Step 5: Commit the state layer**
 
 ```bash
 git add packages/relationship-graph/src/session.ts \

@@ -61,7 +61,7 @@ export function layoutRelationshipGraph(
       .map(([key, groupTables]) => layoutGroup(key, groupTables, graph.relationships));
     const packed = choosePacking(boxes, graph.relationships, groupByName, canvas);
     if (!packed.nodes.every(isFiniteNode)) return fallbackGrid(graph, canvas, groupByName);
-    return finishLayout(graph, packed.nodes);
+    return rebuildRelationshipLayout(graph, packed.nodes);
   } catch {
     return fallbackGrid(graph, canvas, groupRelationshipGraph(graph));
   }
@@ -80,7 +80,30 @@ export function moveRelationshipNode(
     found = true;
     return { ...node, x: position.x, y: position.y };
   });
-  return found ? finishLayout(graph, nodes) : layout;
+  return found ? rebuildRelationshipLayout(graph, nodes) : layout;
+}
+
+export function rebuildRelationshipLayout(
+  graph: RelationshipGraph,
+  nodes: RelationshipNodeLayout[],
+): RelationshipLayout {
+  const sortedNodes = nodes.slice().sort((left, right) => compareTableNames(left.name, right.name));
+  const routed = routeRelationshipEdges(graph.relationships, sortedNodes);
+  const bounds = nodeBounds(sortedNodes);
+  return {
+    width: Math.max(
+      RELATIONSHIP_LAYOUT.padding * 2,
+      bounds.maxX + RELATIONSHIP_LAYOUT.padding,
+      routed.maxX + RELATIONSHIP_LAYOUT.padding,
+    ),
+    height: Math.max(
+      RELATIONSHIP_LAYOUT.padding * 2,
+      bounds.maxY + RELATIONSHIP_LAYOUT.padding,
+      routed.maxY + RELATIONSHIP_LAYOUT.padding,
+    ),
+    nodes: sortedNodes,
+    edges: routed.edges,
+  };
 }
 
 export function fitRelationshipViewport(
@@ -285,26 +308,6 @@ function packingScore(
   return aspectError + emptyRatio * 0.15 + crossSpan * 0.01;
 }
 
-function finishLayout(graph: RelationshipGraph, nodes: RelationshipNodeLayout[]): RelationshipLayout {
-  const sortedNodes = nodes.slice().sort((left, right) => compareTableNames(left.name, right.name));
-  const routed = routeRelationshipEdges(graph.relationships, sortedNodes);
-  const bounds = nodeBounds(sortedNodes);
-  return {
-    width: Math.max(
-      RELATIONSHIP_LAYOUT.padding * 2,
-      bounds.maxX + RELATIONSHIP_LAYOUT.padding,
-      routed.maxX + RELATIONSHIP_LAYOUT.padding,
-    ),
-    height: Math.max(
-      RELATIONSHIP_LAYOUT.padding * 2,
-      bounds.maxY + RELATIONSHIP_LAYOUT.padding,
-      routed.maxY + RELATIONSHIP_LAYOUT.padding,
-    ),
-    nodes: sortedNodes,
-    edges: routed.edges,
-  };
-}
-
 function fallbackGrid(
   graph: RelationshipGraph,
   canvas: CanvasSize,
@@ -324,7 +327,7 @@ function fallbackGrid(
     rowOffsets.push(y);
     y += rowHeights[row] + RELATIONSHIP_LAYOUT.nodeGap;
   }
-  return finishLayout(graph, tables.map((table, index) => ({
+  return rebuildRelationshipLayout(graph, tables.map((table, index) => ({
     name: table.name,
     group: groupByName.get(table.name) ?? table.name,
     x: RELATIONSHIP_LAYOUT.padding
