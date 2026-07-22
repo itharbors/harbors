@@ -14,8 +14,9 @@ import {
 import {
   createNotificationHost,
   createNotificationStore,
-  parseNotificationPort,
 } from './lib/notification-host.mjs';
+import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
+import { resolveRuntimePorts, resolveRuntimeProfile } from './lib/runtime-ports.mjs';
 import {
   buildTrayTemplate,
   createFrameworkArgs,
@@ -40,8 +41,9 @@ const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
 const notificationPreloadPath = fileURLToPath(new URL('./notification-preload.cjs', import.meta.url));
 const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.png', import.meta.url));
-const gatewayPort = parsePort(process.env.PORT, 8080);
-const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${gatewayPort}/`;
+const runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
+const runtimePorts = resolveRuntimePorts(process.env, runtimeProfile);
+const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${runtimePorts.gateway}/`;
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
 const applicationControlToken = randomBytes(32).toString('hex');
 const NOTIFICATION_KIT_NAME = '@itharbors/kit-notifications';
@@ -307,10 +309,16 @@ function startElectronApp() {
 
 function startFramework() {
   console.log('Starting ITHARBORS framework from Electron');
-  const child = spawn('npm', frameworkArgs, {
+  const npm = createNpmSpawnSpec(frameworkArgs);
+  const child = spawn(npm.command, npm.args, {
+    ...npm.spawnOptions,
     cwd: rootDir,
     env: {
       ...process.env,
+      HARBORS_RUNTIME_PROFILE: runtimeProfile,
+      HARBORS_GATEWAY_PORT: String(runtimePorts.gateway),
+      HARBORS_SERVER_PORT: String(runtimePorts.server),
+      HARBORS_CLIENT_PORT: String(runtimePorts.client),
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
       HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
       HARBORS_HOST_MODE: 'desktop',
@@ -324,6 +332,7 @@ function startFramework() {
 
   child.on('error', (error) => {
     console.error('Failed to start framework:', error.message);
+    process.exitCode = 1;
     app.quit();
   });
 
@@ -463,7 +472,7 @@ async function startNotificationService() {
   registerNotificationToastIpc();
   notificationHost = createNotificationHost({
     store: notificationStore,
-    port: parseNotificationPort(process.env.HARBORS_NOTIFICATION_PORT),
+    port: runtimePorts.notification,
   });
   notificationPort = await notificationHost.start();
   refreshNotificationIndicators();
