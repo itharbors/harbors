@@ -302,7 +302,7 @@ git commit -m '[Optimize] 建立关系图身份与缓存基础'
 - Produces: `layoutRelationshipGraph(graph: RelationshipGraph, canvas: CanvasSize): RelationshipLayout`.
 - Produces: `fitRelationshipViewport(layout, canvas): RelationshipViewport`, `zoomRelationshipViewport`, `panRelationshipViewport`, and `moveRelationshipNode`.
 
-- [ ] **Step 1: Write failing token and grouping tests**
+- [x] **Step 1: Write failing token and grouping tests**
 
 Require concrete normalization:
 
@@ -322,7 +322,7 @@ expect(groups.get('audit_log')).not.toBe(groups.get('user'));
 
 Add a 2,000-table candidate-generation test with an injected diagnostic counter exported only from `groups.ts` as `groupRelationshipGraph(graph, { onCandidatePair })`; assert candidates remain below `tables.length * 24`, proving the token index prevents all-pairs work.
 
-- [ ] **Step 2: Write failing layout, edge, and viewport tests**
+- [x] **Step 2: Write failing layout, edge, and viewport tests**
 
 Port all current SQLite/MySQL layout cases into the shared suite, then add:
 
@@ -334,14 +334,14 @@ expect(assertNoNodeOverlap(wide)).toBeUndefined();
 expect(assertNoNodeOverlap(narrow)).toBeUndefined();
 expect(layoutRelationshipGraph(businessGraph, { width: 1400, height: 500 })).toEqual(wide);
 
-const moved = moveRelationshipNode(wide, 'user_profile', { x: 50, y: 70 });
+const moved = moveRelationshipNode(wide, businessGraph, 'user_profile', { x: 50, y: 70 });
 expect(moved.nodes.find((node) => node.name === 'user_profile')).toMatchObject({ x: 50, y: 70 });
 expect(moved.edges.filter(isIncident('user_profile'))).not.toEqual(wide.edges.filter(isIncident('user_profile')));
 ```
 
 Retain exact tests for reciprocal cycles, strongly connected components, self paths, parallel constraints, path coordinates inside bounds, variable node heights, missing relationship endpoints, scale clamp `0.3..2`, zoom anchors, pan, and a 5,000-table chain.
 
-- [ ] **Step 3: Run the new suites and verify the layout exports are absent**
+- [x] **Step 3: Run the new suites and verify the layout exports are absent**
 
 Run:
 
@@ -353,13 +353,13 @@ npx vitest run --config packages/relationship-graph/vitest.config.ts \
 
 Expected: FAIL on missing tokenizer, grouping, and layout exports.
 
-- [ ] **Step 4: Implement bounded token similarity and stable groups**
+- [x] **Step 4: Implement bounded token similarity and stable groups**
 
 Use Unicode normalization and explicit boundaries before lowercase conversion. Conservative plural normalization removes `ies -> y` and a trailing `s` only for tokens longer than three characters and not ending in `ss`. Weight first shared business token highest; lower the contribution of `map`, `link`, `rel`, `history`, `log`, `detail`, `id`, and `data`. Build an inverted `Map<token, sorted table names>`; score only candidates sharing an indexed token or a normalized prefix of at least four characters. Keep at most six stable name neighbors per node.
 
 Combine visible foreign-key edges and hidden name edges with deterministic union/find community growth capped by a fixed maximum soft-group size. An external-key edge may connect groups for adjacency without changing their business group key. Sort every input list with the existing case-insensitive/case-sensitive fallback comparator before traversal.
 
-- [ ] **Step 5: Implement two-level viewport packing and edge routing**
+- [x] **Step 5: Implement two-level viewport packing and edge routing**
 
 Keep these constants centralized in `layout.ts`:
 
@@ -369,7 +369,7 @@ export const RELATIONSHIP_LAYOUT = {
   nodeWidth: 260,
   headerHeight: 42,
   rowHeight: 26,
-  layerGap: 140,
+  layerGap: 60,
   nodeGap: 44,
   groupGap: 72,
 } as const;
@@ -379,7 +379,7 @@ Within each group, rank the iterative strongly connected components of the visib
 
 Move routing into `edges.ts`. Route only valid visible relationships after final positions; include paths in bounds. `moveRelationshipNode` clones only the public layout values, moves one node, reroutes incident and affected parallel edges, then recomputes bounds. If any computed position is non-finite, return a natural-name adaptive grid using `max(1, floor((canvas.width - 96) / (nodeWidth + nodeGap)))` columns.
 
-- [ ] **Step 6: Run package tests and build**
+- [x] **Step 6: Run package tests and build**
 
 Run:
 
@@ -390,7 +390,7 @@ npm run build -w @itharbors/relationship-graph
 
 Expected: every shared package test PASS and TypeScript emits declarations.
 
-- [ ] **Step 7: Commit the deterministic layout**
+- [x] **Step 7: Commit the deterministic layout**
 
 ```bash
 git add packages/relationship-graph/src packages/relationship-graph/tests
