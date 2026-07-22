@@ -15,6 +15,7 @@ import {
   createNotificationHost,
   createNotificationStore,
 } from './lib/notification-host.mjs';
+import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
 import { resolveRuntimePorts, resolveRuntimeProfile } from './lib/runtime-ports.mjs';
 import {
   buildTrayTemplate,
@@ -308,7 +309,9 @@ function startElectronApp() {
 
 function startFramework() {
   console.log('Starting ITHARBORS framework from Electron');
-  const child = spawn('npm', frameworkArgs, {
+  const npm = createNpmSpawnSpec(frameworkArgs);
+  const child = spawn(npm.command, npm.args, {
+    ...npm.spawnOptions,
     cwd: rootDir,
     env: {
       ...process.env,
@@ -329,6 +332,7 @@ function startFramework() {
 
   child.on('error', (error) => {
     console.error('Failed to start framework:', error.message);
+    process.exitCode = 1;
     app.quit();
   });
 

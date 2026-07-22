@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
 import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
+import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -58,13 +59,20 @@ process.on('SIGTERM', () => {
 });
 
 function start(name, args, env) {
-  const child = spawn('npm', args, {
+  const npm = createNpmSpawnSpec(args, { env });
+  const child = spawn(npm.command, npm.args, {
+    ...npm.spawnOptions,
     env,
     stdio: 'inherit',
   });
 
   child.on('error', (error) => {
     console.error(`[${name}] failed to start:`, error.message);
+    process.exitCode = 1;
+    if (!shuttingDown) {
+      shuttingDown = true;
+      stopAll();
+    }
   });
 
   return child;
