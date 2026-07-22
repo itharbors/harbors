@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
-import { createDevPages, createDevServerEnv } from './lib/dev-launcher.mjs';
+import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -19,20 +19,19 @@ if (parsed.errors.length > 0) {
 
 const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const serverEnv = createDevServerEnv(baseEnv, requestedKit);
-const gatewayPort = parsePort(baseEnv.PORT, 8080);
+const stack = createDevStackEnvironments(baseEnv, requestedKit);
 const devPages = createDevPages(requestedKit);
 
 console.log('Starting ITHARBORS dev stack');
 if (requestedKit) {
   console.log(`Requested Kit: ${requestedKit}`);
 }
-printDevPages(gatewayPort, devPages);
+printDevPages(stack.ports.gateway, devPages);
 
 const children = [
-  start('gateway', ['run', 'dev', '-w', 'packages/gateway'], baseEnv),
-  start('server', ['run', 'dev', '-w', 'packages/server'], serverEnv),
-  start('client', ['run', 'dev', '-w', 'packages/client'], baseEnv),
+  start('gateway', ['run', 'dev', '-w', 'packages/gateway'], stack.gatewayEnv),
+  start('server', ['run', 'dev', '-w', 'packages/server'], stack.serverEnv),
+  start('client', ['run', 'dev', '-w', 'packages/client'], stack.clientEnv),
 ];
 
 let shuttingDown = false;
@@ -87,11 +86,6 @@ function printDevPages(port, pages) {
     console.log(`  ${name.padEnd(10)} ${baseUrl}${path}`);
   }
   console.log('');
-}
-
-function parsePort(value, fallback) {
-  const port = parseInt(value || '', 10);
-  return Number.isFinite(port) ? port : fallback;
 }
 
 function parseArgs(args) {

@@ -15,7 +15,7 @@ import {
   shutdownDesktopServices,
   showKitChooser,
 } from './electron-launcher.mjs';
-import { createDevPages, createDevServerEnv } from './dev-launcher.mjs';
+import { createDevPages, createDevServerEnv, createDevStackEnvironments } from './dev-launcher.mjs';
 
 const rootDir = new URL('../..', import.meta.url);
 
@@ -57,6 +57,18 @@ test('passes only an explicit requested Kit to the Web server without leaking st
     CE_DEFAULT_KIT: '@itharbors/kit-mysql',
   });
   assert.deepEqual(base, { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' });
+});
+
+test('isolates each Web child process from inherited legacy port variables', () => {
+  const stack = createDevStackEnvironments({ PORT: '8080', SERVER_PORT: '3000', CLIENT_PORT: '5173' }, '', 'development');
+  assert.deepEqual(stack.ports, { gateway: 18080, server: 13000, client: 15173, notification: 17897 });
+  assert.equal(stack.gatewayEnv.PORT, '18080');
+  assert.equal(stack.gatewayEnv.SERVER_PORT, '13000');
+  assert.equal(stack.gatewayEnv.CLIENT_PORT, '15173');
+  assert.equal(stack.serverEnv.PORT, '13000');
+  assert.equal(stack.serverEnv.SERVER_PORT, undefined);
+  assert.equal(stack.clientEnv.CLIENT_PORT, '15173');
+  assert.equal(stack.clientEnv.PORT, undefined);
 });
 
 test('always prints the chooser and adds an encoded requested Kit shortcut', () => {
