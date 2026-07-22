@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
-import { createDevPages, createDevServerEnv } from './lib/dev-launcher.mjs';
+import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
+import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -19,20 +20,19 @@ if (parsed.errors.length > 0) {
 
 const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const serverEnv = createDevServerEnv(baseEnv, requestedKit);
-const gatewayPort = parsePort(baseEnv.PORT, 8080);
+const stack = createDevStackEnvironments(baseEnv, requestedKit);
 const devPages = createDevPages(requestedKit);
 
 console.log('Starting ITHARBORS dev stack');
 if (requestedKit) {
   console.log(`Requested Kit: ${requestedKit}`);
 }
-printDevPages(gatewayPort, devPages);
+printDevPages(stack.ports.gateway, devPages);
 
 const children = [
-  start('gateway', ['run', 'dev', '-w', 'packages/gateway'], baseEnv),
-  start('server', ['run', 'dev', '-w', 'packages/server'], serverEnv),
-  start('client', ['run', 'dev', '-w', 'packages/client'], baseEnv),
+  start('gateway', ['run', 'dev', '-w', 'packages/gateway'], stack.gatewayEnv),
+  start('server', ['run', 'dev', '-w', 'packages/server'], stack.serverEnv),
+  start('client', ['run', 'dev', '-w', 'packages/client'], stack.clientEnv),
 ];
 
 let shuttingDown = false;
@@ -59,13 +59,20 @@ process.on('SIGTERM', () => {
 });
 
 function start(name, args, env) {
-  const child = spawn('npm', args, {
+  const npm = createNpmSpawnSpec(args, { env });
+  const child = spawn(npm.command, npm.args, {
+    ...npm.spawnOptions,
     env,
     stdio: 'inherit',
   });
 
   child.on('error', (error) => {
     console.error(`[${name}] failed to start:`, error.message);
+    process.exitCode = 1;
+    if (!shuttingDown) {
+      shuttingDown = true;
+      stopAll();
+    }
   });
 
   return child;
@@ -87,11 +94,6 @@ function printDevPages(port, pages) {
     console.log(`  ${name.padEnd(10)} ${baseUrl}${path}`);
   }
   console.log('');
-}
-
-function parsePort(value, fallback) {
-  const port = parseInt(value || '', 10);
-  return Number.isFinite(port) ? port : fallback;
 }
 
 function parseArgs(args) {
@@ -144,12 +146,12 @@ function parseArgs(args) {
 function printHelp() {
   console.log(`
 Usage:
-  npm run dev
-  npm run dev -- --kit <kit-package-name-or-path>
+  npm run dev:web
+  npm run dev:web -- --kit <kit-package-name-or-path>
 
 Examples:
-  npm run dev -- --kit @itharbors/kit-default
-  npm run dev -- --kit ./kits/default
-  npm run dev -- --kit-path /absolute/path/to/kit
+  npm run dev:web -- --kit @itharbors/kit-default
+  npm run dev:web -- --kit ./kits/default
+  npm run dev:web -- --kit-path /absolute/path/to/kit
 `.trim());
 }
