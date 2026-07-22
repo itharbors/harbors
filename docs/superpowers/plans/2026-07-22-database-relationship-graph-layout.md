@@ -144,7 +144,7 @@ git commit -m '[Optimize] 提供 SQLite 稳定文件身份'
 - Produces shared types: `RelationshipGraph`, `RelationshipTable`, `Relationship`, `RelationshipViewport`, `CanvasSize`, `NodePosition`, `RelationshipLayout`, and `PersistedRelationshipStateV1`.
 - Storage dependency is injected as `Pick<Storage, 'getItem' | 'setItem'>`; tests do not patch global localStorage.
 
-- [ ] **Step 1: Scaffold package metadata and root build/test ordering**
+- [x] **Step 1: Scaffold package metadata and root build/test ordering**
 
 Create `package.json`:
 
@@ -166,34 +166,34 @@ Create `package.json`:
 
 Use the same declaration/outDir/rootDir compiler options as `packages/mysql-contracts/tsconfig.json`. Set Vitest `environment: 'jsdom'` and include `tests/**/*.test.ts`. Insert `npm run build -w @itharbors/relationship-graph` after both contracts and before client/plugin builds; insert its test before Kit tests. Run `npm install` to update only the lockfile/workspace links.
 
-- [ ] **Step 2: Write failing identity and collision-bucket tests**
+- [x] **Step 2: Write failing identity and collision-bucket tests**
 
 The tests must include these concrete cases:
 
 ```ts
 const sqlite = createDatabaseLayoutIdentity('sqlite', ['/tmp/a.db', 'dev:1:ino:2']);
-const mysql = createDatabaseLayoutIdentity('mysql', ['db.example:3306', 'app']);
+const otherSqlite = createDatabaseLayoutIdentity('sqlite', ['/tmp/b.db', 'dev:1:ino:3']);
 expect(sqlite.canonical).toBe('sqlite|9:/tmp/a.db|11:dev:1:ino:2');
-expect(mysql.canonical).toBe('mysql|15:db.example:3306|3:app');
+expect(otherSqlite.canonical).toBe('sqlite|9:/tmp/b.db|11:dev:1:ino:3');
 
 const digest = vi.fn(async () => 'same-digest');
 const store = createRelationshipLayoutStore(memoryStorage, { digest, now: () => 20 });
 await store.save(sqlite, stateAt(10, 20));
-await store.save(mysql, stateAt(30, 40));
+await store.save(otherSqlite, stateAt(30, 40));
 expect(await store.load(sqlite)).toEqual(stateAt(10, 20));
-expect(await store.load(mysql)).toEqual(stateAt(30, 40));
+expect(await store.load(otherSqlite)).toEqual(stateAt(30, 40));
 expect(JSON.parse(memoryStorage.value()).entries).toHaveLength(2);
 ```
 
 Also cover engine-separated keys with the real digest, malformed JSON, wrong version, `NaN`/infinite/out-of-range coordinates, get/set throwing, an eight-entry bucket retaining the newest entries, and saving after another writer added a different identity to the same bucket.
 
-- [ ] **Step 3: Run the package tests and verify exports do not exist**
+- [x] **Step 3: Run the package tests and verify exports do not exist**
 
 Run: `npm test -w @itharbors/relationship-graph`
 
 Expected: FAIL because the package sources and exports do not exist.
 
-- [ ] **Step 4: Implement exact shared types and canonical identity**
+- [x] **Step 4: Implement exact shared types and canonical identity**
 
 Define the public foundations in `types.ts`:
 
@@ -249,7 +249,7 @@ export function createDatabaseLayoutIdentity(
 }
 ```
 
-- [ ] **Step 5: Implement defensive async storage**
+- [x] **Step 5: Implement defensive async storage**
 
 Expose this interface:
 
@@ -267,7 +267,7 @@ export function createRelationshipLayoutStore(
 
 The default digest uses `crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))` and lowercase hex. If Web Crypto is absent or rejects, return a stable FNV-1a-derived hexadecimal fallback. Build keys as `itharbors:relationship-layout:v1:${identity.engine}:${digest}`. Each load/save validates `{ version: 1, entries: [...] }`, matches the full canonical identity, clones valid finite state, re-reads before save, and retains at most eight newest entries. Catch storage and digest failures; load returns `null`, save resolves without throwing.
 
-- [ ] **Step 6: Build and run the shared tests**
+- [x] **Step 6: Build and run the shared tests**
 
 Run:
 
@@ -278,7 +278,7 @@ npm test -w @itharbors/relationship-graph
 
 Expected: build succeeds and identity/storage tests PASS.
 
-- [ ] **Step 7: Commit package foundations**
+- [x] **Step 7: Commit package foundations**
 
 ```bash
 git add package.json package-lock.json packages/relationship-graph
