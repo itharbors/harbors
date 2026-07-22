@@ -102,6 +102,17 @@ test('posts JSON to the configured loopback Host', async () => {
   assert.deepEqual(JSON.parse(calls[0].options.body), { title: 'Done', source: 'Codex' });
 });
 
+test('uses the stable Notification Host port by default', async () => {
+  const calls = [];
+  await sendNotification({ title: 'Default port' }, {
+    fetchImpl: async (url) => {
+      calls.push(url);
+      return new Response(JSON.stringify({ id: 'default-port' }), { status: 201 });
+    },
+  });
+  assert.deepEqual(calls, ['http://127.0.0.1:48383/v1/notifications']);
+});
+
 test('surfaces structured Host errors and connection failures', async () => {
   await assert.rejects(
     sendNotification({ title: 'Invalid' }, {

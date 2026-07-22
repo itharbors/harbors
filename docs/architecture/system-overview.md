@@ -12,12 +12,12 @@ flowchart LR
     Browser["浏览器"]
     Tray["Electron Tray / KitCatalog"]
     Electron["按需 Kit BrowserWindow"]
-    Host["Notification Host 127.0.0.1:17896"]
+    Host["Notification Host 127.0.0.1:48383"]
     Agent["Agent / notify-user Skill"]
     Toast["桌面弹窗 / 任务栏角标"]
-    Gateway["Gateway :8080"]
-    Server["Server :3000"]
-    Client["Vite Client :5173"]
+    Gateway["Gateway :48380"]
+    Server["Server :48381"]
+    Client["Vite Client :48382"]
     DB[("SQLite 会话元数据")]
     Panel["Panel iframe"]
 
@@ -43,7 +43,7 @@ flowchart LR
 
 | 路径 | 职责 | 不负责 |
 | --- | --- | --- |
-| `packages/gateway` | 在 8080 提供统一入口并按 URL 前缀反向代理 | 业务路由、认证、持久化 |
+| `packages/gateway` | 在 48380 提供统一入口并按 URL 前缀反向代理 | 业务路由、认证、持久化 |
 | `packages/server` | 会话、Editor 运行时、Kit/插件、消息、窗口、API、SSE、存储 | 具体 Panel UI |
 | `packages/client` | 工作台、Web Components、布局交互、主题、HTTP/SSE 客户端 | 插件装载和权威窗口状态 |
 | `packages/plugin-types` | 插件与 Panel 可见的共享 TypeScript 协议 | 运行时实现 |

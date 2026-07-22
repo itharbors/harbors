@@ -105,6 +105,7 @@ test('limits the default cleanup command to development ports', async () => {
   assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48380(?:\s|$)/);
   assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48381(?:\s|$)/);
   assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48382(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48383(?:\s|$)/);
   assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:49383(?:\s|$)/);
 });
 
