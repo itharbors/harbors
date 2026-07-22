@@ -124,7 +124,7 @@ async function loadDefinition(options: {
   notificationPort?: string | null;
 } = {}) {
   if (options.notificationPort === null) {
-    delete process.env.HARBORS_NOTIFICATION_PORT;
+    vi.stubEnv('HARBORS_NOTIFICATION_PORT', '');
   } else {
     vi.stubEnv('HARBORS_NOTIFICATION_PORT', options.notificationPort ?? '19001');
   }
