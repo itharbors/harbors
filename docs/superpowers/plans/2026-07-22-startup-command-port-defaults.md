@@ -250,3 +250,100 @@
   Run: `git status --short && git log --oneline origin/main..HEAD`
 
   Expected: 工作树干净，日志包含本计划的三个实现 `[Feature]` 提交以及设计与计划提交。
+
+### Task 5: 消除旧端口回退并同步通知 Skill
+
+**Files:**
+- Modify: `packages/gateway/src/index.ts:4-6`
+- Modify: `packages/server/src/index.ts:5`
+- Modify: `packages/client/vite.config.ts:5`
+- Modify: `scripts/lib/notification-host.mjs:4`
+- Modify: `scripts/lib/notification-host.test.mjs:10-16`
+- Modify: `.agents/skills/notify-user/scripts/notify.mjs:59-63`
+- Modify: `.agents/skills/notify-user/tests/notify.test.mjs:77-101`
+- Modify: `.agents/skills/notify-user/SKILL.md:57`
+- Modify: `scripts/lib/electron-launcher.test.mjs:102-109`
+- Modify: `docs/architecture/system-overview.md:15-46`
+- Modify: `docs/guides/developing-plugins-and-kits.md:407`
+- Test: `.agents/skills/notify-user/tests/notify.test.mjs`
+- Test: `scripts/lib/notification-host.test.mjs`
+- Test: `scripts/lib/electron-launcher.test.mjs`
+
+**Interfaces:**
+- Consumes: Task 1 的稳定端口 `{ gateway: 48380, server: 48381, client: 48382, notification: 48383 }` 与开发端口 `{ gateway: 49380, server: 49381, client: 49382, notification: 49383 }`。
+- Produces: 所有可直接执行的稳定回退值和已安装通知 Skill 的默认 Notification Host 端口均为 `48383`；开发启动器仍显式注入 `49380`–`49383`。
+
+- [ ] **Step 1: 添加防回归断言**
+
+  在 `.agents/skills/notify-user/tests/notify.test.mjs` 的通知发送测试旁新增：
+
+  ```js
+  test('uses the stable Notification Host port by default', async () => {
+    const calls = [];
+    await sendNotification({ title: 'Default port' }, {
+      fetchImpl: async (url) => {
+        calls.push(url);
+        return new Response(JSON.stringify({ id: 'default-port' }), { status: 201 });
+      },
+    });
+    assert.deepEqual(calls, ['http://127.0.0.1:48383/v1/notifications']);
+  });
+  ```
+
+  将 `scripts/lib/notification-host.test.mjs` 的无输入端口断言改为 `48383`。在 `scripts/lib/electron-launcher.test.mjs` 的清理命令测试增加：
+
+  ```js
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48383(?:\s|$)/);
+  ```
+
+- [ ] **Step 2: 运行聚焦测试并确认当前实现失败**
+
+  Run: `node --test .agents/skills/notify-user/tests/notify.test.mjs scripts/lib/notification-host.test.mjs scripts/lib/electron-launcher.test.mjs`
+
+  Expected: FAIL，通知 Skill 与 Notification Host 的无覆盖默认端口仍是 `17896`，新通知 Skill URL 断言期望 `48383` 不匹配。
+
+- [ ] **Step 3: 更新所有可执行稳定回退值**
+
+  将以下回退值替换为稳定默认端口，保留相应环境变量优先级、校验与启动器显式注入逻辑：
+
+  ```ts
+  // packages/gateway/src/index.ts
+  const PORT = parseInt(process.env.PORT || '48380', 10);
+  const SERVER_PORT = parseInt(process.env.SERVER_PORT || '48381', 10);
+  const CLIENT_PORT = parseInt(process.env.CLIENT_PORT || '48382', 10);
+
+  // packages/server/src/index.ts
+  const PORT = parseInt(process.env.PORT || '48381', 10);
+
+  // packages/client/vite.config.ts
+  port: parseInt(process.env.CLIENT_PORT || '48382', 10),
+  ```
+
+  在 `scripts/lib/notification-host.mjs` 中设定：
+
+  ```js
+  const DEFAULT_PORT = 48383;
+  ```
+
+  在 `.agents/skills/notify-user/scripts/notify.mjs` 的 `sendNotification` 默认解构中设定：
+
+  ```js
+  port = process.env.HARBORS_NOTIFICATION_PORT || '48383',
+  ```
+
+- [ ] **Step 4: 同步用户文档与清理边界**
+
+  将 `.agents/skills/notify-user/SKILL.md` 和 `docs/guides/developing-plugins-and-kits.md` 中的 Notification Host 默认值更新为 `48383`。将 `docs/architecture/system-overview.md` 的稳定运行拓扑更新为 Notification Host `48383`、Gateway `48380`、Server `48381`、Client `48382`，并修正 Gateway 描述表中的端口。不要修改历史的 `docs/superpowers/specs` 或 `docs/superpowers/plans`。
+
+- [ ] **Step 5: 运行聚焦验证并确认通过**
+
+  Run: `node --test .agents/skills/notify-user/tests/notify.test.mjs scripts/lib/notification-host.test.mjs scripts/lib/electron-launcher.test.mjs && rg -n '17896|8080|3000|5173' .agents/skills/notify-user packages/gateway/src/index.ts packages/server/src/index.ts packages/client/vite.config.ts scripts/lib/notification-host.mjs docs/architecture/system-overview.md docs/guides/developing-plugins-and-kits.md`
+
+  Expected: node 测试全部通过；`rg` 对这些可执行回退和当前用户文档无匹配（测试中传入的非默认示例端口不计入检索范围）。
+
+- [ ] **Step 6: 提交端口回退修复**
+
+  ```bash
+  git add packages/gateway/src/index.ts packages/server/src/index.ts packages/client/vite.config.ts scripts/lib/notification-host.mjs scripts/lib/notification-host.test.mjs .agents/skills/notify-user/scripts/notify.mjs .agents/skills/notify-user/tests/notify.test.mjs .agents/skills/notify-user/SKILL.md scripts/lib/electron-launcher.test.mjs docs/architecture/system-overview.md docs/guides/developing-plugins-and-kits.md
+  git commit -m "[Feature] 同步端口回退与通知默认值"
+  ```
