@@ -210,7 +210,7 @@
   git commit -m "[Feature] 更新启动命令与端口文档"
   ```
 
-### Task 4: 执行仓库验证和开发 Web 冒烟检查
+### Task 4: 执行仓库验证和开发 Gateway 连通性冒烟检查
 
 **Files:**
 - Modify: 无
@@ -219,7 +219,7 @@
 
 **Interfaces:**
 - Consumes: Task 1–3 已实现的端口解析、脚本命令和文档契约。
-- Produces: 通过完整静态测试与可访问的开发 Gateway 健康检查，证明开发端口组可用且不触及稳定端口组。
+- Produces: 通过完整静态测试与可达的开发 Gateway `49380`，证明开发端口组可用且不触及稳定端口组。
 
 - [ ] **Step 1: 运行完整项目检查**
 
@@ -233,11 +233,11 @@
 
   Expected: 进程持续运行，并在日志中显示 Gateway `49380`、Server `49381`、Client `49382`；保留其进程标识供下一步停止。
 
-- [ ] **Step 3: 验证开发 Gateway 与端口隔离**
+- [ ] **Step 3: 验证开发 Gateway 可达性与端口隔离**
 
   Run: `curl --fail --silent http://127.0.0.1:49380/health && (lsof -nP -iTCP:48380 -sTCP:LISTEN || true)`
 
-  Expected: health 请求成功；`lsof` 只会显示已有稳定实例（若存在），开发 Web 栈本身不占用 `48380`。
+  Expected: `curl` 请求成功，证明 Gateway 在 `49380` 可达；该命令不约定 `/health` 的专用响应内容。`lsof` 只会显示已有稳定实例（若存在），开发 Web 栈本身不占用 `48380`。
 
 - [ ] **Step 4: 停止开发 Web 栈并确认其端口释放**
 
