@@ -43,23 +43,23 @@ npm run dev
 图标，从列表选择 Default、SQLite 或 MySQL；首次选择会按需加载，之后再次选择只会打开或
 聚焦已有窗口。
 
-| 服务 | 稳定 Electron（`npm run electron`） | 隔离开发 Electron（`npm run dev`） | 职责 |
+| 服务 | 稳定 Electron（`npm run start`） | 隔离开发 Electron（`npm run dev`） | 职责 |
 | --- | --- | --- | --- |
-| Gateway | http://localhost:8080 | http://localhost:18080 | 统一入口；代理 API、SSE 与前端资源 |
-| Server | http://localhost:3000 | http://localhost:13000 | 会话、Kit、插件运行时、消息和存储 |
-| Client | http://localhost:5173 | http://localhost:15173 | 基于 Vite 的工作台前端 |
-| Notification Host | http://127.0.0.1:17896 | http://127.0.0.1:17897 | 接收本机通知、维护未读状态并驱动桌面提示 |
+| Gateway | http://localhost:48380 | http://localhost:49380 | 统一入口；代理 API、SSE 与前端资源 |
+| Server | http://localhost:48381 | http://localhost:49381 | 会话、Kit、插件运行时、消息和存储 |
+| Client | http://localhost:48382 | http://localhost:49382 | 基于 Vite 的工作台前端 |
+| Notification Host | http://127.0.0.1:48383 | http://127.0.0.1:49383 | 接收本机通知、维护未读状态并驱动桌面提示 |
 
-Gateway 会把 `/api/*` 和 `/sse/*` 转发给 Server，并把其他请求转发到 Client 开发服务。需要直接在浏览器中调试时运行 `npm run dev:web`，再访问 [http://localhost:18080](http://localhost:18080)。
+Gateway 会把 `/api/*` 和 `/sse/*` 转发给 Server，并把其他请求转发到 Client 开发服务。需要直接在浏览器中调试时运行 `npm run dev:web`，再访问 [http://localhost:49380](http://localhost:49380)。
 
 ### Electron 与 Kit 直达
 
 ```bash
-npm run electron
+npm run start
 ```
 
-`npm run electron` 是日常使用的稳定桌面入口，保留 8080、3000、5173 和 17896 端口；`npm run dev`
-是隔离开发入口，使用 18080、13000、15173 和 17897，因此可与稳定实例并行运行。默认只显示 Kit 托盘；使用 `--kit` 代表已经显式
+`npm run start` 是日常使用的稳定桌面入口；`npm run electron` 保留为兼容入口。稳定端口为 Gateway 48380、Server 48381、Client 48382 和 Notification Host 48383；`npm run dev`
+是隔离开发入口，使用 Gateway 49380、Server 49381、Client 49382 和 Notification Host 49383，因此可与稳定实例并行运行。默认只显示 Kit 托盘；使用 `--kit` 代表已经显式
 选择，服务就绪后只自动打开指定 Kit，但 Tray 与 Catalog 仍保留其他 Kit，菜单继续使用统一
 的多 Kit 聚合形式：
 
@@ -120,20 +120,20 @@ npm run dev -- --kit ./kits/default
 
 可用 `HARBORS_GATEWAY_PORT`、`HARBORS_SERVER_PORT`、`HARBORS_CLIENT_PORT` 和
 `HARBORS_NOTIFICATION_PORT` 分别覆盖四个端口；每个值必须是 1–65535 的整数，且四个端口不得重复。
-`npm run kill` 只会强制释放开发端口 18080、13000 和 15173，不会关闭稳定 Electron 实例；使用前仍请确认这些进程确实属于本项目。
+`npm run kill` 只会强制释放开发 Web 端口 49380、49381 和 49382，不会关闭稳定 Electron 实例或 Notification Host；使用前仍请确认这些进程确实属于本项目。
 
 ## 架构概览
 
 ```text
 浏览器 / Electron
         │
-    Gateway (:8080)
-      ├─ /api、/sse ───────► Server (:3000)
+    Gateway (:48380)
+      ├─ /api、/sse ───────► Server (:48381)
       │                         ├─ Application Runtime（启动插件）
       │                         ├─ 会话运行时（按需创建）
       │                         ├─ Kit 加载器
       │                         └─ 插件与消息路由器
-      └─ 其他请求 ─────────► Vite Client (:5173)
+      └─ 其他请求 ─────────► Vite Client (:48382)
 ```
 
 ### Kit

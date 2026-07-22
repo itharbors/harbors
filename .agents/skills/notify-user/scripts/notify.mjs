@@ -57,7 +57,7 @@ export function parseNotifyArgs(args) {
 }
 
 export async function sendNotification(input, {
-  port = process.env.HARBORS_NOTIFICATION_PORT || '17896',
+  port = process.env.HARBORS_NOTIFICATION_PORT || '48383',
   fetchImpl = globalThis.fetch,
 } = {}) {
   const normalizedPort = normalizePort(port);

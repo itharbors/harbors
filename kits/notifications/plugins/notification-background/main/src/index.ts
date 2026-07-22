@@ -9,7 +9,7 @@ import {
 
 declare const editor: any;
 
-const DEFAULT_NOTIFICATION_PORT = 17896;
+const DEFAULT_NOTIFICATION_PORT = 48383;
 let skillInstaller: ReturnType<typeof createCodexSkillInstaller> | null = null;
 let applicationHostMode: 'desktop' | 'web' = 'web';
 

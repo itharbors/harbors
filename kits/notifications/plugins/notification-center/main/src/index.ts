@@ -1,6 +1,6 @@
 declare const editor: any;
 
-const DEFAULT_NOTIFICATION_PORT = 17896;
+const DEFAULT_NOTIFICATION_PORT = 48383;
 const CENTER_PANEL = '@itharbors/notification-center.center';
 
 let runtime: any;

@@ -1,9 +1,9 @@
 import http from 'node:http';
 import { selectGatewayTarget } from './routing';
 
-const PORT = parseInt(process.env.PORT || '8080', 10);
-const SERVER_PORT = parseInt(process.env.SERVER_PORT || '3000', 10);
-const CLIENT_PORT = parseInt(process.env.CLIENT_PORT || '5173', 10);
+const PORT = parseInt(process.env.PORT || '48380', 10);
+const SERVER_PORT = parseInt(process.env.SERVER_PORT || '48381', 10);
+const CLIENT_PORT = parseInt(process.env.CLIENT_PORT || '48382', 10);
 const IS_PROD = process.env.NODE_ENV === 'production';
 const HOST = process.env.HARBORS_BIND_HOST;
 

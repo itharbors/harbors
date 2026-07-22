@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 
-const DEFAULT_PORT = 17896;
+const DEFAULT_PORT = 48383;
 const DEFAULT_DURATION_MS = 8000;
 const MAX_BODY_BYTES = 16 * 1024;
 const LEVELS = new Set(['info', 'success', 'warning', 'error']);

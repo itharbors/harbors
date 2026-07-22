@@ -9,7 +9,7 @@ import {
 } from './notification-host.mjs';
 
 test('parses the configured notification port', () => {
-  assert.equal(parseNotificationPort(undefined), 17896);
+  assert.equal(parseNotificationPort(undefined), 48383);
   assert.equal(parseNotificationPort('18000'), 18000);
   assert.throws(() => parseNotificationPort('0'), /between 1 and 65535/);
   assert.throws(() => parseNotificationPort('65536'), /between 1 and 65535/);
