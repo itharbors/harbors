@@ -53,9 +53,13 @@ describe('MySQL connection panel', () => {
     ]);
     expect(document.querySelector<HTMLInputElement>('[data-field="host"]')?.value).toBe('127.0.0.1');
     expect(document.querySelector<HTMLInputElement>('[data-field="host"]')?.name).toBe('host');
+    expect(document.querySelector<HTMLInputElement>('[data-field="host"]')?.required).toBe(true);
     expect(document.querySelector<HTMLInputElement>('[data-field="port"]')?.value).toBe('3306');
+    expect(document.querySelector<HTMLInputElement>('[data-field="port"]')?.required).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[data-field="user"]')?.required).toBe(true);
     expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.type).toBe('password');
     expect(document.querySelector<HTMLInputElement>('[data-field="database"]')?.placeholder).toBe('连接后选择…');
+    expect(document.querySelector<HTMLInputElement>('[data-field="database"]')?.required).toBe(false);
     expect(document.querySelector('.connection-readout')?.textContent).toContain('凭据仅保留在当前服务端会话中');
 
     const css = fs.readFileSync(path.join(
@@ -165,6 +169,33 @@ describe('MySQL connection panel', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('.connection-readout')?.textContent).toContain('未选择数据库');
     });
+  });
+
+  it.each([
+    ['host', '   ', '请输入 MySQL 主机。'],
+    ['port', '0', '端口必须是 1 到 65535 之间的整数。'],
+    ['port', '65536', '端口必须是 1 到 65535 之间的整数。'],
+    ['port', '3306.5', '端口必须是 1 到 65535 之间的整数。'],
+    ['user', '   ', '请输入 MySQL 用户名。'],
+  ] as const)('validates %s locally before connecting', async (field, value, message) => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      throw new Error('Invalid form input reached MySQL core');
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    setValue('password', 'keep-secret');
+    setValue(field, value);
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain(message));
+    const invalidInput = document.querySelector<HTMLInputElement>(`[data-field="${field}"]`)!;
+    expect(request.mock.calls.filter((call) => call[1] === 'connect')).toHaveLength(0);
+    expect(invalidInput.getAttribute('aria-invalid')).toBe('true');
+    expect(invalidInput.getAttribute('aria-describedby')).toBe('connection-error');
+    expect(document.activeElement).toBe(invalidInput);
+    expect(document.querySelector<HTMLInputElement>('[data-field="password"]')?.value).toBe('keep-secret');
   });
 
   it('renders connect and disconnect actions as mutually exclusive states', async () => {
