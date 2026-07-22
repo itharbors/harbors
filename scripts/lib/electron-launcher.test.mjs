@@ -88,7 +88,8 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
+  assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
+  assert.equal(packageJson.scripts.electron, 'npm run start --');
   assert.equal(packageJson.scripts.dev, 'node scripts/dev-electron.mjs');
   const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   assert.match(electronSource, /resolveRuntimePorts/);
@@ -98,12 +99,13 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
 test('limits the default cleanup command to development ports', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.match(packageJson.scripts.kill, /lsof -ti:18080/);
-  assert.match(packageJson.scripts.kill, /lsof -ti:13000/);
-  assert.match(packageJson.scripts.kill, /lsof -ti:15173/);
-  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:8080(?:\s|$)/);
-  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:3000(?:\s|$)/);
-  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:5173(?:\s|$)/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:49380/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:49381/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:49382/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48380(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48381(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:48382(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:49383(?:\s|$)/);
 });
 
 test('uses visible PNG tray icon assets at standard and Retina densities', async () => {
