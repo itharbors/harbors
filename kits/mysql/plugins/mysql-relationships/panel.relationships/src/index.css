@@ -132,16 +132,14 @@ h1.object-title {
 
 .relationship-toolbar {
   display: flex;
+  flex-wrap: wrap;
   min-width: 0;
   min-height: 42px;
   align-items: center;
   gap: 10px;
   padding: 6px 12px;
-  overflow-x: auto;
   border-bottom: 1px solid var(--line);
   background: var(--deck);
-  white-space: nowrap;
-  scrollbar-width: thin;
 }
 .relationship-toolbar > * { flex: 0 0 auto; }
 .relationship-toolbar input { width: min(180px, 22vw); min-width: 150px; padding: 0 8px; }
@@ -177,9 +175,11 @@ h1.object-title {
   border-radius: 6px;
   color: var(--text);
   background: var(--panel);
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   transition: border-color 120ms ease, opacity 120ms ease;
 }
+.relationship-table[data-dragging="true"] { cursor: grabbing; }
 .relationship-table:hover { border-color: var(--blue); }
 .relationship-table[data-dimmed="true"] { opacity: .28; }
 .relationship-table:focus-visible { outline: 3px solid var(--cyan); outline-offset: 3px; opacity: 1; }
@@ -239,6 +239,7 @@ h1.object-title {
 @media (max-width: 720px) {
   .workspace-heading { min-height: 56px; padding-inline: 12px; }
   .relationship-toolbar input { width: 150px; }
+  .relationship-toolbar small { flex-basis: 100%; margin-left: 0; }
   .relationship-details { grid-template-columns: 1fr; }
 }
 

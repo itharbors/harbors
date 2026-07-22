@@ -3,7 +3,10 @@
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
-  "dependencies": { "@itharbors/mysql-contracts": "0.0.1" },
+  "dependencies": {
+    "@itharbors/mysql-contracts": "0.0.1",
+    "@itharbors/relationship-graph": "0.0.1"
+  },
   "ce-editor": {
     "contribute": {
       "panel": {

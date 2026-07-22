@@ -680,7 +680,7 @@ git commit -m '[Optimize] 接入 SQLite 持久化关系图布局'
 - Consumes: `ConnectionSnapshot.endpoint`, `database`, shared store/session/renderer, and existing MySQL activity/open sequencing.
 - Produces: MySQL-specific labels, theme, activity overlay, and database identity from `[endpoint, database]`.
 
-- [ ] **Step 1: Rewrite MySQL Panel tests around identity and activity safety**
+- [x] **Step 1: Rewrite MySQL Panel tests around identity and activity safety**
 
 Use this connected state:
 
@@ -699,13 +699,13 @@ const connection = {
 
 Port the SQLite persistence/fit/automatic/Schema cases with MySQL identity variants: same endpoint/database restores; changed database or endpoint does not. Retain current tests for spinner, aria-busy, retry, stale loads, duplicate table-open suppression, and activity controls. Require “自动排列” to be disabled during both graph load and table opening.
 
-- [ ] **Step 2: Run MySQL relationship tests and verify missing shared behavior**
+- [x] **Step 2: Run MySQL relationship tests and verify missing shared behavior**
 
 Run: `npx vitest run --config kits/mysql/vitest.config.ts kits/mysql/plugins/mysql-relationships/tests/panel.test.ts`
 
 Expected: FAIL on persistence, drag, and automatic-layout expectations.
 
-- [ ] **Step 3: Replace the local implementation with the shared session/renderer**
+- [x] **Step 3: Replace the local implementation with the shared session/renderer**
 
 Add the shared package dependency and use the same imports and current-canvas helper as SQLite. Only create an identity when both `endpoint` and `database` are non-null:
 
@@ -717,11 +717,11 @@ Preserve the existing `RelationshipActivity` state and sequence checks. The sess
 
 Delete the MySQL-local view implementation and duplicated view tests after the shared tests prove parity.
 
-- [ ] **Step 4: Update MySQL CSS without changing its visual identity**
+- [x] **Step 4: Update MySQL CSS without changing its visual identity**
 
 Add the same drag/touch and toolbar wrap rules under the MySQL variables. Preserve activity-layer stacking, dimming, focus-visible, relationship details, and reduced-motion behavior.
 
-- [ ] **Step 5: Build/check and run MySQL suites**
+- [x] **Step 5: Build/check and run MySQL suites**
 
 Run:
 
@@ -734,7 +734,7 @@ npx vitest run --config kits/mysql/vitest.config.ts kits/mysql/plugins/mysql-rel
 
 Expected: build/check succeed and every MySQL relationship test PASS.
 
-- [ ] **Step 6: Commit MySQL integration**
+- [x] **Step 6: Commit MySQL integration**
 
 ```bash
 git add kits/mysql/plugins/mysql-relationships
