@@ -116,6 +116,33 @@ describe('MySQL Relationships panel', () => {
     await definition.unmount();
   });
 
+  it('keeps one-hop focus across rerenders and clears it when the selected table disappears', async () => {
+    const nextGraph = graphOf(['orders']);
+    let graphReads = 0;
+    const request = requestFor(
+      () => connection(),
+      () => (graphReads++ === 0 ? graph : nextGraph),
+    );
+    const definition = (await import('../panel.relationships/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { openPanel: vi.fn() } });
+
+    relationshipTable('users').click();
+    expect(relationshipTable('users').dataset.focus).toBe('selected');
+    expect(relationshipTable('user_profiles').dataset.focus).toBe('related');
+    expect(relationshipTable('orders').dataset.focus).toBe('muted');
+    button('+').click();
+    expect(relationshipTable('users').dataset.focus).toBe('selected');
+
+    await definition.methods.onSchemaChanged({
+      connectionRevision: 1,
+      schemaRevision: 3,
+      dataRevision: 4,
+    });
+    expect(document.querySelector('[data-focus="selected"]')).toBeNull();
+    expect(relationshipTable('orders').dataset.focus).toBe('idle');
+    await definition.unmount();
+  });
+
   it('keeps the warm graph visible and disables controls during a Schema reload', async () => {
     let resolveReload!: (value: unknown) => void;
     const pendingReload = new Promise((resolve) => { resolveReload = resolve; });
@@ -177,11 +204,15 @@ describe('MySQL Relationships panel', () => {
     const definition = (await import('../panel.relationships/src/index')).default as PanelDefinition;
     await definition.mount({ message: { request }, panel: { openPanel } });
 
+    relationshipTable('users').click();
     document.querySelector<HTMLElement>('[data-relationship-table="users"]')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(document.querySelector('.view-host')?.getAttribute('aria-busy')).toBe('true');
     expect(document.querySelector('[role="status"]')?.textContent).toContain('正在打开 users…');
     expect(button('自动排列').disabled).toBe(true);
+    relationshipTable('orders').click();
+    expect(relationshipTable('users').dataset.focus).toBe('selected');
+    expect(relationshipTable('orders').dataset.focus).toBe('muted');
     document.querySelector<HTMLElement>('[data-relationship-table="users"]')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(request.mock.calls.filter((call) => call[1] === 'selectObject')).toHaveLength(1);
@@ -236,6 +267,8 @@ describe('MySQL Relationships panel', () => {
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
     expect(css).toMatch(/\.relationship-view\s*\{[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\) auto/s);
     expect(css).toMatch(/\.relationship-canvas\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.relationship-table\s*\{[^}]*opacity:\s*\.58/s);
+    expect(css).toMatch(/\.relationship-table\[data-focus="selected"\][^{]*\{[^}]*border-color:\s*var\(--cyan\)/s);
     await definition.unmount();
   });
 });
@@ -318,6 +351,10 @@ function positions() {
 function nodePosition(name: string) {
   const node = document.querySelector<HTMLElement>(`[data-relationship-table="${name}"]`)!;
   return { left: node.style.left, top: node.style.top };
+}
+
+function relationshipTable(name: string): HTMLElement {
+  return document.querySelector<HTMLElement>(`[data-relationship-table="${name}"]`)!;
 }
 
 function button(label: string): HTMLButtonElement {

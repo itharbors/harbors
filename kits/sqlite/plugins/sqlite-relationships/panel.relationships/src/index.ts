@@ -28,6 +28,7 @@ let connection: ConnectionSnapshot | null = null;
 let graph: RelationshipGraph | null = null;
 let session: RelationshipGraphSession | null = null;
 let query = '';
+let selectedTable: string | null = null;
 let error: string | null = null;
 let sequence = 0;
 let schemaRevision = 0;
@@ -81,6 +82,7 @@ const definition = {
       schemaRevision = value.schemaRevision;
       graph = null;
       query = '';
+      selectedTable = null;
       error = null;
       if (value.connected) await loadGraph();
       else render();
@@ -104,6 +106,7 @@ function clearState(): void {
   connection = null;
   graph = null;
   query = '';
+  selectedTable = null;
   error = null;
   schemaRevision = 0;
   lastCanvas = { width: 960, height: 640 };
@@ -135,6 +138,7 @@ async function loadGraph(): Promise<void> {
     await disposeSession();
     session = nextSession;
     graph = next;
+    reconcileSelectedTable(next);
     error = null;
   } catch (value) {
     if (current !== sequence) return;
@@ -169,6 +173,7 @@ async function refreshGraph(): Promise<void> {
       session.updateGraph(next, currentCanvas());
     }
     graph = next;
+    reconcileSelectedTable(next);
     error = null;
   } catch (value) {
     if (current !== sequence) return;
@@ -231,11 +236,16 @@ function render(): void {
     layout: snapshot.layout,
     viewport: snapshot.viewport,
     query,
+    selectedTable,
     tableKindLabel: (table) => table.kind === 'view' ? 'VIEW' : 'TABLE',
     onNodeMove: (name, position, phase) => {
       if (phase === 'commit') session?.moveNode(name, position);
     },
     onViewportChange: (viewport) => session?.setViewport(viewport),
+    onSelectTable: (name) => {
+      selectedTable = name;
+      render();
+    },
     onOpenTable: (name) => void openTable(name),
   });
   view.removeAttribute('aria-labelledby');
@@ -281,6 +291,11 @@ function relationshipStatus(): string {
   if (!connection?.connected) return '等待数据库连接';
   if (!graph) return '正在读取关系图';
   return `${graph.tables.length} 张表 · ${graph.relationships.length} 条关系`;
+}
+
+function reconcileSelectedTable(next: RelationshipGraph): void {
+  if (selectedTable !== null
+    && !next.tables.some((table) => table.name === selectedTable)) selectedTable = null;
 }
 
 function button(label: string, aria: string, handler: () => void): HTMLButtonElement {

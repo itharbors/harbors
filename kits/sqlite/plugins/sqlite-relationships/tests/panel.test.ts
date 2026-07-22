@@ -134,6 +134,35 @@ describe('SQLite Relationships panel', () => {
     await definition.unmount();
   });
 
+  it('keeps one-hop focus across rerenders and clears it when the selected table disappears', async () => {
+    const nextGraph = graphOf(['orders']);
+    let graphReads = 0;
+    const request = requestFor(
+      () => connection(),
+      () => (graphReads++ === 0 ? graph : nextGraph),
+    );
+    const definition = (await import('../panel.relationships/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request }, panel: { openPanel: vi.fn() } });
+
+    relationshipTable('users').click();
+    expect(relationshipTable('users').dataset.focus).toBe('selected');
+    expect(relationshipTable('users').getAttribute('aria-pressed')).toBe('true');
+    expect(relationshipTable('user_profiles').dataset.focus).toBe('related');
+    expect(relationshipTable('orders').dataset.focus).toBe('muted');
+
+    button('+').click();
+    expect(relationshipTable('users').dataset.focus).toBe('selected');
+
+    await definition.methods.onSchemaChanged({
+      connectionRevision: 1,
+      schemaRevision: 3,
+      dataRevision: 4,
+    });
+    expect(document.querySelector('[data-focus="selected"]')).toBeNull();
+    expect(relationshipTable('orders').dataset.focus).toBe('idle');
+    await definition.unmount();
+  });
+
   it('ignores a late initial snapshot after a newer connection event', async () => {
     let resolveInitial!: (value: unknown) => void;
     const initial = new Promise((resolve) => { resolveInitial = resolve; });
@@ -182,6 +211,8 @@ describe('SQLite Relationships panel', () => {
     expect(css).toMatch(/--teal:\s*#57c8b5/);
     expect(css).toMatch(/\.workspace\s*\{[^}]*grid-template-rows:\s*58px minmax\(0,\s*1fr\) 26px/s);
     expect(css).toMatch(/\.relationship-canvas\s*\{[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.relationship-table\s*\{[^}]*opacity:\s*0\.58/s);
+    expect(css).toMatch(/\.relationship-table\[data-focus="selected"\][^{]*\{[^}]*border-color:\s*var\(--teal\)/s);
     await definition.unmount();
   });
 });
@@ -282,6 +313,10 @@ function positions() {
 function nodePosition(name: string) {
   const node = document.querySelector<HTMLElement>(`[data-relationship-table="${name}"]`)!;
   return { left: node.style.left, top: node.style.top };
+}
+
+function relationshipTable(name: string): HTMLElement {
+  return document.querySelector<HTMLElement>(`[data-relationship-table="${name}"]`)!;
 }
 
 function button(label: string): HTMLButtonElement {

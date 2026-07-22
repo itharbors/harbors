@@ -219,7 +219,7 @@ git commit -m '[Optimize] 支持聚焦查看一跳表关系'
 - Consumes: shared renderer `selectedTable` and `onSelectTable`.
 - Produces: database-scoped selection lifecycle and theme-specific opacity/border styles.
 
-- [ ] **Step 1: Add failing SQLite and MySQL Panel tests**
+- [x] **Step 1: Add failing SQLite and MySQL Panel tests**
 
 For both Panels, select `users`, force a normal rerender through zoom, and verify persistence:
 
@@ -234,7 +234,7 @@ expect(table('users').dataset.focus).toBe('selected');
 
 Then send a Schema graph without `users` and verify no table remains selected. Send a connection change and verify selection resets. In MySQL, begin a pending open/load activity and assert table click does not change `data-focus`.
 
-- [ ] **Step 2: Run Panel tests and observe selection loss**
+- [x] **Step 2: Run Panel tests and observe selection loss**
 
 Run:
 
@@ -245,7 +245,7 @@ npx vitest run --config vitest.config.ts plugins/mysql-relationships/tests/panel
 
 Run each command from its Kit directory. Expected: FAIL because Panels do not own selected state or pass the new renderer contract.
 
-- [ ] **Step 3: Add Panel-owned selection state**
+- [x] **Step 3: Add Panel-owned selection state**
 
 In both Panel modules add:
 
@@ -273,7 +273,7 @@ onSelectTable: (name) => {
 
 SQLite omits the activity guard because it has no activity overlay.
 
-- [ ] **Step 4: Apply restrained theme-specific focus CSS**
+- [x] **Step 4: Apply restrained theme-specific focus CSS**
 
 In both themes, use the same hierarchy with existing variables:
 
@@ -293,7 +293,7 @@ Give SQLite selected cards `border-color: var(--teal)` and MySQL selected cards
 `border-color: var(--cyan)`. Related cards use the existing hover color. Keep
 `[data-dimmed="true"]` at the strongest low-opacity level and retain reduced-motion rules.
 
-- [ ] **Step 5: Run both Panel suites and plugin checks**
+- [x] **Step 5: Run both Panel suites and plugin checks**
 
 Run:
 
@@ -309,7 +309,7 @@ npm run test -w @itharbors/kit-mysql
 
 Expected: plugin builds/checks and both Kit suites PASS; MySQL's environment-guarded integration test may remain skipped.
 
-- [ ] **Step 6: Commit Panel integration**
+- [x] **Step 6: Commit Panel integration**
 
 ```bash
 git add kits/sqlite/plugins/sqlite-relationships kits/mysql/plugins/mysql-relationships

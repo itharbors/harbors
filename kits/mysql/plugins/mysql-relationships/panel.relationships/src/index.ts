@@ -29,6 +29,7 @@ let connection: ConnectionSnapshot | null = null;
 let graph: RelationshipGraph | null = null;
 let session: RelationshipGraphSession | null = null;
 let query = '';
+let selectedTable: string | null = null;
 let error: string | null = null;
 let activity: RelationshipActivity = null;
 let sequence = 0;
@@ -83,6 +84,7 @@ const definition = {
       schemaRevision = value.schemaRevision;
       graph = null;
       query = '';
+      selectedTable = null;
       error = null;
       activity = null;
       if (hasDatabaseIdentity(value)) await loadGraph();
@@ -107,6 +109,7 @@ function clearState(): void {
   connection = null;
   graph = null;
   query = '';
+  selectedTable = null;
   error = null;
   activity = null;
   schemaRevision = 0;
@@ -133,6 +136,7 @@ async function loadGraph(): Promise<void> {
     await disposeSession();
     session = nextSession;
     graph = next;
+    reconcileSelectedTable(next);
   } catch (caught) {
     if (current !== sequence) return;
     error = errorMessage(caught);
@@ -161,6 +165,7 @@ async function refreshGraph(): Promise<void> {
     if (current !== sequence || connectionRevision !== connection?.connectionRevision) return;
     session.updateGraph(next, currentCanvas());
     graph = next;
+    reconcileSelectedTable(next);
   } catch (caught) {
     if (current !== sequence) return;
     error = errorMessage(caught);
@@ -267,12 +272,19 @@ function render(): void {
     layout: snapshot.layout,
     viewport: snapshot.viewport,
     query,
+    selectedTable,
     tableKindLabel: (table) => table.kind.toLocaleUpperCase(),
     onNodeMove: (name, position, phase) => {
       if (phase === 'commit' && activity === null) session?.moveNode(name, position);
     },
     onViewportChange: (viewport) => {
       if (activity === null) session?.setViewport(viewport);
+    },
+    onSelectTable: (name) => {
+      if (activity === null) {
+        selectedTable = name;
+        render();
+      }
     },
     onOpenTable: (name) => {
       if (activity === null) void openTable(name);
@@ -313,6 +325,11 @@ function relationshipStatus(): string {
   if (error) return '读取关系图失败';
   if (graph) return `${graph.tables.length} 张表 · ${graph.relationships.length} 条关系`;
   return connection?.connected ? '正在读取关系图…' : '等待连接 MySQL 数据库';
+}
+
+function reconcileSelectedTable(next: RelationshipGraph): void {
+  if (selectedTable !== null
+    && !next.tables.some((table) => table.name === selectedTable)) selectedTable = null;
 }
 
 function renderActivityLayer(host: HTMLElement): void {
