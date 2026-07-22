@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { homedir } from 'node:os';
 import Database from 'better-sqlite3';
 import { listDirectory, validateCreateTarget, type DirectoryListing } from './file-browser.js';
 import { analyzeSqlText, type SqlTextAnalysis } from './sql-analysis.js';
@@ -290,6 +291,10 @@ export class SqliteService {
 
   listDirectory(input: unknown): DirectoryListing {
     return listDirectory(input);
+  }
+
+  getDefaultDirectory(): string {
+    return homedir();
   }
 
   getRecentDatabases(): string[] {

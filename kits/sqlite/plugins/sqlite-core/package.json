@@ -12,6 +12,7 @@
       "message": {
         "request": {
           "listDirectory": ["listDirectory"],
+          "getDefaultDirectory": ["getDefaultDirectory"],
           "getRecentDatabases": ["getRecentDatabases"],
           "getConnectionState": ["getConnectionState"],
           "openDatabase": ["openDatabase"],
