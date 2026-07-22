@@ -108,6 +108,26 @@ test('limits the default cleanup command to development ports', async () => {
   assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:49383(?:\s|$)/);
 });
 
+test('documents the stable start command and isolated high ports', async () => {
+  const documents = await Promise.all([
+    readFile(new URL('../../readme.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../docs/guides/development-workflow.md', import.meta.url), 'utf8'),
+    readFile(new URL('../../docs/architecture/runtime-flows.md', import.meta.url), 'utf8'),
+  ]);
+
+  for (const document of documents) {
+    assert.match(document, /npm run start/);
+    assert.match(document, /48380/);
+    assert.match(document, /48381/);
+    assert.match(document, /48382/);
+    assert.match(document, /48383/);
+    assert.match(document, /49380/);
+    assert.match(document, /49381/);
+    assert.match(document, /49382/);
+    assert.match(document, /49383/);
+  }
+});
+
 test('uses visible PNG tray icon assets at standard and Retina densities', async () => {
   const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
 
