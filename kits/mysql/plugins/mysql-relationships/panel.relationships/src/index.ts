@@ -1,17 +1,19 @@
 import {
+  createDatabaseLayoutIdentity,
+  createRelationshipGraphSession,
+  createRelationshipLayoutStore,
+  renderRelationshipView,
+  zoomRelationshipViewport,
+  type CanvasSize,
+  type RelationshipGraph,
+  type RelationshipGraphSession,
+} from '@itharbors/relationship-graph';
+import {
   MYSQL_CORE,
   MYSQL_EXPLORER,
   unwrapMysqlResponse,
   type ConnectionSnapshot,
 } from '@itharbors/mysql-contracts';
-import {
-  fitRelationshipViewport,
-  layoutRelationshipGraph,
-  renderRelationshipView,
-  zoomRelationshipViewport,
-  type RelationshipGraph,
-  type RelationshipViewport,
-} from './relationship-view.js';
 
 type Context = {
   message: { request(plugin: string, method: string, input?: unknown): Promise<unknown> };
@@ -19,92 +21,122 @@ type Context = {
 };
 type RelationshipActivity = { kind: 'load' | 'open'; name?: string } | null;
 
+const fallbackStorage = new Map<string, string>();
+
 let context: Context | undefined;
 let root: HTMLElement | null = null;
 let connection: ConnectionSnapshot | null = null;
 let graph: RelationshipGraph | null = null;
-let viewport: RelationshipViewport = { x: 32, y: 32, scale: 1 };
+let session: RelationshipGraphSession | null = null;
 let query = '';
+let selectedTable: string | null = null;
 let error: string | null = null;
 let activity: RelationshipActivity = null;
 let sequence = 0;
 let schemaRevision = 0;
+let lastCanvas: CanvasSize = { width: 960, height: 640 };
+let resizeObserver: ResizeObserver | null = null;
 
 const definition = {
   async mount(ctx: Context) {
     context = ctx;
     root = document.querySelector('#panel-root');
     if (!root) throw new Error('Panel root element #panel-root not found');
-    reset();
-    render();
     const current = ++sequence;
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    const previous = session;
+    session = null;
+    clearState();
+    if (previous !== null) await previous.dispose();
+    if (current !== sequence) return;
+    render();
     try {
       const next = await core<ConnectionSnapshot>('getConnectionState');
       if (current !== sequence) return;
       connection = next;
       schemaRevision = next.schemaRevision;
-      if (next.connected) await loadGraph();
+      if (hasDatabaseIdentity(next)) await loadGraph();
       else render();
     } catch (caught) {
       if (current === sequence) setError(caught);
     }
   },
-  unmount() {
+
+  async unmount() {
     sequence += 1;
+    resizeObserver?.disconnect();
+    resizeObserver = null;
+    await disposeSession();
     root?.replaceChildren();
     root = null;
     context = undefined;
-    reset();
+    clearState();
   },
+
   methods: {
     async onConnectionChanged(value: unknown) {
       if (!isConnection(value)) return;
+      const current = ++sequence;
+      await disposeSession();
+      if (current !== sequence) return;
       connection = value;
       schemaRevision = value.schemaRevision;
       graph = null;
-      viewport = { x: 32, y: 32, scale: 1 };
+      query = '';
+      selectedTable = null;
       error = null;
       activity = null;
-      sequence += 1;
-      if (value.connected) await loadGraph();
+      if (hasDatabaseIdentity(value)) await loadGraph();
       else render();
     },
+
     async onSchemaChanged(value: unknown) {
       if (!isRevision(value)
         || value.connectionRevision !== connection?.connectionRevision
         || value.schemaRevision === schemaRevision) return;
       schemaRevision = value.schemaRevision;
-      await loadGraph(true);
+      await refreshGraph();
     },
+
     async onDataChanged(_value: unknown) {},
   },
 };
+
 export default definition;
 
-function reset(): void {
+function clearState(): void {
   connection = null;
   graph = null;
-  viewport = { x: 32, y: 32, scale: 1 };
   query = '';
+  selectedTable = null;
   error = null;
   activity = null;
   schemaRevision = 0;
-  sequence += 1;
+  lastCanvas = { width: 960, height: 640 };
 }
 
-async function loadGraph(keepWarm = false): Promise<void> {
-  if (!connection?.connected || activity !== null) return;
+async function loadGraph(): Promise<void> {
+  if (!hasDatabaseIdentity(connection) || activity !== null) return;
   const connectionRevision = connection.connectionRevision;
   const current = ++sequence;
   const pending: Exclude<RelationshipActivity, null> = { kind: 'load' };
   activity = pending;
+  graph = null;
   error = null;
-  if (!keepWarm) graph = null;
   render();
   try {
     const next = await core<RelationshipGraph>('getRelationshipGraph');
     if (current !== sequence || connectionRevision !== connection?.connectionRevision) return;
+    const nextSession = await createSession(next, connection);
+    if (current !== sequence || connectionRevision !== connection?.connectionRevision) {
+      await nextSession.dispose();
+      return;
+    }
+    await disposeSession();
+    session = nextSession;
     graph = next;
+    reconcileSelectedTable(next);
   } catch (caught) {
     if (current !== sequence) return;
     error = errorMessage(caught);
@@ -114,6 +146,53 @@ async function loadGraph(keepWarm = false): Promise<void> {
       render();
     }
   }
+}
+
+async function refreshGraph(): Promise<void> {
+  if (!hasDatabaseIdentity(connection) || activity !== null) return;
+  if (session === null) {
+    await loadGraph();
+    return;
+  }
+  const connectionRevision = connection.connectionRevision;
+  const current = ++sequence;
+  const pending: Exclude<RelationshipActivity, null> = { kind: 'load' };
+  activity = pending;
+  error = null;
+  render();
+  try {
+    const next = await core<RelationshipGraph>('getRelationshipGraph');
+    if (current !== sequence || connectionRevision !== connection?.connectionRevision) return;
+    session.updateGraph(next, currentCanvas());
+    graph = next;
+    reconcileSelectedTable(next);
+  } catch (caught) {
+    if (current !== sequence) return;
+    error = errorMessage(caught);
+  } finally {
+    if (activity === pending && current === sequence) {
+      activity = null;
+      render();
+    }
+  }
+}
+
+function createSession(next: RelationshipGraph, current: ConnectionSnapshot & {
+  endpoint: string;
+  database: string;
+}): Promise<RelationshipGraphSession> {
+  return createRelationshipGraphSession({
+    identity: createDatabaseLayoutIdentity('mysql', [current.endpoint, current.database]),
+    graph: next,
+    canvas: currentCanvas(),
+    store: createRelationshipLayoutStore(browserStorage()),
+  });
+}
+
+async function disposeSession(): Promise<void> {
+  const previous = session;
+  session = null;
+  if (previous !== null) await previous.dispose();
 }
 
 async function openTable(name: string): Promise<void> {
@@ -149,6 +228,8 @@ async function core<T>(method: string): Promise<T> {
 
 function render(): void {
   if (!root) return;
+  resizeObserver?.disconnect();
+  resizeObserver = null;
   root.innerHTML = `<main class="workspace" aria-busy="${activity !== null}">
     <header class="workspace-heading"><div class="object-identity"><span class="object-kind">数据库</span><h1 class="object-title"></h1></div></header>
     <section class="view-host" aria-busy="${activity !== null}"></section>
@@ -156,19 +237,27 @@ function render(): void {
   </main>`;
   root.querySelector<HTMLElement>('.object-title')!.textContent = connection?.database ?? '全库关系图';
   const host = root.querySelector<HTMLElement>('.view-host')!;
-  const status = root.querySelector<HTMLElement>('.status-deck > [role="status"]')!;
-  status.textContent = relationshipStatus();
+  root.querySelector<HTMLElement>('.status-deck > [role="status"]')!.textContent = relationshipStatus();
 
-  if (error) {
+  if (error && (!graph || !session)) {
     host.innerHTML = `<div class="empty-state error" role="alert"><span>${escape(error)}</span><button data-action="retry">重试</button></div>`;
     host.querySelector('button')?.addEventListener('click', () => void loadGraph());
     return;
+  }
+  if (error) {
+    const slot = root.querySelector<HTMLElement>('.error-slot')!;
+    slot.innerHTML = `<span role="alert">${escape(error)}</span> <button data-action="retry">重试</button>`;
+    slot.querySelector('button')?.addEventListener('click', () => void refreshGraph());
   }
   if (!connection?.connected) {
     host.innerHTML = '<div class="empty-state">请先连接 MySQL 数据库。</div>';
     return;
   }
-  if (!graph) {
+  if (!hasDatabaseIdentity(connection)) {
+    host.innerHTML = '<div class="empty-state">请选择要展示的 MySQL 数据库。</div>';
+    return;
+  }
+  if (!graph || !session) {
     host.innerHTML = `<div class="empty-state">${activity ? spinner() : ''}<span>正在读取关系图…</span></div>`;
     return;
   }
@@ -177,12 +266,29 @@ function render(): void {
     return;
   }
 
+  const snapshot = session.snapshot;
   const view = renderRelationshipView({
     graph,
-    viewport,
+    layout: snapshot.layout,
+    viewport: snapshot.viewport,
     query,
-    onViewportChange: (value) => { viewport = value; },
-    onOpenTable: (name) => void openTable(name),
+    selectedTable,
+    tableKindLabel: (table) => table.kind.toLocaleUpperCase(),
+    onNodeMove: (name, position, phase) => {
+      if (phase === 'commit' && activity === null) session?.moveNode(name, position);
+    },
+    onViewportChange: (viewport) => {
+      if (activity === null) session?.setViewport(viewport);
+    },
+    onSelectTable: (name) => {
+      if (activity === null) {
+        selectedTable = name;
+        render();
+      }
+    },
+    onOpenTable: (name) => {
+      if (activity === null) void openTable(name);
+    },
   });
   view.removeAttribute('role');
   view.removeAttribute('aria-labelledby');
@@ -195,16 +301,21 @@ function render(): void {
   search.value = query;
   search.disabled = activity !== null;
   search.addEventListener('input', () => {
+    if (activity !== null) return;
     query = search.value;
     render();
     queueMicrotask(() => root?.querySelector<HTMLInputElement>('input[type="search"]')?.focus());
   });
-  const zoomOut = button('−', '缩小', () => zoom(1 / 1.1));
-  const zoomIn = button('+', '放大', () => zoom(1.1));
-  const fit = button('适应窗口', '适应窗口', fitView);
-  for (const control of [zoomOut, zoomIn, fit]) control.disabled = activity !== null;
-  toolbar.prepend(search, zoomOut, zoomIn, fit);
+  const controls = [
+    button('−', '缩小', () => zoom(1 / 1.1)),
+    button('+', '放大', () => zoom(1.1)),
+    button('适应窗口', '适应窗口', fitView),
+    button('自动排列', '根据当前窗口自动排列', autoArrange),
+  ];
+  for (const control of controls) control.disabled = activity !== null;
+  toolbar.prepend(search, ...controls);
   host.append(view);
+  observeCanvas();
   if (activity) renderActivityLayer(host);
 }
 
@@ -216,10 +327,17 @@ function relationshipStatus(): string {
   return connection?.connected ? '正在读取关系图…' : '等待连接 MySQL 数据库';
 }
 
+function reconcileSelectedTable(next: RelationshipGraph): void {
+  if (selectedTable !== null
+    && !next.tables.some((table) => table.name === selectedTable)) selectedTable = null;
+}
+
 function renderActivityLayer(host: HTMLElement): void {
   const layer = document.createElement('div');
   layer.className = 'relationship-activity-layer';
-  layer.append(document.createRange().createContextualFragment(`${spinner()}<span>${escape(relationshipStatus())}</span>`));
+  layer.append(document.createRange().createContextualFragment(
+    `${spinner()}<span>${escape(relationshipStatus())}</span>`,
+  ));
   host.append(layer);
 }
 
@@ -228,33 +346,68 @@ function spinner(): string {
 }
 
 function button(label: string, aria: string, handler: () => void): HTMLButtonElement {
-  const value = document.createElement('button');
-  value.type = 'button';
-  value.textContent = label;
-  value.setAttribute('aria-label', aria);
-  value.addEventListener('click', handler);
-  return value;
+  const element = document.createElement('button');
+  element.type = 'button';
+  element.textContent = label;
+  element.setAttribute('aria-label', aria);
+  element.addEventListener('click', handler);
+  return element;
 }
 
 function fitView(): void {
-  if (!graph || activity !== null) return;
-  const canvas = root?.querySelector<HTMLElement>('.relationship-canvas');
-  viewport = fitRelationshipViewport(
-    layoutRelationshipGraph(graph),
-    canvas?.clientWidth || 960,
-    canvas?.clientHeight || 640,
-  );
+  if (!session || activity !== null) return;
+  session.fit(currentCanvas());
+  render();
+}
+
+function autoArrange(): void {
+  if (!session || activity !== null) return;
+  session.autoArrange(currentCanvas());
   render();
 }
 
 function zoom(factor: number): void {
-  if (activity !== null) return;
-  const canvas = root?.querySelector<HTMLElement>('.relationship-canvas');
-  viewport = zoomRelationshipViewport(viewport, factor, {
-    x: (canvas?.clientWidth || 960) / 2,
-    y: (canvas?.clientHeight || 640) / 2,
-  });
+  if (!session || activity !== null) return;
+  const canvas = currentCanvas();
+  session.setViewport(zoomRelationshipViewport(session.snapshot.viewport, factor, {
+    x: canvas.width / 2,
+    y: canvas.height / 2,
+  }));
   render();
+}
+
+function observeCanvas(): void {
+  const canvas = root?.querySelector<HTMLElement>('.relationship-canvas');
+  if (!canvas || typeof ResizeObserver === 'undefined') return;
+  resizeObserver = new ResizeObserver(() => {
+    const size = elementSize(canvas);
+    if (size !== null) lastCanvas = size;
+  });
+  resizeObserver.observe(canvas);
+}
+
+function currentCanvas(): CanvasSize {
+  const canvas = root?.querySelector<HTMLElement>('.relationship-canvas');
+  const host = root?.querySelector<HTMLElement>('.view-host');
+  const size = elementSize(canvas) ?? elementSize(host);
+  if (size !== null) lastCanvas = size;
+  return { ...lastCanvas };
+}
+
+function elementSize(element: HTMLElement | null | undefined): CanvasSize | null {
+  if (!element || element.clientWidth <= 0 || element.clientHeight <= 0) return null;
+  return { width: element.clientWidth, height: element.clientHeight };
+}
+
+function browserStorage(): Pick<Storage, 'getItem' | 'setItem'> {
+  try {
+    return window.localStorage;
+  } catch {
+    return {
+      getItem: (key) => fallbackStorage.get(key) ?? null,
+      setItem: (key, value) => { fallbackStorage.set(key, value); },
+    };
+  }
 }
 
 function setError(value: unknown, rerender = true): void {
@@ -265,6 +418,14 @@ function setError(value: unknown, rerender = true): void {
 
 function errorMessage(value: unknown): string {
   return value instanceof Error ? value.message : String(value);
+}
+
+function hasDatabaseIdentity(value: ConnectionSnapshot | null): value is ConnectionSnapshot & {
+  connected: true;
+  endpoint: string;
+  database: string;
+} {
+  return value?.connected === true && value.endpoint !== null && value.database !== null;
 }
 
 function isRevision(value: unknown): value is { connectionRevision: number; schemaRevision: number } {

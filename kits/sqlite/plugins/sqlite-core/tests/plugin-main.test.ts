@@ -69,6 +69,7 @@ describe('SQLite core plugin main', () => {
     definition!.lifecycle?.load?.({ message: { broadcast } });
     expect(definition!.methods.getConnectionState()).toMatchObject({
       connected: false,
+      fileIdentity: null,
       connectionRevision: 0,
       schemaRevision: 0,
       dataRevision: 0,
@@ -81,15 +82,23 @@ describe('SQLite core plugin main', () => {
     fixture.exec('CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT)');
     fixture.close();
 
-    expect(definition!.methods.openDatabase({ path: dbPath, create: false })).toMatchObject({
+    const opened = definition!.methods.openDatabase({ path: dbPath, create: false }) as {
+      fileIdentity: string | null;
+    };
+    expect(opened).toMatchObject({
       connected: true,
       connectionRevision: 1,
       schemaRevision: 1,
       dataRevision: 1,
     });
+    expect(opened.fileIdentity).toMatch(/^(dev:\d+:ino:\d+|birth:\d+(?:\.\d+)?)$/);
     expect(broadcast).toHaveBeenCalledWith(
       CORE_TOPICS.connectionChanged,
-      expect.objectContaining({ connected: true, connectionRevision: 1 }),
+      expect.objectContaining({
+        connected: true,
+        fileIdentity: opened.fileIdentity,
+        connectionRevision: 1,
+      }),
     );
 
     expect(definition!.methods.deleteRow({
@@ -102,6 +111,16 @@ describe('SQLite core plugin main', () => {
       },
     });
     expect(broadcast).toHaveBeenCalledTimes(1);
+
+    expect(definition!.methods.closeDatabase()).toMatchObject({
+      connected: false,
+      fileIdentity: null,
+      connectionRevision: 2,
+    });
+    expect(broadcast).toHaveBeenLastCalledWith(
+      CORE_TOPICS.connectionChanged,
+      expect.objectContaining({ connected: false, fileIdentity: null, connectionRevision: 2 }),
+    );
 
     await definition!.lifecycle?.unload?.();
     await definition!.lifecycle?.unload?.();
