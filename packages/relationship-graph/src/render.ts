@@ -17,9 +17,11 @@ export type RenderRelationshipViewOptions = {
   layout: RelationshipLayout;
   viewport: RelationshipViewport;
   query: string;
+  selectedTable: string | null;
   tableKindLabel(table: RelationshipTable): string;
   onNodeMove(name: string, position: NodePosition, phase: 'preview' | 'commit'): void;
   onViewportChange(viewport: RelationshipViewport): void;
+  onSelectTable(name: string | null): void;
   onOpenTable(name: string): void;
 };
 
@@ -45,6 +47,10 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     options.graph.relationships.map((relationship) => [relationship.id, relationship]),
   );
   const tableByName = new Map(options.graph.tables.map((table) => [table.name, table]));
+  const selectedTable = options.selectedTable !== null && tableByName.has(options.selectedTable)
+    ? options.selectedTable
+    : null;
+  const relatedTables = directNeighbors(options.graph, selectedTable);
   let workingLayout = cloneLayout(options.layout);
   let currentViewport = { ...options.viewport };
 
@@ -60,7 +66,7 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
   const toolbarCount = document.createElement('span');
   toolbarCount.textContent = `${options.graph.tables.length} 张表 · ${workingLayout.edges.length} 条关系`;
   const toolbarHelp = document.createElement('small');
-  toolbarHelp.textContent = '拖动表调整布局 · 拖动画布平移 · 滚轮缩放 · 回车打开表结构';
+  toolbarHelp.textContent = '单击选择 · 双击或回车打开 · 拖动调整布局 · 滚轮缩放';
   toolbar.append(toolbarLabel, toolbarCount, toolbarHelp);
   view.append(toolbar);
 
@@ -84,6 +90,7 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     path.setAttribute('d', edge.path);
     path.setAttribute('marker-end', 'url(#relationship-arrow)');
     path.dataset.relationshipEdge = edge.id;
+    path.dataset.focus = relationshipFocus(edge, selectedTable);
     path.dataset.dimmed = String(
       query.length > 0
       && !matchesRelationshipSearch(edge.fromTable, query)
@@ -102,7 +109,12 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
   for (const node of workingLayout.nodes) {
     const table = tableByName.get(node.name);
     if (table === undefined) continue;
-    const card = renderTableCard(table, options.tableKindLabel(table), query);
+    const card = renderTableCard(
+      table,
+      options.tableKindLabel(table),
+      query,
+      tableFocus(table.name, selectedTable, relatedTables),
+    );
     applyNodeStyle(card, node);
     installTableInteraction(card, table.name, options, () => currentViewport, {
       get layout() { return workingLayout; },
@@ -133,7 +145,12 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
   view.append(canvas);
 
   if (workingLayout.edges.length > 0) {
-    view.append(renderRelationshipDetails(workingLayout, relationshipById, query));
+    view.append(renderRelationshipDetails(
+      workingLayout,
+      relationshipById,
+      query,
+      selectedTable,
+    ));
   }
 
   const updateViewport = (viewport: RelationshipViewport): void => {
@@ -141,16 +158,28 @@ export function renderRelationshipView(options: RenderRelationshipViewOptions): 
     stage.style.transform = relationshipTransform(currentViewport);
     options.onViewportChange({ ...currentViewport });
   };
-  installCanvasInteraction(canvas, () => currentViewport, updateViewport);
+  installCanvasInteraction(
+    canvas,
+    () => currentViewport,
+    updateViewport,
+    () => options.onSelectTable(null),
+  );
   return view;
 }
 
-function renderTableCard(table: RelationshipTable, kindLabel: string, query: string): HTMLElement {
+function renderTableCard(
+  table: RelationshipTable,
+  kindLabel: string,
+  query: string,
+  focus: 'selected' | 'related' | 'muted' | 'idle',
+): HTMLElement {
   const card = document.createElement('article');
   card.className = 'relationship-table';
   card.setAttribute('role', 'button');
   card.tabIndex = 0;
   card.dataset.relationshipTable = table.name;
+  card.dataset.focus = focus;
+  card.setAttribute('aria-pressed', String(focus === 'selected'));
   if (query && !matchesRelationshipSearch(table.name, query)) card.dataset.dimmed = 'true';
 
   const heading = document.createElement('header');
@@ -206,20 +235,24 @@ function installTableInteraction(
   let dragged = false;
   let suppressClick = false;
 
-  const openTable = (): void => options.onOpenTable(tableName);
   card.addEventListener('click', (event) => {
+    event.stopPropagation();
     if (suppressClick) {
       suppressClick = false;
       event.preventDefault();
-      event.stopPropagation();
       return;
     }
-    openTable();
+    options.onSelectTable(tableName);
+  });
+  card.addEventListener('dblclick', (event) => {
+    event.stopPropagation();
+    options.onOpenTable(tableName);
   });
   card.addEventListener('keydown', (event) => {
     if (event.key !== 'Enter' && event.key !== ' ') return;
     event.preventDefault();
-    openTable();
+    if (event.key === 'Enter') options.onOpenTable(tableName);
+    else options.onSelectTable(tableName);
   });
   card.addEventListener('pointerdown', (event) => {
     event.stopPropagation();
@@ -295,18 +328,28 @@ function installCanvasInteraction(
   canvas: HTMLElement,
   viewport: () => RelationshipViewport,
   updateViewport: (viewport: RelationshipViewport) => void,
+  clearSelection: () => void,
 ): void {
   let pointerId: number | null = null;
   let previous = { x: 0, y: 0 };
+  let pointerStart = { x: 0, y: 0 };
+  let moved = false;
+  let suppressClick = false;
   canvas.addEventListener('pointerdown', (event) => {
     if (event.button !== 0 || pointerId !== null) return;
     event.preventDefault();
     pointerId = event.pointerId;
     previous = { x: event.clientX, y: event.clientY };
+    pointerStart = { ...previous };
+    moved = false;
     canvas.setPointerCapture?.(event.pointerId);
   });
   canvas.addEventListener('pointermove', (event) => {
     if (event.pointerId !== pointerId) return;
+    if (Math.hypot(
+      event.clientX - pointerStart.x,
+      event.clientY - pointerStart.y,
+    ) >= DRAG_THRESHOLD_PX) moved = true;
     updateViewport(panRelationshipViewport(
       viewport(),
       event.clientX - previous.x,
@@ -316,6 +359,7 @@ function installCanvasInteraction(
   });
   const finish = (event: PointerEvent): void => {
     if (event.pointerId !== pointerId) return;
+    if (moved) suppressClick = true;
     pointerId = null;
     if (canvas.hasPointerCapture?.(event.pointerId)) canvas.releasePointerCapture?.(event.pointerId);
   };
@@ -323,6 +367,13 @@ function installCanvasInteraction(
   canvas.addEventListener('pointercancel', finish);
   canvas.addEventListener('lostpointercapture', (event) => {
     if (event.pointerId === pointerId) pointerId = null;
+  });
+  canvas.addEventListener('click', () => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
+    clearSelection();
   });
   canvas.addEventListener('wheel', (event) => {
     if (event.deltaY === 0) return;
@@ -340,6 +391,7 @@ function renderRelationshipDetails(
   layout: RelationshipLayout,
   relationships: Map<string, Relationship>,
   query: string,
+  selectedTable: string | null,
 ): HTMLElement {
   const details = document.createElement('aside');
   details.className = 'relationship-details';
@@ -354,6 +406,7 @@ function renderRelationshipDetails(
     if (relationship === undefined) continue;
     const item = document.createElement('li');
     item.dataset.relationshipDetail = edge.id;
+    item.dataset.focus = relationshipFocus(edge, selectedTable);
     item.dataset.dimmed = String(
       query.length > 0
       && !matchesRelationshipSearch(edge.fromTable, query)
@@ -364,6 +417,34 @@ function renderRelationshipDetails(
   }
   details.append(heading, list);
   return details;
+}
+
+function directNeighbors(graph: RelationshipGraph, selectedTable: string | null): Set<string> {
+  const related = new Set<string>();
+  if (selectedTable === null) return related;
+  for (const relationship of graph.relationships) {
+    if (relationship.fromTable === selectedTable) related.add(relationship.toTable);
+    if (relationship.toTable === selectedTable) related.add(relationship.fromTable);
+  }
+  return related;
+}
+
+function tableFocus(
+  name: string,
+  selectedTable: string | null,
+  relatedTables: Set<string>,
+): 'selected' | 'related' | 'muted' | 'idle' {
+  if (selectedTable === null) return 'idle';
+  if (name === selectedTable) return 'selected';
+  return relatedTables.has(name) ? 'related' : 'muted';
+}
+
+function relationshipFocus(
+  edge: Pick<Relationship, 'fromTable' | 'toTable'>,
+  selectedTable: string | null,
+): 'related' | 'muted' | 'idle' {
+  if (selectedTable === null) return 'idle';
+  return edge.fromTable === selectedTable || edge.toTable === selectedTable ? 'related' : 'muted';
 }
 
 function renderMarker(): SVGDefsElement {

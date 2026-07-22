@@ -109,7 +109,7 @@ git commit -m '[Optimize] 使用曲线绘制表关系'
 - Consumes: `selectedTable: string | null` supplied by a database Panel.
 - Produces: `onSelectTable(name: string | null)`, `data-focus`, and `aria-pressed` states.
 
-- [ ] **Step 1: Add failing renderer focus tests**
+- [x] **Step 1: Add failing renderer focus tests**
 
 Extend the render helper defaults with `selectedTable` and `onSelectTable`, then test:
 
@@ -139,13 +139,13 @@ expect(onSelectTable).toHaveBeenCalledWith(null);
 
 Retain the existing Enter-open test and change the old single-click expectation to selection.
 
-- [ ] **Step 2: Run renderer tests and observe the missing contract**
+- [x] **Step 2: Run renderer tests and observe the missing contract**
 
 Run: `npm test -w @itharbors/relationship-graph -- --run tests/render.test.ts`
 
 Expected: TypeScript/runtime assertions FAIL because selection options and focus attributes do not exist.
 
-- [ ] **Step 3: Compute one-hop focus state in the renderer**
+- [x] **Step 3: Compute one-hop focus state in the renderer**
 
 Add options:
 
@@ -169,7 +169,7 @@ if (selectedTable !== null) {
 
 Use `selected`, `related`, `muted`, or `idle` for cards. Mark an edge/detail `related` only when it is incident to the selection; otherwise `muted` or `idle`. Keep `data-dimmed` search logic unchanged.
 
-- [ ] **Step 4: Rewire card and canvas input semantics**
+- [x] **Step 4: Rewire card and canvas input semantics**
 
 Within `installTableInteraction`:
 
@@ -187,7 +187,7 @@ card.addEventListener('dblclick', (event) => {
 
 Enter calls `onOpenTable`; Space calls `onSelectTable`. Add `aria-pressed`. Extend canvas pointer state with a `moved` threshold so its click handler clears only after a true blank click, not after panning.
 
-- [ ] **Step 5: Run renderer and shared package tests**
+- [x] **Step 5: Run renderer and shared package tests**
 
 Run:
 
@@ -198,7 +198,7 @@ npm test -w @itharbors/relationship-graph
 
 Expected:  all shared tests PASS; drag still previews and commits once without selecting.
 
-- [ ] **Step 6: Commit focus semantics**
+- [x] **Step 6: Commit focus semantics**
 
 ```bash
 git add packages/relationship-graph/src/render.ts packages/relationship-graph/tests/render.test.ts

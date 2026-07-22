@@ -76,16 +76,66 @@ describe('shared relationship graph renderer', () => {
     expect(onOpenTable).toHaveBeenCalledWith('children');
   });
 
-  it('opens a table with Space without changing layout', () => {
+  it('selects a table with Space without opening or changing layout', () => {
     const onOpenTable = vi.fn();
+    const onSelectTable = vi.fn();
     const onNodeMove = vi.fn();
-    const view = render({ onOpenTable, onNodeMove });
+    const view = render({ onOpenTable, onSelectTable, onNodeMove });
 
     view.querySelector<HTMLElement>('[data-relationship-table="children"]')!
       .dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
 
-    expect(onOpenTable).toHaveBeenCalledWith('children');
+    expect(onSelectTable).toHaveBeenCalledWith('children');
+    expect(onOpenTable).not.toHaveBeenCalled();
     expect(onNodeMove).not.toHaveBeenCalled();
+  });
+
+  it('focuses a selected table, its direct neighbors, and incident relationships', () => {
+    const view = render({ selectedTable: 'children' });
+
+    expect(table(view, 'children').dataset.focus).toBe('selected');
+    expect(table(view, 'children').getAttribute('aria-pressed')).toBe('true');
+    expect(table(view, 'parents').dataset.focus).toBe('related');
+    expect(table(view, 'isolated').dataset.focus).toBe('muted');
+    expect(view.querySelector<SVGPathElement>('[data-relationship-edge="children:0"]')?.dataset.focus)
+      .toBe('related');
+    expect(view.querySelector<HTMLElement>('[data-relationship-detail="children:0"]')?.dataset.focus)
+      .toBe('related');
+  });
+
+  it('selects with click or Space, opens with double-click or Enter, and clears on blank click', () => {
+    const onSelectTable = vi.fn();
+    const onOpenTable = vi.fn();
+    const view = render({ onSelectTable, onOpenTable });
+    const child = table(view, 'children');
+
+    child.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onSelectTable).toHaveBeenLastCalledWith('children');
+    expect(onOpenTable).not.toHaveBeenCalled();
+
+    child.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    child.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    child.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(onSelectTable).toHaveBeenLastCalledWith('children');
+    expect(onOpenTable).toHaveBeenCalledTimes(2);
+
+    view.querySelector<HTMLElement>('.relationship-canvas')!
+      .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    expect(onSelectTable).toHaveBeenLastCalledWith(null);
+  });
+
+  it('does not clear selection after panning the canvas', () => {
+    const onSelectTable = vi.fn();
+    const view = render({ onSelectTable });
+    const canvas = view.querySelector<HTMLElement>('.relationship-canvas')!;
+    installPointerCapture(canvas);
+
+    canvas.dispatchEvent(pointer('pointerdown', 12, 10, 10, { button: 0 }));
+    canvas.dispatchEvent(pointer('pointermove', 12, 30, 30));
+    canvas.dispatchEvent(pointer('pointerup', 12, 30, 30));
+    canvas.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+
+    expect(onSelectTable).not.toHaveBeenCalled();
   });
 
   it('anchors wheel zoom, ignores zero delta, and clamps scale', () => {
@@ -160,10 +210,11 @@ describe('shared relationship graph renderer', () => {
     expect(onNodeMove.mock.calls.filter((call) => call[2] === 'commit')).toHaveLength(1);
   });
 
-  it('treats movement below four pixels as a click', () => {
+  it('treats movement below four pixels as a selection click', () => {
     const onOpenTable = vi.fn();
+    const onSelectTable = vi.fn();
     const onNodeMove = vi.fn();
-    const view = render({ onOpenTable, onNodeMove });
+    const view = render({ onOpenTable, onSelectTable, onNodeMove });
     const child = view.querySelector<HTMLElement>('[data-relationship-table="children"]')!;
     installPointerCapture(child);
 
@@ -173,8 +224,9 @@ describe('shared relationship graph renderer', () => {
     child.dispatchEvent(new MouseEvent('click', { bubbles: true }));
 
     expect(onNodeMove).not.toHaveBeenCalled();
-    expect(onOpenTable).toHaveBeenCalledTimes(1);
-    expect(onOpenTable).toHaveBeenCalledWith('children');
+    expect(onSelectTable).toHaveBeenCalledTimes(1);
+    expect(onSelectTable).toHaveBeenCalledWith('children');
+    expect(onOpenTable).not.toHaveBeenCalled();
   });
 
   it('lists only relationships that were routed to existing nodes', () => {
@@ -200,13 +252,19 @@ function render(overrides: Partial<Parameters<typeof renderRelationshipView>[0]>
     layout: overrides.layout ?? layoutRelationshipGraph(selectedGraph, { width: 900, height: 600 }),
     viewport: overrides.viewport ?? { x: 0, y: 0, scale: 1 },
     query: overrides.query ?? '',
+    selectedTable: overrides.selectedTable ?? null,
     tableKindLabel: overrides.tableKindLabel ?? ((table) => (
       table.kind === 'virtual' ? 'VIRTUAL' : 'TABLE'
     )),
     onNodeMove: overrides.onNodeMove ?? vi.fn(),
     onViewportChange: overrides.onViewportChange ?? vi.fn(),
+    onSelectTable: overrides.onSelectTable ?? vi.fn(),
     onOpenTable: overrides.onOpenTable ?? vi.fn(),
   });
+}
+
+function table(view: HTMLElement, name: string): HTMLElement {
+  return view.querySelector<HTMLElement>(`[data-relationship-table="${name}"]`)!;
 }
 
 function pointer(
