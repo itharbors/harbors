@@ -1,5 +1,5 @@
-export const STABLE_PORTS = Object.freeze({ gateway: 8080, server: 3000, client: 5173, notification: 17896 });
-export const DEVELOPMENT_PORTS = Object.freeze({ gateway: 18080, server: 13000, client: 15173, notification: 17897 });
+export const STABLE_PORTS = Object.freeze({ gateway: 48380, server: 48381, client: 48382, notification: 48383 });
+export const DEVELOPMENT_PORTS = Object.freeze({ gateway: 49380, server: 49381, client: 49382, notification: 49383 });
 
 const PORT_ENV = {
   gateway: 'HARBORS_GATEWAY_PORT', server: 'HARBORS_SERVER_PORT',

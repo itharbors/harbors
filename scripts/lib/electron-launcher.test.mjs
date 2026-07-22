@@ -61,13 +61,13 @@ test('passes only an explicit requested Kit to the Web server without leaking st
 
 test('isolates each Web child process from inherited legacy port variables', () => {
   const stack = createDevStackEnvironments({ PORT: '8080', SERVER_PORT: '3000', CLIENT_PORT: '5173' }, '', 'development');
-  assert.deepEqual(stack.ports, { gateway: 18080, server: 13000, client: 15173, notification: 17897 });
-  assert.equal(stack.gatewayEnv.PORT, '18080');
-  assert.equal(stack.gatewayEnv.SERVER_PORT, '13000');
-  assert.equal(stack.gatewayEnv.CLIENT_PORT, '15173');
-  assert.equal(stack.serverEnv.PORT, '13000');
+  assert.deepEqual(stack.ports, { gateway: 49380, server: 49381, client: 49382, notification: 49383 });
+  assert.equal(stack.gatewayEnv.PORT, '49380');
+  assert.equal(stack.gatewayEnv.SERVER_PORT, '49381');
+  assert.equal(stack.gatewayEnv.CLIENT_PORT, '49382');
+  assert.equal(stack.serverEnv.PORT, '49381');
   assert.equal(stack.serverEnv.SERVER_PORT, undefined);
-  assert.equal(stack.clientEnv.CLIENT_PORT, '15173');
+  assert.equal(stack.clientEnv.CLIENT_PORT, '49382');
   assert.equal(stack.clientEnv.PORT, undefined);
 });
 
