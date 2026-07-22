@@ -48,6 +48,7 @@ type ActionToken = {
 const DISCONNECTED: ConnectionSnapshot = {
   connected: false,
   path: null,
+  fileIdentity: null,
   fileName: null,
   mode: null,
   sqliteVersion: null,
