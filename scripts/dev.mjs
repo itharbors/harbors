@@ -146,12 +146,12 @@ function parseArgs(args) {
 function printHelp() {
   console.log(`
 Usage:
-  npm run dev
-  npm run dev -- --kit <kit-package-name-or-path>
+  npm run dev:web
+  npm run dev:web -- --kit <kit-package-name-or-path>
 
 Examples:
-  npm run dev -- --kit @itharbors/kit-default
-  npm run dev -- --kit ./kits/default
-  npm run dev -- --kit-path /absolute/path/to/kit
+  npm run dev:web -- --kit @itharbors/kit-default
+  npm run dev:web -- --kit ./kits/default
+  npm run dev:web -- --kit-path /absolute/path/to/kit
 `.trim());
 }
