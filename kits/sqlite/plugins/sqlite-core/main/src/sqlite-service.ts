@@ -27,6 +27,7 @@ import {
 export type ConnectionState = {
   connected: boolean;
   path: string | null;
+  fileIdentity: string | null;
   fileName: string | null;
   mode: ConnectionMode | null;
   sqliteVersion: string | null;
@@ -271,6 +272,7 @@ type RelationshipTableMetadata = {
 export class SqliteService {
   private database: Database.Database | null = null;
   private databasePath: string | null = null;
+  private fileIdentity: string | null = null;
   private connectionMode: ConnectionMode | null = null;
   private sqliteVersion: string | null = null;
   private foreignKeys: boolean | null = null;
@@ -305,6 +307,7 @@ export class SqliteService {
     return {
       connected: this.database !== null,
       path: this.databasePath,
+      fileIdentity: this.fileIdentity,
       fileName: this.databasePath === null ? null : path.basename(this.databasePath),
       mode: this.connectionMode,
       sqliteVersion: this.sqliteVersion,
@@ -371,10 +374,12 @@ export class SqliteService {
         throw workbenchError('CREATE_TARGET_CHANGED', '新建数据库路径在连接期间发生变化，操作已取消。');
       }
       absolutePath = fs.realpathSync(absolutePath);
+      const fileIdentity = formatFileIdentity(fs.statSync(absolutePath));
 
       const previous = this.database;
       this.database = candidate;
       this.databasePath = absolutePath;
+      this.fileIdentity = fileIdentity;
       this.connectionMode = mode;
       this.sqliteVersion = connection.sqliteVersion;
       this.foreignKeys = connection.foreignKeys;
@@ -433,6 +438,7 @@ export class SqliteService {
     const database = this.database;
     this.database = null;
     this.databasePath = null;
+    this.fileIdentity = null;
     this.connectionMode = null;
     this.sqliteVersion = null;
     this.foreignKeys = null;
@@ -1595,6 +1601,15 @@ function matchesFileIdentity(filePath: string, identity: FileIdentity): boolean 
   } catch {
     return false;
   }
+}
+
+function formatFileIdentity(stat: fs.Stats): string | null {
+  if (Number.isSafeInteger(stat.dev) && Number.isSafeInteger(stat.ino) && stat.ino > 0) {
+    return `dev:${stat.dev}:ino:${stat.ino}`;
+  }
+  return Number.isFinite(stat.birthtimeMs) && stat.birthtimeMs > 0
+    ? `birth:${stat.birthtimeMs}`
+    : null;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {

@@ -37,7 +37,7 @@
 - Produces: SQLite `ConnectionState.fileIdentity: string | null`, formatted like `dev:16777233:ino:923771` when `stat.ino > 0`, otherwise like `birth:1784710000123` when birth time is finite and positive, otherwise `null`.
 - Consumes later: SQLite Relationships Panel combines `path` and `fileIdentity`; neither field is itself a cache key.
 
-- [ ] **Step 1: Write failing service and plugin snapshot tests**
+- [x] **Step 1: Write failing service and plugin snapshot tests**
 
 Add exact assertions alongside the existing disconnected/open state expectations:
 
@@ -55,19 +55,20 @@ expect(service.getConnectionState().fileIdentity).toBe(opened.fileIdentity);
 
 In `plugin-main.test.ts`, require `getConnectionState` and the connection-changed broadcast to contain the same non-null `fileIdentity` after open, then require `null` after close.
 
-- [ ] **Step 2: Run the focused tests and verify the contract is missing**
+- [x] **Step 2: Run the focused tests and verify the contract is missing**
 
 Run:
 
 ```bash
-npx vitest run --config kits/sqlite/vitest.config.ts \
-  kits/sqlite/plugins/sqlite-core/tests/sqlite-service.test.ts \
-  kits/sqlite/plugins/sqlite-core/tests/plugin-main.test.ts
+cd kits/sqlite
+npx vitest run --config vitest.config.ts \
+  plugins/sqlite-core/tests/sqlite-service.test.ts \
+  plugins/sqlite-core/tests/plugin-main.test.ts
 ```
 
 Expected: FAIL because `fileIdentity` is absent from the state and shared contract.
 
-- [ ] **Step 3: Add and populate the identity field**
+- [x] **Step 3: Add and populate the identity field**
 
 Add the contract field:
 
@@ -99,20 +100,21 @@ function formatFileIdentity(stat: fs.Stats): string | null {
 
 Set `this.fileIdentity = formatFileIdentity(fs.statSync(absolutePath))` only after the candidate connection and realpath validation succeed. Return it from `getConnectionState`, preserve it across mode changes, and clear it in `closeDatabase`. Do not use size or mtime because normal writes would change the cache identity.
 
-- [ ] **Step 4: Run focused tests and contracts build**
+- [x] **Step 4: Run focused tests and contracts build**
 
 Run:
 
 ```bash
 npm run build -w @itharbors/sqlite-contracts
-npx vitest run --config kits/sqlite/vitest.config.ts \
-  kits/sqlite/plugins/sqlite-core/tests/sqlite-service.test.ts \
-  kits/sqlite/plugins/sqlite-core/tests/plugin-main.test.ts
+cd kits/sqlite
+npx vitest run --config vitest.config.ts \
+  plugins/sqlite-core/tests/sqlite-service.test.ts \
+  plugins/sqlite-core/tests/plugin-main.test.ts
 ```
 
 Expected: contract build succeeds and both test files PASS.
 
-- [ ] **Step 5: Commit the focused change**
+- [x] **Step 5: Commit the focused change**
 
 ```bash
 git add packages/sqlite-contracts/src/contracts.ts \

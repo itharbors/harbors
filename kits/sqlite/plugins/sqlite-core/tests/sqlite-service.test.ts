@@ -99,6 +99,7 @@ describe('SqliteService connection and schema', () => {
     expect(service.getConnectionState()).toEqual({
       connected: false,
       path: null,
+      fileIdentity: null,
       fileName: null,
       mode: null,
       sqliteVersion: null,
@@ -116,8 +117,12 @@ describe('SqliteService connection and schema', () => {
       foreignKeys: true,
       busyTimeout: 5000,
     });
+    expect(state.fileIdentity).toMatch(/^(dev:\d+:ino:\d+|birth:\d+(?:\.\d+)?)$/);
     expect(state.sqliteVersion).toMatch(/^3\./);
     expect(service.getConnectionState()).toEqual(state);
+
+    service.setConnectionMode({ mode: 'readwrite' });
+    expect(service.getConnectionState().fileIdentity).toBe(state.fileIdentity);
   });
 
   it('classifies ordinary, view, virtual, and shadow objects in name order', () => {

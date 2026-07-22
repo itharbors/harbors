@@ -19,6 +19,7 @@ export type RevisionSnapshot = {
 export type ConnectionSnapshot = RevisionSnapshot & {
   connected: boolean;
   path: string | null;
+  fileIdentity: string | null;
   fileName?: string | null;
   mode: 'readonly' | 'readwrite' | null;
   sqliteVersion: string | null;
