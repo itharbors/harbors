@@ -37,7 +37,7 @@ flowchart LR
     Panel -- "受控 runtime API" --> Gateway
 ```
 
-生产打包和部署策略尚未在仓库中固化；上图描述当前开发栈和 Electron 启动方式。
+生产打包和部署策略尚未在仓库中固化；上图描述稳定直接运行的默认端口拓扑和 Electron 启动方式。
 
 ## Workspace 职责
 
