@@ -3,7 +3,7 @@
   "private": true,
   "workspaces": ["packages/*", "kits/*", "plugins/*"],
   "scripts": {
-    "dev": "npm run electron --",
+    "dev": "node scripts/dev-electron.mjs",
     "dev:web": "node scripts/dev.mjs",
     "electron": "electron scripts/electron.mjs",
     "plugins:build": "node scripts/ce-plugin.mjs build --all && node scripts/prepare-notification-skill-resource.mjs",

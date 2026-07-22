@@ -85,12 +85,14 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
   ]);
 });
 
-test('keeps Electron as the default dev entry and Web as an explicit compatibility entry', async () => {
+test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.dev, 'npm run electron --');
-  assert.equal(packageJson.scripts['dev:web'], 'node scripts/dev.mjs');
   assert.equal(packageJson.scripts.electron, 'electron scripts/electron.mjs');
+  assert.equal(packageJson.scripts.dev, 'node scripts/dev-electron.mjs');
+  const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  assert.match(electronSource, /resolveRuntimePorts/);
+  assert.match(electronSource, /HARBORS_RUNTIME_PROFILE/);
 });
 
 test('uses visible PNG tray icon assets at standard and Retina densities', async () => {
