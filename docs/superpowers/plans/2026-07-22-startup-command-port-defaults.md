@@ -347,3 +347,85 @@
   git add packages/gateway/src/index.ts packages/server/src/index.ts packages/client/vite.config.ts scripts/lib/notification-host.mjs scripts/lib/notification-host.test.mjs .agents/skills/notify-user/scripts/notify.mjs .agents/skills/notify-user/tests/notify.test.mjs .agents/skills/notify-user/SKILL.md scripts/lib/electron-launcher.test.mjs docs/architecture/system-overview.md docs/guides/developing-plugins-and-kits.md
   git commit -m "[Feature] 同步端口回退与通知默认值"
   ```
+
+### Task 6: 隔离开发 Notification Kit 端口并更正命令文档
+
+**Files:**
+- Modify: `scripts/lib/dev-launcher.mjs:14-30`
+- Modify: `scripts/lib/electron-launcher.test.mjs:63-73`
+- Modify: `kits/notifications/plugins/notification-center/main/src/index.ts:3`
+- Modify: `kits/notifications/plugins/notification-center/tests/main.test.ts:8-102`
+- Modify: `kits/notifications/plugins/notification-background/main/src/index.ts:12`
+- Modify: `kits/notifications/plugins/notification-background/tests/main.test.ts:11-145`
+- Modify: `docs/architecture/system-overview.md:110-116`
+- Test: `scripts/lib/electron-launcher.test.mjs`
+- Test: `kits/notifications/plugins/notification-center/tests/main.test.ts`
+- Test: `kits/notifications/plugins/notification-background/tests/main.test.ts`
+
+**Interfaces:**
+- Consumes: `createDevStackEnvironments(baseEnv, requestedKit, profile)` 返回 Gateway、Server、Client 子进程环境；Notification Kit server-side plugins 读取 `HARBORS_NOTIFICATION_PORT`。
+- Produces: 开发三类子进程都显式得到 `HARBORS_NOTIFICATION_PORT='49383'`；若直接执行 Notification Kit plugin 且没有覆盖，则稳定回退为 `48383`。
+
+- [ ] **Step 1: 添加开发端口传播和组件回退测试**
+
+  在 `scripts/lib/electron-launcher.test.mjs` 的开发环境隔离测试中增加：
+
+  ```js
+  assert.equal(stack.gatewayEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  assert.equal(stack.serverEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  assert.equal(stack.clientEnv.HARBORS_NOTIFICATION_PORT, '49383');
+  ```
+
+  在 `notification-center/tests/main.test.ts` 新增无 `HARBORS_NOTIFICATION_PORT` 时调用 `getSnapshot()` 的测试，并断言 fetch URL 为 `http://127.0.0.1:48383/v1/notifications`。扩展 `loadDefinition` 使测试可以显式选择不设置端口，但保留现有测试默认 `19001`。
+
+  在 `notification-background/tests/main.test.ts` 新增无端口覆盖的桌面安装测试：创建临时 Skill source 与 Codex home，调用 `installCodexSkill()`，断言通知请求 URL 为 `http://127.0.0.1:48383/v1/notifications`。扩展测试 helper 使该测试可以不设置端口，现有测试继续使用 `19001`。
+
+- [ ] **Step 2: 运行聚焦测试并确认当前实现失败**
+
+  Run: `node --test scripts/lib/electron-launcher.test.mjs && npm test -w @itharbors/kit-notifications -- --run plugins/notification-center/tests/main.test.ts plugins/notification-background/tests/main.test.ts`
+
+  Expected: FAIL，开发子进程环境没有 `HARBORS_NOTIFICATION_PORT`，两个 Notification Kit plugin 无覆盖时仍请求 `17896`。
+
+- [ ] **Step 3: 注入开发 Notification Host 端口并同步稳定回退**
+
+  在 `scripts/lib/dev-launcher.mjs` 中构建公共环境时加入解析后的通知端口：
+
+  ```js
+  const common = {
+    ...baseEnv,
+    HARBORS_RUNTIME_PROFILE: runtimeProfile,
+    HARBORS_NOTIFICATION_PORT: String(ports.notification),
+  };
+  ```
+
+  将两个 Notification Kit plugin 的默认常量都改为：
+
+  ```ts
+  const DEFAULT_NOTIFICATION_PORT = 48383;
+  ```
+
+  保持环境覆盖优先级、端口校验和 Host loopback 地址不变。
+
+- [ ] **Step 4: 更正架构文档的启动命令契约**
+
+  将 `docs/architecture/system-overview.md` 的 Web 与 Electron 首段改为准确描述：
+
+  ```text
+  `npm run start` 启动稳定 Electron，`npm run electron` 是其兼容别名；`npm run dev`
+  启动隔离开发 Electron，`npm run dev:web` 才直接启动隔离的 Gateway、Server 和 Client。
+  ```
+
+  保留后续 Electron 按需创建 Kit workspace 和窗口的说明。
+
+- [ ] **Step 5: 运行聚焦测试和旧端口扫描**
+
+  Run: `node --test scripts/lib/electron-launcher.test.mjs && npm test -w @itharbors/kit-notifications -- --run plugins/notification-center/tests/main.test.ts plugins/notification-background/tests/main.test.ts && rg -n '17896' kits/notifications scripts/lib/dev-launcher.mjs docs/architecture/system-overview.md`
+
+  Expected: node 测试与 Notification Kit 聚焦测试全部通过；`rg` 无匹配。
+
+- [ ] **Step 6: 提交开发通知端口隔离修复**
+
+  ```bash
+  git add scripts/lib/dev-launcher.mjs scripts/lib/electron-launcher.test.mjs kits/notifications/plugins/notification-center/main/src/index.ts kits/notifications/plugins/notification-center/tests/main.test.ts kits/notifications/plugins/notification-background/main/src/index.ts kits/notifications/plugins/notification-background/tests/main.test.ts docs/architecture/system-overview.md
+  git commit -m "[Feature] 隔离开发通知端口"
+  ```
