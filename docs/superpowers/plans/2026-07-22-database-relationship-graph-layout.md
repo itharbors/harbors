@@ -585,7 +585,7 @@ git commit -m '[Optimize] 支持关系图节点拖动交互'
 - Consumes: `ConnectionSnapshot.path`, `fileIdentity`, shared store/session/renderer, and existing SQLite core/explorer requests.
 - Produces: SQLite-specific `tableKindLabel`, ARIA label, theme, “适应窗口”, and “自动排列” controls.
 
-- [ ] **Step 1: Rewrite Panel tests around the shared behavior**
+- [x] **Step 1: Rewrite Panel tests around the shared behavior**
 
 Mock the core state with both identity fields:
 
@@ -607,7 +607,7 @@ const connection = {
 
 Use a real memory `Storage` through jsdom. Test first-load automatic layout, drag-and-unmount save, remount restore for the same identity, different path/file identity isolation, fit preserving node coordinates, automatic layout consuming stubbed `view-host.clientWidth/clientHeight`, Schema update preservation/new-node placement, data event no-op, search focus, keyboard table opening, disconnect disposal, and a late first connection request not replacing a later connection event.
 
-- [ ] **Step 2: Run SQLite relationship tests and verify old Panel behavior fails**
+- [x] **Step 2: Run SQLite relationship tests and verify old Panel behavior fails**
 
 Run:
 
@@ -618,7 +618,7 @@ npx vitest run --config kits/sqlite/vitest.config.ts \
 
 Expected: FAIL because the Panel has no automatic-layout button, drag persistence, shared session, or file identity handling.
 
-- [ ] **Step 3: Replace local algorithm/rendering with shared package**
+- [x] **Step 3: Replace local algorithm/rendering with shared package**
 
 Add `"@itharbors/relationship-graph": "0.0.1"` to dependencies. Import:
 
@@ -639,11 +639,11 @@ Wire renderer preview to its DOM-only behavior and commit to `session.moveNode`;
 
 Delete the local `relationship-view.ts` and its now-duplicated tests only after the shared package covers every old behavior.
 
-- [ ] **Step 4: Add the small CSS affordances**
+- [x] **Step 4: Add the small CSS affordances**
 
 Add `touch-action: none` and a grabbing cursor only during card drag; keep the current SQLite theme. Ensure toolbar controls wrap in a 480 px minimum Panel and the new automatic-layout button does not cover the search input. Preserve reduced-motion overrides and focus outlines.
 
-- [ ] **Step 5: Build/check the plugin and run SQLite suites**
+- [x] **Step 5: Build/check the plugin and run SQLite suites**
 
 Run:
 
@@ -659,7 +659,7 @@ npx vitest run --config kits/sqlite/vitest.config.ts \
 
 Expected: build/check succeed and every selected SQLite test PASS.
 
-- [ ] **Step 6: Commit SQLite integration**
+- [x] **Step 6: Commit SQLite integration**
 
 ```bash
 git add kits/sqlite/plugins/sqlite-relationships

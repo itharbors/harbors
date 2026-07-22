@@ -1,5 +1,5 @@
 {
   "name":"@itharbors/sqlite-relationships","version":"0.0.1","type":"module","main":"./main/dist/index.js",
-  "dependencies":{"@itharbors/sqlite-contracts":"0.0.1"},
+  "dependencies":{"@itharbors/relationship-graph":"0.0.1","@itharbors/sqlite-contracts":"0.0.1"},
   "ce-editor":{"contribute":{"panel":{"relationships":{"entry":"./panel.relationships/dist/index.html","title":"SQLite 关系图","minWidth":480,"minHeight":320,"multiInstance":false}},"message":{"broadcast":{"@itharbors/sqlite.connection.changed":["panel.onConnectionChanged"],"@itharbors/sqlite.schema.changed":["panel.onSchemaChanged"],"@itharbors/sqlite.data.changed":["panel.onDataChanged"]}}}}
 }

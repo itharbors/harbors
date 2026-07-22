@@ -50,14 +50,14 @@ input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 
 .relationship-view {
   display: grid;
-  grid-template-rows: 42px minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;
   background: var(--ink);
 }
-.relationship-toolbar { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 0 12px; border-bottom: 1px solid var(--grid-strong); background: var(--deck); white-space: nowrap; }
+.relationship-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; min-width: 0; min-height: 42px; padding: 6px 12px; border-bottom: 1px solid var(--grid-strong); background: var(--deck); }
 .relationship-toolbar input { width: min(180px, 22vw); min-height: 26px; padding: 0 8px; }
 .relationship-toolbar button { min-height: 26px; padding-inline: 8px; font-size: var(--font-secondary); }
 .relationship-toolbar strong { color: #edf4f5; font-size: 12px; font-weight: 650; }
@@ -82,7 +82,8 @@ input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 .relationship-edges marker path { fill: var(--teal); stroke: none; }
 .relationship-edges path[data-dimmed="true"] { opacity: 0.16; }
 
-.relationship-table { position: absolute; overflow: hidden; border: 1px solid var(--grid-strong); border-radius: 2px; color: var(--text); background: var(--deck); cursor: pointer; transition: border-color 120ms ease, opacity 120ms ease; }
+.relationship-table { position: absolute; overflow: hidden; border: 1px solid var(--grid-strong); border-radius: 2px; color: var(--text); background: var(--deck); cursor: grab; touch-action: none; transition: border-color 120ms ease, opacity 120ms ease; }
+.relationship-table[data-dragging="true"] { cursor: grabbing; }
 .relationship-table:hover { border-color: var(--teal); }
 .relationship-table[data-dimmed="true"] { opacity: 0.28; }
 .relationship-table:focus-visible { outline: 3px solid var(--amber); outline-offset: 3px; opacity: 1; }
@@ -116,9 +117,8 @@ input:focus-visible { outline: 2px solid var(--amber); outline-offset: 1px; }
 @media (max-width: 720px) {
   .workspace { grid-template-rows: 52px minmax(0, 1fr) 26px; }
   .object-title { padding-inline: 10px; }
-  .relationship-toolbar { overflow-x: auto; flex-wrap: nowrap; }
-  .relationship-toolbar > * { flex-shrink: 0; }
   .relationship-toolbar input { width: 150px; }
+  .relationship-toolbar small { flex-basis: 100%; margin-left: 0; }
   .relationship-details { grid-template-columns: 1fr; }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; transition-duration: 0.01ms !important; } .relationship-table, .relationship-edges path { transition: none !important; } }
