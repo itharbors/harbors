@@ -499,7 +499,7 @@ git commit -m '[Optimize] 持久化关系图状态并协调结构变化'
 - Consumes: an already-computed `RelationshipLayout`; renderer never auto-arranges by itself.
 - Emits node preview/commit and viewport callbacks without writing storage directly.
 
-- [ ] **Step 1: Port existing renderer tests and add pointer-drag assertions**
+- [x] **Step 1: Port existing renderer tests and add pointer-drag assertions**
 
 Use this exact options contract in tests:
 
@@ -526,13 +526,13 @@ expect(onNodeMove).toHaveBeenLastCalledWith('user_profile', { x: 60, y: 40 }, 'c
 
 Move fewer than four CSS pixels and assert the following click/Enter path still calls `onOpenTable` exactly once.
 
-- [ ] **Step 2: Run render tests and verify the renderer is absent**
+- [x] **Step 2: Run render tests and verify the renderer is absent**
 
 Run: `npx vitest run --config packages/relationship-graph/vitest.config.ts packages/relationship-graph/tests/render.test.ts`
 
 Expected: FAIL because the shared renderer is not implemented.
 
-- [ ] **Step 3: Implement stable DOM and pointer interaction**
+- [x] **Step 3: Implement stable DOM and pointer interaction**
 
 Export:
 
@@ -551,7 +551,7 @@ export type RenderRelationshipViewOptions = {
 
 Build the current `.relationship-view`, toolbar, canvas, stage, SVG edges, cards, and relationship details with DOM text nodes. Apply the supplied layout rather than recomputing it. Pointerdown on a card calls `setPointerCapture`, stops canvas pan, and stores graph-space origin. Pointermove schedules at most one `requestAnimationFrame`; update only the card style and incident paths from `moveRelationshipNode`. On pointerup/cancel, classify movement below four screen pixels as a click and otherwise emit one commit. Canvas pointer handling continues to emit pan updates; wheel zoom keeps the pointer anchor. Do not recreate all cards during drag.
 
-- [ ] **Step 4: Run renderer and package tests**
+- [x] **Step 4: Run renderer and package tests**
 
 Run:
 
@@ -562,7 +562,7 @@ npm test -w @itharbors/relationship-graph
 
 Expected: all renderer and shared package tests PASS.
 
-- [ ] **Step 5: Commit shared rendering**
+- [x] **Step 5: Commit shared rendering**
 
 ```bash
 git add packages/relationship-graph/src/render.ts \
