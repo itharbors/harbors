@@ -95,6 +95,17 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
   assert.match(electronSource, /HARBORS_RUNTIME_PROFILE/);
 });
 
+test('limits the default cleanup command to development ports', async () => {
+  const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
+
+  assert.match(packageJson.scripts.kill, /lsof -ti:18080/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:13000/);
+  assert.match(packageJson.scripts.kill, /lsof -ti:15173/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:8080(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:3000(?:\s|$)/);
+  assert.doesNotMatch(packageJson.scripts.kill, /lsof -ti:5173(?:\s|$)/);
+});
+
 test('uses visible PNG tray icon assets at standard and Retina densities', async () => {
   const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
 
