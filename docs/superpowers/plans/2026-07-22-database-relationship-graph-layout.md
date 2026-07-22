@@ -751,7 +751,7 @@ git commit -m '[Optimize] 接入 MySQL 持久化关系图布局'
 - Verifies the full design against authoritative tests, builds, plugin checks, and running products.
 - Produces a clean worktree ready for `change-workflow` finish.
 
-- [ ] **Step 1: Run focused shared and Kit tests**
+- [x] **Step 1: Run focused shared and Kit tests**
 
 Run:
 
@@ -763,7 +763,7 @@ npm run test -w @itharbors/kit-mysql
 
 Expected: all three commands PASS. If a failure is unrelated and pre-existing, capture exact evidence; do not weaken or delete coverage.
 
-- [ ] **Step 2: Run repository build and plugin checks**
+- [x] **Step 2: Run repository build and plugin checks**
 
 Run:
 
@@ -774,13 +774,17 @@ npm run plugins:check
 
 Expected: TypeScript, client/server, all plugins, and all manifest checks succeed.
 
-- [ ] **Step 3: Run the full repository test suite**
+- [x] **Step 3: Run the full repository test suite**
 
 Run: `npm test`
 
 Expected: every repository test PASS, including change-workflow tests.
 
 - [ ] **Step 4: Smoke-test SQLite in the Electron app**
+
+Environment note: attempted twice on 2026-07-22, including after `npm rebuild electron`;
+the Electron process was terminated by the host with `SIGKILL` before creating a window.
+The real SQLite runtime integration suite passed, but this manual UI step remains unverified.
 
 Run: `npm run dev -- --kit ./kits/sqlite`
 
@@ -797,11 +801,15 @@ Stop only the process started by this command; do not use broad kill commands.
 
 - [ ] **Step 5: Smoke-test MySQL in the Electron app**
 
+Environment note: the same Electron host failure blocks the window, and no live MySQL service or
+credentials are configured. The existing live MySQL integration test remains skipped by its own
+environment guard; no manual result is claimed.
+
 Run: `npm run dev -- --kit ./kits/mysql`
 
 Verify the same drag/persist/fit/automatic/Schema behavior. Switch between two databases on the same endpoint and confirm their caches are isolated, then switch back and confirm the original layout restores. Confirm table opening, loading overlay, retry, search, keyboard access, relationship details, self edges, and parallel constraints still work.
 
-- [ ] **Step 6: Audit every objective and inspect the final diff**
+- [x] **Step 6: Audit every objective and inspect the final diff**
 
 Run:
 
@@ -817,7 +825,7 @@ rg -n "layoutRelationshipGraph|renderRelationshipView" \
 
 Expected: no unstaged generated debris; no whitespace errors; layout and rendering implementations exist only in the shared package; both Panels import them. Match evidence to each design goal: stable database ID with exact-identity conflict handling, cached node/viewport restoration, name clustering, viewport-aware automatic layout, draggable nodes, Schema reconciliation, and SQLite/MySQL parity.
 
-- [ ] **Step 7: Commit any generated artifacts or verification fixes**
+- [x] **Step 7: Commit any generated artifacts or verification fixes**
 
 If verification changed the tracked relationship plugin output, inspect `git status --short`, confirm every path belongs to this feature, then stage these exact output directories together with the already identified owning source/test file:
 
