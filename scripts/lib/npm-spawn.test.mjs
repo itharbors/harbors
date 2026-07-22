@@ -3,6 +3,28 @@ import test from 'node:test';
 
 import { createNpmSpawnSpec } from './npm-spawn.mjs';
 
+test('uses npm_node_execpath instead of the Electron executable for npm_execpath', () => {
+  const npmArgs = ['run', 'dev:web', '--', '--kit', '@itharbors/kit-sqlite'];
+
+  const spec = createNpmSpawnSpec(npmArgs, {
+    env: {
+      npm_execpath: '/project/node_modules/npm/bin/npm-cli.js',
+      npm_node_execpath: '/usr/local/bin/node',
+    },
+    execPath: '/Applications/Harbors.app/Contents/MacOS/Harbors',
+    platform: 'darwin',
+  });
+
+  assert.deepEqual(spec, {
+    command: '/usr/local/bin/node',
+    args: [
+      '/project/node_modules/npm/bin/npm-cli.js',
+      ...npmArgs,
+    ],
+    spawnOptions: {},
+  });
+});
+
 test('uses the current Node executable for npm_execpath on Windows', () => {
   const npmArgs = ['run', 'dev:web', '--', '--kit', '@itharbors/kit-sqlite'];
 

@@ -5,7 +5,9 @@ export function createNpmSpawnSpec(args, {
 } = {}) {
   if (env.npm_execpath) {
     return {
-      command: execPath,
+      command: typeof env.npm_node_execpath === 'string' && env.npm_node_execpath
+        ? env.npm_node_execpath
+        : execPath,
       args: [env.npm_execpath, ...args],
       spawnOptions: {},
     };
