@@ -1,4 +1,5 @@
 import { verify as verifySigstoreBundle } from 'sigstore';
+import snappy from 'snappyjs';
 
 const GITHUB_API_ORIGIN = 'https://api.github.com';
 const GITHUB_OIDC_ISSUER = 'https://token.actions.githubusercontent.com';
@@ -72,7 +73,7 @@ function parseWorkflow(workflow, expectedRepository) {
   }
   return {
     repository: match[1],
-    path: `/${match[2]}`,
+    path: match[2],
     ref,
     identity: `https://github.com/${workflow}`,
   };
@@ -130,8 +131,36 @@ async function readLimitedJson(response, maxBytes, tooLargeCode, invalidCode, la
   } finally {
     reader.releaseLock();
   }
+  let bytes = Buffer.concat(chunks, total);
+  if (response.headers.get('content-type')?.split(';', 1)[0].trim().toLowerCase() === 'application/x-snappy') {
+    let declaredSize = 0;
+    let shift = 0;
+    let complete = false;
+    for (const byte of bytes.subarray(0, 8)) {
+      declaredSize += (byte & 0x7f) * (2 ** shift);
+      if ((byte & 0x80) === 0) {
+        complete = true;
+        break;
+      }
+      shift += 7;
+    }
+    if (!complete || !Number.isSafeInteger(declaredSize)) {
+      throw new GitHubAttestationError(invalidCode, `${label} has an invalid Snappy length`);
+    }
+    if (declaredSize > maxBytes) {
+      throw new GitHubAttestationError(tooLargeCode, `${label} exceeds the size limit`);
+    }
+    try {
+      bytes = Buffer.from(snappy.uncompress(bytes));
+    } catch (error) {
+      throw new GitHubAttestationError(invalidCode, `${label} is not valid Snappy`, { cause: error });
+    }
+    if (bytes.byteLength !== declaredSize || bytes.byteLength > maxBytes) {
+      throw new GitHubAttestationError(invalidCode, `${label} has an invalid Snappy size`);
+    }
+  }
   try {
-    return JSON.parse(Buffer.concat(chunks, total).toString('utf8'));
+    return JSON.parse(bytes.toString('utf8'));
   } catch (error) {
     throw new GitHubAttestationError(invalidCode, `${label} is not valid JSON`, { cause: error });
   }

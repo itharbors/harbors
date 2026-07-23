@@ -26,7 +26,7 @@ function statement(overrides = {}) {
           workflow: {
             repository: `https://github.com/${repository}`,
             ref: 'refs/tags/v1.2.3',
-            path: '/.github/workflows/publish-kit.yml',
+            path: '.github/workflows/publish-kit.yml',
           },
         },
         resolvedDependencies: [{
@@ -55,6 +55,33 @@ function jsonResponse(value, init = {}) {
   return new Response(JSON.stringify(value), {
     ...init,
     headers: { 'content-type': 'application/json', ...init.headers },
+  });
+}
+
+function rawSnappyLiteral(value) {
+  const source = Buffer.from(JSON.stringify(value));
+  const lengthPrefix = [];
+  for (let remaining = source.byteLength; remaining >= 0x80; remaining >>>= 7) {
+    lengthPrefix.push((remaining & 0x7f) | 0x80);
+  }
+  lengthPrefix.push(source.byteLength >>> (7 * (lengthPrefix.length)));
+
+  const literalLength = source.byteLength - 1;
+  const literalLengthBytes = [];
+  for (let remaining = literalLength; remaining > 0; remaining >>>= 8) {
+    literalLengthBytes.push(remaining & 0xff);
+  }
+  const literalTag = (59 + literalLengthBytes.length) << 2;
+  return Buffer.concat([
+    Buffer.from(lengthPrefix),
+    Buffer.from([literalTag, ...literalLengthBytes]),
+    source,
+  ]);
+}
+
+function snappyResponse(value) {
+  return new Response(rawSnappyLiteral(value), {
+    headers: { 'content-type': 'application/x-snappy' },
   });
 }
 
@@ -143,6 +170,16 @@ test('sends an optional GitHub token only to the attestation API', async () => {
   await verifier.verify(expected());
   assert.equal(requests[0].init.headers.Authorization, 'Bearer github-token');
   assert.deepEqual(requests[1].init.headers, { Accept: 'application/json' });
+});
+
+test('accepts GitHub raw Snappy attestation bundles', async () => {
+  const { verifier } = createVerifier({
+    fetchImpl: async (url) => String(url).startsWith(attestationUrl)
+      ? jsonResponse({ attestations: [{ bundle_url: bundleUrl }] })
+      : snappyResponse(bundle()),
+  });
+
+  assert.equal((await verifier.verify(expected())).verified, true);
 });
 
 test('rejects empty or control-bearing GitHub tokens', () => {
