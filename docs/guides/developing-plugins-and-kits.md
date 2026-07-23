@@ -233,6 +233,19 @@ Session 插件，两者不能在同一 Kit 中包含同一 package name。Electr
 [Kit 制品与本地安装](./kit-artifacts.md)。`--kit <path>` 仍是开发期显式路径，不会写入
 Installed Kit Store。
 
+### 官方 Kit 的目录与发布边界
+
+官方实现固定保存在主分支的 `kits/sqlite`、`kits/mysql`、`kits/notifications`。每个目录独立维护
+`kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
+修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
+不会发布 Kit 或 Framework。
+
+准备版本时必须同步 Kit manifest、package 和锁文件中的版本。只有显式创建
+`kit/<name>/v<semver>` Tag 才会选择对应 `kits/<name>` 目录执行检查与打包。发布得到独立 `.hkit`
+Release Asset，随后市场工作流自动扫描可信 Release 并重建 `index.v1.json`；开发者不提交逐版本
+Registry entry。具体确认令牌、Stable/Preview 频道和回滚规则见
+[Kit 制品与本地安装](./kit-artifacts.md)。
+
 ### 应用启动插件
 
 只有必须在任何 Kit 窗口打开前可用、且不需要 UI 的能力才应放进 `startup.plugins`，例如本机
