@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -122,6 +122,45 @@ test('generates MySQL and Notifications with minimal product-specific capabiliti
   assert.ok(notificationTree.includes('scripts/prepare-notification-skill-resource.mjs'));
   assert.ok(!notificationTree.some((file) => file.includes('relationship-graph')));
   assert.ok(!notificationTree.some((file) => file.includes('-contracts')));
+});
+
+test('generates a lockfile against the public npm registry regardless of developer configuration', async (context) => {
+  const temp = await mkdtemp(path.join(os.tmpdir(), 'harbors-public-registry-lock-'));
+  context.after(() => rm(temp, { recursive: true, force: true }));
+  const output = path.join(temp, 'notifications');
+  const bin = path.join(temp, 'bin');
+  const fakeNpm = path.join(bin, 'npm');
+  await mkdir(bin);
+  await writeFile(fakeNpm, `#!/usr/bin/env node
+const fs = require('node:fs');
+const registryArgument = process.argv.slice(2).find((argument) => argument.startsWith('--registry='));
+const registry = registryArgument?.slice('--registry='.length)
+  ?? process.env.NPM_CONFIG_REGISTRY
+  ?? 'https://registry.npmjs.org';
+const resolved = new URL('fixture.tgz', registry.endsWith('/') ? registry : \`${'${registry}'}/\`).href;
+fs.writeFileSync('package-lock.json', JSON.stringify({
+  lockfileVersion: 3,
+  packages: {
+    'node_modules/fixture': { resolved },
+  },
+}, null, 2));
+`);
+  await chmod(fakeNpm, 0o755);
+
+  await execFileAsync(process.execPath, [migrationScript, '--kit', 'notifications', '--output', output], {
+    cwd: repository,
+    env: {
+      ...process.env,
+      NPM_CONFIG_REGISTRY: 'https://private-registry.example.invalid',
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}`,
+    },
+  });
+
+  const lock = await json(path.join(output, 'package-lock.json'));
+  assert.equal(
+    lock.packages['node_modules/fixture'].resolved,
+    'https://registry.npmjs.org/fixture.tgz',
+  );
 });
 
 test('rejects unknown Kits and refuses to overwrite output', async (context) => {

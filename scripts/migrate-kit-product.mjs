@@ -269,7 +269,12 @@ async function createSnapshot({ kit, output, skipLock }) {
     );
 
     if (!skipLock) {
-      await execFileAsync('npm', ['install', '--package-lock-only', '--ignore-scripts'], {
+      await execFileAsync('npm', [
+        'install',
+        '--package-lock-only',
+        '--ignore-scripts',
+        '--registry=https://registry.npmjs.org',
+      ], {
         cwd: destination,
         maxBuffer: 16 * 1024 * 1024,
       });
