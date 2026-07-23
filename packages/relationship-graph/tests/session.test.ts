@@ -80,6 +80,11 @@ describe('relationship graph session', () => {
     expect(positions(session.snapshot)).not.toEqual(beforeFit);
     expect(session.snapshot.viewport).not.toEqual(fittedViewport);
     expect(session.snapshot.source).toBe('automatic');
+    const tallPositions = positions(session.snapshot);
+
+    session.autoArrange({ width: 1_200, height: 400 });
+    expect(positions(session.snapshot)).not.toEqual(tallPositions);
+    expect(session.snapshot.source).toBe('automatic');
     await session.dispose();
   });
 

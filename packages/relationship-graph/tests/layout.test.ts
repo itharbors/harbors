@@ -81,6 +81,34 @@ describe('relationship graph layout', () => {
     expect(tall).toEqual(layoutRelationshipGraph(graph, { width: 500, height: 1_600 }));
   });
 
+  it('includes viewport padding when choosing a group direction', () => {
+    const graph: RelationshipGraph = {
+      tables: [
+        table('catalog', 12),
+        table('catalog_a', 1),
+        table('catalog_b', 3),
+        table('catalog_c', 4),
+        table('catalog_d', 7),
+      ],
+      relationships: [
+        relationship('catalog:a', 'catalog_a', 'catalog'),
+        relationship('catalog:b', 'catalog_b', 'catalog'),
+        relationship('catalog:c', 'catalog_c', 'catalog'),
+        relationship('catalog:d', 'catalog_d', 'catalog'),
+      ],
+    };
+    const canvas = { width: 1_000, height: 600 };
+
+    const layout = layoutRelationshipGraph(graph, canvas);
+    const fitted = fitRelationshipViewport(layout, canvas);
+
+    expectNoOverlap(layout);
+    expect(fitted.scale).toBeGreaterThan(0.78);
+    expect(layout.nodes.find((node) => node.name === 'catalog_a')?.y).toBe(
+      layout.nodes.find((node) => node.name === 'catalog_d')?.y,
+    );
+  });
+
   it('prioritizes readable scale when packing differently sized groups', () => {
     const graph: RelationshipGraph = {
       tables: [
@@ -107,6 +135,23 @@ describe('relationship graph layout', () => {
     expect(layout.nodes.find((node) => node.name === 'charlie')?.y).toBe(
       layout.nodes.find((node) => node.name === 'alpha')?.y,
     );
+  });
+
+  it('uses group dimensions when choosing how many packing columns to evaluate', () => {
+    const graph: RelationshipGraph = {
+      tables: Array.from({ length: 100 }, (_, index) => (
+        table(String.fromCodePoint(0x4e00 + index), 100)
+      )),
+      relationships: [],
+    };
+    const canvas = { width: 1_600, height: 600 };
+
+    const layout = layoutRelationshipGraph(graph, canvas);
+    const fitted = fitRelationshipViewport(layout, canvas);
+
+    expectNoOverlap(layout);
+    expect(fitted.scale).toBeGreaterThan(0.08);
+    expect(new Set(layout.nodes.map((node) => node.y)).size).toBe(2);
   });
 
   it('routes cycles, self references, and parallel relationships inside bounds', () => {

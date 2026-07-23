@@ -68,7 +68,7 @@ it('changes a single connected group direction to use the current canvas', () =>
 Run:
 
 ```bash
-npm run test -w @itharbors/relationship-graph -- --run packages/relationship-graph/tests/layout.test.ts
+npm run test -w @itharbors/relationship-graph -- tests/layout.test.ts
 ```
 
 Expected: FAIL because the wide single group remains taller than it is wide.
@@ -135,7 +135,7 @@ Compare tuple items in order; on a full tie prefer `top-to-bottom` for `canvas.w
 Run:
 
 ```bash
-npm run test -w @itharbors/relationship-graph -- --run packages/relationship-graph/tests/layout.test.ts
+npm run test -w @itharbors/relationship-graph -- tests/layout.test.ts
 ```
 
 Expected: PASS; the new regression produces a wide box on `1600 × 500` and a tall box on `500 × 1600`, with no overlap.
@@ -181,7 +181,7 @@ The `0.6` floor is a regression guard for the fixed fixture, not a global produc
 Run:
 
 ```bash
-npm run test -w @itharbors/relationship-graph -- --run packages/relationship-graph/tests/layout.test.ts
+npm run test -w @itharbors/relationship-graph -- tests/layout.test.ts
 ```
 
 Expected: FAIL because the existing aspect-first weighted scorer selects a packing whose fitted scale is below `0.6` for the fixed fixture.

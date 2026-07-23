@@ -132,9 +132,9 @@ export function fitRelationshipViewport(
 ): RelationshipViewport {
   const canvas = safeCanvas(requestedCanvas);
   const bounds = nodeBounds(layout.nodes);
-  const width = Math.max(1, bounds.maxX - bounds.minX + RELATIONSHIP_LAYOUT.padding * 2);
-  const height = Math.max(1, bounds.maxY - bounds.minY + RELATIONSHIP_LAYOUT.padding * 2);
-  const scale = clamp(Math.min(canvas.width / width, canvas.height / height, 1), MIN_SCALE, MAX_SCALE);
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  const scale = clamp(fittedNodeBoundsScale(width, height, canvas), MIN_SCALE, MAX_SCALE);
   return {
     scale,
     x: (canvas.width - (bounds.maxX - bounds.minX) * scale) / 2 - bounds.minX * scale,
@@ -323,8 +323,8 @@ function compareGroupCandidates(
   right: GroupCandidate,
   canvas: CanvasSize,
 ): number {
-  const leftScale = fittedScale(left.box.width, left.box.height, canvas);
-  const rightScale = fittedScale(right.box.width, right.box.height, canvas);
+  const leftScale = fittedNodeBoundsScale(left.box.width, left.box.height, canvas);
+  const rightScale = fittedNodeBoundsScale(right.box.width, right.box.height, canvas);
   const scaleComparison = compareDescending(leftScale, rightScale);
   if (scaleComparison !== 0) return scaleComparison;
   const targetAspect = canvas.width / canvas.height;
@@ -347,6 +347,14 @@ function fittedScale(width: number, height: number, canvas: CanvasSize): number 
   return Math.min(canvas.width / Math.max(1, width), canvas.height / Math.max(1, height), 1);
 }
 
+function fittedNodeBoundsScale(width: number, height: number, canvas: CanvasSize): number {
+  return fittedScale(
+    width + RELATIONSHIP_LAYOUT.padding * 2,
+    height + RELATIONSHIP_LAYOUT.padding * 2,
+    canvas,
+  );
+}
+
 function choosePacking(
   groups: GroupBox[],
   relationships: Relationship[],
@@ -361,9 +369,18 @@ function choosePacking(
       centers: new Map(),
     };
   }
+  const averageWidth = groups.reduce((sum, group) => sum + group.width, 0) / groups.length;
+  const averageHeight = groups.reduce((sum, group) => sum + group.height, 0) / groups.length;
+  const targetAspect = canvas.width / canvas.height;
+  const dimensionAdjustedColumns = Math.sqrt(
+    groups.length * targetAspect * averageHeight / averageWidth,
+  );
   const maximumColumns = Math.min(
     groups.length,
-    Math.ceil(Math.sqrt(groups.length * canvas.width / canvas.height)) + 2,
+    Math.ceil(Math.max(
+      Math.sqrt(groups.length * targetAspect),
+      dimensionAdjustedColumns,
+    )) + 2,
   );
   let best: PackingCandidate | null = null;
   for (let columns = 1; columns <= maximumColumns; columns += 1) {
