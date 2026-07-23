@@ -5,6 +5,7 @@ import { discoverTrustedKitReleases } from './release-source.mjs';
 import { buildKitRegistryIndex } from './registry.mjs';
 
 const repository = 'itharbors/harbors';
+const API_ORIGIN = 'https://api.github.com';
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const digest = 'a'.repeat(64);
 const signerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
@@ -118,13 +119,27 @@ function releaseFetch({ pages, metadata = new Map(), refs = new Map(), calls = [
     }
     if (requestUrl.origin === 'https://api.github.com') {
       if (requestUrl.pathname.includes('/git/ref/tags/')) {
+        const tag = decodeURIComponent(requestUrl.pathname.slice(requestUrl.pathname.indexOf('/git/ref/tags/') + 14));
         return json(refs.get(requestUrl.pathname) ?? {
-          object: { type: 'commit', sha: commit },
+          ref: `refs/tags/${tag}`,
+          url: `${API_ORIGIN}/repos/${repository}/git/refs/tags/${tag}`,
+          object: {
+            type: 'commit',
+            sha: commit,
+            url: `${API_ORIGIN}/repos/${repository}/git/commits/${commit}`,
+          },
         });
       }
       if (requestUrl.pathname.includes('/git/tags/')) {
+        const sha = requestUrl.pathname.slice(requestUrl.pathname.lastIndexOf('/') + 1);
         return json(refs.get(requestUrl.pathname) ?? {
-          object: { type: 'commit', sha: commit },
+          sha,
+          url: `${API_ORIGIN}/repos/${repository}/git/tags/${sha}`,
+          object: {
+            type: 'commit',
+            sha: commit,
+            url: `${API_ORIGIN}/repos/${repository}/git/commits/${commit}`,
+          },
         });
       }
       const page = pages.get(requestUrl.searchParams.get('page')) ?? [];
@@ -152,13 +167,14 @@ function metadataFor(value) {
   ]);
 }
 
-async function discover({ pages, metadata, refs, calls, verifierOptions, responseFor } = {}) {
+async function discover({ pages, metadata, refs, calls, verifierOptions, responseFor, requestTimeoutMs } = {}) {
   return discoverTrustedKitReleases({
     policy,
     repository,
     githubToken: 'token',
     fetchImpl: releaseFetch({ pages, metadata, refs, calls, responseFor }),
     provenanceVerifier: verifier(verifierOptions),
+    requestTimeoutMs,
   });
 }
 
@@ -216,8 +232,16 @@ test('peels annotated Tags and rejects missing, malformed, cyclic, type-drift, a
     pages: new Map([['1', [releaseRecord(value)]]]),
     metadata: metadataFor(value),
     refs: new Map([
-      [refPath, { object: { type: 'tag', sha: 'b'.repeat(40) } }],
-      [tagPath, { object: { type: 'commit', sha: commit } }],
+      [refPath, {
+        ref: `refs/tags/${value.tag}`,
+        url: `${API_ORIGIN}/repos/${repository}/git/refs/tags/${value.tag}`,
+        object: { type: 'tag', sha: 'b'.repeat(40), url: `${API_ORIGIN}/repos/${repository}/git/tags/${'b'.repeat(40)}` },
+      }],
+      [tagPath, {
+        sha: 'b'.repeat(40),
+        url: `${API_ORIGIN}/repos/${repository}/git/tags/${'b'.repeat(40)}`,
+        object: { type: 'commit', sha: commit, url: `${API_ORIGIN}/repos/${repository}/git/commits/${commit}` },
+      }],
     ]),
   }));
   for (const refs of [
@@ -318,12 +342,119 @@ test('returns deep-frozen entries and a read-only Map that remains usable by the
   assert.throws(() => result.releasesByUrl.set('x', release), TypeError);
   assert.throws(() => result.releasesByUrl.delete(value.entry.releaseManifestUrl), TypeError);
   assert.throws(() => result.releasesByUrl.clear(), TypeError);
+  result.releasesByUrl.forEach((candidate, url, facade) => {
+    assert.equal(facade, result.releasesByUrl);
+    assert.equal(candidate, release);
+    assert.equal(url, value.entry.releaseManifestUrl);
+    assert.throws(() => facade.clear(), TypeError);
+  });
+  assert.equal(result.releasesByUrl.size, 1);
+  assert.throws(() => { result.releasesByUrl.extra = true; }, TypeError);
+  assert.throws(() => Object.defineProperty(result.releasesByUrl, 'extra', { value: true }), TypeError);
+  assert.throws(() => Object.setPrototypeOf(result.releasesByUrl, null), TypeError);
+  assert.throws(() => Object.preventExtensions(result.releasesByUrl), TypeError);
+  assert.throws(() => Map.prototype.clear.call(result.releasesByUrl), TypeError);
+  assert.deepEqual([...result.releasesByUrl.keys()], [value.entry.releaseManifestUrl]);
+  assert.deepEqual([...result.releasesByUrl.values()], [release]);
+  assert.deepEqual([...result.releasesByUrl.entries()], [[value.entry.releaseManifestUrl, release]]);
+  assert.deepEqual([...result.releasesByUrl], [[value.entry.releaseManifestUrl, release]]);
   assert.equal(buildKitRegistryIndex({
     entries: result.entries,
     releasesByUrl: result.releasesByUrl,
     revocations: [],
     generatedAt: '2026-07-24T00:00:00.000Z',
   }).kits.length, 1);
+});
+
+test('times out stalled response bodies from fetch start and cancels their streams', async () => {
+  let cancelled = false;
+  const stalled = new Response(new ReadableStream({
+    start(controller) {
+      setTimeout(() => {
+        try {
+          controller.enqueue(new TextEncoder().encode('[]'));
+          controller.close();
+        } catch {
+          // The timeout cancellation closes this test stream first.
+        }
+      }, 50);
+    },
+    cancel() { cancelled = true; },
+  }));
+  await assert.rejects(discover({
+    pages: new Map(),
+    metadata: new Map(),
+    requestTimeoutMs: 5,
+    responseFor: (url) => (url.pathname.endsWith('/releases') ? stalled : undefined),
+  }), /timed out|aborted/i);
+  assert.equal(cancelled, true);
+  await assert.rejects(discover({ pages: new Map(), metadata: new Map(), requestTimeoutMs: 0 }), /timeout/i);
+  await assert.rejects(discover({ pages: new Map(), metadata: new Map(), requestTimeoutMs: 15_001 }), /timeout/i);
+});
+
+test('requires exact canonical Git ref and annotated Tag evidence URLs', async () => {
+  const value = values();
+  const refPath = `/repos/${repository}/git/ref/tags/${encodeURIComponent(value.tag)}`;
+  const tagSha = 'b'.repeat(40);
+  const tagPath = `/repos/${repository}/git/tags/${tagSha}`;
+  const goodRef = {
+    ref: `refs/tags/${value.tag}`,
+    url: `${API_ORIGIN}/repos/${repository}/git/refs/tags/${value.tag}`,
+    object: { type: 'tag', sha: tagSha, url: `${API_ORIGIN}/repos/${repository}/git/tags/${tagSha}` },
+  };
+  const goodTag = {
+    sha: tagSha,
+    url: `${API_ORIGIN}/repos/${repository}/git/tags/${tagSha}`,
+    object: { type: 'commit', sha: commit, url: `${API_ORIGIN}/repos/${repository}/git/commits/${commit}` },
+  };
+  await assert.doesNotReject(discover({
+    pages: new Map([['1', [releaseRecord(value)]]]),
+    metadata: metadataFor(value),
+    refs: new Map([[refPath, goodRef], [tagPath, goodTag]]),
+  }));
+  for (const ref of [
+    { ...goodRef, ref: 'refs/tags/other' },
+    { ...goodRef, url: 'https://api.github.com/repos/other/repo/git/refs/tags/kit/mysql/v1.2.3' },
+    { ...goodRef, object: { ...goodRef.object, url: `${API_ORIGIN}/repos/${repository}/git/commits/${tagSha}` } },
+  ]) {
+    await assert.rejects(discover({
+      pages: new Map([['1', [releaseRecord(value)]]]),
+      metadata: metadataFor(value),
+      refs: new Map([[refPath, ref], [tagPath, goodTag]]),
+    }), /Tag|ref|URL|object/i);
+  }
+  await assert.rejects(discover({
+    pages: new Map([['1', [releaseRecord(value)]]]),
+    metadata: metadataFor(value),
+    refs: new Map([[refPath, goodRef], [tagPath, { ...goodTag, sha: 'c'.repeat(40) }]]),
+  }), /Tag|object|URL/i);
+  await assert.rejects(discover({
+    pages: new Map([['1', [releaseRecord(value)]]]),
+    metadata: metadataFor(value),
+    refs: new Map([[refPath, goodRef], [tagPath, {
+      ...goodTag,
+      object: { type: 'tag', sha: tagSha, url: `${API_ORIGIN}/repos/${repository}/git/tags/${tagSha}` },
+    }]]),
+  }), /cycle/i);
+  const peelShas = Array.from({ length: 6 }, (_, index) => `${index}`.repeat(40));
+  const deepRefs = new Map([[
+    refPath,
+    { ...goodRef, object: { type: 'tag', sha: peelShas[0], url: `${API_ORIGIN}/repos/${repository}/git/tags/${peelShas[0]}` } },
+  ]]);
+  for (let index = 0; index < peelShas.length; index += 1) {
+    deepRefs.set(`/repos/${repository}/git/tags/${peelShas[index]}`, {
+      sha: peelShas[index],
+      url: `${API_ORIGIN}/repos/${repository}/git/tags/${peelShas[index]}`,
+      object: {
+        type: 'tag',
+        sha: peelShas[(index + 1) % peelShas.length],
+        url: `${API_ORIGIN}/repos/${repository}/git/tags/${peelShas[(index + 1) % peelShas.length]}`,
+      },
+    });
+  }
+  await assert.rejects(discover({
+    pages: new Map([['1', [releaseRecord(value)]]]), metadata: metadataFor(value), refs: deepRefs,
+  }), /peel limit/i);
 });
 
 test('rejects every attestation result drift including attestation URL and keeps timeout signals bounded', async () => {
