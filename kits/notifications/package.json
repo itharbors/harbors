@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/notification-background && node ../../scripts/ce-plugin.mjs build plugins/notification-center && node ../../scripts/prepare-notification-skill-resource.mjs",
     "test": "vitest run --config vitest.config.ts"
   },
   "ce-editor": {

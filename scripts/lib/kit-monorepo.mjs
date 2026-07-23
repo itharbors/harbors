@@ -64,12 +64,17 @@ export async function loadOfficialKit({ repositoryRoot, slug }) {
     await readFile(path.join(directory, 'kit.json'), 'utf8'),
   ));
   const packageJson = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+  const packageLock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
   const metadata = policy.kits[slug];
   if (manifest.id !== metadata.id || packageJson.name !== metadata.id) {
     throw new Error(`Kit identity mismatch: ${slug}`);
   }
   if (manifest.version !== packageJson.version) {
     throw new Error(`Kit version mismatch: ${slug}`);
+  }
+  const lockedPackage = packageLock.packages?.[`kits/${slug}`];
+  if (lockedPackage?.name !== packageJson.name || lockedPackage.version !== packageJson.version) {
+    throw new Error(`package-lock identity mismatch: ${slug}`);
   }
   return Object.freeze({ slug, directory, ...metadata, manifest, packageJson });
 }

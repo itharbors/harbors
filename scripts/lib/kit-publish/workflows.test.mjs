@@ -113,7 +113,7 @@ test('publisher deploys Registry only after exactly one release job succeeds', a
   const exactPredicate = "if: ${{ always() && ((needs.publish-preview.result == 'success' && needs.publish-stable.result == 'skipped') || (needs.publish-stable.result == 'success' && needs.publish-preview.result == 'skipped')) }}";
   assert.match(registry, /needs:\s*\[publish-preview, publish-stable\]/u);
   assert.ok(registry.includes(exactPredicate));
-  for (const permission of ['contents: read', 'pages: write', 'id-token: write']) {
+  for (const permission of ['contents: read', 'attestations: read', 'pages: write', 'id-token: write']) {
     assert.match(registry, new RegExp(permission, 'u'));
   }
   assert.match(
@@ -128,6 +128,7 @@ test('Registry workflow scans trusted Releases from main and deploys only one Pa
   assert.match(workflow, /^on:\n  workflow_call:\n  workflow_dispatch:$/mu);
   assert.match(workflow, /group:\s*kit-registry-pages[\s\S]*cancel-in-progress:\s*false/u);
   const build = jobBlock(workflow, 'build');
+  assert.match(build, /permissions:\n\s+contents:\s*read\n\s+attestations:\s*read/u);
   assert.match(build, /actions\/checkout@v6[\s\S]*ref:\s*main/u);
   assert.match(build, /actions\/setup-node@v6[\s\S]*node-version:\s*22\.18\.0/u);
   assert.match(build, /npm install --global npm@10\.9\.3/u);

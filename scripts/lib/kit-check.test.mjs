@@ -12,14 +12,10 @@ import { runCheckKitCli } from '../check-kit.mjs';
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/check-kit.mjs');
 
-function expectedCommands({ artifactName, slug, workspaces, plugins, outputDirectory, preparesResources = false }) {
+function expectedCommands({ artifactName, slug, outputDirectory }) {
   const artifactPath = path.join(outputDirectory, artifactName);
   return [
-    ...workspaces.map((workspace) => ['npm', ['run', 'build', '-w', workspace]]),
-    ...plugins.map((plugin) => [process.execPath, [
-      'scripts/ce-plugin.mjs', 'build', `kits/${slug}/plugins/${plugin}`,
-    ]]),
-    ...(preparesResources ? [[process.execPath, ['scripts/prepare-notification-skill-resource.mjs']]] : []),
+    ['npm', ['run', 'build', '-w', `@itharbors/kit-${slug}`]],
     ['npm', ['test', '-w', `@itharbors/kit-${slug}`]],
     [process.execPath, ['packages/kit-cli/dist/cli.js', 'validate', `kits/${slug}`]],
     [process.execPath, [
@@ -32,9 +28,6 @@ function expectedCommands({ artifactName, slug, workspaces, plugins, outputDirec
 async function checkCommandSequence({
   artifactName = 'kit-mysql-0.1.0-preview.1-any-any.hkit',
   slug,
-  workspaces,
-  plugins,
-  preparesResources = false,
 }) {
   const outputDirectory = await mkdtemp(path.join(tmpdir(), `kit-check-${slug}-`));
   const calls = [];
@@ -49,7 +42,7 @@ async function checkCommandSequence({
     assert.equal(result.kit.slug, slug);
     assert.deepEqual(
       calls,
-      expectedCommands({ artifactName, slug, workspaces, plugins, outputDirectory, preparesResources })
+      expectedCommands({ artifactName, slug, outputDirectory })
         .map(([command, args]) => [command, args, { cwd: repositoryRoot }]),
     );
   } finally {
@@ -60,30 +53,13 @@ async function checkCommandSequence({
 test('checks MySQL with its exact affected build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'mysql',
-    workspaces: [
-      '@itharbors/mysql-contracts',
-      '@itharbors/relationship-graph',
-      '@itharbors/kit-core',
-      '@itharbors/kit-cli',
-    ],
-    plugins: [
-      'mysql-core',
-      'mysql-data',
-      'mysql-explorer',
-      'mysql-relationships',
-      'mysql-schema',
-      'mysql-sql',
-    ],
   });
 });
 
-test('checks Notifications and prepares its skill resource after every plugin build', async () => {
+test('checks Notifications through its Kit-local build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'notifications',
     artifactName: 'kit-notifications-0.1.0-preview.1-any-any.hkit',
-    workspaces: ['@itharbors/kit-core', '@itharbors/kit-cli'],
-    plugins: ['notification-background', 'notification-center'],
-    preparesResources: true,
   });
 });
 
@@ -91,20 +67,6 @@ test('checks SQLite with its exact affected build, test, pack, and inspect seque
   await checkCommandSequence({
     slug: 'sqlite',
     artifactName: 'kit-sqlite-0.1.0-preview.1-darwin-arm64-abi127.hkit',
-    workspaces: [
-      '@itharbors/sqlite-contracts',
-      '@itharbors/relationship-graph',
-      '@itharbors/kit-core',
-      '@itharbors/kit-cli',
-    ],
-    plugins: [
-      'sqlite-core',
-      'sqlite-data',
-      'sqlite-explorer',
-      'sqlite-relationships',
-      'sqlite-schema',
-      'sqlite-sql',
-    ],
   });
 });
 

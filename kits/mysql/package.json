@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "npm run build -w @itharbors/mysql-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/mysql-core && node ../../scripts/ce-plugin.mjs build plugins/mysql-data && node ../../scripts/ce-plugin.mjs build plugins/mysql-explorer && node ../../scripts/ce-plugin.mjs build plugins/mysql-relationships && node ../../scripts/ce-plugin.mjs build plugins/mysql-schema && node ../../scripts/ce-plugin.mjs build plugins/mysql-sql",
     "test": "vitest run --config vitest.config.ts"
   },
   "dependencies": {

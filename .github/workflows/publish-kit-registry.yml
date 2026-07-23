@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      attestations: read
     steps:
       - name: Checkout main governance state
         uses: actions/checkout@v6
