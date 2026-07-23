@@ -48,6 +48,19 @@ type PackedGroups = {
   centers: Map<string, { x: number; y: number }>;
 };
 
+type PackingMetrics = {
+  fitScale: number;
+  aspectError: number;
+  emptyRatio: number;
+  crossSpan: number;
+};
+
+type PackingCandidate = {
+  packed: PackedGroups;
+  metrics: PackingMetrics;
+  columns: number;
+};
+
 export function layoutRelationshipGraph(
   graph: RelationshipGraph,
   requestedCanvas: CanvasSize,
@@ -352,14 +365,15 @@ function choosePacking(
     groups.length,
     Math.ceil(Math.sqrt(groups.length * canvas.width / canvas.height)) + 2,
   );
-  let best: { packed: PackedGroups; score: number; columns: number } | null = null;
+  let best: PackingCandidate | null = null;
   for (let columns = 1; columns <= maximumColumns; columns += 1) {
     const packed = packGroups(groups, columns);
-    const score = packingScore(packed, relationships, groupByName, canvas, groups);
-    if (best === null || score < best.score - 1e-9
-      || (Math.abs(score - best.score) <= 1e-9 && columns < best.columns)) {
-      best = { packed, score, columns };
-    }
+    const candidate: PackingCandidate = {
+      packed,
+      metrics: packingMetrics(packed, relationships, groupByName, canvas, groups),
+      columns,
+    };
+    if (best === null || comparePackingCandidates(candidate, best) < 0) best = candidate;
   }
   return best!.packed;
 }
@@ -389,13 +403,13 @@ function packGroups(groups: GroupBox[], columns: number): PackedGroups {
   };
 }
 
-function packingScore(
+function packingMetrics(
   packed: PackedGroups,
   relationships: Relationship[],
   groupByName: Map<string, string>,
   canvas: CanvasSize,
   groups: GroupBox[],
-): number {
+): PackingMetrics {
   const targetAspect = canvas.width / canvas.height;
   const packedAspect = packed.width / packed.height;
   const aspectError = Math.abs(Math.log(packedAspect / targetAspect));
@@ -411,7 +425,20 @@ function packingScore(
     const to = packed.centers.get(toGroup)!;
     crossSpan += Math.hypot(from.x - to.x, from.y - to.y) / diagonal;
   }
-  return aspectError + emptyRatio * 0.15 + crossSpan * 0.01;
+  return {
+    fitScale: fittedScale(packed.width, packed.height, canvas),
+    aspectError,
+    emptyRatio,
+    crossSpan,
+  };
+}
+
+function comparePackingCandidates(left: PackingCandidate, right: PackingCandidate): number {
+  return compareDescending(left.metrics.fitScale, right.metrics.fitScale)
+    || compareAscending(left.metrics.aspectError, right.metrics.aspectError)
+    || compareAscending(left.metrics.emptyRatio, right.metrics.emptyRatio)
+    || compareAscending(left.metrics.crossSpan, right.metrics.crossSpan)
+    || left.columns - right.columns;
 }
 
 function fallbackGrid(

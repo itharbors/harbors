@@ -81,6 +81,34 @@ describe('relationship graph layout', () => {
     expect(tall).toEqual(layoutRelationshipGraph(graph, { width: 500, height: 1_600 }));
   });
 
+  it('prioritizes readable scale when packing differently sized groups', () => {
+    const graph: RelationshipGraph = {
+      tables: [
+        table('alpha'),
+        table('alpha_child_a', 4),
+        table('alpha_child_b', 4),
+        table('alpha_child_c', 4),
+        table('beta', 9),
+        table('charlie', 8),
+      ],
+      relationships: [
+        relationship('alpha:a', 'alpha_child_a', 'alpha'),
+        relationship('alpha:b', 'alpha_child_b', 'alpha'),
+        relationship('alpha:c', 'alpha_child_c', 'alpha'),
+      ],
+    };
+    const canvas = { width: 1_600, height: 600 };
+
+    const layout = layoutRelationshipGraph(graph, canvas);
+    const fitted = fitRelationshipViewport(layout, canvas);
+
+    expectNoOverlap(layout);
+    expect(fitted.scale).toBeGreaterThan(0.95);
+    expect(layout.nodes.find((node) => node.name === 'charlie')?.y).toBe(
+      layout.nodes.find((node) => node.name === 'alpha')?.y,
+    );
+  });
+
   it('routes cycles, self references, and parallel relationships inside bounds', () => {
     const graph: RelationshipGraph = {
       tables: [table('employee'), table('team'), table('team_member')],
