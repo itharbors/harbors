@@ -1,0 +1,17 @@
+name: Publish Kit
+
+on:
+  push:
+    tags:
+      - 'kit/*/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  pages: write
+
+jobs:
+  publish:
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v2
+    secrets: inherit
