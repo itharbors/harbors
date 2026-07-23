@@ -245,9 +245,9 @@ main
 bash .agents/skills/kit-workflow/scripts/start-kit-change.sh sqlite feature add-import
 ```
 
-该命令固定获取 `origin/main`，校验仓库本地 Git 身份和官方 Kit 契约，再创建隔离 worktree 并
-执行根目录 `npm ci`。只在输出的 worktree 中开发。完成后准备含 `## Summary` 与 `## Testing`
-的 PR body，再运行：
+该命令固定获取 `origin/main` 并校验仓库本地 Git 身份，然后创建隔离 worktree、执行根目录
+`npm ci`，再完整校验官方 Kit 契约。只在输出的 worktree 中开发。完成后准备含 `## Summary`
+与 `## Testing` 的 PR body，再运行：
 
 ```bash
 bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
