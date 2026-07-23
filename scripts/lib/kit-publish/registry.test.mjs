@@ -284,7 +284,11 @@ test('validates Preview revocation evidence against its exact immutable Tag', ()
       releaseManifestUrl: `https://github.com/${repository}/releases/download/preview%2Fmysql%2F41-0123456789ab/release.json`,
     }],
     generatedAt: '2026-07-23T12:00:00.000Z',
-  }), /revocation evidence/i);
+  }), (error) => {
+    assert.equal(error.message, 'Revocation evidence must be an immutable GitHub Release manifest');
+    assert.doesNotMatch(error.message, /Stable/u);
+    return true;
+  });
 });
 
 test('requires revocation evidence to meet the immutable Release trust contract', () => {

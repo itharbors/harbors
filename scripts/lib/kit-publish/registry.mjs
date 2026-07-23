@@ -234,7 +234,7 @@ function validateRevocation(revocation, rawRelease) {
   const { slug } = kitIdentity(release.id, release.publisher);
   const tag = `kit/${slug}/v${release.version}`;
   if (revocation.releaseManifestUrl !== exactReleaseUrl(release.source.repository, tag)) {
-    throw new Error('Revocation evidence must be an immutable Stable GitHub Release manifest');
+    throw new Error('Revocation evidence must be an immutable GitHub Release manifest');
   }
   validateReleaseEvidence(release, {
     repository: release.source.repository,
