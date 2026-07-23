@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "npm run build -w @itharbors/sqlite-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/sqlite-core && node ../../scripts/ce-plugin.mjs build plugins/sqlite-data && node ../../scripts/ce-plugin.mjs build plugins/sqlite-explorer && node ../../scripts/ce-plugin.mjs build plugins/sqlite-relationships && node ../../scripts/ce-plugin.mjs build plugins/sqlite-schema && node ../../scripts/ce-plugin.mjs build plugins/sqlite-sql",
-    "test": "vitest run --config vitest.config.ts"
+    "test:prepare": "node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
+    "test": "npm run test:prepare && vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "better-sqlite3": "^11.0.0"

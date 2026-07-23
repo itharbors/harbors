@@ -51,6 +51,24 @@ test('loads three directory-local manifests with matching runtime identity', asy
   }
 });
 
+test('database Kit tests build the real Framework runtime plugins before Vitest', async () => {
+  const prepareRuntime = [
+    'node ../../scripts/ce-plugin.mjs build ../../plugins/panel',
+    'node ../../scripts/ce-plugin.mjs build ../../plugins/message',
+    'node ../../scripts/ce-plugin.mjs build ../../plugins/menu',
+    'node ../../scripts/ce-plugin.mjs build ../../plugins/config',
+  ].join(' && ');
+  for (const slug of ['mysql', 'sqlite']) {
+    const kit = await loadOfficialKit({ repositoryRoot, slug });
+    assert.equal(kit.packageJson.scripts?.['test:prepare'], prepareRuntime, slug);
+    assert.equal(
+      kit.packageJson.scripts?.test,
+      'npm run test:prepare && vitest run --config vitest.config.ts',
+      slug,
+    );
+  }
+});
+
 test('rejects a Kit whose root lock identity differs from its package', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-lock-'));
   try {
