@@ -10,6 +10,11 @@ import { fileURLToPath } from 'node:url';
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
 const allKits = ['mysql', 'notifications', 'sqlite'];
+const runners = Object.freeze({
+  mysql: 'ubuntu-latest',
+  notifications: 'ubuntu-latest',
+  sqlite: 'macos-14',
+});
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/select-kit-ci.mjs');
@@ -57,6 +62,12 @@ async function runCli(repository, args) {
   }
 }
 
+function expectedCliOutput(slugs) {
+  return `MATRIX_JSON=${JSON.stringify({
+    include: slugs.map((kit) => ({ kit, runner: runners[kit] })),
+  })}\nHAS_KITS=${slugs.length > 0}\n`;
+}
+
 test('selects only changed official Kits in deterministic order', () => {
   assert.deepEqual(selectKitSlugs(['kits/mysql/package.json']), ['mysql']);
   assert.deepEqual(
@@ -93,6 +104,22 @@ test('selects all official Kits for shared build, validation, Registry, and work
     '.github/workflows/publish-kit-registry.yml',
   ]) {
     assert.deepEqual(selectKitSlugs([sharedPath]), allKits, sharedPath);
+  }
+});
+
+test('maps direct Kit-check dependency surfaces to only their affected Kits', () => {
+  const cases = [
+    ['packages/mysql-contracts/src/index.ts', ['mysql']],
+    ['packages/sqlite-contracts/src/index.ts', ['sqlite']],
+    ['packages/relationship-graph/src/index.ts', ['mysql', 'sqlite']],
+    ['scripts/prepare-notification-skill-resource.mjs', ['notifications']],
+    ['scripts/lib/codex-skill-resource.mjs', ['notifications']],
+    ['.agents/skills/notify-user/SKILL.md', ['notifications']],
+    ['scripts/ce-plugin.mjs', allKits],
+    ['scripts/lib/plugin-build/validate.mjs', allKits],
+  ];
+  for (const [changedPath, expected] of cases) {
+    assert.deepEqual(selectKitSlugs([changedPath]), expected, changedPath);
   }
 });
 
@@ -168,6 +195,71 @@ test('CLI includes current root-commit paths when the comparison base is the roo
     );
   } finally {
     await rm(repository, { recursive: true, force: true });
+  }
+});
+
+test('CLI includes deletions and both sides of renames in Kit selection', async (t) => {
+  const cases = [
+    {
+      name: 'deleted Kit file',
+      source: 'kits/mysql/removed.txt',
+      destination: null,
+      expected: ['mysql'],
+    },
+    {
+      name: 'deleted shared file',
+      source: 'scripts/check-kit.mjs',
+      destination: null,
+      expected: allKits,
+    },
+    {
+      name: 'Kit file renamed to docs',
+      source: 'kits/mysql/moved.txt',
+      destination: 'docs/moved.txt',
+      expected: ['mysql'],
+    },
+    {
+      name: 'docs file renamed into a Kit',
+      source: 'docs/moved.txt',
+      destination: 'kits/sqlite/moved.txt',
+      expected: ['sqlite'],
+    },
+    {
+      name: 'file renamed between Kits',
+      source: 'kits/mysql/moved.txt',
+      destination: 'kits/sqlite/moved.txt',
+      expected: ['mysql', 'sqlite'],
+    },
+    {
+      name: 'shared file renamed to docs',
+      source: 'scripts/check-kit.mjs',
+      destination: 'docs/check-kit.mjs',
+      expected: allKits,
+    },
+  ];
+
+  for (const { name, source, destination, expected } of cases) {
+    await t.test(name, async () => {
+      const repository = await initializeRepository();
+      try {
+        await mkdir(path.dirname(path.join(repository, source)), { recursive: true });
+        await writeFile(path.join(repository, source), 'changed\n');
+        const base = await commitAll(repository, 'base');
+        if (destination === null) {
+          await rm(path.join(repository, source));
+        } else {
+          await mkdir(path.dirname(path.join(repository, destination)), { recursive: true });
+          await git(repository, 'mv', source, destination);
+        }
+        const head = await commitAll(repository, 'change');
+
+        const result = await runCli(repository, [base, head]);
+        assert.equal(result.status, 0, result.stderr);
+        assert.equal(result.stdout, expectedCliOutput(expected));
+      } finally {
+        await rm(repository, { recursive: true, force: true });
+      }
+    });
   }
 });
 

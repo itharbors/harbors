@@ -7,6 +7,7 @@ const SHARED_PREFIXES = Object.freeze([
   'scripts/lib/kit-monorepo.',
   'scripts/lib/kit-publish/',
   'scripts/lib/kit-registry/',
+  'scripts/lib/plugin-build/',
 ]);
 
 const SHARED_FILES = new Set([
@@ -15,6 +16,7 @@ const SHARED_FILES = new Set([
   'registry/policy.json',
   'registry/revocations.json',
   'scripts/check-kit.mjs',
+  'scripts/ce-plugin.mjs',
   'scripts/kit-publish.mjs',
   'scripts/select-kit-ci.mjs',
   'scripts/lib/kit-ci-selection.mjs',
@@ -22,6 +24,18 @@ const SHARED_FILES = new Set([
   '.github/workflows/publish-kit.yml',
   '.github/workflows/publish-kit-reusable.yml',
   '.github/workflows/publish-kit-registry.yml',
+]);
+
+const TARGETED_PREFIXES = Object.freeze([
+  ['packages/mysql-contracts/', ['mysql']],
+  ['packages/sqlite-contracts/', ['sqlite']],
+  ['packages/relationship-graph/', ['mysql', 'sqlite']],
+  ['.agents/skills/notify-user/', ['notifications']],
+]);
+
+const TARGETED_FILES = new Map([
+  ['scripts/prepare-notification-skill-resource.mjs', ['notifications']],
+  ['scripts/lib/codex-skill-resource.mjs', ['notifications']],
 ]);
 
 const UNSAFE_PATH_CHARACTERS = /[\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
@@ -51,6 +65,12 @@ export function selectKitSlugs(paths) {
     const parts = assertCanonicalRepositoryPath(value);
     if (SHARED_FILES.has(value) || SHARED_PREFIXES.some((prefix) => value.startsWith(prefix))) {
       for (const slug of OFFICIAL_KIT_SLUGS) selected.add(slug);
+      continue;
+    }
+    const targeted = TARGETED_FILES.get(value)
+      ?? TARGETED_PREFIXES.find(([prefix]) => value.startsWith(prefix))?.[1];
+    if (targeted) {
+      for (const slug of targeted) selected.add(slug);
       continue;
     }
     if (parts[0] !== 'kits' || parts.length === 1) continue;

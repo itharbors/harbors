@@ -45,8 +45,9 @@ async function baseIsRootCommit(baseSha) {
 async function changedPaths(baseSha, headSha) {
   const outputs = [await runGit([
     'diff',
+    '--no-renames',
     '--name-only',
-    '--diff-filter=ACMR',
+    '--diff-filter=ACDMR',
     '-z',
     baseSha,
     headSha,
@@ -57,9 +58,10 @@ async function changedPaths(baseSha, headSha) {
       'diff-tree',
       '--root',
       '-r',
+      '--no-renames',
       '--no-commit-id',
       '--name-only',
-      '--diff-filter=ACMR',
+      '--diff-filter=ACDMR',
       '-z',
       baseSha,
       '--',

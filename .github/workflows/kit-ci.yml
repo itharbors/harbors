@@ -32,6 +32,9 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Build selector dependency
+        run: npm run build -w @itharbors/kit-core
+
       - name: Select changed Kits
         id: selection
         shell: bash

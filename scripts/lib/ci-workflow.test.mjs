@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import test from 'node:test';
 
 const rootUrl = new URL('../../', import.meta.url);
@@ -75,6 +78,50 @@ test('Kit CI selects event-specific full-history Git comparisons without path tr
   assert.match(workflow, /0\{40\}/u);
   assert.match(workflow, /git rev-list --max-parents=0 --max-count=1/u);
   assert.match(workflow, /node scripts\/select-kit-ci\.mjs/u);
+});
+
+test('Kit CI builds Kit Core before loading the selector in a clean checkout', async () => {
+  const fixture = await mkdtemp(path.join(tmpdir(), 'kit-ci-clean-'));
+  try {
+    await Promise.all([
+      mkdir(path.join(fixture, 'scripts/lib'), { recursive: true }),
+      mkdir(path.join(fixture, 'packages/kit-core'), { recursive: true }),
+      mkdir(path.join(fixture, 'node_modules/@itharbors'), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        path.join(fixture, 'scripts/lib/kit-monorepo.mjs'),
+        await readFile(new URL('scripts/lib/kit-monorepo.mjs', rootUrl)),
+      ),
+      writeFile(
+        path.join(fixture, 'packages/kit-core/package.json'),
+        await readFile(new URL('packages/kit-core/package.json', rootUrl)),
+      ),
+    ]);
+    await symlink(
+      path.join(fixture, 'packages/kit-core'),
+      path.join(fixture, 'node_modules/@itharbors/kit-core'),
+      'dir',
+    );
+    const cleanLoad = spawnSync(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      "await import('./scripts/lib/kit-monorepo.mjs')",
+    ], { cwd: fixture, encoding: 'utf8' });
+    assert.equal(cleanLoad.status, 1);
+    assert.match(cleanLoad.stderr, /ERR_MODULE_NOT_FOUND[\s\S]*kit-core\/dist\/index\.js/u);
+
+    const select = workflowJob(await readFile(kitWorkflowUrl, 'utf8'), 'select');
+    const installIndex = select.indexOf('run: npm ci');
+    const buildIndex = select.indexOf('run: npm run build -w @itharbors/kit-core');
+    const selectorIndex = select.indexOf('node scripts/select-kit-ci.mjs');
+    assert.notEqual(installIndex, -1);
+    assert.notEqual(buildIndex, -1);
+    assert.notEqual(selectorIndex, -1);
+    assert.ok(installIndex < buildIndex && buildIndex < selectorIndex);
+  } finally {
+    await rm(fixture, { recursive: true, force: true });
+  }
 });
 
 test('Kit CI exposes safe selector outputs and skips the matrix when no Kit applies', async () => {
