@@ -30,7 +30,8 @@ const USAGE = [
   '    --signer-workflow <workflow@ref> \\',
   '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
   '  node scripts/kit-publish.mjs aggregate \\',
-  '    --entries-directory <directory> --revocations-file <file> \\',
+  '    --repository-root <directory> --repository <owner/repo> --policy-file <file> \\',
+  '    --revocations-file <file> \\',
   '    --output <index.v1.json> --generated-at <ISO-8601 UTC>',
   '',
 ].join('\n');
@@ -49,7 +50,9 @@ const PREPARE_OPTIONS = [
 ];
 
 const AGGREGATE_OPTIONS = [
-  'entries-directory',
+  'repository-root',
+  'repository',
+  'policy-file',
   'revocations-file',
   'output',
   'generated-at',
@@ -135,11 +138,18 @@ async function prepare(options) {
   }
 }
 
-async function aggregate(options, implementation) {
+async function aggregate(options, implementation, environment = {}) {
+  const githubToken = environment.GITHUB_TOKEN;
+  if (typeof githubToken !== 'string' || githubToken.length === 0) {
+    throw new Error('GitHub token is required');
+  }
   const index = await implementation({
-    entriesDirectory: options['entries-directory'],
+    repositoryRoot: options['repository-root'],
+    repository: options.repository,
+    policyFile: options['policy-file'],
     revocationsFile: options['revocations-file'],
     generatedAt: options['generated-at'],
+    githubToken,
   });
   await writeFile(path.resolve(options.output), canonicalJson(index), { flag: 'wx', mode: 0o600 });
   return {
@@ -152,7 +162,7 @@ async function aggregate(options, implementation) {
 export async function runKitPublishCli(
   args,
   io = process,
-  dependencies = { aggregateKitRegistry },
+  dependencies = { aggregateKitRegistry, env: process.env },
 ) {
   const [command, ...rest] = args;
   const allowed = command === 'prepare'
@@ -172,7 +182,7 @@ export async function runKitPublishCli(
   try {
     const outputs = command === 'prepare'
       ? await prepare(options)
-      : await aggregate(options, dependencies.aggregateKitRegistry);
+      : await aggregate(options, dependencies.aggregateKitRegistry, dependencies.env);
     io.stdout.write(`${Object.entries(outputs).map(([key, value]) => `${key}=${value}`).join('\n')}\n`);
     return 0;
   } catch (error) {

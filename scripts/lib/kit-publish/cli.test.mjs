@@ -98,7 +98,9 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
   try {
     const code = await runKitPublishCli([
       'aggregate',
-      '--entries-directory', path.join(root, 'entries'),
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
       '--revocations-file', path.join(root, 'revocations.json'),
       '--output', output,
       '--generated-at', index.generatedAt,
@@ -110,27 +112,63 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
         calls.push(input);
         return index;
       },
+      env: { GITHUB_TOKEN: 'test-token' },
     });
     assert.equal(code, 0, stderr.join(''));
     assert.deepEqual(calls, [{
-      entriesDirectory: path.join(root, 'entries'),
+      repositoryRoot: root,
+      repository: 'itharbors/harbors',
+      policyFile: path.join(root, 'policy.json'),
       revocationsFile: path.join(root, 'revocations.json'),
       generatedAt: index.generatedAt,
+      githubToken: 'test-token',
     }]);
     assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), index);
     assert.match(stdout.join(''), /KITS=0\nREVOCATIONS=0/u);
 
     const replay = await runKitPublishCli([
       'aggregate',
-      '--entries-directory', path.join(root, 'entries'),
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
       '--revocations-file', path.join(root, 'revocations.json'),
       '--output', output,
       '--generated-at', index.generatedAt,
     ], {
       stdout: { write: () => undefined },
       stderr: { write: (value) => stderr.push(value) },
-    }, { aggregateKitRegistry: async () => index });
+    }, { aggregateKitRegistry: async () => index, env: { GITHUB_TOKEN: 'test-token' } });
     assert.equal(replay, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('aggregate fails before requests or output writes when its GitHub token is absent', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-aggregate-'));
+  const output = path.join(root, 'index.v1.json');
+  const stderr = [];
+  let calls = 0;
+  try {
+    const code = await runKitPublishCli([
+      'aggregate',
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
+      '--revocations-file', path.join(root, 'revocations.json'),
+      '--output', output,
+      '--generated-at', '2026-07-24T00:00:00.000Z',
+    ], {
+      stdout: { write: () => assert.fail('aggregate must not write output') },
+      stderr: { write: (value) => stderr.push(value) },
+    }, {
+      aggregateKitRegistry: async () => { calls += 1; },
+      env: {},
+    });
+    assert.equal(code, 1);
+    assert.equal(calls, 0);
+    assert.deepEqual(stderr, ['ERROR=GitHub token is required\n']);
+    await assert.rejects(readFile(output));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

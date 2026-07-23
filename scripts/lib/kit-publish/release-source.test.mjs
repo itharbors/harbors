@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { discoverTrustedKitReleases } from './release-source.mjs';
+import { discoverTrustedKitReleases, fetchTrustedReleaseManifest } from './release-source.mjs';
 import { buildKitRegistryIndex } from './registry.mjs';
 
 const repository = 'itharbors/harbors';
@@ -570,6 +570,41 @@ test('allows the canonical GitHub-to-CDN redirect chain without leaking Authoriz
   const cdn = calls.find((call) => call.url === 'https://release-assets.githubusercontent.com/registry-entry.json');
   assert.equal(cdn.options.headers.Authorization, undefined);
   assert.ok(cdn.options.signal instanceof AbortSignal);
+});
+
+test('fetches only a canonical trusted Release manifest with bounded authenticated redirects', async () => {
+  const value = values();
+  const calls = [];
+  const manifest = await fetchTrustedReleaseManifest({
+    repository,
+    releaseManifestUrl: value.entry.releaseManifestUrl,
+    githubToken: 'token',
+    fetchImpl: async (url, options) => {
+      calls.push({ url, options });
+      if (url === value.entry.releaseManifestUrl) {
+        return new Response(null, {
+          status: 302,
+          headers: { location: 'https://release-assets.githubusercontent.com/release.json' },
+        });
+      }
+      return json(value.release);
+    },
+  });
+  assert.deepEqual(manifest, value.release);
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer token');
+  assert.equal(calls[1].options.headers.Authorization, undefined);
+  for (const url of [
+    'https://example.test/release.json',
+    `https://github.com/${repository}/releases/download/kit/mysql/v1.2.3/release.json`,
+    `https://github.com/${repository}/releases/download/${encodeURIComponent(value.tag)}/other.json`,
+  ]) {
+    await assert.rejects(fetchTrustedReleaseManifest({
+      repository,
+      releaseManifestUrl: url,
+      githubToken: 'token',
+      fetchImpl: async () => assert.fail('untrusted URL must not be fetched'),
+    }), /canonical|trusted|manifest/i);
+  }
 });
 
 test('rejects API and asset failures plus deceptive streamed and reader-error bodies', async () => {

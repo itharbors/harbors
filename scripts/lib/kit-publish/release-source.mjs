@@ -362,6 +362,27 @@ function sameReleaseAssetUrl({ repository, tag, name, immutableUrl, browserUrl }
   return true;
 }
 
+function trustedReleaseManifestUrl(value, repository) {
+  const url = downloadUrl(value, 'GitHub Release manifest URL is not trusted HTTPS');
+  const prefix = `/${repository}/releases/download/`;
+  if (url.origin !== GITHUB_ORIGIN || url.search !== '' || !url.pathname.startsWith(prefix)) {
+    throw new Error('GitHub Release manifest URL is not canonical');
+  }
+  const suffix = url.pathname.slice(prefix.length);
+  const match = /^([^/]+)\/release\.json$/u.exec(suffix);
+  if (!match) throw new Error('GitHub Release manifest URL is not canonical');
+  let tag;
+  try {
+    tag = decodeURIComponent(match[1]);
+  } catch {
+    throw new Error('GitHub Release manifest URL is not canonical');
+  }
+  if (encodeURIComponent(tag) !== match[1] || !RELEASE_TAG.test(tag)) {
+    throw new Error('GitHub Release manifest URL is not canonical');
+  }
+  return url;
+}
+
 function indexAssets(rawAssets, { repository, tag }) {
   if (!Array.isArray(rawAssets)) throw new Error(`GitHub Release assets must be an array: ${tag}`);
   const assets = new Map();
@@ -390,6 +411,34 @@ async function fetchAssetJson(asset, { githubToken, fetchImpl, maxBytes, timeout
       Authorization: `Bearer ${githubToken}`,
     },
   }, { maxBytes, label: `GitHub Release asset ${asset.name}`, redirects: true, timeoutMs })).value;
+}
+
+export async function fetchTrustedReleaseManifest({
+  repository,
+  releaseManifestUrl,
+  githubToken,
+  fetchImpl = globalThis.fetch,
+  requestTimeoutMs = REQUEST_TIMEOUT_MS,
+}) {
+  if (typeof githubToken !== 'string' || githubToken.length === 0) throw new Error('GitHub token is required');
+  if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl is required');
+  if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0 || requestTimeoutMs > REQUEST_TIMEOUT_MS) {
+    throw new TypeError(`requestTimeoutMs must be a positive integer no greater than ${REQUEST_TIMEOUT_MS}`);
+  }
+  const url = trustedReleaseManifestUrl(releaseManifestUrl, repository);
+  return (await request(fetchImpl, url, {
+    method: 'GET',
+    redirect: 'manual',
+    headers: {
+      Accept: 'application/octet-stream',
+      Authorization: `Bearer ${githubToken}`,
+    },
+  }, {
+    label: 'GitHub Release manifest',
+    maxBytes: MAX_METADATA_BYTES,
+    redirects: true,
+    timeoutMs: requestTimeoutMs,
+  })).value;
 }
 
 function assertVerifiedClaims(claims, expected) {
