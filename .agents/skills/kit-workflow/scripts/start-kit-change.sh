@@ -35,8 +35,8 @@ if git -C "$repo_root" worktree list --porcelain | grep -Fqx "worktree $worktree
 fi
 
 git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_commit"
-kit_workflow_validate_product "$worktree_path" "$kit"
 (cd "$worktree_path" && npm ci)
+kit_workflow_validate_product "$worktree_path" "$kit"
 command -v gh >/dev/null 2>&1 || printf 'warning: gh is not installed; it is required to finish and create a PR\n' >&2
 printf 'KIT=%s\nTARGET_BRANCH=%s\nBRANCH=%s\nWORKTREE_PATH=%s\nBASE_COMMIT=%s\n' \
   "$kit" "$target_branch" "$branch" "$worktree_path" "$base_commit"

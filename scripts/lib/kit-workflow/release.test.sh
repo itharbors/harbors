@@ -53,7 +53,8 @@ test_release_supports_stable_and_enforces_channel_from_semver() {
 
 test_release_rejects_noncanonical_semver_and_version_mismatch() {
   prepare_release
-  for version in v0.1.0 01.2.3 1.2 1.2.3+build.7 1.2.3-preview.01; do
+  oversized_prerelease="1.2.3-$(printf 'a%.0s' {1..260})"
+  for version in v0.1.0 01.2.3 1.2 1.2.3+build.7 1.2.3-preview.01 9007199254740992.0.0 "$oversized_prerelease"; do
     if output=$("$RELEASE" sqlite "$version" 2>&1); then fail "invalid version succeeded: $version"; fi
     assert_contains "$output" 'canonical SemVer'
   done
@@ -113,10 +114,20 @@ test_release_rejects_existing_local_or_remote_tag() {
   assert_contains "$output" 'release Tag already exists'
 }
 
+test_release_fails_closed_when_remote_tag_query_fails() {
+  prepare_release
+  install_failing_ls_remote_git
+  if output=$("$RELEASE" sqlite 0.1.0-preview.1 2>&1); then fail 'failed remote query succeeded'; fi
+  assert_contains "$output" 'unable to query origin release Tag'
+  assert_contains "$output" 'simulated ls-remote failure'
+  assert_ref_missing "$REPO" refs/tags/kit/sqlite/v0.1.0-preview.1
+}
+
 run_release_tests() {
   run_case 'release Preview requires exact confirmation and one targeted check' test_release_preview_requires_exact_confirmation_and_runs_one_check
   run_case 'release supports Stable and enforces channel from SemVer' test_release_supports_stable_and_enforces_channel_from_semver
   run_case 'release rejects noncanonical SemVer and version mismatch' test_release_rejects_noncanonical_semver_and_version_mismatch
   run_case 'release requires clean exact main and repository identity' test_release_requires_clean_exact_main_and_repository_identity
   run_case 'release rejects existing local or remote Tag' test_release_rejects_existing_local_or_remote_tag
+  run_case 'release fails closed when remote Tag query fails' test_release_fails_closed_when_remote_tag_query_fails
 }

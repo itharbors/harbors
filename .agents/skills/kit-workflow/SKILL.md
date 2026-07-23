@@ -19,9 +19,10 @@ Types map to `[Feature]`, `[Bug]`, `[Docs]`, `[Refactor]`, `[Optimize]`, `[Test]
 
 ## Develop
 
-Run start from the primary worktree. It fetches and locks `origin/main`, validates the official Kit, repository-local
-identity, and branch conflicts, creates `.worktrees/kit-<kit>-<type>-<slug>`, then runs root `npm ci`. Inspect status and
-diffs, stage only relevant files, and keep every commit label consistent with the branch type.
+Run start from the primary worktree. It verifies repository-local identity and branch conflicts, fetches and locks
+`origin/main`, creates `.worktrees/kit-<kit>-<type>-<slug>`, runs root `npm ci`, then validates the official Kit with
+the same SemVer dependency as Kit Core. Inspect status and diffs, stage only relevant files, and keep every commit
+label consistent with the branch type.
 
 ## Finish
 

@@ -8,6 +8,7 @@ SOURCE_FINISH="$SKILL_SOURCE/scripts/finish-kit-change.sh"
 SOURCE_RELEASE="$SKILL_SOURCE/scripts/release-kit.sh"
 SOURCE_LIB="$SKILL_SOURCE/scripts/_kit-workflow-lib.sh"
 ORIGINAL_PATH=$PATH
+REAL_GIT=$(command -v git)
 PASS_COUNT=0
 FAIL_COUNT=0
 
@@ -130,7 +131,7 @@ new_fixture() {
   git -C "$REPO" config --local user.email 'devhacker520@hotmail.com'
   git -C "$REPO" checkout -b main >/dev/null 2>&1
   write_repository_files "$REPO"
-  printf '.worktrees/\n' > "$REPO/.gitignore"
+  printf '.worktrees/\nnode_modules/\n' > "$REPO/.gitignore"
   git -C "$REPO" add .
   git -C "$REPO" commit -m '[Init] 初始化测试仓库' >/dev/null
   git -C "$REPO" push -u origin main >/dev/null 2>&1
@@ -149,10 +150,14 @@ label_for_type() {
 
 install_mocks() {
   MOCK_BIN="$FIXTURE_ROOT/mock-bin"; GH_LOG="$FIXTURE_ROOT/gh.log"; NPM_LOG="$FIXTURE_ROOT/npm.log"
-  mkdir -p "$MOCK_BIN"; : > "$GH_LOG"; : > "$NPM_LOG"; export GH_LOG NPM_LOG
+  mkdir -p "$MOCK_BIN" "$REPO/node_modules"
+  ln -s "$REPO_SOURCE/node_modules/semver" "$REPO/node_modules/semver"
+  SEMVER_SOURCE="$REPO_SOURCE/node_modules/semver"
+  : > "$GH_LOG"; : > "$NPM_LOG"; export GH_LOG NPM_LOG REAL_GIT SEMVER_SOURCE
   printf '%s\n' \
     '#!/usr/bin/env bash' \
     'printf "%s\n" "$*" >> "$NPM_LOG"' \
+    'if test "${1:-}" = ci; then mkdir -p node_modules; test -e node_modules/semver || ln -s "$SEMVER_SOURCE" node_modules/semver; fi' \
     'test "${NPM_FAIL:-0}" != 1' > "$MOCK_BIN/npm"
   printf '%s\n' '#!/usr/bin/env bash' 'printf "%s\n" "$*" >> "$GH_LOG"' \
     'case "$1 $2" in' \
@@ -162,6 +167,16 @@ install_mocks() {
     '*) exit 2 ;;' 'esac' > "$MOCK_BIN/gh"
   chmod +x "$MOCK_BIN/npm" "$MOCK_BIN/gh"
   export PATH="$MOCK_BIN:$ORIGINAL_PATH"
+}
+
+install_failing_ls_remote_git() {
+  printf '%s\n' \
+    '#!/usr/bin/env bash' \
+    'for argument in "$@"; do' \
+    '  if test "$argument" = ls-remote; then printf "simulated ls-remote failure\\n" >&2; exit 128; fi' \
+    'done' \
+    'exec "$REAL_GIT" "$@"' > "$MOCK_BIN/git"
+  chmod +x "$MOCK_BIN/git"
 }
 
 prepare_change() {

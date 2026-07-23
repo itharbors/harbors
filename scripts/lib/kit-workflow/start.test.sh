@@ -19,6 +19,7 @@ test_start_uses_main_baseline_for_all_types() {
 
 test_start_rejects_invalid_and_missing_kits() {
   new_fixture
+  install_mocks
   if output=$("$START" '../bad' feature valid 2>&1); then fail 'invalid kit succeeded'; fi
   assert_contains "$output" 'invalid Kit name'
   if output=$("$START" sqlite build valid 2>&1); then fail 'invalid type succeeded'; fi
@@ -29,6 +30,7 @@ test_start_rejects_invalid_and_missing_kits() {
   assert_contains "$output" 'not listed in registry policy'
 
   new_fixture
+  install_mocks
   rm "$REPO/kits/sqlite/kit.json"
   git -C "$REPO" add -u
   git -C "$REPO" commit -m '[Bug] 删除测试清单' >/dev/null
@@ -39,11 +41,13 @@ test_start_rejects_invalid_and_missing_kits() {
 
 test_start_rejects_identity_and_product_mismatch() {
   new_fixture
+  install_mocks
   git -C "$REPO" config --local user.name 'Wrong Name'
   if output=$("$START" sqlite bug wrong-identity 2>&1); then fail 'wrong identity succeeded'; fi
   assert_contains "$output" 'Git user.name must be VisualSJ'
 
   new_fixture
+  install_mocks
   node - "$REPO/kits/sqlite/package.json" <<'NODE'
 const fs = require('node:fs');
 const file = process.argv[2];
@@ -58,6 +62,7 @@ NODE
   assert_contains "$output" 'Kit manifest and package versions do not match'
 
   new_fixture
+  install_mocks
   node - "$REPO/registry/policy.json" <<'NODE'
 const fs = require('node:fs');
 const file = process.argv[2];
@@ -70,15 +75,32 @@ NODE
   git -C "$REPO" push origin main >/dev/null 2>&1
   if output=$("$START" sqlite bug bad-policy 2>&1); then fail 'policy mismatch succeeded'; fi
   assert_contains "$output" 'Kit policy identity mismatch'
+
+  new_fixture
+  install_mocks
+  node - "$REPO/package-lock.json" <<'NODE'
+const fs = require('node:fs');
+const file = process.argv[2];
+const value = JSON.parse(fs.readFileSync(file, 'utf8'));
+value.packages['kits/sqlite'].version = '0.1.0-preview.2';
+fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+NODE
+  git -C "$REPO" add package-lock.json
+  git -C "$REPO" commit -m '[Bug] 制造锁文件错误' >/dev/null
+  git -C "$REPO" push origin main >/dev/null 2>&1
+  if output=$("$START" sqlite bug bad-lock 2>&1); then fail 'lock mismatch succeeded'; fi
+  assert_contains "$output" 'package-lock identity for kits/sqlite does not match package.json'
 }
 
 test_start_rejects_conflicts_and_linked_context() {
   new_fixture
+  install_mocks
   git -C "$REPO" branch kit-change/sqlite/feature/existing origin/main >/dev/null
   if output=$("$START" sqlite feature existing 2>&1); then fail 'local conflict succeeded'; fi
   assert_contains "$output" 'branch already exists'
 
   new_fixture
+  install_mocks
   linked="$REPO/.worktrees/linked"
   git -C "$REPO" worktree add --detach "$linked" origin/main >/dev/null 2>&1
   if output=$("$linked/.agents/skills/kit-workflow/scripts/start-kit-change.sh" sqlite feature nested 2>&1); then fail 'linked start succeeded'; fi

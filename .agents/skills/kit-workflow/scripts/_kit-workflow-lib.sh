@@ -39,15 +39,16 @@ kit_workflow_validate_identity() {
 }
 
 kit_workflow_channel_for_version() {
-  node - "$1" <<'NODE'
-const version = process.argv[2];
-const identifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
-const canonical = new RegExp(`^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-${identifier}(?:\\.${identifier})*)?$`, 'u');
-if (!canonical.test(version)) {
+  node - "$1" "$2" <<'NODE'
+const [root, version] = process.argv.slice(2);
+let semver;
+try { semver = require(require.resolve('semver', { paths: [root] })); }
+catch { console.error('error: semver dependency is unavailable; run npm ci'); process.exit(1); }
+if (semver.valid(version) !== version || version.includes('+')) {
   console.error(`error: version must be a canonical SemVer without build metadata: ${version}`);
   process.exit(1);
 }
-console.log(version.includes('-') ? 'preview' : 'stable');
+console.log(semver.prerelease(version) === null ? 'stable' : 'preview');
 NODE
 }
 
@@ -88,16 +89,17 @@ const lock = read('package-lock.json');
 const policy = read('registry/policy.json');
 const expectedId = `@itharbors/kit-${kit}`;
 const stop = (message) => { console.error(`error: ${message}`); process.exit(1); };
-const identifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
-const canonical = new RegExp(`^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-${identifier}(?:\\.${identifier})*)?$`, 'u');
+let semver;
+try { semver = require(require.resolve('semver', { paths: [root] })); }
+catch { stop('semver dependency is unavailable; run npm ci'); }
 
 if (policy.kits[kit]?.id !== expectedId) stop(`Kit policy identity mismatch: expected ${expectedId}`);
 if (manifest.id !== expectedId || pkg.name !== expectedId) stop(`Kit identity mismatch: expected ${expectedId}`);
 if (manifest.version !== pkg.version) stop('Kit manifest and package versions do not match');
-if (typeof manifest.version !== 'string' || !canonical.test(manifest.version)) {
+if (typeof manifest.version !== 'string' || semver.valid(manifest.version) !== manifest.version || manifest.version.includes('+')) {
   stop(`Kit version must be a canonical SemVer without build metadata: ${String(manifest.version)}`);
 }
-const derivedChannel = manifest.version.includes('-') ? 'preview' : 'stable';
+const derivedChannel = semver.prerelease(manifest.version) === null ? 'stable' : 'preview';
 if (manifest.channel !== derivedChannel) stop(`${derivedChannel} channel is required for ${manifest.version}`);
 if (requiredChannel !== 'any' && manifest.channel !== requiredChannel) {
   stop(`${requiredChannel} channel is required, got ${String(manifest.channel)}`);

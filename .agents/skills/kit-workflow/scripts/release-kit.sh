@@ -8,9 +8,9 @@ test "$#" -eq 2 || kit_workflow_fail 'usage: release-kit.sh <kit> <version>'
 kit=$1
 version=$2
 kit_workflow_validate_kit_name "$kit"
-channel=$(kit_workflow_channel_for_version "$version")
 
 repo_root=$(kit_workflow_repo_root)
+channel=$(kit_workflow_channel_for_version "$repo_root" "$version")
 branch=$(git -C "$repo_root" branch --show-current)
 target_branch=main
 test "$branch" = "$target_branch" || kit_workflow_fail "release must run from main, got ${branch:-detached HEAD}"
@@ -33,9 +33,18 @@ test "$package_version" = "$version" \
 tag="kit/$kit/v$version"
 git -C "$repo_root" show-ref --verify --quiet "refs/tags/$tag" \
   && kit_workflow_fail "release Tag already exists locally: $tag"
-if git -C "$repo_root" ls-remote --exit-code --refs --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
-  kit_workflow_fail "release Tag already exists on origin: $tag"
-fi
+set +e
+remote_tag_output=$(git -C "$repo_root" ls-remote --exit-code --refs --tags origin "refs/tags/$tag" 2>&1)
+remote_tag_status=$?
+set -e
+case "$remote_tag_status" in
+  0) kit_workflow_fail "release Tag already exists on origin: $tag" ;;
+  2) ;;
+  *)
+    remote_tag_error=$(printf '%s' "$remote_tag_output" | tr '\r\n' '  ')
+    kit_workflow_fail "unable to query origin release Tag: ${remote_tag_error:-unknown Git error}"
+    ;;
+esac
 confirmation="$tag@$commit"
 printf 'RELEASE_KIT=%s\nRELEASE_VERSION=%s\nRELEASE_CHANNEL=%s\nRELEASE_COMMIT=%s\nRELEASE_TAG=%s\nRELEASE_CONFIRM=%s\n' \
   "$kit" "$version" "$channel" "$commit" "$tag" "$confirmation"
