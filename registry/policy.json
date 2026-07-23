@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "repository": "itharbors/harbors",
+  "workflow": "itharbors/harbors/.github/workflows/publish-kit.yml",
+  "signerWorkflows": [
+    "itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1",
+    "itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2"
+  ],
+  "kits": {
+    "mysql": {
+      "id": "@itharbors/kit-mysql",
+      "label": "MySQL",
+      "summary": "MySQL 数据库连接、浏览、编辑、关系图与 SQL 工作台",
+      "runner": "ubuntu-latest"
+    },
+    "notifications": {
+      "id": "@itharbors/kit-notifications",
+      "label": "Notifications",
+      "summary": "桌面通知中心与 Codex notify-user Skill 安装能力",
+      "runner": "ubuntu-latest"
+    },
+    "sqlite": {
+      "id": "@itharbors/kit-sqlite",
+      "label": "SQLite",
+      "summary": "SQLite 数据库浏览、编辑、关系图与 SQL 工作台",
+      "runner": "macos-14"
+    }
+  }
+}
