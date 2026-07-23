@@ -4,6 +4,7 @@ import {
   layoutRelationshipGraph,
   moveRelationshipNode,
   panRelationshipViewport,
+  RELATIONSHIP_LAYOUT,
   zoomRelationshipViewport,
   type Relationship,
   type RelationshipGraph,
@@ -51,6 +52,106 @@ describe('relationship graph layout', () => {
     expectNoOverlap(wide);
     expectNoOverlap(narrow);
     expect(wide.width / wide.height).toBeGreaterThan(narrow.width / narrow.height);
+  });
+
+  it('changes a single connected group direction to use the current canvas', () => {
+    const graph: RelationshipGraph = {
+      tables: [
+        table('account'),
+        table('account_address', 2),
+        table('account_audit', 3),
+        table('account_profile', 4),
+        table('account_role', 2),
+      ],
+      relationships: [
+        relationship('address:account', 'account_address', 'account'),
+        relationship('audit:account', 'account_audit', 'account'),
+        relationship('profile:account', 'account_profile', 'account'),
+        relationship('role:account', 'account_role', 'account'),
+      ],
+    };
+
+    const wide = layoutRelationshipGraph(graph, { width: 1_600, height: 500 });
+    const tall = layoutRelationshipGraph(graph, { width: 500, height: 1_600 });
+
+    expectNoOverlap(wide);
+    expectNoOverlap(tall);
+    expect(wide.width / wide.height).toBeGreaterThan(1);
+    expect(tall.width / tall.height).toBeLessThan(1);
+    expect(wide).toEqual(layoutRelationshipGraph(graph, { width: 1_600, height: 500 }));
+    expect(tall).toEqual(layoutRelationshipGraph(graph, { width: 500, height: 1_600 }));
+  });
+
+  it('includes viewport padding when choosing a group direction', () => {
+    const graph: RelationshipGraph = {
+      tables: [
+        table('catalog', 12),
+        table('catalog_a', 1),
+        table('catalog_b', 3),
+        table('catalog_c', 4),
+        table('catalog_d', 7),
+      ],
+      relationships: [
+        relationship('catalog:a', 'catalog_a', 'catalog'),
+        relationship('catalog:b', 'catalog_b', 'catalog'),
+        relationship('catalog:c', 'catalog_c', 'catalog'),
+        relationship('catalog:d', 'catalog_d', 'catalog'),
+      ],
+    };
+    const canvas = { width: 1_000, height: 600 };
+
+    const layout = layoutRelationshipGraph(graph, canvas);
+    const fitted = fitRelationshipViewport(layout, canvas);
+
+    expectNoOverlap(layout);
+    expect(fitted.scale).toBeGreaterThan(0.78);
+    expect(layout.nodes.find((node) => node.name === 'catalog_a')?.y).toBe(
+      layout.nodes.find((node) => node.name === 'catalog_d')?.y,
+    );
+  });
+
+  it('prioritizes readable scale when packing differently sized groups', () => {
+    const graph: RelationshipGraph = {
+      tables: [
+        table('alpha'),
+        table('alpha_child_a', 4),
+        table('alpha_child_b', 4),
+        table('alpha_child_c', 4),
+        table('beta', 9),
+        table('charlie', 8),
+      ],
+      relationships: [
+        relationship('alpha:a', 'alpha_child_a', 'alpha'),
+        relationship('alpha:b', 'alpha_child_b', 'alpha'),
+        relationship('alpha:c', 'alpha_child_c', 'alpha'),
+      ],
+    };
+    const canvas = { width: 1_600, height: 600 };
+
+    const layout = layoutRelationshipGraph(graph, canvas);
+    const fitted = fitRelationshipViewport(layout, canvas);
+
+    expectNoOverlap(layout);
+    expect(fitted.scale).toBeGreaterThan(0.95);
+    expect(layout.nodes.find((node) => node.name === 'charlie')?.y).toBe(
+      layout.nodes.find((node) => node.name === 'alpha')?.y,
+    );
+  });
+
+  it('uses group dimensions when choosing how many packing columns to evaluate', () => {
+    const graph: RelationshipGraph = {
+      tables: Array.from({ length: 100 }, (_, index) => (
+        table(String.fromCodePoint(0x4e00 + index), 100)
+      )),
+      relationships: [],
+    };
+    const canvas = { width: 1_600, height: 600 };
+
+    const layout = layoutRelationshipGraph(graph, canvas);
+
+    expectNoOverlap(layout);
+    expect(rawFitScale(layout, canvas)).toBeGreaterThan(0.08);
+    expect(new Set(layout.nodes.map((node) => node.y)).size).toBe(2);
   });
 
   it('routes cycles, self references, and parallel relationships inside bounds', () => {
@@ -170,6 +271,22 @@ function distance(layout: RelationshipLayout, leftName: string, rightName: strin
   const left = layout.nodes.find((node) => node.name === leftName)!;
   const right = layout.nodes.find((node) => node.name === rightName)!;
   return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function rawFitScale(
+  layout: RelationshipLayout,
+  canvas: { width: number; height: number },
+): number {
+  const minX = Math.min(...layout.nodes.map((node) => node.x));
+  const minY = Math.min(...layout.nodes.map((node) => node.y));
+  const maxX = Math.max(...layout.nodes.map((node) => node.x + node.width));
+  const maxY = Math.max(...layout.nodes.map((node) => node.y + node.height));
+  const padding = RELATIONSHIP_LAYOUT.padding * 2;
+  return Math.min(
+    canvas.width / (maxX - minX + padding),
+    canvas.height / (maxY - minY + padding),
+    1,
+  );
 }
 
 function pathCoordinates(path: string): Array<{ x: number; y: number }> {
