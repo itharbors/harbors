@@ -207,6 +207,54 @@ describe('validateKit', () => {
     ]);
   });
 
+  it('resolves hoisted production dependencies from a matching workspace lock root', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-workspace-'));
+    temporaryDirectories.push(root);
+    const directory = path.join(root, 'kits/demo');
+    await cp(fixtureDirectory, directory, { recursive: true });
+    await updateJson(path.join(directory, 'package.json'), (pkg) => {
+      pkg.dependencies = { 'runtime-root': '1.0.0' };
+    });
+    await updateJson(path.join(directory, 'plugins/demo/package.json'), (pkg) => {
+      pkg.dependencies = { '@example/contracts': '1.0.0' };
+    });
+    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'workspace-root' },
+        'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
+      },
+    }));
+
+    const contracts = path.join(root, 'packages/contracts');
+    await mkdir(path.join(contracts, 'dist'), { recursive: true });
+    await writeFile(path.join(contracts, 'package.json'), JSON.stringify({
+      name: '@example/contracts',
+      version: '1.0.0',
+      dependencies: { transitive: '2.0.0' },
+    }));
+    await writeFile(path.join(contracts, 'dist/index.js'), 'export const contract = true;\n');
+
+    const modules = path.join(root, 'node_modules');
+    await mkdir(path.join(modules, '@example'), { recursive: true });
+    await symlink(contracts, path.join(modules, '@example/contracts'), 'dir');
+    await writeInstalledPackage(modules, 'runtime-root', '1.0.0', {
+      dependencies: { transitive: '2.0.0' },
+    });
+    await writeInstalledPackage(modules, 'transitive', '2.0.0');
+
+    const project = await validateKit(directory);
+
+    expect(project.payload.map((file) => file.archivePath)).toEqual(expect.arrayContaining([
+      'node_modules/@example/contracts/package.json',
+      'node_modules/@example/contracts/dist/index.js',
+      'node_modules/runtime-root/package.json',
+      'node_modules/runtime-root/index.js',
+      'node_modules/transitive/package.json',
+      'node_modules/transitive/index.js',
+    ]));
+  });
+
   it('rejects a missing production dependency', async () => {
     const directory = await copyFixture();
     await updateJson(path.join(directory, 'plugins/demo/package.json'), (pkg) => {

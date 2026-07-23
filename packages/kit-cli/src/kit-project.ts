@@ -39,6 +39,7 @@ interface InstalledPackage {
   manifest: Record<string, any>;
   name: string;
   version: string;
+  workspace: boolean;
 }
 
 interface DependencyRequest {
@@ -247,7 +248,7 @@ function dependencyRequests(
 }
 
 async function findInstalledPackage(
-  kitDirectory: string,
+  installationRoot: string,
   importer: string,
   name: string,
 ): Promise<InstalledPackage | null> {
@@ -261,7 +262,7 @@ async function findInstalledPackage(
         throw new Error(`Installed production dependency ${name} is not a directory`);
       }
       const directory = await realpath(candidate);
-      assertInside(kitDirectory, directory, `Production dependency ${name}`);
+      assertInside(installationRoot, directory, `Production dependency ${name}`);
       const manifest = await readJson(
         path.join(directory, 'package.json'),
         `Production dependency ${name} package.json`,
@@ -275,19 +276,49 @@ async function findInstalledPackage(
         manifest,
         name,
         version: nonEmptyString(manifest.version, `Production dependency ${name} version`),
+        workspace: info.isSymbolicLink(),
       };
     }
-    if (current === kitDirectory) break;
+    if (current === installationRoot) break;
     const parent = path.dirname(current);
-    const relative = path.relative(kitDirectory, parent);
+    const relative = path.relative(installationRoot, parent);
     if (parent === current || relative === '..' || relative.startsWith(`..${path.sep}`)) break;
     current = parent;
   }
   return null;
 }
 
+async function findDependencyInstallationRoot(
+  kitDirectory: string,
+  runtimeManifest: Record<string, any>,
+): Promise<string> {
+  const name = nonEmptyString(runtimeManifest.name, 'package.json name');
+  const version = nonEmptyString(runtimeManifest.version, 'package.json version');
+  let current = kitDirectory;
+  while (true) {
+    const packageLock = await readJson(
+      path.join(current, 'package-lock.json'),
+      'package-lock.json',
+    ).catch(() => null);
+    const packages = packageLock?.packages;
+    const relativeKitPath = path.relative(current, kitDirectory).split(path.sep).join('/');
+    if (packages !== null && typeof packages === 'object' && !Array.isArray(packages)) {
+      const packageEntry = packages[relativeKitPath];
+      if (packageEntry !== null && typeof packageEntry === 'object' && !Array.isArray(packageEntry)
+        && packageEntry.name === name && packageEntry.version === version) {
+        return current;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return kitDirectory;
+}
+
 async function collectProductionDependencies(
   kitDirectory: string,
+  installationRoot: string,
   runtimeManifest: Record<string, any>,
   plugins: PluginProject[],
   append: (absolutePath: string, archivePath: string) => Promise<void>,
@@ -302,7 +333,7 @@ async function collectProductionDependencies(
   while (pending.length > 0) {
     const request = pending.shift()!;
     const installed = await findInstalledPackage(
-      kitDirectory,
+      installationRoot,
       request.importer,
       request.name,
     );
@@ -323,9 +354,7 @@ async function collectProductionDependencies(
     packageNames.add(installed.name);
 
     const archiveDirectory = `node_modules/${installed.name}`;
-    const relative = path.relative(kitDirectory, installed.directory);
-    const workspacePackage = relative.startsWith(`packages${path.sep}`);
-    if (workspacePackage) {
+    if (installed.workspace) {
       await append(
         path.join(installed.directory, 'package.json'),
         `${archiveDirectory}/package.json`,
@@ -510,8 +539,13 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
     }
   }
 
+  const dependencyInstallationRoot = await findDependencyInstallationRoot(
+    kitDirectory,
+    runtimeManifest,
+  );
   const dependencyPackageNames = await collectProductionDependencies(
     kitDirectory,
+    dependencyInstallationRoot,
     runtimeManifest,
     plugins,
     append,
