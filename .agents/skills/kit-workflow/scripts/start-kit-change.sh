@@ -17,9 +17,10 @@ git_dir=$(git -C "$repo_root" rev-parse --absolute-git-dir)
 git_common=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
 test "$git_dir" = "$git_common" || kit_workflow_fail 'start must run from the primary worktree'
 git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || kit_workflow_fail 'origin remote is missing'
+kit_workflow_validate_identity "$repo_root"
 
 git -C "$repo_root" fetch origin --prune
-target_branch="kit/$kit"
+target_branch=main
 target_ref="refs/remotes/origin/$target_branch"
 git -C "$repo_root" show-ref --verify --quiet "$target_ref" || kit_workflow_fail "origin/$target_branch is missing"
 base_commit=$(git -C "$repo_root" rev-parse "$target_ref")
@@ -34,8 +35,8 @@ if git -C "$repo_root" worktree list --porcelain | grep -Fqx "worktree $worktree
 fi
 
 git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_commit"
-kit_workflow_validate_product "$worktree_path" "$kit"
 (cd "$worktree_path" && npm ci)
+kit_workflow_validate_product "$worktree_path" "$kit"
 command -v gh >/dev/null 2>&1 || printf 'warning: gh is not installed; it is required to finish and create a PR\n' >&2
 printf 'KIT=%s\nTARGET_BRANCH=%s\nBRANCH=%s\nWORKTREE_PATH=%s\nBASE_COMMIT=%s\n' \
   "$kit" "$target_branch" "$branch" "$worktree_path" "$base_commit"

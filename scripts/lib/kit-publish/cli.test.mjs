@@ -7,6 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { runKitPublishCli } from '../../kit-publish.mjs';
+import { GitHubArtifactAttestationVerifier } from '../kit-registry/github-attestation.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/kit-publish.mjs');
@@ -22,7 +23,7 @@ function runPrepare(outputDirectory, extra = []) {
     '--repository', 'example/harbors',
     '--commit', commit,
     '--workflow', 'example/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/demo/v1.2.3',
-    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
     '--ref', 'refs/tags/kit/demo/v1.2.3',
     '--tag', 'kit/demo/v1.2.3',
     '--label', 'Demo Kit',
@@ -48,6 +49,10 @@ test('prepare writes a packed Kit, release manifest, SBOM, and Registry entry ex
     const entry = JSON.parse(await readFile(path.join(outputDirectory, 'registry-entry.json'), 'utf8'));
     const sbom = JSON.parse(await readFile(path.join(outputDirectory, 'sbom.spdx.json'), 'utf8'));
     assert.equal(release.assets[0].sha256, outputs.ARTIFACT_SHA256);
+    assert.equal(
+      release.source.signerWorkflow,
+      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    );
     assert.equal(entry.releaseManifestUrl.endsWith('/release.json'), true);
     assert.equal(sbom.spdxVersion, 'SPDX-2.3');
     assert.equal(await readFile(path.join(outputDirectory, outputs.ARTIFACT_NAME)).then((value) => value.length), release.assets[0].size);
@@ -91,10 +96,14 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
     revocations: [],
   };
   const calls = [];
+  const verifier = Object.freeze({ verify: async () => undefined });
+  const factoryCalls = [];
   try {
     const code = await runKitPublishCli([
       'aggregate',
-      '--entries-directory', path.join(root, 'entries'),
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
       '--revocations-file', path.join(root, 'revocations.json'),
       '--output', output,
       '--generated-at', index.generatedAt,
@@ -106,27 +115,110 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
         calls.push(input);
         return index;
       },
+      createProvenanceVerifier: (input) => {
+        factoryCalls.push(input);
+        return verifier;
+      },
+      env: { GITHUB_TOKEN: 'test-token' },
     });
     assert.equal(code, 0, stderr.join(''));
+    assert.deepEqual(factoryCalls, [{ githubToken: 'test-token' }]);
     assert.deepEqual(calls, [{
-      entriesDirectory: path.join(root, 'entries'),
+      repositoryRoot: root,
+      repository: 'itharbors/harbors',
+      policyFile: path.join(root, 'policy.json'),
       revocationsFile: path.join(root, 'revocations.json'),
       generatedAt: index.generatedAt,
+      githubToken: 'test-token',
+      provenanceVerifier: verifier,
     }]);
     assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), index);
     assert.match(stdout.join(''), /KITS=0\nREVOCATIONS=0/u);
 
     const replay = await runKitPublishCli([
       'aggregate',
-      '--entries-directory', path.join(root, 'entries'),
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
       '--revocations-file', path.join(root, 'revocations.json'),
       '--output', output,
       '--generated-at', index.generatedAt,
     ], {
       stdout: { write: () => undefined },
       stderr: { write: (value) => stderr.push(value) },
-    }, { aggregateKitRegistry: async () => index });
+    }, { aggregateKitRegistry: async () => index, env: { GITHUB_TOKEN: 'test-token' } });
     assert.equal(replay, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('aggregate production dependencies construct the GitHub provenance verifier', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-aggregate-'));
+  const output = path.join(root, 'index.v1.json');
+  let provenanceVerifier;
+  try {
+    const code = await runKitPublishCli([
+      'aggregate',
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
+      '--revocations-file', path.join(root, 'revocations.json'),
+      '--output', output,
+      '--generated-at', '2026-07-24T00:00:00.000Z',
+    ], {
+      stdout: { write: () => undefined },
+      stderr: { write: (value) => assert.fail(value) },
+    }, {
+      aggregateKitRegistry: async (input) => {
+        provenanceVerifier = input.provenanceVerifier;
+        return {
+          schemaVersion: 1,
+          generatedAt: '2026-07-24T00:00:00.000Z',
+          kits: [],
+          revocations: [],
+        };
+      },
+      env: { GITHUB_TOKEN: 'production-token' },
+    });
+    assert.equal(code, 0);
+    assert.ok(provenanceVerifier instanceof GitHubArtifactAttestationVerifier);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('aggregate fails before requests or output writes when its GitHub token is absent', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-aggregate-'));
+  const output = path.join(root, 'index.v1.json');
+  const stderr = [];
+  let calls = 0;
+  let factoryCalls = 0;
+  try {
+    const code = await runKitPublishCli([
+      'aggregate',
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
+      '--revocations-file', path.join(root, 'revocations.json'),
+      '--output', output,
+      '--generated-at', '2026-07-24T00:00:00.000Z',
+    ], {
+      stdout: { write: () => assert.fail('aggregate must not write output') },
+      stderr: { write: (value) => stderr.push(value) },
+    }, {
+      aggregateKitRegistry: async () => { calls += 1; },
+      createProvenanceVerifier: () => {
+        factoryCalls += 1;
+        return { verify: async () => undefined };
+      },
+      env: {},
+    });
+    assert.equal(code, 1);
+    assert.equal(calls, 0);
+    assert.equal(factoryCalls, 0);
+    assert.deepEqual(stderr, ['ERROR=GitHub token is required\n']);
+    await assert.rejects(readFile(output));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

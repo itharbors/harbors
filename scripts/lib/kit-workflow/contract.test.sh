@@ -7,8 +7,14 @@ test_skill_layout_and_contract() {
   test -x "$SOURCE_FINISH" || fail 'finish-kit-change.sh is missing or not executable'
   test -x "$SOURCE_RELEASE" || fail 'release-kit.sh is missing or not executable'
   assert_contains "$(sed -n '1,8p' "$SKILL_SOURCE/SKILL.md")" 'name: kit-workflow'
-  assert_contains "$(cat "$SKILL_SOURCE/SKILL.md")" 'origin/kit/<kit>'
+  skill=$(cat "$SKILL_SOURCE/SKILL.md")
+  assert_contains "$skill" 'main:kits/<kit>'
+  assert_contains "$skill" 'origin/main'
+  assert_contains "$skill" 'kit/<kit>/v<version>'
+  assert_not_contains "$skill" 'origin/kit/<kit>'
+  assert_not_contains "$skill" 'product branch'
   assert_contains "$(cat "$SKILL_SOURCE/agents/openai.yaml")" 'display_name: "Kit Workflow"'
+  assert_contains "$(cat "$SKILL_SOURCE/agents/openai.yaml")" 'main'
   grep -Fq '"test:kit-workflow"' "$REPO_SOURCE/package.json" || fail 'package test script is missing'
 }
 

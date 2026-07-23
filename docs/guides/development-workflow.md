@@ -217,50 +217,58 @@ lsof -i :49382
 先检查对应入口的 Gateway health 地址（隔离开发默认是 `http://localhost:49380/api/health`），再看 Server 日志中的 Kit/插件装载错误。
 Client 会尝试创建 session 并重试一次，但不会掩盖持续装载错误。
 
-## Framework 与 Kit 分支治理
+## Framework 与 Kit 的单主分支治理
 
-Framework 和独立 Kit 使用两套互不混用的工作流：
+Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill 和检查范围：
 
 | 变更对象 | 基线 / PR base | 变更分支 | 本地 Skill |
 | --- | --- | --- | --- |
-| Framework | `main` | `feature/<type>/<slug>` | `change-workflow` |
-| 单个 Kit | `kit/<kit>` | `kit-change/<kit>/<type>/<slug>` | `kit-workflow` |
-| 市场元数据 | `kit-registry` | 自动化分支或审核分支 | Registry workflow |
+| Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
+| 单个 Kit | `origin/main` / `main` | `kit-change/<name>/<type>/<slug>` | `kit-workflow` |
 
-不要从 `main` 开始 Kit 产品变更，也不要把 Kit PR 指向 `main`。`kit-workflow` 会固定读取
-`origin/kit/<kit>`，创建隔离 worktree，并检查产品身份、锁文件、Node/npm 和 Kit CLI 版本：
+SQLite、MySQL 和 Notifications 分别保存在 `kits/sqlite`、`kits/mysql`、`kits/notifications`。
+Kit 合并只改变 `main` 上的目录内容，不发布 Release，也不修改或发布 Framework 版本。完整生命周期是：
+
+```text
+main
+  -> kit-change/<name>/<type>/<slug>
+  -> PR base main
+  -> merge without Release
+  -> version-preparation PR updates kits/<name>/kit.json and kits/<name>/package.json
+  -> release-kit.sh emits confirmation
+  -> push kit/<name>/v<semver>
+```
+
+开始 SQLite 变更：
 
 ```bash
 bash .agents/skills/kit-workflow/scripts/start-kit-change.sh sqlite feature add-import
 ```
 
-只在命令输出的 worktree 中开发。完成后准备含 `## Summary` 与 `## Testing` 的 PR body，再运行：
+该命令固定获取 `origin/main` 并校验仓库本地 Git 身份，然后创建隔离 worktree、执行根目录
+`npm ci`，再完整校验官方 Kit 契约。只在输出的 worktree 中开发。完成后准备含 `## Summary`
+与 `## Testing` 的 PR body，再运行：
 
 ```bash
 bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
   sqlite "添加数据导入" /absolute/path/to/pr-body.md
 ```
 
-finish 会执行产品 `check`、Kit validate 和 dry-run pack，普通 push 后只创建 base 为
-`kit/sqlite` 的 PR。Stable 发布另行执行：
+finish 只运行目标 Kit 的 `npm run kit:check -- sqlite`，普通 push 后创建并核验 base 为 `main`
+的 PR。路径级 CI 至少检查被修改的 Kit；`kit-core`、Kit CLI、发布/Registry 工具或其他共享
+构建面变化会触发所有官方 Kit CI。
+
+发布前用独立 PR 同步更新目标目录的 `kit.json`、`package.json` 和根 `package-lock.json`。
+合并并确保本地干净 `main` 与 `origin/main` 完全一致后运行：
 
 ```bash
 bash .agents/skills/kit-workflow/scripts/release-kit.sh sqlite 1.2.0
 ```
 
-第一次运行只显示 Kit、版本、Commit、Tag 与绑定 Tag/Commit 的确认 token；必须获得用户对该次 Stable 发布的明确确认，
-再按输出设置 `HARBORS_KIT_RELEASE_CONFIRM` 重跑。实现功能的确认不等于推送发布 Tag 的确认。
-
-首次建立产品分支可使用迁移器生成独立快照；它们只写入新的输出目录，不创建分支也不推送：
-
-```bash
-node scripts/migrate-kit-product.mjs --kit sqlite --output /absolute/path/to/sqlite-product
-node scripts/migrate-kit-product.mjs --kit mysql --output /absolute/path/to/mysql-product
-node scripts/migrate-kit-product.mjs --kit notifications --output /absolute/path/to/notifications-product
-node scripts/migrate-kit-registry.mjs --output /absolute/path/to/kit-registry
-```
-
-首个独立历史提交使用 `[Init]`；后续提交不再使用该类型。
+第一次运行只显示 Kit、版本、频道、Commit、Tag 和精确的 `Tag@40-char-SHA` 确认令牌，不创建
+Tag。获得用户对这次发布的明确确认后，按输出设置 `HARBORS_KIT_RELEASE_CONFIRM` 重跑。功能
+实现或 PR 合并的确认不等于发布确认。普通 SemVer 发布 Stable，带 prerelease 段的 SemVer
+发布 Preview；build metadata 不允许用于发布 Tag。
 
 ## 提交信息规范
 

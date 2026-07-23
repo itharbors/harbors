@@ -1,23 +1,31 @@
 import {
   readFile,
-  readdir,
   stat,
 } from 'node:fs/promises';
 import path from 'node:path';
+import semver from 'semver';
 
 import {
-  encodeKitId,
   parseKitRegistryIndex,
   parseReleaseManifest,
 } from '@itharbors/kit-core';
 
-import { fetchGitHubReleaseAsset } from '../kit-registry/github-release-fetch.mjs';
+import { loadKitPolicy } from '../kit-monorepo.mjs';
+import { deriveArtifactName } from './metadata.mjs';
+import {
+  discoverTrustedKitReleases,
+  fetchTrustedReleaseManifest,
+} from './release-source.mjs';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 const REPOSITORY_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?\/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/u;
 const KIT_ID_PATTERN = /^@([a-z0-9][a-z0-9._-]*)\/kit-([a-z0-9][a-z0-9-]*)$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const PUBLISH_SIGNER_WORKFLOWS = new Set([
+  'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+  'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+]);
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -117,14 +125,8 @@ export function parseRegistryEntry(value) {
     throw new Error('Registry channel entry repository owner must match publisher');
   }
   const tag = nonEmptyString(source.tag, 'Registry channel entry tag');
-  if (channel === 'stable' && tag !== `kit/${slug}/v${reference.version}`) {
-    throw new Error('Stable Registry entry tag does not match Kit version');
-  }
-  if (
-    channel === 'preview'
-    && !new RegExp(`^preview/${slug}/[1-9][0-9]*-[a-f0-9]{12}$`, 'u').test(tag)
-  ) {
-    throw new Error('Preview Registry entry tag does not match Kit identity');
+  if (tag !== `kit/${slug}/v${reference.version}`) {
+    throw new Error('Registry entry tag does not match Kit version');
   }
   if (reference.releaseManifestUrl !== exactReleaseUrl(repository, tag)) {
     throw new Error('Registry entry releaseManifestUrl does not match repository and tag');
@@ -148,7 +150,33 @@ function sameStrings(left, right) {
     && [...left].sort().every((value, index) => value === [...right].sort()[index]);
 }
 
-function validateRelease(entry, rawRelease) {
+function validateReleaseEvidence(release, { repository, tag, context }) {
+  const expectedWorkflow = `${repository}/.github/workflows/publish-kit.yml@refs/tags/${tag}`;
+  if (release.source.workflow !== expectedWorkflow) {
+    throw new Error(`Release workflow does not match ${context}`);
+  }
+  if (!PUBLISH_SIGNER_WORKFLOWS.has(release.source.signerWorkflow)) {
+    throw new Error(`Release signer workflow does not match ${context}`);
+  }
+  if (release.assets.length !== 1) {
+    throw new Error('Release manifest must contain exactly one attested Kit asset');
+  }
+  const [asset] = release.assets;
+  const expectedAssetName = deriveArtifactName(asset.manifest);
+  if (asset.name !== expectedAssetName) {
+    throw new Error(`Release asset name does not match manifest ${context}`);
+  }
+  if (asset.url !== exactReleaseUrl(repository, tag, expectedAssetName)) {
+    throw new Error(`Release asset URL does not match ${context}`);
+  }
+  const expectedAttestation = `https://api.github.com/repos/${repository}/attestations/sha256:${asset.sha256}`;
+  if (release.source.attestationUrl !== expectedAttestation) {
+    throw new Error(`Release attestation URL does not match asset ${expectedAssetName}`);
+  }
+  return asset;
+}
+
+export function validateRegistryRelease(entry, rawRelease) {
   const release = parseReleaseManifest(rawRelease);
   if (
     release.id !== entry.id
@@ -158,32 +186,13 @@ function validateRelease(entry, rawRelease) {
     || release.source.repository !== entry.source.repository
   ) throw new Error(`Release identity does not match Registry entry ${entry.id}@${entry.version}`);
 
-  const { slug } = kitIdentity(entry.id, entry.publisher);
-  const expectedWorkflow = entry.channel === 'stable'
-    ? `${entry.source.repository}/.github/workflows/publish-kit.yml@refs/tags/${entry.source.tag}`
-    : `${entry.source.repository}/.github/workflows/publish-kit.yml@refs/heads/kit/${slug}`;
-  if (release.source.workflow !== expectedWorkflow) {
-    throw new Error(`Release workflow does not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  if (
-    release.source.signerWorkflow
-    !== 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1'
-  ) {
-    throw new Error(`Release signer workflow does not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  if (release.assets.length !== 1) {
-    throw new Error('Release manifest must contain exactly one attested Kit asset');
-  }
-  const [asset] = release.assets;
+  const asset = validateReleaseEvidence(release, {
+    repository: entry.source.repository,
+    tag: entry.source.tag,
+    context: `Registry entry ${entry.id}@${entry.version}`,
+  });
   if (!sameStrings(asset.manifest.permissions, entry.permissions)) {
     throw new Error(`Release permissions do not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  if (asset.url !== exactReleaseUrl(entry.source.repository, entry.source.tag, asset.name)) {
-    throw new Error(`Release asset URL does not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  const expectedAttestation = `https://api.github.com/repos/${entry.source.repository}/attestations/sha256:${asset.sha256}`;
-  if (release.source.attestationUrl !== expectedAttestation) {
-    throw new Error(`Release attestation URL does not match asset ${asset.name}`);
   }
   return release;
 }
@@ -228,11 +237,13 @@ function validateRevocation(revocation, rawRelease) {
   const { slug } = kitIdentity(release.id, release.publisher);
   const tag = `kit/${slug}/v${release.version}`;
   if (revocation.releaseManifestUrl !== exactReleaseUrl(release.source.repository, tag)) {
-    throw new Error('Revocation evidence must be an immutable Stable GitHub Release manifest');
+    throw new Error('Revocation evidence must be an immutable GitHub Release manifest');
   }
-  if (asset.url !== exactReleaseUrl(release.source.repository, tag, asset.name)) {
-    throw new Error('Revocation evidence asset URL is inconsistent');
-  }
+  validateReleaseEvidence(release, {
+    repository: release.source.repository,
+    tag,
+    context: `revocation evidence ${revocation.id}@${revocation.version}`,
+  });
   return release;
 }
 
@@ -241,15 +252,28 @@ export function buildKitRegistryIndex({ entries, releasesByUrl, revocations, gen
     throw new TypeError('entries, releasesByUrl, and revocations are required');
   }
   const parsedEntries = entries.map(parseRegistryEntry);
-  const channels = new Set();
-  const kits = new Map();
+  const tuples = new Set();
+  const sourceTags = new Set();
+  const releaseUrls = new Set();
   for (const entry of parsedEntries) {
-    const key = `${entry.id}\0${entry.channel}`;
-    if (channels.has(key)) throw new Error(`Duplicate Registry channel ${entry.id} ${entry.channel}`);
-    channels.add(key);
+    const tuple = `${entry.id}\0${entry.version}\0${entry.channel}`;
+    if (tuples.has(tuple)) throw new Error(`Duplicate Registry entry ${entry.id} ${entry.version} ${entry.channel}`);
+    tuples.add(tuple);
+    const sourceTag = `${entry.source.repository}\0${entry.source.tag}`;
+    if (sourceTags.has(sourceTag)) throw new Error(`Duplicate Registry source Tag ${entry.source.tag}`);
+    sourceTags.add(sourceTag);
+    if (releaseUrls.has(entry.releaseManifestUrl)) {
+      throw new Error(`Duplicate Registry Release manifest URL ${entry.releaseManifestUrl}`);
+    }
+    releaseUrls.add(entry.releaseManifestUrl);
+  }
+
+  const kits = new Map();
+  const candidates = [];
+  for (const entry of parsedEntries) {
     const rawRelease = releasesByUrl.get(entry.releaseManifestUrl);
     if (rawRelease === undefined) throw new Error(`Missing Release manifest ${entry.releaseManifestUrl}`);
-    validateRelease(entry, rawRelease);
+    const release = validateRegistryRelease(entry, rawRelease);
     const existing = kits.get(entry.id);
     if (existing && (
       existing.label !== entry.label
@@ -263,15 +287,11 @@ export function buildKitRegistryIndex({ entries, releasesByUrl, revocations, gen
       summary: entry.summary,
       channels: {},
     };
-    kit.channels[entry.channel] = {
-      version: entry.version,
-      releaseManifestUrl: entry.releaseManifestUrl,
-      permissions: [...entry.permissions],
-    };
     kits.set(entry.id, kit);
+    candidates.push({ entry, release });
   }
 
-  const publicRevocations = revocations.map((revocation) => {
+  const verifiedRevocations = revocations.map((revocation) => {
     const rawRelease = releasesByUrl.get(revocation.releaseManifestUrl);
     if (rawRelease === undefined) {
       throw new Error(`Missing revocation Release manifest ${revocation.releaseManifestUrl}`);
@@ -280,10 +300,35 @@ export function buildKitRegistryIndex({ entries, releasesByUrl, revocations, gen
     const { releaseManifestUrl: _evidence, ...publicValue } = revocation;
     return publicValue;
   });
+  const revokedArtifacts = new Set(verifiedRevocations.map((revocation) => (
+    `${revocation.id}\0${revocation.version}\0${revocation.sha256}`
+  )));
+  const channels = new Map();
+  for (const candidate of candidates) {
+    const artifact = candidate.release.assets[0];
+    const revocationKey = `${candidate.entry.id}\0${candidate.entry.version}\0${artifact.sha256}`;
+    if (revokedArtifacts.has(revocationKey)) continue;
+    const key = `${candidate.entry.id}\0${candidate.entry.channel}`;
+    const values = channels.get(key) ?? [];
+    values.push(candidate);
+    channels.set(key, values);
+  }
+  for (const values of channels.values()) {
+    values.sort((left, right) => semver.rcompare(left.entry.version, right.entry.version));
+    const { entry } = values[0];
+    kits.get(entry.id).channels[entry.channel] = {
+      version: entry.version,
+      releaseManifestUrl: entry.releaseManifestUrl,
+      permissions: [...entry.permissions],
+    };
+  }
+  const publicRevocations = verifiedRevocations;
   const index = parseKitRegistryIndex({
     schemaVersion: 1,
     generatedAt,
-    kits: [...kits.values()].sort((left, right) => left.id.localeCompare(right.id)),
+    kits: [...kits.values()]
+      .filter((kit) => Object.keys(kit.channels).length > 0)
+      .sort((left, right) => left.id.localeCompare(right.id)),
     revocations: publicRevocations.sort((left, right) => (
       `${left.id}\0${left.version}\0${left.sha256}`.localeCompare(`${right.id}\0${right.version}\0${right.sha256}`)
     )),
@@ -301,103 +346,42 @@ async function readJson(file, context, maxBytes = DEFAULT_MAX_RESPONSE_BYTES) {
   }
 }
 
-async function loadEntries(entriesDirectory) {
-  const directoryEntries = await readdir(entriesDirectory, { withFileTypes: true });
-  const values = [];
-  for (const directoryEntry of directoryEntries.sort((left, right) => left.name.localeCompare(right.name))) {
-    if (directoryEntry.name === '.gitkeep') continue;
-    if (!directoryEntry.isDirectory() || directoryEntry.isSymbolicLink()) {
-      throw new Error(`Registry entry path ${directoryEntry.name} must be a directory`);
-    }
-    const directory = path.join(entriesDirectory, directoryEntry.name);
-    const files = await readdir(directory, { withFileTypes: true });
-    for (const file of files.sort((left, right) => left.name.localeCompare(right.name))) {
-      if (file.name === '.gitkeep') continue;
-      if (!file.isFile() || file.isSymbolicLink() || !['stable.json', 'preview.json'].includes(file.name)) {
-        throw new Error(`Registry entry path ${directoryEntry.name}/${file.name} is invalid`);
-      }
-      const parsed = parseRegistryEntry(await readJson(
-        path.join(directory, file.name),
-        `Registry entry ${directoryEntry.name}/${file.name}`,
-      ));
-      if (
-        directoryEntry.name !== encodeKitId(parsed.id)
-        || file.name !== `${parsed.channel}.json`
-      ) throw new Error(`Registry entry path does not match ${parsed.id} ${parsed.channel}`);
-      values.push(parsed);
-    }
-  }
-  return values;
-}
-
-async function readLimitedJsonResponse(response, maxBytes) {
-  const declared = response.headers.get('content-length');
-  if (declared !== null && Number(declared) > maxBytes) {
-    throw new Error('Remote Release manifest exceeds the size limit');
-  }
-  if (!response.body) throw new Error('Remote Release manifest body is empty');
-  const reader = response.body.getReader();
-  const chunks = [];
-  let size = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxBytes) {
-        await reader.cancel().catch(() => undefined);
-        throw new Error('Remote Release manifest exceeds the size limit');
-      }
-      chunks.push(Buffer.from(value));
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks, size).toString('utf8'));
-  } catch (error) {
-    throw new Error('Remote Release manifest is not valid JSON', { cause: error });
-  }
-}
-
-async function fetchRelease(url, { fetchImpl, timeoutMs, maxResponseBytes }) {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(new Error('Release request timed out')), timeoutMs);
-  try {
-    const response = await fetchGitHubReleaseAsset(fetchImpl, url, {
-      method: 'GET',
-      headers: { Accept: 'application/json' },
-      signal: controller.signal,
-    });
-    if (!response.ok) throw new Error(`Remote Release manifest failed with HTTP ${response.status}`);
-    return await readLimitedJsonResponse(response, maxResponseBytes);
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
 export async function aggregateKitRegistry({
-  entriesDirectory,
+  repositoryRoot,
+  repository,
+  policyFile,
   revocationsFile,
   generatedAt,
+  githubToken,
   fetchImpl = globalThis.fetch,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-  maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES,
+  provenanceVerifier,
+  requestTimeoutMs = DEFAULT_TIMEOUT_MS,
 }) {
   if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl is required');
-  const entries = await loadEntries(path.resolve(entriesDirectory));
+  const policy = await loadKitPolicy({ repositoryRoot, policyFile });
+  const discovered = await discoverTrustedKitReleases({
+    policy,
+    repository,
+    githubToken,
+    fetchImpl,
+    provenanceVerifier,
+    requestTimeoutMs,
+  });
   const revocationDocument = await readJson(
     path.resolve(revocationsFile),
     'Registry revocations',
   );
   const revocations = parseInternalRevocations(revocationDocument);
-  const urls = [...new Set([
-    ...entries.map((entry) => entry.releaseManifestUrl),
-    ...revocations.map((revocation) => revocation.releaseManifestUrl),
-  ])].sort();
-  const releasesByUrl = new Map();
-  for (const url of urls) {
-    releasesByUrl.set(url, await fetchRelease(url, { fetchImpl, timeoutMs, maxResponseBytes }));
+  const releasesByUrl = new Map(discovered.releasesByUrl);
+  for (const revocation of revocations) {
+    if (releasesByUrl.has(revocation.releaseManifestUrl)) continue;
+    releasesByUrl.set(revocation.releaseManifestUrl, await fetchTrustedReleaseManifest({
+      repository,
+      releaseManifestUrl: revocation.releaseManifestUrl,
+      githubToken,
+      fetchImpl,
+      requestTimeoutMs,
+    }));
   }
-  return buildKitRegistryIndex({ entries, releasesByUrl, revocations, generatedAt });
+  return buildKitRegistryIndex({ entries: discovered.entries, releasesByUrl, revocations, generatedAt });
 }

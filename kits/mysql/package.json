@@ -1,10 +1,12 @@
 {
   "name": "@itharbors/kit-mysql",
-  "version": "0.0.1",
+  "version": "0.1.0-preview.1",
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "vitest run --config vitest.config.ts"
+    "build": "npm run build -w @itharbors/mysql-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/mysql-core && node ../../scripts/ce-plugin.mjs build plugins/mysql-data && node ../../scripts/ce-plugin.mjs build plugins/mysql-explorer && node ../../scripts/ce-plugin.mjs build plugins/mysql-relationships && node ../../scripts/ce-plugin.mjs build plugins/mysql-schema && node ../../scripts/ce-plugin.mjs build plugins/mysql-sql",
+    "test:prepare": "node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
+    "test": "npm run test:prepare && vitest run --config vitest.config.ts"
   },
   "dependencies": {
     "mysql2": "^3.23.0"

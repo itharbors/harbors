@@ -1,0 +1,119 @@
+name: Kit CI
+
+on:
+  pull_request:
+  merge_group:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  select:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-json: ${{ steps.selection.outputs.matrix-json }}
+      has-kits: ${{ steps.selection.outputs.has-kits }}
+    steps:
+      - name: Checkout full comparison history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build selector dependency
+        run: npm run build -w @itharbors/kit-core
+
+      - name: Select changed Kits
+        id: selection
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_SHA: ${{ github.sha }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            pull_request)
+              base_sha="$PR_BASE_SHA"
+              ;;
+            merge_group)
+              base_sha="$MERGE_GROUP_BASE_SHA"
+              ;;
+            push)
+              base_sha="$PUSH_BEFORE_SHA"
+              if [[ "$base_sha" =~ ^0{40}$ ]]; then
+                base_sha="$(git rev-list --max-parents=0 --max-count=1 "$HEAD_SHA")"
+              fi
+              ;;
+            *)
+              echo "Unsupported GitHub event: $EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          selector_output="$(node scripts/select-kit-ci.mjs "$base_sha" "$HEAD_SHA")"
+          matrix_json=''
+          has_kits=''
+          while IFS= read -r line; do
+            case "$line" in
+              MATRIX_JSON=*)
+                test -z "$matrix_json"
+                matrix_json="${line#MATRIX_JSON=}"
+                ;;
+              HAS_KITS=true|HAS_KITS=false)
+                test -z "$has_kits"
+                has_kits="${line#HAS_KITS=}"
+                ;;
+              *)
+                echo 'Selector emitted an invalid output record' >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$selector_output"
+          test -n "$matrix_json"
+          test -n "$has_kits"
+          printf 'matrix-json=%s\nhas-kits=%s\n' "$matrix_json" "$has_kits" >> "$GITHUB_OUTPUT"
+
+  check-kit:
+    needs: select
+    if: needs.select.outputs.has-kits == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.select.outputs.matrix-json).include }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout selected revision
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Validate selected Kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          output_directory="$RUNNER_TEMP/kit-${{ matrix.kit }}"
+          npm run kit:check -- "${{ matrix.kit }}" --output-directory "$output_directory"

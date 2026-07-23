@@ -15,6 +15,7 @@ export const DEFAULT_KIT_PUBLISHER_POLICIES = Object.freeze({
     workflows: Object.freeze(['itharbors/harbors/.github/workflows/publish-kit.yml']),
     signerWorkflows: Object.freeze([
       'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
     ]),
   }),
 });

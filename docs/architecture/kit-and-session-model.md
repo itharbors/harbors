@@ -85,11 +85,16 @@ signer 的 GitHub Actions 证书身份、transparency log，以及 caller workfl
 source claims。下载器只接受 Resolver 创建的内部可信对象，流式核对大小与
 SHA-256 后交给 InstalledKitStore 安装事务。安装与激活分离，网络或校验失败不修改 active。
 
-发布面由产品分支中的薄 caller 和固定 `kit-publish-v1` reusable workflow 组成。Preview push
-自动生成 prerelease、GitHub Artifact Attestation 和 preview Registry 投影；Stable Tag 经过
-`kit-stable` Environment 审批后生成不可覆盖的 Release，并向 `kit-registry` 提交审核 PR。
-Registry 分支在 PR 中重新获取并校验所有 Release manifest，只有 push 校验成功才聚合
-`index.v1.json` 并部署 GitHub Pages。客户端和聚合器只跟随 GitHub Release 到官方内容 CDN，
+发布源统一位于 `main:kits/<name>`。普通 PR 合并不产生 Release；只有专属
+`kit/<name>/v<semver>` Tag 才触发 caller，并从 Tag 解析出唯一 Kit 目录。固定
+`kit-publish-v2` reusable workflow 核对 Tag、`kit.json`、`package.json`、锁文件版本与
+Stable/Preview 频道，只将独立 `.hkit` 作为安装用 Release Asset，并通过 GitHub Artifact
+Attestation 绑定 signer workflow、caller Tag 和精确 Commit。
+
+市场 workflow 自动扫描可信且不可变的 GitHub Release，解析实际 Tag Commit，验证 metadata、
+`.hkit` digest、attestation claims 与 signer allowlist，然后根据 `registry/policy.json` 和
+`registry/revocations.json` 重建 `index.v1.json` 并部署 GitHub Pages。每次发版不提交 Registry
+entry；策略和撤回文件只是低频治理输入。客户端和聚合器只跟随 GitHub Release 到官方内容 CDN，
 不会接受任意重定向。
 
 `KitRegistryManager.list/refresh` 将远程市场和已安装状态合并为公开投影，但移除 Release URL、

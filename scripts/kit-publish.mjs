@@ -21,6 +21,7 @@ import {
   deriveArtifactName,
 } from './lib/kit-publish/metadata.mjs';
 import { aggregateKitRegistry } from './lib/kit-publish/registry.mjs';
+import { GitHubArtifactAttestationVerifier } from './lib/kit-registry/github-attestation.mjs';
 
 const USAGE = [
   'Usage:',
@@ -30,7 +31,8 @@ const USAGE = [
   '    --signer-workflow <workflow@ref> \\',
   '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
   '  node scripts/kit-publish.mjs aggregate \\',
-  '    --entries-directory <directory> --revocations-file <file> \\',
+  '    --repository-root <directory> --repository <owner/repo> --policy-file <file> \\',
+  '    --revocations-file <file> \\',
   '    --output <index.v1.json> --generated-at <ISO-8601 UTC>',
   '',
 ].join('\n');
@@ -49,7 +51,9 @@ const PREPARE_OPTIONS = [
 ];
 
 const AGGREGATE_OPTIONS = [
-  'entries-directory',
+  'repository-root',
+  'repository',
+  'policy-file',
   'revocations-file',
   'output',
   'generated-at',
@@ -135,11 +139,24 @@ async function prepare(options) {
   }
 }
 
-async function aggregate(options, implementation) {
+function createDefaultProvenanceVerifier({ githubToken }) {
+  return new GitHubArtifactAttestationVerifier({ githubToken });
+}
+
+async function aggregate(options, implementation, environment, createProvenanceVerifier) {
+  const githubToken = environment.GITHUB_TOKEN;
+  if (typeof githubToken !== 'string' || githubToken.length === 0) {
+    throw new Error('GitHub token is required');
+  }
+  const provenanceVerifier = createProvenanceVerifier({ githubToken });
   const index = await implementation({
-    entriesDirectory: options['entries-directory'],
+    repositoryRoot: options['repository-root'],
+    repository: options.repository,
+    policyFile: options['policy-file'],
     revocationsFile: options['revocations-file'],
     generatedAt: options['generated-at'],
+    githubToken,
+    provenanceVerifier,
   });
   await writeFile(path.resolve(options.output), canonicalJson(index), { flag: 'wx', mode: 0o600 });
   return {
@@ -152,7 +169,7 @@ async function aggregate(options, implementation) {
 export async function runKitPublishCli(
   args,
   io = process,
-  dependencies = { aggregateKitRegistry },
+  dependencies = {},
 ) {
   const [command, ...rest] = args;
   const allowed = command === 'prepare'
@@ -170,9 +187,18 @@ export async function runKitPublishCli(
     return 2;
   }
   try {
+    const aggregateImplementation = dependencies.aggregateKitRegistry ?? aggregateKitRegistry;
+    const environment = dependencies.env ?? process.env;
+    const createProvenanceVerifier = dependencies.createProvenanceVerifier
+      ?? createDefaultProvenanceVerifier;
     const outputs = command === 'prepare'
       ? await prepare(options)
-      : await aggregate(options, dependencies.aggregateKitRegistry);
+      : await aggregate(
+        options,
+        aggregateImplementation,
+        environment,
+        createProvenanceVerifier,
+      );
     io.stdout.write(`${Object.entries(outputs).map(([key, value]) => `${key}=${value}`).join('\n')}\n`);
     return 0;
   } catch (error) {

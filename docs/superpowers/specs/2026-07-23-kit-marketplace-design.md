@@ -1,5 +1,9 @@
 # Kit 独立发布与市场设计
 
+> 后续架构决策：Kit 产品分支与逐版本 `kit-registry` 提交模型已由
+> [Harbors 单分支多 Kit 目录设计](./2026-07-24-kit-monorepo-consolidation-design.md)取代。
+> 本文关于 `.hkit`、校验、下载、安装、激活、回滚和审计的协议仍然有效。
+
 ## 背景
 
 Harbors 已经以插件作为功能扩展单元，并以 Kit 组合单个 Session 的插件、

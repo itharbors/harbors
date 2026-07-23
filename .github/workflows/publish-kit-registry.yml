@@ -1,27 +1,27 @@
-name: Validate and publish Kit Registry
+name: Publish Kit Registry
 
 on:
-  push:
-    branches:
-      - kit-registry
-  pull_request:
-    branches:
-      - kit-registry
-    types:
-      - opened
-      - synchronize
-      - reopened
+  workflow_call:
   workflow_dispatch:
+
+concurrency:
+  group: kit-registry-pages
+  cancel-in-progress: false
+
+# GitHub Release immutability must be enabled as a repository setting before activation.
+# This workflow consumes immutable Releases and never attempts to change that setting.
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      attestations: read
     steps:
-      - name: Checkout Registry
+      - name: Checkout main governance state
         uses: actions/checkout@v6
         with:
+          ref: main
           persist-credentials: false
 
       - name: Setup Node.js
@@ -30,46 +30,44 @@ jobs:
           node-version: 22.18.0
           package-manager-cache: false
 
-      - name: Checkout pinned Registry toolchain
-        uses: actions/checkout@v6
-        with:
-          repository: itharbors/harbors
-          ref: kit-publish-v1
-          path: .harbors-toolchain
-          persist-credentials: false
-
-      - name: Build pinned Registry toolchain
-        working-directory: .harbors-toolchain
+      - name: Pin npm
         run: |
-          npm ci --ignore-scripts
+          npm install --global npm@10.9.3
+          test "$(npm --version)" = 10.9.3
+
+      - name: Install Registry scanner dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Build Registry scanner tools
+        run: |
           npm run build -w @itharbors/kit-core
           npm run build -w @itharbors/kit-cli
 
-      - name: Verify and aggregate Registry
+      - name: Scan Releases and aggregate Registry
         shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           site_directory="$RUNNER_TEMP/registry-site"
           mkdir -p "$site_directory"
-          generated_at=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')
-          node .harbors-toolchain/scripts/kit-publish.mjs aggregate \
-            --entries-directory registry/entries \
+          node scripts/kit-publish.mjs aggregate \
+            --repository-root "$GITHUB_WORKSPACE" \
+            --repository "$GITHUB_REPOSITORY" \
+            --policy-file registry/policy.json \
             --revocations-file registry/revocations.json \
             --output "$site_directory/index.v1.json" \
-            --generated-at "$generated_at"
+            --generated-at "$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')"
 
       - name: Configure Pages
-        if: github.event_name == 'push'
         uses: actions/configure-pages@v5
 
-      - name: Upload validated Pages artifact
-        if: github.event_name == 'push'
+      - name: Upload validated Pages index
         uses: actions/upload-pages-artifact@v4
         with:
           path: ${{ runner.temp }}/registry-site
 
   deploy:
-    if: github.event_name == 'push'
     needs: build
     runs-on: ubuntu-latest
     permissions:
