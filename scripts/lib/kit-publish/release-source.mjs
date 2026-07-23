@@ -5,11 +5,15 @@ import {
 
 const RELEASE_TAG = /^kit\/(mysql|notifications|sqlite)\/v(.+)$/u;
 const API_VERSION = '2026-03-10';
-const MAX_RELEASES = 1000;
+const API_ORIGIN = 'https://api.github.com';
+const GITHUB_ORIGIN = 'https://github.com';
 const PAGE_SIZE = 100;
+const MAX_PAGES = 10;
 const MAX_METADATA_BYTES = 1024 * 1024;
 const MAX_REDIRECTS = 5;
-const GITHUB_ORIGIN = 'https://github.com';
+const MAX_TAG_PEELS = 5;
+const REQUEST_TIMEOUT_MS = 15_000;
+const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const SAFE_DOWNLOAD_ORIGINS = new Set([
   GITHUB_ORIGIN,
   'https://github-releases.githubusercontent.com',
@@ -17,8 +21,33 @@ const SAFE_DOWNLOAD_ORIGINS = new Set([
   'https://release-assets.githubusercontent.com',
 ]);
 
+function deepFreeze(value) {
+  if (value && typeof value === 'object') {
+    for (const child of Object.values(value)) deepFreeze(child);
+    if (!Object.isFrozen(value)) Object.freeze(value);
+  }
+  return value;
+}
+
+function readOnlyMap(entries) {
+  const target = new Map(entries);
+  return new Proxy(target, {
+    get(map, property) {
+      if (['set', 'delete', 'clear'].includes(property)) {
+        return () => { throw new TypeError('Trusted Release map is read-only'); };
+      }
+      const value = Reflect.get(map, property, map);
+      return typeof value === 'function' ? value.bind(map) : value;
+    },
+  });
+}
+
 function releaseDownloadUrl(repository, tag, name) {
   return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+}
+
+function apiBase(repository) {
+  return `${API_ORIGIN}/repos/${repository}`;
 }
 
 function requireObject(value, message) {
@@ -26,7 +55,29 @@ function requireObject(value, message) {
   return value;
 }
 
-function requireHttpsUrl(value, message, allowedOrigins) {
+function cancelBody(response) {
+  return response.body?.cancel().catch(() => undefined);
+}
+
+function apiUrl(value, message) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(message);
+  }
+  if (
+    url.origin !== API_ORIGIN
+    || url.protocol !== 'https:'
+    || url.username !== ''
+    || url.password !== ''
+    || url.port !== ''
+    || url.hash !== ''
+  ) throw new Error(message);
+  return url;
+}
+
+function downloadUrl(value, message) {
   let url;
   try {
     url = new URL(value);
@@ -37,8 +88,13 @@ function requireHttpsUrl(value, message, allowedOrigins) {
     url.protocol !== 'https:'
     || url.username !== ''
     || url.password !== ''
-    || !allowedOrigins.has(url.origin)
+    || url.port !== ''
+    || url.hash !== ''
+    || !SAFE_DOWNLOAD_ORIGINS.has(url.origin)
   ) throw new Error(message);
+  if (url.origin === GITHUB_ORIGIN && url.search !== '') {
+    throw new Error(message);
+  }
   return url;
 }
 
@@ -47,6 +103,7 @@ async function readLimitedJson(response, { maxBytes, label }) {
   if (contentLength !== null) {
     const declared = Number(contentLength);
     if (Number.isFinite(declared) && declared > maxBytes) {
+      await cancelBody(response);
       throw new Error(`${label} exceeds the size limit`);
     }
   }
@@ -75,13 +132,21 @@ async function readLimitedJson(response, { maxBytes, label }) {
   }
 }
 
-async function fetchJson(fetchImpl, url, init, { maxBytes, label }) {
-  let current = requireHttpsUrl(url, `${label} URL is not HTTPS`, SAFE_DOWNLOAD_ORIGINS);
+async function request(fetchImpl, url, init, { label, maxBytes, redirects }) {
+  let current = url;
+  let requestInit = init;
   let redirectCount = 0;
-  let currentInit = init;
   while (true) {
-    const response = await fetchImpl(current.href, { ...currentInit, redirect: 'manual' });
-    if (response.status >= 300 && response.status < 400) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error(`${label} timed out`)), REQUEST_TIMEOUT_MS);
+    let response;
+    try {
+      response = await fetchImpl(current.href, { ...requestInit, signal: controller.signal });
+    } finally {
+      clearTimeout(timeout);
+    }
+    if (redirects && response.status >= 300 && response.status < 400) {
+      await cancelBody(response);
       if (redirectCount >= MAX_REDIRECTS) throw new Error(`${label} redirected too many times`);
       const location = response.headers.get('location');
       if (!location) throw new Error(`${label} redirect is missing a Location header`);
@@ -91,46 +156,123 @@ async function fetchJson(fetchImpl, url, init, { maxBytes, label }) {
       } catch {
         throw new Error(`${label} redirect URL is invalid`);
       }
-      requireHttpsUrl(next.href, `${label} redirect URL is not trusted HTTPS`, SAFE_DOWNLOAD_ORIGINS);
-      current = next;
+      current = downloadUrl(next.href, `${label} redirect URL is not trusted HTTPS`);
       redirectCount += 1;
-      // A GitHub download redirect may contain a signed CDN URL. Never forward the token there.
+      // Do not restore Authorization if a CDN ever redirects back to github.com.
       if (current.origin !== GITHUB_ORIGIN) {
-        const { Authorization: _authorization, ...headers } = currentInit.headers;
-        currentInit = { ...currentInit, headers };
+        const { Authorization: _authorization, ...headers } = requestInit.headers;
+        requestInit = { ...requestInit, headers };
       }
       continue;
     }
-    if (!response.ok) throw new Error(`${label} failed with HTTP ${response.status}`);
-    return readLimitedJson(response, { maxBytes, label });
+    if (!response.ok) {
+      await cancelBody(response);
+      throw new Error(`${label} failed with HTTP ${response.status}`);
+    }
+    return { value: await readLimitedJson(response, { maxBytes, label }), response };
   }
+}
+
+async function fetchApiJson(fetchImpl, url, githubToken, label) {
+  const current = apiUrl(url, `${label} URL is not trusted`);
+  return request(fetchImpl, current, {
+    method: 'GET',
+    redirect: 'error',
+    headers: {
+      Accept: 'application/vnd.github+json',
+      Authorization: `Bearer ${githubToken}`,
+      'X-GitHub-Api-Version': API_VERSION,
+    },
+  }, { label, maxBytes: MAX_METADATA_BYTES, redirects: false });
+}
+
+function listUrl(repository, page) {
+  const url = new URL(`${apiBase(repository)}/releases`);
+  url.searchParams.set('per_page', String(PAGE_SIZE));
+  url.searchParams.set('page', String(page));
+  return url;
+}
+
+function parseNextLink(header, { repository, page }) {
+  if (header === null || header === '') return undefined;
+  const links = header.split(',').map((item) => {
+    const match = /^\s*<([^>]+)>\s*;\s*rel="?([a-z]+)"?\s*$/u.exec(item);
+    if (!match) throw new Error('GitHub Releases API Link header is invalid');
+    return { href: match[1], relation: match[2] };
+  });
+  const nextLinks = links.filter((link) => link.relation === 'next');
+  if (nextLinks.length === 0) return undefined;
+  if (nextLinks.length !== 1) throw new Error('GitHub Releases API Link header is invalid');
+  const next = apiUrl(nextLinks[0].href, 'GitHub Releases API next Link is not trusted');
+  const expected = listUrl(repository, page + 1);
+  if (
+    next.pathname !== expected.pathname
+    || next.searchParams.size !== 2
+    || next.searchParams.get('per_page') !== String(PAGE_SIZE)
+    || next.searchParams.get('page') !== String(page + 1)
+  ) throw new Error('GitHub Releases API next Link is not canonical');
+  return next;
 }
 
 async function listReleases({ repository, githubToken, fetchImpl }) {
   const releases = [];
-  for (let page = 1; page <= MAX_RELEASES / PAGE_SIZE; page += 1) {
-    const url = new URL(`https://api.github.com/repos/${repository}/releases`);
-    url.searchParams.set('per_page', String(PAGE_SIZE));
-    url.searchParams.set('page', String(page));
-    const response = await fetchImpl(url.href, {
-      method: 'GET',
-      redirect: 'error',
-      headers: {
-        Accept: 'application/vnd.github+json',
-        Authorization: `Bearer ${githubToken}`,
-        'X-GitHub-Api-Version': API_VERSION,
-      },
-    });
-    if (!response.ok) throw new Error(`GitHub Releases API failed with HTTP ${response.status}`);
-    const values = await readLimitedJson(response, {
-      maxBytes: MAX_METADATA_BYTES,
-      label: 'GitHub Releases API response',
-    });
-    if (!Array.isArray(values)) throw new Error('GitHub Releases API response must be an array');
-    releases.push(...values);
-    if (values.length < PAGE_SIZE) return releases;
+  let page = 1;
+  let url = listUrl(repository, page);
+  while (true) {
+    const { value, response } = await fetchApiJson(fetchImpl, url.href, githubToken, 'GitHub Releases API');
+    if (!Array.isArray(value) || value.length > PAGE_SIZE) {
+      throw new Error('GitHub Releases API response must be an array of at most 100 Releases');
+    }
+    releases.push(...value);
+    const next = parseNextLink(response.headers.get('link'), { repository, page });
+    if (value.length < PAGE_SIZE) {
+      if (next) throw new Error('GitHub Releases API short page must not include next Link');
+      return releases;
+    }
+    if (!next) return releases;
+    if (page === MAX_PAGES) throw new Error('GitHub Releases API exceeds the 1000 Release limit');
+    page += 1;
+    url = next;
   }
-  throw new Error(`GitHub Releases API exceeds the ${MAX_RELEASES} Release limit`);
+}
+
+function tagRefUrl(repository, tag) {
+  return `${apiBase(repository)}/git/ref/tags/${encodeURIComponent(tag)}`;
+}
+
+function tagObjectUrl(repository, sha) {
+  return `${apiBase(repository)}/git/tags/${sha}`;
+}
+
+function tagObject(value, label) {
+  const object = requireObject(requireObject(value, label).object, `${label} object is invalid`);
+  if (!['commit', 'tag'].includes(object.type) || typeof object.sha !== 'string' || !SHA_PATTERN.test(object.sha)) {
+    throw new Error(`${label} object is invalid`);
+  }
+  return object;
+}
+
+async function resolveTagCommit({ repository, tag, githubToken, fetchImpl }) {
+  let object = tagObject((await fetchApiJson(
+    fetchImpl,
+    tagRefUrl(repository, tag),
+    githubToken,
+    'GitHub Tag ref API',
+  )).value, 'GitHub Tag ref API response');
+  const seen = new Set();
+  for (let depth = 0; depth <= MAX_TAG_PEELS; depth += 1) {
+    if (object.type === 'commit') return object.sha;
+    if (seen.has(object.sha)) throw new Error('GitHub Tag object cycle detected');
+    seen.add(object.sha);
+    if (depth === MAX_TAG_PEELS) throw new Error('GitHub Tag object exceeds peel limit');
+    object = tagObject((await fetchApiJson(
+      fetchImpl,
+      tagObjectUrl(repository, object.sha),
+      githubToken,
+      'GitHub Tag object API',
+    )).value, 'GitHub Tag object API response');
+  }
+  throw new Error('GitHub Tag object is invalid');
 }
 
 function indexAssets(rawAssets, { repository, tag }) {
@@ -155,13 +297,15 @@ function indexAssets(rawAssets, { repository, tag }) {
 }
 
 async function fetchAssetJson(asset, { githubToken, fetchImpl, maxBytes }) {
-  return fetchJson(fetchImpl, asset.browser_download_url, {
+  const url = downloadUrl(asset.browser_download_url, `GitHub Release asset ${asset.name} URL is not HTTPS`);
+  return (await request(fetchImpl, url, {
     method: 'GET',
+    redirect: 'manual',
     headers: {
       Accept: 'application/octet-stream',
       Authorization: `Bearer ${githubToken}`,
     },
-  }, { maxBytes, label: `GitHub Release asset ${asset.name}` });
+  }, { maxBytes, label: `GitHub Release asset ${asset.name}`, redirects: true })).value;
 }
 
 function assertVerifiedClaims(claims, expected) {
@@ -173,6 +317,7 @@ function assertVerifiedClaims(claims, expected) {
     || claims.commit !== expected.commit
     || claims.workflow !== expected.workflow
     || claims.signerWorkflow !== expected.signerWorkflow
+    || claims.attestationUrl !== expected.attestationUrl
   ) throw new Error('Artifact attestation does not match the trusted Release asset');
 }
 
@@ -184,16 +329,16 @@ export async function discoverTrustedKitReleases({
   provenanceVerifier,
 }) {
   if (!policy || repository !== policy.repository) throw new Error('Release repository is not trusted');
-  if (typeof githubToken !== 'string' || githubToken.length === 0) {
-    throw new Error('GitHub token is required');
-  }
+  if (typeof githubToken !== 'string' || githubToken.length === 0) throw new Error('GitHub token is required');
   if (typeof fetchImpl !== 'function') throw new TypeError('fetchImpl is required');
   if (!provenanceVerifier || typeof provenanceVerifier.verify !== 'function') {
     throw new TypeError('provenanceVerifier is required');
   }
   const releases = await listReleases({ repository, githubToken, fetchImpl });
   const entries = [];
-  const releasesByUrl = new Map();
+  const releasesByUrl = [];
+  const tags = new Set();
+  const releaseUrls = new Set();
   for (const rawRecord of releases) {
     const releaseRecord = requireObject(rawRecord, 'GitHub Release record is invalid');
     if (releaseRecord.draft === true) continue;
@@ -202,51 +347,47 @@ export async function discoverTrustedKitReleases({
     }
     const match = RELEASE_TAG.exec(releaseRecord.tag_name);
     if (!match || !Object.hasOwn(policy.kits, match[1])) continue;
+    if (tags.has(releaseRecord.tag_name)) throw new Error(`Duplicate trusted GitHub Release Tag: ${releaseRecord.tag_name}`);
+    tags.add(releaseRecord.tag_name);
     if (typeof releaseRecord.prerelease !== 'boolean' || typeof releaseRecord.target_commitish !== 'string') {
       throw new Error(`GitHub Release metadata is invalid: ${releaseRecord.tag_name}`);
     }
-    const assets = indexAssets(releaseRecord.assets, {
-      repository,
-      tag: releaseRecord.tag_name,
-    });
+    const assets = indexAssets(releaseRecord.assets, { repository, tag: releaseRecord.tag_name });
     if (!assets.has('release.json') || !assets.has('registry-entry.json')) {
       throw new Error(`Trusted Kit Release is incomplete: ${releaseRecord.tag_name}`);
     }
     const hkitAssets = [...assets.values()].filter((asset) => asset.name.endsWith('.hkit'));
-    if (hkitAssets.length !== 1) {
-      throw new Error(`Trusted Kit Release must contain exactly one .hkit: ${releaseRecord.tag_name}`);
-    }
+    if (hkitAssets.length !== 1) throw new Error(`Trusted Kit Release must contain exactly one .hkit: ${releaseRecord.tag_name}`);
     const entry = parseRegistryEntry(await fetchAssetJson(assets.get('registry-entry.json'), {
-      githubToken,
-      fetchImpl,
-      maxBytes: MAX_METADATA_BYTES,
+      githubToken, fetchImpl, maxBytes: MAX_METADATA_BYTES,
     }));
-    if (entry.source.repository !== repository || entry.source.tag !== releaseRecord.tag_name) {
-      throw new Error('Release Tag or repository does not match Registry entry');
-    }
+    const policyKit = policy.kits[match[1]];
+    if (
+      entry.source.repository !== repository
+      || entry.source.tag !== releaseRecord.tag_name
+      || entry.id !== policyKit.id
+      || entry.label !== policyKit.label
+      || entry.summary !== policyKit.summary
+    ) throw new Error('Registry entry does not match trusted Release policy identity');
+    if (releaseUrls.has(entry.releaseManifestUrl)) throw new Error(`Duplicate trusted Release manifest URL: ${entry.releaseManifestUrl}`);
+    releaseUrls.add(entry.releaseManifestUrl);
     const rawRelease = await fetchAssetJson(assets.get('release.json'), {
-      githubToken,
-      fetchImpl,
-      maxBytes: MAX_METADATA_BYTES,
+      githubToken, fetchImpl, maxBytes: MAX_METADATA_BYTES,
     });
     const validated = validateRegistryRelease(entry, rawRelease);
-    if (!policy.signerWorkflows.includes(validated.source.signerWorkflow)) {
-      throw new Error('Release signer workflow is not trusted');
+    if (!policy.signerWorkflows.includes(validated.source.signerWorkflow)) throw new Error('Release signer workflow is not trusted');
+    if (releaseRecord.prerelease !== (validated.channel === 'preview')) {
+      throw new Error('GitHub Release prerelease does not match release.json');
     }
-    const expectedPrerelease = validated.channel === 'preview';
-    if (
-      releaseRecord.prerelease !== expectedPrerelease
-      || releaseRecord.target_commitish !== validated.source.commit
-    ) throw new Error('GitHub Release channel or target Commit does not match release.json');
+    const tagCommit = await resolveTagCommit({ repository, tag: releaseRecord.tag_name, githubToken, fetchImpl });
+    if (tagCommit !== validated.source.commit) throw new Error('GitHub Tag Commit does not match release.json');
     const artifact = validated.assets[0];
     const [hkitAsset] = hkitAssets;
     if (
       artifact.name !== hkitAsset.name
       || hkitAsset.digest !== `sha256:${artifact.sha256}`
       || artifact.url !== hkitAsset.browser_download_url
-    ) {
-      throw new Error('Release .hkit asset does not match release.json');
-    }
+    ) throw new Error('Release .hkit asset does not match release.json');
     const expected = {
       repository: validated.source.repository,
       subjectName: artifact.name,
@@ -263,8 +404,11 @@ export async function discoverTrustedKitReleases({
       throw new Error('Artifact attestation verification failed', { cause: error });
     }
     assertVerifiedClaims(claims, expected);
-    entries.push(entry);
-    releasesByUrl.set(entry.releaseManifestUrl, validated);
+    entries.push(deepFreeze(entry));
+    releasesByUrl.push([entry.releaseManifestUrl, deepFreeze(validated)]);
   }
-  return Object.freeze({ entries: Object.freeze(entries), releasesByUrl });
+  return Object.freeze({
+    entries: Object.freeze(entries),
+    releasesByUrl: readOnlyMap(releasesByUrl),
+  });
 }
