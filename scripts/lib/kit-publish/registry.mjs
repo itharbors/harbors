@@ -173,7 +173,7 @@ function validateReleaseEvidence(release, { repository, tag, context }) {
   return asset;
 }
 
-function validateRelease(entry, rawRelease) {
+export function validateRegistryRelease(entry, rawRelease) {
   const release = parseReleaseManifest(rawRelease);
   if (
     release.id !== entry.id
@@ -257,7 +257,7 @@ export function buildKitRegistryIndex({ entries, releasesByUrl, revocations, gen
     channels.add(key);
     const rawRelease = releasesByUrl.get(entry.releaseManifestUrl);
     if (rawRelease === undefined) throw new Error(`Missing Release manifest ${entry.releaseManifestUrl}`);
-    validateRelease(entry, rawRelease);
+    validateRegistryRelease(entry, rawRelease);
     const existing = kits.get(entry.id);
     if (existing && (
       existing.label !== entry.label

@@ -10,6 +10,7 @@ import {
   aggregateKitRegistry,
   buildKitRegistryIndex,
   parseRegistryEntry,
+  validateRegistryRelease,
 } from './registry.mjs';
 
 const commit = '0123456789abcdef0123456789abcdef01234567';
@@ -255,6 +256,17 @@ test('requires the only Release asset to use the name derived from its parsed ma
       generatedAt: '2026-07-23T12:00:00.000Z',
     }), /asset/i);
   }
+});
+
+test('exports the strict Registry Release validator for trusted Release discovery', () => {
+  const stable = entry('stable');
+  assert.deepEqual(validateRegistryRelease(stable, release('stable')), release('stable'));
+  assert.throws(() => validateRegistryRelease(stable, release('stable', {
+    source: {
+      ...release('stable').source,
+      workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/main`,
+    },
+  })), /workflow/i);
 });
 
 test('validates Preview revocation evidence against its exact immutable Tag', () => {
