@@ -7,6 +7,8 @@ import {
 } from './metadata.mjs';
 
 const commit = '0123456789abcdef0123456789abcdef01234567';
+const previewTag = 'kit/mysql/v1.3.0-preview.1';
+const publishSignerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
 
 const stableManifest = {
   schemaVersion: 1,
@@ -26,21 +28,16 @@ const stableManifest = {
 
 function input(overrides = {}) {
   const manifest = overrides.manifest ?? stableManifest;
-  const channel = manifest.channel;
-  const ref = channel === 'stable'
-    ? `refs/tags/kit/mysql/v${manifest.version}`
-    : 'refs/heads/kit/mysql';
-  const tag = channel === 'stable'
-    ? `kit/mysql/v${manifest.version}`
-    : `preview/mysql/41-${commit.slice(0, 12)}`;
+  const tag = `kit/mysql/v${manifest.version}`;
+  const ref = overrides.ref ?? `refs/tags/${tag}`;
   return {
     manifest,
     sha256: 'a'.repeat(64),
     size: 3_179,
     repository: 'itharbors/harbors',
     commit,
-    workflow: `itharbors/harbors/.github/workflows/publish-kit.yml@${ref}`,
-    signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+    workflow: overrides.workflow ?? `itharbors/harbors/.github/workflows/publish-kit.yml@${ref}`,
+    signerWorkflow: publishSignerWorkflow,
     ref,
     tag,
     label: 'MySQL',
@@ -62,7 +59,7 @@ test('creates immutable Stable Release and Registry metadata from the inspected 
       repository: 'itharbors/harbors',
       commit,
       workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/mysql/v1.2.3',
-      signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+      signerWorkflow: publishSignerWorkflow,
       attestationUrl: `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${'a'.repeat(64)}`,
     },
     assets: [{
@@ -89,17 +86,24 @@ test('creates immutable Stable Release and Registry metadata from the inspected 
   assert.equal(Object.isFrozen(metadata.registryEntry), true);
 });
 
-test('creates Preview metadata only for a prerelease manifest on the Kit branch', () => {
+test('creates Preview metadata only for a prerelease manifest on its immutable Tag', () => {
   const manifest = {
     ...stableManifest,
-    version: '1.3.0-preview.g0123456',
+    version: '1.3.0-preview.1',
     channel: 'preview',
   };
   const metadata = createKitPublicationMetadata(input({ manifest }));
   assert.equal(metadata.registryEntry.channel, 'preview');
-  assert.equal(metadata.registryEntry.source.tag, `preview/mysql/41-${commit.slice(0, 12)}`);
-  assert.match(metadata.release.assets[0].url, /preview%2Fmysql%2F41-/u);
-  assert.equal(metadata.release.source.workflow.endsWith('@refs/heads/kit/mysql'), true);
+  assert.deepEqual(metadata.registryEntry.source, {
+    repository: 'itharbors/harbors',
+    tag: previewTag,
+  });
+  assert.match(metadata.release.assets[0].url, /kit%2Fmysql%2Fv1\.3\.0-preview\.1/u);
+  assert.equal(
+    metadata.release.source.workflow,
+    `itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/${previewTag}`,
+  );
+  assert.equal(metadata.release.source.signerWorkflow, publishSignerWorkflow);
 });
 
 test('derives portable artifact names for any and native targets', () => {
@@ -110,20 +114,21 @@ test('derives portable artifact names for any and native targets', () => {
   assert.equal(deriveArtifactName(stableManifest), 'kit-mysql-1.2.3-darwin-arm64-abi127.hkit');
 });
 
-test('rejects mismatched channel, tag, branch, publisher, workflow, and untrusted identities', () => {
+test('rejects channel-specific SemVer, Tag, source workflow, and signer mismatches', () => {
   const preview = { ...stableManifest, version: '1.2.3-preview.1', channel: 'preview' };
   for (const [name, overrides] of [
     ['Stable prerelease', { manifest: { ...stableManifest, version: '1.2.3-preview.1' } }],
     ['Preview release version', { manifest: { ...stableManifest, channel: 'preview' } }],
     ['Stable tag', { tag: 'kit/mysql/v9.9.9' }],
     ['Stable ref', { ref: 'refs/heads/kit/mysql' }],
-    ['Preview tag', { manifest: preview, tag: 'preview/sqlite/41-0123456789ab' }],
-    ['Preview ref', { manifest: preview, ref: 'refs/heads/kit/sqlite' }],
+    ['Preview branch ref', { manifest: preview, ref: 'refs/heads/kit/mysql' }],
+    ['Preview tag version', { manifest: preview, tag: 'kit/mysql/v1.2.4-preview.1' }],
+    ['Preview legacy tag', { manifest: preview, tag: 'preview/mysql/41-0123456789ab' }],
     ['publisher owner', { repository: 'other/harbors' }],
     ['workflow repository', { workflow: 'other/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/mysql/v1.2.3' }],
     ['workflow path', { workflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit/mysql/v1.2.3' }],
     ['workflow ref', { workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/heads/main' }],
-    ['signer workflow', { signerWorkflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit-publish-v1' }],
+    ['signer workflow', { signerWorkflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit-publish-v2' }],
     ['repository casing', { repository: 'ITHARBORS/harbors' }],
     ['digest', { sha256: 'A'.repeat(64) }],
   ]) {

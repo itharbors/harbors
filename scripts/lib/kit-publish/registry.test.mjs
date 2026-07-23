@@ -15,12 +15,14 @@ import {
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const digest = 'a'.repeat(64);
 const repository = 'itharbors/harbors';
+const publishSignerV1 = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1';
+const publishSignerV2 = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
 
 function manifest(channel = 'stable') {
   return {
     schemaVersion: 1,
     id: '@itharbors/kit-mysql',
-    version: channel === 'stable' ? '1.2.3' : '1.3.0-preview.g0123456',
+    version: channel === 'stable' ? '1.2.3' : '1.3.0-preview.1',
     channel,
     publisher: 'itharbors',
     requires: {
@@ -36,9 +38,7 @@ function manifest(channel = 'stable') {
 
 function entry(channel = 'stable', overrides = {}) {
   const value = manifest(channel);
-  const tag = channel === 'stable'
-    ? 'kit/mysql/v1.2.3'
-    : `preview/mysql/41-${commit.slice(0, 12)}`;
+  const tag = `kit/mysql/v${value.version}`;
   return {
     schemaVersion: 1,
     id: value.id,
@@ -67,10 +67,8 @@ function release(channel = 'stable', overrides = {}) {
     source: {
       repository,
       commit,
-      workflow: channel === 'stable'
-        ? `${repository}/.github/workflows/publish-kit.yml@refs/tags/${publication.source.tag}`
-        : `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/mysql`,
-      signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+      workflow: `${repository}/.github/workflows/publish-kit.yml@refs/tags/${publication.source.tag}`,
+      signerWorkflow: publishSignerV1,
       attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${digest}`,
     },
     assets: [{
@@ -138,7 +136,9 @@ test('builds a deterministic Registry index from verified Stable and Preview ent
 
 test('parses only canonical channel entries with exact GitHub Release URLs', () => {
   const stable = entry('stable');
+  const preview = entry('preview');
   assert.deepEqual(parseRegistryEntry(stable), stable);
+  assert.deepEqual(parseRegistryEntry(preview), preview);
   for (const mutation of [
     { extra: true },
     { releaseManifestUrl: 'https://example.test/release.json' },
@@ -147,6 +147,10 @@ test('parses only canonical channel entries with exact GitHub Release URLs', () 
   ]) {
     assert.throws(() => parseRegistryEntry({ ...stable, ...mutation }));
   }
+  assert.throws(() => parseRegistryEntry({
+    ...preview,
+    source: { ...preview.source, tag: 'preview/mysql/41-0123456789ab' },
+  }));
 });
 
 test('rejects duplicate channels and inconsistent display identity for one Kit', () => {
@@ -170,6 +174,44 @@ test('rejects duplicate channels and inconsistent display identity for one Kit',
   }), /identity/i);
 });
 
+test('trusts only immutable v1 or v2 signer releases with Tag-based caller workflows', () => {
+  const preview = entry('preview');
+  for (const signerWorkflow of [publishSignerV1, publishSignerV2]) {
+    assert.doesNotThrow(() => buildKitRegistryIndex({
+      entries: [preview],
+      releasesByUrl: new Map([[preview.releaseManifestUrl, release('preview', {
+        source: { ...release('preview').source, signerWorkflow },
+      })]]),
+      revocations: [],
+      generatedAt: '2026-07-23T12:00:00.000Z',
+    }));
+  }
+  for (const signerWorkflow of [
+    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
+    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/heads/main',
+  ]) {
+    assert.throws(() => buildKitRegistryIndex({
+      entries: [preview],
+      releasesByUrl: new Map([[preview.releaseManifestUrl, release('preview', {
+        source: { ...release('preview').source, signerWorkflow },
+      })]]),
+      revocations: [],
+      generatedAt: '2026-07-23T12:00:00.000Z',
+    }), /signer/i);
+  }
+  assert.throws(() => buildKitRegistryIndex({
+    entries: [preview],
+    releasesByUrl: new Map([[preview.releaseManifestUrl, release('preview', {
+      source: {
+        ...release('preview').source,
+        workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/mysql`,
+      },
+    })]]),
+    revocations: [],
+    generatedAt: '2026-07-23T12:00:00.000Z',
+  }), /workflow/i);
+});
+
 test('rejects Release identity, permissions, repository, workflow, asset URL, and attestation drift', () => {
   const stable = entry('stable');
   const base = release('stable');
@@ -189,6 +231,36 @@ test('rejects Release identity, permissions, repository, workflow, asset URL, an
       generatedAt: '2026-07-23T12:00:00.000Z',
     }));
   }
+});
+
+test('validates Preview revocation evidence against its exact immutable Tag', () => {
+  const preview = entry('preview');
+  const revocation = {
+    id: preview.id,
+    version: preview.version,
+    sha256: digest,
+    reason: 'known-vulnerability',
+    action: 'block-install',
+    releaseManifestUrl: preview.releaseManifestUrl,
+  };
+  assert.doesNotThrow(() => buildKitRegistryIndex({
+    entries: [preview],
+    releasesByUrl: new Map([[preview.releaseManifestUrl, release('preview')]]),
+    revocations: [revocation],
+    generatedAt: '2026-07-23T12:00:00.000Z',
+  }));
+  assert.throws(() => buildKitRegistryIndex({
+    entries: [preview],
+    releasesByUrl: new Map([
+      [preview.releaseManifestUrl, release('preview')],
+      ['https://github.com/itharbors/harbors/releases/download/preview%2Fmysql%2F41-0123456789ab/release.json', release('preview')],
+    ]),
+    revocations: [{
+      ...revocation,
+      releaseManifestUrl: `https://github.com/${repository}/releases/download/preview%2Fmysql%2F41-0123456789ab/release.json`,
+    }],
+    generatedAt: '2026-07-23T12:00:00.000Z',
+  }), /revocation evidence/i);
 });
 
 test('loads canonical entry paths, fetches bounded manifests, and validates revocation evidence', async () => {

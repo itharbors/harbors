@@ -18,6 +18,10 @@ const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 const REPOSITORY_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?\/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/u;
 const KIT_ID_PATTERN = /^@([a-z0-9][a-z0-9._-]*)\/kit-([a-z0-9][a-z0-9-]*)$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+const PUBLISH_SIGNER_WORKFLOWS = new Set([
+  'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+  'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+]);
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -117,14 +121,8 @@ export function parseRegistryEntry(value) {
     throw new Error('Registry channel entry repository owner must match publisher');
   }
   const tag = nonEmptyString(source.tag, 'Registry channel entry tag');
-  if (channel === 'stable' && tag !== `kit/${slug}/v${reference.version}`) {
-    throw new Error('Stable Registry entry tag does not match Kit version');
-  }
-  if (
-    channel === 'preview'
-    && !new RegExp(`^preview/${slug}/[1-9][0-9]*-[a-f0-9]{12}$`, 'u').test(tag)
-  ) {
-    throw new Error('Preview Registry entry tag does not match Kit identity');
+  if (tag !== `kit/${slug}/v${reference.version}`) {
+    throw new Error('Registry entry tag does not match Kit version');
   }
   if (reference.releaseManifestUrl !== exactReleaseUrl(repository, tag)) {
     throw new Error('Registry entry releaseManifestUrl does not match repository and tag');
@@ -158,17 +156,11 @@ function validateRelease(entry, rawRelease) {
     || release.source.repository !== entry.source.repository
   ) throw new Error(`Release identity does not match Registry entry ${entry.id}@${entry.version}`);
 
-  const { slug } = kitIdentity(entry.id, entry.publisher);
-  const expectedWorkflow = entry.channel === 'stable'
-    ? `${entry.source.repository}/.github/workflows/publish-kit.yml@refs/tags/${entry.source.tag}`
-    : `${entry.source.repository}/.github/workflows/publish-kit.yml@refs/heads/kit/${slug}`;
+  const expectedWorkflow = `${entry.source.repository}/.github/workflows/publish-kit.yml@refs/tags/${entry.source.tag}`;
   if (release.source.workflow !== expectedWorkflow) {
     throw new Error(`Release workflow does not match Registry entry ${entry.id}@${entry.version}`);
   }
-  if (
-    release.source.signerWorkflow
-    !== 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1'
-  ) {
+  if (!PUBLISH_SIGNER_WORKFLOWS.has(release.source.signerWorkflow)) {
     throw new Error(`Release signer workflow does not match Registry entry ${entry.id}@${entry.version}`);
   }
   if (release.assets.length !== 1) {

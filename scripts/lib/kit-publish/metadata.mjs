@@ -3,13 +3,13 @@ import {
   parseKitRegistryIndex,
   parseReleaseManifest,
 } from '@itharbors/kit-core';
+import semver from 'semver';
 
 const REPOSITORY_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?\/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const KIT_ID_PATTERN = /^@([a-z0-9][a-z0-9._-]*)\/(kit-([a-z0-9][a-z0-9-]*))$/u;
-const PREVIEW_TAG_PATTERN = /^preview\/([a-z0-9][a-z0-9-]*)\/([1-9][0-9]*)-([a-f0-9]{12})$/u;
-const PUBLISH_SIGNER_WORKFLOW = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1';
+const PUBLISH_SIGNER_WORKFLOW = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {
@@ -64,21 +64,17 @@ function validateSource({ commit, repository, workflow, ref }) {
   }
 }
 
-function validateTag({ channel, commit, ref, slug, tag, version }) {
-  if (channel === 'stable') {
-    const expectedTag = `kit/${slug}/v${version}`;
-    if (tag !== expectedTag || ref !== `refs/tags/${expectedTag}`) {
-      throw new Error(`Stable publication requires Tag ${expectedTag}`);
-    }
-    return;
+function validateTag({ channel, ref, slug, tag, version }) {
+  const expectedTag = `kit/${slug}/v${version}`;
+  if (tag !== expectedTag || ref !== `refs/tags/${expectedTag}`) {
+    throw new Error(`Kit publication requires Tag ${expectedTag}`);
   }
-
-  if (ref !== `refs/heads/kit/${slug}`) {
-    throw new Error(`Preview publication requires branch kit/${slug}`);
+  const prerelease = semver.prerelease(version);
+  if (channel === 'stable' && prerelease !== null) {
+    throw new Error('Stable publication requires a version without a prerelease segment');
   }
-  const match = typeof tag === 'string' ? PREVIEW_TAG_PATTERN.exec(tag) : null;
-  if (!match || match[1] !== slug || match[3] !== commit.slice(0, 12)) {
-    throw new Error(`Preview Tag must match preview/${slug}/<run>-${commit.slice(0, 12)}`);
+  if (channel === 'preview' && prerelease === null) {
+    throw new Error('Preview publication requires a SemVer prerelease segment');
   }
 }
 
@@ -111,7 +107,6 @@ export function createKitPublicationMetadata(input) {
   }
   validateTag({
     channel: manifest.channel,
-    commit: input.commit,
     ref: input.ref,
     slug,
     tag: input.tag,
