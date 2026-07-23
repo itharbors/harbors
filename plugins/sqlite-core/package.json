@@ -1,0 +1,38 @@
+{
+  "name": "@itharbors/sqlite-core",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "@itharbors/sqlite-contracts": "0.0.1",
+    "better-sqlite3": "^11.0.0"
+  },
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "listDirectory": ["listDirectory"],
+          "getDefaultDirectory": ["getDefaultDirectory"],
+          "getRecentDatabases": ["getRecentDatabases"],
+          "getConnectionState": ["getConnectionState"],
+          "openDatabase": ["openDatabase"],
+          "setConnectionMode": ["setConnectionMode"],
+          "closeDatabase": ["closeDatabase"],
+          "getSchema": ["getSchema"],
+          "getObjectSchema": ["getObjectSchema"],
+          "getRelationshipGraph": ["getRelationshipGraph"],
+          "getRows": ["getRows"],
+          "exportRows": ["exportRows"],
+          "insertRow": ["insertRow"],
+          "updateRow": ["updateRow"],
+          "deleteRow": ["deleteRow"],
+          "undoLastMutation": ["undoLastMutation"],
+          "analyzeSql": ["analyzeSql"],
+          "executeSql": ["executeSql"],
+          "cancelSql": ["cancelSql"],
+          "explainSql": ["explainSql"]
+        }
+      }
+    }
+  }
+}

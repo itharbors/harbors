@@ -1,0 +1,21 @@
+{
+  "name": "@example/kit-demo",
+  "version": "1.2.3",
+  "type": "module",
+  "ce-editor": {
+    "kit": {
+      "menuRoot": {
+        "id": "demo",
+        "label": "Demo Kit"
+      },
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": ["@example/demo"]
+    }
+  }
+}
