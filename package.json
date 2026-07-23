@@ -12,7 +12,7 @@
     "dev:web": "node scripts/dev.mjs",
     "electron": "npm run start --",
     "kit": "node packages/kit-cli/dist/cli.js",
-    "kit:check": "node scripts/check-kit.mjs",
+    "kit:check": "npm run build -w @itharbors/kit-core && node scripts/check-kit.mjs",
     "kit:publish": "node scripts/kit-publish.mjs",
     "kits:validate": "npm run kit -- validate",
     "plugins:build": "node scripts/ce-plugin.mjs build --all && node scripts/prepare-notification-skill-resource.mjs",

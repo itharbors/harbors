@@ -15,7 +15,10 @@ function compact(value) {
 test('root scripts expose the Kit artifact and targeted-check CLIs without migration commands', async () => {
   const packageJson = JSON.parse(await read('package.json'));
   assert.equal(packageJson.scripts.kit, 'node packages/kit-cli/dist/cli.js');
-  assert.equal(packageJson.scripts['kit:check'], 'node scripts/check-kit.mjs');
+  assert.equal(
+    packageJson.scripts['kit:check'],
+    'npm run build -w @itharbors/kit-core && node scripts/check-kit.mjs',
+  );
   assert.equal(packageJson.scripts['kit:publish'], 'node scripts/kit-publish.mjs');
   assert.equal(packageJson.scripts['kits:validate'], 'npm run kit -- validate');
   assert.equal(packageJson.scripts['test:kit-migration'], undefined);

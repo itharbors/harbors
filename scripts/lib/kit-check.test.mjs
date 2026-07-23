@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,6 +11,14 @@ import { runCheckKitCli } from '../check-kit.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/check-kit.mjs');
+
+test('the root Kit check command bootstraps Kit Core before loading the CLI', async () => {
+  const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
+  assert.equal(
+    packageJson.scripts['kit:check'],
+    'npm run build -w @itharbors/kit-core && node scripts/check-kit.mjs',
+  );
+});
 
 function expectedCommands({ artifactName, slug, outputDirectory }) {
   const artifactPath = path.join(outputDirectory, artifactName);
