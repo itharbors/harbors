@@ -34,6 +34,13 @@ type GroupBox = {
   nodes: RelationshipNodeLayout[];
 };
 
+type LayoutDirection = 'left-to-right' | 'top-to-bottom';
+
+type GroupCandidate = {
+  box: GroupBox;
+  direction: LayoutDirection;
+};
+
 type PackedGroups = {
   width: number;
   height: number;
@@ -58,7 +65,7 @@ export function layoutRelationshipGraph(
     }
     const boxes = [...grouped]
       .sort(([left], [right]) => compareTableNames(left, right))
-      .map(([key, groupTables]) => layoutGroup(key, groupTables, graph.relationships));
+      .map(([key, groupTables]) => layoutGroup(key, groupTables, graph.relationships, canvas));
     const packed = choosePacking(boxes, graph.relationships, groupByName, canvas);
     if (!packed.nodes.every(isFiniteNode)) return fallbackGrid(graph, canvas, groupByName);
     return rebuildRelationshipLayout(graph, packed.nodes);
@@ -148,6 +155,7 @@ function layoutGroup(
   key: string,
   tables: RelationshipTable[],
   relationships: Relationship[],
+  canvas: CanvasSize,
 ): GroupBox {
   const tableByName = new Map(tables.map((table) => [table.name, table]));
   const internal = relationships.filter((relationship) => (
@@ -174,58 +182,156 @@ function layoutGroup(
     layers.set(rank, values);
   }
 
+  const isolated = tables
+    .filter((table) => !related.has(table.name))
+    .sort((left, right) => compareTableNames(left.name, right.name));
+  const directions: LayoutDirection[] = [
+    'left-to-right',
+    'top-to-bottom',
+  ];
+  const candidates: GroupCandidate[] = directions.map((direction) => ({
+    direction,
+    box: layoutGroupCandidate(key, layers, isolated, direction, canvas),
+  }));
+  candidates.sort((left, right) => compareGroupCandidates(left, right, canvas));
+  return candidates[0].box;
+}
+
+function layoutGroupCandidate(
+  key: string,
+  layers: Map<number, RelationshipTable[]>,
+  isolated: RelationshipTable[],
+  direction: LayoutDirection,
+  canvas: CanvasSize,
+): GroupBox {
+  const nodes = layoutRankedNodes(key, layers, direction);
+  const relatedBounds = nodeBounds(nodes);
+  const isolatedNodes = layoutIsolatedNodes(key, isolated, canvas);
+  if (isolatedNodes.length > 0) {
+    const offset = nodes.length === 0
+      ? { x: 0, y: 0 }
+      : direction === 'left-to-right'
+        ? { x: relatedBounds.maxX + RELATIONSHIP_LAYOUT.nodeGap, y: 0 }
+        : { x: 0, y: relatedBounds.maxY + RELATIONSHIP_LAYOUT.nodeGap };
+    nodes.push(...isolatedNodes.map((node) => ({
+      ...node,
+      x: node.x + offset.x,
+      y: node.y + offset.y,
+    })));
+  }
+  const bounds = nodeBounds(nodes);
+  return {
+    key,
+    nodes,
+    width: Math.max(RELATIONSHIP_LAYOUT.nodeWidth, bounds.maxX - bounds.minX),
+    height: Math.max(
+      RELATIONSHIP_LAYOUT.headerHeight + RELATIONSHIP_LAYOUT.rowHeight,
+      bounds.maxY - bounds.minY,
+    ),
+  };
+}
+
+function layoutRankedNodes(
+  key: string,
+  layers: Map<number, RelationshipTable[]>,
+  direction: LayoutDirection,
+): RelationshipNodeLayout[] {
   const nodes: RelationshipNodeLayout[] = [];
-  let relatedBottom = 0;
+  let rankOffset = 0;
   for (const rank of [...layers.keys()].sort((left, right) => left - right)) {
-    let y = 0;
-    for (const table of layers.get(rank)!.sort((left, right) => compareTableNames(left.name, right.name))) {
+    const tables = layers.get(rank)!
+      .slice()
+      .sort((left, right) => compareTableNames(left.name, right.name));
+    let memberOffset = 0;
+    let rankSpan = 0;
+    for (const table of tables) {
       const height = tableHeight(table);
       nodes.push({
         name: table.name,
         group: key,
-        x: rank * (RELATIONSHIP_LAYOUT.nodeWidth + RELATIONSHIP_LAYOUT.layerGap),
-        y,
+        x: direction === 'left-to-right' ? rankOffset : memberOffset,
+        y: direction === 'left-to-right' ? memberOffset : rankOffset,
         width: RELATIONSHIP_LAYOUT.nodeWidth,
         height,
       });
-      relatedBottom = Math.max(relatedBottom, y + height);
-      y += height + RELATIONSHIP_LAYOUT.nodeGap;
+      memberOffset += (direction === 'left-to-right' ? height : RELATIONSHIP_LAYOUT.nodeWidth)
+        + RELATIONSHIP_LAYOUT.nodeGap;
+      rankSpan = Math.max(
+        rankSpan,
+        direction === 'left-to-right' ? RELATIONSHIP_LAYOUT.nodeWidth : height,
+      );
     }
+    rankOffset += rankSpan + RELATIONSHIP_LAYOUT.layerGap;
   }
+  return nodes;
+}
 
-  const isolated = tables
-    .filter((table) => !related.has(table.name))
-    .sort((left, right) => compareTableNames(left.name, right.name));
-  const isolatedColumns = Math.max(1, Math.ceil(Math.sqrt(isolated.length)));
-  const isolatedStartY = relatedBottom === 0 ? 0 : relatedBottom + RELATIONSHIP_LAYOUT.nodeGap;
+function layoutIsolatedNodes(
+  key: string,
+  isolated: RelationshipTable[],
+  canvas: CanvasSize,
+): RelationshipNodeLayout[] {
+  if (isolated.length === 0) return [];
+  const averageHeight = isolated.reduce((sum, table) => sum + tableHeight(table), 0)
+    / isolated.length;
+  const targetAspect = canvas.width / canvas.height;
+  const isolatedColumns = clampInteger(
+    Math.round(Math.sqrt(
+      isolated.length * targetAspect * averageHeight / RELATIONSHIP_LAYOUT.nodeWidth,
+    )),
+    1,
+    isolated.length,
+  );
   const rowHeights: number[] = [];
   for (let index = 0; index < isolated.length; index += isolatedColumns) {
     rowHeights.push(Math.max(...isolated.slice(index, index + isolatedColumns).map(tableHeight)));
   }
   const rowOffsets: number[] = [];
-  for (let row = 0, y = isolatedStartY; row < rowHeights.length; row += 1) {
+  for (let row = 0, y = 0; row < rowHeights.length; row += 1) {
     rowOffsets.push(y);
     y += rowHeights[row] + RELATIONSHIP_LAYOUT.nodeGap;
   }
-  isolated.forEach((table, index) => {
+  return isolated.map((table, index) => {
     const row = Math.floor(index / isolatedColumns);
     const column = index % isolatedColumns;
-    nodes.push({
+    return {
       name: table.name,
       group: key,
       x: column * (RELATIONSHIP_LAYOUT.nodeWidth + RELATIONSHIP_LAYOUT.nodeGap),
       y: rowOffsets[row],
       width: RELATIONSHIP_LAYOUT.nodeWidth,
       height: tableHeight(table),
-    });
+    };
   });
-  const bounds = nodeBounds(nodes);
-  return {
-    key,
-    nodes,
-    width: Math.max(RELATIONSHIP_LAYOUT.nodeWidth, bounds.maxX),
-    height: Math.max(RELATIONSHIP_LAYOUT.headerHeight + RELATIONSHIP_LAYOUT.rowHeight, bounds.maxY),
-  };
+}
+
+function compareGroupCandidates(
+  left: GroupCandidate,
+  right: GroupCandidate,
+  canvas: CanvasSize,
+): number {
+  const leftScale = fittedScale(left.box.width, left.box.height, canvas);
+  const rightScale = fittedScale(right.box.width, right.box.height, canvas);
+  const scaleComparison = compareDescending(leftScale, rightScale);
+  if (scaleComparison !== 0) return scaleComparison;
+  const targetAspect = canvas.width / canvas.height;
+  const leftAspectError = Math.abs(Math.log(left.box.width / left.box.height / targetAspect));
+  const rightAspectError = Math.abs(Math.log(right.box.width / right.box.height / targetAspect));
+  const aspectComparison = compareAscending(leftAspectError, rightAspectError);
+  if (aspectComparison !== 0) return aspectComparison;
+  const areaComparison = compareAscending(
+    left.box.width * left.box.height,
+    right.box.width * right.box.height,
+  );
+  if (areaComparison !== 0) return areaComparison;
+  const preferred: LayoutDirection = canvas.width >= canvas.height
+    ? 'top-to-bottom'
+    : 'left-to-right';
+  return left.direction === preferred ? -1 : right.direction === preferred ? 1 : 0;
+}
+
+function fittedScale(width: number, height: number, canvas: CanvasSize): number {
+  return Math.min(canvas.width / Math.max(1, width), canvas.height / Math.max(1, height), 1);
 }
 
 function choosePacking(
@@ -479,4 +585,16 @@ function isCoordinate(value: number): boolean {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function clampInteger(value: number, minimum: number, maximum: number): number {
+  return Math.round(clamp(value, minimum, maximum));
+}
+
+function compareAscending(left: number, right: number): number {
+  return Math.abs(left - right) <= 1e-9 ? 0 : left < right ? -1 : 1;
+}
+
+function compareDescending(left: number, right: number): number {
+  return compareAscending(right, left);
 }

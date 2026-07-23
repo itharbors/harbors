@@ -53,6 +53,34 @@ describe('relationship graph layout', () => {
     expect(wide.width / wide.height).toBeGreaterThan(narrow.width / narrow.height);
   });
 
+  it('changes a single connected group direction to use the current canvas', () => {
+    const graph: RelationshipGraph = {
+      tables: [
+        table('account'),
+        table('account_address', 2),
+        table('account_audit', 3),
+        table('account_profile', 4),
+        table('account_role', 2),
+      ],
+      relationships: [
+        relationship('address:account', 'account_address', 'account'),
+        relationship('audit:account', 'account_audit', 'account'),
+        relationship('profile:account', 'account_profile', 'account'),
+        relationship('role:account', 'account_role', 'account'),
+      ],
+    };
+
+    const wide = layoutRelationshipGraph(graph, { width: 1_600, height: 500 });
+    const tall = layoutRelationshipGraph(graph, { width: 500, height: 1_600 });
+
+    expectNoOverlap(wide);
+    expectNoOverlap(tall);
+    expect(wide.width / wide.height).toBeGreaterThan(1);
+    expect(tall.width / tall.height).toBeLessThan(1);
+    expect(wide).toEqual(layoutRelationshipGraph(graph, { width: 1_600, height: 500 }));
+    expect(tall).toEqual(layoutRelationshipGraph(graph, { width: 500, height: 1_600 }));
+  });
+
   it('routes cycles, self references, and parallel relationships inside bounds', () => {
     const graph: RelationshipGraph = {
       tables: [table('employee'), table('team'), table('team_member')],
