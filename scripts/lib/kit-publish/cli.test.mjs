@@ -22,7 +22,7 @@ function runPrepare(outputDirectory, extra = []) {
     '--repository', 'example/harbors',
     '--commit', commit,
     '--workflow', 'example/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/demo/v1.2.3',
-    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
     '--ref', 'refs/tags/kit/demo/v1.2.3',
     '--tag', 'kit/demo/v1.2.3',
     '--label', 'Demo Kit',
@@ -48,6 +48,10 @@ test('prepare writes a packed Kit, release manifest, SBOM, and Registry entry ex
     const entry = JSON.parse(await readFile(path.join(outputDirectory, 'registry-entry.json'), 'utf8'));
     const sbom = JSON.parse(await readFile(path.join(outputDirectory, 'sbom.spdx.json'), 'utf8'));
     assert.equal(release.assets[0].sha256, outputs.ARTIFACT_SHA256);
+    assert.equal(
+      release.source.signerWorkflow,
+      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    );
     assert.equal(entry.releaseManifestUrl.endsWith('/release.json'), true);
     assert.equal(sbom.spdxVersion, 'SPDX-2.3');
     assert.equal(await readFile(path.join(outputDirectory, outputs.ARTIFACT_NAME)).then((value) => value.length), release.assets[0].size);
