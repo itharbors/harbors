@@ -276,7 +276,12 @@ async function findInstalledPackage(
         manifest,
         name,
         version: nonEmptyString(manifest.version, `Production dependency ${name} version`),
-        workspace: info.isSymbolicLink(),
+        workspace: await isWorkspaceDependency(
+          installationRoot,
+          candidate,
+          directory,
+          info.isSymbolicLink(),
+        ),
       };
     }
     if (current === installationRoot) break;
@@ -286,6 +291,30 @@ async function findInstalledPackage(
     current = parent;
   }
   return null;
+}
+
+async function isWorkspaceDependency(
+  installationRoot: string,
+  candidate: string,
+  directory: string,
+  symbolicLink: boolean,
+): Promise<boolean> {
+  if (!symbolicLink) return false;
+  const relativeCandidate = path.relative(installationRoot, candidate).split(path.sep).join('/');
+  if (!relativeCandidate.startsWith('node_modules/')) return false;
+  const packageLock = await readJson(
+    path.join(installationRoot, 'package-lock.json'),
+    'package-lock.json',
+  ).catch(() => null);
+  const packages = packageLock?.packages;
+  if (packages === null || typeof packages !== 'object' || Array.isArray(packages)) return false;
+  const packageEntry = packages[relativeCandidate];
+  if (packageEntry === null || typeof packageEntry !== 'object' || Array.isArray(packageEntry)
+    || packageEntry.link !== true || typeof packageEntry.resolved !== 'string') {
+    return false;
+  }
+  const resolved = await realpath(path.resolve(installationRoot, packageEntry.resolved)).catch(() => null);
+  return resolved === directory;
 }
 
 async function findDependencyInstallationRoot(

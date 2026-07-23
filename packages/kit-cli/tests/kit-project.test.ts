@@ -223,6 +223,7 @@ describe('validateKit', () => {
       packages: {
         '': { name: 'workspace-root' },
         'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
+        'node_modules/@example/contracts': { link: true, resolved: 'packages/contracts' },
       },
     }));
 
@@ -234,6 +235,8 @@ describe('validateKit', () => {
       dependencies: { transitive: '2.0.0' },
     }));
     await writeFile(path.join(contracts, 'dist/index.js'), 'export const contract = true;\n');
+    await mkdir(path.join(contracts, 'src'), { recursive: true });
+    await writeFile(path.join(contracts, 'src/index.ts'), 'secret source\n');
 
     const modules = path.join(root, 'node_modules');
     await mkdir(path.join(modules, '@example'), { recursive: true });
@@ -253,6 +256,84 @@ describe('validateKit', () => {
       'node_modules/transitive/package.json',
       'node_modules/transitive/index.js',
     ]));
+    expect(project.payload.map((file) => file.archivePath)).not.toEqual(expect.arrayContaining([
+      'node_modules/@example/contracts/src/index.ts',
+    ]));
+  });
+
+  it('treats a symlink without a workspace lock entry as a normal dependency', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-local-link-'));
+    temporaryDirectories.push(root);
+    const directory = path.join(root, 'kits/demo');
+    await cp(fixtureDirectory, directory, { recursive: true });
+    await updateJson(path.join(directory, 'package.json'), (pkg) => {
+      pkg.dependencies = { 'local-linked': '1.0.0' };
+    });
+    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        '': { name: 'workspace-root' },
+        'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
+      },
+    }));
+    const localLinked = path.join(root, 'local-linked-source');
+    await mkdir(localLinked, { recursive: true });
+    await writeFile(path.join(localLinked, 'package.json'), JSON.stringify({
+      name: 'local-linked',
+      version: '1.0.0',
+    }));
+    await writeFile(path.join(localLinked, 'index.js'), 'export const local = true;\n');
+    await mkdir(path.join(root, 'node_modules'), { recursive: true });
+    await symlink(localLinked, path.join(root, 'node_modules/local-linked'), 'dir');
+
+    const project = await validateKit(directory);
+
+    expect(project.payload.map((file) => file.archivePath)).toEqual(expect.arrayContaining([
+      'node_modules/local-linked/package.json',
+      'node_modules/local-linked/index.js',
+    ]));
+  });
+
+  it('does not use ancestor node_modules when its lock entry does not match the Kit', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-mismatched-lock-'));
+    temporaryDirectories.push(root);
+    const directory = path.join(root, 'kits/demo');
+    await cp(fixtureDirectory, directory, { recursive: true });
+    await updateJson(path.join(directory, 'package.json'), (pkg) => {
+      pkg.dependencies = { 'runtime-root': '1.0.0' };
+    });
+    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        'kits/demo': { name: '@example/kit-other', version: '1.2.3' },
+      },
+    }));
+    await writeInstalledPackage(path.join(root, 'node_modules'), 'runtime-root', '1.0.0');
+
+    await expect(validateKit(directory)).rejects.toThrow(/production dependency runtime-root.*not installed/i);
+  });
+
+  it('rejects a matching workspace dependency symlink that resolves outside its installation root', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-outside-link-'));
+    const outside = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-outside-target-'));
+    temporaryDirectories.push(root, outside);
+    const directory = path.join(root, 'kits/demo');
+    await cp(fixtureDirectory, directory, { recursive: true });
+    await updateJson(path.join(directory, 'package.json'), (pkg) => {
+      pkg.dependencies = { outside: '1.0.0' };
+    });
+    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
+      lockfileVersion: 3,
+      packages: {
+        'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
+        'node_modules/outside': { link: true, resolved: path.join(outside, 'outside') },
+      },
+    }));
+    await writeInstalledPackage(outside, 'outside', '1.0.0');
+    await mkdir(path.join(root, 'node_modules'), { recursive: true });
+    await symlink(path.join(outside, 'outside'), path.join(root, 'node_modules/outside'), 'dir');
+
+    await expect(validateKit(directory)).rejects.toThrow(/production dependency outside must stay inside/i);
   });
 
   it('rejects a missing production dependency', async () => {
