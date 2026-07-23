@@ -85,6 +85,18 @@ function snappyResponse(value) {
   });
 }
 
+function streamedSnappyResponse(bytes) {
+  return new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(bytes.subarray(0, 1));
+      controller.enqueue(bytes.subarray(1));
+      controller.close();
+    },
+  }), {
+    headers: { 'content-type': 'application/x-snappy' },
+  });
+}
+
 function expected(overrides = {}) {
   return {
     attestationUrl,
@@ -180,6 +192,34 @@ test('accepts GitHub raw Snappy attestation bundles', async () => {
   });
 
   assert.equal((await verifier.verify(expected())).verified, true);
+});
+
+test('rejects streamed Snappy bundles whose compressed input exceeds the bound', async () => {
+  let cryptoChecks = 0;
+  const { verifier } = createVerifier({
+    maxBundleBytes: 64,
+    fetchImpl: async (url) => String(url).startsWith(attestationUrl)
+      ? jsonResponse({ attestations: [{ bundle_url: bundleUrl }] })
+      : streamedSnappyResponse(Buffer.alloc(65)),
+    verifyBundle: async () => { cryptoChecks += 1; },
+  });
+
+  await assert.rejects(verifier.verify(expected()), (error) => error.code === 'PROVENANCE_FAILED');
+  assert.equal(cryptoChecks, 0);
+});
+
+test('rejects Snappy bundles whose declared output exceeds the bound', async () => {
+  let cryptoChecks = 0;
+  const { verifier } = createVerifier({
+    maxBundleBytes: 64,
+    fetchImpl: async (url) => String(url).startsWith(attestationUrl)
+      ? jsonResponse({ attestations: [{ bundle_url: bundleUrl }] })
+      : streamedSnappyResponse(Buffer.from([65])),
+    verifyBundle: async () => { cryptoChecks += 1; },
+  });
+
+  await assert.rejects(verifier.verify(expected()), (error) => error.code === 'PROVENANCE_FAILED');
+  assert.equal(cryptoChecks, 0);
 });
 
 test('rejects empty or control-bearing GitHub tokens', () => {

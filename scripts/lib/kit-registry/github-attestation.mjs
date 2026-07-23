@@ -151,7 +151,7 @@ async function readLimitedJson(response, maxBytes, tooLargeCode, invalidCode, la
       throw new GitHubAttestationError(tooLargeCode, `${label} exceeds the size limit`);
     }
     try {
-      bytes = Buffer.from(snappy.uncompress(bytes));
+      bytes = Buffer.from(snappy.uncompress(bytes, maxBytes));
     } catch (error) {
       throw new GitHubAttestationError(invalidCode, `${label} is not valid Snappy`, { cause: error });
     }
