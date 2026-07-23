@@ -17,9 +17,10 @@ git_dir=$(git -C "$repo_root" rev-parse --absolute-git-dir)
 git_common=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
 test "$git_dir" = "$git_common" || kit_workflow_fail 'start must run from the primary worktree'
 git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || kit_workflow_fail 'origin remote is missing'
+kit_workflow_validate_identity "$repo_root"
 
 git -C "$repo_root" fetch origin --prune
-target_branch="kit/$kit"
+target_branch=main
 target_ref="refs/remotes/origin/$target_branch"
 git -C "$repo_root" show-ref --verify --quiet "$target_ref" || kit_workflow_fail "origin/$target_branch is missing"
 base_commit=$(git -C "$repo_root" rev-parse "$target_ref")

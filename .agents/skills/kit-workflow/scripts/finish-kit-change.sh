@@ -33,7 +33,7 @@ label=$(kit_workflow_label_for_type "$change_type")
 test -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" || kit_workflow_fail 'working tree is not clean'
 git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || kit_workflow_fail 'origin remote is missing'
 git -C "$repo_root" fetch origin --prune
-target_branch="kit/$kit"
+target_branch=main
 target_ref="refs/remotes/origin/$target_branch"
 git -C "$repo_root" show-ref --verify --quiet "$target_ref" || kit_workflow_fail "origin/$target_branch is missing"
 git -C "$repo_root" merge-base --is-ancestor "$target_ref" HEAD \
@@ -46,7 +46,7 @@ done < <(git -C "$repo_root" log --format=%s "$target_ref"..HEAD)
 
 pack_dir=$(mktemp -d "${TMPDIR:-/tmp}/kit-workflow-pack.XXXXXX")
 trap 'rm -rf -- "$pack_dir"' EXIT
-kit_workflow_run_product_checks "$repo_root" "$pack_dir"
+kit_workflow_run_product_checks "$repo_root" "$kit" "$pack_dir"
 command -v gh >/dev/null 2>&1 || kit_workflow_fail 'gh is not installed; install GitHub CLI before finishing'
 gh auth status >/dev/null 2>&1 || kit_workflow_fail 'gh is not authenticated; run gh auth login'
 git -C "$repo_root" push --set-upstream origin "$branch"

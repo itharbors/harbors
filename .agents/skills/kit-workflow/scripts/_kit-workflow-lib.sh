@@ -28,44 +28,88 @@ kit_workflow_repo_root() {
   git -C "$script_dir" rev-parse --show-toplevel 2>/dev/null || kit_workflow_fail 'Skill is not inside a Git repository'
 }
 
+kit_workflow_validate_identity() {
+  local repo_root=$1 actual_name actual_email
+  actual_name=$(git -C "$repo_root" config --local --get user.name 2>/dev/null || true)
+  actual_email=$(git -C "$repo_root" config --local --get user.email 2>/dev/null || true)
+  test "$actual_name" = 'VisualSJ' \
+    || kit_workflow_fail "Git user.name must be VisualSJ, got ${actual_name:-unset}"
+  test "$actual_email" = 'devhacker520@hotmail.com' \
+    || kit_workflow_fail "Git user.email must be devhacker520@hotmail.com, got ${actual_email:-unset}"
+}
+
+kit_workflow_channel_for_version() {
+  node - "$1" <<'NODE'
+const version = process.argv[2];
+const identifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
+const canonical = new RegExp(`^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-${identifier}(?:\\.${identifier})*)?$`, 'u');
+if (!canonical.test(version)) {
+  console.error(`error: version must be a canonical SemVer without build metadata: ${version}`);
+  process.exit(1);
+}
+console.log(version.includes('-') ? 'preview' : 'stable');
+NODE
+}
+
 kit_workflow_validate_product() {
-  local repo_root=$1 kit=$2 required_channel=${3:-any} npm_version current_node_version
-  test -f "$repo_root/kit.json" || kit_workflow_fail 'kit.json is missing from product root'
-  test -f "$repo_root/package.json" || kit_workflow_fail 'package.json is missing from product root'
-  test -f "$repo_root/package-lock.json" || kit_workflow_fail 'package-lock.json is missing from product root'
-  npm_version=$(npm --version)
-  current_node_version=$(node --version)
-  node - "$repo_root" "$kit" "$required_channel" "${current_node_version#v}" "$npm_version" <<'NODE'
+  local repo_root=$1 kit=$2 required_channel=${3:-any}
+  local manifest_path="$repo_root/kits/$kit/kit.json"
+  local package_path="$repo_root/kits/$kit/package.json"
+  local lock_path="$repo_root/package-lock.json"
+  local policy_path="$repo_root/registry/policy.json"
+  kit_workflow_validate_identity "$repo_root"
+  test -f "$policy_path" || kit_workflow_fail 'registry/policy.json is missing from repository root'
+  test -f "$lock_path" || kit_workflow_fail 'package-lock.json is missing from repository root'
+  node - "$policy_path" "$kit" <<'NODE'
+const fs = require('node:fs');
+const [file, kit] = process.argv.slice(2);
+let policy;
+try { policy = JSON.parse(fs.readFileSync(file, 'utf8')); }
+catch { console.error('error: registry/policy.json must contain valid JSON'); process.exit(1); }
+if (!policy?.kits || !Object.prototype.hasOwnProperty.call(policy.kits, kit)) {
+  console.error(`error: Kit is not listed in registry policy: ${kit}`);
+  process.exit(1);
+}
+NODE
+  test -f "$manifest_path" || kit_workflow_fail "kits/$kit/kit.json is missing"
+  test -f "$package_path" || kit_workflow_fail "kits/$kit/package.json is missing"
+  node - "$repo_root" "$kit" "$required_channel" <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
 
-const [root, kit, requiredChannel, actualNode, actualNpm] = process.argv.slice(2);
-const read = (name) => JSON.parse(fs.readFileSync(path.join(root, name), 'utf8'));
-const manifest = read('kit.json');
-const pkg = read('package.json');
+const [root, kit, requiredChannel] = process.argv.slice(2);
+const read = (name) => {
+  try { return JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')); }
+  catch { console.error(`error: ${name} must contain valid JSON`); process.exit(1); }
+};
+const manifest = read(`kits/${kit}/kit.json`);
+const pkg = read(`kits/${kit}/package.json`);
 const lock = read('package-lock.json');
+const policy = read('registry/policy.json');
 const expectedId = `@itharbors/kit-${kit}`;
 const stop = (message) => { console.error(`error: ${message}`); process.exit(1); };
+const identifier = '(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)';
+const canonical = new RegExp(`^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-${identifier}(?:\\.${identifier})*)?$`, 'u');
 
+if (policy.kits[kit]?.id !== expectedId) stop(`Kit policy identity mismatch: expected ${expectedId}`);
 if (manifest.id !== expectedId || pkg.name !== expectedId) stop(`Kit identity mismatch: expected ${expectedId}`);
 if (manifest.version !== pkg.version) stop('Kit manifest and package versions do not match');
+if (typeof manifest.version !== 'string' || !canonical.test(manifest.version)) {
+  stop(`Kit version must be a canonical SemVer without build metadata: ${String(manifest.version)}`);
+}
+const derivedChannel = manifest.version.includes('-') ? 'preview' : 'stable';
+if (manifest.channel !== derivedChannel) stop(`${derivedChannel} channel is required for ${manifest.version}`);
 if (requiredChannel !== 'any' && manifest.channel !== requiredChannel) {
   stop(`${requiredChannel} channel is required, got ${String(manifest.channel)}`);
 }
-if (pkg.engines?.node !== actualNode) stop(`Node version mismatch: expected ${String(pkg.engines?.node)}, got ${actualNode}`);
-if (pkg.engines?.npm !== actualNpm) stop(`npm version mismatch: expected ${String(pkg.engines?.npm)}, got ${actualNpm}`);
-const kitCli = pkg.harbors?.kitCli;
-if (typeof kitCli !== 'string' || kitCli.length === 0) stop('package.json harbors.kitCli pin is missing');
-if (pkg.devDependencies?.['@itharbors/kit-cli'] !== kitCli) stop('Kit CLI dependency does not match harbors.kitCli pin');
-const rootLock = lock.packages?.[''];
-if (rootLock?.name !== pkg.name || rootLock?.version !== pkg.version) stop('package-lock root identity does not match package.json');
-if (rootLock?.devDependencies?.['@itharbors/kit-cli'] !== kitCli) stop('package-lock Kit CLI pin does not match package.json');
+const workspaceLock = lock.packages?.[`kits/${kit}`];
+if (workspaceLock?.name !== pkg.name || workspaceLock?.version !== pkg.version) {
+  stop(`package-lock identity for kits/${kit} does not match package.json`);
+}
 NODE
 }
 
 kit_workflow_run_product_checks() {
-  local repo_root=$1 pack_dir=$2
-  (cd "$repo_root" && npm run check)
-  (cd "$repo_root" && npm run kit:validate)
-  (cd "$repo_root" && npm run kit:pack -- --output "$pack_dir/product.hkit")
+  local repo_root=$1 kit=$2 pack_dir=$3
+  (cd "$repo_root" && npm run kit:check -- "$kit" --output-directory "$pack_dir")
 }
