@@ -108,6 +108,7 @@ test('verifies Sigstore identity and every selected artifact claim', async () =>
 
   assert.deepEqual(await verifier.verify(expected()), {
     verified: true,
+    attestationUrl,
     subjectName,
     subjectSha256: digest,
     repository,
@@ -135,6 +136,22 @@ test('verifies Sigstore identity and every selected artifact claim', async () =>
     ctLogThreshold: 1,
     tlogThreshold: 1,
   });
+});
+
+test('sends an optional GitHub token only to the attestation API', async () => {
+  const { verifier, requests } = createVerifier({ githubToken: 'github-token' });
+  await verifier.verify(expected());
+  assert.equal(requests[0].init.headers.Authorization, 'Bearer github-token');
+  assert.deepEqual(requests[1].init.headers, { Accept: 'application/json' });
+});
+
+test('rejects empty or control-bearing GitHub tokens', () => {
+  for (const githubToken of ['', 'token\nvalue', 'token\u007fvalue', 'token\u0085value']) {
+    assert.throws(
+      () => createVerifier({ githubToken }),
+      /githubToken/u,
+    );
+  }
 });
 
 test('rejects an attestation URL that is not exactly derived from repository and digest', async () => {

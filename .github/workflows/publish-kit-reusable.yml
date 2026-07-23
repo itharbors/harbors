@@ -350,6 +350,10 @@ jobs:
 
   publish-registry:
     needs: [publish-preview, publish-stable]
-    if: ${{ always() && (needs.publish-preview.result == 'success' || needs.publish-stable.result == 'success') }}
+    if: ${{ always() && ((needs.publish-preview.result == 'success' && needs.publish-stable.result == 'skipped') || (needs.publish-stable.result == 'success' && needs.publish-preview.result == 'skipped')) }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     uses: itharbors/harbors/.github/workflows/publish-kit-registry.yml@kit-publish-v2
     secrets: inherit

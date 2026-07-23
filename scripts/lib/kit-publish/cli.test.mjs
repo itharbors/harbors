@@ -7,6 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { runKitPublishCli } from '../../kit-publish.mjs';
+import { GitHubArtifactAttestationVerifier } from '../kit-registry/github-attestation.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/kit-publish.mjs');
@@ -95,6 +96,8 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
     revocations: [],
   };
   const calls = [];
+  const verifier = Object.freeze({ verify: async () => undefined });
+  const factoryCalls = [];
   try {
     const code = await runKitPublishCli([
       'aggregate',
@@ -112,9 +115,14 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
         calls.push(input);
         return index;
       },
+      createProvenanceVerifier: (input) => {
+        factoryCalls.push(input);
+        return verifier;
+      },
       env: { GITHUB_TOKEN: 'test-token' },
     });
     assert.equal(code, 0, stderr.join(''));
+    assert.deepEqual(factoryCalls, [{ githubToken: 'test-token' }]);
     assert.deepEqual(calls, [{
       repositoryRoot: root,
       repository: 'itharbors/harbors',
@@ -122,6 +130,7 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
       revocationsFile: path.join(root, 'revocations.json'),
       generatedAt: index.generatedAt,
       githubToken: 'test-token',
+      provenanceVerifier: verifier,
     }]);
     assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), index);
     assert.match(stdout.join(''), /KITS=0\nREVOCATIONS=0/u);
@@ -144,11 +153,47 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
   }
 });
 
+test('aggregate production dependencies construct the GitHub provenance verifier', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-aggregate-'));
+  const output = path.join(root, 'index.v1.json');
+  let provenanceVerifier;
+  try {
+    const code = await runKitPublishCli([
+      'aggregate',
+      '--repository-root', root,
+      '--repository', 'itharbors/harbors',
+      '--policy-file', path.join(root, 'policy.json'),
+      '--revocations-file', path.join(root, 'revocations.json'),
+      '--output', output,
+      '--generated-at', '2026-07-24T00:00:00.000Z',
+    ], {
+      stdout: { write: () => undefined },
+      stderr: { write: (value) => assert.fail(value) },
+    }, {
+      aggregateKitRegistry: async (input) => {
+        provenanceVerifier = input.provenanceVerifier;
+        return {
+          schemaVersion: 1,
+          generatedAt: '2026-07-24T00:00:00.000Z',
+          kits: [],
+          revocations: [],
+        };
+      },
+      env: { GITHUB_TOKEN: 'production-token' },
+    });
+    assert.equal(code, 0);
+    assert.ok(provenanceVerifier instanceof GitHubArtifactAttestationVerifier);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('aggregate fails before requests or output writes when its GitHub token is absent', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-aggregate-'));
   const output = path.join(root, 'index.v1.json');
   const stderr = [];
   let calls = 0;
+  let factoryCalls = 0;
   try {
     const code = await runKitPublishCli([
       'aggregate',
@@ -163,10 +208,15 @@ test('aggregate fails before requests or output writes when its GitHub token is 
       stderr: { write: (value) => stderr.push(value) },
     }, {
       aggregateKitRegistry: async () => { calls += 1; },
+      createProvenanceVerifier: () => {
+        factoryCalls += 1;
+        return { verify: async () => undefined };
+      },
       env: {},
     });
     assert.equal(code, 1);
     assert.equal(calls, 0);
+    assert.equal(factoryCalls, 0);
     assert.deepEqual(stderr, ['ERROR=GitHub token is required\n']);
     await assert.rejects(readFile(output));
   } finally {

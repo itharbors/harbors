@@ -24,6 +24,18 @@ function positiveInteger(value, name) {
   return value;
 }
 
+function optionalGitHubToken(value) {
+  if (value === undefined) return undefined;
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u.test(value)
+  ) {
+    throw new TypeError('githubToken must be a non-empty control-free string');
+  }
+  return value;
+}
+
 function assertRepository(repository) {
   if (typeof repository !== 'string') throw new TypeError('repository must be owner/repo');
   const parts = repository.split('/');
@@ -212,6 +224,7 @@ async function defaultVerifyBundle(bundle, options) {
 
 export class GitHubArtifactAttestationVerifier {
   #fetch;
+  #githubToken;
   #verifyBundle;
   #timeoutMs;
   #maxApiResponseBytes;
@@ -219,6 +232,7 @@ export class GitHubArtifactAttestationVerifier {
 
   constructor({
     fetchImpl = globalThis.fetch,
+    githubToken,
     verifyBundle = defaultVerifyBundle,
     timeoutMs = DEFAULT_TIMEOUT_MS,
     maxApiResponseBytes = DEFAULT_MAX_API_RESPONSE_BYTES,
@@ -227,6 +241,7 @@ export class GitHubArtifactAttestationVerifier {
     if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
     if (typeof verifyBundle !== 'function') throw new TypeError('verifyBundle is required');
     this.#fetch = fetchImpl;
+    this.#githubToken = optionalGitHubToken(githubToken);
     this.#verifyBundle = verifyBundle;
     this.#timeoutMs = positiveInteger(timeoutMs, 'timeoutMs');
     this.#maxApiResponseBytes = positiveInteger(maxApiResponseBytes, 'maxApiResponseBytes');
@@ -246,6 +261,9 @@ export class GitHubArtifactAttestationVerifier {
         headers: {
           Accept: 'application/vnd.github+json',
           'X-GitHub-Api-Version': '2026-03-10',
+          ...(this.#githubToken === undefined
+            ? {}
+            : { Authorization: `Bearer ${this.#githubToken}` }),
         },
       },
       timeoutMs: this.#timeoutMs,
@@ -286,6 +304,7 @@ export class GitHubArtifactAttestationVerifier {
         assertStatement(decodeStatement(bundle), expected);
         return Object.freeze({
           verified: true,
+          attestationUrl: rawExpected.attestationUrl,
           subjectName: expected.subjectName,
           subjectSha256: expected.subjectSha256,
           repository: expected.repository,

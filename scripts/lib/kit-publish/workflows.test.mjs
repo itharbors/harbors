@@ -110,11 +110,12 @@ test('Preview and Stable Releases are non-clobbering, attested, and upload only 
 test('publisher deploys Registry only after exactly one release job succeeds', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   const registry = jobBlock(workflow, 'publish-registry');
+  const exactPredicate = "if: ${{ always() && ((needs.publish-preview.result == 'success' && needs.publish-stable.result == 'skipped') || (needs.publish-stable.result == 'success' && needs.publish-preview.result == 'skipped')) }}";
   assert.match(registry, /needs:\s*\[publish-preview, publish-stable\]/u);
-  assert.match(
-    registry,
-    /if:\s*\$\{\{ always\(\) && \(needs\.publish-preview\.result == 'success' \|\| needs\.publish-stable\.result == 'success'\) \}\}/u,
-  );
+  assert.ok(registry.includes(exactPredicate));
+  for (const permission of ['contents: read', 'pages: write', 'id-token: write']) {
+    assert.match(registry, new RegExp(permission, 'u'));
+  }
   assert.match(
     registry,
     /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-registry\.yml@kit-publish-v2/u,

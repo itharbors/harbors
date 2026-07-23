@@ -21,6 +21,7 @@ import {
   deriveArtifactName,
 } from './lib/kit-publish/metadata.mjs';
 import { aggregateKitRegistry } from './lib/kit-publish/registry.mjs';
+import { GitHubArtifactAttestationVerifier } from './lib/kit-registry/github-attestation.mjs';
 
 const USAGE = [
   'Usage:',
@@ -138,11 +139,16 @@ async function prepare(options) {
   }
 }
 
-async function aggregate(options, implementation, environment = {}) {
+function createDefaultProvenanceVerifier({ githubToken }) {
+  return new GitHubArtifactAttestationVerifier({ githubToken });
+}
+
+async function aggregate(options, implementation, environment, createProvenanceVerifier) {
   const githubToken = environment.GITHUB_TOKEN;
   if (typeof githubToken !== 'string' || githubToken.length === 0) {
     throw new Error('GitHub token is required');
   }
+  const provenanceVerifier = createProvenanceVerifier({ githubToken });
   const index = await implementation({
     repositoryRoot: options['repository-root'],
     repository: options.repository,
@@ -150,6 +156,7 @@ async function aggregate(options, implementation, environment = {}) {
     revocationsFile: options['revocations-file'],
     generatedAt: options['generated-at'],
     githubToken,
+    provenanceVerifier,
   });
   await writeFile(path.resolve(options.output), canonicalJson(index), { flag: 'wx', mode: 0o600 });
   return {
@@ -162,7 +169,7 @@ async function aggregate(options, implementation, environment = {}) {
 export async function runKitPublishCli(
   args,
   io = process,
-  dependencies = { aggregateKitRegistry, env: process.env },
+  dependencies = {},
 ) {
   const [command, ...rest] = args;
   const allowed = command === 'prepare'
@@ -180,9 +187,18 @@ export async function runKitPublishCli(
     return 2;
   }
   try {
+    const aggregateImplementation = dependencies.aggregateKitRegistry ?? aggregateKitRegistry;
+    const environment = dependencies.env ?? process.env;
+    const createProvenanceVerifier = dependencies.createProvenanceVerifier
+      ?? createDefaultProvenanceVerifier;
     const outputs = command === 'prepare'
       ? await prepare(options)
-      : await aggregate(options, dependencies.aggregateKitRegistry, dependencies.env);
+      : await aggregate(
+        options,
+        aggregateImplementation,
+        environment,
+        createProvenanceVerifier,
+      );
     io.stdout.write(`${Object.entries(outputs).map(([key, value]) => `${key}=${value}`).join('\n')}\n`);
     return 0;
   } catch (error) {
