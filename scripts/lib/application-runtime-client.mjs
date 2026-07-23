@@ -1,5 +1,6 @@
 import http from 'node:http';
 import https from 'node:https';
+import { randomUUID } from 'node:crypto';
 
 export async function fetchApplicationBootstrap(baseUrl, fetchImpl = globalThis.fetch) {
   const response = await fetchImpl(new URL('/api/application/bootstrap', baseUrl));
@@ -28,6 +29,51 @@ export async function triggerApplicationMenu(
   const payload = await readJson(response);
   if (!response.ok) throw responseError(response, payload);
   return payload?.result;
+}
+
+export async function validateInstalledKitRuntime(
+  baseUrl,
+  bootstrap,
+  kitId,
+  {
+    fetchImpl = globalThis.fetch,
+    sessionId = `kit-activation-${randomUUID()}`,
+  } = {},
+) {
+  if (typeof kitId !== 'string' || kitId.length === 0) throw new TypeError('Kit id is required');
+  if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
+  const failedPlugin = Array.isArray(bootstrap?.plugins)
+    ? bootstrap.plugins.find((plugin) => (
+      plugin?.status === 'failed'
+      && Array.isArray(plugin.kits)
+      && plugin.kits.includes(kitId)
+    ))
+    : undefined;
+  if (failedPlugin) {
+    throw new Error(
+      `Kit ${kitId} startup plugin ${String(failedPlugin.name)} failed: ${String(failedPlugin.error)}`,
+    );
+  }
+  const diagnostic = Array.isArray(bootstrap?.diagnostics)
+    ? bootstrap.diagnostics.find((item) => item?.kit === kitId)
+    : undefined;
+  if (diagnostic) {
+    throw new Error(`Kit ${kitId} startup validation failed: ${String(diagnostic.message)}`);
+  }
+
+  const response = await fetchImpl(new URL('/api/session', baseUrl), {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId, kit: kitId }),
+  });
+  const payload = await readJson(response);
+  if (!response.ok) throw responseError(response, payload);
+
+  const cleanup = await fetchImpl(
+    new URL(`/api/session/${encodeURIComponent(sessionId)}`, baseUrl),
+    { method: 'DELETE' },
+  );
+  if (!cleanup.ok) throw new Error(`Framework could not close Kit validation session (HTTP ${cleanup.status})`);
 }
 
 export function createApplicationEventParser(onEvent) {

@@ -229,6 +229,7 @@ test('builds tray entries for available and persisted unavailable Kits', () => {
     ],
   }, {
     openKit: (kitName) => opened.push(kitName),
+    openKitManager: () => opened.push('kit-manager'),
     quit: () => { quitCount += 1; },
   });
 
@@ -237,11 +238,14 @@ test('builds tray entries for available and persisted unavailable Kits', () => {
     { label: 'SQLite', enabled: true, type: undefined },
     { label: '@itharbors/kit-removed (Unavailable)', enabled: false, type: undefined },
     { label: undefined, enabled: undefined, type: 'separator' },
+    { label: 'Kit Manager…', enabled: undefined, type: undefined },
+    { label: undefined, enabled: undefined, type: 'separator' },
     { label: 'Quit ITHARBORS', enabled: undefined, type: undefined },
   ]);
   template[1].click();
   template[4].click();
-  assert.deepEqual(opened, ['@itharbors/kit-sqlite']);
+  template[6].click();
+  assert.deepEqual(opened, ['@itharbors/kit-sqlite', 'kit-manager']);
   assert.equal(quitCount, 1);
 });
 
@@ -256,6 +260,7 @@ test('adds unread count only to the Notification Kit tray entry', () => {
     notificationKitName: '@itharbors/kit-notifications',
   }, {
     openKit() {},
+    openKitManager() {},
     quit() {},
   });
 
@@ -361,11 +366,17 @@ test('clears a failed Kit load so the next selection can retry', async () => {
   assert.equal(pendingLoads.size, 0);
 });
 
-test('stops the Framework before tearing down Electron-owned notification services', async () => {
+test('drains Kit Manager work before stopping the Framework and notification services', async () => {
   const events = [];
+  let releaseManager;
   let releaseFramework;
   const shutdown = shutdownDesktopServices({
     persistWorkspace: async () => { events.push('persist'); },
+    stopKitManagerService: async () => {
+      events.push('manager:start');
+      await new Promise((resolve) => { releaseManager = resolve; });
+      events.push('manager:stopped');
+    },
     stopFramework: async () => {
       events.push('framework:start');
       await new Promise((resolve) => { releaseFramework = resolve; });
@@ -375,12 +386,17 @@ test('stops the Framework before tearing down Electron-owned notification servic
   });
 
   await Promise.resolve();
-  assert.deepEqual(events, ['persist', 'framework:start']);
+  assert.deepEqual(events, ['persist', 'manager:start']);
+  releaseManager();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(events, ['persist', 'manager:start', 'manager:stopped', 'framework:start']);
   releaseFramework();
   await shutdown;
 
   assert.deepEqual(events, [
     'persist',
+    'manager:start',
+    'manager:stopped',
     'framework:start',
     'framework:stopped',
     'notification:stopped',
@@ -459,6 +475,19 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
+  assert.match(source, /const kitStoreRoot = path\.join\(app\.getPath\('userData'\), 'kit-store'\)/);
+  assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
+  assert.match(source, /resolveFrameworkRuntime\(\)/);
+  assert.doesNotMatch(source, /nodeAbi:\s*process\.versions\.modules/);
+  assert.match(source, /prepareInstalledKitsForStartup/);
+  assert.match(source, /finalizePendingKitActivations/);
+  assert.match(source, /validateInstalledKitRuntime/);
+  assert.match(source, /createKitManagerService/);
+  assert.match(source, /createKitManagerWindowController/);
+  assert.match(source, /registerKitManagerIpc/);
+  assert.match(source, /openKitManager/);
+  assert.match(source, /discoverKits\(\{[\s\S]*installedKits/);
+  assert.match(source, /HARBORS_INSTALLED_KITS:\s*JSON\.stringify\(installedKits\.map/);
   assert.doesNotMatch(source, /prewarmKitWindows/);
   assert.match(source, /initializeKitHost/);
   assert.doesNotMatch(source, /openKit\(kitCatalog\[0\]\.name\)/);
@@ -466,6 +495,21 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   const stopHost = source.indexOf('await notificationHost?.stop()');
   const unsubscribeStore = source.indexOf('notificationStoreUnsubscribe?.()');
   assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
+});
+
+test('commits pending installed Kits only after Catalog and actual Framework load validation', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const prepare = source.indexOf('await prepareInstalledKitsForStartup');
+  const discover = source.indexOf('kitCatalog = await discoverKits');
+  const initialize = source.indexOf('await initializeKitHost');
+  assert.ok(prepare >= 0 && discover > prepare && initialize > discover);
+  assert.match(source, /validateCatalog:\s*async \(sources\).*discoverKits/s);
+  const startFramework = source.indexOf('frameworkProcess = startFramework()');
+  const finalize = source.indexOf('await finalizePendingKitActivations');
+  assert.ok(startFramework >= 0 && finalize > startFramework);
+  assert.match(source, /validateRuntime:\s*\(selection\) => validateInstalledKitRuntime/s);
+  assert.match(source, /activation\.restartRequired[\s\S]*app\.relaunch\(\)/);
+  assert.match(source, /registration\?\.drain/);
 });
 
 test('keeps the notification toast preload bridge intentionally narrow', async () => {

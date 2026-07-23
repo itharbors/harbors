@@ -5,6 +5,7 @@ export interface AssemblyConfig {
   pluginsDir: string;
   builtinKitsDir: string;
   kitsDir: string;
+  installedKitDirs: string[];
   defaultKit: string;
 }
 
@@ -19,6 +20,7 @@ export function createDefaultAssemblyConfig(
     pluginsDir: path.join(projectRoot, 'plugins'),
     builtinKitsDir: path.join(projectRoot, 'kits'),
     kitsDir: path.join(projectRoot, 'kits'),
+    installedKitDirs: [],
     defaultKit: '@itharbors/kit-default',
   }, override);
 }
@@ -32,6 +34,7 @@ export function normalizeAssemblyConfig(
     pluginsDir: override.pluginsDir ?? fileConfig.pluginsDir,
     builtinKitsDir: override.builtinKitsDir ?? fileConfig.builtinKitsDir,
     kitsDir: override.kitsDir ?? fileConfig.kitsDir,
+    installedKitDirs: [...(override.installedKitDirs ?? fileConfig.installedKitDirs ?? [])],
     defaultKit: override.defaultKit ?? fileConfig.defaultKit,
   };
 }

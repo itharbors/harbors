@@ -5,6 +5,7 @@ import {
   createApplicationEventParser,
   createApplicationRuntimeClient,
   fetchApplicationBootstrap,
+  validateInstalledKitRuntime,
   triggerApplicationMenu,
 } from './application-runtime-client.mjs';
 
@@ -81,4 +82,76 @@ test('reconnects a closed application event stream until explicitly stopped', as
   connections[1].handlers.onEnd();
   assert.equal(timers.length, 0);
   assert.equal(connections[1].closeCalled, true);
+});
+
+test('validates an installed Kit through startup state and an actual disposable session load', async () => {
+  const calls = [];
+  const bootstrap = {
+    phase: 'ready',
+    diagnostics: [],
+    plugins: [{ name: '@example/startup', kits: ['@example/kit-demo'], status: 'running' }],
+  };
+  await validateInstalledKitRuntime(
+    'http://localhost:8080/editor',
+    bootstrap,
+    '@example/kit-demo',
+    {
+      sessionId: 'activation-check',
+      fetchImpl: async (url, init = {}) => {
+        calls.push({ url: String(url), init });
+        return init.method === 'DELETE'
+          ? new Response(null, { status: 204 })
+          : new Response(JSON.stringify({ sessionId: 'activation-check' }), { status: 201 });
+      },
+    },
+  );
+
+  assert.deepEqual(calls.map((call) => [call.url, call.init.method]), [
+    ['http://localhost:8080/api/session', 'POST'],
+    ['http://localhost:8080/api/session/activation-check', 'DELETE'],
+  ]);
+  assert.deepEqual(JSON.parse(calls[0].init.body), {
+    sessionId: 'activation-check',
+    kit: '@example/kit-demo',
+  });
+});
+
+test('rejects a failed startup plugin before opening a disposable session', async () => {
+  let fetches = 0;
+  await assert.rejects(validateInstalledKitRuntime(
+    'http://localhost:8080',
+    {
+      phase: 'degraded',
+      diagnostics: [],
+      plugins: [{
+        name: '@example/startup',
+        kits: ['@example/kit-demo'],
+        status: 'failed',
+        error: 'native import failed',
+      }],
+    },
+    '@example/kit-demo',
+    { fetchImpl: async () => { fetches += 1; } },
+  ), /native import failed/);
+  assert.equal(fetches, 0);
+});
+
+test('rejects a Kit-attributed startup conflict before opening a disposable session', async () => {
+  let fetches = 0;
+  await assert.rejects(validateInstalledKitRuntime(
+    'http://localhost:8080',
+    {
+      phase: 'degraded',
+      diagnostics: [{
+        code: 'PLUGIN_PATH_CONFLICT',
+        kit: '@example/kit-demo',
+        plugin: '@example/startup',
+        message: 'startup plugin resolves to different paths',
+      }],
+      plugins: [],
+    },
+    '@example/kit-demo',
+    { fetchImpl: async () => { fetches += 1; } },
+  ), /different paths/);
+  assert.equal(fetches, 0);
 });

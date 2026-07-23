@@ -217,6 +217,51 @@ lsof -i :49382
 先检查对应入口的 Gateway health 地址（隔离开发默认是 `http://localhost:49380/api/health`），再看 Server 日志中的 Kit/插件装载错误。
 Client 会尝试创建 session 并重试一次，但不会掩盖持续装载错误。
 
+## Framework 与 Kit 分支治理
+
+Framework 和独立 Kit 使用两套互不混用的工作流：
+
+| 变更对象 | 基线 / PR base | 变更分支 | 本地 Skill |
+| --- | --- | --- | --- |
+| Framework | `main` | `feature/<type>/<slug>` | `change-workflow` |
+| 单个 Kit | `kit/<kit>` | `kit-change/<kit>/<type>/<slug>` | `kit-workflow` |
+| 市场元数据 | `kit-registry` | 自动化分支或审核分支 | Registry workflow |
+
+不要从 `main` 开始 Kit 产品变更，也不要把 Kit PR 指向 `main`。`kit-workflow` 会固定读取
+`origin/kit/<kit>`，创建隔离 worktree，并检查产品身份、锁文件、Node/npm 和 Kit CLI 版本：
+
+```bash
+bash .agents/skills/kit-workflow/scripts/start-kit-change.sh sqlite feature add-import
+```
+
+只在命令输出的 worktree 中开发。完成后准备含 `## Summary` 与 `## Testing` 的 PR body，再运行：
+
+```bash
+bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
+  sqlite "添加数据导入" /absolute/path/to/pr-body.md
+```
+
+finish 会执行产品 `check`、Kit validate 和 dry-run pack，普通 push 后只创建 base 为
+`kit/sqlite` 的 PR。Stable 发布另行执行：
+
+```bash
+bash .agents/skills/kit-workflow/scripts/release-kit.sh sqlite 1.2.0
+```
+
+第一次运行只显示 Kit、版本、Commit、Tag 与绑定 Tag/Commit 的确认 token；必须获得用户对该次 Stable 发布的明确确认，
+再按输出设置 `HARBORS_KIT_RELEASE_CONFIRM` 重跑。实现功能的确认不等于推送发布 Tag 的确认。
+
+首次建立产品分支可使用迁移器生成独立快照；它们只写入新的输出目录，不创建分支也不推送：
+
+```bash
+node scripts/migrate-kit-product.mjs --kit sqlite --output /absolute/path/to/sqlite-product
+node scripts/migrate-kit-product.mjs --kit mysql --output /absolute/path/to/mysql-product
+node scripts/migrate-kit-product.mjs --kit notifications --output /absolute/path/to/notifications-product
+node scripts/migrate-kit-registry.mjs --output /absolute/path/to/kit-registry
+```
+
+首个独立历史提交使用 `[Init]`；后续提交不再使用该类型。
+
 ## 提交信息规范
 
 提交标题必须匹配：

@@ -44,12 +44,14 @@ describe('Kit catalog discovery', () => {
         name: '@itharbors/kit-default',
         label: 'Default Kit',
         directory: defaultDirectory,
+        source: 'builtin',
       },
       {
         id: 'mysql',
         name: '@itharbors/kit-mysql',
         label: 'MySQL',
         directory: mysqlDirectory,
+        source: 'builtin',
       },
     ]);
   });
@@ -95,14 +97,49 @@ describe('Kit catalog discovery', () => {
         name: '@itharbors/kit-default',
         label: 'Default Kit',
         directory: path.join(kitsDir, 'default'),
+        source: 'builtin',
       },
       {
         id: 'external',
         name: '@example/external-kit',
         label: 'External Kit',
         directory: externalDirectory,
+        source: 'explicit',
       },
     ]);
+  });
+
+  it('discovers only explicitly supplied active installed Kit directories', async () => {
+    createKit(builtinKitsDir, 'default', {
+      name: '@itharbors/kit-default', id: 'default', label: 'Default Kit',
+    });
+    const installedDirectory = createKit(path.join(root, 'store', 'encoded'), '1.0.0', {
+      name: '@example/kit-installed', id: 'installed', label: 'Installed Kit',
+    });
+
+    const catalog = await discoverKitCatalog({
+      ...assembly(),
+      installedKitDirs: [installedDirectory],
+    });
+
+    expect(catalog.find((entry) => entry.name === '@example/kit-installed')).toEqual({
+      id: 'installed', name: '@example/kit-installed', label: 'Installed Kit',
+      directory: installedDirectory, source: 'installed',
+    });
+  });
+
+  it('rejects an invalid active installed Kit instead of silently dropping it', async () => {
+    createKit(builtinKitsDir, 'default', {
+      name: '@itharbors/kit-default', id: 'default', label: 'Default Kit',
+    });
+    const invalidInstalled = path.join(root, 'store', 'encoded', '1.0.0');
+    fs.mkdirSync(invalidInstalled, { recursive: true });
+    fs.writeFileSync(path.join(invalidInstalled, 'package.json'), JSON.stringify({ name: 'invalid' }));
+
+    await expect(discoverKitCatalog({
+      ...assembly(),
+      installedKitDirs: [invalidInstalled],
+    })).rejects.toThrow('Invalid installed Kit manifest');
   });
 
   it('does not filter repository Kits when one is explicitly selected', async () => {
@@ -167,6 +204,7 @@ describe('Kit catalog discovery', () => {
       pluginsDir: path.join(root, 'plugins'),
       builtinKitsDir,
       kitsDir,
+      installedKitDirs: [],
       defaultKit: '@itharbors/kit-default',
     };
   }

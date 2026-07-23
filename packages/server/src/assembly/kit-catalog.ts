@@ -6,10 +6,11 @@ import { resolveKit } from '../plugin/resolver';
 
 export interface KitCatalogEntry extends PublicKitCatalogEntry {
   directory: string;
+  source: 'builtin' | 'installed' | 'explicit';
 }
 
 export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitCatalogEntry[]> {
-  const directories = new Set<string>();
+  const directories = new Map<string, KitCatalogEntry['source']>();
   for (const kitsDirectory of new Set([
     path.resolve(assembly.builtinKitsDir),
     path.resolve(assembly.kitsDir),
@@ -22,21 +23,27 @@ export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitC
       throw error;
     }
     for (const child of children) {
-      if (child.isDirectory()) directories.add(path.join(kitsDirectory, child.name));
+      if (child.isDirectory()) directories.set(path.join(kitsDirectory, child.name), 'builtin');
     }
+  }
+  for (const installedDirectory of assembly.installedKitDirs) {
+    directories.set(path.resolve(installedDirectory), 'installed');
   }
 
   const selectedDirectory = path.resolve(await resolveKit(assembly.defaultKit, {
     builtinKitsDir: assembly.builtinKitsDir,
     kitsDir: assembly.kitsDir,
+    installedKitDirs: assembly.installedKitDirs,
   }));
-  directories.add(selectedDirectory);
+  if (!directories.has(selectedDirectory)) directories.set(selectedDirectory, 'explicit');
 
   const entries: KitCatalogEntry[] = [];
-  for (const directory of directories) {
-    const entry = await readKitEntry(directory);
+  for (const [directory, source] of directories) {
+    const entry = await readKitEntry(directory, source);
     if (entry) {
       entries.push(entry);
+    } else if (source === 'installed') {
+      throw new Error(`Invalid installed Kit manifest at ${directory}`);
     } else if (directory === selectedDirectory) {
       throw new Error(`Invalid Kit manifest for selected Kit "${assembly.defaultKit}"`);
     }
@@ -47,7 +54,10 @@ export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitC
   return entries;
 }
 
-async function readKitEntry(directory: string): Promise<KitCatalogEntry | null> {
+async function readKitEntry(
+  directory: string,
+  source: KitCatalogEntry['source'],
+): Promise<KitCatalogEntry | null> {
   let manifest: unknown;
   try {
     manifest = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8')) as unknown;
@@ -70,6 +80,7 @@ async function readKitEntry(directory: string): Promise<KitCatalogEntry | null> 
     name: manifest.name,
     label: kit.menuRoot.label,
     directory: path.resolve(directory),
+    source,
   };
 }
 

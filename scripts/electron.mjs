@@ -16,6 +16,7 @@ import {
   createNotificationStore,
 } from './lib/notification-host.mjs';
 import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
+import { resolveFrameworkRuntime } from './lib/framework-runtime.mjs';
 import { resolveRuntimePorts, resolveRuntimeProfile } from './lib/runtime-ports.mjs';
 import {
   buildTrayTemplate,
@@ -31,15 +32,26 @@ import {
 } from './lib/electron-launcher.mjs';
 import { resolveCodexSkillSource } from './lib/codex-skill-resource.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
+import { InstalledKitStore } from './lib/kit-store/state.mjs';
+import {
+  finalizePendingKitActivations,
+  prepareInstalledKitsForStartup,
+} from './lib/kit-store/startup.mjs';
+import { createKitManagerService } from './lib/kit-manager-service.mjs';
+import { registerKitManagerIpc } from './lib/kit-manager-ipc.mjs';
+import { createKitManagerWindowController } from './lib/kit-manager-window.mjs';
 import {
   createApplicationRuntimeClient,
   fetchApplicationBootstrap,
   triggerApplicationMenu,
+  validateInstalledKitRuntime,
 } from './lib/application-runtime-client.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
 const notificationPreloadPath = fileURLToPath(new URL('./notification-preload.cjs', import.meta.url));
+const kitManagerPreloadPath = fileURLToPath(new URL('./kit-manager-preload.cjs', import.meta.url));
+const kitManagerHtmlPath = fileURLToPath(new URL('./kit-manager.html', import.meta.url));
 const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.png', import.meta.url));
 const runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
 const runtimePorts = resolveRuntimePorts(process.env, runtimeProfile);
@@ -49,6 +61,12 @@ const applicationControlToken = randomBytes(32).toString('hex');
 const NOTIFICATION_KIT_NAME = '@itharbors/kit-notifications';
 const TOAST_WIDTH = 360;
 const TOAST_HEIGHT = 176;
+const kitRuntime = Object.freeze({
+  harborsVersion: '1.0.0',
+  kitApiVersion: '1.0.0',
+  protocolVersion: 1,
+  ...resolveFrameworkRuntime(),
+});
 
 let frameworkProcess;
 let frameworkStopPromise;
@@ -57,6 +75,15 @@ let tray;
 let trayContextMenu;
 let trayWorkspaceRecords = [];
 let workspaceStore;
+let kitStore;
+let kitManagerService;
+let kitManagerWindowController;
+let kitManagerIpcRegistration;
+let kitManagerCloseDrain = Promise.resolve();
+let kitManagerRefreshTimer;
+let kitManagerBackgroundRefresh;
+let installedKits = [];
+let pendingKitActivations = [];
 let kitCatalog = [];
 let electronOptions;
 let quitting = false;
@@ -229,9 +256,24 @@ function startElectronApp() {
   app.whenReady()
     .then(async () => {
       electronOptions = parseElectronOptions(process.argv.slice(2));
+      const kitStoreRoot = path.join(app.getPath('userData'), 'kit-store');
+      kitStore = new InstalledKitStore(kitStoreRoot);
+      kitManagerService = createKitManagerService({
+        storeRoot: kitStoreRoot,
+        store: kitStore,
+        runtime: kitRuntime,
+      });
+      const prepared = await prepareInstalledKitsForStartup({
+        store: kitStore,
+        audit: kitManagerService.audit,
+        validateCatalog: async (sources) => discoverKits({ rootDir, installedKits: sources }),
+      });
+      installedKits = prepared.activeSources;
+      pendingKitActivations = prepared.pendingActivations;
       kitCatalog = await discoverKits({
         rootDir,
         requestedKit: electronOptions.requestedKit ?? undefined,
+        installedKits,
       });
       electronOptions = {
         ...electronOptions,
@@ -245,6 +287,17 @@ function startElectronApp() {
         throw new Error('No valid Kits were discovered');
       }
       workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
+      kitManagerWindowController = createKitManagerWindowController({
+        BrowserWindow,
+        preloadPath: kitManagerPreloadPath,
+        htmlPath: kitManagerHtmlPath,
+        onClosed() {
+          const registration = kitManagerIpcRegistration;
+          registration?.unregister();
+          kitManagerIpcRegistration = undefined;
+          kitManagerCloseDrain = registration?.drain() ?? Promise.resolve();
+        },
+      });
       codexSkillSource = resolveCodexSkillSource({
         isPackaged: app.isPackaged,
         resourcesPath: process.resourcesPath,
@@ -259,6 +312,7 @@ function startElectronApp() {
         },
         openKit,
       });
+      scheduleKitManagerRefresh();
     })
     .catch((error) => {
       console.error(error.message);
@@ -286,6 +340,7 @@ function startElectronApp() {
           ? persistOpenWindowBounds(kitWindows, workspaceStore)
           : Promise.resolve(),
         stopFramework,
+        stopKitManagerService,
         stopNotificationService,
       })
         .then((results) => {
@@ -302,6 +357,8 @@ function startElectronApp() {
     tray = undefined;
     unregisterMenuIpc();
     unregisterOpenExternalUrlIpc();
+    kitManagerIpcRegistration?.unregister();
+    kitManagerIpcRegistration = undefined;
     applicationRuntimeClient?.close();
     applicationRuntimeClient = undefined;
   });
@@ -324,6 +381,7 @@ function startFramework() {
       HARBORS_HOST_MODE: 'desktop',
       HARBORS_APPLICATION_TOKEN: applicationControlToken,
       HARBORS_BIND_HOST: '127.0.0.1',
+      HARBORS_INSTALLED_KITS: JSON.stringify(installedKits.map((kit) => kit.directory)),
     },
     stdio: 'inherit',
   });
@@ -346,11 +404,76 @@ function startFramework() {
   return child;
 }
 
+function scheduleKitManagerRefresh(delayMs = 1500) {
+  if (!kitManagerService || kitManagerRefreshTimer) return;
+  kitManagerRefreshTimer = setTimeout(() => {
+    kitManagerRefreshTimer = undefined;
+    kitManagerBackgroundRefresh = kitManagerService.manager.refresh()
+      .catch((error) => {
+        console.error('Kit Registry background refresh failed:', error.message);
+      })
+      .finally(() => {
+        kitManagerBackgroundRefresh = undefined;
+      });
+  }, delayMs);
+}
+
+async function openKitManager() {
+  if (quitting || !kitManagerWindowController || !kitManagerService) return null;
+  if (!kitManagerIpcRegistration) {
+    kitManagerIpcRegistration = registerKitManagerIpc({
+      ipcMain,
+      getManagerWindow: () => kitManagerWindowController?.getWindow(),
+      service: kitManagerService.manager,
+    });
+  }
+  try {
+    return await kitManagerWindowController.open();
+  } catch (error) {
+    kitManagerIpcRegistration?.unregister();
+    kitManagerIpcRegistration = undefined;
+    console.error('Failed to open Kit Manager:', error.message);
+    return null;
+  }
+}
+
+async function stopKitManagerService() {
+  if (kitManagerRefreshTimer) {
+    clearTimeout(kitManagerRefreshTimer);
+    kitManagerRefreshTimer = undefined;
+  }
+  const registration = kitManagerIpcRegistration;
+  kitManagerIpcRegistration = undefined;
+  registration?.unregister();
+  kitManagerWindowController?.destroy();
+  await Promise.allSettled([
+    registration?.drain(),
+    kitManagerCloseDrain,
+    kitManagerBackgroundRefresh,
+  ].filter(Boolean));
+  kitManagerBackgroundRefresh = undefined;
+}
+
 async function startFrameworkAndTrackReadiness() {
   await startNotificationService();
   frameworkProcess = startFramework();
   frameworkReadyPromise = waitForApplicationRuntime(startUrl);
   const bootstrap = await frameworkReadyPromise;
+  const activation = await finalizePendingKitActivations({
+    store: kitStore,
+    selections: pendingKitActivations,
+    audit: kitManagerService.audit,
+    validateRuntime: (selection) => validateInstalledKitRuntime(
+      startUrl,
+      bootstrap,
+      selection.id,
+    ),
+  });
+  pendingKitActivations = [];
+  if (activation.restartRequired) {
+    app.relaunch();
+    throw new Error('A Kit failed its first runtime load; restored state will be applied after restart');
+  }
   updateApplicationBootstrap(bootstrap);
   applicationRuntimeClient = createApplicationRuntimeClient({
     baseUrl: startUrl,
@@ -642,6 +765,7 @@ function refreshApplicationTray() {
     notificationKitName: NOTIFICATION_KIT_NAME,
   }, {
     openKit,
+    openKitManager,
     quit: () => app.quit(),
   });
   trayContextMenu = Menu.buildFromTemplate(template);

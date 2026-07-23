@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "@example/kit-demo",
+  "version": "1.2.3",
+  "channel": "stable",
+  "publisher": "example",
+  "requires": {
+    "harbors": ">=1.0.0 <2.0.0",
+    "kitApi": ">=1.0.0 <2.0.0",
+    "protocolVersion": 1
+  },
+  "target": {
+    "platform": "any",
+    "arch": "any"
+  },
+  "permissions": ["network"],
+  "entry": "package.json"
+}

@@ -1,12 +1,20 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
+import { parseKitPackageManifest } from '@itharbors/kit-core';
 
-export async function discoverKits({ rootDir, requestedKit } = {}) {
+export async function discoverKits({ rootDir, requestedKit, installedKits = [] } = {}) {
   if (typeof rootDir !== 'string' || rootDir.length === 0) {
     throw new TypeError('rootDir is required');
   }
 
   const catalog = await discoverRepositoryKits(rootDir);
+  for (const installedKit of installedKits) {
+    const result = await readKitEntry(installedKit?.directory, 'installed', installedKit);
+    if (result.status !== 'valid') {
+      throw new Error(`Installed Kit ${installedKit?.id ?? '<unknown>'} is ${result.status}: ${result.reason ?? installedKit?.directory ?? '<unknown>'}`);
+    }
+    catalog.push(result.entry);
+  }
   catalog.sort(compareKits);
   assertUniqueCatalog(catalog);
 
@@ -25,7 +33,7 @@ export async function discoverKits({ rootDir, requestedKit } = {}) {
     return catalog;
   }
 
-  const explicitEntry = await readKitEntry(requestedPath);
+  const explicitEntry = await readKitEntry(requestedPath, 'explicit');
   if (explicitEntry.status === 'valid') {
     const combined = [...catalog, explicitEntry.entry].sort(compareKits);
     assertUniqueCatalog(combined);
@@ -66,7 +74,7 @@ async function discoverRepositoryKits(rootDir) {
 
   const catalog = [];
   for (const directory of entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const result = await readKitEntry(path.join(kitsDir, directory.name));
+    const result = await readKitEntry(path.join(kitsDir, directory.name), 'builtin');
     if (result.status === 'valid') {
       catalog.push(result.entry);
     }
@@ -74,14 +82,17 @@ async function discoverRepositoryKits(rootDir) {
   return catalog;
 }
 
-async function readKitEntry(directory) {
+async function readKitEntry(directory, source, installedSource) {
+  if (typeof directory !== 'string' || directory.length === 0) {
+    return { status: 'missing', reason: 'directory is required' };
+  }
   const manifestPath = path.join(directory, 'package.json');
   let manifest;
   try {
     manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   } catch (error) {
     if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') {
-      return { status: 'missing' };
+      return { status: 'missing', reason: `directory does not exist: ${directory}` };
     }
     return { status: 'invalid', reason: 'package.json is not valid JSON' };
   }
@@ -89,6 +100,31 @@ async function readKitEntry(directory) {
   const reason = validateManifest(manifest);
   if (reason) {
     return { status: 'invalid', reason };
+  }
+
+  let version = manifest.version;
+  if (typeof version !== 'string' || version.trim().length === 0) {
+    return { status: 'invalid', reason: 'version is required' };
+  }
+  if (source === 'installed') {
+    if (!installedSource || installedSource.source !== 'installed' || !/^[a-f0-9]{64}$/u.test(installedSource.digest ?? '')) {
+      return { status: 'invalid', reason: 'installed source metadata is invalid' };
+    }
+    let publication;
+    try {
+      publication = parseKitPackageManifest(JSON.parse(
+        await readFile(path.join(directory, 'kit.json'), 'utf8'),
+      ));
+    } catch (error) {
+      return { status: 'invalid', reason: `kit.json is invalid: ${error.message}` };
+    }
+    if (publication.id !== installedSource.id
+      || publication.version !== installedSource.version
+      || manifest.name !== installedSource.id
+      || manifest.version !== installedSource.version) {
+      return { status: 'invalid', reason: 'installed Kit identity does not match active source metadata' };
+    }
+    version = publication.version;
   }
 
   const menuRoot = manifest['ce-editor'].kit.menuRoot;
@@ -102,6 +138,8 @@ async function readKitEntry(directory) {
       directory: path.resolve(directory),
       manifestPath: path.resolve(manifestPath),
       startupPlugins: [...startupPlugins],
+      source,
+      version,
     },
   };
 }

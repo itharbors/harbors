@@ -16,6 +16,7 @@ export interface ServerOptions {
   port?: number;
   dbPath?: string;
   defaultKit?: string;
+  installedKitDirs?: string[];
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
@@ -24,6 +25,22 @@ export interface ServerOptions {
     ApplicationRuntime,
     'start' | 'getBootstrap' | 'triggerMenu' | 'subscribe' | 'dispose'
   >;
+}
+
+export function parseInstalledKitDirs(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  const message = 'HARBORS_INSTALLED_KITS must be a JSON array of non-empty absolute paths';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(message);
+  }
+  if (!Array.isArray(parsed)
+    || parsed.some((item) => typeof item !== 'string' || item.length === 0 || !path.isAbsolute(item))) {
+    throw new Error(message);
+  }
+  return [...parsed];
 }
 
 export function createServer(options: ServerOptions = {}) {
@@ -35,7 +52,7 @@ export function createServer(options: ServerOptions = {}) {
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
   const assembly = options.assembly ?? createDefaultAssemblyConfig(
     path.resolve(serverDir, '../../..'),
-    { defaultKit: options.defaultKit },
+    { defaultKit: options.defaultKit, installedKitDirs: options.installedKitDirs },
   );
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',

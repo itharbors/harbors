@@ -1,0 +1,347 @@
+name: Publish Kit reusable
+
+on:
+  workflow_call:
+    inputs:
+      kit-name:
+        description: Lowercase Kit product name without the kit/ prefix
+        required: true
+        type: string
+      label:
+        description: Marketplace display label
+        required: true
+        type: string
+      summary:
+        description: Marketplace summary
+        required: true
+        type: string
+      node-version:
+        description: Locked Node.js build version
+        required: false
+        default: 22.18.0
+        type: string
+      runner:
+        description: GitHub-hosted runner matching the Kit artifact target
+        required: false
+        default: ubuntu-latest
+        type: string
+
+jobs:
+  prepare:
+    runs-on: ${{ inputs.runner }}
+    permissions:
+      contents: read
+    outputs:
+      artifact-name: ${{ steps.package.outputs.ARTIFACT_NAME }}
+      channel: ${{ steps.context.outputs.channel }}
+      publish: ${{ steps.context.outputs.publish }}
+      tag: ${{ steps.context.outputs.tag }}
+      version: ${{ steps.package.outputs.VERSION }}
+    steps:
+      - name: Checkout Kit product
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate publication context
+        id: context
+        shell: bash
+        env:
+          KIT_NAME: ${{ inputs.kit-name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$KIT_NAME" =~ ^[a-z0-9][a-z0-9-]*$ ]]; then
+            echo 'Invalid Kit name' >&2
+            exit 1
+          fi
+          manifest_channel=$(node -e '
+            const fs = require("node:fs");
+            const manifest = JSON.parse(fs.readFileSync("kit.json", "utf8"));
+            process.stdout.write(String(manifest.channel));
+          ')
+          if [[ "$GITHUB_REF" == "refs/heads/kit/$KIT_NAME" ]]; then
+            if [[ "$manifest_channel" == stable ]]; then
+              echo 'Stable source commit waits for its immutable Tag; skipping Preview publication.'
+              echo 'publish=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            if [[ "$manifest_channel" != preview ]]; then
+              echo "Invalid branch manifest channel: $manifest_channel" >&2
+              exit 1
+            fi
+            channel=preview
+            tag="preview/$KIT_NAME/${GITHUB_RUN_ID}${GITHUB_RUN_ATTEMPT}-${GITHUB_SHA:0:12}"
+          elif [[ "$GITHUB_REF" == refs/tags/kit/"$KIT_NAME"/v* ]]; then
+            if [[ "$manifest_channel" != stable ]]; then
+              echo "Stable Tag requires a stable manifest, got $manifest_channel" >&2
+              exit 1
+            fi
+            channel=stable
+            tag="${GITHUB_REF#refs/tags/}"
+          else
+            echo "Ref $GITHUB_REF cannot publish Kit $KIT_NAME" >&2
+            exit 1
+          fi
+          echo 'publish=true' >> "$GITHUB_OUTPUT"
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        if: steps.context.outputs.publish == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ inputs.node-version }}
+          package-manager-cache: false
+
+      - name: Install locked Kit dependencies
+        if: steps.context.outputs.publish == 'true'
+        run: npm ci
+
+      - name: Test Kit
+        if: steps.context.outputs.publish == 'true'
+        run: npm test
+
+      - name: Build Kit
+        if: steps.context.outputs.publish == 'true'
+        run: npm run build
+
+      - name: Checkout pinned Harbors publishing toolchain
+        if: steps.context.outputs.publish == 'true'
+        uses: actions/checkout@v6
+        with:
+          repository: itharbors/harbors
+          ref: kit-publish-v1
+          path: .harbors-toolchain
+          persist-credentials: false
+
+      - name: Build pinned publishing toolchain
+        if: steps.context.outputs.publish == 'true'
+        working-directory: .harbors-toolchain
+        run: |
+          npm ci --ignore-scripts
+          npm run build -w @itharbors/kit-core
+          npm run build -w @itharbors/kit-cli
+
+      - name: Validate, pack, and generate publication metadata
+        if: steps.context.outputs.publish == 'true'
+        id: package
+        shell: bash
+        env:
+          CHANNEL: ${{ steps.context.outputs.channel }}
+          KIT_LABEL: ${{ inputs.label }}
+          KIT_SUMMARY: ${{ inputs.summary }}
+          RELEASE_TAG: ${{ steps.context.outputs.tag }}
+        run: |
+          set -euo pipefail
+          output_directory="$RUNNER_TEMP/kit-release"
+          node .harbors-toolchain/scripts/kit-publish.mjs prepare \
+            --kit-directory . \
+            --output-directory "$output_directory" \
+            --repository "$GITHUB_REPOSITORY" \
+            --commit "$GITHUB_SHA" \
+            --workflow "$GITHUB_WORKFLOW_REF" \
+            --signer-workflow itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1 \
+            --ref "$GITHUB_REF" \
+            --tag "$RELEASE_TAG" \
+            --label "$KIT_LABEL" \
+            --summary "$KIT_SUMMARY" >> "$GITHUB_OUTPUT"
+
+      - name: Inspect packed artifact offline
+        if: steps.context.outputs.publish == 'true'
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ steps.package.outputs.ARTIFACT_NAME }}
+        run: |
+          set -euo pipefail
+          node .harbors-toolchain/packages/kit-cli/dist/cli.js inspect \
+            "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" --json \
+            > "$RUNNER_TEMP/kit-release/inspection.json"
+
+      - name: Transfer publication bundle
+        if: steps.context.outputs.publish == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: kit-publication
+          path: ${{ runner.temp }}/kit-release
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-preview:
+    if: needs.prepare.outputs.publish == 'true' && needs.prepare.outputs.channel == 'preview'
+    needs: prepare
+    runs-on: ubuntu-latest
+    concurrency:
+      group: kit-registry-preview
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download publication bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: kit-publication
+          path: ${{ runner.temp }}/kit-release
+
+      - name: Attest Kit and Release manifest
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/kit-release/${{ needs.prepare.outputs.artifact-name }}
+            ${{ runner.temp }}/kit-release/release.json
+
+      - name: Create immutable Preview Release
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ needs.prepare.outputs.artifact-name }}
+          GH_TOKEN: ${{ github.token }}
+          KIT_LABEL: ${{ inputs.label }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Preview Release already exists: $TAG" >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" \
+            "$RUNNER_TEMP/kit-release/release.json" \
+            "$RUNNER_TEMP/kit-release/sbom.spdx.json" \
+            "$RUNNER_TEMP/kit-release/registry-entry.json" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "$KIT_LABEL $VERSION Preview" \
+            --notes "Automated Kit Preview from $GITHUB_SHA."
+
+      - name: Checkout Registry branch
+        uses: actions/checkout@v6
+        with:
+          ref: kit-registry
+          path: registry-branch
+
+      - name: Update Preview Registry entry
+        shell: bash
+        env:
+          ENTRY_FILE: ${{ runner.temp }}/kit-release/registry-entry.json
+          EXPECTED_CHANNEL: preview
+        run: |
+          set -euo pipefail
+          entry_path=$(node -e '
+            const fs = require("node:fs");
+            const entry = JSON.parse(fs.readFileSync(process.env.ENTRY_FILE, "utf8"));
+            if (entry.channel !== process.env.EXPECTED_CHANNEL) throw new Error("Registry channel mismatch");
+            const encoded = Buffer.from(entry.id, "utf8").toString("base64url");
+            process.stdout.write(`registry/entries/${encoded}/preview.json`);
+          ')
+          mkdir -p "registry-branch/$(dirname "$entry_path")"
+          cp "$ENTRY_FILE" "registry-branch/$entry_path"
+          git -C registry-branch config user.name 'github-actions[bot]'
+          git -C registry-branch config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C registry-branch add "$entry_path"
+          git -C registry-branch commit -m "[Feature] 更新 ${{ inputs.kit-name }} Kit Preview 索引"
+          git -C registry-branch push origin HEAD:kit-registry
+
+      - name: Retain ten Preview Releases
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          KIT_NAME: ${{ inputs.kit-name }}
+        run: |
+          set -euo pipefail
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+            | jq -r --arg prefix "preview/$KIT_NAME/" \
+              '.[][] | select(.prerelease == true and (.tag_name | startswith($prefix))) | [.created_at, .tag_name] | @tsv' \
+            | sort -r \
+            | tail -n +11 \
+            | while IFS=$'\t' read -r _ old_tag; do
+                [[ -z "$old_tag" ]] || gh release delete "$old_tag" --cleanup-tag --yes
+              done
+
+  publish-stable:
+    if: needs.prepare.outputs.publish == 'true' && needs.prepare.outputs.channel == 'stable'
+    needs: prepare
+    runs-on: ubuntu-latest
+    environment:
+      name: kit-stable
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      pull-requests: write
+    steps:
+      - name: Download publication bundle
+        uses: actions/download-artifact@v8
+        with:
+          name: kit-publication
+          path: ${{ runner.temp }}/kit-release
+
+      - name: Attest Kit and Release manifest
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            ${{ runner.temp }}/kit-release/${{ needs.prepare.outputs.artifact-name }}
+            ${{ runner.temp }}/kit-release/release.json
+
+      - name: Create immutable Stable Release
+        shell: bash
+        env:
+          ARTIFACT_NAME: ${{ needs.prepare.outputs.artifact-name }}
+          GH_TOKEN: ${{ github.token }}
+          KIT_LABEL: ${{ inputs.label }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Stable Release already exists: $TAG" >&2
+            exit 1
+          fi
+          gh release create "$TAG" \
+            "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" \
+            "$RUNNER_TEMP/kit-release/release.json" \
+            "$RUNNER_TEMP/kit-release/sbom.spdx.json" \
+            "$RUNNER_TEMP/kit-release/registry-entry.json" \
+            --verify-tag \
+            --title "$KIT_LABEL $VERSION" \
+            --notes "Reviewed Stable Kit Release from $GITHUB_SHA."
+
+      - name: Checkout Registry branch
+        uses: actions/checkout@v6
+        with:
+          ref: kit-registry
+          path: registry-branch
+
+      - name: Open Stable Registry review
+        shell: bash
+        env:
+          ENTRY_FILE: ${{ runner.temp }}/kit-release/registry-entry.json
+          EXPECTED_CHANNEL: stable
+          GH_TOKEN: ${{ github.token }}
+          KIT_NAME: ${{ inputs.kit-name }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          entry_path=$(node -e '
+            const fs = require("node:fs");
+            const entry = JSON.parse(fs.readFileSync(process.env.ENTRY_FILE, "utf8"));
+            if (entry.channel !== process.env.EXPECTED_CHANNEL) throw new Error("Registry channel mismatch");
+            const encoded = Buffer.from(entry.id, "utf8").toString("base64url");
+            process.stdout.write(`registry/entries/${encoded}/stable.json`);
+          ')
+          update_branch="registry/$KIT_NAME/$VERSION-$GITHUB_RUN_ID"
+          git -C registry-branch switch -c "$update_branch"
+          mkdir -p "registry-branch/$(dirname "$entry_path")"
+          cp "$ENTRY_FILE" "registry-branch/$entry_path"
+          git -C registry-branch config user.name 'github-actions[bot]'
+          git -C registry-branch config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C registry-branch add "$entry_path"
+          git -C registry-branch commit -m "[Feature] 上架 $KIT_NAME Kit $VERSION"
+          git -C registry-branch push origin "HEAD:refs/heads/$update_branch"
+          gh pr create \
+            --repo "$GITHUB_REPOSITORY" \
+            --base kit-registry \
+            --head "$update_branch" \
+            --title "[Feature] 上架 $KIT_NAME Kit $VERSION" \
+            --body "验证并发布 $KIT_NAME Kit $VERSION 到 Stable Registry。"
