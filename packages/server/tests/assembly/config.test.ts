@@ -4,6 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { normalizeAssemblyConfig } from '../../src/assembly/config';
 import { resolvePlugin, resolveKit } from '../../src/plugin/resolver';
+import { parseInstalledKitDirs } from '../../src/server';
 
 const tmpDirs: string[] = [];
 
@@ -26,13 +27,15 @@ afterEach(() => {
 
 describe('normalizeAssemblyConfig', () => {
   it('prefers CLI overrides over file config', () => {
-    const config = normalizeAssemblyConfig({
+    const fileConfig = {
       builtinPluginsDir: '/repo/builtin/plugins',
       pluginsDir: '/repo/plugins',
       builtinKitsDir: '/repo/builtin/kits',
       kitsDir: '/repo/kits',
+      installedKitDirs: ['/store/one'],
       defaultKit: 'kit-from-file',
-    }, {
+    };
+    const config = normalizeAssemblyConfig(fileConfig, {
       defaultKit: 'kit-from-cli',
       pluginsDir: '/repo/plugins-cli',
     });
@@ -42,8 +45,24 @@ describe('normalizeAssemblyConfig', () => {
       pluginsDir: '/repo/plugins-cli',
       builtinKitsDir: '/repo/builtin/kits',
       kitsDir: '/repo/kits',
+      installedKitDirs: ['/store/one'],
       defaultKit: 'kit-from-cli',
     });
+    expect(config.installedKitDirs).not.toBe(fileConfig.installedKitDirs);
+  });
+});
+
+describe('parseInstalledKitDirs', () => {
+  it('accepts only a JSON array of non-empty absolute paths and returns a clone', () => {
+    expect(parseInstalledKitDirs(undefined)).toEqual([]);
+    expect(parseInstalledKitDirs('["/store/one","/store/two"]')).toEqual([
+      '/store/one', '/store/two',
+    ]);
+    for (const value of ['{', '{}', '[""]', '["relative"]', '[1]']) {
+      expect(() => parseInstalledKitDirs(value)).toThrow(
+        'HARBORS_INSTALLED_KITS must be a JSON array of non-empty absolute paths',
+      );
+    }
   });
 });
 
@@ -116,6 +135,7 @@ describe('resolver uses explicit directories only', () => {
     const resolved = await resolveKit('default-kit', {
       builtinKitsDir,
       kitsDir: path.join(root, 'kits'),
+      installedKitDirs: [],
     });
 
     expect(resolved).toBe(path.join(builtinKitsDir, 'default-kit'));
@@ -150,8 +170,24 @@ describe('resolver uses explicit directories only', () => {
     const resolved = await resolveKit('default-kit', {
       builtinKitsDir,
       kitsDir,
+      installedKitDirs: [],
     });
 
     expect(resolved).toBe(path.join(builtinKitsDir, 'builtin-default'));
+  });
+
+  it('resolves an active installed Kit only from explicit installed directories', async () => {
+    const root = mkTmpDir('assembly-installed-kit');
+    const installed = path.join(root, 'store', 'encoded', '1.0.0');
+    writePkg(installed, {
+      name: '@example/kit-installed',
+      'ce-editor': { kit: { layouts: { default: 'layout.json' }, plugin: [] } },
+    });
+
+    await expect(resolveKit('@example/kit-installed', {
+      builtinKitsDir: path.join(root, 'builtin-kits'),
+      kitsDir: path.join(root, 'kits'),
+      installedKitDirs: [installed],
+    })).resolves.toBe(installed);
   });
 });

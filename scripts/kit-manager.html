@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
+    >
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>ITHARBORS Kit Dock</title>
+    <link rel="stylesheet" href="./kit-manager.css">
+  </head>
+  <body>
+    <div class="dock-shell">
+      <aside class="dock-mark" aria-label="ITHARBORS Kit Dock">
+        <span class="dock-mark__brand">ITHARBORS</span>
+        <span class="dock-mark__title" aria-hidden="true">KIT / DOCK</span>
+        <span class="dock-mark__rule"></span>
+        <span class="dock-mark__caption">Verified cargo only</span>
+      </aside>
+
+      <main id="manager-main" aria-busy="false">
+        <header class="dock-header">
+          <div>
+            <p class="eyebrow">Extension control</p>
+            <h1>Kit dock</h1>
+            <p class="lede">Install verified Kits now. Change the active version on a safe restart.</p>
+          </div>
+          <div class="registry-console" aria-live="polite">
+            <span class="registry-console__lamp" aria-hidden="true"></span>
+            <div>
+              <strong id="registry-status">Loading Registry…</strong>
+              <span id="registry-detail">Checking the last verified market snapshot.</span>
+            </div>
+            <button id="refresh-button" class="button button--quiet" type="button">Refresh</button>
+          </div>
+        </header>
+
+        <div id="registry-notice" class="notice" role="status" hidden></div>
+        <div id="operation-status" class="operation-status" role="status" aria-live="polite"></div>
+
+        <section class="berth-section" aria-labelledby="stable-heading">
+          <div class="section-heading">
+            <div>
+              <p class="eyebrow">Release channel</p>
+              <h2 id="stable-heading">Stable berths</h2>
+            </div>
+            <span class="section-heading__note">Reviewed releases · safe restart activation</span>
+          </div>
+          <p id="stable-empty" class="empty-state" hidden></p>
+          <div id="stable-list" class="kit-grid"></div>
+        </section>
+
+        <details id="preview-section" class="preview-section">
+          <summary>
+            <span>
+              <span class="eyebrow">Opt-in channel</span>
+              <strong>Preview berths</strong>
+            </span>
+            <span class="preview-section__warning">May change without notice</span>
+          </summary>
+          <section aria-label="Preview Kits">
+            <p id="preview-empty" class="empty-state" hidden>No Preview releases are listed.</p>
+            <div id="preview-list" class="kit-grid"></div>
+          </section>
+        </details>
+
+        <footer class="dock-footer">
+          <strong>Versions stay immutable.</strong>
+          <span>Uninstall is not available yet because active workspace references must be preserved safely.</span>
+        </footer>
+      </main>
+    </div>
+    <script type="module" src="./kit-manager-renderer.mjs"></script>
+  </body>
+</html>

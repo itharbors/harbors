@@ -90,6 +90,8 @@ export function buildTrayTemplate({
     ...availableEntries,
     ...unavailableEntries,
     { type: 'separator' },
+    { label: 'Kit Manager…', click: () => adapters.openKitManager() },
+    { type: 'separator' },
     { label: 'Quit ITHARBORS', click: () => adapters.quit() },
   ];
 }
@@ -121,17 +123,21 @@ export async function openOrFocusKitWindow(kitName, registry, pendingLoads, crea
 
 export async function shutdownDesktopServices({
   persistWorkspace,
+  stopKitManagerService = () => Promise.resolve(),
   stopFramework,
   stopNotificationService,
 }) {
-  const frameworkResults = await Promise.allSettled([
+  const controlResults = await Promise.allSettled([
     persistWorkspace(),
+    stopKitManagerService(),
+  ]);
+  const frameworkResults = await Promise.allSettled([
     stopFramework(),
   ]);
   const notificationResults = await Promise.allSettled([
     stopNotificationService(),
   ]);
-  return [...frameworkResults, ...notificationResults];
+  return [...controlResults, ...frameworkResults, ...notificationResults];
 }
 
 export async function persistOpenWindowBounds(registry, workspaceStore) {

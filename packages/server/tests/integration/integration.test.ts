@@ -145,6 +145,45 @@ describe('Framework Integration', () => {
     }
   });
 
+  it('creates a session from an explicitly active installed Kit directory', async () => {
+    const installedKit = mkdtempSync(path.join(tmpdir(), 'harbors-installed-session-'));
+    tempDirs.push(installedKit);
+    writeFileSync(path.join(installedKit, 'package.json'), JSON.stringify({
+      name: '@example/kit-installed',
+      version: '1.0.0',
+      'ce-editor': {
+        kit: {
+          menuRoot: { id: 'installed', label: 'Installed Kit' },
+          layouts: { default: 'layout.json' },
+          windowEntries: { main: 'main.html', secondary: 'secondary.html' },
+          plugin: [],
+        },
+      },
+    }));
+    writeFileSync(path.join(installedKit, 'layout.json'), JSON.stringify({ windows: [] }));
+    writeFileSync(path.join(installedKit, 'main.html'), '<!doctype html>');
+    writeFileSync(path.join(installedKit, 'secondary.html'), '<!doctype html>');
+    const server = createServer({
+      defaultKit: '@example/kit-installed',
+      installedKitDirs: [installedKit],
+    });
+    const installedPort = await server.start(0);
+    try {
+      const response = await fetch(`http://localhost:${installedPort}/api/session`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: 'installed-session', kit: '@example/kit-installed' }),
+      });
+      expect(response.status).toBe(201);
+      const bootstrap = await fetch(
+        `http://localhost:${installedPort}/api/bootstrap/installed-session`,
+      );
+      await expect(bootstrap.json()).resolves.toMatchObject({ kitName: '@example/kit-installed' });
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('GET /api/bootstrap/:sessionId returns session-specific menuTree without leaking menu state across sessions', async () => {
     await createSession('menu-a');
     await createSession('menu-b');

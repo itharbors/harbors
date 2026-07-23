@@ -8,6 +8,7 @@ const catalog = Promise.resolve([
     name: '@itharbors/kit-mysql',
     label: 'MySQL',
     directory: '/private/repository/kits/mysql',
+    source: 'builtin' as const,
   },
 ]);
 

@@ -77,11 +77,42 @@ Kit package 的核心结构：
 
 ## Kit 解析
 
-传入值像路径时，resolver 先尝试该路径并要求存在 `package.json`。否则在 assembly
-配置的 builtin kits 和 kits 目录中枚举一级子目录，使用目录名或 package name 匹配。
+远程 Kit 不由运行时直接解析 URL。application-scope 的 Registry 服务先读取严格
+`index.v1.json`，使用 ETag 刷新并原子缓存已验证快照；Release Resolver 再根据当前快照中的
+`id + version + channel` 选择唯一兼容资产，验证权限投影、publisher repository/workflow
+policy、revocation 和 attestation claims。生产 verifier 使用 Sigstore 分别验证固定 reusable
+signer 的 GitHub Actions 证书身份、transparency log，以及 caller workflow/Commit 的 SLSA
+source claims。下载器只接受 Resolver 创建的内部可信对象，流式核对大小与
+SHA-256 后交给 InstalledKitStore 安装事务。安装与激活分离，网络或校验失败不修改 active。
 
-默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，默认 Kit 是
+发布面由产品分支中的薄 caller 和固定 `kit-publish-v1` reusable workflow 组成。Preview push
+自动生成 prerelease、GitHub Artifact Attestation 和 preview Registry 投影；Stable Tag 经过
+`kit-stable` Environment 审批后生成不可覆盖的 Release，并向 `kit-registry` 提交审核 PR。
+Registry 分支在 PR 中重新获取并校验所有 Release manifest，只有 push 校验成功才聚合
+`index.v1.json` 并部署 GitHub Pages。客户端和聚合器只跟随 GitHub Release 到官方内容 CDN，
+不会接受任意重定向。
+
+`KitRegistryManager.list/refresh` 将远程市场和已安装状态合并为公开投影，但移除 Release URL、
+本地目录、digest、Commit 和 source。相同 Kit 的 install 操作串行化，不同 Kit 可以并行下载；
+刷新和安装写入不接受任意详情字段的 `audit.ndjson`。Electron main process 通过独立本地 Kit
+Dock 提供五个 sender-bound IPC 操作，普通 Kit Renderer 无法调用，也不能提交 URL、路径或
+摘要。安装不热替换运行中代码，activate/rollback 只设置 pending。
+
+传入值像路径时，resolver 先尝试该路径并要求存在 `package.json`。否则在 assembly
+配置的 builtin kits 和 kits 目录中枚举一级子目录，使用目录名或 package name 匹配；此外只
+检查 assembly 明确传入的 `installedKitDirs`，不会扫描 Store 根或任意版本目录。
+
+默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，installed 目录默认为空，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
+
+Electron 在启动时先将 pending 版本暂存为 active 并用完整 Catalog 校验，再让 Framework
+检查 application-scope 启动状态并通过一次临时 Session 真实加载普通插件。两层都成功后才提交
+激活；真实加载失败通过一次原子写入进入 badVersions，并把 previous 重新置为 pending 后自动
+重启。previous 也必须重新通过两层验证；再次失败或没有 previous 时原子清除该 Kit 的 active。
+完成这一步后再从 InstalledKitStore 读取 active 版本快照，将同一目录数组交给桌面
+Catalog 并序列化为 `HARBORS_INSTALLED_KITS` 传给 Server。桌面端校验发布 `kit.json` 与
+Store 记录的 id/version，Server 再独立校验运行时 `package.json`。builtin、installed 和
+显式开发路径之间出现 package name 或 menu root 冲突时直接拒绝，不采用覆盖优先级。
 
 Electron 默认通过 KitCatalog 扫描 `kits/*`，但启动时只保留静态目录并读取已有 workspace
 记录。首次从 Tray 选择 Kit 时才调用 `WorkspaceStore.getOrCreate()`，创建或恢复稳定

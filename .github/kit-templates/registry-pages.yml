@@ -1,0 +1,85 @@
+name: Validate and publish Kit Registry
+
+on:
+  push:
+    branches:
+      - kit-registry
+  pull_request:
+    branches:
+      - kit-registry
+    types:
+      - opened
+      - synchronize
+      - reopened
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout Registry
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Checkout pinned Registry toolchain
+        uses: actions/checkout@v6
+        with:
+          repository: itharbors/harbors
+          ref: kit-publish-v1
+          path: .harbors-toolchain
+          persist-credentials: false
+
+      - name: Build pinned Registry toolchain
+        working-directory: .harbors-toolchain
+        run: |
+          npm ci --ignore-scripts
+          npm run build -w @itharbors/kit-core
+          npm run build -w @itharbors/kit-cli
+
+      - name: Verify and aggregate Registry
+        shell: bash
+        run: |
+          set -euo pipefail
+          site_directory="$RUNNER_TEMP/registry-site"
+          mkdir -p "$site_directory"
+          generated_at=$(date -u +'%Y-%m-%dT%H:%M:%S.000Z')
+          node .harbors-toolchain/scripts/kit-publish.mjs aggregate \
+            --entries-directory registry/entries \
+            --revocations-file registry/revocations.json \
+            --output "$site_directory/index.v1.json" \
+            --generated-at "$generated_at"
+
+      - name: Configure Pages
+        if: github.event_name == 'push'
+        uses: actions/configure-pages@v5
+
+      - name: Upload validated Pages artifact
+        if: github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: ${{ runner.temp }}/registry-site
+
+  deploy:
+    if: github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy Registry Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

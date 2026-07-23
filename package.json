@@ -1,25 +1,43 @@
 {
   "name": "itharbors",
   "private": true,
-  "workspaces": ["packages/*", "kits/*", "plugins/*"],
+  "workspaces": [
+    "packages/*",
+    "kits/*",
+    "plugins/*"
+  ],
   "scripts": {
     "start": "electron scripts/electron.mjs",
     "dev": "node scripts/dev-electron.mjs",
     "dev:web": "node scripts/dev.mjs",
     "electron": "npm run start --",
+    "kit": "node packages/kit-cli/dist/cli.js",
+    "kit:publish": "node scripts/kit-publish.mjs",
+    "kits:validate": "npm run kit -- validate",
     "plugins:build": "node scripts/ce-plugin.mjs build --all && node scripts/prepare-notification-skill-resource.mjs",
     "plugins:check": "node scripts/ce-plugin.mjs check --all",
-    "build": "npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/sqlite-contracts && npm run build -w @itharbors/mysql-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
+    "build": "npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/sqlite-contracts && npm run build -w @itharbors/mysql-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build",
     "clean": "node scripts/clean.mjs",
-    "test": "npm run test -w packages/gateway && npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/relationship-graph && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && npm run test -w @itharbors/kit-notifications && node --test scripts/lib/kit-path.test.mjs scripts/lib/ci-workflow.test.mjs scripts/lib/plugin-namespace.test.mjs scripts/lib/kit-catalog.test.mjs scripts/lib/workspace-store.test.mjs scripts/lib/electron-launcher.test.mjs scripts/lib/application-runtime-client.test.mjs scripts/lib/codex-skill-resource.test.mjs scripts/lib/notification-host.test.mjs scripts/lib/notification-desktop.test.mjs scripts/lib/runtime-ports.test.mjs scripts/lib/npm-spawn.test.mjs scripts/lib/plugin-build/scripts.test.mjs .agents/skills/notify-user/tests/notify.test.mjs && npm run test:change-workflow",
+    "test": "npm run test -w packages/gateway && npm run test -w packages/server && npm run test -w packages/client && npm run test -w @itharbors/relationship-graph && npm run test -w @itharbors/kit-core && npm run test -w @itharbors/kit-cli && npm run test -w @itharbors/kit-sqlite && npm run test -w @itharbors/kit-mysql && npm run test -w @itharbors/kit-notifications && node --test scripts/lib/kit-path.test.mjs scripts/lib/ci-workflow.test.mjs scripts/lib/plugin-namespace.test.mjs scripts/lib/kit-catalog.test.mjs scripts/lib/workspace-store.test.mjs scripts/lib/electron-launcher.test.mjs scripts/lib/application-runtime-client.test.mjs scripts/lib/codex-skill-resource.test.mjs scripts/lib/notification-host.test.mjs scripts/lib/notification-desktop.test.mjs scripts/lib/runtime-ports.test.mjs scripts/lib/npm-spawn.test.mjs scripts/lib/framework-runtime.test.mjs scripts/lib/plugin-build/scripts.test.mjs scripts/lib/kit-store/state.test.mjs scripts/lib/kit-store/startup.test.mjs scripts/lib/kit-store/archive.test.mjs scripts/lib/kit-store/installer.test.mjs scripts/lib/kit-registry/cache.test.mjs scripts/lib/kit-registry/client.test.mjs scripts/lib/kit-registry/resolver.test.mjs scripts/lib/kit-registry/github-release-fetch.test.mjs scripts/lib/kit-registry/github-attestation.test.mjs scripts/lib/kit-registry/downloader.test.mjs scripts/lib/kit-registry/audit.test.mjs scripts/lib/kit-registry/manager.test.mjs scripts/lib/kit-registry/acceptance.test.mjs scripts/lib/kit-manager-service.test.mjs scripts/lib/kit-manager-ipc.test.mjs scripts/lib/kit-manager-preload.test.mjs scripts/lib/kit-manager-view.test.mjs scripts/lib/kit-manager-window.test.mjs scripts/lib/kit-manager-acceptance.test.mjs scripts/lib/kit-docs.test.mjs .agents/skills/notify-user/tests/notify.test.mjs && npm run test:kit-publish && npm run test:change-workflow && npm run test:kit-workflow && npm run test:kit-migration && npm run test:kit-registry-migration",
+    "test:kit-publish": "node --test scripts/lib/kit-publish/*.test.mjs",
     "test:change-workflow": "bash .agents/skills/change-workflow/tests/change-workflow.test.sh",
+    "test:kit-workflow": "bash scripts/lib/kit-workflow/kit-workflow.test.sh",
+    "test:kit-migration": "node --test scripts/lib/kit-product-migration.test.mjs",
+    "test:kit-registry-migration": "node --test scripts/lib/kit-registry-migration.test.mjs",
     "kill": "lsof -ti:49380 | xargs kill -9 2>/dev/null; lsof -ti:49381 | xargs kill -9 2>/dev/null; lsof -ti:49382 | xargs kill -9 2>/dev/null; echo 'development ports cleared'",
     "check": "npm run build && npm test && npm run plugins:check"
   },
   "devDependencies": {
+    "@types/yauzl": "^3.4.0",
     "concurrently": "^9.0.0",
     "electron": "^31.0.0",
     "esbuild": "^0.28.0",
+    "jsdom": "29.1.1",
     "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@itharbors/kit-core": "^0.0.1",
+    "sigstore": "3.1.0",
+    "yauzl": "^3.4.0"
   }
 }

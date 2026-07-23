@@ -55,6 +55,7 @@ describe('resolvePlugin', () => {
     return {
       builtinKitsDir: path.join(projectRoot, 'builtin-kits'),
       kitsDir: path.join(projectRoot, 'kits'),
+      installedKitDirs: [],
     };
   }
 

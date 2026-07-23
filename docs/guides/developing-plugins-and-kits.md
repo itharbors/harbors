@@ -228,6 +228,11 @@ kits/my-kit/
 Session 插件，两者不能在同一 Kit 中包含同一 package name。Electron 默认不自动打开 Kit，
 用户首次从 Tray 选择或通过 `--kit` 直达时才创建 Session；Kit 下的插件仍需先生成 dist。
 
+要生成可独立传递的 Kit 制品，还需在 Kit 根增加发布协议 `kit.json`，并使用
+`npm run kit -- validate/pack/inspect`。完整字段、目标 ABI、制品内容和本地 Store 行为见
+[Kit 制品与本地安装](./kit-artifacts.md)。`--kit <path>` 仍是开发期显式路径，不会写入
+Installed Kit Store。
+
 ### 应用启动插件
 
 只有必须在任何 Kit 窗口打开前可用、且不需要 UI 的能力才应放进 `startup.plugins`，例如本机

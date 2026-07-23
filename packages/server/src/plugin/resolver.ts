@@ -11,6 +11,7 @@ export interface PluginResolveContext {
 export interface KitResolveContext {
   builtinKitsDir: string;
   kitsDir: string;
+  installedKitDirs: string[];
 }
 
 /**
@@ -38,6 +39,15 @@ export async function resolveKit(nameOrPath: string, ctx: KitResolveContext): Pr
     const explicitPath = path.resolve(nameOrPath);
     if (fs.existsSync(path.join(explicitPath, 'package.json'))) {
       return explicitPath;
+    }
+  }
+
+  for (const installedDirectory of ctx.installedKitDirs) {
+    try {
+      const pkg = JSON.parse(await readFile(path.join(installedDirectory, 'package.json'), 'utf8'));
+      if (pkg.name === nameOrPath && pkg['ce-editor']?.kit) return path.resolve(installedDirectory);
+    } catch {
+      continue;
     }
   }
 
