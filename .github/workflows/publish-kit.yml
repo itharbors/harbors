@@ -1,0 +1,23 @@
+name: Publish Notifications Kit
+
+on:
+  push:
+    branches:
+      - kit/notifications
+    tags:
+      - 'kit/notifications/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  pull-requests: write
+
+jobs:
+  publish:
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v1
+    with:
+      kit-name: notifications
+      label: Notifications
+      summary: 桌面通知中心与 Codex notify-user Skill 安装能力
+      runner: ubuntu-latest
