@@ -1,0 +1,37 @@
+{
+  "name": "@itharbors/notification-center",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "center": {
+          "entry": "./panel.center/dist/index.html",
+          "title": "Notifications",
+          "minWidth": 420,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "request": {
+          "getSnapshot": ["getSnapshot"],
+          "markRead": ["markRead"],
+          "markAllRead": ["markAllRead"],
+          "removeNotification": ["removeNotification"],
+          "openCenterPanel": ["openCenterPanel"]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/notification-center",
+          "message": "openCenterPanel",
+          "order": 1000,
+          "label": "Notification Center"
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "type": "panel",
+  "plugin": "@example/demo",
+  "panel": "main"
+}
