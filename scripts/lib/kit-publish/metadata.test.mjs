@@ -140,6 +140,23 @@ test('rejects channel-specific SemVer, Tag, source workflow, and signer mismatch
   }
 });
 
+test('rejects noncanonical publication SemVer versions before deriving a Tag', () => {
+  for (const version of ['v1.2.3', '01.2.3', '1.2']) {
+    assert.throws(() => createKitPublicationMetadata(input({
+      manifest: { ...stableManifest, version },
+    })), /version/i);
+  }
+});
+
+test('rejects build metadata under the core canonical SemVer policy', () => {
+  for (const manifest of [
+    { ...stableManifest, version: '1.2.4+build.7' },
+    { ...stableManifest, version: '1.3.0-preview.1+build.7', channel: 'preview' },
+  ]) {
+    assert.throws(() => createKitPublicationMetadata(input({ manifest })), /version/i);
+  }
+});
+
 test('rejects display metadata and Kit identities that could become paths or workflow commands', () => {
   for (const overrides of [
     { label: 'MySQL\nINJECT=1' },

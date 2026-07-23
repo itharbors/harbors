@@ -233,6 +233,30 @@ test('rejects Release identity, permissions, repository, workflow, asset URL, an
   }
 });
 
+test('requires the only Release asset to use the name derived from its parsed manifest', () => {
+  const stable = entry('stable');
+  const base = release('stable');
+  for (const name of [
+    'source.zip',
+    'kit-mysql-9.9.9-any-any.hkit',
+  ]) {
+    const mutated = {
+      ...base,
+      assets: [{
+        ...base.assets[0],
+        name,
+        url: `https://github.com/${repository}/releases/download/${encodeURIComponent(stable.source.tag)}/${name}`,
+      }],
+    };
+    assert.throws(() => buildKitRegistryIndex({
+      entries: [stable],
+      releasesByUrl: new Map([[stable.releaseManifestUrl, mutated]]),
+      revocations: [],
+      generatedAt: '2026-07-23T12:00:00.000Z',
+    }), /asset/i);
+  }
+});
+
 test('validates Preview revocation evidence against its exact immutable Tag', () => {
   const preview = entry('preview');
   const revocation = {
@@ -261,6 +285,68 @@ test('validates Preview revocation evidence against its exact immutable Tag', ()
     }],
     generatedAt: '2026-07-23T12:00:00.000Z',
   }), /revocation evidence/i);
+});
+
+test('requires revocation evidence to meet the immutable Release trust contract', () => {
+  const preview = entry('preview');
+  const base = release('preview');
+  const revocation = {
+    id: preview.id,
+    version: preview.version,
+    sha256: digest,
+    reason: 'known-vulnerability',
+    action: 'block-install',
+    releaseManifestUrl: preview.releaseManifestUrl,
+  };
+  const mutations = [
+    {
+      source: {
+        ...base.source,
+        workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/mysql`,
+      },
+    },
+    {
+      source: {
+        ...base.source,
+        signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
+      },
+    },
+    {
+      source: {
+        ...base.source,
+        signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/heads/main',
+      },
+    },
+    {
+      assets: [{
+        ...base.assets[0],
+        name: 'source.zip',
+        url: `https://github.com/${repository}/releases/download/${encodeURIComponent(preview.source.tag)}/source.zip`,
+      }],
+    },
+    {
+      assets: [{
+        ...base.assets[0],
+        name: 'kit-mysql-9.9.9-any-any.hkit',
+        url: `https://github.com/${repository}/releases/download/${encodeURIComponent(preview.source.tag)}/kit-mysql-9.9.9-any-any.hkit`,
+      }],
+    },
+    { assets: [{ ...base.assets[0], url: 'https://example.test/kit.hkit' }] },
+    {
+      source: {
+        ...base.source,
+        attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${'b'.repeat(64)}`,
+      },
+    },
+  ];
+  for (const mutation of mutations) {
+    assert.throws(() => buildKitRegistryIndex({
+      entries: [],
+      releasesByUrl: new Map([[preview.releaseManifestUrl, { ...base, ...mutation }]]),
+      revocations: [revocation],
+      generatedAt: '2026-07-23T12:00:00.000Z',
+    }), /workflow|signer|asset|attestation/i);
+  }
 });
 
 test('loads canonical entry paths, fetches bounded manifests, and validates revocation evidence', async () => {

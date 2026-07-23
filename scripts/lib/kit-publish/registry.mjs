@@ -12,6 +12,7 @@ import {
 } from '@itharbors/kit-core';
 
 import { fetchGitHubReleaseAsset } from '../kit-registry/github-release-fetch.mjs';
+import { deriveArtifactName } from './metadata.mjs';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -146,6 +147,32 @@ function sameStrings(left, right) {
     && [...left].sort().every((value, index) => value === [...right].sort()[index]);
 }
 
+function validateReleaseEvidence(release, { repository, tag, context }) {
+  const expectedWorkflow = `${repository}/.github/workflows/publish-kit.yml@refs/tags/${tag}`;
+  if (release.source.workflow !== expectedWorkflow) {
+    throw new Error(`Release workflow does not match ${context}`);
+  }
+  if (!PUBLISH_SIGNER_WORKFLOWS.has(release.source.signerWorkflow)) {
+    throw new Error(`Release signer workflow does not match ${context}`);
+  }
+  if (release.assets.length !== 1) {
+    throw new Error('Release manifest must contain exactly one attested Kit asset');
+  }
+  const [asset] = release.assets;
+  const expectedAssetName = deriveArtifactName(asset.manifest);
+  if (asset.name !== expectedAssetName) {
+    throw new Error(`Release asset name does not match manifest ${context}`);
+  }
+  if (asset.url !== exactReleaseUrl(repository, tag, expectedAssetName)) {
+    throw new Error(`Release asset URL does not match ${context}`);
+  }
+  const expectedAttestation = `https://api.github.com/repos/${repository}/attestations/sha256:${asset.sha256}`;
+  if (release.source.attestationUrl !== expectedAttestation) {
+    throw new Error(`Release attestation URL does not match asset ${expectedAssetName}`);
+  }
+  return asset;
+}
+
 function validateRelease(entry, rawRelease) {
   const release = parseReleaseManifest(rawRelease);
   if (
@@ -156,26 +183,13 @@ function validateRelease(entry, rawRelease) {
     || release.source.repository !== entry.source.repository
   ) throw new Error(`Release identity does not match Registry entry ${entry.id}@${entry.version}`);
 
-  const expectedWorkflow = `${entry.source.repository}/.github/workflows/publish-kit.yml@refs/tags/${entry.source.tag}`;
-  if (release.source.workflow !== expectedWorkflow) {
-    throw new Error(`Release workflow does not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  if (!PUBLISH_SIGNER_WORKFLOWS.has(release.source.signerWorkflow)) {
-    throw new Error(`Release signer workflow does not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  if (release.assets.length !== 1) {
-    throw new Error('Release manifest must contain exactly one attested Kit asset');
-  }
-  const [asset] = release.assets;
+  const asset = validateReleaseEvidence(release, {
+    repository: entry.source.repository,
+    tag: entry.source.tag,
+    context: `Registry entry ${entry.id}@${entry.version}`,
+  });
   if (!sameStrings(asset.manifest.permissions, entry.permissions)) {
     throw new Error(`Release permissions do not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  if (asset.url !== exactReleaseUrl(entry.source.repository, entry.source.tag, asset.name)) {
-    throw new Error(`Release asset URL does not match Registry entry ${entry.id}@${entry.version}`);
-  }
-  const expectedAttestation = `https://api.github.com/repos/${entry.source.repository}/attestations/sha256:${asset.sha256}`;
-  if (release.source.attestationUrl !== expectedAttestation) {
-    throw new Error(`Release attestation URL does not match asset ${asset.name}`);
   }
   return release;
 }
@@ -222,9 +236,11 @@ function validateRevocation(revocation, rawRelease) {
   if (revocation.releaseManifestUrl !== exactReleaseUrl(release.source.repository, tag)) {
     throw new Error('Revocation evidence must be an immutable Stable GitHub Release manifest');
   }
-  if (asset.url !== exactReleaseUrl(release.source.repository, tag, asset.name)) {
-    throw new Error('Revocation evidence asset URL is inconsistent');
-  }
+  validateReleaseEvidence(release, {
+    repository: release.source.repository,
+    tag,
+    context: `revocation evidence ${revocation.id}@${revocation.version}`,
+  });
   return release;
 }
 
