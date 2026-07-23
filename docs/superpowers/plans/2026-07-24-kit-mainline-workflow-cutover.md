@@ -275,7 +275,7 @@ validate commits since `origin/main`, run the targeted check, push normally, and
 
 In `release-kit.sh`:
 
-1. Accept valid Stable or prerelease SemVer.
+1. Accept only canonical Stable or prerelease SemVer under the existing `kit-core` policy; reject build metadata.
 2. Require local branch `main`, a clean tree, and `HEAD == refs/remotes/origin/main`.
 3. Require `kit.json.channel=stable` for plain SemVer and `preview` for prerelease SemVer.
 4. Require `kits/$kit/kit.json.version` and `kits/$kit/package.json.version` to equal the argument.

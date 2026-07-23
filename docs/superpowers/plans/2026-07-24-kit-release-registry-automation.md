@@ -11,7 +11,8 @@
 ## Global Constraints
 
 - Run this plan after `2026-07-24-kit-monorepo-source-consolidation.md` passes.
-- Publication Tags are exactly `kit/{sqlite|mysql|notifications}/v<valid-semver>`.
+- Publication Tags are exactly `kit/{sqlite|mysql|notifications}/v<canonical-semver>`; versions follow the existing
+  `kit-core` canonical SemVer policy and must not include build metadata.
 - A plain SemVer requires `kit.json.channel=stable`; a prerelease SemVer requires `kit.json.channel=preview`.
 - Tag version, `kit.json.version`, `package.json.version`, `release.json.version`, and artifact filename version must match exactly.
 - The Tag Commit must be reachable from `origin/main`.

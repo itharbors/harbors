@@ -21,7 +21,8 @@ Release 全量重建市场索引。Kit 发布和 Framework 发布使用不同 Ta
 2. SQLite、MySQL 和 Notifications 分别位于 `kits/sqlite`、`kits/mysql` 和
    `kits/notifications`。
 3. 每个 Kit 独立声明 manifest、版本、依赖、测试、构建命令和发布载荷。
-4. `kit/<slug>/v<semver>` Tag 只发布 `kits/<slug>`。
+4. `kit/<slug>/v<canonical-semver>` Tag 只发布 `kits/<slug>`；版本遵循现有 `kit-core` canonical SemVer
+   策略，禁止 build metadata。
 5. 发布只上传经过验证的 `.hkit`、`release.json`、checksums、SBOM 和 Attestation；GitHub 自动生成
    的仓库源码 ZIP 不参与安装。
 6. Release 成功后自动从可信 Releases 全量重建 `index.v1.json`，不再提交逐版本 Registry JSON。
@@ -127,7 +128,8 @@ Workflow 对 Tag 执行严格解析：
 
 1. `<slug>` 必须属于 `sqlite`、`mysql` 或 `notifications`，且 `kits/<slug>` 存在。
 2. Tag 必须指向 `main` 可达的 Commit；游离提交或未合并功能分支不能发布。
-3. Tag 的 SemVer 必须与目标 `kit.json.version` 及 `package.json.version` 完全一致。
+3. Tag 的 canonical SemVer（禁止 build metadata）必须与目标 `kit.json.version` 及 `package.json.version`
+   完全一致。
 4. 普通 `X.Y.Z` 版本要求 `kit.json.channel` 为 `stable`。
 5. `X.Y.Z-<prerelease>` 版本要求 `kit.json.channel` 为 `preview`。
 6. 同名 Tag 或 GitHub Release 已存在时失败，不覆盖现有资产。
