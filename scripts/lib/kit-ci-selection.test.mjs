@@ -86,6 +86,7 @@ test('selects all official Kits for shared build, validation, Registry, and work
   for (const sharedPath of [
     'package.json',
     'package-lock.json',
+    'tsconfig.json',
     'registry/policy.json',
     'registry/revocations.json',
     'packages/kit-core/src/schema.ts',

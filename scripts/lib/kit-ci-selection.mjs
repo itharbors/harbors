@@ -13,6 +13,7 @@ const SHARED_PREFIXES = Object.freeze([
 const SHARED_FILES = new Set([
   'package.json',
   'package-lock.json',
+  'tsconfig.json',
   'registry/policy.json',
   'registry/revocations.json',
   'scripts/check-kit.mjs',
