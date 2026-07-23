@@ -4,6 +4,7 @@ import {
   layoutRelationshipGraph,
   moveRelationshipNode,
   panRelationshipViewport,
+  RELATIONSHIP_LAYOUT,
   zoomRelationshipViewport,
   type Relationship,
   type RelationshipGraph,
@@ -147,10 +148,9 @@ describe('relationship graph layout', () => {
     const canvas = { width: 1_600, height: 600 };
 
     const layout = layoutRelationshipGraph(graph, canvas);
-    const fitted = fitRelationshipViewport(layout, canvas);
 
     expectNoOverlap(layout);
-    expect(fitted.scale).toBeGreaterThan(0.08);
+    expect(rawFitScale(layout, canvas)).toBeGreaterThan(0.08);
     expect(new Set(layout.nodes.map((node) => node.y)).size).toBe(2);
   });
 
@@ -271,6 +271,22 @@ function distance(layout: RelationshipLayout, leftName: string, rightName: strin
   const left = layout.nodes.find((node) => node.name === leftName)!;
   const right = layout.nodes.find((node) => node.name === rightName)!;
   return Math.hypot(left.x - right.x, left.y - right.y);
+}
+
+function rawFitScale(
+  layout: RelationshipLayout,
+  canvas: { width: number; height: number },
+): number {
+  const minX = Math.min(...layout.nodes.map((node) => node.x));
+  const minY = Math.min(...layout.nodes.map((node) => node.y));
+  const maxX = Math.max(...layout.nodes.map((node) => node.x + node.width));
+  const maxY = Math.max(...layout.nodes.map((node) => node.y + node.height));
+  const padding = RELATIONSHIP_LAYOUT.padding * 2;
+  return Math.min(
+    canvas.width / (maxX - minX + padding),
+    canvas.height / (maxY - minY + padding),
+    1,
+  );
 }
 
 function pathCoordinates(path: string): Array<{ x: number; y: number }> {
