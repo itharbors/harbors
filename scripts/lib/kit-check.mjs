@@ -11,6 +11,13 @@ const BUILD_WORKSPACES = Object.freeze({
   sqlite: ['@itharbors/sqlite-contracts', '@itharbors/relationship-graph', '@itharbors/kit-core', '@itharbors/kit-cli'],
 });
 
+function normalizeOutputDirectory(outputDirectory) {
+  if (typeof outputDirectory !== 'string' || outputDirectory.length === 0 || !path.isAbsolute(outputDirectory)) {
+    throw new TypeError('outputDirectory must be a non-empty absolute path');
+  }
+  return path.resolve(outputDirectory);
+}
+
 export function runCheckedCommand(command, args, { cwd } = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { cwd, shell: false, stdio: 'inherit' });
@@ -33,6 +40,7 @@ export async function checkOfficialKit({
   outputDirectory,
   runCommand = runCheckedCommand,
 }) {
+  const normalizedOutputDirectory = normalizeOutputDirectory(outputDirectory);
   const kit = await loadOfficialKit({ repositoryRoot, slug });
   for (const workspace of BUILD_WORKSPACES[slug]) {
     await runCommand('npm', ['run', 'build', '-w', workspace], { cwd: repositoryRoot });
@@ -57,8 +65,8 @@ export async function checkOfficialKit({
   await runCommand(process.execPath, ['packages/kit-cli/dist/cli.js', 'validate', `kits/${slug}`], {
     cwd: repositoryRoot,
   });
-  const artifactPath = path.join(outputDirectory, deriveArtifactName(kit.manifest));
-  await mkdir(outputDirectory, { recursive: true });
+  const artifactPath = path.join(normalizedOutputDirectory, deriveArtifactName(kit.manifest));
+  await mkdir(normalizedOutputDirectory, { recursive: true });
   await runCommand(process.execPath, [
     'packages/kit-cli/dist/cli.js', 'pack', `kits/${slug}`, '--output', artifactPath,
   ], { cwd: repositoryRoot });

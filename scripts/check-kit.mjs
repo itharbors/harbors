@@ -9,6 +9,14 @@ import { OFFICIAL_KIT_SLUGS } from './lib/kit-monorepo.mjs';
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const USAGE = 'Usage: node scripts/check-kit.mjs <sqlite|mysql|notifications> --output-directory <absolute-directory>\n';
 
+function sanitizeErrorMessage(error) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/[\r\n\u2028\u2029\u0000-\u001f\u007f-\u009f]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim() || 'Unknown error';
+}
+
 export async function runCheckKitCli(
   args,
   io = process,
@@ -33,8 +41,7 @@ export async function runCheckKitCli(
     io.stdout.write(`KIT=${slug}\nARTIFACT=${artifactPath}\n`);
     return 0;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    io.stderr.write(`ERROR=${message.replace(/[\r\n]+/gu, ' ')}\n`);
+    io.stderr.write(`ERROR=${sanitizeErrorMessage(error)}\n`);
     return 1;
   }
 }

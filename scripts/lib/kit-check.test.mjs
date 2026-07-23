@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -122,7 +122,48 @@ test('rejects an unknown slug before running a command', async () => {
   assert.deepEqual(calls, []);
 });
 
-test('runCheckedCommand rejects both non-zero exits and signals', async () => {
+test('rejects a relative output directory before running commands or creating it', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-check-relative-'));
+  const outputDirectory = path.relative(process.cwd(), path.join(root, 'output'));
+  const calls = [];
+  try {
+    await assert.rejects(
+      checkOfficialKit({
+        repositoryRoot,
+        slug: 'sqlite',
+        outputDirectory,
+        runCommand: async (...args) => calls.push(args),
+      }),
+      /outputDirectory must be a non-empty absolute path/u,
+    );
+    assert.deepEqual(calls, []);
+    await assert.rejects(access(path.resolve(outputDirectory)));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('normalizes an absolute output directory before every artifact operation', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-check-normalized-'));
+  const outputDirectory = path.join(root, 'parent', '..', 'output');
+  const normalizedOutputDirectory = path.join(root, 'output');
+  const calls = [];
+  try {
+    const result = await checkOfficialKit({
+      repositoryRoot,
+      slug: 'mysql',
+      outputDirectory,
+      runCommand: async (command, args, options) => calls.push([command, args, options]),
+    });
+    const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.1-any-any.hkit');
+    assert.equal(result.artifactPath, artifactPath);
+    assert.equal(calls.at(-2)[1].at(-1), artifactPath);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('runCheckedCommand rejects non-zero exits, signals, error events, and invalid spawn input', async () => {
   await assert.rejects(
     runCheckedCommand(process.execPath, ['-e', 'process.exit(3)']),
     /exited with code 3/u,
@@ -131,17 +172,34 @@ test('runCheckedCommand rejects both non-zero exits and signals', async () => {
     runCheckedCommand(process.execPath, ['-e', "process.kill(process.pid, 'SIGTERM')"]),
     /terminated by signal SIGTERM/u,
   );
+  await assert.rejects(
+    runCheckedCommand(`missing-kit-check-command-${process.pid}`, []),
+    /ENOENT/u,
+  );
+  await assert.rejects(
+    runCheckedCommand(null, []),
+    /ERR_INVALID_ARG_TYPE|The "file" argument/u,
+  );
 });
 
-test('the CLI reports a one-line ERROR for an operational failure', async () => {
-  const stderr = [];
-  const code = await runCheckKitCli(
-    ['sqlite', '--output-directory', path.resolve(tmpdir(), 'kit-check-cli-output')],
-    { stdout: { write: () => undefined }, stderr: { write: (value) => stderr.push(value) } },
-    { checkOfficialKit: async () => { throw new Error('first line\nsecond line'); } },
-  );
-  assert.equal(code, 1);
-  assert.equal(stderr.join(''), 'ERROR=first line second line\n');
+test('the CLI reports one safely parseable ERROR line for unsafe or empty failures', async () => {
+  for (const [error, expected] of [
+    [
+      new Error('first\r\nsecond\u2028third\u2029fourth\u0000fifth\u001b[31mred\u007f\u0085last'),
+      'ERROR=first second third fourth fifth [31mred last\n',
+    ],
+    [new Error(''), 'ERROR=Unknown error\n'],
+  ]) {
+    const stderr = [];
+    const code = await runCheckKitCli(
+      ['sqlite', '--output-directory', path.resolve(tmpdir(), 'kit-check-cli-output')],
+      { stdout: { write: () => undefined }, stderr: { write: (value) => stderr.push(value) } },
+      { checkOfficialKit: async () => { throw error; } },
+    );
+    assert.equal(code, 1);
+    assert.equal(stderr.join(''), expected);
+    assert.equal(stderr.join('').split('\n').length, 2);
+  }
 });
 
 test('the CLI rejects relative output paths and extra arguments in a real process', () => {
