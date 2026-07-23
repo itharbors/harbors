@@ -223,6 +223,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const kitPath = await resolveKit(kitNameOrPath, {
       builtinKitsDir: assembly.builtinKitsDir,
       kitsDir: assembly.kitsDir,
+      installedKitDirs: assembly.installedKitDirs,
     });
     const pkg = JSON.parse(fs.readFileSync(path.join(kitPath, 'package.json'), 'utf-8')) as KitPackageJson;
     if (!pkg.name || !pkg['ce-editor']?.kit) {

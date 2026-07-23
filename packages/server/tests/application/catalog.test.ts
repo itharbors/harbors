@@ -16,6 +16,7 @@ describe('discoverApplicationPlugins', () => {
       pluginsDir: path.join(root, 'plugins'),
       builtinKitsDir: path.join(root, 'builtin-kits'),
       kitsDir: path.join(root, 'kits'),
+      installedKitDirs: [],
       defaultKit: '@scope/kit-default',
     };
     for (const directory of [
@@ -84,8 +85,10 @@ describe('discoverApplicationPlugins', () => {
   it('rejects same-name different-path conflicts without blocking other plugins', async () => {
     const kitA = createKit('a', '@scope/kit-a', ['@scope/background', '@scope/healthy']);
     const kitB = createKit('b', '@scope/kit-b', ['@scope/background']);
+    const kitC = createKit('c', '@scope/kit-c', ['@scope/background']);
     createPlugin(path.join(kitA, 'plugins'), 'background', '@scope/background');
     createPlugin(path.join(kitB, 'plugins'), 'background', '@scope/background');
+    createPlugin(path.join(kitC, 'plugins'), 'background', '@scope/background');
     const healthyPath = createPlugin(path.join(kitA, 'plugins'), 'healthy', '@scope/healthy');
 
     const result = await discoverApplicationPlugins({ assembly });
@@ -96,7 +99,15 @@ describe('discoverApplicationPlugins', () => {
       kits: ['@scope/kit-a'],
     }]);
     expect(result.diagnostics).toEqual([
-      expect.objectContaining({ code: 'PLUGIN_PATH_CONFLICT', plugin: '@scope/background' }),
+      expect.objectContaining({
+        code: 'PLUGIN_PATH_CONFLICT', plugin: '@scope/background', kit: '@scope/kit-a',
+      }),
+      expect.objectContaining({
+        code: 'PLUGIN_PATH_CONFLICT', plugin: '@scope/background', kit: '@scope/kit-b',
+      }),
+      expect.objectContaining({
+        code: 'PLUGIN_PATH_CONFLICT', plugin: '@scope/background', kit: '@scope/kit-c',
+      }),
     ]);
   });
 
@@ -154,6 +165,30 @@ describe('discoverApplicationPlugins', () => {
         kits: ['@scope/kit-external'],
       },
     ]);
+  });
+
+  it('discovers startup plugins from an explicitly active installed Kit', async () => {
+    const installedKit = createKit(
+      '1.0.0',
+      '@scope/kit-installed',
+      ['@scope/installed-background'],
+      [],
+      path.join(root, 'store', 'encoded'),
+    );
+    const installedPlugin = createPlugin(
+      path.join(installedKit, 'plugins'),
+      'background',
+      '@scope/installed-background',
+    );
+    assembly.installedKitDirs = [installedKit];
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toContainEqual({
+      name: '@scope/installed-background',
+      path: installedPlugin,
+      kits: ['@scope/kit-installed'],
+    });
   });
 
   it('reports malformed and overlapping declarations as diagnostics', async () => {

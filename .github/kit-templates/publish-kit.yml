@@ -1,0 +1,23 @@
+name: Publish __KIT_LABEL__ Kit
+
+on:
+  push:
+    branches:
+      - kit/__KIT_NAME__
+    tags:
+      - 'kit/__KIT_NAME__/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  pull-requests: write
+
+jobs:
+  publish:
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v1
+    with:
+      kit-name: __KIT_NAME__
+      label: __KIT_LABEL__
+      summary: __KIT_SUMMARY__
+      runner: __RUNNER__

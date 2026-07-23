@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { createServer } from './server';
+import { createServer, parseInstalledKitDirs } from './server';
 import { startServerUntilShutdown } from './process-lifecycle';
 
 const PORT = parseInt(process.env.PORT || '48381', 10);
@@ -12,6 +12,7 @@ const HOST = process.env.HARBORS_BIND_HOST;
 const { start, stop } = createServer({
   dbPath: DB_PATH,
   defaultKit: DEFAULT_KIT,
+  installedKitDirs: parseInstalledKitDirs(process.env.HARBORS_INSTALLED_KITS),
   applicationHostMode: APPLICATION_HOST_MODE,
   applicationControlToken: process.env.HARBORS_APPLICATION_TOKEN,
   host: HOST,

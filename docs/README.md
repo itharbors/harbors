@@ -27,6 +27,7 @@
 2. [Kit 与会话模型](./architecture/kit-and-session-model.md)
 3. [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md)
 4. [开发工作流](./guides/development-workflow.md)
+5. [Kit 制品与本地安装](./guides/kit-artifacts.md)
 
 ## 文档地图
 
@@ -41,6 +42,7 @@
 | [UI 系统](./architecture/ui-system.md) | Web Components、主题、iframe 与 Electron 如何协作？ |
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
+| [Kit 制品、Registry 与本地安装](./guides/kit-artifacts.md) | 如何校验、发现、下载和事务安装 Kit 制品？ |
 | [文档维护指南](./guides/maintaining-docs.md) | 代码变化后应更新哪些文档，如何验证？ |
 | [架构决策记录](./decisions/README.md) | 重要设计为何被采用，替代方案是什么？ |
 

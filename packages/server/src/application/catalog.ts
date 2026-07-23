@@ -50,7 +50,15 @@ export async function discoverApplicationPlugins(
         continue;
       }
 
-      if (conflicted.has(pluginName)) continue;
+      if (conflicted.has(pluginName)) {
+        diagnostics.push({
+          code: 'PLUGIN_PATH_CONFLICT',
+          kit: declaration.name,
+          plugin: pluginName,
+          message: `Startup plugin "${pluginName}" was already rejected because Kit paths conflict`,
+        });
+        continue;
+      }
       const existing = byName.get(pluginName);
       if (!existing) {
         const spec = { name: pluginName, path: pluginPath, kits: [declaration.name] };
@@ -66,11 +74,14 @@ export async function discoverApplicationPlugins(
       conflicted.add(pluginName);
       byName.delete(pluginName);
       plugins.splice(plugins.indexOf(existing), 1);
-      diagnostics.push({
-        code: 'PLUGIN_PATH_CONFLICT',
-        plugin: pluginName,
-        message: `Startup plugin "${pluginName}" resolves to different paths: ${existing.path} and ${pluginPath}`,
-      });
+      for (const kit of [...existing.kits, declaration.name]) {
+        diagnostics.push({
+          code: 'PLUGIN_PATH_CONFLICT',
+          kit,
+          plugin: pluginName,
+          message: `Startup plugin "${pluginName}" resolves to different paths: ${existing.path} and ${pluginPath}`,
+        });
+      }
     }
   }
 
@@ -93,6 +104,16 @@ async function discoverKitPaths(assembly: AssemblyConfig): Promise<string[]> {
       if (seen.has(canonical)) continue;
       seen.add(canonical);
       result.push(canonical);
+    }
+  }
+  for (const installedKitDir of assembly.installedKitDirs) {
+    try {
+      const canonical = await realpath(installedKitDir);
+      if (seen.has(canonical)) continue;
+      seen.add(canonical);
+      result.push(canonical);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
     }
   }
   try {
