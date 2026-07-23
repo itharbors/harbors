@@ -33,6 +33,7 @@ test('uses the official Registry and an exact official repository/workflow polic
       workflows: ['itharbors/harbors/.github/workflows/publish-kit.yml'],
       signerWorkflows: [
         'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
+        'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
       ],
     },
   });
