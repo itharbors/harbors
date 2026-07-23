@@ -1,0 +1,7 @@
+node_modules/
+**/dist/
+!packages/kit-cli/tests/fixtures/**/dist/
+!packages/kit-cli/tests/fixtures/**/dist/**
+coverage/
+.worktrees/
+*.hkit

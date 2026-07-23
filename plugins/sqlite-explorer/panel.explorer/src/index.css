@@ -1,0 +1,221 @@
+:root {
+  color-scheme: dark;
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  font-synthesis: none;
+  --ink: #0b1116;
+  --deck: #121a21;
+  --grid: #26323b;
+  --grid-strong: #374650;
+  --text: #dce5e8;
+  --text-muted: #84949d;
+  --teal: #57c8b5;
+  --amber: #e2b86b;
+  --font-body: 12px;
+  --font-secondary: 11px;
+  --mono: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+* { box-sizing: border-box; }
+
+html,
+body,
+#panel-root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-width: 200px;
+  color: var(--text);
+  background: var(--ink);
+  font-size: var(--font-body);
+}
+
+button,
+input {
+  color: inherit;
+  font: inherit;
+  font-size: var(--font-body);
+}
+
+button,
+input {
+  border: 1px solid var(--grid-strong);
+  border-radius: 2px;
+  background: #0e151a;
+}
+
+button { cursor: pointer; }
+
+button:hover:not(:disabled) {
+  border-color: #637580;
+  color: #fff;
+  background: #1b262e;
+}
+
+button:focus-visible,
+input:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 1px;
+}
+
+.object-rail {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  border-right: 1px solid var(--grid-strong);
+  background: rgb(18 26 33 / 96%);
+}
+
+.rail-heading {
+  display: flex;
+  flex: 0 0 42px;
+  align-items: center;
+  justify-content: space-between;
+  height: 42px;
+  padding: 0 14px;
+  border-bottom: 1px solid var(--grid);
+  color: #9daab0;
+  font-size: var(--font-secondary);
+  font-weight: 800;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.rail-heading b {
+  width: 28px;
+  height: 1px;
+  background: repeating-linear-gradient(90deg, var(--teal) 0 2px, transparent 2px 5px);
+}
+
+.object-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 8px 0 20px;
+}
+
+.object-list > input[type="search"] {
+  width: calc(100% - 20px);
+  min-height: 30px;
+  margin: 8px 10px 2px;
+  padding: 0 8px;
+}
+
+.object-group-title {
+  display: flex;
+  align-items: center;
+  min-height: 20px;
+  margin: 15px 14px 6px;
+  color: #687982;
+  font-size: var(--font-secondary);
+  font-weight: 800;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.object-group > summary.object-group-title {
+  cursor: pointer;
+  list-style: none;
+}
+
+.object-group > summary::-webkit-details-marker { display: none; }
+
+.object-group > summary.object-group-title::after {
+  margin-left: auto;
+  color: var(--teal);
+  content: "›";
+  font-size: 15px;
+  line-height: 1;
+  transform: rotate(0deg);
+}
+
+.object-group[open] > summary.object-group-title::after { transform: rotate(90deg); }
+
+.object-item {
+  display: grid;
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+  align-items: center;
+  width: 100%;
+  min-height: 34px;
+  padding: 0 11px;
+  border: 0;
+  border-left: 2px solid transparent;
+  border-radius: 0;
+  color: #aebbc0;
+  background: transparent;
+  text-align: left;
+}
+
+.object-item:hover:not(:disabled) { background: #172128; }
+
+.object-item.active {
+  border-left-color: var(--teal);
+  color: #f1f8f9;
+  background: linear-gradient(90deg, rgb(87 200 181 / 13%), transparent 75%);
+}
+
+.object-item > span:nth-child(2) {
+  overflow: hidden;
+  font-family: var(--mono);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.object-item small {
+  color: #60717a;
+  font-size: var(--font-secondary);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.object-icon {
+  color: var(--teal);
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.object-icon.view { color: var(--amber); }
+
+.empty-state {
+  display: grid;
+  min-height: 110px;
+  padding: 18px;
+  color: #71828b;
+  line-height: 1.5;
+  place-items: center;
+  text-align: center;
+}
+
+.error-banner {
+  margin: 10px;
+  padding: 10px 12px;
+  border: 1px solid #81443f;
+  border-left: 3px solid #ff7d72;
+  color: #ffd0cc;
+  background: #321d1c;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.error-banner pre {
+  overflow: auto;
+  font-family: var(--mono);
+  white-space: pre-wrap;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}

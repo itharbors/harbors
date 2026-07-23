@@ -1,0 +1,23 @@
+name: Publish SQLite Kit
+
+on:
+  push:
+    branches:
+      - kit/sqlite
+    tags:
+      - 'kit/sqlite/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  pull-requests: write
+
+jobs:
+  publish:
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v1
+    with:
+      kit-name: sqlite
+      label: SQLite
+      summary: SQLite 数据库浏览、编辑、关系图与 SQL 工作台
+      runner: macos-14
