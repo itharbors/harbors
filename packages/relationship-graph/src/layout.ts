@@ -34,11 +34,31 @@ type GroupBox = {
   nodes: RelationshipNodeLayout[];
 };
 
+type LayoutDirection = 'left-to-right' | 'top-to-bottom';
+
+type GroupCandidate = {
+  box: GroupBox;
+  direction: LayoutDirection;
+};
+
 type PackedGroups = {
   width: number;
   height: number;
   nodes: RelationshipNodeLayout[];
   centers: Map<string, { x: number; y: number }>;
+};
+
+type PackingMetrics = {
+  fitScale: number;
+  aspectError: number;
+  emptyRatio: number;
+  crossSpan: number;
+};
+
+type PackingCandidate = {
+  packed: PackedGroups;
+  metrics: PackingMetrics;
+  columns: number;
 };
 
 export function layoutRelationshipGraph(
@@ -58,7 +78,7 @@ export function layoutRelationshipGraph(
     }
     const boxes = [...grouped]
       .sort(([left], [right]) => compareTableNames(left, right))
-      .map(([key, groupTables]) => layoutGroup(key, groupTables, graph.relationships));
+      .map(([key, groupTables]) => layoutGroup(key, groupTables, graph.relationships, canvas));
     const packed = choosePacking(boxes, graph.relationships, groupByName, canvas);
     if (!packed.nodes.every(isFiniteNode)) return fallbackGrid(graph, canvas, groupByName);
     return rebuildRelationshipLayout(graph, packed.nodes);
@@ -112,9 +132,9 @@ export function fitRelationshipViewport(
 ): RelationshipViewport {
   const canvas = safeCanvas(requestedCanvas);
   const bounds = nodeBounds(layout.nodes);
-  const width = Math.max(1, bounds.maxX - bounds.minX + RELATIONSHIP_LAYOUT.padding * 2);
-  const height = Math.max(1, bounds.maxY - bounds.minY + RELATIONSHIP_LAYOUT.padding * 2);
-  const scale = clamp(Math.min(canvas.width / width, canvas.height / height, 1), MIN_SCALE, MAX_SCALE);
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  const scale = clamp(fittedNodeBoundsScale(width, height, canvas), MIN_SCALE, MAX_SCALE);
   return {
     scale,
     x: (canvas.width - (bounds.maxX - bounds.minX) * scale) / 2 - bounds.minX * scale,
@@ -148,6 +168,7 @@ function layoutGroup(
   key: string,
   tables: RelationshipTable[],
   relationships: Relationship[],
+  canvas: CanvasSize,
 ): GroupBox {
   const tableByName = new Map(tables.map((table) => [table.name, table]));
   const internal = relationships.filter((relationship) => (
@@ -174,58 +195,164 @@ function layoutGroup(
     layers.set(rank, values);
   }
 
+  const isolated = tables
+    .filter((table) => !related.has(table.name))
+    .sort((left, right) => compareTableNames(left.name, right.name));
+  const directions: LayoutDirection[] = [
+    'left-to-right',
+    'top-to-bottom',
+  ];
+  const candidates: GroupCandidate[] = directions.map((direction) => ({
+    direction,
+    box: layoutGroupCandidate(key, layers, isolated, direction, canvas),
+  }));
+  candidates.sort((left, right) => compareGroupCandidates(left, right, canvas));
+  return candidates[0].box;
+}
+
+function layoutGroupCandidate(
+  key: string,
+  layers: Map<number, RelationshipTable[]>,
+  isolated: RelationshipTable[],
+  direction: LayoutDirection,
+  canvas: CanvasSize,
+): GroupBox {
+  const nodes = layoutRankedNodes(key, layers, direction);
+  const relatedBounds = nodeBounds(nodes);
+  const isolatedNodes = layoutIsolatedNodes(key, isolated, canvas);
+  if (isolatedNodes.length > 0) {
+    const offset = nodes.length === 0
+      ? { x: 0, y: 0 }
+      : direction === 'left-to-right'
+        ? { x: relatedBounds.maxX + RELATIONSHIP_LAYOUT.nodeGap, y: 0 }
+        : { x: 0, y: relatedBounds.maxY + RELATIONSHIP_LAYOUT.nodeGap };
+    nodes.push(...isolatedNodes.map((node) => ({
+      ...node,
+      x: node.x + offset.x,
+      y: node.y + offset.y,
+    })));
+  }
+  const bounds = nodeBounds(nodes);
+  return {
+    key,
+    nodes,
+    width: Math.max(RELATIONSHIP_LAYOUT.nodeWidth, bounds.maxX - bounds.minX),
+    height: Math.max(
+      RELATIONSHIP_LAYOUT.headerHeight + RELATIONSHIP_LAYOUT.rowHeight,
+      bounds.maxY - bounds.minY,
+    ),
+  };
+}
+
+function layoutRankedNodes(
+  key: string,
+  layers: Map<number, RelationshipTable[]>,
+  direction: LayoutDirection,
+): RelationshipNodeLayout[] {
   const nodes: RelationshipNodeLayout[] = [];
-  let relatedBottom = 0;
+  let rankOffset = 0;
   for (const rank of [...layers.keys()].sort((left, right) => left - right)) {
-    let y = 0;
-    for (const table of layers.get(rank)!.sort((left, right) => compareTableNames(left.name, right.name))) {
+    const tables = layers.get(rank)!
+      .slice()
+      .sort((left, right) => compareTableNames(left.name, right.name));
+    let memberOffset = 0;
+    let rankSpan = 0;
+    for (const table of tables) {
       const height = tableHeight(table);
       nodes.push({
         name: table.name,
         group: key,
-        x: rank * (RELATIONSHIP_LAYOUT.nodeWidth + RELATIONSHIP_LAYOUT.layerGap),
-        y,
+        x: direction === 'left-to-right' ? rankOffset : memberOffset,
+        y: direction === 'left-to-right' ? memberOffset : rankOffset,
         width: RELATIONSHIP_LAYOUT.nodeWidth,
         height,
       });
-      relatedBottom = Math.max(relatedBottom, y + height);
-      y += height + RELATIONSHIP_LAYOUT.nodeGap;
+      memberOffset += (direction === 'left-to-right' ? height : RELATIONSHIP_LAYOUT.nodeWidth)
+        + RELATIONSHIP_LAYOUT.nodeGap;
+      rankSpan = Math.max(
+        rankSpan,
+        direction === 'left-to-right' ? RELATIONSHIP_LAYOUT.nodeWidth : height,
+      );
     }
+    rankOffset += rankSpan + RELATIONSHIP_LAYOUT.layerGap;
   }
+  return nodes;
+}
 
-  const isolated = tables
-    .filter((table) => !related.has(table.name))
-    .sort((left, right) => compareTableNames(left.name, right.name));
-  const isolatedColumns = Math.max(1, Math.ceil(Math.sqrt(isolated.length)));
-  const isolatedStartY = relatedBottom === 0 ? 0 : relatedBottom + RELATIONSHIP_LAYOUT.nodeGap;
+function layoutIsolatedNodes(
+  key: string,
+  isolated: RelationshipTable[],
+  canvas: CanvasSize,
+): RelationshipNodeLayout[] {
+  if (isolated.length === 0) return [];
+  const averageHeight = isolated.reduce((sum, table) => sum + tableHeight(table), 0)
+    / isolated.length;
+  const targetAspect = canvas.width / canvas.height;
+  const isolatedColumns = clampInteger(
+    Math.round(Math.sqrt(
+      isolated.length * targetAspect * averageHeight / RELATIONSHIP_LAYOUT.nodeWidth,
+    )),
+    1,
+    isolated.length,
+  );
   const rowHeights: number[] = [];
   for (let index = 0; index < isolated.length; index += isolatedColumns) {
     rowHeights.push(Math.max(...isolated.slice(index, index + isolatedColumns).map(tableHeight)));
   }
   const rowOffsets: number[] = [];
-  for (let row = 0, y = isolatedStartY; row < rowHeights.length; row += 1) {
+  for (let row = 0, y = 0; row < rowHeights.length; row += 1) {
     rowOffsets.push(y);
     y += rowHeights[row] + RELATIONSHIP_LAYOUT.nodeGap;
   }
-  isolated.forEach((table, index) => {
+  return isolated.map((table, index) => {
     const row = Math.floor(index / isolatedColumns);
     const column = index % isolatedColumns;
-    nodes.push({
+    return {
       name: table.name,
       group: key,
       x: column * (RELATIONSHIP_LAYOUT.nodeWidth + RELATIONSHIP_LAYOUT.nodeGap),
       y: rowOffsets[row],
       width: RELATIONSHIP_LAYOUT.nodeWidth,
       height: tableHeight(table),
-    });
+    };
   });
-  const bounds = nodeBounds(nodes);
-  return {
-    key,
-    nodes,
-    width: Math.max(RELATIONSHIP_LAYOUT.nodeWidth, bounds.maxX),
-    height: Math.max(RELATIONSHIP_LAYOUT.headerHeight + RELATIONSHIP_LAYOUT.rowHeight, bounds.maxY),
-  };
+}
+
+function compareGroupCandidates(
+  left: GroupCandidate,
+  right: GroupCandidate,
+  canvas: CanvasSize,
+): number {
+  const leftScale = fittedNodeBoundsScale(left.box.width, left.box.height, canvas);
+  const rightScale = fittedNodeBoundsScale(right.box.width, right.box.height, canvas);
+  const scaleComparison = compareDescending(leftScale, rightScale);
+  if (scaleComparison !== 0) return scaleComparison;
+  const targetAspect = canvas.width / canvas.height;
+  const leftAspectError = Math.abs(Math.log(left.box.width / left.box.height / targetAspect));
+  const rightAspectError = Math.abs(Math.log(right.box.width / right.box.height / targetAspect));
+  const aspectComparison = compareAscending(leftAspectError, rightAspectError);
+  if (aspectComparison !== 0) return aspectComparison;
+  const areaComparison = compareAscending(
+    left.box.width * left.box.height,
+    right.box.width * right.box.height,
+  );
+  if (areaComparison !== 0) return areaComparison;
+  const preferred: LayoutDirection = canvas.width >= canvas.height
+    ? 'top-to-bottom'
+    : 'left-to-right';
+  return left.direction === preferred ? -1 : right.direction === preferred ? 1 : 0;
+}
+
+function fittedScale(width: number, height: number, canvas: CanvasSize): number {
+  return Math.min(canvas.width / Math.max(1, width), canvas.height / Math.max(1, height), 1);
+}
+
+function fittedNodeBoundsScale(width: number, height: number, canvas: CanvasSize): number {
+  return fittedScale(
+    width + RELATIONSHIP_LAYOUT.padding * 2,
+    height + RELATIONSHIP_LAYOUT.padding * 2,
+    canvas,
+  );
 }
 
 function choosePacking(
@@ -242,18 +369,28 @@ function choosePacking(
       centers: new Map(),
     };
   }
+  const averageWidth = groups.reduce((sum, group) => sum + group.width, 0) / groups.length;
+  const averageHeight = groups.reduce((sum, group) => sum + group.height, 0) / groups.length;
+  const targetAspect = canvas.width / canvas.height;
+  const dimensionAdjustedColumns = Math.sqrt(
+    groups.length * targetAspect * averageHeight / averageWidth,
+  );
   const maximumColumns = Math.min(
     groups.length,
-    Math.ceil(Math.sqrt(groups.length * canvas.width / canvas.height)) + 2,
+    Math.ceil(Math.max(
+      Math.sqrt(groups.length * targetAspect),
+      dimensionAdjustedColumns,
+    )) + 2,
   );
-  let best: { packed: PackedGroups; score: number; columns: number } | null = null;
+  let best: PackingCandidate | null = null;
   for (let columns = 1; columns <= maximumColumns; columns += 1) {
     const packed = packGroups(groups, columns);
-    const score = packingScore(packed, relationships, groupByName, canvas, groups);
-    if (best === null || score < best.score - 1e-9
-      || (Math.abs(score - best.score) <= 1e-9 && columns < best.columns)) {
-      best = { packed, score, columns };
-    }
+    const candidate: PackingCandidate = {
+      packed,
+      metrics: packingMetrics(packed, relationships, groupByName, canvas, groups),
+      columns,
+    };
+    if (best === null || comparePackingCandidates(candidate, best) < 0) best = candidate;
   }
   return best!.packed;
 }
@@ -283,13 +420,13 @@ function packGroups(groups: GroupBox[], columns: number): PackedGroups {
   };
 }
 
-function packingScore(
+function packingMetrics(
   packed: PackedGroups,
   relationships: Relationship[],
   groupByName: Map<string, string>,
   canvas: CanvasSize,
   groups: GroupBox[],
-): number {
+): PackingMetrics {
   const targetAspect = canvas.width / canvas.height;
   const packedAspect = packed.width / packed.height;
   const aspectError = Math.abs(Math.log(packedAspect / targetAspect));
@@ -305,7 +442,20 @@ function packingScore(
     const to = packed.centers.get(toGroup)!;
     crossSpan += Math.hypot(from.x - to.x, from.y - to.y) / diagonal;
   }
-  return aspectError + emptyRatio * 0.15 + crossSpan * 0.01;
+  return {
+    fitScale: fittedScale(packed.width, packed.height, canvas),
+    aspectError,
+    emptyRatio,
+    crossSpan,
+  };
+}
+
+function comparePackingCandidates(left: PackingCandidate, right: PackingCandidate): number {
+  return compareDescending(left.metrics.fitScale, right.metrics.fitScale)
+    || compareAscending(left.metrics.aspectError, right.metrics.aspectError)
+    || compareAscending(left.metrics.emptyRatio, right.metrics.emptyRatio)
+    || compareAscending(left.metrics.crossSpan, right.metrics.crossSpan)
+    || left.columns - right.columns;
 }
 
 function fallbackGrid(
@@ -479,4 +629,16 @@ function isCoordinate(value: number): boolean {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+function clampInteger(value: number, minimum: number, maximum: number): number {
+  return Math.round(clamp(value, minimum, maximum));
+}
+
+function compareAscending(left: number, right: number): number {
+  return Math.abs(left - right) <= 1e-9 ? 0 : left < right ? -1 : 1;
+}
+
+function compareDescending(left: number, right: number): number {
+  return compareAscending(right, left);
 }
