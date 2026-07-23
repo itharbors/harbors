@@ -1,0 +1,42 @@
+{
+  "windows": [
+    {
+      "id": "mysql-main",
+      "kind": "main",
+      "type": "panel-area",
+      "layout": {
+        "type": "vsplit",
+        "sizes": [112, 1],
+        "children": [
+          {
+            "type": "leaf",
+            "panel": "@itharbors/mysql-explorer.connection",
+            "panelType": "simple"
+          },
+          {
+            "type": "hsplit",
+            "sizes": [270, 1],
+            "children": [
+              {
+                "type": "leaf",
+                "panel": "@itharbors/mysql-explorer.explorer",
+                "panelType": "simple"
+              },
+              {
+                "type": "tab",
+                "activeIndex": 0,
+                "children": [
+                  { "type": "leaf", "panel": "@itharbors/mysql-data.data" },
+                  { "type": "leaf", "panel": "@itharbors/mysql-schema.schema" },
+                  { "type": "leaf", "panel": "@itharbors/mysql-relationships.relationships" },
+                  { "type": "leaf", "panel": "@itharbors/mysql-sql.sql" }
+                ]
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "activePanel": "@itharbors/mysql-data.data"
+}

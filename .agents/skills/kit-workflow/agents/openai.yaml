@@ -1,0 +1,4 @@
+interface:
+  display_name: "Kit Workflow"
+  short_description: "隔离开发、验收并安全发布独立 Harbors Kit 产品分支"
+  default_prompt: "Use $kit-workflow to start an isolated change for a Harbors Kit product branch."

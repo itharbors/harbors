@@ -1,0 +1,15 @@
+{
+  "name": "@example/demo",
+  "version": "1.2.3",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "main": {
+          "entry": "./panel.main/dist/index.html"
+        }
+      }
+    }
+  }
+}
