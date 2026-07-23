@@ -57,6 +57,10 @@ function releaseDownloadUrl(repository, tag, name) {
   return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
 }
 
+function browserDownloadUrl(repository, tag, name) {
+  return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}`;
+}
+
 function apiBase(repository) {
   return `${API_ORIGIN}/repos/${repository}`;
 }
@@ -127,12 +131,16 @@ async function readLimitedJson(response, { maxBytes, label, signal }) {
   const chunks = [];
   let size = 0;
   const abort = () => reader.cancel().catch(() => undefined);
+  let abortListener;
   const aborted = new Promise((_, reject) => {
     if (signal.aborted) reject(timeoutError(label));
-    else signal.addEventListener('abort', () => {
+    else {
+      abortListener = () => {
       void abort();
       reject(timeoutError(label));
-    }, { once: true });
+      };
+      signal.addEventListener('abort', abortListener, { once: true });
+    }
   });
   try {
     while (true) {
@@ -147,6 +155,7 @@ async function readLimitedJson(response, { maxBytes, label, signal }) {
       chunks.push(Buffer.from(value));
     }
   } finally {
+    if (abortListener) signal.removeEventListener('abort', abortListener);
     reader.releaseLock();
   }
   try {
@@ -219,18 +228,27 @@ function listUrl(repository, page) {
 
 function parseNextLink(header, { repository, page }) {
   if (header === null || header === '') return undefined;
+  const humanPath = listUrl(repository, page).pathname;
+  const numericRepositoryPath = /^\/repositories\/[1-9][0-9]*\/releases$/u;
   const links = header.split(',').map((item) => {
     const match = /^\s*<([^>]+)>\s*;\s*rel="?([a-z]+)"?\s*$/u.exec(item);
     if (!match) throw new Error('GitHub Releases API Link header is invalid');
-    return { href: match[1], relation: match[2] };
+    const url = apiUrl(match[1], 'GitHub Releases API Link is not trusted');
+    if (
+      (url.pathname !== humanPath && !numericRepositoryPath.test(url.pathname))
+      || url.searchParams.size !== 2
+      || url.searchParams.get('per_page') !== String(PAGE_SIZE)
+      || !/^[1-9][0-9]*$/u.test(url.searchParams.get('page') ?? '')
+    ) throw new Error('GitHub Releases API Link is not canonical');
+    return { url, relation: match[2] };
   });
   const nextLinks = links.filter((link) => link.relation === 'next');
   if (nextLinks.length === 0) return undefined;
   if (nextLinks.length !== 1) throw new Error('GitHub Releases API Link header is invalid');
-  const next = apiUrl(nextLinks[0].href, 'GitHub Releases API next Link is not trusted');
+  const next = nextLinks[0].url;
   const expected = listUrl(repository, page + 1);
   if (
-    next.pathname !== expected.pathname
+    (next.pathname !== expected.pathname && !numericRepositoryPath.test(next.pathname))
     || next.searchParams.size !== 2
     || next.searchParams.get('per_page') !== String(PAGE_SIZE)
     || next.searchParams.get('page') !== String(page + 1)
@@ -256,7 +274,8 @@ async function listReleases({ repository, githubToken, fetchImpl, timeoutMs }) {
     if (!next) return releases;
     if (page === MAX_PAGES) throw new Error('GitHub Releases API exceeds the 1000 Release limit');
     page += 1;
-    url = next;
+    // Numeric repository Links prove pagination but are not an identity authority.
+    url = listUrl(repository, page);
   }
 }
 
@@ -325,6 +344,24 @@ async function resolveTagCommit({ repository, tag, githubToken, fetchImpl, timeo
   throw new Error('GitHub Tag object is invalid');
 }
 
+function assertBrowserDownloadUrl(value, { repository, tag, name }) {
+  const url = downloadUrl(value, `GitHub Release asset URL is not trusted: ${name}`);
+  const [owner, repo] = repository.split('/');
+  const expectedPath = [
+    '', owner, repo, 'releases', 'download', ...tag.split('/'), encodeURIComponent(name),
+  ].join('/');
+  if (url.origin !== GITHUB_ORIGIN || url.pathname !== expectedPath || url.search !== '') {
+    throw new Error(`GitHub Release asset URL is not the canonical browser download URL: ${name}`);
+  }
+  return url;
+}
+
+function sameReleaseAssetUrl({ repository, tag, name, immutableUrl, browserUrl }) {
+  if (immutableUrl !== releaseDownloadUrl(repository, tag, name)) return false;
+  assertBrowserDownloadUrl(browserUrl, { repository, tag, name });
+  return true;
+}
+
 function indexAssets(rawAssets, { repository, tag }) {
   if (!Array.isArray(rawAssets)) throw new Error(`GitHub Release assets must be an array: ${tag}`);
   const assets = new Map();
@@ -337,10 +374,7 @@ function indexAssets(rawAssets, { repository, tag }) {
       throw new Error(`GitHub Release asset URL is invalid: ${tag}`);
     }
     if (assets.has(asset.name)) throw new Error(`GitHub Release contains duplicate asset ${asset.name}`);
-    const expectedUrl = releaseDownloadUrl(repository, tag, asset.name);
-    if (asset.browser_download_url !== expectedUrl) {
-      throw new Error(`GitHub Release asset URL is not the immutable download URL: ${asset.name}`);
-    }
+    assertBrowserDownloadUrl(asset.browser_download_url, { repository, tag, name: asset.name });
     assets.set(asset.name, asset);
   }
   return assets;
@@ -401,6 +435,9 @@ export async function discoverTrustedKitReleases({
     }
     const match = RELEASE_TAG.exec(releaseRecord.tag_name);
     if (!match || !Object.hasOwn(policy.kits, match[1])) continue;
+    if (releaseRecord.immutable !== true) {
+      throw new Error(`Trusted GitHub Release must be immutable: ${releaseRecord.tag_name}`);
+    }
     if (tags.has(releaseRecord.tag_name)) throw new Error(`Duplicate trusted GitHub Release Tag: ${releaseRecord.tag_name}`);
     tags.add(releaseRecord.tag_name);
     if (typeof releaseRecord.prerelease !== 'boolean' || typeof releaseRecord.target_commitish !== 'string') {
@@ -446,7 +483,13 @@ export async function discoverTrustedKitReleases({
     if (
       artifact.name !== hkitAsset.name
       || hkitAsset.digest !== `sha256:${artifact.sha256}`
-      || artifact.url !== hkitAsset.browser_download_url
+      || !sameReleaseAssetUrl({
+        repository,
+        tag: releaseRecord.tag_name,
+        name: artifact.name,
+        immutableUrl: artifact.url,
+        browserUrl: hkitAsset.browser_download_url,
+      })
     ) throw new Error('Release .hkit asset does not match release.json');
     const expected = {
       repository: validated.source.repository,

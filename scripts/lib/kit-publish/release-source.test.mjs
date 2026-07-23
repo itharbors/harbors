@@ -6,6 +6,7 @@ import { buildKitRegistryIndex } from './registry.mjs';
 
 const repository = 'itharbors/harbors';
 const API_ORIGIN = 'https://api.github.com';
+const repositoryId = '123456';
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const digest = 'a'.repeat(64);
 const signerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
@@ -22,6 +23,10 @@ const policy = Object.freeze({
 
 function assetUrl(tag, name) {
   return `https://github.com/${repository}/releases/download/${encodeURIComponent(tag)}/${encodeURIComponent(name)}`;
+}
+
+function browserAssetUrl(tag, name) {
+  return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}`;
 }
 
 function values({ version = '1.2.3', channel = 'stable', overrides = {} } = {}) {
@@ -86,16 +91,17 @@ function values({ version = '1.2.3', channel = 'stable', overrides = {} } = {}) 
 function releaseRecord(value, overrides = {}) {
   return {
     draft: false,
+    immutable: true,
     prerelease: value.release.channel === 'preview',
     tag_name: value.tag,
     target_commitish: commit,
     assets: [
-      { name: 'release.json', browser_download_url: assetUrl(value.tag, 'release.json') },
-      { name: 'registry-entry.json', browser_download_url: assetUrl(value.tag, 'registry-entry.json') },
+      { name: 'release.json', browser_download_url: browserAssetUrl(value.tag, 'release.json') },
+      { name: 'registry-entry.json', browser_download_url: browserAssetUrl(value.tag, 'registry-entry.json') },
       {
         name: value.artifactName,
         digest: `sha256:${digest}`,
-        browser_download_url: assetUrl(value.tag, value.artifactName),
+        browser_download_url: browserAssetUrl(value.tag, value.artifactName),
       },
     ],
     ...overrides,
@@ -162,8 +168,8 @@ function verifier({ fail = false, calls = [], claims } = {}) {
 
 function metadataFor(value) {
   return new Map([
-    [assetUrl(value.tag, 'release.json'), value.release],
-    [assetUrl(value.tag, 'registry-entry.json'), value.entry],
+    [browserAssetUrl(value.tag, 'release.json'), value.release],
+    [browserAssetUrl(value.tag, 'registry-entry.json'), value.entry],
   ]);
 }
 
@@ -186,7 +192,7 @@ test('lists 100-Release pages through the first short page with GitHub authentic
       ['1', {
         body: [releaseRecord(value), ...Array.from({ length: 99 }, () => ({ draft: true }))],
         headers: {
-          link: `<https://api.github.com/repos/${repository}/releases?per_page=100&page=2>; rel=\"next\"`,
+          link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=2>; rel=\"next\"`,
         },
       }],
       ['2', []],
@@ -268,15 +274,15 @@ test('follows only canonical Link pagination and permits exactly 1,000 Releases'
     pages.set(String(page), {
       body: Array.from({ length: 100 }, () => ({ draft: true })),
       headers: page === 10 ? {} : {
-        link: `<https://api.github.com/repos/${repository}/releases?per_page=100&page=${page + 1}>; rel=\"next\"`,
+        link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=${page + 1}>; rel=\"next\"`,
       },
     });
   }
   await assert.doesNotReject(discover({ pages, metadata: new Map() }));
   for (const firstPage of [
     { body: Array.from({ length: 101 }, () => ({ draft: true })), headers: {} },
-    { body: [{ draft: true }], headers: { link: `<https://api.github.com/repos/${repository}/releases?per_page=100&page=2>; rel=\"next\"` } },
-    { body: Array.from({ length: 100 }, () => ({ draft: true })), headers: { link: `<https://api.github.com/repos/${repository}/releases?per_page=99&page=2>; rel=\"next\"` } },
+    { body: [{ draft: true }], headers: { link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=2>; rel=\"next\"` } },
+    { body: Array.from({ length: 100 }, () => ({ draft: true })), headers: { link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=99&page=2>; rel=\"next\"` } },
   ]) {
     await assert.rejects(discover({
       pages: new Map([['1', firstPage]]),
@@ -285,7 +291,7 @@ test('follows only canonical Link pagination and permits exactly 1,000 Releases'
   }
   pages.set('10', {
     body: Array.from({ length: 100 }, () => ({ draft: true })),
-    headers: { link: `<https://api.github.com/repos/${repository}/releases?per_page=100&page=11>; rel=\"next\"` },
+    headers: { link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=11>; rel=\"next\"` },
   });
   await assert.rejects(discover({ pages, metadata: new Map() }), /limit/i);
 });
@@ -295,17 +301,24 @@ test('accepts terminal GitHub Link headers that contain only first and previous 
     pages: new Map([
       ['1', {
         body: Array.from({ length: 100 }, () => ({ draft: true })),
-        headers: { link: `<https://api.github.com/repos/${repository}/releases?per_page=100&page=2>; rel=\"next\"` },
+        headers: { link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=2>; rel=\"next\"` },
       }],
       ['2', {
         body: [],
         headers: {
-          link: `<https://api.github.com/repos/${repository}/releases?per_page=100&page=1>; rel=\"first\", <https://api.github.com/repos/${repository}/releases?per_page=100&page=1>; rel=\"prev\"`,
+          link: `<https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=1>; rel=\"first\", <https://api.github.com/repositories/${repositoryId}/releases?per_page=100&page=1>; rel=\"prev\"`,
         },
       }],
     ]),
     metadata: new Map(),
   }));
+  await assert.rejects(discover({
+    pages: new Map([['1', {
+      body: [],
+      headers: { link: '<https://example.test/releases?per_page=100&page=1>; rel="prev"' },
+    }]]),
+    metadata: new Map(),
+  }), /Link|trusted/i);
 });
 
 test('requires policy display identity and rejects duplicate trusted Release identities', async () => {
@@ -313,8 +326,8 @@ test('requires policy display identity and rejects duplicate trusted Release ide
   await assert.rejects(discover({
     pages: new Map([['1', [releaseRecord(value)]]]),
     metadata: new Map([
-      [assetUrl(value.tag, 'release.json'), value.release],
-      [assetUrl(value.tag, 'registry-entry.json'), { ...value.entry, label: 'Drift' }],
+      [browserAssetUrl(value.tag, 'release.json'), value.release],
+      [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, label: 'Drift' }],
     ]),
   }), /policy|identity/i);
   await assert.rejects(discover({
@@ -353,6 +366,8 @@ test('returns deep-frozen entries and a read-only Map that remains usable by the
   assert.throws(() => Object.defineProperty(result.releasesByUrl, 'extra', { value: true }), TypeError);
   assert.throws(() => Object.setPrototypeOf(result.releasesByUrl, null), TypeError);
   assert.throws(() => Object.preventExtensions(result.releasesByUrl), TypeError);
+  assert.throws(() => Map.prototype.set.call(result.releasesByUrl, 'x', release), TypeError);
+  assert.throws(() => Map.prototype.delete.call(result.releasesByUrl, value.entry.releaseManifestUrl), TypeError);
   assert.throws(() => Map.prototype.clear.call(result.releasesByUrl), TypeError);
   assert.deepEqual([...result.releasesByUrl.keys()], [value.entry.releaseManifestUrl]);
   assert.deepEqual([...result.releasesByUrl.values()], [release]);
@@ -463,6 +478,11 @@ test('rejects every attestation result drift including attestation URL and keeps
     (expected) => ({ ...expected, verified: false }),
     (expected) => ({ ...expected, attestationUrl: 'https://api.github.com/other' }),
     (expected) => ({ ...expected, subjectName: 'other.hkit' }),
+    (expected) => ({ ...expected, subjectSha256: 'b'.repeat(64) }),
+    (expected) => ({ ...expected, repository: 'itharbors/other' }),
+    (expected) => ({ ...expected, commit: 'b'.repeat(40) }),
+    (expected) => ({ ...expected, workflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/v1' }),
+    (expected) => ({ ...expected, signerWorkflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/v1' }),
   ]) {
     await assert.rejects(discover({
       pages: new Map([['1', [releaseRecord(value)]]]),
@@ -470,6 +490,32 @@ test('rejects every attestation result drift including attestation URL and keeps
       verifierOptions: { claims: mutate },
     }), /attestation/i);
   }
+});
+
+test('requires immutable Releases and exact raw GitHub browser download URLs', async () => {
+  const value = values();
+  const missingImmutable = releaseRecord(value);
+  delete missingImmutable.immutable;
+  for (const record of [
+    releaseRecord(value, { immutable: false }),
+    missingImmutable,
+    releaseRecord(value, { assets: releaseRecord(value).assets.map((asset) => (
+      asset.name === 'release.json' ? { ...asset, browser_download_url: assetUrl(value.tag, asset.name) } : asset
+    )) }),
+    releaseRecord(value, { assets: releaseRecord(value).assets.map((asset) => (
+      asset.name === 'release.json' ? { ...asset, browser_download_url: `${browserAssetUrl(value.tag, asset.name)}?drift=1` } : asset
+    )) }),
+    releaseRecord(value, { assets: releaseRecord(value).assets.map((asset) => (
+      asset.name === 'release.json' ? { ...asset, browser_download_url: `https://github.com:444/${repository}/releases/download/${value.tag}/${asset.name}` } : asset
+    )) }),
+  ]) {
+    await assert.rejects(discover({
+      pages: new Map([['1', [record]]]), metadata: metadataFor(value),
+    }), /immutable|browser download|URL/i);
+  }
+  await assert.doesNotReject(discover({
+    pages: new Map([['1', [releaseRecord(value, { immutable: true })]]]), metadata: metadataFor(value),
+  }));
 });
 
 test('rejects unsafe responses, malformed assets, and over-limit bodies while cancelling unusable bodies', async () => {
@@ -511,7 +557,7 @@ test('allows the canonical GitHub-to-CDN redirect chain without leaking Authoriz
     metadata: metadataFor(value),
     calls,
     responseFor: (url) => {
-      if (url.href === assetUrl(value.tag, 'registry-entry.json')) {
+      if (url.href === browserAssetUrl(value.tag, 'registry-entry.json')) {
         return new Response(null, {
           status: 302,
           headers: { location: 'https://release-assets.githubusercontent.com/registry-entry.json' },
@@ -536,7 +582,7 @@ test('rejects API and asset failures plus deceptive streamed and reader-error bo
   await assert.rejects(discover({
     pages: new Map([['1', [releaseRecord(value)]]]), metadata: metadataFor(value),
     responseFor: (url) => (
-      url.href === assetUrl(value.tag, 'registry-entry.json') ? new Response('no', { status: 404 }) : undefined
+      url.href === browserAssetUrl(value.tag, 'registry-entry.json') ? new Response('no', { status: 404 }) : undefined
     ),
   }), /HTTP 404/i);
   await assert.rejects(discover({
@@ -566,14 +612,14 @@ test('rejects unsafe redirects and never restores Authorization after leaving gi
     await assert.rejects(discover({
       pages: new Map([['1', [releaseRecord(value)]]]), metadata: metadataFor(value),
       responseFor: (url) => (
-        url.href === assetUrl(value.tag, 'registry-entry.json') ? new Response(null, {
+        url.href === browserAssetUrl(value.tag, 'registry-entry.json') ? new Response(null, {
           status: 302, headers: { location },
         }) : undefined
       ),
     }), /redirect|trusted HTTPS/i);
   }
   const calls = [];
-  const returnUrl = assetUrl(value.tag, 'registry-entry.json');
+  const returnUrl = browserAssetUrl(value.tag, 'registry-entry.json');
   await discover({
     pages: new Map([['1', [releaseRecord(value)]]]), metadata: metadataFor(value), calls,
     responseFor: (url) => {
@@ -611,7 +657,7 @@ test('rejects a trusted Release missing metadata or containing a non-unique Kit 
     releaseRecord(value, { assets: releaseRecord(value).assets.filter((asset) => asset.name !== 'release.json') }),
     releaseRecord(value, { assets: [
       ...releaseRecord(value).assets,
-      { name: 'another.hkit', browser_download_url: assetUrl(value.tag, 'another.hkit') },
+      { name: 'another.hkit', browser_download_url: browserAssetUrl(value.tag, 'another.hkit') },
     ] }),
   ]) {
     await assert.rejects(discover({
@@ -631,8 +677,8 @@ test('downloads named metadata assets from browser URLs as octet streams', async
   });
   const metadataCalls = calls.filter((call) => call.url.startsWith('https://github.com/'));
   assert.deepEqual(metadataCalls.map((call) => call.url).sort(), [
-    assetUrl(value.tag, 'registry-entry.json'),
-    assetUrl(value.tag, 'release.json'),
+    browserAssetUrl(value.tag, 'registry-entry.json'),
+    browserAssetUrl(value.tag, 'release.json'),
   ].sort());
   for (const { options } of metadataCalls) {
     assert.equal(options.headers.Accept, 'application/octet-stream');
@@ -671,8 +717,8 @@ test('rejects the complete aggregation for metadata drift and failed attestation
     pages: new Map([['1', [releaseRecord(valid), releaseRecord(mismatched)]]]),
     metadata: new Map([
       ...metadataFor(valid),
-      [assetUrl(mismatched.tag, 'release.json'), mismatched.release],
-      [assetUrl(mismatched.tag, 'registry-entry.json'), entryWithWrongTag],
+      [browserAssetUrl(mismatched.tag, 'release.json'), mismatched.release],
+      [browserAssetUrl(mismatched.tag, 'registry-entry.json'), entryWithWrongTag],
     ]),
   }), /tag/i);
   await assert.rejects(discover({
