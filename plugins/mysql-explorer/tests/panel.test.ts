@@ -1,0 +1,377 @@
+// @vitest-environment jsdom
+import fs from 'node:fs';
+import path from 'node:path';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+type PanelDefinition = {
+  mount(context: unknown): Promise<void>;
+  unmount(): void;
+  methods: Record<string, (payload: unknown) => Promise<void> | void>;
+};
+
+const objectsSnapshot = {
+  connected: true,
+  database: 'app',
+  databases: ['app', 'mysql'],
+  connectionRevision: 1,
+  schemaRevision: 3,
+  objects: [
+    { name: 'users', type: 'table', insertable: true },
+    { name: 'active_users', type: 'view', insertable: false },
+  ],
+  selection: { connectionRevision: 1, objectName: 'users' },
+};
+
+describe('MySQL object explorer panel', () => {
+  beforeEach(() => {
+    document.body.innerHTML = '<div id="panel-root"></div>';
+    vi.resetModules();
+  });
+
+  it('hydrates only from main, restores the historical rail, groups and filters objects, then selects', async () => {
+    const request = vi.fn(async (plugin: string, method: string, input?: unknown) => {
+      expect(plugin).toBe('@itharbors/mysql-explorer');
+      if (method === 'getObjectsSnapshot') return objectsSnapshot;
+      if (method === 'selectObject') return input;
+      throw new Error(`Unexpected request ${plugin}:${method}`);
+    });
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+
+    await definition.mount({ message: { request } });
+
+    expect(document.querySelector('.object-rail')).not.toBeNull();
+    expect(document.querySelector('.rail-heading')?.textContent).toContain('数据库对象');
+    expect(document.querySelector('.object-count')?.textContent).toBe('2');
+    expect(Array.from(document.querySelectorAll('.rail-group h3')).map((heading) => heading.textContent)).toEqual([
+      '数据库',
+      '表',
+      '视图',
+    ]);
+    expect(document.querySelector('[data-database-name="app"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-database-name="mysql"]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('.object-dot.view')).not.toBeNull();
+    expect(request).not.toHaveBeenCalledWith('@itharbors/mysql-core', expect.anything(), expect.anything());
+
+    const search = document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')!;
+    search.value = 'active';
+    search.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(document.querySelector('[data-object-name="users"]')).toBeNull();
+    expect(document.querySelector('[data-object-name="active_users"]')).not.toBeNull();
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith('@itharbors/mysql-explorer', 'selectObject', {
+        connectionRevision: 1,
+        objectName: 'active_users',
+      });
+      expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('true');
+    });
+
+    const css = fs.readFileSync(path.join(
+      process.cwd(),
+      'plugins/mysql-explorer/panel.explorer/src/index.css',
+    ), 'utf8');
+    expect(css).toContain('--ink: #07111d');
+    expect(css).toContain('background: #091725');
+    expect(css).toContain('box-shadow: inset 2px 0 var(--blue)');
+    expect(css).toMatch(/grid-template-areas:\s*"heading"\s*"search"\s*"error"\s*"tree"/s);
+    expect(css).toMatch(/\.object-tree\s*{[^}]*grid-area:\s*tree;[^}]*min-height:\s*0;[^}]*overflow:\s*auto;/s);
+    expect(Array.from(document.querySelector('.object-rail')!.children).map((child) => child.className)).toEqual([
+      'rail-heading',
+      'object-search',
+      'object-error-slot',
+      'object-tree',
+    ]);
+    expect(document.querySelector('.object-error-slot')?.children).toHaveLength(0);
+  });
+
+  it('consumes newer snapshots, rejects stale revisions, and distinguishes disconnected from an empty schema', async () => {
+    const request = vi.fn(async () => ({
+      connected: false,
+      database: null,
+      databases: [],
+      connectionRevision: 0,
+      schemaRevision: 0,
+      objects: [],
+      selection: { connectionRevision: 0, objectName: null },
+    }));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    expect(document.body.textContent).toContain('连接后即可查看表和视图');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(true);
+
+    await definition.methods.onObjectsChanged({
+      connected: true,
+      database: null,
+      databases: ['app', 'mysql'],
+      connectionRevision: 2,
+      schemaRevision: 5,
+      objects: [],
+      selection: { connectionRevision: 2, objectName: null },
+    });
+    expect(document.body.textContent).toContain('选择数据库后查看表和视图');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(true);
+
+    await definition.methods.onObjectsChanged({
+      connected: true,
+      database: 'app',
+      databases: ['app', 'mysql'],
+      connectionRevision: 3,
+      schemaRevision: 6,
+      objects: [],
+      selection: { connectionRevision: 3, objectName: null },
+    });
+    expect(document.body.textContent).toContain('此数据库没有表或视图');
+    expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(false);
+
+    await definition.methods.onObjectsChanged({
+      connected: true,
+      database: 'stale',
+      databases: ['stale'],
+      connectionRevision: 2,
+      schemaRevision: 99,
+      objects: [{ name: 'stale', type: 'table', insertable: true }],
+      selection: { connectionRevision: 2, objectName: 'stale' },
+    });
+    expect(document.body.textContent).not.toContain('stale');
+    expect(document.body.textContent).toContain('此数据库没有表或视图');
+  });
+
+  it('shows schema refresh failures instead of reporting a connected database as empty', async () => {
+    const objectsSnapshot = {
+      connected: true,
+      database: 'app',
+      databases: ['app'],
+      connectionRevision: 2,
+      schemaRevision: 3,
+      objects: [],
+      selection: { connectionRevision: 2, objectName: null },
+      error: { message: '无法读取数据库结构', detail: 'schema unavailable' },
+    };
+    const request = vi.fn(async () => objectsSnapshot);
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('无法读取数据库结构');
+    expect(document.body.textContent).not.toContain('此数据库没有表或视图');
+  });
+
+  it('selects a database while keeping the database list visible', async () => {
+    const request = vi.fn(async (_plugin: string, method: string, input?: unknown) => {
+      if (method === 'getObjectsSnapshot') return { ...objectsSnapshot, database: null, objects: [], selection: { connectionRevision: 1, objectName: null } };
+      if (method === 'selectDatabase') {
+        expect(input).toEqual({ database: 'app' });
+        return objectsSnapshot;
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-database-name="app"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => {
+      expect(request).toHaveBeenCalledWith('@itharbors/mysql-explorer', 'selectDatabase', { database: 'app' });
+      expect(document.querySelector('[data-database-name="app"]')?.getAttribute('aria-pressed')).toBe('true');
+      expect(document.querySelector('[data-object-name="users"]')).not.toBeNull();
+    });
+  });
+
+  it('shows database switch progress and blocks duplicate object rail requests', async () => {
+    let rejectSelection: ((reason?: unknown) => void) | undefined;
+    const pendingSelection = new Promise<unknown>((_resolve, reject) => { rejectSelection = reject; });
+    const serverSnapshot = {
+      ...objectsSnapshot,
+      database: null,
+      objects: [],
+      selection: { connectionRevision: 1, objectName: null },
+    };
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? serverSnapshot : pendingSelection
+    ));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-database-name="app"]') as HTMLButtonElement).click();
+
+    const pendingButton = document.querySelector<HTMLButtonElement>('[data-database-name="app"]')!;
+    expect(document.querySelector('.object-rail')?.getAttribute('aria-busy')).toBe('true');
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在切换数据库 app');
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('.rail-group button'))
+      .every((button) => button.disabled)).toBe(true);
+    expect(document.querySelector<HTMLInputElement>('[aria-label="筛选对象"]')?.disabled).toBe(true);
+    (document.querySelector('[data-database-name="mysql"]') as HTMLButtonElement).click();
+    expect(request.mock.calls.filter((call) => call[1] === 'selectDatabase')).toHaveLength(1);
+
+    rejectSelection?.(new Error('切换数据库失败'));
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent)
+      .toContain('切换数据库失败'));
+    expect(document.querySelector('[data-database-name="app"]')?.getAttribute('aria-pressed')).toBe('false');
+    expect(document.querySelector('.activity-spinner')).toBeNull();
+  });
+
+  it('keeps the object list available when selection fails', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getObjectsSnapshot') return objectsSnapshot;
+      if (method === 'selectObject') throw new Error('数据库连接已变化');
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[role="alert"]')?.textContent).toContain('数据库连接已变化');
+    });
+    expect(document.querySelector('.object-error-slot > [role="alert"]')).not.toBeNull();
+    expect(document.querySelector('.object-error-slot + .object-tree')).not.toBeNull();
+    expect(document.querySelector('[data-object-name="users"]')).not.toBeNull();
+    expect(document.querySelector('[data-object-name="active_users"]')).not.toBeNull();
+  });
+
+  it('keeps a long object list inside the dedicated scrollable tree row', async () => {
+    const objects = Array.from({ length: 80 }, (_, index) => ({
+      name: `table_${String(index).padStart(2, '0')}`,
+      type: 'table' as const,
+      insertable: true,
+    }));
+    const request = vi.fn(async () => ({
+      ...objectsSnapshot,
+      objects,
+      selection: { connectionRevision: 1, objectName: objects[0].name },
+    }));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const tree = document.querySelector('.object-tree')!;
+    expect(tree.querySelectorAll('[data-object-name]')).toHaveLength(80);
+    expect(document.querySelector('.object-rail')?.lastElementChild).toBe(tree);
+    expect(Array.from(document.querySelectorAll('[data-object-name]')).every((item) => item.closest('.object-tree') === tree)).toBe(true);
+  });
+
+  it('does not let late hydration overwrite newer objects or a same-revision selection broadcast', async () => {
+    let resolveHydration: ((value: unknown) => void) | undefined;
+    const hydration = new Promise<unknown>((resolve) => { resolveHydration = resolve; });
+    const request = vi.fn(async () => hydration);
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    const mounting = definition.mount({ message: { request } });
+
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      connectionRevision: 3,
+      schemaRevision: 8,
+      objects: [{ name: 'newer', type: 'table', insertable: true }],
+      selection: { connectionRevision: 3, objectName: 'newer' },
+    });
+    resolveHydration?.(objectsSnapshot);
+    await mounting;
+
+    expect(document.querySelector('[data-object-name="newer"]')).not.toBeNull();
+    expect(document.querySelector('[data-object-name="users"]')).toBeNull();
+
+    definition.unmount();
+    document.body.innerHTML = '<div id="panel-root"></div>';
+    let resolveSameRevisionHydration: ((value: unknown) => void) | undefined;
+    const sameRevisionHydration = new Promise<unknown>((resolve) => { resolveSameRevisionHydration = resolve; });
+    request.mockImplementationOnce(async () => sameRevisionHydration);
+    const remounting = definition.mount({ message: { request } });
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      selection: { connectionRevision: 1, objectName: 'active_users' },
+    });
+    resolveSameRevisionHydration?.(objectsSnapshot);
+    await remounting;
+
+    expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('ignores a late selection response after a newer authoritative snapshot', async () => {
+    let resolveSelection: ((value: unknown) => void) | undefined;
+    const selection = new Promise<unknown>((resolve) => { resolveSelection = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? objectsSnapshot : selection
+    ));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      selection: { connectionRevision: 1, objectName: 'users' },
+    });
+    resolveSelection?.({ connectionRevision: 1, objectName: 'active_users' });
+    await new Promise<void>((resolve) => queueMicrotask(resolve));
+
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
+    expect(document.querySelector('[data-object-name="active_users"]')?.getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('shows object selection progress and blocks another selection until it completes', async () => {
+    let resolveSelection: ((value: unknown) => void) | undefined;
+    const pendingSelection = new Promise<unknown>((resolve) => { resolveSelection = resolve; });
+    const nextSnapshot = {
+      ...objectsSnapshot,
+      objects: [
+        ...objectsSnapshot.objects,
+        { name: 'audit', type: 'table', insertable: true },
+      ],
+    };
+    const request = vi.fn(async (_plugin: string, method: string, input?: unknown) => {
+      if (method === 'getObjectsSnapshot') return nextSnapshot;
+      if (method === 'selectObject' && (input as { objectName: string }).objectName === 'active_users') {
+        return pendingSelection;
+      }
+      if (method === 'selectObject') return input;
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    const pendingButton = document.querySelector<HTMLButtonElement>('[data-object-name="active_users"]')!;
+    expect(pendingButton.querySelector('.activity-spinner')).not.toBeNull();
+    expect(document.querySelector('[role="status"]')?.textContent).toContain('正在选择 active_users');
+    expect(Array.from(document.querySelectorAll<HTMLButtonElement>('.rail-group button'))
+      .every((button) => button.disabled)).toBe(true);
+    (document.querySelector('[data-object-name="audit"]') as HTMLButtonElement).click();
+    expect(request.mock.calls.filter((call) => call[1] === 'selectObject')).toHaveLength(1);
+    expect(document.querySelector('[data-object-name="users"]')?.getAttribute('aria-pressed')).toBe('true');
+
+    resolveSelection?.({ connectionRevision: 1, objectName: 'active_users' });
+    await vi.waitFor(() => expect(document.querySelector('[data-object-name="active_users"]')
+      ?.getAttribute('aria-pressed')).toBe('true'));
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('.activity-spinner')).toBeNull();
+  });
+
+  it('ignores a late selection rejection after switching connections or unmounting', async () => {
+    let rejectSelection: ((reason?: unknown) => void) | undefined;
+    const selection = new Promise<unknown>((_resolve, reject) => { rejectSelection = reject; });
+    const request = vi.fn(async (_plugin: string, method: string) => (
+      method === 'getObjectsSnapshot' ? objectsSnapshot : selection
+    ));
+    const definition = (await import('../panel.explorer/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    (document.querySelector('[data-object-name="active_users"]') as HTMLButtonElement).click();
+    await definition.methods.onObjectsChanged({
+      ...objectsSnapshot,
+      connectionRevision: 2,
+      schemaRevision: 1,
+      objects: [{ name: 'new_database_table', type: 'table', insertable: true }],
+      selection: { connectionRevision: 2, objectName: 'new_database_table' },
+    });
+    rejectSelection?.(new Error('old connection selection failed late'));
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(document.querySelector('[data-object-name="new_database_table"]')?.getAttribute('aria-pressed')).toBe('true');
+
+    definition.unmount();
+    expect(document.querySelector('#panel-root')?.children).toHaveLength(0);
+  });
+});

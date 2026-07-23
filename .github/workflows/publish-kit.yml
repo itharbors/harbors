@@ -1,0 +1,23 @@
+name: Publish MySQL Kit
+
+on:
+  push:
+    branches:
+      - kit/mysql
+    tags:
+      - 'kit/mysql/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+  pull-requests: write
+
+jobs:
+  publish:
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v1
+    with:
+      kit-name: mysql
+      label: MySQL
+      summary: MySQL 数据库连接、浏览、编辑、关系图与 SQL 工作台
+      runner: ubuntu-latest

@@ -1,0 +1,68 @@
+{
+  "name": "@itharbors/kit-mysql",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:packages": "npm run build -w @itharbors/mysql-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli",
+    "plugins:build": "node scripts/ce-plugin.mjs build --all",
+    "plugins:check": "node scripts/ce-plugin.mjs check --all",
+    "build": "npm run build -w @itharbors/mysql-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && npm run plugins:build",
+    "test:product": "vitest run --config vitest.config.ts",
+    "test:toolchain": "npm run test -w @itharbors/relationship-graph && npm run test -w @itharbors/kit-core && npm run test -w @itharbors/kit-cli",
+    "test": "npm run build:packages && npm run test:product && npm run test:toolchain",
+    "check": "npm run build && npm test && npm run plugins:check",
+    "kit:validate": "node packages/kit-cli/dist/cli.js validate .",
+    "kit:pack": "node packages/kit-cli/dist/cli.js pack ."
+  },
+  "dependencies": {
+    "mysql2": "^3.23.0"
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": {
+        "id": "mysql",
+        "label": "MySQL"
+      },
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "@itharbors/mysql-core",
+        "@itharbors/mysql-explorer",
+        "@itharbors/mysql-data",
+        "@itharbors/mysql-schema",
+        "@itharbors/mysql-relationships",
+        "@itharbors/mysql-sql"
+      ],
+      "theme": {
+        "--ce-accent": "#4f9fdf"
+      }
+    }
+  },
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "engines": {
+    "node": "22.18.0",
+    "npm": "10.9.3"
+  },
+  "harbors": {
+    "kitCli": "0.0.1"
+  },
+  "devDependencies": {
+    "@itharbors/kit-cli": "0.0.1",
+    "@types/better-sqlite3": "^7.6.0",
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.28.0",
+    "jsdom": "29.1.1",
+    "tsx": "^4.0.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.0.0"
+  }
+}
