@@ -22,9 +22,15 @@ export async function runCheckKitCli(
   io = process,
   dependencies = { checkOfficialKit },
 ) {
+  if (!Array.isArray(args) || args.length !== 3) {
+    io.stderr.write(USAGE);
+    return 2;
+  }
   const [slug, option, outputDirectory] = args;
   if (
-    args.length !== 3
+    typeof slug !== 'string'
+    || typeof option !== 'string'
+    || typeof outputDirectory !== 'string'
     || !OFFICIAL_KIT_SLUGS.includes(slug)
     || option !== '--output-directory'
     || !path.isAbsolute(outputDirectory)

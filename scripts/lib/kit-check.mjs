@@ -18,8 +18,9 @@ function normalizeOutputDirectory(outputDirectory) {
   return path.resolve(outputDirectory);
 }
 
-export function runCheckedCommand(command, args, { cwd } = {}) {
+export function runCheckedCommand(command, args, options) {
   return new Promise((resolve, reject) => {
+    const { cwd } = options ?? {};
     const child = spawn(command, args, { cwd, shell: false, stdio: 'inherit' });
     child.once('error', reject);
     child.once('close', (code, signal) => {

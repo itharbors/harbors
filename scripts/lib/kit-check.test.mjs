@@ -180,6 +180,30 @@ test('runCheckedCommand rejects non-zero exits, signals, error events, and inval
     runCheckedCommand(null, []),
     /ERR_INVALID_ARG_TYPE|The "file" argument/u,
   );
+  let nullOptionsResult;
+  assert.doesNotThrow(() => {
+    nullOptionsResult = runCheckedCommand(null, [], null);
+  });
+  await assert.rejects(
+    nullOptionsResult,
+    /ERR_INVALID_ARG_TYPE|The "file" argument/u,
+  );
+});
+
+test('the CLI returns Usage for non-array arguments and non-string output directories', async () => {
+  for (const args of [
+    null,
+    ['sqlite', '--output-directory', 42],
+  ]) {
+    const stderr = [];
+    const code = await runCheckKitCli(
+      args,
+      { stdout: { write: () => undefined }, stderr: { write: (value) => stderr.push(value) } },
+      { checkOfficialKit: async () => { throw new Error('must not run'); } },
+    );
+    assert.equal(code, 2);
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <sqlite|mysql|notifications> --output-directory <absolute-directory>\n');
+  }
 });
 
 test('the CLI reports one safely parseable ERROR line for unsafe or empty failures', async () => {
