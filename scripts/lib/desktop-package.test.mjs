@@ -3,15 +3,103 @@ import test from 'node:test';
 import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import { runDesktopPackage } from './desktop-package-build.mjs';
+
+function commandRunner({ fail = {} } = {}) {
+  const calls = [];
+  return {
+    calls,
+    run: async (step) => {
+      calls.push(step);
+      if (fail[step.name]) throw fail[step.name];
+      return step.name;
+    },
+  };
+}
+
+test('rebuilds the packaged native addon before builder and restores the Node ABI afterwards', async () => {
+  const runner = commandRunner();
+
+  await runDesktopPackage({
+    cwd: '/workspace/harbors',
+    mode: 'dir',
+    run: runner.run,
+    electronRebuildCli: '/workspace/harbors/node_modules/@electron/rebuild/bin/cli.js',
+  });
+
+  assert.deepEqual(runner.calls.map((step) => step.name), [
+    'prepare',
+    'electron-rebuild',
+    'electron-builder',
+    'restore-node-addon',
+  ]);
+  assert.deepEqual(runner.calls[1].args, [
+    '/workspace/harbors/node_modules/@electron/rebuild/bin/cli.js',
+    '-f',
+    '-w',
+    'better-sqlite3',
+    '--version',
+    '31.7.7',
+    '--arch',
+    'arm64',
+  ]);
+});
+
+test('restores the Node ABI when electron-builder fails and preserves its failure', async () => {
+  const builderFailure = new Error('builder failed');
+  const runner = commandRunner({ fail: { 'electron-builder': builderFailure } });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd: '/workspace/harbors', mode: 'dir', run: runner.run }),
+    (error) => error === builderFailure,
+  );
+  assert.deepEqual(runner.calls.map((step) => step.name), [
+    'prepare',
+    'electron-rebuild',
+    'electron-builder',
+    'restore-node-addon',
+  ]);
+});
+
+test('reports both packaging and Node ABI restoration failures', async () => {
+  const builderFailure = new Error('builder failed');
+  const restoreFailure = new Error('restore failed');
+  const runner = commandRunner({
+    fail: { 'electron-builder': builderFailure, 'restore-node-addon': restoreFailure },
+  });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd: '/workspace/harbors', mode: 'dir', run: runner.run }),
+    (error) => error instanceof AggregateError
+      && error.errors[0] === builderFailure
+      && error.errors[1] === restoreFailure,
+  );
+});
+
+test('surfaces a Node ABI restoration failure after a successful package build', async () => {
+  const restoreFailure = new Error('restore failed');
+  const runner = commandRunner({ fail: { 'restore-node-addon': restoreFailure } });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd: '/workspace/harbors', mode: 'dist', run: runner.run }),
+    (error) => error === restoreFailure,
+  );
+  assert.equal(runner.calls[2].name, 'electron-builder');
+  assert.deepEqual(runner.calls[2].args.slice(-2), ['--publish', 'never']);
+});
 
 test('desktop package owns version, updater, and native runtime dependencies', async () => {
   const pkg = JSON.parse(await readFile(new URL('../../packages/desktop/package.json', import.meta.url)));
+  const rootPackage = JSON.parse(await readFile(new URL('../../package.json', import.meta.url)));
   const desktopBuildSource = await readFile(new URL('./desktop-build.mjs', import.meta.url), 'utf8');
   assert.equal(pkg.name, '@itharbors/desktop');
   assert.equal(pkg.version, '0.1.0-preview.1');
   assert.equal(pkg.main, 'dist/main.mjs');
   assert.equal(pkg.dependencies['electron-updater'], '6.8.9');
   assert.equal(pkg.dependencies['better-sqlite3'], '11.10.0');
+  assert.equal(rootPackage.devDependencies['@electron/rebuild'], '4.2.0');
+  assert.equal(rootPackage.scripts['desktop:dir'], 'node scripts/desktop-package.mjs dir');
+  assert.equal(rootPackage.scripts['desktop:dist'], 'node scripts/desktop-package.mjs dist');
   for (const [name, version] of [
     ['sigstore', '3.1.0'],
     ['snappyjs', '0.7.0'],
