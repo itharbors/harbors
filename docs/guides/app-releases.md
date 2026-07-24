@@ -52,7 +52,8 @@ HARBORS_DISABLE_UPDATE_CHECKS=1 \
 npm run app:release -- <semver>
 ```
 
-脚本只打印 `app/v<semver>@<40-char-commit>`。获得对该 Commit/Tag 的明确确认后，再按输出设置
+脚本会打印发布身份字段（Tag、版本、Commit、渠道），并给出唯一的精确确认 token
+`app/v<semver>@<40-char-commit>`。获得对该 Commit/Tag 的明确确认后，再按输出设置
 `HARBORS_APP_RELEASE_CONFIRM` 重跑。An implementation approval or merge approval is not an exact release confirmation.
 
 `app/v*` wrapper 仅调用 `app-publish-v1`；保护 `app/v*` 与 `app-publish-v1` Tag，禁止未审查重写。
