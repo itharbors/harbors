@@ -7,6 +7,12 @@
     "itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2"
   ],
   "kits": {
+    "csv": {
+      "id": "@itharbors/kit-csv",
+      "label": "CSV",
+      "summary": "CSV/TSV 文件浏览、筛选、排序与导出工作台",
+      "runner": "macos-14"
+    },
     "mysql": {
       "id": "@itharbors/kit-mysql",
       "label": "MySQL",

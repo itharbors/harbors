@@ -235,7 +235,7 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-官方实现固定保存在主分支的 `kits/sqlite`、`kits/mysql`、`kits/notifications`。每个目录独立维护
+官方实现固定保存在主分支的 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`。每个目录独立维护
 `kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
 不会发布 Kit 或 Framework。
@@ -352,6 +352,19 @@ SQLite Kit 由 Core、Explorer、Data、Schema、Relationships 和 SQL 六个插
 
 SQL 页每次执行一个语句，可运行查询、DDL 或 DML；结果集每页最多返回 50 行。所有表格生成的
 写操作使用参数绑定，删除记录与写 SQL 都会要求确认。
+
+## CSV Kit
+
+仓库内置的 `@itharbors/kit-csv` 是只读 CSV/TSV 文本检查器。它支持 UTF-8（含 BOM）与
+GB18030，允许在打开前确认逗号、制表符或分号分隔符和表头配置，并对不规则记录给出警告。
+
+```bash
+npm run dev -- --kit ./kits/csv
+```
+
+Core 插件流式解析源文件并建立会话临时索引；Panel 仅获取当前页。数据页提供全字段搜索、字段筛选、
+稳定文本排序和 25/50/100/250 行分页，结构页按需读取空值数与最大长度。导出始终创建新的 UTF-8 BOM
+CSV 并拒绝覆盖源文件或已有目标。完整格式、查询语义与资源上限见 [CSV Kit README](../../kits/csv/README.md)。
 
 ## MySQL Kit
 

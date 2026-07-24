@@ -1,0 +1,32 @@
+{
+  "name": "@itharbors/csv-core",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "@itharbors/csv-contracts": "0.0.1",
+    "better-sqlite3": "^11.0.0",
+    "csv-parse": "^7.0.1",
+    "iconv-lite": "^0.7.3"
+  },
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "listDirectory": ["listDirectory"],
+          "getDefaultDirectory": ["getDefaultDirectory"],
+          "sampleFile": ["sampleFile"],
+          "openFile": ["openFile"],
+          "getConnectionState": ["getConnectionState"],
+          "cancelOpen": ["cancelOpen"],
+          "closeFile": ["closeFile"],
+          "getSchema": ["getSchema"],
+          "getRows": ["getRows"],
+          "getColumnStats": ["getColumnStats"],
+          "exportRows": ["exportRows"],
+          "cancelExport": ["cancelExport"]
+        }
+      }
+    }
+  }
+}
