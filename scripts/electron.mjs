@@ -36,6 +36,7 @@ import {
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
+  registerDesktopSignalHandlers,
   selectMenuWindow,
   shouldStartElectronApp,
   shutdownDesktopServices,
@@ -115,6 +116,7 @@ let updateCheckTimer;
 let updateCheckScheduled = false;
 let updatePromptPromise;
 let installUpdateAfterShutdown = false;
+let disposeDesktopSignalHandlers;
 let notificationStore;
 let notificationHost;
 let notificationPort;
@@ -304,6 +306,10 @@ function startElectronApp() {
       app.quit();
     },
   });
+  disposeDesktopSignalHandlers = registerDesktopSignalHandlers({
+    signalSource: process,
+    quit: () => app.quit(),
+  });
   app.whenReady()
     .then(async () => {
       electronOptions = parseElectronOptions(process.argv.slice(2));
@@ -436,6 +442,8 @@ function startElectronApp() {
     updateUnsubscribe = undefined;
     updateController?.dispose();
     updateController = undefined;
+    disposeDesktopSignalHandlers?.();
+    disposeDesktopSignalHandlers = undefined;
     kitManagerIpcRegistration?.unregister();
     kitManagerIpcRegistration = undefined;
     applicationRuntimeClient?.close();

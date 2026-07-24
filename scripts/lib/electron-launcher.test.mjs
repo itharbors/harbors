@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
@@ -13,6 +14,7 @@ import {
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
+  registerDesktopSignalHandlers,
   selectMenuWindow,
   shutdownDesktopServices,
   finishDesktopShutdown,
@@ -61,6 +63,31 @@ test('starts packaged Electron when LaunchServices does not provide the bundled 
     entryPath: modulePath,
     modulePath,
   }), true);
+});
+
+test('registers SIGTERM and SIGINT as one graceful desktop quit, then disposes both listeners', () => {
+  const signalSource = new EventEmitter();
+  let quitCount = 0;
+
+  assert.equal(signalSource.listenerCount('SIGTERM'), 0);
+  assert.equal(signalSource.listenerCount('SIGINT'), 0);
+  const dispose = registerDesktopSignalHandlers({
+    signalSource,
+    quit: () => { quitCount += 1; },
+  });
+
+  assert.equal(signalSource.listenerCount('SIGTERM'), 1);
+  assert.equal(signalSource.listenerCount('SIGINT'), 1);
+  signalSource.emit('SIGTERM');
+  signalSource.emit('SIGINT');
+  signalSource.emit('SIGTERM');
+  assert.equal(quitCount, 1);
+
+  dispose();
+  assert.equal(signalSource.listenerCount('SIGTERM'), 0);
+  assert.equal(signalSource.listenerCount('SIGINT'), 0);
+  signalSource.emit('SIGINT');
+  assert.equal(quitCount, 1);
 });
 
 test('rejects missing, duplicate and unknown Electron arguments', () => {

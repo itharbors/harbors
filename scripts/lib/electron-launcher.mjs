@@ -4,6 +4,26 @@ export function shouldStartElectronApp({ isPackaged, entryPath, modulePath }) {
   return isPackaged === true || (typeof entryPath === 'string' && entryPath === modulePath);
 }
 
+export function registerDesktopSignalHandlers({ signalSource, quit }) {
+  let disposed = false;
+  let quitRequested = false;
+  const requestQuit = () => {
+    if (disposed || quitRequested) return;
+    quitRequested = true;
+    quit();
+  };
+
+  signalSource.on('SIGTERM', requestQuit);
+  signalSource.on('SIGINT', requestQuit);
+
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    signalSource.off('SIGTERM', requestQuit);
+    signalSource.off('SIGINT', requestQuit);
+  };
+}
+
 export function parseElectronOptions(args) {
   let requestedKit = null;
 
