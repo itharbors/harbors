@@ -1,0 +1,16 @@
+name: Publish App
+
+on:
+  push:
+    tags:
+      - 'app/v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    uses: itharbors/harbors/.github/workflows/publish-app-reusable.yml@app-publish-v1
+    secrets: inherit
