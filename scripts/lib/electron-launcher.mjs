@@ -96,6 +96,22 @@ export function buildTrayTemplate({
   ];
 }
 
+export function buildUpdateMenuItems({ check, onError = () => {} }) {
+  return [
+    { type: 'separator' },
+    {
+      label: '检查更新…',
+      click() {
+        try {
+          Promise.resolve(check()).catch(onError);
+        } catch (error) {
+          onError(error);
+        }
+      },
+    },
+  ];
+}
+
 export async function openOrFocusKitWindow(kitName, registry, pendingLoads, createWindow) {
   let window = registry.get(kitName);
   if (!window || window.isDestroyed()) {
@@ -138,6 +154,27 @@ export async function shutdownDesktopServices({
     stopNotificationService(),
   ]);
   return [...controlResults, ...frameworkResults, ...notificationResults];
+}
+
+export function finishDesktopShutdown({
+  results,
+  installUpdateAfterShutdown,
+  updater,
+  quit,
+  logError,
+}) {
+  const failed = results.some((result) => result.status === 'rejected');
+  if (installUpdateAfterShutdown && !failed) {
+    updater.quitAndInstall();
+    return;
+  }
+  if (installUpdateAfterShutdown) {
+    updater.autoInstallOnAppQuit = false;
+    logError('Update installation deferred because application shutdown failed');
+  } else if (failed) {
+    logError('Failed to complete one or more application shutdown steps');
+  }
+  quit();
 }
 
 export async function persistOpenWindowBounds(registry, workspaceStore) {

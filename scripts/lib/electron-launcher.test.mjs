@@ -4,6 +4,7 @@ import test from 'node:test';
 
 import {
   buildTrayTemplate,
+  buildUpdateMenuItems,
   createFrameworkArgs,
   createKitWindowUrl,
   mergeMenuTrees,
@@ -13,6 +14,7 @@ import {
   persistOpenWindowBounds,
   selectMenuWindow,
   shutdownDesktopServices,
+  finishDesktopShutdown,
   showKitChooser,
 } from './electron-launcher.mjs';
 import { createDevPages, createDevServerEnv, createDevStackEnvironments } from './dev-launcher.mjs';
@@ -268,6 +270,21 @@ test('adds unread count only to the Notification Kit tray entry', () => {
   assert.equal(template[1].label, 'Notifications (4)');
 });
 
+test('builds the APP update menu action without renderer-controlled inputs', () => {
+  let checks = 0;
+  const items = buildUpdateMenuItems({
+    check: () => { checks += 1; },
+  });
+
+  assert.deepEqual(items.map(({ label, type }) => ({ label, type })), [
+    { label: undefined, type: 'separator' },
+    { label: '检查更新…', type: undefined },
+  ]);
+  assert.equal(items[1].click.length, 0);
+  items[1].click();
+  assert.equal(checks, 1);
+});
+
 test('focuses an existing Kit window or creates a replacement', async () => {
   const calls = [];
   const existing = {
@@ -401,6 +418,92 @@ test('drains Kit Manager work before stopping the Framework and notification ser
     'framework:stopped',
     'notification:stopped',
   ]);
+});
+
+test('installs an update only after every ordered shutdown result fulfilled', () => {
+  const installed = [];
+  const quit = [];
+  const logs = [];
+  const updater = {
+    autoInstallOnAppQuit: true,
+    quitAndInstall: () => installed.push('install'),
+  };
+  finishDesktopShutdown({
+    results: [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }],
+    installUpdateAfterShutdown: true,
+    updater,
+    quit: () => quit.push('quit'),
+    logError: (...values) => logs.push(values),
+  });
+  assert.deepEqual(installed, ['install']);
+  assert.deepEqual(quit, []);
+  assert.deepEqual(logs, []);
+
+  finishDesktopShutdown({
+    results: [{ status: 'rejected', reason: new Error('secret /private/db token=abc') }],
+    installUpdateAfterShutdown: true,
+    updater,
+    quit: () => quit.push('quit'),
+    logError: (...values) => logs.push(values),
+  });
+  assert.deepEqual(installed, ['install']);
+  assert.deepEqual(quit, ['quit']);
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  assert.deepEqual(logs, [['Update installation deferred because application shutdown failed']]);
+});
+
+test('ordinary shutdown logs sanitized failures and quits without calling update install', () => {
+  const calls = [];
+  finishDesktopShutdown({
+    results: [{ status: 'rejected', reason: new Error('certificate /private/path') }],
+    installUpdateAfterShutdown: false,
+    updater: { quitAndInstall: () => calls.push('install') },
+    quit: () => calls.push('quit'),
+    logError: (...values) => calls.push(values),
+  });
+  assert.deepEqual(calls, [
+    ['Failed to complete one or more application shutdown steps'],
+    'quit',
+  ]);
+});
+
+test('wires updater IPC, delayed background download, prompt and narrow preload into Electron', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const preload = await readFile(new URL('../electron-preload.cjs', import.meta.url), 'utf8');
+  const clientTypes = await readFile(new URL('../../packages/client/src/electron/types.ts', import.meta.url), 'utf8');
+  const clientBridge = await readFile(new URL('../../packages/client/src/electron/bridge.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /createAppUpdater/);
+  assert.match(source, /registerAppUpdaterIpc/);
+  assert.match(source, /buildUpdateMenuItems/);
+  assert.match(source, /setTimeout\([\s\S]*updateController\.check/);
+  assert.match(source, /snapshot\.status === 'available'[\s\S]*updateController\.download/);
+  assert.match(source, /snapshot\.status !== 'downloaded'[\s\S]*showMessageBox/);
+  assert.match(source, /installUpdateAfterShutdown = true/);
+  assert.match(source, /finishDesktopShutdown/);
+
+  assert.match(preload, /exposeInMainWorld\('harborsUpdates'/);
+  for (const [method, channel] of [
+    ['getState', 'harbors:update:get-state'],
+    ['check', 'harbors:update:check'],
+    ['download', 'harbors:update:download'],
+    ['install', 'harbors:update:install'],
+  ]) {
+    assert.match(preload, new RegExp(`${method}:?\\s*\\(\\)\\s*=>\\s*ipcRenderer\\.invoke\\('${channel}'\\)`));
+  }
+  assert.match(preload, /return \(\) => ipcRenderer\.removeListener\('harbors:update:state', listener\)/);
+  assert.doesNotMatch(preload, /feedURL|feedUrl|assetURL|assetUrl|filePath/);
+
+  assert.match(clientTypes, /interface AppUpdateSnapshot/);
+  assert.match(clientTypes, /interface AppUpdateBridge/);
+  assert.match(clientTypes, /harborsUpdates\?: AppUpdateBridge/);
+  for (const exportName of [
+    'getAppUpdateState',
+    'checkForAppUpdates',
+    'downloadAppUpdate',
+    'installAppUpdate',
+    'onAppUpdateState',
+  ]) assert.match(clientBridge, new RegExp(`export function ${exportName}`));
 });
 
 test('persists every live Kit window before the tray application quits', async () => {
