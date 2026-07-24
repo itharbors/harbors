@@ -84,6 +84,7 @@ export async function runDesktopFrameworkProcess({
   let finalizationPromise;
   let failure;
   let hasFailure = false;
+  let shutdownRequested = false;
   const recordFailure = (error) => {
     if (!hasFailure) {
       failure = error;
@@ -115,6 +116,10 @@ export async function runDesktopFrameworkProcess({
     })();
     return finalizationPromise;
   };
+  const requestShutdown = () => {
+    shutdownRequested = true;
+    return finalize();
+  };
 
   try {
     const environment = parseDesktopFrameworkEnvironment(env);
@@ -135,10 +140,10 @@ export async function runDesktopFrameworkProcess({
       start: () => framework.start(),
       stop: () => framework.stop(),
     });
-    unsubscribeShutdown = subscribeShutdown?.(finalize);
+    unsubscribeShutdown = subscribeShutdown?.(requestShutdown);
     return await controller.start();
   } catch (error) {
-    await finalize(error);
+    await (shutdownRequested ? finalize() : finalize(error));
     return undefined;
   }
 }
