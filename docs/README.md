@@ -4,6 +4,12 @@
 [README](../readme.md) 用于快速了解与启动项目；本知识库用于回答“系统为何这样设计”
 以及“各模块如何协作”。
 
+## 主程序发布
+
+主程序发布以 `app/v<semver>` 触发，使用 **Developer ID Application** 签名并由
+`app-publish-v1` 工作流执行。请从[主程序构建、发布与验收](guides/app-releases.md)了解本地结构验收、
+精确确认、Preview/Stable 环境、凭据边界和不可变 Release 恢复。
+
 ## 推荐阅读路径
 
 ### 第一次接触项目

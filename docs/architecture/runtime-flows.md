@@ -3,6 +3,13 @@
 本篇沿端到端路径描述各模块如何协作。接口字段可能继续演进，但状态所有权和清理边界
 应保持与[核心原则](./core-principles.md)一致。
 
+## 桌面发布与更新流程
+
+发布从 `app/v<semver>` 开始，签名使用 **Developer ID Application**，受保护的
+`app-publish-v1` 工作流将经验证的 DMG/ZIP 与更新元数据一次性发布。Preview 与 Stable 走不同 GitHub
+environment；客户端只检查对应频道的签名 Release。完整的凭据、确认和回滚流程见
+[主程序构建、发布与验收](../guides/app-releases.md)。
+
 ## 1. Electron 与开发栈启动
 
 ```mermaid

@@ -97,6 +97,12 @@ node "<skill-directory>/scripts/notify.mjs" \
 
 ## 常用命令
 
+### 主程序发布
+
+桌面主程序使用 `app/v<semver>` Tag、**Developer ID Application** 签名和受保护的
+`app-publish-v1` 工作流。开发构建、精确发布确认、Preview/Stable 环境门禁、签名产物验收与不可变
+Release 恢复见[主程序构建、发布与验收](docs/guides/app-releases.md)；本地未签名目录包只可做结构验收。
+
 ```bash
 # 构建插件类型、前端、服务端和全部插件
 npm run build

@@ -30,3 +30,34 @@ test('builder ships only the staged runtime and unpacks native modules', async (
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlementsInherit), entitlementsPath);
   await access(entitlementsPath);
 });
+
+test('desktop release documentation preserves operational safety boundaries', async () => {
+  const rootUrl = new URL('../../', import.meta.url);
+  const releaseGuideUrl = new URL('docs/guides/app-releases.md', rootUrl);
+  const documentUrls = [
+    releaseGuideUrl,
+    new URL('readme.md', rootUrl),
+    new URL('docs/README.md', rootUrl),
+    new URL('docs/architecture/system-overview.md', rootUrl),
+    new URL('docs/architecture/runtime-flows.md', rootUrl),
+    new URL('docs/guides/development-workflow.md', rootUrl),
+  ];
+  const documents = await Promise.all(documentUrls.map((url) => readFile(url, 'utf8')));
+
+  for (const text of documents) {
+    assert.match(text, /app\/v<semver>/u);
+    assert.match(text, /Developer ID Application/u);
+    assert.match(text, /app-publish-v1/u);
+  }
+
+  const releaseGuide = documents[0];
+  assert.match(releaseGuide, /MAC_CSC_LINK/u);
+  assert.match(releaseGuide, /App Store Connect Team API Key/u);
+  assert.match(releaseGuide, /gh attestation verify/u);
+  assert.match(releaseGuide, /Developer ID Installer.*not required|not required.*Developer ID Installer/u);
+  assert.match(releaseGuide, /implementation.*merge.*not.*exact release confirmation|exact release confirmation.*implementation.*merge/u);
+  assert.match(releaseGuide, /app-preview/u);
+  assert.match(releaseGuide, /app-stable/u);
+  assert.match(releaseGuide, /higher version|higher SemVer/u);
+  assert.match(releaseGuide, /unsigned.*structural|structural.*unsigned/u);
+});
