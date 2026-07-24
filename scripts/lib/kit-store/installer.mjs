@@ -65,18 +65,30 @@ export class KitArtifactInstaller {
       }
       await mkdir(path.dirname(destination), { recursive: true });
       await rename(staging, destination);
-      await this.store.recordInstalled({
-        id: manifest.id,
-        version: manifest.version,
-        directory: destination,
-        digest,
-        source: {
-          publisher: expected.publisher,
-          repository: expected.repository,
-          commit: expected.commit,
-        },
-        channel: manifest.channel,
-      });
+      try {
+        await this.store.recordInstalled({
+          id: manifest.id,
+          version: manifest.version,
+          directory: destination,
+          digest,
+          source: {
+            publisher: expected.publisher,
+            repository: expected.repository,
+            commit: expected.commit,
+          },
+          channel: manifest.channel,
+        });
+      } catch (error) {
+        try {
+          await rm(destination, { recursive: true, force: true });
+        } catch (cleanupError) {
+          throw new AggregateError(
+            [error, cleanupError],
+            'Kit state persistence and destination rollback both failed',
+          );
+        }
+        throw error;
+      }
       return { status: 'installed', directory: destination, digest };
     } finally {
       if (staging) await rm(staging, { recursive: true, force: true });

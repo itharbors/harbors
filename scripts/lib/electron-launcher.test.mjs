@@ -533,6 +533,8 @@ test('wires updater IPC, delayed background download, prompt and narrow preload 
   const clientBridge = await readFile(new URL('../../packages/client/src/electron/bridge.ts', import.meta.url), 'utf8');
 
   assert.match(source, /createAppUpdater/);
+  assert.match(source, /hasOfficialMacSignature/);
+  assert.match(source, /releaseSigned:\s*hasOfficialMacSignature\(\{[\s\S]*executable:\s*process\.execPath/u);
   assert.match(source, /appUpdatesDisabled\(process\.env\.HARBORS_DISABLE_UPDATE_CHECKS\)/u);
   assert.match(source, /registerAppUpdaterIpc/);
   assert.match(source, /buildUpdateMenuItems/);

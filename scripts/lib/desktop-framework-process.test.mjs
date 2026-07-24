@@ -88,7 +88,7 @@ test('rejects fatal, early-exit, and timeout startup races', async (t) => {
   });
 });
 
-test('stops idempotently through IPC before escalating after ten seconds', async () => {
+test('stops idempotently through IPC and resolves only after a clean Framework exit', async () => {
   const child = createChild();
   const supervisor = launch(child);
   child.emit('message', { type: 'ready', port: 43123 });
@@ -101,9 +101,40 @@ test('stops idempotently through IPC before escalating after ten seconds', async
   assert.equal(supervisor.timers[1].delay, 10_000);
   assert.deepEqual(child.kills, []);
 
-  supervisor.timers[1].callback();
-  assert.deepEqual(child.kills, ['SIGKILL']);
-  child.signalCode = 'SIGKILL';
-  child.emit('exit', null, 'SIGKILL');
+  child.exitCode = 0;
+  child.emit('exit', 0, null);
   await first;
+  assert.equal(supervisor.timers[1].cancelled, true);
+  assert.deepEqual(child.kills, []);
+});
+
+test('rejects Framework shutdown when it reports fatal or requires SIGKILL', async (t) => {
+  await t.test('fatal shutdown', async () => {
+    const child = createChild();
+    const supervisor = launch(child);
+    child.emit('message', { type: 'ready', port: 43123 });
+    await supervisor.ready;
+
+    const stopped = supervisor.stop();
+    child.emit('message', { type: 'fatal', message: 'database close failed' });
+    child.exitCode = 1;
+    child.emit('exit', 1, null);
+
+    await assert.rejects(stopped, /database close failed|shutdown failed/i);
+  });
+
+  await t.test('forced shutdown', async () => {
+    const child = createChild();
+    const supervisor = launch(child);
+    child.emit('message', { type: 'ready', port: 43123 });
+    await supervisor.ready;
+
+    const stopped = supervisor.stop();
+    supervisor.timers[1].callback();
+    assert.deepEqual(child.kills, ['SIGKILL']);
+    child.signalCode = 'SIGKILL';
+    child.emit('exit', null, 'SIGKILL');
+
+    await assert.rejects(stopped, /SIGKILL|shutdown failed/i);
+  });
 });

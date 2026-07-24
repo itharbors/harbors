@@ -7,17 +7,17 @@ const wrapperUrl = new URL('.github/workflows/publish-app.yml', rootUrl);
 const reusableUrl = new URL('.github/workflows/publish-app-reusable.yml', rootUrl);
 const packageUrl = new URL('package.json', rootUrl);
 
-test('app publish wrapper only dispatches app/v* tags through the locked reusable workflow', async () => {
+test('app publish wrapper only dispatches updater-compatible v* tags through the locked reusable workflow', async () => {
   const wrapper = await readFile(wrapperUrl, 'utf8');
 
-  assert.match(wrapper, /^on:\s*\n\s+push:\s*\n\s+tags:\s*\n\s+- ['"]app\/v\*['"]\s*$/mu);
+  assert.match(wrapper, /^on:\s*\n\s+push:\s*\n\s+tags:\s*\n\s+- ['"]v\*['"]\s*$/mu);
   assert.doesNotMatch(wrapper, /workflow_dispatch|branches:|paths:|kit\/v|@main/u);
   assert.match(wrapper, /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-app-reusable\.yml@app-publish-v1/u);
   assert.doesNotMatch(wrapper, /uses:.*@refs\/tags\/app-publish-v1/u);
   assert.match(wrapper, /contents:\s*write/u);
   assert.match(wrapper, /id-token:\s*write/u);
   assert.match(wrapper, /attestations:\s*write/u);
-  assert.match(wrapper, /secrets:\s*inherit/u);
+  assert.doesNotMatch(wrapper, /secrets:\s*inherit/u);
 });
 
 test('reusable workflow locks caller and signer identities with GitHub reference semantics', async () => {
@@ -28,14 +28,35 @@ test('reusable workflow locks caller and signer identities with GitHub reference
   assert.match(context, /GITHUB_REPOSITORY/u);
   assert.match(context, /\.github\/workflows\/publish-app\.yml@\$GITHUB_REF/u);
   assert.match(workflow, /itharbors\/harbors\/\.github\/workflows\/publish-app-reusable\.yml@refs\/tags\/app-publish-v1/u);
+  assert.equal(
+    (workflow.match(/ACTUAL_SIGNER_WORKFLOW:\s*\$\{\{ job\.workflow_ref \}\}/gu) ?? []).length,
+    2,
+    'every reusable workflow job must validate its defining ref',
+  );
+  assert.equal(
+    (workflow.match(/"\$ACTUAL_SIGNER_WORKFLOW" != "\$EXPECTED_SIGNER_WORKFLOW"/gu) ?? []).length,
+    2,
+  );
   assert.doesNotMatch(workflow, /publish-app-reusable\.yml@main/u);
+});
+
+test('every external action is pinned to a full immutable commit SHA', async () => {
+  const workflow = await readFile(reusableUrl, 'utf8');
+  const actionUses = [...workflow.matchAll(/^\s*uses:\s*([^\s#]+)(?:\s+#.*)?$/gmu)]
+    .map((match) => match[1]);
+
+  assert.ok(actionUses.length >= 5);
+  for (const action of actionUses) {
+    assert.match(action, /^[\w.-]+\/[\w.-]+@[0-9a-f]{40}$/u);
+  }
+  assert.doesNotMatch(workflow, /uses:\s*actions\/[\w.-]+@v\d/u);
 });
 
 test('context validates the exact canonical release commit from full history on origin/main', async () => {
   const workflow = await readFile(reusableUrl, 'utf8');
   const context = workflowJob(workflow, 'context');
 
-  assert.match(context, /actions\/checkout@v6/u);
+  assert.match(context, /actions\/checkout@[0-9a-f]{40}\s+# v6\.1\.0/u);
   assert.match(context, /ref:\s*\$\{\{ github\.ref \}\}/u);
   assert.match(context, /fetch-depth:\s*0/u);
   assert.match(context, /persist-credentials:\s*false/u);
@@ -57,7 +78,7 @@ test('release runs on pinned macOS arm64 tooling after all checks and requires e
 
   assert.match(release, /runs-on:\s*macos-15/u);
   assert.match(release, /environment:\s*app-\$\{\{ needs\.context\.outputs\.channel \}\}/u);
-  assert.match(release, /actions\/setup-node@v6[\s\S]*node-version:\s*22\.18\.0/u);
+  assert.match(release, /actions\/setup-node@[0-9a-f]{40}\s+# v6\.5\.0[\s\S]*node-version:\s*22\.18\.0/u);
   assert.match(release, /npm install --global npm@10\.9\.3/u);
   assert.match(release, /uname -m[\s\S]*arm64/u);
 
@@ -105,19 +126,22 @@ test('release selects exactly six nonempty assets and generates checksums plus S
   assert.match(release, /npm sbom --sbom-format spdx/u);
   assert.match(release, /shasum -a 256/u);
   assert.match(release, /ITHARBORS-\$RELEASE_VERSION-arm64\.dmg/u);
-  assert.match(release, /ITHARBORS-\$RELEASE_VERSION-arm64\.zip/u);
-  assert.match(release, /ITHARBORS-\$RELEASE_VERSION-arm64\.zip\.blockmap/u);
+  assert.match(release, /ITHARBORS-\$RELEASE_VERSION-arm64-mac\.zip/u);
+  assert.match(release, /ITHARBORS-\$RELEASE_VERSION-arm64-mac\.zip\.blockmap/u);
   assert.match(release, /latest-mac\.yml/u);
   assert.match(release, /checksums\.txt/u);
   assert.match(release, /sbom\.spdx\.json/u);
   assert.match(release, /\$\{#ASSETS\[@\]\}.*-ne 6/u);
   assert.match(release, /! -s "\$asset"/u);
+  assert.match(release, /validateAppUpdateMetadata/u);
+  assert.match(release, /EXPECTED_ZIP_NAME/u);
+  assert.match(release, /EXPECTED_DMG_NAME/u);
 });
 
 test('publication attests all assets and safely verifies a new draft before publishing once', async () => {
   const release = workflowJob(await readFile(reusableUrl, 'utf8'), 'release');
 
-  assert.match(release, /actions\/attest@v4/u);
+  assert.match(release, /actions\/attest@[0-9a-f]{40}\s+# v4\.2\.0/u);
   assert.match(release, /subject-path:[\s\S]*\.dmg[\s\S]*\.zip[\s\S]*\.zip\.blockmap[\s\S]*latest-mac\.yml[\s\S]*checksums\.txt[\s\S]*sbom\.spdx\.json/u);
   assert.match(release, /releases\/tags\/\$RELEASE_TAG/u);
   assert.match(release, /already exists/u);
@@ -130,19 +154,24 @@ test('publication attests all assets and safely verifies a new draft before publ
   assert.match(release, /actualNames[\s\S]*\.sort/u);
   assert.match(release, /expectedNames[\s\S]*\.sort/u);
   assert.match(release, /asset\.size <= 0/u);
-  assert.equal((release.match(/--draft=false/gu) ?? []).length, 1, 'draft must be published exactly once');
-  assert.match(release, /publish_args\+=\(--prerelease\)/u);
+  assert.match(release, /UPLOAD_URL/u);
+  assert.match(release, /releases\/\$DRAFT_ID\/assets/u);
+  assert.doesNotMatch(release, /gh release upload/u);
+  assert.match(release, /--method PATCH "repos\/\$GITHUB_REPOSITORY\/releases\/\$DRAFT_ID"/u);
+  assert.doesNotMatch(release, /gh release edit/u);
+  assert.match(release, /release\.draft !== false/u);
   assert.match(release, /needs\.context\.outputs\.channel == 'preview'/u);
 });
 
-test('root test scripts register the focused app publish workflow suite', async () => {
+test('root check runs every focused desktop and app publication suite', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
 
   assert.equal(
     packageJson.scripts['test:app-publish'],
     'node --test scripts/lib/app-publish/*.test.mjs',
   );
-  assert.match(packageJson.scripts.test, /npm run test:app-publish/u);
+  assert.match(packageJson.scripts.test, /npm run test:desktop/u);
+  assert.match(packageJson.scripts.test, /npm run test:app-workflow/u);
 });
 
 function workflowJob(workflow, name) {

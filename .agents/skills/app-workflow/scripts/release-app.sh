@@ -20,12 +20,41 @@ test "$branch" = main || app_workflow_fail "release must run from main, got ${br
 origin_url=$(git -C "$repo_root" remote get-url origin 2>/dev/null) \
   || app_workflow_fail 'origin remote is required'
 test -n "$origin_url" || app_workflow_fail 'origin remote is required'
+case "$origin_url" in
+  https://github.com/itharbors/harbors|https://github.com/itharbors/harbors.git|\
+  git@github.com:itharbors/harbors|git@github.com:itharbors/harbors.git|\
+  ssh://git@github.com/itharbors/harbors|ssh://git@github.com/itharbors/harbors.git) ;;
+  *) app_workflow_fail 'origin must be the canonical itharbors/harbors repository' ;;
+esac
 git -C "$repo_root" fetch origin --prune \
   || app_workflow_fail 'unable to fetch origin'
 commit=$(git -C "$repo_root" rev-parse HEAD)
 origin_main=$(git -C "$repo_root" rev-parse --verify refs/remotes/origin/main 2>/dev/null) \
   || app_workflow_fail 'unable to resolve fetched origin/main'
 test "$commit" = "$origin_main" || app_workflow_fail 'current Commit is not origin/main'
+
+if toolchain_tag=$(git -C "$repo_root" ls-remote --exit-code --refs --tags \
+  origin refs/tags/app-publish-v1 2>&1); then
+  test -n "$toolchain_tag" \
+    || app_workflow_fail 'app-publish-v1 Tag must be activated before app releases'
+else
+  toolchain_tag_status=$?
+  case "$toolchain_tag_status" in
+    2) app_workflow_fail 'app-publish-v1 Tag must be activated before app releases' ;;
+    *) app_workflow_fail "unable to query app-publish-v1 Tag: ${toolchain_tag:-unknown Git error}" ;;
+  esac
+fi
+
+if toolchain_branch=$(git -C "$repo_root" ls-remote --exit-code --refs --heads \
+  origin refs/heads/app-publish-v1 2>&1); then
+  app_workflow_fail 'app-publish-v1 must not exist as a branch'
+else
+  toolchain_branch_status=$?
+  case "$toolchain_branch_status" in
+    2) ;;
+    *) app_workflow_fail "unable to query app-publish-v1 branch: ${toolchain_branch:-unknown Git error}" ;;
+  esac
+fi
 
 git_name=$(git -C "$repo_root" config --local --get user.name || true)
 git_email=$(git -C "$repo_root" config --local --get user.email || true)
@@ -50,7 +79,7 @@ if (semver.valid(version) !== version || version.includes('+')) process.exit(1);
 NODE
 ) || app_workflow_fail 'release version must be canonical SemVer without build metadata'
 
-tag="app/v$version"
+tag="v$version"
 if test -n "$(git -C "$repo_root" tag --list "$tag")"; then
   app_workflow_fail "release Tag already exists locally: $tag"
 fi

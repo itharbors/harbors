@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a self-contained macOS arm64 ITHARBORS application, publish it from immutable `app/v<semver>` GitHub Tags, and let installed signed builds update from GitHub Releases.
+**Goal:** Build a self-contained macOS arm64 ITHARBORS application, publish it from immutable updater-compatible `v<semver>` GitHub Tags, and let installed signed builds update from GitHub Releases.
 
 **Architecture:** Add `packages/desktop` as the authoritative application package and version source. A build script bundles the Electron main process and a separate production Framework process, stages only Framework resources plus the Default Kit, and hands the result to electron-builder. `electron-updater` owns the signed update transaction; a protected reusable GitHub workflow validates the Tag, signs and notarizes artifacts, publishes an atomic Release, and attests its provenance.
 
@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Main application Tags are exactly `app/v<canonical-semver>`; build metadata is forbidden.
+- Main application Tags are exactly `v<canonical-semver>`; build metadata is forbidden because electron-updater parses the complete GitHub prerelease Tag as SemVer.
 - Plain SemVer is Stable; a prerelease component is Preview.
 - The Tag version, desktop package version, Electron `app.getVersion()`, update metadata, and asset names must match.
 - Initial production target is macOS arm64; Intel Mac, Windows, and Linux are not published in this change.
@@ -19,7 +19,7 @@
 - Runtime state is written only below Electron `userData`; packaged resources are read-only.
 - macOS publishing requires a `Developer ID Application: <team name> (<TEAM_ID>)` identity and notarization with an App Store Connect Team API Key.
 - Missing or mismatched signing credentials fail closed; no unsigned Preview or Stable GitHub Release is allowed.
-- `app/v*`, `app-publish-v1`, `kit/*/v*`, and `kit-publish-v2` remain independent protected Tag families.
+- `v*`, `app-publish-v1`, `kit/*/v*`, and `kit-publish-v2` remain independent protected Tag families.
 - Use `VisualSJ <devhacker520@hotmail.com>` for every Commit and the repository `[Feature] 中文摘要` convention.
 
 ---
@@ -659,7 +659,7 @@ git commit -m '[Feature] 实现主程序安全更新机制'
 **Interfaces:**
 - Produces: `parseAppReleaseTag(ref)` and `validateAppReleaseIdentity({ ref, packageVersion })`.
 - Produces local release command `.agents/skills/app-workflow/scripts/release-app.sh <version>`.
-- Produces confirmation token `app/v<version>@<40-char-commit>`.
+- Produces confirmation token `v<version>@<40-char-commit>`.
 
 - [ ] **Step 1: Read required skill-authoring instructions before creating the skill**
 
@@ -671,12 +671,12 @@ Expected: authoring and verification requirements are known before any `.agents/
 
 ```js
 test.each([
-  ['refs/tags/app/v1.2.3', { version: '1.2.3', channel: 'stable', tag: 'app/v1.2.3' }],
-  ['refs/tags/app/v1.2.3-preview.1', { version: '1.2.3-preview.1', channel: 'preview', tag: 'app/v1.2.3-preview.1' }],
+  ['refs/tags/v1.2.3', { version: '1.2.3', channel: 'stable', tag: 'v1.2.3' }],
+  ['refs/tags/v1.2.3-preview.1', { version: '1.2.3-preview.1', channel: 'preview', tag: 'v1.2.3-preview.1' }],
 ])('parses canonical app releases', (ref, expected) => {
   assert.deepEqual(parseAppReleaseTag(ref), expected);
 });
-test.each(['app/v1.2.3', 'refs/tags/app/v01.2.3', 'refs/tags/app/v1.2.3+build.1', 'refs/tags/kit/sqlite/v1.2.3'])(
+test.each(['v1.2.3', 'refs/tags/v01.2.3', 'refs/tags/v1.2.3+build.1', 'refs/tags/app/v1.2.3', 'refs/tags/kit/sqlite/v1.2.3'])(
   'rejects %s', (ref) => assert.throws(() => parseAppReleaseTag(ref)),
 );
 ```
@@ -698,21 +698,21 @@ Expected: FAIL because the files do not exist.
 
 ```js
 export function parseAppReleaseTag(ref) {
-  const match = /^refs\/tags\/app\/v(.+)$/u.exec(ref);
+  const match = /^refs\/tags\/v(.+)$/u.exec(ref);
   if (!match || semver.valid(match[1]) !== match[1] || match[1].includes('+')) {
-    throw new Error('App release requires refs/tags/app/v<canonical-semver> without build metadata');
+    throw new Error('App release requires refs/tags/v<canonical-semver> without build metadata');
   }
   return {
     version: match[1],
     channel: semver.prerelease(match[1]) === null ? 'stable' : 'preview',
-    tag: `app/v${match[1]}`,
+    tag: `v${match[1]}`,
   };
 }
 ```
 
 - [ ] **Step 5: Implement the release skill**
 
-The script mirrors Kit release safety: resolve repository root, require clean local `main` exactly equal to fetched `origin/main`, validate repository identity, compare requested version to `packages/desktop/package.json`, reject existing local or remote Tag, print all identity fields, require `HARBORS_APP_RELEASE_CONFIRM=app/v<version>@<commit>`, run `npm run check` and `npm run desktop:prepare`, then create and push exactly one annotated Tag. It must never create a branch, GitHub Release, or force push.
+The script mirrors Kit release safety: resolve repository root, require clean local `main` exactly equal to fetched `origin/main`, validate the canonical origin and repository identity, require the remote `app-publish-v1` Tag while rejecting a same-named branch, compare requested version to `packages/desktop/package.json`, reject existing local or remote Tag, print all identity fields, require `HARBORS_APP_RELEASE_CONFIRM=v<version>@<commit>`, run `npm run check` and `npm run desktop:prepare`, then create and push exactly one annotated Tag. It must never create a branch, GitHub Release, or force push.
 
 - [ ] **Step 6: Run the complete release contract**
 
@@ -741,14 +741,14 @@ git commit -m '[Feature] 建立主程序标签发布流程'
 - Modify: `package.json`
 
 **Interfaces:**
-- Wrapper trigger: push Tags matching only `app/v*`.
+- Wrapper trigger: push Tags matching only updater-compatible `v*`.
 - Reusable toolchain identity: `itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1`.
 - Environment names: `app-preview` and `app-stable`.
 - Required secrets: `MAC_CSC_LINK`, `MAC_CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `APPLE_TEAM_ID`.
 
 - [ ] **Step 1: Write workflow contract tests**
 
-Tests must parse the files as text and assert exact Tag isolation, pinned reusable reference, checkout of the exact Tag with full history, ancestor-of-main check, Node/npm pins, `npm ci`, full check, arm64 runner, required secrets, no signing fallback, Developer ID and Team ID verification, codesign/spctl/stapler verification, asset whitelist, attestation, Draft-first publication, cleanup limited to the run-created Draft, Stable environment gate, Preview prerelease flag, and refusal to mutate an existing Release.
+Tests must parse the files as text and assert exact Tag isolation, full-SHA action pins, exact `job.workflow_ref`, checkout of the exact Tag with full history, ancestor-of-main check, Node/npm pins, `npm ci`, full check, arm64 runner, required environment secrets, no signing fallback, Developer ID and Team ID verification, codesign/spctl/stapler verification, asset whitelist plus `latest-mac.yml` references, attestation, Release-ID-bound Draft publication, cleanup limited to the run-created Draft, Stable environment gate, Preview prerelease flag, and refusal to mutate an existing Release.
 
 - [ ] **Step 2: Run and verify both workflows are absent**
 
@@ -763,7 +763,7 @@ name: Publish App
 on:
   push:
     tags:
-      - 'app/v*'
+      - 'v*'
 permissions:
   contents: write
   id-token: write
@@ -771,7 +771,6 @@ permissions:
 jobs:
   publish:
     uses: itharbors/harbors/.github/workflows/publish-app-reusable.yml@app-publish-v1
-    secrets: inherit
 ```
 
 - [ ] **Step 4: Implement reusable context validation**
@@ -917,7 +916,7 @@ Expected: `PR_URL=` for an open PR whose base is `main`, with green CI and Kit C
 
 - [ ] **Step 4: Activate the immutable reusable workflow after merge**
 
-From a clean local `main` exactly equal to `origin/main`, first print `app-publish-v1@<commit>` and obtain separate user confirmation. Then create and push the toolchain Tag. Configure a GitHub Tag ruleset preventing update/deletion of `app-publish-v1` and `app/v*` while allowing the release workflow actor required bypass.
+From a clean local `main` exactly equal to `origin/main`, first print `app-publish-v1@<commit>` and obtain separate user confirmation. Then create and push the toolchain Tag before any application Tag, and prohibit an `app-publish-v1` branch. Configure a GitHub Tag ruleset preventing update/deletion of `app-publish-v1` and `v*` while allowing only the narrowly approved release actor required bypass.
 
 - [ ] **Step 5: Configure protected environments and secrets**
 
@@ -925,7 +924,7 @@ Create `app-preview` and `app-stable`; require reviewer approval for `app-stable
 
 - [ ] **Step 6: Publish two signed Preview versions with separate confirmations**
 
-Publish `app/v0.1.0-preview.1`, install it on a clean arm64 Mac, then merge the version increment to `0.1.0-preview.2` and separately confirm/publish the second Tag. Do not reuse Commit or assets between versions.
+Publish `v0.1.0-preview.1`, install it on a clean arm64 Mac, then merge the version increment to `0.1.0-preview.2` and separately confirm/publish the second Tag. Do not reuse Commit or assets between versions.
 
 - [ ] **Step 7: Prove real update and supply-chain behavior**
 

@@ -130,6 +130,8 @@ test('builder ships only the staged runtime and unpacks native modules', async (
     output: 'dist/desktop-release',
   });
   assert.deepEqual(config.mac.target, [{ target: 'dmg', arch: ['arm64'] }, { target: 'zip', arch: ['arm64'] }]);
+  assert.equal(config.artifactName, '${productName}-${version}-${arch}-mac.${ext}');
+  assert.equal(config.dmg.artifactName, '${productName}-${version}-${arch}.${ext}');
   assert.match(JSON.stringify(config.extraResources), /dist\/desktop-runtime/);
   assert.match(JSON.stringify(config.asarUnpack), /\.node/);
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlements), entitlementsPath);
@@ -151,7 +153,7 @@ test('desktop release documentation preserves operational safety boundaries', as
   const documents = await Promise.all(documentUrls.map((url) => readFile(url, 'utf8')));
 
   for (const text of documents) {
-    assert.match(text, /app\/v<semver>/u);
+    assert.match(text, /v<semver>/u);
     assert.match(text, /Developer ID Application/u);
     assert.match(text, /app-publish-v1/u);
   }

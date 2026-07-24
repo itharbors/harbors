@@ -10,7 +10,10 @@ export default {
   npmRebuild: true,
   electronUpdaterCompatibility: '>=2.16',
   generateUpdatesFilesForAllChannels: true,
-  artifactName: '${productName}-${version}-${arch}.${ext}',
+  artifactName: '${productName}-${version}-${arch}-mac.${ext}',
+  dmg: {
+    artifactName: '${productName}-${version}-${arch}.${ext}',
+  },
   mac: {
     category: 'public.app-category.developer-tools',
     target: [{ target: 'dmg', arch: ['arm64'] }, { target: 'zip', arch: ['arm64'] }],

@@ -109,25 +109,58 @@ export function startDesktopFrameworkProcess(spec, {
 
   const stop = () => {
     if (stopPromise) return stopPromise;
-    stopPromise = new Promise((resolve) => {
+    stopPromise = new Promise((resolve, reject) => {
       if (!isLive(child)) {
-        resolve();
+        if (child.exitCode === 0 && child.signalCode === null) resolve();
+        else reject(new Error(
+          `Framework shutdown failed (code ${child.exitCode ?? 'null'}, signal ${child.signalCode ?? 'null'})`,
+        ));
         return;
       }
       let forceStopTimer;
-      const finish = () => {
+      let fatalError;
+      let processError;
+      let forced = false;
+      const cleanup = () => {
         if (forceStopTimer) cancelSchedule(forceStopTimer);
-        removeListener(child, 'exit', finish);
-        resolve();
+        removeListener(child, 'message', onShutdownMessage);
+        removeListener(child, 'exit', onShutdownExit);
+        removeListener(child, 'error', onShutdownError);
       };
-      child.once('exit', finish);
+      const onShutdownMessage = (message) => {
+        if (message?.type !== 'fatal') return;
+        fatalError = new Error(
+          typeof message.message === 'string' && message.message
+            ? message.message
+            : 'Framework reported a fatal shutdown error',
+        );
+      };
+      const onShutdownError = (error) => {
+        processError = error instanceof Error ? error : new Error(String(error));
+      };
+      const onShutdownExit = (code, signal) => {
+        cleanup();
+        if (!forced && !fatalError && !processError && code === 0 && signal === null) {
+          resolve();
+          return;
+        }
+        reject(fatalError ?? processError ?? new Error(
+          `Framework shutdown failed (code ${code ?? 'null'}, signal ${signal ?? 'null'})`,
+        ));
+      };
+      child.on('message', onShutdownMessage);
+      child.once('exit', onShutdownExit);
+      child.once('error', onShutdownError);
       try {
         child.send({ type: 'shutdown' });
       } catch {
         // The timeout below guarantees a stopped child even when IPC is already unavailable.
       }
       forceStopTimer = schedule(() => {
-        if (isLive(child)) child.kill('SIGKILL');
+        if (isLive(child)) {
+          forced = true;
+          child.kill('SIGKILL');
+        }
       }, stopTimeoutMs);
     });
     return stopPromise;

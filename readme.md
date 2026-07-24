@@ -99,7 +99,7 @@ node "<skill-directory>/scripts/notify.mjs" \
 
 ### 主程序发布
 
-桌面主程序使用 `app/v<semver>` Tag、**Developer ID Application** 签名和受保护的
+桌面主程序使用 updater 可直接解析的 `v<semver>` Tag、**Developer ID Application** 签名和受保护的
 `app-publish-v1` 工作流。开发构建、精确发布确认、Preview/Stable 环境门禁、签名产物验收与不可变
 Release 恢复见[主程序构建、发布与验收](docs/guides/app-releases.md)；本地未签名目录包可做隔离的结构与运行冒烟验收，不能替代签名发布验收。
 

@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import * as appUpdaterModule from './app-updater.mjs';
 
-const { appUpdatesDisabled, createAppUpdater } = appUpdaterModule;
+const { appUpdatesDisabled, createAppUpdater, hasOfficialMacSignature } = appUpdaterModule;
 
 class FakeUpdater extends EventEmitter {
   autoDownload = true;
@@ -45,6 +45,7 @@ test('deduplicates checks with the same Promise and keeps Stable away from prere
     updater,
     currentVersion: '1.2.3',
     isPackaged: true,
+    releaseSigned: true,
     onInstall() {},
   });
 
@@ -83,6 +84,7 @@ test('runs the Preview download and install transition contract', async () => {
     updater,
     currentVersion: '1.2.4-preview.1',
     isPackaged: true,
+    releaseSigned: true,
     onInstall: async () => { installCalls += 1; },
   });
   assert.equal(updater.allowPrerelease, true);
@@ -115,12 +117,34 @@ test('runs the Preview download and install transition contract', async () => {
   assert.equal(controller.getSnapshot().status, 'installing');
 });
 
+test('deduplicates repeated downloads with the same in-flight Promise', async () => {
+  const updater = new FakeUpdater();
+  updater.downloadResult = new Promise(() => {});
+  const controller = createAppUpdater({
+    updater,
+    currentVersion: '1.2.3-preview.1',
+    isPackaged: true,
+    releaseSigned: true,
+    onInstall() {},
+  });
+
+  await controller.check();
+  updater.emit('update-available', { version: '1.2.3-preview.2' });
+  const first = controller.download();
+  const second = controller.download();
+
+  assert.equal(first, second);
+  assert.equal(updater.downloadCalls, 1);
+  assert.equal(controller.getSnapshot().status, 'downloading');
+});
+
 test('keeps only a retryable candidate on provider failure and retries exact allowed actions', async () => {
   const updater = new FakeUpdater();
   const controller = createAppUpdater({
     updater,
     currentVersion: '2.0.0',
     isPackaged: true,
+    releaseSigned: true,
     onInstall() {},
   });
 
@@ -164,6 +188,7 @@ test('delivers nested state transitions to every subscriber in transition order'
     updater,
     currentVersion: '2.0.0',
     isPackaged: true,
+    releaseSigned: true,
     onInstall() {},
   });
   const observed = [];
@@ -183,6 +208,7 @@ test('rejects every action outside the transition table with fixed public errors
     updater,
     currentVersion: '3.0.0',
     isPackaged: true,
+    releaseSigned: true,
     onInstall() {},
   });
 
@@ -210,6 +236,7 @@ test('sanitizes rejected provider operations without exposing their reason', asy
     updater,
     currentVersion: '4.0.0',
     isPackaged: true,
+    releaseSigned: true,
     onInstall() {},
   });
 
@@ -247,6 +274,69 @@ test('development is disabled and registers no provider listeners', async () => 
   assert.equal(updater.checkCalls, 0);
 });
 
+test('a packaged but unsigned directory build is disabled and never contacts the provider', async () => {
+  const updater = new FakeUpdater();
+  const controller = createAppUpdater({
+    updater,
+    currentVersion: '1.0.0',
+    isPackaged: true,
+    releaseSigned: false,
+    onInstall() {},
+  });
+
+  assert.equal(controller.getSnapshot().status, 'disabled');
+  assert.deepEqual(updater.eventNames(), []);
+  await assert.rejects(controller.check(), assertPublicError);
+  assert.equal(updater.checkCalls, 0);
+});
+
+test('recognizes only a valid Developer ID Application signature as an official macOS release', () => {
+  assert.equal(typeof hasOfficialMacSignature, 'function');
+  const calls = [];
+  const signed = hasOfficialMacSignature({
+    isPackaged: true,
+    platform: 'darwin',
+    executable: '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS',
+    runCodesign(command, args) {
+      calls.push([command, args]);
+      if (args[0] === '--verify') return { status: 0, stderr: '' };
+      return {
+        status: 0,
+        stderr: 'Authority=Developer ID Application: Example (ABC1234567)\nTeamIdentifier=ABC1234567\n',
+      };
+    },
+  });
+
+  assert.equal(signed, true);
+  assert.deepEqual(calls, [
+    ['/usr/bin/codesign', ['--verify', '--strict', '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS']],
+    ['/usr/bin/codesign', ['-dv', '--verbose=4', '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS']],
+  ]);
+
+  for (const signature of [
+    'Signature=adhoc\nTeamIdentifier=not set\n',
+    'Authority=Apple Development: Example (ABC1234567)\nTeamIdentifier=ABC1234567\n',
+    'Authority=Developer ID Application: Example (ABC1234567)\nTeamIdentifier=not set\n',
+  ]) {
+    assert.equal(hasOfficialMacSignature({
+      isPackaged: true,
+      platform: 'darwin',
+      executable: '/tmp/ITHARBORS',
+      runCodesign(_command, args) {
+        return args[0] === '--verify'
+          ? { status: 0, stderr: '' }
+          : { status: 0, stderr: signature };
+      },
+    }), false);
+  }
+  assert.equal(hasOfficialMacSignature({
+    isPackaged: false,
+    platform: 'darwin',
+    executable: '/tmp/ITHARBORS',
+    runCodesign() { throw new Error('must not run'); },
+  }), false);
+});
+
 test('packaged acceptance disables updates only for the exact opt-out value', async () => {
   assert.equal(typeof appUpdatesDisabled, 'function');
   assert.equal(appUpdatesDisabled('1'), true);
@@ -259,6 +349,7 @@ test('packaged acceptance disables updates only for the exact opt-out value', as
     updater,
     currentVersion: '1.0.0',
     isPackaged: true,
+    releaseSigned: true,
     updatesDisabled: appUpdatesDisabled('1'),
     onInstall() {},
   });
@@ -277,6 +368,7 @@ test('dispose removes every provider listener and freezes the final snapshot', a
     updater,
     currentVersion: '5.0.0',
     isPackaged: true,
+    releaseSigned: true,
     onInstall() {},
   });
   let notifications = 0;

@@ -43,7 +43,9 @@ new_fixture() {
   export FAKE_TRACKING_REF FAKE_REMOTE_MAIN FAKE_TRACKING_REF_EXISTS=1 FAKE_FETCH_FAIL=0
   export FAKE_LOCAL_GIT_NAME='VisualSJ' FAKE_LOCAL_GIT_EMAIL='devhacker520@hotmail.com'
   export FAKE_GLOBAL_GIT_NAME='VisualSJ' FAKE_GLOBAL_GIT_EMAIL='devhacker520@hotmail.com'
+  export FAKE_ORIGIN_URL='https://github.com/itharbors/harbors.git'
   export FAKE_LOCAL_TAG='' FAKE_LS_REMOTE='missing'
+  export FAKE_TOOLCHAIN_TAG='exists' FAKE_TOOLCHAIN_BRANCH='missing'
   write_fake_git
   write_fake_npm
 }
@@ -77,7 +79,7 @@ case "${1:-}" in
     fi ;;
   remote)
     test "${2:-}" = get-url && test "${3:-}" = origin || exit 2
-    printf '%s\n' 'https://github.com/itharbors/harbors.git' ;;
+    printf '%s\n' "$FAKE_ORIGIN_URL" ;;
   config)
     case "${2:-}" in
       --local) scope=LOCAL; key=${4:-} ;;
@@ -92,9 +94,15 @@ case "${1:-}" in
   tag)
     if test "${2:-}" = --list; then printf '%s\n' "$FAKE_LOCAL_TAG"; else exit 0; fi ;;
   ls-remote)
-    case "$FAKE_LS_REMOTE" in
+    query=${!#}
+    case "$query" in
+      refs/tags/app-publish-v1) state=$FAKE_TOOLCHAIN_TAG ;;
+      refs/heads/app-publish-v1) state=$FAKE_TOOLCHAIN_BRANCH ;;
+      *) state=$FAKE_LS_REMOTE ;;
+    esac
+    case "$state" in
       missing) exit 2 ;;
-      exists) printf '%s\trefs/tags/app/v0.1.0-preview.1\n' "$FAKE_HEAD" ;;
+      exists) printf '%s\t%s\n' "$FAKE_HEAD" "$query" ;;
       failed) printf '%s\n' 'simulated ls-remote failure' >&2; exit 128 ;;
       *) exit 2 ;;
     esac ;;
@@ -145,6 +153,21 @@ test_non_main_is_rejected_before_publish() {
   assert_rejected_before_publish 'non-main release' 'release must run from main'
 }
 
+test_noncanonical_origin_is_rejected_before_publish() {
+  new_fixture
+  export FAKE_ORIGIN_URL='https://github.com/example/harbors.git'
+  assert_rejected_before_publish 'wrong origin release' 'origin must be the canonical itharbors/harbors repository'
+}
+
+test_canonical_ssh_origin_is_accepted() {
+  new_fixture
+  export FAKE_ORIGIN_URL='git@github.com:itharbors/harbors.git'
+  run_release
+  test "$RELEASE_STATUS" -ne 0 || fail 'unconfirmed SSH-origin release unexpectedly succeeded'
+  assert_contains "$RELEASE_OUTPUT" 'App release requires explicit confirmation' || return 1
+  assert_no_publish || return 1
+}
+
 test_origin_mismatch_is_rejected_before_publish() {
   new_fixture
   printf '%s\n' '9999999999999999999999999999999999999999' > "$FAKE_REMOTE_MAIN"
@@ -154,7 +177,7 @@ test_origin_mismatch_is_rejected_before_publish() {
 test_stale_tracking_ref_is_refreshed_before_publish() {
   new_fixture
   printf '%s\n' '9999999999999999999999999999999999999999' > "$FAKE_REMOTE_MAIN"
-  export HARBORS_APP_RELEASE_CONFIRM="app/v0.1.0-preview.1@$FAKE_HEAD"
+  export HARBORS_APP_RELEASE_CONFIRM="v0.1.0-preview.1@$FAKE_HEAD"
   run_release
   unset HARBORS_APP_RELEASE_CONFIRM
   if test "$RELEASE_STATUS" -eq 0; then
@@ -177,6 +200,18 @@ test_failed_origin_fetch_is_rejected_before_publish() {
   assert_rejected_before_publish 'failed origin fetch release' 'unable to fetch origin'
 }
 
+test_missing_toolchain_tag_is_rejected_before_publish() {
+  new_fixture
+  export FAKE_TOOLCHAIN_TAG='missing'
+  assert_rejected_before_publish 'missing toolchain tag release' 'app-publish-v1 Tag must be activated before app releases'
+}
+
+test_same_named_toolchain_branch_is_rejected_before_publish() {
+  new_fixture
+  export FAKE_TOOLCHAIN_BRANCH='exists'
+  assert_rejected_before_publish 'toolchain branch release' 'app-publish-v1 must not exist as a branch'
+}
+
 test_wrong_repository_identity_is_rejected_before_publish() {
   new_fixture
   export FAKE_LOCAL_GIT_EMAIL='wrong@example.com' FAKE_GLOBAL_GIT_EMAIL='wrong@example.com'
@@ -186,7 +221,7 @@ test_wrong_repository_identity_is_rejected_before_publish() {
 test_global_only_identity_is_rejected_before_publish() {
   new_fixture
   export FAKE_LOCAL_GIT_NAME='' FAKE_LOCAL_GIT_EMAIL=''
-  export HARBORS_APP_RELEASE_CONFIRM="app/v0.1.0-preview.1@$FAKE_HEAD"
+  export HARBORS_APP_RELEASE_CONFIRM="v0.1.0-preview.1@$FAKE_HEAD"
   run_release
   unset HARBORS_APP_RELEASE_CONFIRM
   if test "$RELEASE_STATUS" -eq 0; then
@@ -204,7 +239,7 @@ test_desktop_version_mismatch_is_rejected_before_publish() {
 
 test_existing_local_tag_is_rejected_before_publish() {
   new_fixture
-  export FAKE_LOCAL_TAG='app/v0.1.0-preview.1'
+  export FAKE_LOCAL_TAG='v0.1.0-preview.1'
   assert_rejected_before_publish 'local tag release' 'release Tag already exists locally'
 }
 
@@ -227,19 +262,19 @@ test_missing_exact_confirmation_is_rejected_before_publish() {
 
 test_confirmed_release_checks_then_publishes_one_annotated_tag() {
   new_fixture
-  export HARBORS_APP_RELEASE_CONFIRM="app/v0.1.0-preview.1@$FAKE_HEAD"
+  export HARBORS_APP_RELEASE_CONFIRM="v0.1.0-preview.1@$FAKE_HEAD"
   run_release
   unset HARBORS_APP_RELEASE_CONFIRM
   test "$RELEASE_STATUS" -eq 0 || fail "confirmed release failed: $RELEASE_OUTPUT"
-  assert_contains "$RELEASE_OUTPUT" 'RELEASE_TAG=app/v0.1.0-preview.1'
+  assert_contains "$RELEASE_OUTPUT" 'RELEASE_TAG=v0.1.0-preview.1'
   assert_contains "$(cat "$FAKE_NPM_LOG")" 'run check'
   assert_contains "$(cat "$FAKE_NPM_LOG")" 'run desktop:prepare'
   check_line=$(grep -n 'run check' "$FAKE_NPM_LOG" | cut -d: -f1)
   prepare_line=$(grep -n 'run desktop:prepare' "$FAKE_NPM_LOG" | cut -d: -f1)
   test "$check_line" -lt "$prepare_line" || fail 'expected check before desktop preparation'
-  test "$(grep -Ec '^tag -a app/v0.1.0-preview.1 ' "$FAKE_GIT_LOG")" -eq 1 \
+  test "$(grep -Ec '^tag -a v0.1.0-preview.1 ' "$FAKE_GIT_LOG")" -eq 1 \
     || fail 'expected one annotated tag'
-  test "$(grep -Ec '^push origin refs/tags/app/v0.1.0-preview.1$' "$FAKE_GIT_LOG")" -eq 1 \
+  test "$(grep -Ec '^push origin refs/tags/v0.1.0-preview.1$' "$FAKE_GIT_LOG")" -eq 1 \
     || fail 'expected one tag push'
 }
 
@@ -258,10 +293,14 @@ test -x "$RELEASE" || fail 'release-app.sh is missing or not executable'
 
 run_test test_dirty_tree_is_rejected_before_publish
 run_test test_non_main_is_rejected_before_publish
+run_test test_noncanonical_origin_is_rejected_before_publish
+run_test test_canonical_ssh_origin_is_accepted
 run_test test_origin_mismatch_is_rejected_before_publish
 run_test test_stale_tracking_ref_is_refreshed_before_publish
 run_test test_missing_fetched_tracking_ref_is_rejected_before_publish
 run_test test_failed_origin_fetch_is_rejected_before_publish
+run_test test_missing_toolchain_tag_is_rejected_before_publish
+run_test test_same_named_toolchain_branch_is_rejected_before_publish
 run_test test_wrong_repository_identity_is_rejected_before_publish
 run_test test_global_only_identity_is_rejected_before_publish
 run_test test_desktop_version_mismatch_is_rejected_before_publish

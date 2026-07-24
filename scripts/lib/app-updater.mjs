@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import semver from 'semver';
 
 const UPDATE_FAILED = Object.freeze({
@@ -40,10 +41,42 @@ export function appUpdatesDisabled(value) {
   return value === '1';
 }
 
+export function hasOfficialMacSignature({
+  isPackaged,
+  platform = process.platform,
+  executable = process.execPath,
+  runCodesign = spawnSync,
+}) {
+  if (!isPackaged || platform !== 'darwin' || typeof executable !== 'string' || !executable) {
+    return false;
+  }
+  try {
+    const options = { encoding: 'utf8', windowsHide: true };
+    const verified = runCodesign(
+      '/usr/bin/codesign',
+      ['--verify', '--strict', executable],
+      options,
+    );
+    if (verified?.status !== 0) return false;
+    const inspected = runCodesign(
+      '/usr/bin/codesign',
+      ['-dv', '--verbose=4', executable],
+      options,
+    );
+    if (inspected?.status !== 0) return false;
+    const details = `${inspected.stdout ?? ''}\n${inspected.stderr ?? ''}`;
+    return /^Authority=Developer ID Application:.+$/mu.test(details)
+      && /^TeamIdentifier=(?!not set$)\S+$/mu.test(details);
+  } catch {
+    return false;
+  }
+}
+
 export function createAppUpdater({
   updater,
   currentVersion,
   isPackaged,
+  releaseSigned = false,
   updatesDisabled = false,
   onInstall,
 }) {
@@ -61,7 +94,8 @@ export function createAppUpdater({
   let disposed = false;
   let notifying = false;
   let checkPromise = null;
-  const disabled = !isPackaged || updatesDisabled === true;
+  let downloadPromise = null;
+  const disabled = !isPackaged || !releaseSigned || updatesDisabled === true;
   let snapshot = freezeSnapshot({
     status: disabled ? 'disabled' : 'idle',
     currentVersion,
@@ -130,6 +164,7 @@ export function createAppUpdater({
   }
 
   function download() {
+    if (snapshot.status === 'downloading') return downloadPromise;
     if (
       disposed
       || !['available', 'error'].includes(snapshot.status)
@@ -140,7 +175,8 @@ export function createAppUpdater({
       availableVersion: snapshot.availableVersion,
       progress: null,
     });
-    return runProvider(() => updater.downloadUpdate(), 'downloading');
+    downloadPromise = runProvider(() => updater.downloadUpdate(), 'downloading');
+    return downloadPromise;
   }
 
   function install() {

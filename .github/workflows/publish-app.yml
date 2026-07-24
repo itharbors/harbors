@@ -3,7 +3,7 @@ name: Publish App
 on:
   push:
     tags:
-      - 'app/v*'
+      - 'v*'
 
 permissions:
   contents: write
@@ -13,4 +13,3 @@ permissions:
 jobs:
   publish:
     uses: itharbors/harbors/.github/workflows/publish-app-reusable.yml@app-publish-v1
-    secrets: inherit

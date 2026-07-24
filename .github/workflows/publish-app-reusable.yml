@@ -13,14 +13,24 @@ jobs:
       channel: ${{ steps.identity.outputs.channel }}
       tag: ${{ steps.identity.outputs.tag }}
     steps:
+      - name: Require the immutable reusable workflow identity
+        env:
+          ACTUAL_SIGNER_WORKFLOW: ${{ job.workflow_ref }}
+          EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
+        run: |
+          set -euo pipefail
+          if [[ "$ACTUAL_SIGNER_WORKFLOW" != "$EXPECTED_SIGNER_WORKFLOW" ]]; then
+            echo "::error::Unexpected reusable workflow identity"
+            exit 1
+          fi
       - name: Check out the exact release ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22.18.0
           cache: npm
@@ -32,7 +42,6 @@ jobs:
         id: identity
         env:
           EXPECTED_REPOSITORY: itharbors/harbors
-          EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
         run: |
           set -euo pipefail
           if [[ "$GITHUB_REPOSITORY" != "$EXPECTED_REPOSITORY" ]]; then
@@ -86,14 +95,24 @@ jobs:
       RELEASE_TAG: ${{ needs.context.outputs.tag }}
       EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
     steps:
+      - name: Require the immutable reusable workflow identity
+        env:
+          ACTUAL_SIGNER_WORKFLOW: ${{ job.workflow_ref }}
+          EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
+        run: |
+          set -euo pipefail
+          if [[ "$ACTUAL_SIGNER_WORKFLOW" != "$EXPECTED_SIGNER_WORKFLOW" ]]; then
+            echo "::error::Unexpected reusable workflow identity"
+            exit 1
+          fi
       - name: Check out the exact release ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
           persist-credentials: false
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
         with:
           node-version: 22.18.0
           cache: npm
@@ -206,7 +225,7 @@ jobs:
           set -euo pipefail
           RELEASE_DIR="dist/desktop-release"
           DMG="$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.dmg"
-          ZIP="$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.zip"
+          ZIP="$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64-mac.zip"
           BLOCKMAP="$ZIP.blockmap"
           UPDATE_YML="$RELEASE_DIR/latest-mac.yml"
           CHECKSUMS="$RELEASE_DIR/checksums.txt"
@@ -224,13 +243,28 @@ jobs:
               exit 1
             fi
           done
+          UPDATE_YML_PATH="$UPDATE_YML" \
+            EXPECTED_ZIP_NAME="$(basename "$ZIP")" \
+            EXPECTED_DMG_NAME="$(basename "$DMG")" \
+            node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import yaml from 'js-yaml';
+          import { validateAppUpdateMetadata } from './scripts/lib/app-publish/metadata.mjs';
+
+          const metadata = yaml.load(readFileSync(process.env.UPDATE_YML_PATH, 'utf8'));
+          validateAppUpdateMetadata({
+            metadata,
+            zipName: process.env.EXPECTED_ZIP_NAME,
+            dmgName: process.env.EXPECTED_DMG_NAME,
+          });
+          NODE
       - name: Attest release assets
-        uses: actions/attest@v4
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: |
             dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64.dmg
-            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64.zip
-            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64.zip.blockmap
+            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64-mac.zip
+            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64-mac.zip.blockmap
             dist/desktop-release/latest-mac.yml
             dist/desktop-release/checksums.txt
             dist/desktop-release/sbom.spdx.json
@@ -242,8 +276,8 @@ jobs:
           RELEASE_DIR="dist/desktop-release"
           ASSETS=(
             "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.dmg"
-            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.zip"
-            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.zip.blockmap"
+            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64-mac.zip"
+            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64-mac.zip.blockmap"
             "$RELEASE_DIR/latest-mac.yml"
             "$RELEASE_DIR/checksums.txt"
             "$RELEASE_DIR/sbom.spdx.json"
@@ -287,8 +321,22 @@ jobs:
           DRAFT_ID=$(DRAFT_JSON="$draft_json" node --input-type=module \
             -e "const release=JSON.parse(process.env.DRAFT_JSON); if (!Number.isInteger(release.id) || release.draft !== true) process.exit(1); process.stdout.write(String(release.id));")
           [[ -n "$DRAFT_ID" ]]
+          UPLOAD_URL=$(DRAFT_JSON="$draft_json" node --input-type=module \
+            -e "const release=JSON.parse(process.env.DRAFT_JSON); if (typeof release.upload_url !== 'string') process.exit(1); process.stdout.write(release.upload_url.replace(/\\{.*$/u, ''));")
+          expected_upload_url="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID/assets"
+          [[ "$UPLOAD_URL" == "$expected_upload_url" ]]
 
-          gh release upload "$RELEASE_TAG" "${ASSETS[@]}"
+          for asset in "${ASSETS[@]}"; do
+            asset_name=$(basename "$asset")
+            if [[ ! "$asset_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::Unsafe Release asset name"
+              exit 1
+            fi
+            gh api --method POST \
+              -H 'Content-Type: application/octet-stream' \
+              --input "$asset" \
+              "$UPLOAD_URL?name=$asset_name" >/dev/null
+          done
           gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" > "$RUNNER_TEMP/release.json"
           RELEASE_JSON_PATH="$RUNNER_TEMP/release.json" node --input-type=module <<'NODE'
           import { readFileSync } from 'node:fs';
@@ -296,8 +344,8 @@ jobs:
           const release = JSON.parse(readFileSync(process.env.RELEASE_JSON_PATH, 'utf8'));
           const expectedNames = [
             `ITHARBORS-${process.env.RELEASE_VERSION}-arm64.dmg`,
-            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64.zip`,
-            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64.zip.blockmap`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip.blockmap`,
             'latest-mac.yml',
             'checksums.txt',
             'sbom.spdx.json',
@@ -314,9 +362,32 @@ jobs:
           }
           NODE
 
-          publish_args=(--draft=false)
-          if [[ "${{ needs.context.outputs.channel == 'preview' }}" == "true" ]]; then
-            publish_args+=(--prerelease)
-          fi
-          gh release edit "$RELEASE_TAG" "${publish_args[@]}" >/dev/null
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" \
+            -F draft=false \
+            -F prerelease="$prerelease" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" > "$RUNNER_TEMP/published-release.json"
+          RELEASE_JSON_PATH="$RUNNER_TEMP/published-release.json" \
+            EXPECTED_PRERELEASE="$prerelease" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const release = JSON.parse(readFileSync(process.env.RELEASE_JSON_PATH, 'utf8'));
+          const expectedNames = [
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64.dmg`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip.blockmap`,
+            'latest-mac.yml',
+            'checksums.txt',
+            'sbom.spdx.json',
+          ].sort();
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          const expectedPrerelease = process.env.EXPECTED_PRERELEASE === 'true';
+          if (
+            release.draft !== false
+            || release.prerelease !== expectedPrerelease
+            || release.tag_name !== process.env.RELEASE_TAG
+            || JSON.stringify(actualNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error('Published Release does not match the run-created verified draft');
+          }
+          NODE
           PUBLISHED=true

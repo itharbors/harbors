@@ -298,7 +298,7 @@ Tag。获得用户对这次发布的明确确认后，按输出设置 `HARBORS_K
 
 ## 主程序发布与本地包验收
 
-主程序发布使用 `app/v<semver>`、**Developer ID Application** 和受保护的 `app-publish-v1` 工作流。
+主程序发布使用 updater 可直接解析的 `v<semver>`、**Developer ID Application** 和受保护的 `app-publish-v1` 工作流。
 `npm run desktop:dir` 的未签名目录包只能用于隔离的本地结构验收，不能上传或替代 GitHub 签名发布；
 精确确认令牌、Apple 凭据、环境门禁、attestation 与不可变 Release 的恢复方式见
 [主程序构建、发布与验收](./app-releases.md)。

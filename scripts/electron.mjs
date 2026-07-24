@@ -4,7 +4,11 @@ import { randomBytes } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
-import { appUpdatesDisabled, createAppUpdater } from './lib/app-updater.mjs';
+import {
+  appUpdatesDisabled,
+  createAppUpdater,
+  hasOfficialMacSignature,
+} from './lib/app-updater.mjs';
 import { registerAppUpdaterIpc } from './lib/app-updater-ipc.mjs';
 import { discoverKits, resolveRequestedKitName } from './lib/kit-catalog.mjs';
 import {
@@ -336,6 +340,10 @@ function startElectronApp() {
         updater: autoUpdater,
         currentVersion: app.getVersion(),
         isPackaged: app.isPackaged,
+        releaseSigned: hasOfficialMacSignature({
+          isPackaged: app.isPackaged,
+          executable: process.execPath,
+        }),
         updatesDisabled: appUpdatesDisabled(process.env.HARBORS_DISABLE_UPDATE_CHECKS),
         onInstall() {
           installUpdateAfterShutdown = true;
