@@ -170,12 +170,21 @@ export function createAppUpdater({
       || !['available', 'error'].includes(snapshot.status)
       || !snapshot.availableVersion
     ) return invalidAction();
+    let resolveDownload;
+    let rejectDownload;
+    downloadPromise = new Promise((resolve, reject) => {
+      resolveDownload = resolve;
+      rejectDownload = reject;
+    });
     publish({
       status: 'downloading',
       availableVersion: snapshot.availableVersion,
       progress: null,
     });
-    downloadPromise = runProvider(() => updater.downloadUpdate(), 'downloading');
+    runProvider(() => updater.downloadUpdate(), 'downloading').then(
+      resolveDownload,
+      rejectDownload,
+    );
     return downloadPromise;
   }
 

@@ -792,6 +792,18 @@ test('uses only Electron run-as-node and IPC for packaged Framework startup', as
   assert.match(packagedStart, /frameworkStop = started\.stop/);
 });
 
+test('consults the supervised Framework stop result even after the child exits early', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const stop = source.slice(
+    source.indexOf('function stopFramework()'),
+    source.indexOf('function parsePort'),
+  );
+  const supervised = stop.indexOf('if (frameworkStop)');
+  const exited = stop.indexOf('child.exitCode !== null');
+
+  assert.ok(supervised >= 0 && exited > supervised);
+});
+
 test('commits pending installed Kits only after Catalog and actual Framework load validation', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const prepare = source.indexOf('await prepareInstalledKitsForStartup');

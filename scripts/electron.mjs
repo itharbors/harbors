@@ -1234,13 +1234,16 @@ function waitForApplicationRuntime(url, timeoutMs = 30000) {
 
 function stopFramework() {
   if (frameworkStopPromise) return frameworkStopPromise;
-  const child = frameworkProcess;
-  if (!child || child.exitCode !== null || child.signalCode !== null) {
-    return Promise.resolve();
-  }
   if (frameworkStop) {
     frameworkStopPromise = frameworkStop();
     return frameworkStopPromise;
+  }
+  const child = frameworkProcess;
+  if (!child) return Promise.resolve();
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return child.exitCode === 0 && child.signalCode === null
+      ? Promise.resolve()
+      : Promise.reject(new Error('Framework exited before supervised shutdown'));
   }
   frameworkStopPromise = new Promise((resolve) => {
     let forceStopTimer;

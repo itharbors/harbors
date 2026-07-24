@@ -138,6 +138,30 @@ test('deduplicates repeated downloads with the same in-flight Promise', async ()
   assert.equal(controller.getSnapshot().status, 'downloading');
 });
 
+test('returns the in-flight download Promise during synchronous subscriber reentry', async () => {
+  const updater = new FakeUpdater();
+  updater.downloadResult = new Promise(() => {});
+  const controller = createAppUpdater({
+    updater,
+    currentVersion: '1.2.3-preview.1',
+    isPackaged: true,
+    releaseSigned: true,
+    onInstall() {},
+  });
+  let reentrant;
+  controller.subscribe((snapshot) => {
+    if (snapshot.status === 'downloading') reentrant = controller.download();
+  });
+
+  await controller.check();
+  updater.emit('update-available', { version: '1.2.3-preview.2' });
+  const started = controller.download();
+
+  assert.equal(reentrant, started);
+  assert.ok(started instanceof Promise);
+  assert.equal(updater.downloadCalls, 1);
+});
+
 test('keeps only a retryable candidate on provider failure and retries exact allowed actions', async () => {
   const updater = new FakeUpdater();
   const controller = createAppUpdater({

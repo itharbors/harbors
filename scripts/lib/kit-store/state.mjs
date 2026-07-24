@@ -24,19 +24,38 @@ function clone(value) {
   return structuredClone(value);
 }
 
+async function syncDirectory(root) {
+  try {
+    const directory = await open(root, 'r');
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  } catch (error) {
+    if (!['EINVAL', 'EPERM', 'EISDIR'].includes(error?.code)) throw error;
+  }
+}
+
 export class InstalledKitStore {
   #root;
   #stateFile;
   #now;
+  #syncDirectory;
   #state;
   #queue = Promise.resolve();
   #sequence = 0;
 
-  constructor(root, { now = () => new Date().toISOString() } = {}) {
+  constructor(root, {
+    now = () => new Date().toISOString(),
+    syncDirectory: syncDirectoryAdapter = syncDirectory,
+  } = {}) {
     if (typeof root !== 'string' || root.length === 0) throw new TypeError('Store root is required');
+    if (typeof syncDirectoryAdapter !== 'function') throw new TypeError('Directory sync adapter is required');
     this.#root = path.resolve(root);
     this.#stateFile = path.join(this.#root, 'installed.json');
     this.#now = now;
+    this.#syncDirectory = syncDirectoryAdapter;
   }
 
   #enqueue(operation) {
@@ -79,17 +98,13 @@ export class InstalledKitStore {
       await handle.close();
     }
     await rename(temporary, this.#stateFile);
-    try {
-      const directory = await open(this.#root, 'r');
-      try {
-        await directory.sync();
-      } finally {
-        await directory.close();
-      }
-    } catch (error) {
-      if (!['EINVAL', 'EPERM', 'EISDIR'].includes(error?.code)) throw error;
-    }
     this.#state = validated;
+    try {
+      await this.#syncDirectory(this.#root);
+    } catch {
+      // The atomic rename is the commit point. Reporting failure now could make
+      // callers delete files referenced by the already-committed state.
+    }
   }
 
   async snapshot() {

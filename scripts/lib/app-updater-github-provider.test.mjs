@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { GitHubProvider } from 'electron-updater/out/providers/GitHubProvider.js';
+import { HttpError } from 'builder-util-runtime';
 import semver from 'semver';
 
 test('electron-updater discovers a Preview release from the canonical v<semver> GitHub tag', async () => {
@@ -24,7 +25,11 @@ sha512: YWJj
   const executor = {
     request(options) {
       requests.push(options.path);
-      return Promise.resolve(requests.length === 1 ? feed : updateMetadata);
+      if (requests.length === 1) return Promise.resolve(feed);
+      if (options.path.endsWith('/preview-mac.yml')) {
+        return Promise.reject(new HttpError(404));
+      }
+      return Promise.resolve(updateMetadata);
     },
   };
   const updater = {
@@ -46,5 +51,6 @@ sha512: YWJj
   assert.deepEqual(requests, [
     '/itharbors/harbors/releases.atom',
     '/itharbors/harbors/releases/download/v1.2.3-preview.2/preview-mac.yml',
+    '/itharbors/harbors/releases/download/v1.2.3-preview.2/latest-mac.yml',
   ]);
 });
