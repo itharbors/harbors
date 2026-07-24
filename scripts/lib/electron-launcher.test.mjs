@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
 import {
   buildTrayTemplate,
+  buildUpdateMenuItems,
+  createBeforeQuitGate,
   createFrameworkArgs,
   createKitWindowUrl,
   mergeMenuTrees,
@@ -11,9 +14,12 @@ import {
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
+  registerDesktopSignalHandlers,
   selectMenuWindow,
   shutdownDesktopServices,
+  finishDesktopShutdown,
   showKitChooser,
+  shouldStartElectronApp,
 } from './electron-launcher.mjs';
 import { createDevPages, createDevServerEnv, createDevStackEnvironments } from './dev-launcher.mjs';
 
@@ -27,6 +33,61 @@ test('parses an optional requested Kit without creating a host mode', () => {
   assert.deepEqual(parseElectronOptions(['--kit=./kits/mysql']), {
     requestedKit: './kits/mysql',
   });
+});
+
+test('starts packaged Electron when LaunchServices does not provide the bundled entry in argv', () => {
+  const modulePath = '/Applications/ITHARBORS.app/Contents/Resources/app.asar/dist/main.mjs';
+
+  assert.equal(shouldStartElectronApp({
+    isPackaged: true,
+    entryPath: undefined,
+    modulePath,
+  }), true);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: true,
+    entryPath: '/private/var/folders/launch-services-wrapper',
+    modulePath,
+  }), true);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: false,
+    entryPath: undefined,
+    modulePath,
+  }), false);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: false,
+    entryPath: '/workspace/scripts/other.mjs',
+    modulePath,
+  }), false);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: false,
+    entryPath: modulePath,
+    modulePath,
+  }), true);
+});
+
+test('registers SIGTERM and SIGINT as one graceful desktop quit, then disposes both listeners', () => {
+  const signalSource = new EventEmitter();
+  let quitCount = 0;
+
+  assert.equal(signalSource.listenerCount('SIGTERM'), 0);
+  assert.equal(signalSource.listenerCount('SIGINT'), 0);
+  const dispose = registerDesktopSignalHandlers({
+    signalSource,
+    quit: () => { quitCount += 1; },
+  });
+
+  assert.equal(signalSource.listenerCount('SIGTERM'), 1);
+  assert.equal(signalSource.listenerCount('SIGINT'), 1);
+  signalSource.emit('SIGTERM');
+  signalSource.emit('SIGINT');
+  signalSource.emit('SIGTERM');
+  assert.equal(quitCount, 1);
+
+  dispose();
+  assert.equal(signalSource.listenerCount('SIGTERM'), 0);
+  assert.equal(signalSource.listenerCount('SIGINT'), 0);
+  signalSource.emit('SIGINT');
+  assert.equal(quitCount, 1);
 });
 
 test('rejects missing, duplicate and unknown Electron arguments', () => {
@@ -268,6 +329,21 @@ test('adds unread count only to the Notification Kit tray entry', () => {
   assert.equal(template[1].label, 'Notifications (4)');
 });
 
+test('builds the APP update menu action without renderer-controlled inputs', () => {
+  let checks = 0;
+  const items = buildUpdateMenuItems({
+    check: () => { checks += 1; },
+  });
+
+  assert.deepEqual(items.map(({ label, type }) => ({ label, type })), [
+    { label: undefined, type: 'separator' },
+    { label: '检查更新…', type: undefined },
+  ]);
+  assert.equal(items[1].click.length, 0);
+  items[1].click();
+  assert.equal(checks, 1);
+});
+
 test('focuses an existing Kit window or creates a replacement', async () => {
   const calls = [];
   const existing = {
@@ -403,6 +479,203 @@ test('drains Kit Manager work before stopping the Framework and notification ser
   ]);
 });
 
+test('installs an update only after every ordered shutdown result fulfilled', () => {
+  const installed = [];
+  const quit = [];
+  const logs = [];
+  const updater = {
+    autoInstallOnAppQuit: true,
+    quitAndInstall: () => installed.push('install'),
+  };
+  finishDesktopShutdown({
+    results: [{ status: 'fulfilled', value: undefined }, { status: 'fulfilled', value: undefined }],
+    installUpdateAfterShutdown: true,
+    updater,
+    quit: () => quit.push('quit'),
+    logError: (...values) => logs.push(values),
+  });
+  assert.deepEqual(installed, ['install']);
+  assert.deepEqual(quit, []);
+  assert.deepEqual(logs, []);
+
+  finishDesktopShutdown({
+    results: [{ status: 'rejected', reason: new Error('secret /private/db token=abc') }],
+    installUpdateAfterShutdown: true,
+    updater,
+    quit: () => quit.push('quit'),
+    logError: (...values) => logs.push(values),
+  });
+  assert.deepEqual(installed, ['install']);
+  assert.deepEqual(quit, ['quit']);
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  assert.deepEqual(logs, [['Update installation deferred because application shutdown failed']]);
+});
+
+test('ordinary shutdown logs sanitized failures and quits without calling update install', () => {
+  const calls = [];
+  finishDesktopShutdown({
+    results: [{ status: 'rejected', reason: new Error('certificate /private/path') }],
+    installUpdateAfterShutdown: false,
+    updater: { quitAndInstall: () => calls.push('install') },
+    quit: () => calls.push('quit'),
+    logError: (...values) => calls.push(values),
+  });
+  assert.deepEqual(calls, [
+    ['Failed to complete one or more application shutdown steps'],
+    'quit',
+  ]);
+});
+
+test('wires updater IPC, delayed background download, prompt and narrow preload into Electron', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const preload = await readFile(new URL('../electron-preload.cjs', import.meta.url), 'utf8');
+  const clientTypes = await readFile(new URL('../../packages/client/src/electron/types.ts', import.meta.url), 'utf8');
+  const clientBridge = await readFile(new URL('../../packages/client/src/electron/bridge.ts', import.meta.url), 'utf8');
+
+  assert.match(source, /createAppUpdater/);
+  assert.match(source, /hasOfficialMacSignature/);
+  assert.match(source, /releaseSigned:\s*hasOfficialMacSignature\(\{[\s\S]*executable:\s*process\.execPath/u);
+  assert.match(source, /appUpdatesDisabled\(process\.env\.HARBORS_DISABLE_UPDATE_CHECKS\)/u);
+  assert.match(source, /registerAppUpdaterIpc/);
+  assert.match(source, /buildUpdateMenuItems/);
+  assert.match(source, /setTimeout\([\s\S]*updateController\.check/);
+  assert.match(source, /getSnapshot\(\)\.status === 'disabled'\) return;[\s\S]*setTimeout/u);
+  assert.match(source, /snapshot\.status === 'available'[\s\S]*updateController\.download/);
+  assert.match(source, /snapshot\.status !== 'downloaded'[\s\S]*showMessageBox/);
+  assert.match(source, /installUpdateAfterShutdown = true/);
+  assert.match(source, /finishDesktopShutdown/);
+  assert.match(source, /createBeforeQuitGate/);
+  assert.match(source, /beforeQuitGate\.handle\(event\)/);
+  assert.doesNotMatch(source, /if \(!quitting\) \{\s*event\.preventDefault\(\)/);
+
+  assert.match(preload, /exposeInMainWorld\('harborsUpdates'/);
+  for (const [method, channel] of [
+    ['getState', 'harbors:update:get-state'],
+    ['check', 'harbors:update:check'],
+    ['download', 'harbors:update:download'],
+    ['install', 'harbors:update:install'],
+  ]) {
+    assert.match(preload, new RegExp(`${method}:?\\s*\\(\\)\\s*=>\\s*ipcRenderer\\.invoke\\('${channel}'\\)`));
+  }
+  assert.match(preload, /return \(\) => ipcRenderer\.removeListener\('harbors:update:state', listener\)/);
+  assert.doesNotMatch(preload, /feedURL|feedUrl|assetURL|assetUrl|filePath/);
+
+  assert.match(clientTypes, /interface AppUpdateSnapshot/);
+  assert.match(clientTypes, /interface AppUpdateBridge/);
+  assert.match(clientTypes, /harborsUpdates\?: AppUpdateBridge/);
+  for (const exportName of [
+    'getAppUpdateState',
+    'checkForAppUpdates',
+    'downloadAppUpdate',
+    'installAppUpdate',
+    'onAppUpdateState',
+  ]) assert.match(clientBridge, new RegExp(`export function ${exportName}`));
+});
+
+test('loads externalized electron-updater through a lazy CJS-safe packaged ESM boundary', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /createRequire\(import\.meta\.url\)/);
+  assert.match(source, /function loadAutoUpdater\(\) \{\s*return require\('electron-updater'\)\.autoUpdater;\s*\}/u);
+  assert.match(source, /function startElectronApp\(\) \{\s*const autoUpdater = loadAutoUpdater\(\);/u);
+  assert.doesNotMatch(source, /const\s*\{\s*autoUpdater\s*\}\s*=\s*require\('electron-updater'\)/u);
+  assert.doesNotMatch(source, /import\s*\{\s*autoUpdater\s*\}\s*from\s*'electron-updater'/);
+});
+
+test('keeps every repeated before-quit blocked behind one successful shutdown gate', async () => {
+  let resolveShutdown;
+  let shutdownCalls = 0;
+  const calls = [];
+  const updater = {
+    autoInstallOnAppQuit: true,
+    quitAndInstall: () => calls.push(['install']),
+  };
+  const gate = createBeforeQuitGate({
+    shutdown() {
+      shutdownCalls += 1;
+      return new Promise((resolve) => { resolveShutdown = resolve; });
+    },
+    finalize(results) {
+      calls.push(['finalize', results]);
+      finishDesktopShutdown({
+        results,
+        installUpdateAfterShutdown: true,
+        updater,
+        quit: () => calls.push(['quit']),
+        logError: (message) => calls.push(['error', message]),
+      });
+    },
+    onFailure() {
+      calls.push(['failure']);
+    },
+  });
+  const firstEvent = { preventDefault: () => calls.push(['prevent:first']) };
+  const secondEvent = { preventDefault: () => calls.push(['prevent:second']) };
+
+  const first = gate.handle(firstEvent);
+  const second = gate.handle(secondEvent);
+  assert.equal(first, second);
+  assert.equal(shutdownCalls, 0);
+  assert.deepEqual(calls, [['prevent:first'], ['prevent:second']]);
+  await Promise.resolve();
+  assert.equal(shutdownCalls, 1);
+  assert.deepEqual(calls, [['prevent:first'], ['prevent:second']]);
+
+  const results = [{ status: 'fulfilled', value: undefined }];
+  resolveShutdown(results);
+  await first;
+  assert.deepEqual(calls, [
+    ['prevent:first'],
+    ['prevent:second'],
+    ['finalize', results],
+    ['install'],
+  ]);
+  assert.equal(gate.handle({ preventDefault: () => calls.push(['prevent:final']) }), undefined);
+  assert.doesNotMatch(JSON.stringify(calls), /prevent:final/);
+});
+
+test('keeps update install blocked until failed shutdown disables auto-install and quits normally', async () => {
+  let resolveShutdown;
+  const calls = [];
+  const updater = {
+    autoInstallOnAppQuit: true,
+    quitAndInstall: () => calls.push('install'),
+  };
+  const gate = createBeforeQuitGate({
+    shutdown: () => new Promise((resolve) => { resolveShutdown = resolve; }),
+    finalize(results) {
+      finishDesktopShutdown({
+        results,
+        installUpdateAfterShutdown: true,
+        updater,
+        quit: () => calls.push('quit'),
+        logError: (message) => calls.push(message),
+      });
+    },
+    onFailure() {
+      updater.autoInstallOnAppQuit = false;
+      calls.push('quit');
+    },
+  });
+  const first = gate.handle({ preventDefault: () => calls.push('prevent:first') });
+  const second = gate.handle({ preventDefault: () => calls.push('prevent:second') });
+
+  assert.equal(first, second);
+  assert.deepEqual(calls, ['prevent:first', 'prevent:second']);
+  assert.equal(updater.autoInstallOnAppQuit, true);
+  await Promise.resolve();
+  resolveShutdown([{ status: 'rejected', reason: new Error('secret /private/db') }]);
+  await first;
+  assert.deepEqual(calls, [
+    'prevent:first',
+    'prevent:second',
+    'Update installation deferred because application shutdown failed',
+    'quit',
+  ]);
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  assert.equal(gate.handle({ preventDefault: () => calls.push('prevent:final') }), undefined);
+});
+
 test('persists every live Kit window before the tray application quits', async () => {
   const updates = [];
   const windows = new Map([
@@ -475,10 +748,10 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
-  assert.match(source, /const kitStoreRoot = path\.join\(app\.getPath\('userData'\), 'kit-store'\)/);
+  assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
   assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
-  assert.match(source, /resolveFrameworkRuntime\(\)/);
-  assert.doesNotMatch(source, /nodeAbi:\s*process\.versions\.modules/);
+  assert.match(source, /app\.getVersion\(\)/);
+  assert.match(source, /app\.isPackaged\s*\?\s*resolveCurrentProcessRuntime\(process\)\s*:\s*resolveFrameworkRuntime\(\)/);
   assert.match(source, /prepareInstalledKitsForStartup/);
   assert.match(source, /finalizePendingKitActivations/);
   assert.match(source, /validateInstalledKitRuntime/);
@@ -497,6 +770,40 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
 });
 
+test('uses only Electron run-as-node and IPC for packaged Framework startup', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const packagedStart = source.slice(
+    source.indexOf('function startPackagedFramework'),
+    source.indexOf('function startDevelopmentFramework'),
+  );
+
+  assert.match(source, /resolveDesktopPaths/);
+  assert.match(source, /startDesktopFrameworkProcess/);
+  assert.match(source, /createPackagedFrameworkSpec/);
+  assert.match(packagedStart, /HARBORS_RUNTIME_ROOT/);
+  assert.match(packagedStart, /HARBORS_CLIENT_ASSETS_ROOT/);
+  assert.match(packagedStart, /HARBORS_DB_PATH/);
+  assert.match(packagedStart, /HARBORS_INSTALLED_KITS/);
+  assert.doesNotMatch(packagedStart, /npm|vite|tsx|\bnode\b/iu);
+  const spawned = packagedStart.indexOf('const started = startDesktopFrameworkProcess');
+  const owned = packagedStart.indexOf('frameworkProcess = started.child');
+  const ready = packagedStart.indexOf('await started.ready');
+  assert.ok(spawned >= 0 && owned > spawned && owned < ready);
+  assert.match(packagedStart, /frameworkStop = started\.stop/);
+});
+
+test('consults the supervised Framework stop result even after the child exits early', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const stop = source.slice(
+    source.indexOf('function stopFramework()'),
+    source.indexOf('function parsePort'),
+  );
+  const supervised = stop.indexOf('if (frameworkStop)');
+  const exited = stop.indexOf('child.exitCode !== null');
+
+  assert.ok(supervised >= 0 && exited > supervised);
+});
+
 test('commits pending installed Kits only after Catalog and actual Framework load validation', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const prepare = source.indexOf('await prepareInstalledKitsForStartup');
@@ -504,7 +811,7 @@ test('commits pending installed Kits only after Catalog and actual Framework loa
   const initialize = source.indexOf('await initializeKitHost');
   assert.ok(prepare >= 0 && discover > prepare && initialize > discover);
   assert.match(source, /validateCatalog:\s*async \(sources\).*discoverKits/s);
-  const startFramework = source.indexOf('frameworkProcess = startFramework()');
+  const startFramework = source.indexOf('const started = await startFramework()');
   const finalize = source.indexOf('await finalizePendingKitActivations');
   assert.ok(startFramework >= 0 && finalize > startFramework);
   assert.match(source, /validateRuntime:\s*\(selection\) => validateInstalledKitRuntime/s);

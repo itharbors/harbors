@@ -1,0 +1,393 @@
+name: Publish App Reusable
+
+on:
+  workflow_call:
+
+jobs:
+  context:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.identity.outputs.version }}
+      channel: ${{ steps.identity.outputs.channel }}
+      tag: ${{ steps.identity.outputs.tag }}
+    steps:
+      - name: Require the immutable reusable workflow identity
+        env:
+          ACTUAL_SIGNER_WORKFLOW: ${{ job.workflow_ref }}
+          EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
+        run: |
+          set -euo pipefail
+          if [[ "$ACTUAL_SIGNER_WORKFLOW" != "$EXPECTED_SIGNER_WORKFLOW" ]]; then
+            echo "::error::Unexpected reusable workflow identity"
+            exit 1
+          fi
+      - name: Check out the exact release ref
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - name: Pin npm
+        run: npm install --global npm@10.9.3
+      - name: Install locked dependencies
+        run: npm ci --ignore-scripts
+      - name: Validate caller, commit, and release identity
+        id: identity
+        env:
+          EXPECTED_REPOSITORY: itharbors/harbors
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REPOSITORY" != "$EXPECTED_REPOSITORY" ]]; then
+            echo "::error::App publication must run in the canonical repository"
+            exit 1
+          fi
+          expected_caller="$GITHUB_REPOSITORY/.github/workflows/publish-app.yml@$GITHUB_REF"
+          if [[ "$GITHUB_WORKFLOW_REF" != "$expected_caller" ]]; then
+            echo "::error::Unexpected app publication caller identity"
+            exit 1
+          fi
+          if [[ "$(git rev-parse HEAD)" != "$GITHUB_SHA" ]]; then
+            echo "::error::Checkout does not match the triggering commit"
+            exit 1
+          fi
+          git fetch --no-tags origin main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Release commit must be reachable from origin/main"
+            exit 1
+          fi
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { validateAppReleaseIdentity } from './scripts/lib/app-publish/metadata.mjs';
+
+          const desktopPackage = JSON.parse(readFileSync('packages/desktop/package.json', 'utf8'));
+          const identity = validateAppReleaseIdentity({
+            ref: process.env.GITHUB_REF,
+            packageVersion: desktopPackage.version,
+          });
+          if (`refs/tags/${identity.tag}` !== process.env.GITHUB_REF) {
+            throw new Error('Release tag is not canonical');
+          }
+          for (const [name, value] of Object.entries(identity)) {
+            if (!/^[a-z0-9./-]+$/u.test(value) || value.includes('\n')) {
+              throw new Error(`Unsafe release output: ${name}`);
+            }
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+          NODE
+
+  release:
+    needs: context
+    runs-on: macos-15
+    environment: app-${{ needs.context.outputs.channel }}
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      RELEASE_VERSION: ${{ needs.context.outputs.version }}
+      RELEASE_TAG: ${{ needs.context.outputs.tag }}
+      EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
+    steps:
+      - name: Require the immutable reusable workflow identity
+        env:
+          ACTUAL_SIGNER_WORKFLOW: ${{ job.workflow_ref }}
+          EXPECTED_SIGNER_WORKFLOW: itharbors/harbors/.github/workflows/publish-app-reusable.yml@refs/tags/app-publish-v1
+        run: |
+          set -euo pipefail
+          if [[ "$ACTUAL_SIGNER_WORKFLOW" != "$EXPECTED_SIGNER_WORKFLOW" ]]; then
+            echo "::error::Unexpected reusable workflow identity"
+            exit 1
+          fi
+      - name: Check out the exact release ref
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - name: Pin npm
+        run: npm install --global npm@10.9.3
+      - name: Require an arm64 runner
+        run: |
+          set -euo pipefail
+          [[ "$(uname -m)" == "arm64" ]]
+      - name: Require signing and notarization secrets
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          for secret_name in MAC_CSC_LINK MAC_CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_TEAM_ID; do
+            if [[ -z "${!secret_name}" ]]; then
+              echo "::error::Required release secret is missing: $secret_name"
+              exit 1
+            fi
+          done
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run the complete repository check
+        run: npm run check
+      - name: Build, sign, and notarize the arm64 application
+        env:
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY_CONTENT: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          set -euo pipefail
+          umask 077
+          api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+          cleanup_key() { rm -f "$api_key_path"; }
+          trap cleanup_key EXIT
+          printf '%s' "$APPLE_API_KEY_CONTENT" > "$api_key_path"
+          export APPLE_API_KEY="$api_key_path"
+          npm run desktop:dist
+      - name: Verify signature, notarization, and architecture
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          APP_PATH="dist/desktop-release/mac-arm64/ITHARBORS.app"
+          EXECUTABLE="$APP_PATH/Contents/MacOS/ITHARBORS"
+          [[ -d "$APP_PATH" && -x "$EXECUTABLE" ]]
+          identity=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1)
+          printf '%s\n' "$identity" | grep 'Authority=Developer ID Application:'
+          printf '%s\n' "$identity" | grep "TeamIdentifier=$APPLE_TEAM_ID"
+          codesign --verify --deep --strict --verbose=2 "$APP_PATH"
+          spctl --assess --type execute --verbose=4 "$APP_PATH"
+          xcrun stapler validate "$APP_PATH"
+          file "$EXECUTABLE" | grep 'arm64'
+      - name: Smoke test the packaged Framework
+        run: |
+          set -euo pipefail
+          APP_PATH="dist/desktop-release/mac-arm64/ITHARBORS.app"
+          EXECUTABLE="$APP_PATH/Contents/MacOS/ITHARBORS"
+          SMOKE_USER_DATA=$(mktemp -d "$RUNNER_TEMP/harbors-smoke.XXXXXX")
+          APP_LOG="$RUNNER_TEMP/harbors-smoke.log"
+          APP_PID=""
+          cleanup_smoke() {
+            if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
+              kill "$APP_PID"
+              wait "$APP_PID" 2>/dev/null || true
+            fi
+            rm -rf "$SMOKE_USER_DATA"
+          }
+          trap cleanup_smoke EXIT
+          HARBORS_DISABLE_UPDATE_CHECKS=1 "$EXECUTABLE" \
+            --user-data-dir="$SMOKE_USER_DATA" \
+            --disable-background-networking >"$APP_LOG" 2>&1 &
+          APP_PID=$!
+          healthy=false
+          for attempt in {1..60}; do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo "::error::Packaged app exited before Framework health became ready"
+              exit 1
+            fi
+            framework_pid=$(pgrep -P "$APP_PID" -f 'framework\.mjs' | head -1 || true)
+            if [[ -n "$framework_pid" ]]; then
+              port=$(lsof -nP -a -p "$framework_pid" -iTCP -sTCP:LISTEN 2>/dev/null \
+                | awk 'NR > 1 { print $9 }' \
+                | sed -nE 's#.*127\.0\.0\.1:([0-9]+).*#\1#p' \
+                | head -1)
+              if [[ -n "${port:-}" ]] && curl --fail --silent --max-time 2 \
+                "http://127.0.0.1:$port/api/health" >/dev/null; then
+                healthy=true
+                break
+              fi
+            fi
+            sleep 1
+          done
+          if [[ "$healthy" != true ]]; then
+            echo "::error::Timed out waiting for packaged Framework health"
+            exit 1
+          fi
+          kill "$APP_PID"
+          wait "$APP_PID" 2>/dev/null || true
+          APP_PID=""
+      - name: Generate and validate the release asset set
+        run: |
+          set -euo pipefail
+          RELEASE_DIR="dist/desktop-release"
+          DMG="$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.dmg"
+          ZIP="$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64-mac.zip"
+          BLOCKMAP="$ZIP.blockmap"
+          UPDATE_YML="$RELEASE_DIR/latest-mac.yml"
+          CHECKSUMS="$RELEASE_DIR/checksums.txt"
+          SBOM="$RELEASE_DIR/sbom.spdx.json"
+          npm sbom --sbom-format spdx > "$SBOM"
+          shasum -a 256 "$DMG" "$ZIP" "$BLOCKMAP" "$UPDATE_YML" "$SBOM" > "$CHECKSUMS"
+          ASSETS=("$DMG" "$ZIP" "$BLOCKMAP" "$UPDATE_YML" "$CHECKSUMS" "$SBOM")
+          if [[ ${#ASSETS[@]} -ne 6 ]]; then
+            echo "::error::Release asset contract must contain exactly six files"
+            exit 1
+          fi
+          for asset in "${ASSETS[@]}"; do
+            if [[ ! -s "$asset" ]]; then
+              echo "::error::Release asset is missing or empty: $(basename "$asset")"
+              exit 1
+            fi
+          done
+          UPDATE_YML_PATH="$UPDATE_YML" \
+            EXPECTED_ZIP_NAME="$(basename "$ZIP")" \
+            EXPECTED_DMG_NAME="$(basename "$DMG")" \
+            node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import yaml from 'js-yaml';
+          import { validateAppUpdateMetadata } from './scripts/lib/app-publish/metadata.mjs';
+
+          const metadata = yaml.load(readFileSync(process.env.UPDATE_YML_PATH, 'utf8'));
+          validateAppUpdateMetadata({
+            metadata,
+            zipName: process.env.EXPECTED_ZIP_NAME,
+            dmgName: process.env.EXPECTED_DMG_NAME,
+          });
+          NODE
+      - name: Attest release assets
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: |
+            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64.dmg
+            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64-mac.zip
+            dist/desktop-release/ITHARBORS-${{ needs.context.outputs.version }}-arm64-mac.zip.blockmap
+            dist/desktop-release/latest-mac.yml
+            dist/desktop-release/checksums.txt
+            dist/desktop-release/sbom.spdx.json
+      - name: Create, verify, and publish the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RELEASE_DIR="dist/desktop-release"
+          ASSETS=(
+            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64.dmg"
+            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64-mac.zip"
+            "$RELEASE_DIR/ITHARBORS-$RELEASE_VERSION-arm64-mac.zip.blockmap"
+            "$RELEASE_DIR/latest-mac.yml"
+            "$RELEASE_DIR/checksums.txt"
+            "$RELEASE_DIR/sbom.spdx.json"
+          )
+          lookup_error="$RUNNER_TEMP/release-lookup.err"
+          if gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >/dev/null 2>"$lookup_error"; then
+            echo "::error::Release $RELEASE_TAG already exists"
+            exit 1
+          elif ! grep -q 'HTTP 404' "$lookup_error"; then
+            echo "::error::Unable to establish that the Release tag is unused"
+            exit 1
+          fi
+
+          DRAFT_ID=""
+          PUBLISHED=false
+          cleanup() {
+            if [[ -z "$DRAFT_ID" || "$PUBLISHED" == true ]]; then
+              return
+            fi
+            release_json=$(gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" 2>/dev/null || true)
+            if RELEASE_JSON="$release_json" node --input-type=module <<'NODE'
+          const release = JSON.parse(process.env.RELEASE_JSON || '{}');
+          if (release.draft !== true || release.tag_name !== process.env.RELEASE_TAG) process.exit(1);
+          NODE
+            then
+              gh api --method DELETE "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" >/dev/null
+            fi
+          }
+          trap cleanup EXIT
+
+          prerelease=false
+          if [[ "${{ needs.context.outputs.channel == 'preview' }}" == "true" ]]; then
+            prerelease=true
+          fi
+          draft_json=$(gh api --method POST "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$RELEASE_TAG" \
+            -f name="$RELEASE_TAG" \
+            -F draft=true \
+            -F prerelease="$prerelease" \
+            -F generate_release_notes=true)
+          DRAFT_ID=$(DRAFT_JSON="$draft_json" node --input-type=module \
+            -e "const release=JSON.parse(process.env.DRAFT_JSON); if (!Number.isInteger(release.id) || release.draft !== true) process.exit(1); process.stdout.write(String(release.id));")
+          [[ -n "$DRAFT_ID" ]]
+          UPLOAD_URL=$(DRAFT_JSON="$draft_json" node --input-type=module \
+            -e "const release=JSON.parse(process.env.DRAFT_JSON); if (typeof release.upload_url !== 'string') process.exit(1); process.stdout.write(release.upload_url.replace(/\\{.*$/u, ''));")
+          expected_upload_url="https://uploads.github.com/repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID/assets"
+          [[ "$UPLOAD_URL" == "$expected_upload_url" ]]
+
+          for asset in "${ASSETS[@]}"; do
+            asset_name=$(basename "$asset")
+            if [[ ! "$asset_name" =~ ^[A-Za-z0-9._-]+$ ]]; then
+              echo "::error::Unsafe Release asset name"
+              exit 1
+            fi
+            gh api --method POST \
+              -H 'Content-Type: application/octet-stream' \
+              --input "$asset" \
+              "$UPLOAD_URL?name=$asset_name" >/dev/null
+          done
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" > "$RUNNER_TEMP/release.json"
+          RELEASE_JSON_PATH="$RUNNER_TEMP/release.json" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const release = JSON.parse(readFileSync(process.env.RELEASE_JSON_PATH, 'utf8'));
+          const expectedNames = [
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64.dmg`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip.blockmap`,
+            'latest-mac.yml',
+            'checksums.txt',
+            'sbom.spdx.json',
+          ].sort();
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          if (release.draft !== true || release.tag_name !== process.env.RELEASE_TAG) {
+            throw new Error('Uploaded assets do not belong to the run-created draft');
+          }
+          if (JSON.stringify(actualNames) !== JSON.stringify(expectedNames)) {
+            throw new Error('Draft Release asset names do not match the exact allowlist');
+          }
+          if (release.assets.some((asset) => !Number.isFinite(asset.size) || asset.size <= 0)) {
+            throw new Error('Every uploaded Release asset must be nonempty');
+          }
+          NODE
+
+          gh api --method PATCH "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" \
+            -F draft=false \
+            -F prerelease="$prerelease" >/dev/null
+          gh api "repos/$GITHUB_REPOSITORY/releases/$DRAFT_ID" > "$RUNNER_TEMP/published-release.json"
+          RELEASE_JSON_PATH="$RUNNER_TEMP/published-release.json" \
+            EXPECTED_PRERELEASE="$prerelease" node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const release = JSON.parse(readFileSync(process.env.RELEASE_JSON_PATH, 'utf8'));
+          const expectedNames = [
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64.dmg`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip`,
+            `ITHARBORS-${process.env.RELEASE_VERSION}-arm64-mac.zip.blockmap`,
+            'latest-mac.yml',
+            'checksums.txt',
+            'sbom.spdx.json',
+          ].sort();
+          const actualNames = release.assets.map((asset) => asset.name).sort();
+          const expectedPrerelease = process.env.EXPECTED_PRERELEASE === 'true';
+          if (
+            release.draft !== false
+            || release.prerelease !== expectedPrerelease
+            || release.tag_name !== process.env.RELEASE_TAG
+            || JSON.stringify(actualNames) !== JSON.stringify(expectedNames)
+          ) {
+            throw new Error('Published Release does not match the run-created verified draft');
+          }
+          NODE
+          PUBLISHED=true

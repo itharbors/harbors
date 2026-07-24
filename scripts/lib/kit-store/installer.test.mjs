@@ -100,3 +100,58 @@ test('cleans unique staging and owned downloads after failures', async () => {
   assert.deepEqual(await readdir(path.join(value.storeRoot, 'staging')), []);
   assert.deepEqual(await readdir(downloads), []);
 });
+
+test('rolls back the final Kit directory when installed state persistence fails', async () => {
+  const value = await setup();
+  const failingStore = {
+    snapshot: () => value.store.snapshot(),
+    recordInstalled: async () => { throw new Error('state persistence failed'); },
+  };
+  const installer = new KitArtifactInstaller({
+    storeRoot: value.storeRoot,
+    store: failingStore,
+    runtime,
+  });
+
+  await assert.rejects(installer.installFromFile({
+    archivePath: value.packed.output,
+    expected: value.expected,
+  }), /state persistence failed/);
+
+  const destination = path.join(
+    value.storeRoot,
+    'kits',
+    Buffer.from(value.expected.id).toString('base64url'),
+    value.expected.version,
+  );
+  await assert.rejects(stat(destination), (error) => error?.code === 'ENOENT');
+
+  const retried = await value.installer.installFromFile({
+    archivePath: value.packed.output,
+    expected: value.expected,
+  });
+  assert.equal(retried.status, 'installed');
+});
+
+test('keeps the installed Kit when state rename committed before directory sync failed', async () => {
+  const value = await setup();
+  const committedStore = new InstalledKitStore(value.storeRoot, {
+    now: () => '2026-07-23T00:00:00.000Z',
+    syncDirectory: async () => { throw new Error('directory fsync failed after rename'); },
+  });
+  const installer = new KitArtifactInstaller({
+    storeRoot: value.storeRoot,
+    store: committedStore,
+    runtime,
+  });
+
+  const installed = await installer.installFromFile({
+    archivePath: value.packed.output,
+    expected: value.expected,
+  });
+
+  assert.equal(installed.status, 'installed');
+  assert.equal((await stat(installed.directory)).isDirectory(), true);
+  assert.equal((await committedStore.snapshot()).kits[value.expected.id]
+    .versions[value.expected.version].directory, installed.directory);
+});
