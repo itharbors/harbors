@@ -14,17 +14,7 @@ export function resolveCodexSkillSource({
   }
 
   return path.resolve(isPackaged
-    ? path.join(
-        rootDir,
-        'kits',
-        'notifications',
-        'plugins',
-        'notification-background',
-        'main',
-        'dist',
-        'resources',
-        'notify-user',
-      )
+    ? path.join(resourcesPath, 'runtime', 'resources', 'notify-user')
     : path.join(rootDir, '.agents', 'skills', 'notify-user'));
 }
 
