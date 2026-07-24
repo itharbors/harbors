@@ -17,6 +17,7 @@ import {
   shutdownDesktopServices,
   finishDesktopShutdown,
   showKitChooser,
+  shouldStartElectronApp,
 } from './electron-launcher.mjs';
 import { createDevPages, createDevServerEnv, createDevStackEnvironments } from './dev-launcher.mjs';
 
@@ -30,6 +31,36 @@ test('parses an optional requested Kit without creating a host mode', () => {
   assert.deepEqual(parseElectronOptions(['--kit=./kits/mysql']), {
     requestedKit: './kits/mysql',
   });
+});
+
+test('starts packaged Electron when LaunchServices does not provide the bundled entry in argv', () => {
+  const modulePath = '/Applications/ITHARBORS.app/Contents/Resources/app.asar/dist/main.mjs';
+
+  assert.equal(shouldStartElectronApp({
+    isPackaged: true,
+    entryPath: undefined,
+    modulePath,
+  }), true);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: true,
+    entryPath: '/private/var/folders/launch-services-wrapper',
+    modulePath,
+  }), true);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: false,
+    entryPath: undefined,
+    modulePath,
+  }), false);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: false,
+    entryPath: '/workspace/scripts/other.mjs',
+    modulePath,
+  }), false);
+  assert.equal(shouldStartElectronApp({
+    isPackaged: false,
+    entryPath: modulePath,
+    modulePath,
+  }), true);
 });
 
 test('rejects missing, duplicate and unknown Electron arguments', () => {

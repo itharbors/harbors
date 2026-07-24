@@ -37,6 +37,7 @@ import {
   parseElectronOptions,
   persistOpenWindowBounds,
   selectMenuWindow,
+  shouldStartElectronApp,
   shutdownDesktopServices,
   finishDesktopShutdown,
   showKitChooser,
@@ -266,13 +267,12 @@ function mergeElectronMenuTemplates(primary, secondary) {
   return merged;
 }
 
-if (shouldStartElectronApp()) {
+if (shouldStartElectronApp({
+  isPackaged: app?.isPackaged,
+  entryPath: process.argv[1] ? path.resolve(process.argv[1]) : undefined,
+  modulePath: fileURLToPath(import.meta.url),
+})) {
   startElectronApp();
-}
-
-function shouldStartElectronApp() {
-  const entryPath = process.argv[1];
-  return Boolean(app?.whenReady && entryPath && fileURLToPath(import.meta.url) === path.resolve(entryPath));
 }
 
 function loadAutoUpdater() {

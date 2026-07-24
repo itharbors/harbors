@@ -1,5 +1,9 @@
 import { formatNotificationKitLabel } from './notification-desktop.mjs';
 
+export function shouldStartElectronApp({ isPackaged, entryPath, modulePath }) {
+  return isPackaged === true || (typeof entryPath === 'string' && entryPath === modulePath);
+}
+
 export function parseElectronOptions(args) {
   let requestedKit = null;
 
