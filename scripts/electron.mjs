@@ -59,7 +59,6 @@ import {
 } from './lib/application-runtime-client.mjs';
 
 const require = createRequire(import.meta.url);
-const { autoUpdater } = require('electron-updater');
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
@@ -276,7 +275,12 @@ function shouldStartElectronApp() {
   return Boolean(app?.whenReady && entryPath && fileURLToPath(import.meta.url) === path.resolve(entryPath));
 }
 
+function loadAutoUpdater() {
+  return require('electron-updater').autoUpdater;
+}
+
 function startElectronApp() {
+  const autoUpdater = loadAutoUpdater();
   configureElectronApp(app);
   const beforeQuitGate = createBeforeQuitGate({
     shutdown: () => shutdownDesktopServices({

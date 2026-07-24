@@ -510,11 +510,13 @@ test('wires updater IPC, delayed background download, prompt and narrow preload 
   ]) assert.match(clientBridge, new RegExp(`export function ${exportName}`));
 });
 
-test('loads externalized electron-updater through a CJS-safe packaged ESM boundary', async () => {
+test('loads externalized electron-updater through a lazy CJS-safe packaged ESM boundary', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
 
   assert.match(source, /createRequire\(import\.meta\.url\)/);
-  assert.match(source, /require\('electron-updater'\)/);
+  assert.match(source, /function loadAutoUpdater\(\) \{\s*return require\('electron-updater'\)\.autoUpdater;\s*\}/u);
+  assert.match(source, /function startElectronApp\(\) \{\s*const autoUpdater = loadAutoUpdater\(\);/u);
+  assert.doesNotMatch(source, /const\s*\{\s*autoUpdater\s*\}\s*=\s*require\('electron-updater'\)/u);
   assert.doesNotMatch(source, /import\s*\{\s*autoUpdater\s*\}\s*from\s*'electron-updater'/);
 });
 
