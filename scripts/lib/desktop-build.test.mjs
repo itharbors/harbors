@@ -35,7 +35,12 @@ async function createRepositoryFixture(t) {
     'scripts/assets/tray-icon.png',
     'scripts/assets/tray-icon@2x.png',
   ]) await write(root, relative);
-  await write(root, 'scripts/electron.mjs', 'export const main = true;\n');
+  await write(root, 'scripts/electron.mjs', `
+import 'sigstore';
+import 'snappyjs';
+import 'yauzl';
+export const main = true;
+`);
   await write(root, 'packages/desktop/src/framework.mjs', 'export const framework = true;\n');
   await write(root, 'packages/client/dist/index.html', '<script src="/assets/index.js"></script>');
   await write(root, 'packages/client/dist/assets/index.js', 'export const client = true;\n');
@@ -112,7 +117,12 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
       await readFile(path.join(repositoryRoot, 'scripts', 'assets', filename)),
     );
   }
-  assert.match(await readFile(path.join(repositoryRoot, 'packages/desktop/dist/main.mjs'), 'utf8'), /main/);
+  const mainBundle = await readFile(path.join(repositoryRoot, 'packages/desktop/dist/main.mjs'), 'utf8');
+  assert.match(mainBundle, /main/);
+  for (const name of ['sigstore', 'snappyjs', 'yauzl']) {
+    assert.match(mainBundle, new RegExp(`import ['"]${name}['"]`, 'u'));
+  }
+  assert.doesNotMatch(mainBundle, /node_modules\/@sigstore\//u);
 });
 
 test('rejects missing files, symlinks, repository escapes, duplicate destinations, and product Kits', async (t) => {

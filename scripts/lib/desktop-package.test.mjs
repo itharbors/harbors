@@ -110,15 +110,6 @@ test('desktop package owns version, updater, and native runtime dependencies', a
   }
 });
 
-test('generated desktop bundle leaves registry CommonJS dependencies to the runtime loader', async () => {
-  const bundle = await readFile(new URL('../../packages/desktop/dist/main.mjs', import.meta.url), 'utf8');
-
-  for (const name of ['sigstore', 'snappyjs', 'yauzl']) {
-    assert.match(bundle, new RegExp(`from ['"]${name}['"]`, 'u'));
-  }
-  assert.doesNotMatch(bundle, /node_modules\/@sigstore\//u);
-});
-
 test('builder ships only the staged runtime and unpacks native modules', async () => {
   const config = (await import('../../electron-builder.config.mjs')).default;
   const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
