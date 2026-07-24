@@ -1,9 +1,9 @@
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, screen, shell, Tray } from 'electron';
-import { autoUpdater } from 'electron-updater';
 import { createAppUpdater } from './lib/app-updater.mjs';
 import { registerAppUpdaterIpc } from './lib/app-updater-ipc.mjs';
 import { discoverKits, resolveRequestedKitName } from './lib/kit-catalog.mjs';
@@ -29,6 +29,7 @@ import { resolveRuntimePorts, resolveRuntimeProfile } from './lib/runtime-ports.
 import {
   buildTrayTemplate,
   buildUpdateMenuItems,
+  createBeforeQuitGate,
   createFrameworkArgs,
   createKitWindowUrl,
   initializeKitHost,
@@ -57,6 +58,8 @@ import {
   validateInstalledKitRuntime,
 } from './lib/application-runtime-client.mjs';
 
+const require = createRequire(import.meta.url);
+const { autoUpdater } = require('electron-updater');
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
@@ -275,6 +278,28 @@ function shouldStartElectronApp() {
 
 function startElectronApp() {
   configureElectronApp(app);
+  const beforeQuitGate = createBeforeQuitGate({
+    shutdown: () => shutdownDesktopServices({
+      persistWorkspace: () => workspaceStore
+        ? persistOpenWindowBounds(kitWindows, workspaceStore)
+        : Promise.resolve(),
+      stopFramework,
+      stopKitManagerService,
+      stopNotificationService,
+    }),
+    finalize: (results) => finishDesktopShutdown({
+      results,
+      installUpdateAfterShutdown,
+      updater: autoUpdater,
+      quit: () => app.quit(),
+      logError: (message) => console.error(message),
+    }),
+    onFailure() {
+      if (installUpdateAfterShutdown) autoUpdater.autoInstallOnAppQuit = false;
+      console.error('Failed to complete application shutdown');
+      app.quit();
+    },
+  });
   app.whenReady()
     .then(async () => {
       electronOptions = parseElectronOptions(process.argv.slice(2));
@@ -389,31 +414,9 @@ function startElectronApp() {
   });
 
   app.on('before-quit', (event) => {
-    if (!quitting) {
-      event.preventDefault();
+    const pendingShutdown = beforeQuitGate.handle(event);
+    if (pendingShutdown) {
       quitting = true;
-      void shutdownDesktopServices({
-        persistWorkspace: () => workspaceStore
-          ? persistOpenWindowBounds(kitWindows, workspaceStore)
-          : Promise.resolve(),
-        stopFramework,
-        stopKitManagerService,
-        stopNotificationService,
-      })
-        .then((results) => {
-          finishDesktopShutdown({
-            results,
-            installUpdateAfterShutdown,
-            updater: autoUpdater,
-            quit: () => app.quit(),
-            logError: (message) => console.error(message),
-          });
-        })
-        .catch(() => {
-          if (installUpdateAfterShutdown) autoUpdater.autoInstallOnAppQuit = false;
-          console.error('Failed to complete application shutdown');
-          app.quit();
-        });
       return;
     }
     tray?.destroy();

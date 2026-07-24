@@ -156,6 +156,31 @@ export async function shutdownDesktopServices({
   return [...controlResults, ...frameworkResults, ...notificationResults];
 }
 
+export function createBeforeQuitGate({ shutdown, finalize, onFailure }) {
+  let shutdownPromise;
+  let finalizing = false;
+
+  return Object.freeze({
+    handle(event) {
+      if (finalizing) return undefined;
+      event.preventDefault();
+      if (!shutdownPromise) {
+        shutdownPromise = Promise.resolve()
+          .then(shutdown)
+          .then((results) => {
+            finalizing = true;
+            return finalize(results);
+          })
+          .catch(() => {
+            finalizing = true;
+            return onFailure();
+          });
+      }
+      return shutdownPromise;
+    },
+  });
+}
+
 export function finishDesktopShutdown({
   results,
   installUpdateAfterShutdown,

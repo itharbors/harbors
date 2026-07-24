@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   buildTrayTemplate,
   buildUpdateMenuItems,
+  createBeforeQuitGate,
   createFrameworkArgs,
   createKitWindowUrl,
   mergeMenuTrees,
@@ -481,6 +482,9 @@ test('wires updater IPC, delayed background download, prompt and narrow preload 
   assert.match(source, /snapshot\.status !== 'downloaded'[\s\S]*showMessageBox/);
   assert.match(source, /installUpdateAfterShutdown = true/);
   assert.match(source, /finishDesktopShutdown/);
+  assert.match(source, /createBeforeQuitGate/);
+  assert.match(source, /beforeQuitGate\.handle\(event\)/);
+  assert.doesNotMatch(source, /if \(!quitting\) \{\s*event\.preventDefault\(\)/);
 
   assert.match(preload, /exposeInMainWorld\('harborsUpdates'/);
   for (const [method, channel] of [
@@ -504,6 +508,108 @@ test('wires updater IPC, delayed background download, prompt and narrow preload 
     'installAppUpdate',
     'onAppUpdateState',
   ]) assert.match(clientBridge, new RegExp(`export function ${exportName}`));
+});
+
+test('loads externalized electron-updater through a CJS-safe packaged ESM boundary', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+
+  assert.match(source, /createRequire\(import\.meta\.url\)/);
+  assert.match(source, /require\('electron-updater'\)/);
+  assert.doesNotMatch(source, /import\s*\{\s*autoUpdater\s*\}\s*from\s*'electron-updater'/);
+});
+
+test('keeps every repeated before-quit blocked behind one successful shutdown gate', async () => {
+  let resolveShutdown;
+  let shutdownCalls = 0;
+  const calls = [];
+  const updater = {
+    autoInstallOnAppQuit: true,
+    quitAndInstall: () => calls.push(['install']),
+  };
+  const gate = createBeforeQuitGate({
+    shutdown() {
+      shutdownCalls += 1;
+      return new Promise((resolve) => { resolveShutdown = resolve; });
+    },
+    finalize(results) {
+      calls.push(['finalize', results]);
+      finishDesktopShutdown({
+        results,
+        installUpdateAfterShutdown: true,
+        updater,
+        quit: () => calls.push(['quit']),
+        logError: (message) => calls.push(['error', message]),
+      });
+    },
+    onFailure() {
+      calls.push(['failure']);
+    },
+  });
+  const firstEvent = { preventDefault: () => calls.push(['prevent:first']) };
+  const secondEvent = { preventDefault: () => calls.push(['prevent:second']) };
+
+  const first = gate.handle(firstEvent);
+  const second = gate.handle(secondEvent);
+  assert.equal(first, second);
+  assert.equal(shutdownCalls, 0);
+  assert.deepEqual(calls, [['prevent:first'], ['prevent:second']]);
+  await Promise.resolve();
+  assert.equal(shutdownCalls, 1);
+  assert.deepEqual(calls, [['prevent:first'], ['prevent:second']]);
+
+  const results = [{ status: 'fulfilled', value: undefined }];
+  resolveShutdown(results);
+  await first;
+  assert.deepEqual(calls, [
+    ['prevent:first'],
+    ['prevent:second'],
+    ['finalize', results],
+    ['install'],
+  ]);
+  assert.equal(gate.handle({ preventDefault: () => calls.push(['prevent:final']) }), undefined);
+  assert.doesNotMatch(JSON.stringify(calls), /prevent:final/);
+});
+
+test('keeps update install blocked until failed shutdown disables auto-install and quits normally', async () => {
+  let resolveShutdown;
+  const calls = [];
+  const updater = {
+    autoInstallOnAppQuit: true,
+    quitAndInstall: () => calls.push('install'),
+  };
+  const gate = createBeforeQuitGate({
+    shutdown: () => new Promise((resolve) => { resolveShutdown = resolve; }),
+    finalize(results) {
+      finishDesktopShutdown({
+        results,
+        installUpdateAfterShutdown: true,
+        updater,
+        quit: () => calls.push('quit'),
+        logError: (message) => calls.push(message),
+      });
+    },
+    onFailure() {
+      updater.autoInstallOnAppQuit = false;
+      calls.push('quit');
+    },
+  });
+  const first = gate.handle({ preventDefault: () => calls.push('prevent:first') });
+  const second = gate.handle({ preventDefault: () => calls.push('prevent:second') });
+
+  assert.equal(first, second);
+  assert.deepEqual(calls, ['prevent:first', 'prevent:second']);
+  assert.equal(updater.autoInstallOnAppQuit, true);
+  await Promise.resolve();
+  resolveShutdown([{ status: 'rejected', reason: new Error('secret /private/db') }]);
+  await first;
+  assert.deepEqual(calls, [
+    'prevent:first',
+    'prevent:second',
+    'Update installation deferred because application shutdown failed',
+    'quit',
+  ]);
+  assert.equal(updater.autoInstallOnAppQuit, false);
+  assert.equal(gate.handle({ preventDefault: () => calls.push('prevent:final') }), undefined);
 });
 
 test('persists every live Kit window before the tray application quits', async () => {
