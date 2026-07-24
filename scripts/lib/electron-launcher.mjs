@@ -1,5 +1,29 @@
 import { formatNotificationKitLabel } from './notification-desktop.mjs';
 
+export function shouldStartElectronApp({ isPackaged, entryPath, modulePath }) {
+  return isPackaged === true || (typeof entryPath === 'string' && entryPath === modulePath);
+}
+
+export function registerDesktopSignalHandlers({ signalSource, quit }) {
+  let disposed = false;
+  let quitRequested = false;
+  const requestQuit = () => {
+    if (disposed || quitRequested) return;
+    quitRequested = true;
+    quit();
+  };
+
+  signalSource.on('SIGTERM', requestQuit);
+  signalSource.on('SIGINT', requestQuit);
+
+  return () => {
+    if (disposed) return;
+    disposed = true;
+    signalSource.off('SIGTERM', requestQuit);
+    signalSource.off('SIGINT', requestQuit);
+  };
+}
+
 export function parseElectronOptions(args) {
   let requestedKit = null;
 
@@ -96,6 +120,22 @@ export function buildTrayTemplate({
   ];
 }
 
+export function buildUpdateMenuItems({ check, onError = () => {} }) {
+  return [
+    { type: 'separator' },
+    {
+      label: '检查更新…',
+      click() {
+        try {
+          Promise.resolve(check()).catch(onError);
+        } catch (error) {
+          onError(error);
+        }
+      },
+    },
+  ];
+}
+
 export async function openOrFocusKitWindow(kitName, registry, pendingLoads, createWindow) {
   let window = registry.get(kitName);
   if (!window || window.isDestroyed()) {
@@ -138,6 +178,52 @@ export async function shutdownDesktopServices({
     stopNotificationService(),
   ]);
   return [...controlResults, ...frameworkResults, ...notificationResults];
+}
+
+export function createBeforeQuitGate({ shutdown, finalize, onFailure }) {
+  let shutdownPromise;
+  let finalizing = false;
+
+  return Object.freeze({
+    handle(event) {
+      if (finalizing) return undefined;
+      event.preventDefault();
+      if (!shutdownPromise) {
+        shutdownPromise = Promise.resolve()
+          .then(shutdown)
+          .then((results) => {
+            finalizing = true;
+            return finalize(results);
+          })
+          .catch(() => {
+            finalizing = true;
+            return onFailure();
+          });
+      }
+      return shutdownPromise;
+    },
+  });
+}
+
+export function finishDesktopShutdown({
+  results,
+  installUpdateAfterShutdown,
+  updater,
+  quit,
+  logError,
+}) {
+  const failed = results.some((result) => result.status === 'rejected');
+  if (installUpdateAfterShutdown && !failed) {
+    updater.quitAndInstall();
+    return;
+  }
+  if (installUpdateAfterShutdown) {
+    updater.autoInstallOnAppQuit = false;
+    logError('Update installation deferred because application shutdown failed');
+  } else if (failed) {
+    logError('Failed to complete one or more application shutdown steps');
+  }
+  quit();
 }
 
 export async function persistOpenWindowBounds(registry, workspaceStore) {

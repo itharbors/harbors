@@ -1,0 +1,4 @@
+interface:
+  display_name: "App Release Workflow"
+  short_description: "Safely validate and publish app tags"
+  default_prompt: "Use $app-workflow to safely publish a desktop app tag."

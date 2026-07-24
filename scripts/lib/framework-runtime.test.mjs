@@ -1,7 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { resolveFrameworkRuntime } from './framework-runtime.mjs';
+import { resolveCurrentProcessRuntime, resolveFrameworkRuntime } from './framework-runtime.mjs';
+
+test('derives packaged native compatibility directly from Electron process versions', () => {
+  const runtime = resolveCurrentProcessRuntime({
+    platform: 'darwin',
+    arch: 'arm64',
+    versions: { modules: '127' },
+  });
+
+  assert.deepEqual(runtime, { platform: 'darwin', arch: 'arm64', nodeAbi: '127' });
+});
 
 test('derives native compatibility from the Node process that runs Framework plugins', () => {
   const calls = [];

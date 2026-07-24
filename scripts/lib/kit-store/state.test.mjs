@@ -50,6 +50,26 @@ test('persists atomically with private mode and leaves no temporary files', asyn
   assert.equal(JSON.parse(await readFile(stateFile, 'utf8')).kits[id].versions['1.0.0'].version, '1.0.0');
 });
 
+test('treats directory sync failure after atomic rename as committed state', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-state-'));
+  let syncCalls = 0;
+  const store = new InstalledKitStore(root, {
+    now: () => '2026-07-23T00:00:00.000Z',
+    syncDirectory: async () => {
+      syncCalls += 1;
+      throw new Error('directory fsync failed after rename');
+    },
+  });
+
+  const record = await store.recordInstalled(installed('1.0.0'));
+
+  assert.equal(record.version, '1.0.0');
+  assert.equal(syncCalls, 1);
+  assert.equal((await store.snapshot()).kits[id].versions['1.0.0'].version, '1.0.0');
+  assert.equal(JSON.parse(await readFile(path.join(root, 'installed.json'), 'utf8')).kits[id]
+    .versions['1.0.0'].version, '1.0.0');
+});
+
 test('serializes concurrent mutations without losing installed versions', async () => {
   const { store } = await createStore();
   await Promise.all([

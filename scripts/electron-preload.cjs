@@ -15,3 +15,15 @@ contextBridge.exposeInMainWorld('electronMenu', {
     return ipcRenderer.invoke('ce:open-external-url', url);
   },
 });
+
+contextBridge.exposeInMainWorld('harborsUpdates', {
+  getState: () => ipcRenderer.invoke('harbors:update:get-state'),
+  check: () => ipcRenderer.invoke('harbors:update:check'),
+  download: () => ipcRenderer.invoke('harbors:update:download'),
+  install: () => ipcRenderer.invoke('harbors:update:install'),
+  onState(handler) {
+    const listener = (_event, state) => handler(state);
+    ipcRenderer.on('harbors:update:state', listener);
+    return () => ipcRenderer.removeListener('harbors:update:state', listener);
+  },
+});
