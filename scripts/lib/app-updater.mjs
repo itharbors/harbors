@@ -36,7 +36,17 @@ function validatedVersion(value, allowPrerelease) {
   return value;
 }
 
-export function createAppUpdater({ updater, currentVersion, isPackaged, onInstall }) {
+export function appUpdatesDisabled(value) {
+  return value === '1';
+}
+
+export function createAppUpdater({
+  updater,
+  currentVersion,
+  isPackaged,
+  updatesDisabled = false,
+  onInstall,
+}) {
   if (semver.valid(currentVersion) !== currentVersion) {
     throw publicError(UPDATE_FAILED);
   }
@@ -51,8 +61,9 @@ export function createAppUpdater({ updater, currentVersion, isPackaged, onInstal
   let disposed = false;
   let notifying = false;
   let checkPromise = null;
+  const disabled = !isPackaged || updatesDisabled === true;
   let snapshot = freezeSnapshot({
-    status: isPackaged ? 'idle' : 'disabled',
+    status: disabled ? 'disabled' : 'idle',
     currentVersion,
   });
 
@@ -198,7 +209,7 @@ export function createAppUpdater({ updater, currentVersion, isPackaged, onInstal
     );
   }
 
-  if (isPackaged) {
+  if (!disabled) {
     updater.autoDownload = false;
     updater.autoInstallOnAppQuit = true;
     updater.allowPrerelease = allowPrerelease;

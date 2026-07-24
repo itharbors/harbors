@@ -475,9 +475,11 @@ test('wires updater IPC, delayed background download, prompt and narrow preload 
   const clientBridge = await readFile(new URL('../../packages/client/src/electron/bridge.ts', import.meta.url), 'utf8');
 
   assert.match(source, /createAppUpdater/);
+  assert.match(source, /appUpdatesDisabled\(process\.env\.HARBORS_DISABLE_UPDATE_CHECKS\)/u);
   assert.match(source, /registerAppUpdaterIpc/);
   assert.match(source, /buildUpdateMenuItems/);
   assert.match(source, /setTimeout\([\s\S]*updateController\.check/);
+  assert.match(source, /getSnapshot\(\)\.status === 'disabled'\) return;[\s\S]*setTimeout/u);
   assert.match(source, /snapshot\.status === 'available'[\s\S]*updateController\.download/);
   assert.match(source, /snapshot\.status !== 'downloaded'[\s\S]*showMessageBox/);
   assert.match(source, /installUpdateAfterShutdown = true/);

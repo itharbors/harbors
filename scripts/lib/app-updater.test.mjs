@@ -2,7 +2,9 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import test from 'node:test';
 
-import { createAppUpdater } from './app-updater.mjs';
+import * as appUpdaterModule from './app-updater.mjs';
+
+const { appUpdatesDisabled, createAppUpdater } = appUpdaterModule;
 
 class FakeUpdater extends EventEmitter {
   autoDownload = true;
@@ -243,6 +245,30 @@ test('development is disabled and registers no provider listeners', async () => 
   ]) assert.equal(updater.listenerCount(event), 0);
   await assert.rejects(controller.check(), assertPublicError);
   assert.equal(updater.checkCalls, 0);
+});
+
+test('packaged acceptance disables updates only for the exact opt-out value', async () => {
+  assert.equal(typeof appUpdatesDisabled, 'function');
+  assert.equal(appUpdatesDisabled('1'), true);
+  for (const value of [undefined, null, '', '0', 'true', ' 1', '1 ', 1, true]) {
+    assert.equal(appUpdatesDisabled(value), false);
+  }
+
+  const updater = new FakeUpdater();
+  const controller = createAppUpdater({
+    updater,
+    currentVersion: '1.0.0',
+    isPackaged: true,
+    updatesDisabled: appUpdatesDisabled('1'),
+    onInstall() {},
+  });
+
+  assert.equal(controller.getSnapshot().status, 'disabled');
+  assert.deepEqual(updater.eventNames(), []);
+  await assert.rejects(controller.check(), assertPublicError);
+  await assert.rejects(controller.download(), assertPublicError);
+  assert.equal(updater.checkCalls, 0);
+  assert.equal(updater.downloadCalls, 0);
 });
 
 test('dispose removes every provider listener and freezes the final snapshot', async () => {
