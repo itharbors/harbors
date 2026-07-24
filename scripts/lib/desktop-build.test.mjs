@@ -33,6 +33,7 @@ async function createRepositoryFixture(t) {
     'scripts/kit-manager.css',
     'scripts/kit-manager.html',
     'scripts/assets/tray-icon.png',
+    'scripts/assets/tray-icon@2x.png',
   ]) await write(root, relative);
   await write(root, 'scripts/electron.mjs', 'export const main = true;\n');
   await write(root, 'packages/desktop/src/framework.mjs', 'export const framework = true;\n');
@@ -101,8 +102,15 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
     'kit-manager.css',
     'kit-manager.html',
     'assets/tray-icon.png',
+    'assets/tray-icon@2x.png',
   ]) {
     assert.equal(existsSync(path.join(repositoryRoot, 'packages', 'desktop', 'dist', filename)), true);
+  }
+  for (const filename of ['tray-icon.png', 'tray-icon@2x.png']) {
+    assert.deepEqual(
+      await readFile(path.join(repositoryRoot, 'packages', 'desktop', 'dist', 'assets', filename)),
+      await readFile(path.join(repositoryRoot, 'scripts', 'assets', filename)),
+    );
   }
   assert.match(await readFile(path.join(repositoryRoot, 'packages/desktop/dist/main.mjs'), 'utf8'), /main/);
 });

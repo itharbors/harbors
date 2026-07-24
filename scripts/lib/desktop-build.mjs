@@ -36,6 +36,10 @@ const DESKTOP_ASSETS = Object.freeze([
     source: 'scripts/assets/tray-icon.png',
     destination: 'assets/tray-icon.png',
   }),
+  Object.freeze({
+    source: 'scripts/assets/tray-icon@2x.png',
+    destination: 'assets/tray-icon@2x.png',
+  }),
 ]);
 
 function runtimeEntries() {
