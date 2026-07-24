@@ -20,6 +20,7 @@ export interface ServerOptions {
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
+  clientAssetsRoot?: string;
   host?: string;
   applicationRuntime?: Pick<
     ApplicationRuntime,
@@ -62,6 +63,7 @@ export function createServer(options: ServerOptions = {}) {
     assembly,
     applicationRuntime,
     applicationControlToken: options.applicationControlToken,
+    clientAssetsRoot: options.clientAssetsRoot,
   }, broker);
 
   const server = http.createServer(async (req, res) => {

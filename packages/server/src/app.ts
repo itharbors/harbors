@@ -28,12 +28,14 @@ import { createApplicationBootstrapRouter } from './routes/application-bootstrap
 import { createApplicationEventsRouter } from './routes/application-events';
 import { createApplicationMenuTriggerRouter } from './routes/application-menu-trigger';
 import { createKitCatalogRouter } from './routes/kit-catalog';
+import { createClientAssetRouter } from './routes/client-asset';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
   override?: AssemblyConfigOverride;
   applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'triggerMenu' | 'subscribe'>;
   applicationControlToken?: string;
+  clientAssetsRoot?: string;
 }
 
 export function createApp(
@@ -140,6 +142,9 @@ export function createApp(
     { controlToken: appOptions.applicationControlToken },
   );
   const kitCatalogRouter = createKitCatalogRouter(kitCatalogPromise);
+  const clientAssetRouter = appOptions.clientAssetsRoot
+    ? createClientAssetRouter(appOptions.clientAssetsRoot)
+    : undefined;
 
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';
@@ -228,6 +233,13 @@ export function createApp(
     // Legacy API routes
     if (url.startsWith('/api/')) {
       await sessionRouter(req, res);
+      return;
+    }
+
+    if (clientAssetRouter) {
+      if (await clientAssetRouter(req, res)) return;
+      res.statusCode = 404;
+      res.end();
       return;
     }
 
