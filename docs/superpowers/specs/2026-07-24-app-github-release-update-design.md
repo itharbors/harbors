@@ -198,6 +198,15 @@ APPLE_API_ISSUER
 APPLE_TEAM_ID
 ```
 
+证书必须由用户所属 Apple Developer Program 团队签发，钥匙串身份格式为
+`Developer ID Application: <Team Name> (<TEAM_ID>)`。CI 导入包含证书及其私钥的密码保护
+`.p12`，并验证签名 Authority 类型和 Team Identifier；证书显示名称不在仓库中硬编码。当前发布
+DMG 与 ZIP，不发布 PKG，因此不需要 `Developer ID Installer`。
+
+notarization 使用 App Store Connect **Team API Key** 的 `.p8`、Key ID 和 Issuer ID；Individual
+API Key 不支持 `notarytool`，不得用于本工作流。API Key 的界面显示名称建议使用
+`ITHARBORS GitHub Release`，但该名称不参与身份校验。
+
 证书、密码和 Apple API Key 不进入仓库、日志、Artifact 或 Release。workflow 在缺少任何凭据时
 必须失败，不得自动降级为 unsigned Stable Release。
 
