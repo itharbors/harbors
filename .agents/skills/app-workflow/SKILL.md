@@ -1,6 +1,6 @@
 ---
 name: app-workflow
-description: Use when validating or locally publishing a Harbors desktop app tag, including preview and stable app releases. Enforces the canonical app tag format, a clean fetched main branch, local Git identity, exact confirmation, and local product checks before the only tag push.
+description: Use when validating or locally publishing a Harbors desktop app release tag, including preview and stable releases.
 ---
 
 # App Workflow

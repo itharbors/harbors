@@ -36,8 +36,13 @@ new_fixture() {
   export FIXTURE_ROOT FAKE_GIT_LOG FAKE_NPM_LOG
   export FAKE_STATUS='' FAKE_BRANCH='main'
   export FAKE_HEAD='0123456789012345678901234567890123456789'
-  export FAKE_ORIGIN="$FAKE_HEAD"
-  export FAKE_GIT_NAME='VisualSJ' FAKE_GIT_EMAIL='devhacker520@hotmail.com'
+  FAKE_TRACKING_REF="$FIXTURE_ROOT/origin-main"
+  FAKE_REMOTE_MAIN="$FIXTURE_ROOT/remote-main"
+  printf '%s\n' "$FAKE_HEAD" > "$FAKE_TRACKING_REF"
+  printf '%s\n' "$FAKE_HEAD" > "$FAKE_REMOTE_MAIN"
+  export FAKE_TRACKING_REF FAKE_REMOTE_MAIN FAKE_TRACKING_REF_EXISTS=1 FAKE_FETCH_FAIL=0
+  export FAKE_LOCAL_GIT_NAME='VisualSJ' FAKE_LOCAL_GIT_EMAIL='devhacker520@hotmail.com'
+  export FAKE_GLOBAL_GIT_NAME='VisualSJ' FAKE_GLOBAL_GIT_EMAIL='devhacker520@hotmail.com'
   export FAKE_LOCAL_TAG='' FAKE_LS_REMOTE='missing'
   write_fake_git
   write_fake_npm
@@ -51,19 +56,37 @@ if test "${1:-}" = -C; then shift 2; fi
 printf '%s\n' "$*" >> "$FAKE_GIT_LOG"
 case "${1:-}" in
   rev-parse)
-    case "${2:-}" in
+    if test "${2:-}" = --verify; then ref=${3:-}; else ref=${2:-}; fi
+    case "$ref" in
       --show-toplevel) printf '%s\n' "$FIXTURE_ROOT" ;;
       --abbrev-ref) printf '%s\n' "$FAKE_BRANCH" ;;
       HEAD) printf '%s\n' "$FAKE_HEAD" ;;
-      origin/main) printf '%s\n' "$FAKE_ORIGIN" ;;
+      origin/main|refs/remotes/origin/main)
+        test "$FAKE_TRACKING_REF_EXISTS" = 1 || exit 128
+        cat "$FAKE_TRACKING_REF" ;;
       *) exit 2 ;;
     esac ;;
   status) printf '%s\n' "$FAKE_STATUS" ;;
-  fetch) exit 0 ;;
+  fetch)
+    if test "$FAKE_FETCH_FAIL" = 1; then
+      printf '%s\n' 'simulated fetch failure' >&2
+      exit 128
+    fi
+    if test "${2:-}" = origin && test "${3:-}" = --prune; then
+      cp "$FAKE_REMOTE_MAIN" "$FAKE_TRACKING_REF"
+    fi ;;
+  remote)
+    test "${2:-}" = get-url && test "${3:-}" = origin || exit 2
+    printf '%s\n' 'https://github.com/itharbors/harbors.git' ;;
   config)
-    case "${3:-}" in
-      user.name) printf '%s\n' "$FAKE_GIT_NAME" ;;
-      user.email) printf '%s\n' "$FAKE_GIT_EMAIL" ;;
+    case "${2:-}" in
+      --local) scope=LOCAL; key=${4:-} ;;
+      --get) scope=GLOBAL; key=${3:-} ;;
+      *) exit 2 ;;
+    esac
+    case "$key" in
+      user.name) value_name="FAKE_${scope}_GIT_NAME"; printf '%s\n' "${!value_name}" ;;
+      user.email) value_name="FAKE_${scope}_GIT_EMAIL"; printf '%s\n' "${!value_name}" ;;
       *) exit 1 ;;
     esac ;;
   tag)
@@ -102,9 +125,12 @@ run_release() {
 assert_rejected_before_publish() {
   local name=$1 expected=$2
   run_release
-  test "$RELEASE_STATUS" -ne 0 || fail "$name unexpectedly succeeded"
-  assert_contains "$RELEASE_OUTPUT" "$expected"
-  assert_no_publish
+  if test "$RELEASE_STATUS" -eq 0; then
+    fail "$name unexpectedly succeeded"
+    return 1
+  fi
+  assert_contains "$RELEASE_OUTPUT" "$expected" || return 1
+  assert_no_publish || return 1
 }
 
 test_dirty_tree_is_rejected_before_publish() {
@@ -121,14 +147,54 @@ test_non_main_is_rejected_before_publish() {
 
 test_origin_mismatch_is_rejected_before_publish() {
   new_fixture
-  export FAKE_ORIGIN='9999999999999999999999999999999999999999'
+  printf '%s\n' '9999999999999999999999999999999999999999' > "$FAKE_REMOTE_MAIN"
   assert_rejected_before_publish 'origin mismatch release' 'current Commit is not origin/main'
+}
+
+test_stale_tracking_ref_is_refreshed_before_publish() {
+  new_fixture
+  printf '%s\n' '9999999999999999999999999999999999999999' > "$FAKE_REMOTE_MAIN"
+  export HARBORS_APP_RELEASE_CONFIRM="app/v0.1.0-preview.1@$FAKE_HEAD"
+  run_release
+  unset HARBORS_APP_RELEASE_CONFIRM
+  if test "$RELEASE_STATUS" -eq 0; then
+    fail 'stale tracking ref release unexpectedly succeeded'
+    return 1
+  fi
+  assert_contains "$RELEASE_OUTPUT" 'current Commit is not origin/main' || return 1
+  assert_no_publish || return 1
+}
+
+test_missing_fetched_tracking_ref_is_rejected_before_publish() {
+  new_fixture
+  export FAKE_TRACKING_REF_EXISTS=0
+  assert_rejected_before_publish 'missing fetched tracking ref release' 'unable to resolve fetched origin/main'
+}
+
+test_failed_origin_fetch_is_rejected_before_publish() {
+  new_fixture
+  export FAKE_FETCH_FAIL=1
+  assert_rejected_before_publish 'failed origin fetch release' 'unable to fetch origin'
 }
 
 test_wrong_repository_identity_is_rejected_before_publish() {
   new_fixture
-  export FAKE_GIT_EMAIL='wrong@example.com'
+  export FAKE_LOCAL_GIT_EMAIL='wrong@example.com' FAKE_GLOBAL_GIT_EMAIL='wrong@example.com'
   assert_rejected_before_publish 'wrong identity release' 'Git user.email must be devhacker520@hotmail.com'
+}
+
+test_global_only_identity_is_rejected_before_publish() {
+  new_fixture
+  export FAKE_LOCAL_GIT_NAME='' FAKE_LOCAL_GIT_EMAIL=''
+  export HARBORS_APP_RELEASE_CONFIRM="app/v0.1.0-preview.1@$FAKE_HEAD"
+  run_release
+  unset HARBORS_APP_RELEASE_CONFIRM
+  if test "$RELEASE_STATUS" -eq 0; then
+    fail 'global-only identity release unexpectedly succeeded'
+    return 1
+  fi
+  assert_contains "$RELEASE_OUTPUT" 'Git user.name must be VisualSJ' || return 1
+  assert_no_publish || return 1
 }
 
 test_desktop_version_mismatch_is_rejected_before_publish() {
@@ -193,7 +259,11 @@ test -x "$RELEASE" || fail 'release-app.sh is missing or not executable'
 run_test test_dirty_tree_is_rejected_before_publish
 run_test test_non_main_is_rejected_before_publish
 run_test test_origin_mismatch_is_rejected_before_publish
+run_test test_stale_tracking_ref_is_refreshed_before_publish
+run_test test_missing_fetched_tracking_ref_is_rejected_before_publish
+run_test test_failed_origin_fetch_is_rejected_before_publish
 run_test test_wrong_repository_identity_is_rejected_before_publish
+run_test test_global_only_identity_is_rejected_before_publish
 run_test test_desktop_version_mismatch_is_rejected_before_publish
 run_test test_existing_local_tag_is_rejected_before_publish
 run_test test_existing_remote_tag_is_rejected_before_publish

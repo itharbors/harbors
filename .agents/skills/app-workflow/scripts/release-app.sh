@@ -17,13 +17,18 @@ test -z "$(git -C "$repo_root" status --porcelain)" \
   || app_workflow_fail 'working tree is not clean'
 branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD)
 test "$branch" = main || app_workflow_fail "release must run from main, got ${branch:-detached HEAD}"
-git -C "$repo_root" fetch origin main
+origin_url=$(git -C "$repo_root" remote get-url origin 2>/dev/null) \
+  || app_workflow_fail 'origin remote is required'
+test -n "$origin_url" || app_workflow_fail 'origin remote is required'
+git -C "$repo_root" fetch origin --prune \
+  || app_workflow_fail 'unable to fetch origin'
 commit=$(git -C "$repo_root" rev-parse HEAD)
-origin_main=$(git -C "$repo_root" rev-parse origin/main)
+origin_main=$(git -C "$repo_root" rev-parse --verify refs/remotes/origin/main 2>/dev/null) \
+  || app_workflow_fail 'unable to resolve fetched origin/main'
 test "$commit" = "$origin_main" || app_workflow_fail 'current Commit is not origin/main'
 
-git_name=$(git -C "$repo_root" config --get user.name || true)
-git_email=$(git -C "$repo_root" config --get user.email || true)
+git_name=$(git -C "$repo_root" config --local --get user.name || true)
+git_email=$(git -C "$repo_root" config --local --get user.email || true)
 test "$git_name" = VisualSJ || app_workflow_fail 'Git user.name must be VisualSJ'
 test "$git_email" = devhacker520@hotmail.com \
   || app_workflow_fail 'Git user.email must be devhacker520@hotmail.com'
