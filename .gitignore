@@ -12,3 +12,5 @@ tsconfig.tsbuildinfo
 .editor.db-shm
 .editor.db-wal
 /harbors-kits/
+/dist/desktop-runtime/
+/dist/desktop-release/
