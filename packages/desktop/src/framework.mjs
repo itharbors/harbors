@@ -9,9 +9,9 @@ function send(message) {
 }
 
 function subscribeShutdown(shutdown) {
-  const onSignal = () => shutdown();
+  const onSignal = () => { void shutdown(); };
   const onMessage = (message) => {
-    if (message?.type === 'shutdown') shutdown();
+    if (message?.type === 'shutdown') void shutdown();
   };
   process.once('SIGINT', onSignal);
   process.once('SIGTERM', onSignal);
@@ -23,8 +23,8 @@ function subscribeShutdown(shutdown) {
   };
 }
 
-function exit() {
-  process.exitCode = 1;
+function exit({ failed }) {
+  if (failed) process.exitCode = 1;
   if (process.connected) process.disconnect();
 }
 

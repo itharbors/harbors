@@ -79,17 +79,41 @@ export async function runDesktopFrameworkProcess({
   subscribeShutdown,
   exit,
 }) {
-  let shutdown;
+  let controller;
   let unsubscribeShutdown;
-  const fail = async (error) => {
-    try {
-      await shutdown?.();
-    } catch {
-      // Preserve the startup failure as the fatal IPC message.
+  let finalizationPromise;
+  let failure;
+  let hasFailure = false;
+  const recordFailure = (error) => {
+    if (!hasFailure) {
+      failure = error;
+      hasFailure = true;
     }
-    unsubscribeShutdown?.();
-    send?.({ type: 'fatal', message: errorMessage(error) });
-    exit?.();
+  };
+  const finalize = (error) => {
+    if (error !== undefined) {
+      recordFailure(error);
+    }
+    finalizationPromise ??= (async () => {
+      try {
+        await controller?.stop();
+      } catch (stopError) {
+        recordFailure(stopError);
+      }
+      try {
+        unsubscribeShutdown?.();
+      } catch (unsubscribeError) {
+        recordFailure(unsubscribeError);
+      }
+      try {
+        if (hasFailure) {
+          send?.({ type: 'fatal', message: errorMessage(failure) });
+        }
+      } finally {
+        exit?.({ failed: hasFailure });
+      }
+    })();
+    return finalizationPromise;
   };
 
   try {
@@ -106,16 +130,15 @@ export async function runDesktopFrameworkProcess({
       applicationHostMode: 'desktop',
       applicationControlToken: environment.applicationControlToken,
     });
-    const controller = createFrameworkProcessController({
+    controller = createFrameworkProcessController({
       send,
       start: () => framework.start(),
       stop: () => framework.stop(),
     });
-    shutdown = () => controller.stop();
-    unsubscribeShutdown = subscribeShutdown?.(() => { void shutdown().catch(fail); });
+    unsubscribeShutdown = subscribeShutdown?.(finalize);
     return await controller.start();
   } catch (error) {
-    await fail(error);
+    await finalize(error);
     return undefined;
   }
 }

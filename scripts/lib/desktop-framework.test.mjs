@@ -128,7 +128,7 @@ test('cleans failed entry startup, reports fatal, and detaches its IPC shutdown 
   let stops = 0;
   let shutdownSubscriptions = 0;
   let shutdownUnsubscriptions = 0;
-  let exits = 0;
+  const exits = [];
 
   const result = await runDesktopFrameworkProcess({
     env: validEnvironment(),
@@ -142,13 +142,44 @@ test('cleans failed entry startup, reports fatal, and detaches its IPC shutdown 
       shutdownSubscriptions += 1;
       return () => { shutdownUnsubscriptions += 1; };
     },
-    exit: () => { exits += 1; },
+    exit: (options) => exits.push(options),
   });
 
   assert.equal(result, undefined);
   assert.equal(stops, 1);
   assert.equal(shutdownSubscriptions, 1);
   assert.equal(shutdownUnsubscriptions, 1);
-  assert.equal(exits, 1);
+  assert.deepEqual(exits, [{ failed: true }]);
   assert.deepEqual(messages, [{ type: 'fatal', message: 'listen failed' }]);
+});
+
+test('finalizes a normal shutdown by stopping once, detaching listeners, and exiting successfully', async () => {
+  const messages = [];
+  const exits = [];
+  let stops = 0;
+  let shutdown;
+  let shutdownUnsubscriptions = 0;
+
+  const port = await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: () => ({
+      start: async () => 43123,
+      stop: async () => { stops += 1; },
+    }),
+    send: (message) => messages.push(message),
+    subscribeShutdown: (handler) => {
+      shutdown = handler;
+      return () => { shutdownUnsubscriptions += 1; };
+    },
+    exit: (options) => exits.push(options),
+  });
+
+  assert.equal(port, 43123);
+  await Promise.all([shutdown(), shutdown()]);
+
+  assert.equal(stops, 1);
+  assert.equal(shutdownUnsubscriptions, 1);
+  assert.deepEqual(exits, [{ failed: false }]);
+  assert.deepEqual(messages, [{ type: 'ready', port: 43123 }]);
 });
