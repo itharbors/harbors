@@ -66,3 +66,56 @@ export function createFrameworkProcessController({ send, start, stop }) {
     },
   };
 }
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export async function runDesktopFrameworkProcess({
+  env,
+  createAssembly,
+  createServer,
+  send,
+  subscribeShutdown,
+  exit,
+}) {
+  let shutdown;
+  let unsubscribeShutdown;
+  const fail = async (error) => {
+    try {
+      await shutdown?.();
+    } catch {
+      // Preserve the startup failure as the fatal IPC message.
+    }
+    unsubscribeShutdown?.();
+    send?.({ type: 'fatal', message: errorMessage(error) });
+    exit?.();
+  };
+
+  try {
+    const environment = parseDesktopFrameworkEnvironment(env);
+    const assembly = createAssembly(environment.runtimeRoot, {
+      installedKitDirs: environment.installedKitDirs,
+    });
+    const framework = createServer({
+      assembly,
+      clientAssetsRoot: environment.clientAssetsRoot,
+      dbPath: environment.dbPath,
+      host: environment.host,
+      port: environment.port,
+      applicationHostMode: 'desktop',
+      applicationControlToken: environment.applicationControlToken,
+    });
+    const controller = createFrameworkProcessController({
+      send,
+      start: () => framework.start(),
+      stop: () => framework.stop(),
+    });
+    shutdown = () => controller.stop();
+    unsubscribeShutdown = subscribeShutdown?.(() => { void shutdown().catch(fail); });
+    return await controller.start();
+  } catch (error) {
+    await fail(error);
+    return undefined;
+  }
+}

@@ -4,6 +4,7 @@ import test from 'node:test';
 import {
   createFrameworkProcessController,
   parseDesktopFrameworkEnvironment,
+  runDesktopFrameworkProcess,
 } from './desktop-framework.mjs';
 
 function validEnvironment(application = '/Applications/ITHARBORS.app') {
@@ -119,4 +120,35 @@ test('drains shutdown without emitting ready when startup fails', async () => {
   await processController.stop();
   assert.equal(stops, 1);
   assert.deepEqual(messages, []);
+});
+
+test('cleans failed entry startup, reports fatal, and detaches its IPC shutdown listener', async () => {
+  const messages = [];
+  const failure = new Error('listen failed');
+  let stops = 0;
+  let shutdownSubscriptions = 0;
+  let shutdownUnsubscriptions = 0;
+  let exits = 0;
+
+  const result = await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: () => ({
+      start: async () => { throw failure; },
+      stop: async () => { stops += 1; },
+    }),
+    send: (message) => messages.push(message),
+    subscribeShutdown: () => {
+      shutdownSubscriptions += 1;
+      return () => { shutdownUnsubscriptions += 1; };
+    },
+    exit: () => { exits += 1; },
+  });
+
+  assert.equal(result, undefined);
+  assert.equal(stops, 1);
+  assert.equal(shutdownSubscriptions, 1);
+  assert.equal(shutdownUnsubscriptions, 1);
+  assert.equal(exits, 1);
+  assert.deepEqual(messages, [{ type: 'fatal', message: 'listen failed' }]);
 });
