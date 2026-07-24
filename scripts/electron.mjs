@@ -16,7 +16,12 @@ import {
   createNotificationStore,
 } from './lib/notification-host.mjs';
 import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
-import { resolveFrameworkRuntime } from './lib/framework-runtime.mjs';
+import { resolveCurrentProcessRuntime, resolveFrameworkRuntime } from './lib/framework-runtime.mjs';
+import { resolveDesktopPaths } from './lib/desktop-paths.mjs';
+import {
+  createPackagedFrameworkSpec,
+  startDesktopFrameworkProcess,
+} from './lib/desktop-framework-process.mjs';
 import { resolveRuntimePorts, resolveRuntimeProfile } from './lib/runtime-ports.mjs';
 import {
   buildTrayTemplate,
@@ -47,30 +52,29 @@ import {
   validateInstalledKitRuntime,
 } from './lib/application-runtime-client.mjs';
 
-const rootDir = fileURLToPath(new URL('..', import.meta.url));
+const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
+const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
 const preloadPath = fileURLToPath(new URL('./electron-preload.cjs', import.meta.url));
 const notificationPreloadPath = fileURLToPath(new URL('./notification-preload.cjs', import.meta.url));
 const kitManagerPreloadPath = fileURLToPath(new URL('./kit-manager-preload.cjs', import.meta.url));
 const kitManagerHtmlPath = fileURLToPath(new URL('./kit-manager.html', import.meta.url));
 const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.png', import.meta.url));
-const runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
-const runtimePorts = resolveRuntimePorts(process.env, runtimeProfile);
-const startUrl = process.env.ELECTRON_START_URL || `http://localhost:${runtimePorts.gateway}/`;
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
 const applicationControlToken = randomBytes(32).toString('hex');
 const NOTIFICATION_KIT_NAME = '@itharbors/kit-notifications';
 const TOAST_WIDTH = 360;
 const TOAST_HEIGHT = 176;
-const kitRuntime = Object.freeze({
-  harborsVersion: '1.0.0',
-  kitApiVersion: '1.0.0',
-  protocolVersion: 1,
-  ...resolveFrameworkRuntime(),
-});
+let rootDir = repositoryRoot;
+let desktopPaths;
+let runtimeProfile;
+let runtimePorts;
+let startUrl;
+let kitRuntime;
 
 let frameworkProcess;
 let frameworkStopPromise;
 let frameworkReadyPromise;
+let frameworkStop;
 let tray;
 let trayContextMenu;
 let trayWorkspaceRecords = [];
@@ -256,7 +260,26 @@ function startElectronApp() {
   app.whenReady()
     .then(async () => {
       electronOptions = parseElectronOptions(process.argv.slice(2));
-      const kitStoreRoot = path.join(app.getPath('userData'), 'kit-store');
+      desktopPaths = resolveDesktopPaths({
+        isPackaged: app.isPackaged,
+        repositoryRoot,
+        resourcesPath: process.resourcesPath,
+        moduleDirectory,
+        userData: app.getPath('userData'),
+      });
+      rootDir = desktopPaths.rootDir;
+      runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
+      runtimePorts = resolveRuntimePorts(process.env, runtimeProfile);
+      startUrl = app.isPackaged
+        ? undefined
+        : process.env.ELECTRON_START_URL || `http://localhost:${runtimePorts.gateway}/`;
+      kitRuntime = Object.freeze({
+        harborsVersion: app.getVersion(),
+        kitApiVersion: '1.0.0',
+        protocolVersion: 1,
+        ...(app.isPackaged ? resolveCurrentProcessRuntime(process) : resolveFrameworkRuntime()),
+      });
+      const kitStoreRoot = desktopPaths.kitStoreRoot;
       kitStore = new InstalledKitStore(kitStoreRoot);
       kitManagerService = createKitManagerService({
         storeRoot: kitStoreRoot,
@@ -364,7 +387,35 @@ function startElectronApp() {
   });
 }
 
-function startFramework() {
+async function startFramework() {
+  if (app.isPackaged) return startPackagedFramework();
+  return startDevelopmentFramework();
+}
+
+async function startPackagedFramework() {
+  console.log('Starting packaged ITHARBORS framework from Electron');
+  const started = startDesktopFrameworkProcess(createPackagedFrameworkSpec({
+    executable: process.execPath,
+    frameworkEntry: desktopPaths.frameworkEntry,
+    env: {
+      ...process.env,
+      HARBORS_RUNTIME_ROOT: desktopPaths.runtimeRoot,
+      HARBORS_CLIENT_ASSETS_ROOT: desktopPaths.clientAssetsRoot,
+      HARBORS_DB_PATH: desktopPaths.dbPath,
+      HARBORS_NOTIFICATION_PORT: String(notificationPort),
+      HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
+      HARBORS_APPLICATION_TOKEN: applicationControlToken,
+      HARBORS_INSTALLED_KITS: JSON.stringify(installedKits.map((kit) => kit.directory)),
+    },
+  }));
+  frameworkProcess = started.child;
+  frameworkStop = started.stop;
+  observeFrameworkProcess(started.child);
+  const ready = await started.ready;
+  return Object.freeze({ ...ready, stop: started.stop });
+}
+
+function startDevelopmentFramework() {
   console.log('Starting ITHARBORS framework from Electron');
   const npm = createNpmSpawnSpec(frameworkArgs);
   const child = spawn(npm.command, npm.args, {
@@ -386,8 +437,11 @@ function startFramework() {
     stdio: 'inherit',
   });
 
-  frameworkStopPromise = undefined;
+  observeFrameworkProcess(child);
+  return Object.freeze({ child, startUrl, stop: undefined });
+}
 
+function observeFrameworkProcess(child) {
   child.on('error', (error) => {
     console.error('Failed to start framework:', error.message);
     process.exitCode = 1;
@@ -400,8 +454,6 @@ function startFramework() {
       app.quit();
     }
   });
-
-  return child;
 }
 
 function scheduleKitManagerRefresh(delayMs = 1500) {
@@ -456,7 +508,11 @@ async function stopKitManagerService() {
 
 async function startFrameworkAndTrackReadiness() {
   await startNotificationService();
-  frameworkProcess = startFramework();
+  frameworkStopPromise = undefined;
+  const started = await startFramework();
+  frameworkProcess = started.child;
+  frameworkStop = started.stop;
+  startUrl = started.startUrl;
   frameworkReadyPromise = waitForApplicationRuntime(startUrl);
   const bootstrap = await frameworkReadyPromise;
   const activation = await finalizePendingKitActivations({
@@ -1059,6 +1115,10 @@ function stopFramework() {
   const child = frameworkProcess;
   if (!child || child.exitCode !== null || child.signalCode !== null) {
     return Promise.resolve();
+  }
+  if (frameworkStop) {
+    frameworkStopPromise = frameworkStop();
+    return frameworkStopPromise;
   }
   frameworkStopPromise = new Promise((resolve) => {
     let forceStopTimer;

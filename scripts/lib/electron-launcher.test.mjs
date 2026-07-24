@@ -475,10 +475,10 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
-  assert.match(source, /const kitStoreRoot = path\.join\(app\.getPath\('userData'\), 'kit-store'\)/);
+  assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
   assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
-  assert.match(source, /resolveFrameworkRuntime\(\)/);
-  assert.doesNotMatch(source, /nodeAbi:\s*process\.versions\.modules/);
+  assert.match(source, /app\.getVersion\(\)/);
+  assert.match(source, /app\.isPackaged\s*\?\s*resolveCurrentProcessRuntime\(process\)\s*:\s*resolveFrameworkRuntime\(\)/);
   assert.match(source, /prepareInstalledKitsForStartup/);
   assert.match(source, /finalizePendingKitActivations/);
   assert.match(source, /validateInstalledKitRuntime/);
@@ -497,6 +497,28 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
 });
 
+test('uses only Electron run-as-node and IPC for packaged Framework startup', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const packagedStart = source.slice(
+    source.indexOf('function startPackagedFramework'),
+    source.indexOf('function startDevelopmentFramework'),
+  );
+
+  assert.match(source, /resolveDesktopPaths/);
+  assert.match(source, /startDesktopFrameworkProcess/);
+  assert.match(source, /createPackagedFrameworkSpec/);
+  assert.match(packagedStart, /HARBORS_RUNTIME_ROOT/);
+  assert.match(packagedStart, /HARBORS_CLIENT_ASSETS_ROOT/);
+  assert.match(packagedStart, /HARBORS_DB_PATH/);
+  assert.match(packagedStart, /HARBORS_INSTALLED_KITS/);
+  assert.doesNotMatch(packagedStart, /npm|vite|tsx|\bnode\b/iu);
+  const spawned = packagedStart.indexOf('const started = startDesktopFrameworkProcess');
+  const owned = packagedStart.indexOf('frameworkProcess = started.child');
+  const ready = packagedStart.indexOf('await started.ready');
+  assert.ok(spawned >= 0 && owned > spawned && owned < ready);
+  assert.match(packagedStart, /frameworkStop = started\.stop/);
+});
+
 test('commits pending installed Kits only after Catalog and actual Framework load validation', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const prepare = source.indexOf('await prepareInstalledKitsForStartup');
@@ -504,7 +526,7 @@ test('commits pending installed Kits only after Catalog and actual Framework loa
   const initialize = source.indexOf('await initializeKitHost');
   assert.ok(prepare >= 0 && discover > prepare && initialize > discover);
   assert.match(source, /validateCatalog:\s*async \(sources\).*discoverKits/s);
-  const startFramework = source.indexOf('frameworkProcess = startFramework()');
+  const startFramework = source.indexOf('const started = await startFramework()');
   const finalize = source.indexOf('await finalizePendingKitActivations');
   assert.ok(startFramework >= 0 && finalize > startFramework);
   assert.match(source, /validateRuntime:\s*\(selection\) => validateInstalledKitRuntime/s);

@@ -6,13 +6,7 @@ const RUNTIME_EXPRESSION = `JSON.stringify({
   nodeAbi: process.versions.modules,
 })`;
 
-function parseRuntime(value) {
-  let runtime;
-  try {
-    runtime = JSON.parse(value);
-  } catch (error) {
-    throw new Error('Framework Node runtime returned invalid JSON', { cause: error });
-  }
+function normalizeRuntime(runtime) {
   if (
     !runtime
     || typeof runtime !== 'object'
@@ -31,6 +25,24 @@ function parseRuntime(value) {
     platform: runtime.platform,
     arch: runtime.arch,
     nodeAbi: runtime.nodeAbi,
+  });
+}
+
+function parseRuntime(value) {
+  let runtime;
+  try {
+    runtime = JSON.parse(value);
+  } catch (error) {
+    throw new Error('Framework Node runtime returned invalid JSON', { cause: error });
+  }
+  return normalizeRuntime(runtime);
+}
+
+export function resolveCurrentProcessRuntime(processLike) {
+  return normalizeRuntime({
+    platform: processLike?.platform,
+    arch: processLike?.arch,
+    nodeAbi: processLike?.versions?.modules,
   });
 }
 
