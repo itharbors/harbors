@@ -187,7 +187,9 @@ test('finalizes a normal shutdown by stopping once, detaching listeners, and exi
 test('treats a rejected startup as normal shutdown when IPC shutdown begins while startup is pending', async () => {
   const messages = [];
   const exits = [];
-  const startupFailure = new Error('startup cancelled');
+  const startupCancellation = Object.assign(new Error('unrelated cancellation text'), {
+    code: 'HARBORS_SERVER_STOPPING',
+  });
   let rejectStart;
   let onIpcShutdown;
   let stops = 0;
@@ -211,7 +213,7 @@ test('treats a rejected startup as normal shutdown when IPC shutdown begins whil
   });
 
   const shutdownPromise = onIpcShutdown();
-  rejectStart(startupFailure);
+  rejectStart(startupCancellation);
 
   assert.equal(await processPromise, undefined);
   await shutdownPromise;
@@ -219,4 +221,41 @@ test('treats a rejected startup as normal shutdown when IPC shutdown begins whil
   assert.equal(shutdownUnsubscriptions, 1);
   assert.deepEqual(exits, [{ failed: false }]);
   assert.deepEqual(messages, []);
+});
+
+test('reports a real startup failure that follows pending IPC shutdown', async () => {
+  const messages = [];
+  const exits = [];
+  const startupFailure = new Error('database initialization failed');
+  let rejectStart;
+  let onIpcShutdown;
+  let stops = 0;
+  let shutdownUnsubscriptions = 0;
+
+  const processPromise = runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: () => ({
+      start: () => new Promise((_resolve, reject) => {
+        rejectStart = reject;
+      }),
+      stop: async () => { stops += 1; },
+    }),
+    send: (message) => messages.push(message),
+    subscribeShutdown: (handler) => {
+      onIpcShutdown = handler;
+      return () => { shutdownUnsubscriptions += 1; };
+    },
+    exit: (options) => exits.push(options),
+  });
+
+  const shutdownPromise = onIpcShutdown();
+  rejectStart(startupFailure);
+
+  assert.equal(await processPromise, undefined);
+  await shutdownPromise;
+  assert.equal(stops, 1);
+  assert.equal(shutdownUnsubscriptions, 1);
+  assert.deepEqual(exits, [{ failed: true }]);
+  assert.deepEqual(messages, [{ type: 'fatal', message: 'database initialization failed' }]);
 });

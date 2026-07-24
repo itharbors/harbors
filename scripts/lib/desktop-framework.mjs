@@ -1,5 +1,7 @@
 import path from 'node:path';
 
+const SERVER_STOPPING_ERROR_CODE = 'HARBORS_SERVER_STOPPING';
+
 function requireAbsolutePath(env, name) {
   const value = env[name];
   if (typeof value !== 'string' || !path.isAbsolute(value)) {
@@ -69,6 +71,12 @@ export function createFrameworkProcessController({ send, start, stop }) {
 
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isServerStoppingError(error) {
+  return typeof error === 'object'
+    && error !== null
+    && error.code === SERVER_STOPPING_ERROR_CODE;
 }
 
 export async function runDesktopFrameworkProcess({
@@ -143,7 +151,7 @@ export async function runDesktopFrameworkProcess({
     unsubscribeShutdown = subscribeShutdown?.(requestShutdown);
     return await controller.start();
   } catch (error) {
-    await (shutdownRequested ? finalize() : finalize(error));
+    await finalize(shutdownRequested && isServerStoppingError(error) ? undefined : error);
     return undefined;
   }
 }

@@ -28,6 +28,17 @@ export interface ServerOptions {
   >;
 }
 
+export const SERVER_STOPPING_ERROR_CODE = 'HARBORS_SERVER_STOPPING';
+
+export class ServerStoppingError extends Error {
+  readonly code = SERVER_STOPPING_ERROR_CODE;
+
+  constructor() {
+    super('Editor server is stopping');
+    this.name = 'ServerStoppingError';
+  }
+}
+
 export function parseInstalledKitDirs(value: string | undefined): string[] {
   if (value === undefined) return [];
   const message = 'HARBORS_INSTALLED_KITS must be a JSON array of non-empty absolute paths';
@@ -82,14 +93,14 @@ export function createServer(options: ServerOptions = {}) {
   let startPromise: Promise<number> | undefined;
   let stopping = false;
   const start = (port?: number): Promise<number> => {
-    if (stopping) return Promise.reject(new Error('Editor server is stopping'));
+    if (stopping) return Promise.reject(new ServerStoppingError());
     if (!startPromise) startPromise = startInternal(port);
     return startPromise;
   };
 
   const startInternal = async (port?: number): Promise<number> => {
     await applicationRuntime.start();
-    if (stopping) throw new Error('Editor server is stopping');
+    if (stopping) throw new ServerStoppingError();
     const listeningPort = await new Promise<number>((resolve, reject) => {
       const p = port || options.port || 0;
       server.listen(p, options.host, () => {
@@ -102,7 +113,7 @@ export function createServer(options: ServerOptions = {}) {
       });
       server.once('error', reject);
     });
-    if (stopping) throw new Error('Editor server is stopping');
+    if (stopping) throw new ServerStoppingError();
     return listeningPort;
   };
 

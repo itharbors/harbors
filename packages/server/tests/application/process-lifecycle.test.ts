@@ -4,6 +4,7 @@ import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 
 import { registerServerShutdown, startServerUntilShutdown } from '../../src/process-lifecycle';
+import { ServerStoppingError } from '../../src/server';
 
 describe('server process lifecycle', () => {
   it('runs graceful server cleanup once when termination signals race', async () => {
@@ -44,7 +45,7 @@ describe('server process lifecycle', () => {
 
     processEvents.emit('SIGTERM');
     await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
-    rejectStart?.(new Error('Editor server is stopping'));
+    rejectStart?.(new ServerStoppingError());
     await Promise.resolve();
 
     expect(settled).toBe(false);
