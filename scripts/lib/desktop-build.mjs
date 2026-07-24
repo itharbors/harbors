@@ -269,7 +269,7 @@ export async function buildDesktop({ repositoryRoot, outputRoot }) {
     platform: 'node',
     format: 'esm',
     target: 'node20',
-    external: ['electron', 'electron-updater', 'better-sqlite3'],
+    external: ['electron', 'electron-updater', 'better-sqlite3', 'sigstore', 'snappyjs', 'yauzl'],
   });
   await esbuild({
     entryPoints: [frameworkEntry],
