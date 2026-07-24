@@ -38,7 +38,12 @@ function requestPathname(url: string): string | null {
   return safeDecode(rawPathname);
 }
 
-function resolveExistingFile(realRoot: string, relative: string): string | null {
+interface ExistingFile {
+  path: string;
+  size: number;
+}
+
+function resolveExistingFile(realRoot: string, relative: string): ExistingFile | null {
   if (
     relative.includes('\0')
     || path.isAbsolute(relative)
@@ -49,8 +54,10 @@ function resolveExistingFile(realRoot: string, relative: string): string | null 
   if (!resolved.startsWith(rootPrefix)) return null;
   try {
     const realCandidate = realpathSync(resolved);
-    if (!realCandidate.startsWith(rootPrefix) || !statSync(realCandidate).isFile()) return null;
-    return realCandidate;
+    if (!realCandidate.startsWith(rootPrefix)) return null;
+    const info = statSync(realCandidate);
+    if (!info.isFile()) return null;
+    return { path: realCandidate, size: info.size };
   } catch {
     return null;
   }
@@ -75,16 +82,20 @@ export function createClientAssetRouter(root: string) {
     if (req.method !== 'GET' && req.method !== 'HEAD') return false;
     const pathname = requestPathname(req.url || '/');
     if (pathname === null) return sendNotFound(res);
-    const isAsset = pathname.startsWith('/assets/');
-    const relative = isAsset ? pathname.slice(1) : 'index.html';
+    const assetPrefix = '/assets/';
+    const isAsset = pathname.startsWith(assetPrefix);
+    const assetRelative = isAsset ? pathname.slice(assetPrefix.length) : '';
+    if (isAsset && path.isAbsolute(assetRelative)) return sendNotFound(res);
+    const relative = isAsset ? path.join('assets', assetRelative) : 'index.html';
     const candidate = resolveExistingFile(realRoot, relative);
-    if (!candidate || (isAsset && candidate === indexPath)) return sendNotFound(res);
+    if (!candidate || (isAsset && candidate.path === indexPath.path)) return sendNotFound(res);
 
     res.statusCode = 200;
-    res.setHeader('Content-Type', contentType(candidate));
+    res.setHeader('Content-Type', contentType(candidate.path));
+    res.setHeader('Content-Length', candidate.size);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     if (req.method === 'HEAD') res.end();
-    else await pipeline(createReadStream(candidate), res);
+    else await pipeline(createReadStream(candidate.path), res);
     return true;
   };
 }

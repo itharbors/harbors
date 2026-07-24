@@ -5,6 +5,7 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createClientAssetRouter } from '../../src/routes/client-asset';
+import { createServer } from '../../src/server';
 
 const temporaryDirectories: string[] = [];
 
@@ -51,6 +52,7 @@ async function responseFrom(
     status: response.statusCode,
     body: Buffer.concat(chunks).toString('utf8'),
     contentType: headers.get('content-type'),
+    contentLength: headers.get('content-length'),
     nosniff: headers.get('x-content-type-options'),
   };
 }
@@ -74,12 +76,18 @@ describe('createClientAssetRouter', () => {
       handled: true,
       status: 200,
       body: 'export const ready = true;',
+      contentLength: String(Buffer.byteLength('export const ready = true;')),
       nosniff: 'nosniff',
     });
     expect(asset.contentType).toContain('application/javascript');
 
     const head = await responseFrom(router, 'HEAD', '/assets/index.js');
-    expect(head).toMatchObject({ handled: true, status: 200, body: '' });
+    expect(head).toMatchObject({
+      handled: true,
+      status: 200,
+      body: '',
+      contentLength: String(Buffer.byteLength('export const ready = true;')),
+    });
     expect(head.contentType).toContain('application/javascript');
 
     const spa = await responseFrom(router, 'GET', '/workspace/one');
@@ -103,6 +111,28 @@ describe('createClientAssetRouter', () => {
     });
   });
 
+  it('returns 404 for malformed, absolute, directory, NUL, and missing asset paths', async () => {
+    const root = fixture({
+      'index.html': '<div id="app"></div>',
+      'assets/nested/index.js': 'export const nested = true;',
+    });
+    const router = createClientAssetRouter(root);
+
+    for (const url of [
+      '/assets/%',
+      '/assets/%00index.js',
+      '/assets/%2Fnested/index.js',
+      '/assets/nested/',
+      '/assets/missing.js',
+    ]) {
+      await expect(responseFrom(router, 'GET', url), url).resolves.toMatchObject({
+        handled: true,
+        status: 404,
+        body: '',
+      });
+    }
+  });
+
   it('rejects asset symlinks whose real target leaves the Client root', async () => {
     const root = fixture({
       'index.html': '<div id="app"></div>',
@@ -119,5 +149,39 @@ describe('createClientAssetRouter', () => {
       status: 404,
       body: '',
     });
+  });
+
+  it('dispatches API routes before production assets and uses the SPA only for non-API routes', async () => {
+    const root = fixture({
+      'index.html': '<main>production client</main>',
+      'assets/index.js': 'export const ready = true;',
+    });
+    const applicationRuntime = {
+      start: async () => ({}),
+      getBootstrap: () => ({}),
+      triggerMenu: async () => undefined,
+      subscribe: () => () => undefined,
+      dispose: async () => undefined,
+    } as never;
+    const server = createServer({
+      clientAssetsRoot: root,
+      applicationRuntime,
+      host: '127.0.0.1',
+    });
+
+    try {
+      const port = await server.start(0);
+      const api = await fetch(`http://127.0.0.1:${port}/api/health`);
+      expect(api.status).toBe(200);
+      expect(api.headers.get('content-type')).toBe('application/json');
+      await expect(api.json()).resolves.toMatchObject({ status: 'ok' });
+
+      const spa = await fetch(`http://127.0.0.1:${port}/workspace/one`);
+      expect(spa.status).toBe(200);
+      expect(spa.headers.get('content-type')).toContain('text/html');
+      await expect(spa.text()).resolves.toBe('<main>production client</main>');
+    } finally {
+      await server.stop();
+    }
   });
 });
