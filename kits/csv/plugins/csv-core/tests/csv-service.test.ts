@@ -721,11 +721,17 @@ describe('CsvService streaming index lifecycle', () => {
   it('blocks export registration during swap and settles bound exports before index disposal', async () => {
     await service.dispose();
     let exportWriterCall = 0;
-    let writerDestroyStarted = false;
     let writerDestroyCompleted = false;
-    let releaseWriterDestroy: (() => void) | undefined;
     let pendingWrite: ((error?: Error | null) => void) | undefined;
     let disposedWhileWriterActive = false;
+    let signalWriterDestroyStarted!: () => void;
+    const writerDestroyStarted = new Promise<void>((resolve) => {
+      signalWriterDestroyStarted = resolve;
+    });
+    let releaseWriterDestroy!: () => void;
+    const writerDestroyReleased = new Promise<void>((resolve) => {
+      releaseWriterDestroy = resolve;
+    });
     service = new CsvService({
       temporaryRoot,
       yieldEveryRecords: 1,
@@ -746,12 +752,12 @@ describe('CsvService streaming index lifecycle', () => {
             else callback();
           },
           destroy(error, callback) {
-            writerDestroyStarted = true;
-            releaseWriterDestroy = () => {
+            signalWriterDestroyStarted();
+            void writerDestroyReleased.then(() => {
               writerDestroyCompleted = true;
               pendingWrite?.(error);
               callback(error);
-            };
+            });
           },
         });
       },
@@ -785,26 +791,31 @@ describe('CsvService streaming index lifecycle', () => {
       delimiter: ',',
       hasHeader: true,
     });
-    await waitFor(() => writerDestroyStarted);
+    try {
+      await waitForSignal(writerDestroyStarted, 5_000, 'writer destroy did not start');
 
-    const lateOutput = path.join(root, 'late-export.csv');
-    const lateOutcome = await service.exportRows({
-      ...query(oldRevision),
-      exportId: 'late-old-export',
-      outputPath: lateOutput,
-    }).then(
-      () => ({ code: 'RESOLVED' }),
-      (error: unknown) => error,
-    );
-    const disposedBeforeRelease = disposedWhileWriterActive;
-    releaseWriterDestroy?.();
-    await expect(activeExportError).resolves.toMatchObject({ code: 'EXPORT_CANCELLED' });
-    await opening;
+      const lateOutput = path.join(root, 'late-export.csv');
+      const lateOutcome = await service.exportRows({
+        ...query(oldRevision),
+        exportId: 'late-old-export',
+        outputPath: lateOutput,
+      }).then(
+        () => ({ code: 'RESOLVED' }),
+        (error: unknown) => error,
+      );
+      const disposedBeforeRelease = disposedWhileWriterActive;
+      releaseWriterDestroy();
+      await expect(activeExportError).resolves.toMatchObject({ code: 'EXPORT_CANCELLED' });
+      await opening;
 
-    expect(lateOutcome).toMatchObject({ code: 'EXPORT_UNAVAILABLE' });
-    expect(fs.existsSync(lateOutput)).toBe(false);
-    expect(disposedBeforeRelease).toBe(false);
-    expect(disposedWhileWriterActive).toBe(false);
+      expect(lateOutcome).toMatchObject({ code: 'EXPORT_UNAVAILABLE' });
+      expect(fs.existsSync(lateOutput)).toBe(false);
+      expect(disposedBeforeRelease).toBe(false);
+      expect(disposedWhileWriterActive).toBe(false);
+    } finally {
+      releaseWriterDestroy();
+      await Promise.allSettled([activeExportError, opening]);
+    }
   });
 
   it('makes close and dispose idempotent and removes the owned index', async () => {
@@ -953,4 +964,18 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
   throw new Error('condition was not reached');
+}
+
+async function waitForSignal<T>(signal: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      signal,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
