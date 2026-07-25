@@ -1,6 +1,9 @@
 export type ThemeTokens = Record<`--ce-${string}`, string>;
 
+const managedThemeTokens = new WeakMap<HTMLElement, Set<string>>();
+
 export const DEFAULT_THEME_TOKENS: ThemeTokens = {
+  '--ce-color-scheme': 'dark',
   '--ce-color-neutral-0': '#0f1115',
   '--ce-color-neutral-1': '#16181d',
   '--ce-color-neutral-2': '#1c2027',
@@ -121,4 +124,16 @@ export const DEFAULT_THEME_TOKENS: ThemeTokens = {
 
 export function renderThemeVariables(tokens: ThemeTokens): string {
   return Object.entries(tokens).map(([token, value]) => `${token}:${value};`).join('');
+}
+
+export function applyThemeTokensToElement(element: HTMLElement, tokens: ThemeTokens): void {
+  const previous = managedThemeTokens.get(element) ?? new Set<string>();
+  const next = new Set(Object.keys(tokens));
+  for (const token of previous) {
+    if (!next.has(token)) element.style.removeProperty(token);
+  }
+  for (const [token, value] of Object.entries(tokens)) {
+    element.style.setProperty(token, value);
+  }
+  managedThemeTokens.set(element, next);
 }
