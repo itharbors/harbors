@@ -1,0 +1,29 @@
+{
+  "name": "@itharbors/kit-csv",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build -w @itharbors/csv-contracts && node ../../scripts/ce-plugin.mjs build plugins/csv-core && node ../../scripts/ce-plugin.mjs build plugins/csv-explorer && node ../../scripts/ce-plugin.mjs build plugins/csv-data",
+    "test:prepare": "npm run build && node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
+    "test": "npm run test:prepare && vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.0.0",
+    "csv-parse": "^7.0.1",
+    "iconv-lite": "^0.7.3"
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": { "id": "csv", "label": "CSV" },
+      "layouts": { "default": "layout.json" },
+      "windowEntries": { "main": "main.html", "secondary": "secondary.html" },
+      "plugin": [
+        "@itharbors/csv-core",
+        "@itharbors/csv-explorer",
+        "@itharbors/csv-data"
+      ],
+      "theme": { "--ce-accent": "#56b6a9" }
+    }
+  }
+}

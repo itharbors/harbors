@@ -108,8 +108,8 @@ process 同时校验调用 sender。Stable 默认展开，Preview 默认折叠�
 
 ## GitHub 自动发布
 
-SQLite、MySQL、Notifications 的发布源分别是 `main` 上的 `kits/sqlite`、`kits/mysql`、
-`kits/notifications`。普通 PR 合并只更新代码，不触发 Kit 或 Framework Release，也不要求修改
+CSV、SQLite、MySQL、Notifications 的发布源分别是 `main` 上的 `kits/csv`、`kits/sqlite`、
+`kits/mysql`、`kits/notifications`。普通 PR 合并只更新代码，不触发 Kit 或 Framework Release，也不要求修改
 Framework 版本。发布者从干净且与 `origin/main` 完全一致的 checkout 创建专属 Tag：
 
 ```text
@@ -127,6 +127,12 @@ workflow 只对目标目录运行 `npm run kit:check -- <name>`，生成 canonic
 `release.json`，并由固定 reusable signer workflow、caller Tag 与精确 Commit 共同绑定来源。
 Preview Release 标记为 prerelease；Stable Release 走受保护环境。生产仓库必须先启用 GitHub
 Release immutability，已存在的 Tag 或 Release 不允许覆盖。
+
+例如，CSV Kit 的本地官方检查会构建、测试、校验、封装并检查制品：
+
+```bash
+npm run kit:check -- csv --output-directory "$PWD/dist/kit-check"
+```
 
 发布完成后，`.github/workflows/publish-kit-registry.yml` 自动扫描仓库的可信、不可变 Release，
 解析并 peel 实际 Tag Commit，核对 Release metadata、唯一 `.hkit`、digest、attestation claims、
