@@ -390,48 +390,14 @@ git commit -m "[Bug] 校验 Kit 主题配置契约"
 ### Task 5: Paint Default Kit simple-panel roots with semantic surfaces
 
 **Files:**
-- Modify: `kits/default/package.json`
 - Modify: `kits/default/plugins/title-bar/panel.title/src/index.css:5-20`
 - Modify: `kits/default/plugins/status-bar/panel.status/src/index.css:5-20`
-- Create: `kits/default/tests/panel-surfaces.test.mjs`
-- Modify: root `package.json` test script
 
 **Interfaces:**
 - Consumes: injected `--ce-surface` and `--ce-border` theme tokens.
 - Produces: Default Kit title/status roots always paint an opaque semantic surface.
 
-- [ ] **Step 1: Add a failing Default Kit source-contract test**
-
-```js
-import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
-import test from 'node:test';
-import { fileURLToPath } from 'node:url';
-import path from 'node:path';
-
-const kitRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-
-for (const relativePath of [
-  'plugins/title-bar/panel.title/src/index.css',
-  'plugins/status-bar/panel.status/src/index.css',
-]) {
-  test(`${relativePath} paints its panel root with the semantic surface`, () => {
-    const css = readFileSync(path.join(kitRoot, relativePath), 'utf8');
-    const rootRule = css.match(/#panel-root\s*\{([^}]*)\}/)?.[1] ?? '';
-    assert.match(rootRule, /background:\s*var\(--ce-surface,/);
-  });
-}
-```
-
-Add `"test": "node --test tests/*.test.mjs"` to the Default Kit package and add `npm run test -w @itharbors/kit-default` to the root test sequence.
-
-- [ ] **Step 2: Run the Default Kit test and verify RED**
-
-Run: `npm run test -w @itharbors/kit-default`
-
-Expected: two failures because neither root currently declares a background.
-
-- [ ] **Step 3: Replace hardcoded body/root surface values in the affected panels**
+- [ ] **Step 1: Replace hardcoded body/root surface values in the affected panels**
 
 For both files, use:
 
@@ -450,21 +416,25 @@ body {
 
 Use this exact surface declaration in both panels. Convert the title border to `var(--ce-border, #2a2a2a)`.
 
-- [ ] **Step 4: Run Default Kit and focused client tests**
+- [ ] **Step 2: Build the affected plugins and run focused behavior regressions**
 
 Run:
 
 ```bash
-npm run test -w @itharbors/kit-default
+npm run plugins:build
 npm run test -w packages/client -- packages/client/tests/layout/panel.test.ts packages/client/tests/styles/theme.test.ts
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit the isolated change**
+- [ ] **Step 3: Record the runtime verification requirement**
+
+Do not add a regex/source-text test for CSS declarations. Task 6 must launch the Default Kit through the Web runtime and inspect the computed title/status root backgrounds; both must be opaque and resolve from the semantic surface token.
+
+- [ ] **Step 4: Commit the isolated change**
 
 ```bash
-git add package.json kits/default/package.json kits/default/tests/panel-surfaces.test.mjs kits/default/plugins/title-bar/panel.title/src/index.css kits/default/plugins/status-bar/panel.status/src/index.css
+git add kits/default/plugins/title-bar/panel.title/src/index.css kits/default/plugins/status-bar/panel.status/src/index.css
 git commit -m "[Bug] 修复默认 Kit 简单面板底色"
 ```
 
@@ -490,12 +460,16 @@ npm run test -w packages/client -- \
 npm run test -w packages/server -- \
   packages/server/tests/framework/kit-theme.test.ts \
   packages/server/tests/framework/editor.test.ts
-npm run test -w @itharbors/kit-default
+npm run plugins:build
 ```
 
 Expected: all tests pass with zero failures.
 
-- [ ] **Step 2: Run full verification**
+- [ ] **Step 2: Verify the Default Kit in the Web runtime**
+
+Launch the development Web runtime for the Default Kit, inspect the title and status iframe roots in a real browser, and record their computed `background-color` and root `color-scheme`. Both backgrounds must be opaque and the scheme must be `dark`. Stop the development process after recording the evidence.
+
+- [ ] **Step 3: Run full verification**
 
 ```bash
 npm test
@@ -504,7 +478,7 @@ npm run build
 
 Expected: both commands exit 0. If either fails, fix the failure with a new red-green cycle and rerun both commands.
 
-- [ ] **Step 3: Inspect repository state and diff**
+- [ ] **Step 4: Inspect repository state and diff**
 
 ```bash
 git status --short
@@ -515,11 +489,11 @@ git log --oneline a3f2143c318b383d80930f09cd60804b31bd6aca..HEAD
 
 Expected: clean worktree, no whitespace errors, only scoped files, and `[Bug]` commit titles.
 
-- [ ] **Step 4: Request code review and resolve findings**
+- [ ] **Step 5: Request code review and resolve findings**
 
 Provide the reviewer the base SHA, head SHA, design document, this plan, and the complete diff. Fix every Critical or Important finding and rerun the affected focused tests plus full verification.
 
-- [ ] **Step 5: Create the PR through the repository workflow**
+- [ ] **Step 6: Create the PR through the repository workflow**
 
 Create `/tmp/harbors-iframe-theme-pr-body.md` outside the repository containing `## Summary` and `## Testing` with the exact successful checks, then run:
 
