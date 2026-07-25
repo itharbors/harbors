@@ -602,7 +602,13 @@ export class EditorApp extends HTMLElement {
 
   private syncIframeThemes(): void {
     const liveIframes = new Set<HTMLIFrameElement>();
-    for (const panel of this.querySelectorAll('ce-panel[src]')) {
+    const panels = Array.from(this.querySelectorAll('ce-panel[src]'));
+    const floatingLayer = this.querySelector('floating-panel-layer');
+    if (floatingLayer?.shadowRoot) {
+      panels.push(...floatingLayer.shadowRoot.querySelectorAll('ce-panel[src]'));
+    }
+
+    for (const panel of panels) {
       const iframe = panel.shadowRoot?.querySelector('iframe');
       if (!iframe) {
         continue;

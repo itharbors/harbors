@@ -1313,6 +1313,53 @@ describe('EditorApp default layout', () => {
       .toContain('color-scheme: var(--ce-color-scheme, dark);');
   });
 
+  it('binds and prunes host theme styles for floating panel iframes', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      theme: {
+        '--ce-accent': '#abcdef',
+      },
+      panelInstances: [{
+        id: 'floating-open',
+        panelName: '@itharbors/log.log',
+        carrier: 'floating',
+        state: 'open',
+        windowGroupId: null,
+      }],
+    }));
+
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+    await Promise.resolve();
+
+    const layer = el.querySelector('floating-panel-layer')!;
+    const floatingIframe = layer.shadowRoot!
+      .querySelector('ce-panel')!
+      .shadowRoot!
+      .querySelector('iframe') as HTMLIFrameElement;
+    const iframeDocument = document.implementation.createHTMLDocument('floating-panel');
+    Object.defineProperty(floatingIframe, 'contentDocument', {
+      configurable: true,
+      value: iframeDocument,
+    });
+
+    floatingIframe.dispatchEvent(new Event('load'));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#abcdef');
+    expect(iframeDocument.getElementById('ce-base-ui-theme')?.textContent)
+      .toContain('color-scheme: var(--ce-color-scheme, dark);');
+
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="minimize"]')?.click();
+    await Promise.resolve();
+    iframeDocument.documentElement.style.removeProperty('--ce-accent');
+    iframeDocument.getElementById('ce-base-ui-theme')?.remove();
+    floatingIframe.dispatchEvent(new Event('load'));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
+    expect(iframeDocument.getElementById('ce-base-ui-theme')).toBeNull();
+  });
+
   it('disposes iframe theme bindings when disconnected', async () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);
