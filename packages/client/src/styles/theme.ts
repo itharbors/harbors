@@ -122,10 +122,6 @@ export const DEFAULT_THEME_TOKENS: ThemeTokens = {
   '--ce-orange': 'var(--ce-color-warning-500)',
 };
 
-export function renderThemeVariables(tokens: ThemeTokens): string {
-  return Object.entries(tokens).map(([token, value]) => `${token}:${value};`).join('');
-}
-
 export function applyThemeTokensToElement(element: HTMLElement, tokens: ThemeTokens): void {
   const previous = managedThemeTokens.get(element) ?? new Set<string>();
   const next = new Set(Object.keys(tokens));

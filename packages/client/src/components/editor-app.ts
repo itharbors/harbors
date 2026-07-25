@@ -22,8 +22,8 @@ import {
   mapLayoutTitles,
 } from '../layout/tab-layout';
 import { createWindowLayoutStorage } from '../layout/storage';
-import { DEFAULT_THEME_TOKENS, renderThemeVariables, type ThemeTokens } from '../styles/theme';
-import { applyThemeToDocument } from '../styles/iframe-theme';
+import { applyThemeTokensToElement, DEFAULT_THEME_TOKENS, type ThemeTokens } from '../styles/theme';
+import { bindThemeToIframe } from '../styles/iframe-theme';
 import { getElectronMenuModeFromURL, mountMenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
 import type { FloatingPanelState } from './floating-panel-layer';
 
@@ -43,6 +43,7 @@ export class EditorApp extends HTMLElement {
   private renderedWindow: BootstrapInfo['windows'][number] | null = null;
   private floatingPanels: FloatingPanelState[] = [];
   private channel: BroadcastChannel | null = null;
+  private readonly iframeThemeBindings = new Map<HTMLIFrameElement, () => void>();
   private readonly layoutStorage = createWindowLayoutStorage({
     localStorage: window.localStorage,
     sessionStorage: window.sessionStorage,
@@ -129,6 +130,7 @@ export class EditorApp extends HTMLElement {
 
   disconnectedCallback() {
     this.initToken += 1;
+    this.clearIframeThemeBindings();
     this.clearPanelModalState();
     this.transport?.disconnectSSE();
     this.channel?.removeEventListener('message', this.handleChannelMessageEvent);
@@ -258,12 +260,15 @@ export class EditorApp extends HTMLElement {
         padding:var(--ce-workbench-padding, 0);
         --split-gap:var(--ce-workbench-gap, 0);
         background:var(--ce-workbench-bg, var(--ce-surface, #1a1a1a));
-        ${renderThemeVariables(this.hostThemeTokens)}
       ">
         ${content}
       </ce-split-pane>
       ${floatingLayer}
     `;
+    const outer = this.querySelector('ce-split-pane');
+    if (outer instanceof HTMLElement) {
+      applyThemeTokensToElement(outer, this.hostThemeTokens);
+    }
     bindResizableSplitPanes(this);
     queueMicrotask(() => this.syncIframeThemes());
   }
@@ -592,25 +597,30 @@ export class EditorApp extends HTMLElement {
   }
 
   private syncIframeThemes(): void {
+    const liveIframes = new Set<HTMLIFrameElement>();
     for (const panel of this.querySelectorAll('ce-panel[src]')) {
       const iframe = panel.shadowRoot?.querySelector('iframe');
       if (!iframe) {
         continue;
       }
-
-      if (iframe.dataset.themeBound !== 'true') {
-        iframe.dataset.themeBound = 'true';
-        iframe.addEventListener('load', () => {
-          if (iframe.contentDocument) {
-            applyThemeToDocument(iframe.contentDocument, this.hostThemeTokens);
-          }
-        });
-      }
-
-      if (iframe.contentDocument) {
-        applyThemeToDocument(iframe.contentDocument, this.hostThemeTokens);
+      liveIframes.add(iframe);
+      if (!this.iframeThemeBindings.has(iframe)) {
+        this.iframeThemeBindings.set(iframe, bindThemeToIframe(iframe, () => this.hostThemeTokens));
       }
     }
+
+    for (const [iframe, dispose] of this.iframeThemeBindings) {
+      if (liveIframes.has(iframe)) continue;
+      dispose();
+      this.iframeThemeBindings.delete(iframe);
+    }
+  }
+
+  private clearIframeThemeBindings(): void {
+    for (const dispose of this.iframeThemeBindings.values()) {
+      dispose();
+    }
+    this.iframeThemeBindings.clear();
   }
 
   private dispatchPanelEvent(event: object): void {
