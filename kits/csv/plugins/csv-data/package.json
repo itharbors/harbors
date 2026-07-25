@@ -1,0 +1,36 @@
+{
+  "name": "@itharbors/csv-data",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "@itharbors/csv-contracts": "0.0.1"
+  },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "data": {
+          "entry": "./panel.data/dist/index.html",
+          "title": "CSV 数据",
+          "minWidth": 480,
+          "minHeight": 320,
+          "multiInstance": false
+        },
+        "schema": {
+          "entry": "./panel.schema/dist/index.html",
+          "title": "CSV 结构",
+          "minWidth": 420,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "broadcast": {
+          "@itharbors/csv.connection.changed": ["panel.onDataConnectionChanged", "panel.onSchemaConnectionChanged"],
+          "@itharbors/csv.schema.changed": ["panel.onDataSchemaChanged", "panel.onSchemaChanged"],
+          "@itharbors/csv.export.progress": ["panel.onExportProgress"]
+        }
+      }
+    }
+  }
+}

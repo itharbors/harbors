@@ -31,7 +31,7 @@ npm run start
 ```
 
 它扫描 `kits/*` 中所有合法 Kit。启动后只显示系统托盘图标，
-不会自动打开默认 Kit。单击或右键托盘图标，从列表选择 Default、SQLite 或 MySQL；首次
+不会自动打开默认 Kit。单击或右键托盘图标，从列表选择 Default、CSV、SQLite、MySQL 或 Notifications；首次
 选择会按需创建稳定 session、独立窗口和插件/Panel/消息管线，之后再次选择只会打开或聚焦
 已有窗口。
 
@@ -66,6 +66,7 @@ Web 栈始终运行统一 Kit 主机，裸地址显示 Kit 选择页，并提供
 ```text
 Kit 选择页   http://localhost:49380/
 Default Kit  http://localhost:49380/kits/default
+CSV           http://localhost:49380/kits/csv
 SQLite       http://localhost:49380/kits/sqlite
 MySQL        http://localhost:49380/kits/mysql
 ```
@@ -226,7 +227,7 @@ Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill
 | Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 | 单个 Kit | `origin/main` / `main` | `kit-change/<name>/<type>/<slug>` | `kit-workflow` |
 
-SQLite、MySQL 和 Notifications 分别保存在 `kits/sqlite`、`kits/mysql`、`kits/notifications`。
+CSV、SQLite、MySQL 和 Notifications 分别保存在 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`。
 Kit 合并只改变 `main` 上的目录内容，不发布 Release，也不修改或发布 Framework 版本。完整生命周期是：
 
 ```text

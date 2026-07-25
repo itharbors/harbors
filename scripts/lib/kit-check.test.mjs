@@ -12,11 +12,11 @@ import { runCheckKitCli } from '../check-kit.mjs';
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/check-kit.mjs');
 
-test('the root Kit check command bootstraps Kit Core before loading the CLI', async () => {
+test('the root Kit check command bootstraps Kit Core and Kit CLI before loading the CLI', async () => {
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/kit-core && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli && node scripts/check-kit.mjs',
   );
 });
 
@@ -75,6 +75,13 @@ test('checks SQLite with its exact affected build, test, pack, and inspect seque
   await checkCommandSequence({
     slug: 'sqlite',
     artifactName: 'kit-sqlite-0.1.0-preview.1-darwin-arm64-abi127.hkit',
+  });
+});
+
+test('checks CSV with its exact affected build, test, pack, and inspect sequence', async () => {
+  await checkCommandSequence({
+    slug: 'csv',
+    artifactName: 'kit-csv-0.1.0-preview.1-darwin-arm64-abi127.hkit',
   });
 });
 
@@ -172,7 +179,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <sqlite|mysql|notifications> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <csv|mysql|notifications|sqlite> --output-directory <absolute-directory>\n');
   }
 });
 

@@ -9,8 +9,9 @@ import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
-const allKits = ['mysql', 'notifications', 'sqlite'];
+const allKits = ['csv', 'mysql', 'notifications', 'sqlite'];
 const runners = Object.freeze({
+  csv: 'macos-14',
   mysql: 'ubuntu-latest',
   notifications: 'ubuntu-latest',
   sqlite: 'macos-14',
@@ -69,6 +70,7 @@ function expectedCliOutput(slugs) {
 }
 
 test('selects only changed official Kits in deterministic order', () => {
+  assert.deepEqual(selectKitSlugs(['kits/csv/package.json']), ['csv']);
   assert.deepEqual(selectKitSlugs(['kits/mysql/package.json']), ['mysql']);
   assert.deepEqual(
     selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json']),
@@ -110,6 +112,7 @@ test('selects all official Kits for shared build, validation, Registry, and work
 
 test('maps direct Kit-check dependency surfaces to only their affected Kits', () => {
   const cases = [
+    ['packages/csv-contracts/src/index.ts', ['csv']],
     ['packages/mysql-contracts/src/index.ts', ['mysql']],
     ['packages/sqlite-contracts/src/index.ts', ['sqlite']],
     ['packages/relationship-graph/src/index.ts', ['mysql', 'sqlite']],

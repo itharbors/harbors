@@ -15,6 +15,7 @@ const policy = Object.freeze({
   repository,
   signerWorkflows: [signerWorkflow],
   kits: {
+    csv: { id: '@itharbors/kit-csv', label: 'CSV', summary: 'CSV/TSV 文件浏览、筛选、排序与导出工作台' },
     mysql: { id: '@itharbors/kit-mysql', label: 'MySQL', summary: 'MySQL database workbench' },
     notifications: { id: '@itharbors/kit-notifications', label: 'Notifications', summary: 'Notification kit' },
     sqlite: { id: '@itharbors/kit-sqlite', label: 'SQLite', summary: 'SQLite database workbench' },

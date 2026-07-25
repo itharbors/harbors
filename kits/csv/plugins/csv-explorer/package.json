@@ -1,0 +1,36 @@
+{
+  "name": "@itharbors/csv-explorer",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "@itharbors/csv-contracts": "0.0.1"
+  },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "connection": {
+          "entry": "./panel.connection/dist/index.html",
+          "title": "CSV 文件连接",
+          "minWidth": 320,
+          "minHeight": 78,
+          "multiInstance": false
+        },
+        "explorer": {
+          "entry": "./panel.explorer/dist/index.html",
+          "title": "CSV 字段",
+          "minWidth": 220,
+          "minHeight": 320,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "broadcast": {
+          "@itharbors/csv.connection.changed": ["panel.onConnectionChanged", "panel.onExplorerConnectionChanged"],
+          "@itharbors/csv.progress.changed": ["panel.onProgressChanged"],
+          "@itharbors/csv.schema.changed": ["panel.onSchemaChanged"]
+        }
+      }
+    }
+  }
+}

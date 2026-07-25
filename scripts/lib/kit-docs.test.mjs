@@ -17,7 +17,7 @@ test('root scripts expose the Kit artifact and targeted-check CLIs without migra
   assert.equal(packageJson.scripts.kit, 'node packages/kit-cli/dist/cli.js');
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/kit-core && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli && node scripts/check-kit.mjs',
   );
   assert.equal(packageJson.scripts['kit:publish'], 'node scripts/kit-publish.mjs');
   assert.equal(packageJson.scripts['kits:validate'], 'npm run kit -- validate');
@@ -47,6 +47,7 @@ test('artifact and authoring guides document monorepo Kits and trusted Release d
   const authoring = compact(await read('docs/guides/developing-plugins-and-kits.md'));
   const combined = `${artifacts} ${authoring}`;
   for (const expected of [
+    'kits/csv',
     'kits/sqlite',
     'kits/mysql',
     'kits/notifications',
@@ -83,6 +84,7 @@ test('root README and architecture describe Release Assets and automatic market 
   const readme = compact(await read('readme.md'));
   const architecture = compact(await read('docs/architecture/kit-and-session-model.md'));
   for (const expected of [
+    'kits/csv',
     'kits/sqlite',
     'kits/mysql',
     'kits/notifications',
@@ -93,6 +95,43 @@ test('root README and architecture describe Release Assets and automatic market 
     'registry/revocations.json',
   ]) assert.match(`${readme} ${architecture}`, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
   assert.match(`${readme} ${architecture}`, /自动[^。]{0,80}(扫描|发现)[^。]{0,80}Release/iu);
+});
+
+test('CSV Kit documentation states its read-only parsing, query, export, and resource contract', async () => {
+  const csv = compact(await read('kits/csv/README.md'));
+  for (const expected of [
+    '.csv',
+    '.tsv',
+    '.txt',
+    'UTF-8',
+    'GB18030',
+    '只读',
+    '不修改源文件',
+    '不规则记录',
+    'contains',
+    'equals',
+    'is-empty',
+    'is-not-empty',
+    'UTF-8 BOM',
+    '2 GiB',
+    '10,000',
+    '16 MiB',
+    'npm run dev -- --kit ./kits/csv',
+  ]) assert.match(csv, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
+  assert.match(csv, /逗号[^。]{0,40}制表符[^。]{0,40}分号/iu);
+  assert.match(csv, /“导出当前结果”[^。]{0,80}新的/iu);
+  assert.match(csv, /不会覆盖源文件/iu);
+});
+
+test('active official-Kit docs do not retain exact-three lists that omit CSV', async () => {
+  const prose = compact((await Promise.all([
+    'readme.md',
+    'docs/guides/development-workflow.md',
+    'docs/guides/kit-artifacts.md',
+    'docs/guides/developing-plugins-and-kits.md',
+  ].map(read))).join('\n'));
+  assert.doesNotMatch(prose, /(?:^|\s)SQLite、MySQL、Notifications\s+(?:分别|的发布源)/iu);
+  assert.doesNotMatch(prose, /(?:^|\s)SQLite、MySQL 和 Notifications\s+分别/iu);
 });
 
 test('active docs contain no branch-era migration or publication instructions', async () => {
