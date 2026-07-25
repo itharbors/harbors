@@ -1333,6 +1333,26 @@ describe('EditorApp default layout', () => {
     expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
   });
 
+  it('does not bind iframe themes after disconnecting before queued synchronization', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    (el as unknown as { render(): void }).render();
+    const panel = Array.from(el.querySelectorAll('ce-panel')).find(
+      (candidate) => candidate.getAttribute('src')?.includes('%40itharbors%2Fplugin-list.list'),
+    ) as HTMLElement;
+    const iframe = panel.shadowRoot!.querySelector('iframe') as HTMLIFrameElement;
+    const iframeDocument = document.implementation.createHTMLDocument('plugin-list');
+    Object.defineProperty(iframe, 'contentDocument', { configurable: true, value: iframeDocument });
+
+    el.remove();
+    await Promise.resolve();
+    iframe.dispatchEvent(new Event('load'));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
+  });
+
   it('wraps a single non-simple panel in a panel-group', async () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);

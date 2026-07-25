@@ -270,7 +270,11 @@ export class EditorApp extends HTMLElement {
       applyThemeTokensToElement(outer, this.hostThemeTokens);
     }
     bindResizableSplitPanes(this);
-    queueMicrotask(() => this.syncIframeThemes());
+    queueMicrotask(() => {
+      if (this.isConnected) {
+        this.syncIframeThemes();
+      }
+    });
   }
 
   private clearPanelModalState(): void {
