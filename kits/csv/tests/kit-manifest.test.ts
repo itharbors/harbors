@@ -19,6 +19,7 @@ describe('CSV kit manifest', () => {
       '@itharbors/csv-explorer',
       '@itharbors/csv-data',
     ]);
+    expect(pkg['ce-editor'].kit.theme).toEqual({ '--ce-accent': '#56b6a9' });
     expect(layout.activePanel).toBe('@itharbors/csv-data.data');
     expect(layout.windows[0].layout).toEqual({
       type: 'vsplit',

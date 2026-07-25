@@ -427,7 +427,10 @@ describe('CSV data panel', () => {
     });
     for (const panel of ['panel.data', 'panel.schema']) {
       const css = readFileSync(resolve(pluginRoot, `${panel}/src/index.css`), 'utf8');
-      expect(css).toMatch(/--csv-brass:\s*#d6a84b/);
+      expect(css).toMatch(/color-scheme:\s*dark/);
+      expect(css).toMatch(/--teal:\s*#57c8b5/);
+      expect(css).toMatch(/--amber:\s*#e2b86b/);
+      expect(css).toMatch(/--coral:\s*#ff7d72/);
       expect(css).toMatch(/:focus-visible/);
       expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
       expect(css).not.toMatch(/gradient\s*\(/);

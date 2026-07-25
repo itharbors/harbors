@@ -23,7 +23,7 @@
         "@itharbors/csv-explorer",
         "@itharbors/csv-data"
       ],
-      "theme": { "--ce-accent": "#3e9d8f" }
+      "theme": { "--ce-accent": "#56b6a9" }
     }
   }
 }

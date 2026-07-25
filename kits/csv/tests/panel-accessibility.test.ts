@@ -106,4 +106,37 @@ describe('CSV built panel accessibility', () => {
     expect(data).toContain('data-row-index');
     expect(data).toContain('role=\"dialog\"');
   });
+
+  it('keeps opaque panel roots when the host forces the document background transparent', () => {
+    const connection = readBuilt('plugins/csv-explorer/panel.connection', 'index.css');
+    const explorer = readBuilt('plugins/csv-explorer/panel.explorer', 'index.css');
+    const data = readBuilt('plugins/csv-data/panel.data', 'index.css');
+    const schema = readBuilt('plugins/csv-data/panel.schema', 'index.css');
+
+    expect(connection).toMatch(/\.csv-connection\s*\{[^}]*background:\s*var\(--ink\)/su);
+    expect(explorer).toMatch(/\.field-ledger\s*\{[^}]*background:\s*var\(--ink\)/su);
+    for (const workspace of [data, schema]) {
+      expect(workspace).toMatch(/\.workspace\s*\{[^}]*background:\s*rgb\(11 17 22 \/ 90%\)/su);
+    }
+  });
+
+  it('uses the SQLite dark workbench semantic palette in every panel', () => {
+    const expectedTokens = [
+      'color-scheme: dark',
+      '--ink: #0b1116',
+      '--deck: #121a21',
+      '--grid: #26323b',
+      '--grid-strong: #374650',
+      '--text: #dce5e8',
+      '--text-muted: #84949d',
+      '--teal: #57c8b5',
+      '--amber: #e2b86b',
+      '--coral: #ff7d72',
+    ];
+
+    for (const panelRoot of panelRoots) {
+      const css = readBuilt(panelRoot, 'index.css');
+      for (const token of expectedTokens) expect(css).toContain(token);
+    }
+  });
 });
