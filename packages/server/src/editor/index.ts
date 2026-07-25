@@ -6,6 +6,7 @@ import { I18nModule } from '../framework/i18n/index';
 import type { KitDescriptor, KitLayoutConfig, KitLayoutInputConfig } from '../framework/kit/types';
 import type { PanelConstraints } from '../framework/panel/types';
 import { KitModule, normalizeKitLayoutConfig } from '../framework/kit/index';
+import { normalizeKitTheme } from '../framework/kit/theme';
 import { MenuModule } from '../framework/menu/index';
 import { MessageModule } from '../framework/message/index';
 import { PanelModule } from '../framework/panel/index';
@@ -31,7 +32,7 @@ interface KitPackageJson {
   'ce-editor'?: {
     kit?: {
       layouts?: Record<string, string>;
-      theme?: Record<`--ce-${string}`, string>;
+      theme?: unknown;
       plugin?: string[];
       menuRoot?: {
         id?: unknown;
@@ -262,7 +263,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       label: pkg.label,
       icon: pkg.icon,
       menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
-      theme: pkg['ce-editor'].kit.theme,
+      theme: normalizeKitTheme(pkg['ce-editor'].kit.theme, pkg.name),
       plugins,
       layouts,
       windowEntries: normalizedWindowEntries,
