@@ -3,7 +3,7 @@ import test from 'node:test';
 import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { runDesktopPackage } from './desktop-package-build.mjs';
+import { DESKTOP_ELECTRON_VERSION, runDesktopPackage } from './desktop-package-build.mjs';
 
 function commandRunner({ fail = {} } = {}) {
   const calls = [];
@@ -91,13 +91,20 @@ test('surfaces a Node ABI restoration failure after a successful package build',
 test('desktop package owns version, updater, and native runtime dependencies', async () => {
   const pkg = JSON.parse(await readFile(new URL('../../packages/desktop/package.json', import.meta.url)));
   const rootPackage = JSON.parse(await readFile(new URL('../../package.json', import.meta.url)));
+  const rootLock = JSON.parse(await readFile(new URL('../../package-lock.json', import.meta.url)));
+  const builderConfig = (await import('../../electron-builder.config.mjs')).default;
   const desktopBuildSource = await readFile(new URL('./desktop-build.mjs', import.meta.url), 'utf8');
   assert.equal(pkg.name, '@itharbors/desktop');
   assert.equal(pkg.version, '0.1.0-preview.1');
   assert.equal(pkg.main, 'dist/main.mjs');
   assert.equal(pkg.dependencies['electron-updater'], '6.8.9');
-  assert.equal(pkg.dependencies['better-sqlite3'], '11.10.0');
+  assert.equal(pkg.dependencies['better-sqlite3'], '12.10.1');
+  assert.equal(rootPackage.engines.node, '>=22.12.0');
   assert.equal(rootPackage.devDependencies['@electron/rebuild'], '4.2.0');
+  assert.equal(rootPackage.devDependencies.electron, DESKTOP_ELECTRON_VERSION);
+  assert.equal(rootLock.packages[''].devDependencies.electron, DESKTOP_ELECTRON_VERSION);
+  assert.equal(rootLock.packages['node_modules/electron'].version, DESKTOP_ELECTRON_VERSION);
+  assert.equal(builderConfig.electronVersion, DESKTOP_ELECTRON_VERSION);
   assert.equal(rootPackage.scripts['desktop:dir'], 'node scripts/desktop-package.mjs dir');
   assert.equal(rootPackage.scripts['desktop:dist'], 'node scripts/desktop-package.mjs dist');
   for (const [name, version] of [
@@ -148,6 +155,9 @@ test('desktop release documentation preserves operational safety boundaries', as
     assert.match(text, /Developer ID Application/u);
     assert.match(text, /app-publish-v1/u);
   }
+  assert.match(documents[1], /Node\.js 22\.12/u);
+  assert.match(documents[1], /Electron-43/u);
+  assert.match(documents[5], /Node\.js 22\.12/u);
 
   const releaseGuide = documents[0];
   assert.match(releaseGuide, /MAC_CSC_LINK/u);

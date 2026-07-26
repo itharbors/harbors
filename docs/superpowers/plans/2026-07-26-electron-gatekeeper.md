@@ -11,6 +11,8 @@
 ## Global Constraints
 
 - Use Electron `43.2.0`, the latest stable release selected for this fix.
+- Use `better-sqlite3@12.10.1` or compatible declarations so native rebuilds support Electron ABI 148.
+- Require Node.js `22.12.0` or newer, matching Electron's package tooling requirement.
 - Keep the desktop packaging target on macOS arm64.
 - Do not change application behavior beyond the Electron runtime upgrade.
 
@@ -24,6 +26,14 @@
 - Modify: `electron-builder.config.mjs`
 - Modify: `package.json`
 - Modify: `package-lock.json`
+- Modify: `packages/desktop/package.json`
+- Modify: `packages/server/package.json`
+- Modify: `kits/csv/package.json`
+- Modify: `kits/sqlite/package.json`
+- Modify: `kits/csv/plugins/csv-core/package.json`
+- Modify: `kits/sqlite/plugins/sqlite-core/package.json`
+- Modify: `readme.md`
+- Modify: `docs/guides/development-workflow.md`
 
 **Interfaces:**
 - Consumes: root `devDependencies.electron`, `electron-builder.config.mjs`, and `createDesktopPackageSteps()`
@@ -75,6 +85,14 @@ Expected: `v43.2.0` and exit code 0.
 Run: `npm run start`
 
 Expected: Electron stays running without `ENOENT`, `SIGKILL`, or Gatekeeper moving the app bundle to Trash.
+
+Run: `npm run desktop:dir`
+
+Expected: `better-sqlite3` rebuilds for Electron 43/arm64 and electron-builder produces the unpacked application directory.
+
+Run the packaged Electron executable with `ELECTRON_RUN_AS_NODE=1` and load the bundled `better-sqlite3` from `app.asar`.
+
+Expected: Electron reports module ABI `148` and an in-memory SQLite query succeeds.
 
 - [x] **Step 6: Commit the focused fix**
 

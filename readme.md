@@ -1,7 +1,7 @@
 # ITHARBORS
 
-[![Node.js](https://img.shields.io/badge/Node.js-20.19%2B-339933?logo=node.js)](https://nodejs.org/)
-[![Electron](https://img.shields.io/badge/Electron-31%2B-47848F?logo=electron)](https://www.electronjs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-339933?logo=node.js)](https://nodejs.org/)
+[![Electron](https://img.shields.io/badge/Electron-43-47848F?logo=electron)](https://www.electronjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5%2B-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 
 ITHARBORS 是一个以插件为核心的桌面应用开发框架。它提供基于 Web 的编辑器工作台、按会话隔离的 Kit 与插件运行时，以及默认启用的 Electron 桌面宿主，用于构建跨平台开发工具。
@@ -27,7 +27,7 @@ ITHARBORS 是一个以插件为核心的桌面应用开发框架。它提供基�
 
 ### 环境要求
 
-- Node.js 20.19 或更高版本
+- Node.js 22.12 或更高版本
 - npm 9 或更高版本
 
 服务端使用 `better-sqlite3`。如果当前 Node.js 版本和平台没有可用的预编译二进制包，安装依赖时还需要 Python 和可用的 C/C++ 编译工具链。
