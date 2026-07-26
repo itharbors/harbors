@@ -152,6 +152,7 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
+  assert.equal(packageJson.scripts.prestart, 'npm run build');
   assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
   assert.equal(packageJson.scripts.electron, 'npm run start --');
   assert.equal(packageJson.scripts.dev, 'node scripts/dev-electron.mjs');
