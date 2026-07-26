@@ -9,7 +9,7 @@
     "test": "npm run test:prepare && vitest run --config vitest.config.ts"
   },
   "dependencies": {
-    "better-sqlite3": "^11.0.0",
+    "better-sqlite3": "^12.10.1",
     "csv-parse": "^7.0.1",
     "iconv-lite": "^0.7.3"
   },

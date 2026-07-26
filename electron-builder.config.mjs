@@ -1,7 +1,7 @@
 export default {
   appId: 'com.itharbors.desktop',
   productName: 'ITHARBORS',
-  electronVersion: '31.7.7',
+  electronVersion: '43.2.0',
   directories: { app: 'packages/desktop', output: 'dist/desktop-release' },
   files: ['package.json', 'dist/**/*'],
   extraResources: [{ from: 'dist/desktop-runtime', to: 'runtime' }],
