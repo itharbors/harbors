@@ -30,8 +30,9 @@ npm install
 npm run start
 ```
 
-它扫描 `kits/*` 中所有合法 Kit。启动后只显示系统托盘图标，
-不会自动打开默认 Kit。单击或右键托盘图标，从列表选择 Default、CSV、SQLite、MySQL 或 Notifications；首次
+它只加载显式内置 Kit，以及 `<userData>/kit-store` 中已经安装并激活的商城 Kit，不扫描仓库中的
+普通开发 Kit。启动后只显示系统托盘图标，不会自动打开默认 Kit。单击或右键托盘图标，从列表选择
+当前可用 Kit；首次
 选择会按需创建稳定 session、独立窗口和插件/Panel/消息管线，之后再次选择只会打开或聚焦
 已有窗口。
 
@@ -40,6 +41,10 @@ npm run start
 ```bash
 npm run dev
 ```
+
+开发入口使用同一套来源解析，但额外加载仓库 `kits/*` 中所有合法 Kit，因此可以直接联合调试
+Default、CSV、SQLite、MySQL 和 Notifications，不需要先从市场安装。开发源码与 active 商城 Kit
+同 ID 时只在当前开发进程中临时使用源码，不修改 `installed.json`。
 
 两种 Electron 入口分别启动以下 Web 开发服务：
 
@@ -87,7 +92,7 @@ npm run dev -- --kit ./kits/default
 npm run dev -- --kit @itharbors/kit-default
 ```
 
-`--kit`、`--kit-path` 和 `--kitPath` 都被 Electron 启动脚本接受。指定参数代表已经显式
+`--kit`、`--kit-path` 和 `--kitPath` 都被开发 Electron 启动脚本接受。指定参数代表已经显式
 选择 Kit：服务就绪后只自动创建该 Kit 的窗口，其他 Kit 仍保留在 Tray 中并继续懒加载。
 Electron 窗口统一使用多 Kit 聚合菜单。路径必须包含有效 package；package name 必须能在
 Kit 目录中找到。外部路径会临时追加到 Catalog。Web 裸地址 `/` 始终显示选择页；开发脚本
@@ -105,7 +110,7 @@ npm run start
 启动桌面宿主。传给 Electron 的 Kit 参数会继续转发给 Web 开发栈：
 
 ```bash
-npm run start -- --kit ./kits/default
+npm run dev -- --kit ./kits/default
 ```
 
 ## 构建
