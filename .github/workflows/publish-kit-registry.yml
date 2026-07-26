@@ -3,6 +3,13 @@ name: Publish Kit Registry
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      request-id:
+        description: Correlation ID supplied by the Kit publisher
+        required: true
+        type: string
+
+run-name: Publish Kit Registry ${{ inputs.request-id }}
 
 concurrency:
   group: kit-registry-pages

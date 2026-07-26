@@ -22,7 +22,7 @@ function jobBlock(workflow, name) {
 test('mainline caller publishes only exact Kit version Tags through immutable v2 workflows', async () => {
   const workflow = await read('.github/workflows/publish-kit.yml');
   assert.match(workflow, /^on:\n  push:\n    tags:\n      - ['"]kit\/\*\/v\*['"]$/mu);
-  assert.doesNotMatch(workflow, /branches:|workflow_dispatch:|pull_request:|\bmain\b/u);
+  assert.doesNotMatch(workflow, /^\s+(branches:|workflow_dispatch:|pull_request:)/mu);
   assert.match(
     workflow,
     /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@kit-publish-v2/u,
@@ -31,6 +31,24 @@ test('mainline caller publishes only exact Kit version Tags through immutable v2
   for (const permission of ['contents: write', 'id-token: write', 'attestations: write', 'pages: write']) {
     assert.match(workflow, new RegExp(permission, 'u'));
   }
+});
+
+test('mainline caller refreshes Registry through one correlated main dispatch after publication', async () => {
+  const workflow = await read('.github/workflows/publish-kit.yml');
+  const refresh = jobBlock(workflow, 'refresh-registry');
+  assert.match(refresh, /needs:\s*publish/u);
+  assert.match(refresh, /runs-on:\s*ubuntu-latest/u);
+  assert.match(refresh, /permissions:\n\s+actions:\s*write/u);
+  assert.match(refresh, /REQUEST_ID:\s*kit-release-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/u);
+  assert.match(
+    refresh,
+    /gh workflow run publish-kit-registry\.yml[\s\S]*--repo "\$GITHUB_REPOSITORY"[\s\S]*--ref main[\s\S]*-f request-id="\$REQUEST_ID"/u,
+  );
+  assert.match(refresh, /gh run list[\s\S]*--workflow publish-kit-registry\.yml[\s\S]*--event workflow_dispatch/u);
+  assert.match(refresh, /Publish Kit Registry \$REQUEST_ID/u);
+  assert.match(refresh, /if \[\[ -z "\$run_id" \]\]; then[\s\S]*exit 1/u);
+  assert.match(refresh, /gh run watch "\$run_id"[\s\S]*--exit-status/u);
+  assert.doesNotMatch(refresh, /actions\/deploy-pages|pages:\s*write|id-token:\s*write/u);
 });
 
 test('publisher context validates exact Tag identity and trusted mainline policy without injectable outputs', async () => {
@@ -125,7 +143,8 @@ test('publisher deploys Registry only after exactly one release job succeeds', a
 
 test('Registry workflow scans trusted Releases from main and deploys only one Pages index', async () => {
   const workflow = await read('.github/workflows/publish-kit-registry.yml');
-  assert.match(workflow, /^on:\n  workflow_call:\n  workflow_dispatch:$/mu);
+  assert.match(workflow, /^on:\n  workflow_call:\n  workflow_dispatch:\n    inputs:\n      request-id:\n        description:\s*.+\n        required:\s*true\n        type:\s*string$/mu);
+  assert.match(workflow, /^run-name:\s*Publish Kit Registry \$\{\{ inputs\.request-id \}\}$/mu);
   assert.match(workflow, /group:\s*kit-registry-pages[\s\S]*cancel-in-progress:\s*false/u);
   const build = jobBlock(workflow, 'build');
   assert.match(build, /permissions:\n\s+contents:\s*read\n\s+attestations:\s*read/u);
