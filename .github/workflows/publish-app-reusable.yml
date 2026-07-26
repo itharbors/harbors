@@ -190,8 +190,7 @@ jobs:
           }
           trap cleanup_smoke EXIT
           HARBORS_DISABLE_UPDATE_CHECKS=1 "$EXECUTABLE" \
-            --user-data-dir="$SMOKE_USER_DATA" \
-            --disable-background-networking >"$APP_LOG" 2>&1 &
+            --user-data-dir="$SMOKE_USER_DATA" >"$APP_LOG" 2>&1 &
           APP_PID=$!
           healthy=false
           for attempt in {1..60}; do

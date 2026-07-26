@@ -1,0 +1,163 @@
+name: Build Unsigned App
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - name: Require a manual main build
+        env:
+          EXPECTED_REF: refs/heads/main
+        run: |
+          set -euo pipefail
+          [[ "$GITHUB_REF" == "$EXPECTED_REF" ]]
+      - name: Check out the exact requested commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6.5.0
+        with:
+          node-version: 22.18.0
+          cache: npm
+      - name: Verify commit and runner architecture
+        run: |
+          set -euo pipefail
+          [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]
+          [[ "$(uname -m)" == "arm64" ]]
+      - name: Pin npm
+        run: npm install --global npm@10.9.3
+      - name: Install locked dependencies
+        run: npm ci
+      - name: Run the complete repository check
+        run: npm run check
+      - name: Build the explicit unsigned ARM64 package
+        run: npm run desktop:unsigned
+      - name: Read and validate the desktop version
+        id: metadata
+        run: |
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import semver from 'semver';
+
+          const desktop = JSON.parse(readFileSync('packages/desktop/package.json', 'utf8'));
+          if (semver.valid(desktop.version) !== desktop.version || desktop.version.includes('+')) {
+            throw new Error('Desktop version must be canonical SemVer without build metadata');
+          }
+          appendFileSync(process.env.GITHUB_OUTPUT, `version=${desktop.version}\n`, 'utf8');
+          NODE
+      - name: Smoke test the unsigned packaged Framework
+        run: |
+          set -euo pipefail
+          APP_PATH="dist/desktop-release/mac-arm64/ITHARBORS.app"
+          EXECUTABLE="$APP_PATH/Contents/MacOS/ITHARBORS"
+          SMOKE_USER_DATA=$(mktemp -d "$RUNNER_TEMP/harbors-unsigned-smoke.XXXXXX")
+          APP_LOG="$RUNNER_TEMP/harbors-unsigned-smoke.log"
+          APP_PID=""
+          cleanup_smoke() {
+            if [[ -n "$APP_PID" ]] && kill -0 "$APP_PID" 2>/dev/null; then
+              kill "$APP_PID"
+              wait "$APP_PID" 2>/dev/null || true
+            fi
+            rm -rf "$SMOKE_USER_DATA"
+          }
+          trap cleanup_smoke EXIT
+          HARBORS_DISABLE_UPDATE_CHECKS=1 "$EXECUTABLE" \
+            --user-data-dir="$SMOKE_USER_DATA" >"$APP_LOG" 2>&1 &
+          APP_PID=$!
+          healthy=false
+          for attempt in {1..60}; do
+            if ! kill -0 "$APP_PID" 2>/dev/null; then
+              echo '::error::Unsigned packaged app exited before Framework health became ready'
+              exit 1
+            fi
+            framework_pid=$(pgrep -P "$APP_PID" -f 'framework\.mjs' | head -1 || true)
+            if [[ -n "$framework_pid" ]]; then
+              port=$(lsof -nP -a -p "$framework_pid" -iTCP -sTCP:LISTEN 2>/dev/null \
+                | awk 'NR > 1 { print $9 }' \
+                | sed -nE 's#.*127\.0\.0\.1:([0-9]+).*#\1#p' \
+                | head -1)
+              if [[ -n "${port:-}" ]] && curl --fail --silent --max-time 2 \
+                "http://127.0.0.1:$port/api/health" >/dev/null; then
+                healthy=true
+                break
+              fi
+            fi
+            sleep 1
+          done
+          if [[ "$healthy" != true ]]; then
+            echo '::error::Timed out waiting for unsigned packaged Framework health'
+            exit 1
+          fi
+          kill "$APP_PID"
+          wait "$APP_PID" 2>/dev/null || true
+          APP_PID=""
+      - name: Validate and stage the unsigned test bundle
+        env:
+          DESKTOP_VERSION: ${{ steps.metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          APP_PATH="dist/desktop-release/mac-arm64/ITHARBORS.app"
+          EXECUTABLE="$APP_PATH/Contents/MacOS/ITHARBORS"
+          [[ -d "$APP_PATH" && -x "$EXECUTABLE" ]]
+          file "$EXECUTABLE" | grep 'arm64'
+          SIGNATURE=$(codesign -dv --verbose=4 "$APP_PATH" 2>&1 || true)
+          if printf '%s\n' "$SIGNATURE" | grep -q 'Authority=Developer ID Application:'; then
+            echo '::error::Unsigned build unexpectedly has a Developer ID Application identity'
+            exit 1
+          fi
+          UPLOAD_DIR="$RUNNER_TEMP/unsigned-app"
+          mkdir -p "$UPLOAD_DIR"
+          cp "dist/desktop-release/ITHARBORS-$DESKTOP_VERSION-arm64.dmg" \
+            "$UPLOAD_DIR/ITHARBORS-$DESKTOP_VERSION-unsigned-arm64.dmg"
+          cp "dist/desktop-release/ITHARBORS-$DESKTOP_VERSION-arm64-mac.zip" \
+            "$UPLOAD_DIR/ITHARBORS-$DESKTOP_VERSION-unsigned-arm64-mac.zip"
+          UPLOAD_DIR="$UPLOAD_DIR" \
+            RUN_URL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            node --input-type=module <<'NODE'
+          import { writeFileSync } from 'node:fs';
+          import path from 'node:path';
+
+          const warning = [
+            'UNSIGNED INTERNAL TEST BUILD',
+            `Version: ${process.env.DESKTOP_VERSION}`,
+            `Commit: ${process.env.GITHUB_SHA}`,
+            `Run: ${process.env.RUN_URL}`,
+            '',
+            'This build has no Apple Developer ID signature or notarization.',
+            'Gatekeeper may warn about or block this application.',
+            'Use only for internal testing, demonstrations, and functional validation.',
+            'This is not a formal GitHub Release or an automatic update source.',
+            '',
+          ].join('\n');
+          writeFileSync(path.join(process.env.UPLOAD_DIR, 'UNSIGNED-BUILD.txt'), warning, 'utf8');
+          NODE
+          (
+            cd "$UPLOAD_DIR"
+            shasum -a 256 \
+              "ITHARBORS-$DESKTOP_VERSION-unsigned-arm64.dmg" \
+              "ITHARBORS-$DESKTOP_VERSION-unsigned-arm64-mac.zip" \
+              UNSIGNED-BUILD.txt > checksums.txt
+          )
+          STAGED_FILES=("$UPLOAD_DIR"/*)
+          if [[ ${#STAGED_FILES[@]} -ne 4 ]]; then
+            echo '::error::Unsigned Artifact must contain exactly four files'
+            exit 1
+          fi
+          for staged_file in "${STAGED_FILES[@]}"; do
+            [[ -f "$staged_file" && -s "$staged_file" ]]
+          done
+      - name: Upload the short-lived unsigned test bundle
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: ITHARBORS-${{ steps.metadata.outputs.version }}-unsigned-${{ github.run_id }}
+          path: ${{ runner.temp }}/unsigned-app/
+          if-no-files-found: error
+          retention-days: 7

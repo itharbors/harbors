@@ -5,9 +5,10 @@ import { runDesktopPackage } from './lib/desktop-package-build.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const [mode, ...extra] = process.argv.slice(2);
+const modes = ['dir', 'dist', 'unsigned'];
 
-if (extra.length > 0 || !['dir', 'dist'].includes(mode)) {
-  throw new Error('Usage: node scripts/desktop-package.mjs <dir|dist>');
+if (extra.length > 0 || !modes.includes(mode)) {
+  throw new Error('Usage: node scripts/desktop-package.mjs <dir|dist|unsigned>');
 }
 
 await runDesktopPackage({ cwd: repositoryRoot, mode });

@@ -116,6 +116,7 @@ test('release verifies Developer ID signing, notarization, arm64, and an isolate
   assert.match(release, /mktemp -d/u);
   assert.match(release, /--user-data-dir/u);
   assert.match(release, /HARBORS_DISABLE_UPDATE_CHECKS/u);
+  assert.doesNotMatch(release, /--disable-background-networking/u);
   assert.match(release, /\/api\/health/u);
   assert.match(release, /kill .*APP_PID/u);
 });
