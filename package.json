@@ -10,6 +10,7 @@
     "plugins/*"
   ],
   "scripts": {
+    "prestart": "npm run build",
     "start": "electron scripts/electron.mjs",
     "dev": "node scripts/dev-electron.mjs",
     "dev:web": "node scripts/dev.mjs",
