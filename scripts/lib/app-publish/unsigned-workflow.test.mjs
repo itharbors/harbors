@@ -46,6 +46,7 @@ test('unsigned app build verifies startup and uploads the exact short-lived warn
   assert.match(workflow, /codesign -dv --verbose=4[\s\S]*Authority=Developer ID Application:/u);
   assert.match(workflow, /file "\$EXECUTABLE"[\s\S]*arm64/u);
   assert.match(workflow, /mktemp -d[\s\S]*HARBORS_DISABLE_UPDATE_CHECKS=1[\s\S]*--user-data-dir[\s\S]*\/api\/health/u);
+  assert.doesNotMatch(workflow, /--disable-background-networking/u);
   assert.match(workflow, /ITHARBORS-\$DESKTOP_VERSION-unsigned-arm64\.dmg/u);
   assert.match(workflow, /ITHARBORS-\$DESKTOP_VERSION-unsigned-arm64-mac\.zip/u);
   assert.match(workflow, /UNSIGNED-BUILD\.txt/u);
