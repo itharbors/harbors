@@ -12,8 +12,15 @@ function validEnvironment(application = '/Applications/ITHARBORS.app') {
     HARBORS_RUNTIME_ROOT: `${application}/Contents/Resources/runtime`,
     HARBORS_CLIENT_ASSETS_ROOT: `${application}/Contents/Resources/runtime/client`,
     HARBORS_DB_PATH: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
-    HARBORS_INSTALLED_KITS: JSON.stringify([
-      '/Users/me/Library/Application Support/ITHARBORS/kit-store/kits/demo/1.0.0',
+    HARBORS_KIT_SOURCES: JSON.stringify([
+      {
+        directory: '/Applications/ITHARBORS.app/Contents/Resources/runtime/kits/default',
+        source: 'builtin',
+      },
+      {
+        directory: '/Users/me/Library/Application Support/ITHARBORS/kit-store/kits/demo/1.0.0',
+        source: 'installed',
+      },
     ]),
     HARBORS_NOTIFICATION_PORT: '17896',
     HARBORS_APPLICATION_TOKEN: 'application-secret',
@@ -28,8 +35,15 @@ test('requires absolute packaged paths and loopback configuration', () => {
     runtimeRoot: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
     clientAssetsRoot: '/Applications/ITHARBORS.app/Contents/Resources/runtime/client',
     dbPath: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
-    installedKitDirs: [
-      '/Users/me/Library/Application Support/ITHARBORS/kit-store/kits/demo/1.0.0',
+    kitSources: [
+      {
+        directory: '/Applications/ITHARBORS.app/Contents/Resources/runtime/kits/default',
+        source: 'builtin',
+      },
+      {
+        directory: '/Users/me/Library/Application Support/ITHARBORS/kit-store/kits/demo/1.0.0',
+        source: 'installed',
+      },
     ],
     notificationPort: 17896,
     applicationControlToken: 'application-secret',
@@ -37,7 +51,8 @@ test('requires absolute packaged paths and loopback configuration', () => {
     port: 0,
   });
   assert.equal(Object.isFrozen(parsed), true);
-  assert.equal(Object.isFrozen(parsed.installedKitDirs), true);
+  assert.equal(Object.isFrozen(parsed.kitSources), true);
+  assert.equal(Object.isFrozen(parsed.kitSources[0]), true);
 
   for (const [field, value] of [
     ['HARBORS_RUNTIME_ROOT', '../runtime'],
@@ -53,16 +68,18 @@ test('requires absolute packaged paths and loopback configuration', () => {
 
 test('rejects malformed installed Kits, notification ports, and application tokens', () => {
   const valid = validEnvironment();
-  for (const installedKits of [
+  for (const kitSources of [
     'not-json',
     '{}',
     '["relative/kit"]',
     '[""]',
+    '[{"directory":"/kit","source":"unknown"}]',
+    '[{"directory":"/kit","source":"builtin","extra":true}]',
   ]) {
     assert.throws(() => parseDesktopFrameworkEnvironment({
       ...valid,
-      HARBORS_INSTALLED_KITS: installedKits,
-    }), /HARBORS_INSTALLED_KITS.*JSON array.*absolute/iu);
+      HARBORS_KIT_SOURCES: kitSources,
+    }), /HARBORS_KIT_SOURCES/iu);
   }
   for (const notificationPort of ['0', '65536', '1.5', 'not-a-port', '']) {
     assert.throws(() => parseDesktopFrameworkEnvironment({

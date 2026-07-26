@@ -66,6 +66,14 @@ export function createFrameworkArgs(args) {
   ];
 }
 
+export function createKitSourceSnapshot(catalog) {
+  if (!Array.isArray(catalog)) throw new TypeError('catalog must be an array');
+  return Object.freeze(catalog.map((kit) => Object.freeze({
+    directory: kit.directory,
+    source: kit.source,
+  })));
+}
+
 export async function initializeKitHost(options, adapters) {
   await adapters.createTray();
   await adapters.startFramework();
