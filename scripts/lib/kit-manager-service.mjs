@@ -7,6 +7,7 @@ import { KitArtifactDownloader } from './kit-registry/downloader.mjs';
 import { KitAuditLog } from './kit-registry/audit.mjs';
 import { InstalledKitStore } from './kit-store/state.mjs';
 import { KitArtifactInstaller } from './kit-store/installer.mjs';
+import { BUILTIN_KIT_IDS } from './builtin-kits.mjs';
 
 export const DEFAULT_KIT_REGISTRY_URL = 'https://itharbors.github.io/harbors/index.v1.json';
 export const DEFAULT_KIT_PUBLISHER_POLICIES = Object.freeze({
@@ -179,6 +180,7 @@ export function createKitManagerService({
     audit,
     runtime,
     autoUpdatePublishers: config.autoUpdatePublishers,
+    builtinKitIds: BUILTIN_KIT_IDS,
   });
   return {
     manager,

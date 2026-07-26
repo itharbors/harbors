@@ -123,6 +123,22 @@ test('renders stable and collapsed preview berths with permissions and lifecycle
   assert.match(preview.querySelector('[data-action="activate"]').textContent, /Retry after restart/i);
 });
 
+test('renders builtin Kits without an install action', async () => {
+  const value = await createView({
+    initial: snapshot({
+      kits: [{ ...snapshot().kits[0], builtin: true }],
+    }),
+  });
+
+  await value.view.start();
+
+  const button = value.document.querySelector('[data-channel="stable"] [data-action="builtin"]');
+  assert.equal(button.textContent, 'Built in');
+  assert.equal(button.disabled, true);
+  assert.equal(value.document.querySelector('[data-action="install"]'), null);
+  assert.deepEqual(value.calls, []);
+});
+
 test('confirms native code, installs a selected channel, and refreshes the installed projection', async () => {
   const calls = [];
   let current = snapshot();

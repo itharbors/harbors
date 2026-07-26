@@ -65,11 +65,12 @@ function installedProjection(record) {
   };
 }
 
-function sanitize(snapshot, installedState) {
+function sanitize(snapshot, installedState, builtinKitIds) {
   const kits = new Map();
   for (const kit of snapshot.index?.kits ?? []) {
     kits.set(kit.id, {
       id: kit.id,
+      ...(builtinKitIds.has(kit.id) ? { builtin: true } : {}),
       label: kit.label,
       publisher: kit.publisher,
       summary: kit.summary,
@@ -117,6 +118,7 @@ export class KitRegistryManager {
   #audit;
   #runtime;
   #autoUpdatePublishers;
+  #builtinKitIds;
   #kitQueues = new Map();
 
   constructor({
@@ -128,6 +130,7 @@ export class KitRegistryManager {
     audit,
     runtime,
     autoUpdatePublishers = [],
+    builtinKitIds = [],
   }) {
     requireMethod(client, 'snapshot', 'client');
     requireMethod(client, 'refresh', 'client');
@@ -143,6 +146,10 @@ export class KitRegistryManager {
       || autoUpdatePublishers.some((item) => typeof item !== 'string' || item.length === 0)) {
       throw new TypeError('autoUpdatePublishers must be an array of publisher names');
     }
+    if (!Array.isArray(builtinKitIds)
+      || builtinKitIds.some((item) => typeof item !== 'string' || !KIT_ID_PATTERN.test(item))) {
+      throw new TypeError('builtinKitIds must be an array of Kit ids');
+    }
     this.#client = client;
     this.#resolver = resolver;
     this.#downloader = downloader;
@@ -151,6 +158,7 @@ export class KitRegistryManager {
     this.#audit = audit;
     this.#runtime = structuredClone(runtime);
     this.#autoUpdatePublishers = new Set(autoUpdatePublishers);
+    this.#builtinKitIds = new Set(builtinKitIds);
   }
 
   async #safeAudit(entry) {
@@ -158,7 +166,7 @@ export class KitRegistryManager {
   }
 
   async #project(snapshot) {
-    return sanitize(snapshot, await this.#store.snapshot());
+    return sanitize(snapshot, await this.#store.snapshot(), this.#builtinKitIds);
   }
 
   async list() {
@@ -192,6 +200,11 @@ export class KitRegistryManager {
     const input = parseInstallInput(value);
     return this.#enqueueKit(input.id, async () => {
       try {
+        if (this.#builtinKitIds.has(input.id)) {
+          throw Object.assign(new Error(`Kit ${input.id} is built into Harbors`), {
+            code: 'BUILTIN_KIT_ID',
+          });
+        }
         const asset = await this.#resolver.resolve({ ...input, runtime: this.#runtime });
         const downloaded = await this.#downloader.download(asset);
         const installed = await this.#installer.installFromFile({
