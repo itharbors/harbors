@@ -16,12 +16,16 @@ export function createDesktopPackageSteps({
   nodeExecutable = process.execPath,
 } = {}) {
   if (!path.isAbsolute(cwd)) throw new TypeError('cwd must be an absolute path');
-  if (!['dir', 'dist'].includes(mode)) throw new TypeError('mode must be dir or dist');
+  const modes = ['dir', 'dist', 'unsigned'];
+  if (!modes.includes(mode)) throw new TypeError('mode must be dir, dist, or unsigned');
 
+  const builderConfig = mode === 'unsigned'
+    ? 'electron-builder.unsigned.config.mjs'
+    : 'electron-builder.config.mjs';
   const builderArgs = [
     electronBuilderCli,
     '--config',
-    'electron-builder.config.mjs',
+    builderConfig,
     '--mac',
     '--arm64',
     ...(mode === 'dir' ? ['--dir'] : ['--publish', 'never']),
