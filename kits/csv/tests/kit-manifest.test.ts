@@ -67,7 +67,7 @@ describe('CSV kit manifest', () => {
 
     expect(pluginPackages.core.dependencies).toEqual({
       '@itharbors/csv-contracts': '0.0.1',
-      'better-sqlite3': '^11.0.0',
+      'better-sqlite3': '^12.10.1',
       'csv-parse': '^7.0.1',
       'iconv-lite': '^0.7.3',
     });

@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
 
-export const DESKTOP_ELECTRON_VERSION = '31.7.7';
+export const DESKTOP_ELECTRON_VERSION = '43.2.0';
 export const DESKTOP_ARCH = 'arm64';
 
 function npmCommand() {
