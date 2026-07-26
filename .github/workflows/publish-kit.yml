@@ -5,13 +5,55 @@ on:
     tags:
       - 'kit/*/v*'
 
-permissions:
-  contents: write
-  id-token: write
-  attestations: write
-  pages: write
+permissions: {}
 
 jobs:
   publish:
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      pages: write
     uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v2
     secrets: inherit
+
+  # deploy-pages keys deployments by GITHUB_SHA. A standalone main dispatch replaces
+  # the artifact when several immutable Kit Tags point to the same Commit.
+  refresh-registry:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch and await Registry refresh from main
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_ID: kit-release-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+          gh workflow run publish-kit-registry.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main \
+            -f request-id="$REQUEST_ID"
+
+          run_id=''
+          for attempt in {1..60}; do
+            run_id="$(
+              gh run list \
+                --repo "$GITHUB_REPOSITORY" \
+                --workflow publish-kit-registry.yml \
+                --event workflow_dispatch \
+                --limit 50 \
+                --json databaseId,displayTitle \
+                --jq ".[] | select(.displayTitle == \"Publish Kit Registry $REQUEST_ID\") | .databaseId" \
+                | head -n 1
+            )"
+            if [[ -n "$run_id" ]]; then break; fi
+            sleep 2
+          done
+          if [[ -z "$run_id" ]]; then
+            echo "Timed out locating dispatched Registry run: $REQUEST_ID" >&2
+            exit 1
+          fi
+          gh run watch "$run_id" --repo "$GITHUB_REPOSITORY" --exit-status
