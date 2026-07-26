@@ -213,4 +213,11 @@ test('desktop release documentation preserves operational safety boundaries', as
   assert.match(releaseGuide, /app-stable/u);
   assert.match(releaseGuide, /higher version|higher SemVer/u);
   assert.match(releaseGuide, /unsigned.*structural|structural.*unsigned/u);
+  assert.match(releaseGuide, /Build Unsigned App/u);
+  assert.match(releaseGuide, /workflow_dispatch/u);
+  assert.match(releaseGuide, /ITHARBORS-<version>-unsigned-arm64\.dmg/u);
+  assert.match(releaseGuide, /UNSIGNED-BUILD\.txt/u);
+  assert.match(releaseGuide, /7 days|7 天/u);
+  assert.match(releaseGuide, /unsigned[\s\S]*not.*Release|未签名[\s\S]*不是.*Release/u);
+  assert.match(releaseGuide, /unsigned[\s\S]*not.*automatic update|未签名[\s\S]*不.*自动更新/u);
 });
