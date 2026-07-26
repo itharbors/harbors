@@ -1,10 +1,10 @@
-import { DEFAULT_THEME_TOKENS, type ThemeTokens, renderThemeVariables } from './theme';
+import { applyThemeTokensToElement, DEFAULT_THEME_TOKENS, type ThemeTokens } from './theme';
 
 export const THEME_TOKEN_STYLE_ID = 'ce-theme-tokens';
 export const BASE_UI_THEME_STYLE_ID = 'ce-base-ui-theme';
 
 const BASE_UI_THEME_CSS = `:root {
-  color-scheme: normal;
+  color-scheme: var(--ce-color-scheme, dark);
 }
 
 button,
@@ -144,6 +144,24 @@ function upsertStyle(document: Document, id: string, cssText: string): HTMLStyle
 }
 
 export function applyThemeToDocument(document: Document, tokens: ThemeTokens = DEFAULT_THEME_TOKENS): void {
-  upsertStyle(document, THEME_TOKEN_STYLE_ID, `:root { ${renderThemeVariables(tokens)} }`);
+  applyThemeTokensToElement(document.documentElement, tokens);
   upsertStyle(document, BASE_UI_THEME_STYLE_ID, BASE_UI_THEME_CSS);
+}
+
+export function bindThemeToIframe(
+  iframe: HTMLIFrameElement,
+  getTokens: () => ThemeTokens,
+): () => void {
+  let active = true;
+  const apply = () => {
+    if (!active || !iframe.contentDocument) return;
+    applyThemeToDocument(iframe.contentDocument, getTokens());
+  };
+  iframe.addEventListener('load', apply);
+  apply();
+  return () => {
+    if (!active) return;
+    active = false;
+    iframe.removeEventListener('load', apply);
+  };
 }

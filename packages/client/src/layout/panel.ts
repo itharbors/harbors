@@ -162,49 +162,9 @@ export class Panel extends HTMLElement {
         </div>
       `}
       <div class="content">
-        ${shouldRenderIframe ? `<iframe src="${escapeAttr(src!)}" sandbox="allow-scripts allow-same-origin" allowtransparency="true"></iframe>` : '<slot></slot>'}
+        ${shouldRenderIframe ? `<iframe src="${escapeAttr(src!)}" sandbox="allow-scripts allow-same-origin" allowtransparency="true" style="background: transparent"></iframe>` : '<slot></slot>'}
       </div>
     `;
-    this.syncIframeTransparency();
-  }
-
-  private syncIframeTransparency(): void {
-    const iframe = this.shadowRoot!.querySelector('iframe');
-    if (!iframe) return;
-
-    iframe.style.background = 'transparent';
-    iframe.style.backgroundColor = 'transparent';
-
-    const apply = () => {
-      try {
-        const doc = iframe.contentDocument;
-        if (!doc) return;
-
-        doc.documentElement.style.background = 'transparent';
-        doc.documentElement.style.backgroundColor = 'transparent';
-        doc.body?.style.setProperty('background', 'transparent', 'important');
-        doc.body?.style.setProperty('background-color', 'transparent', 'important');
-
-        let style = doc.getElementById('ce-panel-transparent-frame') as HTMLStyleElement | null;
-        if (!style) {
-          style = doc.createElement('style');
-          style.id = 'ce-panel-transparent-frame';
-          doc.head.appendChild(style);
-        }
-        style.textContent = `
-          html,
-          body {
-            background: transparent !important;
-            background-color: transparent !important;
-          }
-        `;
-      } catch {
-        // Cross-origin frames cannot be patched; same-origin panel iframes are patched on load.
-      }
-    };
-
-    iframe.addEventListener('load', apply);
-    apply();
   }
 }
 
