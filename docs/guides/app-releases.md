@@ -33,6 +33,21 @@ HARBORS_DISABLE_UPDATE_CHECKS=1 \
 “Quit ITHARBORS”相同的 `app.quit()` 有序关闭路径，而不是强制终止。不要复用真实 userData 或使用 `kill -9`。仅在确认变量仍指向这次
 `mktemp -d` 创建的目录后删除它。签名、Gatekeeper、stapling 与更新验收只能针对 GitHub 签名产物。
 
+## 线上未签名测试包
+
+没有 Apple Developer Program 凭据时，可以在 GitHub Actions 选择 `Build Unsigned App`，选择 `main`，
+再通过 **Run workflow** 手动发起 `workflow_dispatch`。成功后从该 Run 下载
+`ITHARBORS-<version>-unsigned-<run-id>`，并在内部测试前核对 `checksums.txt`。
+
+Artifact 保留 7 天，只包含 `ITHARBORS-<version>-unsigned-arm64.dmg`、
+`ITHARBORS-<version>-unsigned-arm64-mac.zip`、`checksums.txt` 和 `UNSIGNED-BUILD.txt`。
+它没有 Apple Developer ID 签名或 notarization，Gatekeeper 可能警告或阻止启动，只能用于内部体验、
+演示和功能验证。
+
+未签名 Artifact 不是 GitHub Release，不使用版本 Tag，也不进入自动更新通道。它不能作为签名、
+Gatekeeper、stapling、更新或正式 Release 验收依据。获得 Apple 凭据后，`app-publish-v1` 仍是唯一的
+正式发布链路。
+
 ## Apple 凭据边界
 
 - `MAC_CSC_LINK` 是 **Developer ID Application** 证书 `.p12`（或其受控链接），

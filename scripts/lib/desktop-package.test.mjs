@@ -3,7 +3,11 @@ import test from 'node:test';
 import { access, readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
-import { DESKTOP_ELECTRON_VERSION, runDesktopPackage } from './desktop-package-build.mjs';
+import {
+  DESKTOP_ELECTRON_VERSION,
+  createDesktopPackageSteps,
+  runDesktopPackage,
+} from './desktop-package-build.mjs';
 
 function commandRunner({ fail = {} } = {}) {
   const calls = [];
@@ -88,6 +92,45 @@ test('surfaces a Node ABI restoration failure after a successful package build',
   assert.deepEqual(runner.calls[2].args.slice(-2), ['--publish', 'never']);
 });
 
+test('unsigned packaging uses a dedicated non-publishing builder config', () => {
+  const steps = createDesktopPackageSteps({
+    cwd: '/workspace/harbors',
+    mode: 'unsigned',
+    electronBuilderCli: '/workspace/harbors/node_modules/electron-builder/cli.js',
+  });
+
+  assert.deepEqual(steps.map((step) => step.name), [
+    'prepare',
+    'electron-rebuild',
+    'electron-builder',
+    'restore-node-addon',
+  ]);
+  assert.deepEqual(steps[2].args, [
+    '/workspace/harbors/node_modules/electron-builder/cli.js',
+    '--config',
+    'electron-builder.unsigned.config.mjs',
+    '--mac',
+    '--arm64',
+    '--publish',
+    'never',
+  ]);
+});
+
+test('unsigned config preserves packaging inputs while disabling signing and notarization', async () => {
+  const signed = (await import('../../electron-builder.config.mjs')).default;
+  const unsigned = (await import('../../electron-builder.unsigned.config.mjs')).default;
+
+  assert.equal(signed.mac.notarize, true);
+  assert.equal(unsigned.mac.identity, null);
+  assert.equal(unsigned.mac.notarize, false);
+  assert.equal(unsigned.appId, signed.appId);
+  assert.equal(unsigned.electronVersion, signed.electronVersion);
+  assert.deepEqual(unsigned.directories, signed.directories);
+  assert.deepEqual(unsigned.files, signed.files);
+  assert.deepEqual(unsigned.extraResources, signed.extraResources);
+  assert.deepEqual(unsigned.mac.target, signed.mac.target);
+});
+
 test('desktop package owns version, updater, and native runtime dependencies', async () => {
   const pkg = JSON.parse(await readFile(new URL('../../packages/desktop/package.json', import.meta.url)));
   const rootPackage = JSON.parse(await readFile(new URL('../../package.json', import.meta.url)));
@@ -107,6 +150,7 @@ test('desktop package owns version, updater, and native runtime dependencies', a
   assert.equal(builderConfig.electronVersion, DESKTOP_ELECTRON_VERSION);
   assert.equal(rootPackage.scripts['desktop:dir'], 'node scripts/desktop-package.mjs dir');
   assert.equal(rootPackage.scripts['desktop:dist'], 'node scripts/desktop-package.mjs dist');
+  assert.equal(rootPackage.scripts['desktop:unsigned'], 'node scripts/desktop-package.mjs unsigned');
   for (const [name, version] of [
     ['sigstore', '3.1.0'],
     ['snappyjs', '0.7.0'],
@@ -169,4 +213,11 @@ test('desktop release documentation preserves operational safety boundaries', as
   assert.match(releaseGuide, /app-stable/u);
   assert.match(releaseGuide, /higher version|higher SemVer/u);
   assert.match(releaseGuide, /unsigned.*structural|structural.*unsigned/u);
+  assert.match(releaseGuide, /Build Unsigned App/u);
+  assert.match(releaseGuide, /workflow_dispatch/u);
+  assert.match(releaseGuide, /ITHARBORS-<version>-unsigned-arm64\.dmg/u);
+  assert.match(releaseGuide, /UNSIGNED-BUILD\.txt/u);
+  assert.match(releaseGuide, /7 days|7 天/u);
+  assert.match(releaseGuide, /unsigned[\s\S]*not.*Release|未签名[\s\S]*不是.*Release/u);
+  assert.match(releaseGuide, /unsigned[\s\S]*not.*automatic update|未签名[\s\S]*不.*自动更新/u);
 });
