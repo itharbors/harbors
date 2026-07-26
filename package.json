@@ -40,7 +40,7 @@
     "@electron/rebuild": "4.2.0",
     "@types/yauzl": "^3.4.0",
     "concurrently": "^9.0.0",
-    "electron": "^31.0.0",
+    "electron": "43.2.0",
     "electron-builder": "26.15.3",
     "esbuild": "^0.28.0",
     "jsdom": "29.1.1",

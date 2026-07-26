@@ -39,7 +39,7 @@ test('rebuilds the packaged native addon before builder and restores the Node AB
     '-w',
     'better-sqlite3',
     '--version',
-    '31.7.7',
+    '43.2.0',
     '--arch',
     'arm64',
   ]);
