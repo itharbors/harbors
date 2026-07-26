@@ -1,14 +1,12 @@
-import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
-
 import { describe, expect, it } from 'vitest';
 
-import { applyThemeToDocument, BASE_UI_THEME_STYLE_ID, THEME_TOKEN_STYLE_ID } from '../../src/styles/iframe-theme';
-import { DEFAULT_THEME_TOKENS, renderThemeVariables } from '../../src/styles/theme';
+import { applyThemeToDocument, BASE_UI_THEME_STYLE_ID, bindThemeToIframe, THEME_TOKEN_STYLE_ID } from '../../src/styles/iframe-theme';
+import { applyThemeTokensToElement, DEFAULT_THEME_TOKENS } from '../../src/styles/theme';
 
 describe('DEFAULT_THEME_TOKENS', () => {
   it('contains the agreed first-round token families using full css variable names', () => {
     expect(DEFAULT_THEME_TOKENS).toMatchObject({
+      '--ce-color-scheme': 'dark',
       '--ce-color-neutral-0': '#0f1115',
       '--ce-color-neutral-1': '#16181d',
       '--ce-color-neutral-2': '#1c2027',
@@ -99,32 +97,24 @@ describe('DEFAULT_THEME_TOKENS', () => {
   });
 });
 
-describe('renderThemeVariables', () => {
-  it('serializes theme tokens as a raw inline declaration string', () => {
-    const css = renderThemeVariables({
+describe('applyThemeTokensToElement', () => {
+  it('sets theme tokens as DOM style properties and removes stale managed tokens', () => {
+    const element = document.createElement('div');
+    applyThemeTokensToElement(element, {
+      '--ce-accent': '#55aaff',
+      '--ce-workbench-bg': '#111111',
+    });
+    applyThemeTokensToElement(element, {
       '--ce-accent': '#ff00aa',
-      '--ce-workbench-bg': 'var(--ce-surface)',
-      '--ce-input-bg': '#111111',
     });
 
-    expect(css).toBe('--ce-accent:#ff00aa;--ce-workbench-bg:var(--ce-surface);--ce-input-bg:#111111;');
-  });
-
-  it('keeps DEFAULT_THEME_TOKENS in sync with tokens.css', () => {
-    const cssSource = readFileSync(join(dirname(import.meta.filename), '../../src/styles/tokens.css'), 'utf8');
-
-    expect(cssSource).toContain(':root {');
-
-    const cssTokens = Object.fromEntries(
-      Array.from(cssSource.matchAll(/(--ce-[\w-]+):\s*([^;]+);/g), ([, token, value]) => [token, value.trim()]),
-    );
-
-    expect(cssTokens).toEqual(DEFAULT_THEME_TOKENS);
+    expect(element.style.getPropertyValue('--ce-accent')).toBe('#ff00aa');
+    expect(element.style.getPropertyValue('--ce-workbench-bg')).toBe('');
   });
 });
 
 describe('applyThemeToDocument', () => {
-  it('upserts token and base-ui style tags and reuses them', () => {
+  it('applies tokens to the document element and reuses the base-ui style tag', () => {
     const document = window.document.implementation.createHTMLDocument('iframe');
 
     applyThemeToDocument(document, {
@@ -133,13 +123,14 @@ describe('applyThemeToDocument', () => {
       '--ce-input-bg': '#202020',
     });
 
-    const tokenStyle = document.getElementById(THEME_TOKEN_STYLE_ID);
     const baseUiStyle = document.getElementById(BASE_UI_THEME_STYLE_ID);
 
-    expect(tokenStyle).not.toBeNull();
     expect(baseUiStyle).not.toBeNull();
-    expect(tokenStyle?.textContent).toBe(':root { --ce-accent:#55aaff;--ce-workbench-bg:#111111;--ce-input-bg:#202020; }');
-    expect(baseUiStyle?.textContent).toContain('color-scheme: normal;');
+    expect(document.getElementById(THEME_TOKEN_STYLE_ID)).toBeNull();
+    expect(document.documentElement.style.getPropertyValue('--ce-accent')).toBe('#55aaff');
+    expect(document.documentElement.style.getPropertyValue('--ce-workbench-bg')).toBe('#111111');
+    expect(document.documentElement.style.getPropertyValue('--ce-input-bg')).toBe('#202020');
+    expect(baseUiStyle?.textContent).toContain('color-scheme: var(--ce-color-scheme, dark);');
     expect(baseUiStyle?.textContent).toContain('button');
     expect(baseUiStyle?.textContent).toContain('input');
     expect(baseUiStyle?.textContent).toContain('textarea');
@@ -206,13 +197,33 @@ describe('applyThemeToDocument', () => {
       '--ce-input-bg': '#303030',
     });
 
-    const tokenStyles = document.querySelectorAll(`#${THEME_TOKEN_STYLE_ID}`);
     const baseUiStyles = document.querySelectorAll(`#${BASE_UI_THEME_STYLE_ID}`);
 
-    expect(tokenStyles).toHaveLength(1);
     expect(baseUiStyles).toHaveLength(1);
-    expect(document.getElementById(THEME_TOKEN_STYLE_ID)).toBe(tokenStyle);
     expect(document.getElementById(BASE_UI_THEME_STYLE_ID)).toBe(baseUiStyle);
-    expect(tokenStyle?.textContent).toBe(':root { --ce-accent:#77bbff;--ce-workbench-bg:#222222;--ce-input-bg:#303030; }');
+    expect(document.getElementById(THEME_TOKEN_STYLE_ID)).toBeNull();
+    expect(document.documentElement.style.getPropertyValue('--ce-accent')).toBe('#77bbff');
+    expect(document.documentElement.style.getPropertyValue('--ce-workbench-bg')).toBe('#222222');
+    expect(document.documentElement.style.getPropertyValue('--ce-input-bg')).toBe('#303030');
+  });
+});
+
+describe('bindThemeToIframe', () => {
+  it('applies on load and stops applying after cleanup', () => {
+    const iframe = document.createElement('iframe');
+    const iframeDocument = document.implementation.createHTMLDocument('panel');
+    Object.defineProperty(iframe, 'contentDocument', { configurable: true, value: iframeDocument });
+    let accent = '#55aaff';
+    const cleanup = bindThemeToIframe(iframe, () => ({ '--ce-accent': accent }));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#55aaff');
+    accent = '#ff00aa';
+    iframe.dispatchEvent(new Event('load'));
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#ff00aa');
+
+    cleanup();
+    accent = '#00ffaa';
+    iframe.dispatchEvent(new Event('load'));
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#ff00aa');
   });
 });

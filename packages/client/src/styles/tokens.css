@@ -1,5 +1,6 @@
 /* ===== Primitive + Runtime Tokens ===== */
 :root {
+  --ce-color-scheme: dark;
   --ce-color-neutral-0: #0f1115;
   --ce-color-neutral-1: #16181d;
   --ce-color-neutral-2: #1c2027;

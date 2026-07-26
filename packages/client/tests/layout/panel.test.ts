@@ -47,13 +47,14 @@ describe('ce-panel', () => {
     expect((iframe as HTMLIFrameElement).style.background).toBe('transparent');
   });
 
-  it('forces same-origin iframe document backgrounds to transparent', () => {
+  it('does not override the iframe document background', () => {
     const el = document.createElement('ce-panel') as Panel;
     el.setAttribute('src', '/editor');
     document.body.appendChild(el);
 
     const iframe = el.shadowRoot!.querySelector('iframe') as HTMLIFrameElement;
     const iframeDocument = document.implementation.createHTMLDocument('panel');
+    iframeDocument.documentElement.style.background = 'rgb(24, 24, 24)';
     iframeDocument.body.style.background = 'rgb(32, 32, 32)';
     Object.defineProperty(iframe, 'contentDocument', {
       configurable: true,
@@ -62,9 +63,9 @@ describe('ce-panel', () => {
 
     iframe.dispatchEvent(new Event('load'));
 
-    expect(iframeDocument.documentElement.style.background).toBe('transparent');
-    expect(iframeDocument.body.style.getPropertyValue('background')).toBe('transparent');
-    expect(iframeDocument.getElementById('ce-panel-transparent-frame')?.textContent).toContain('background: transparent !important');
+    expect(iframeDocument.documentElement.style.background).toBe('rgb(24, 24, 24)');
+    expect(iframeDocument.body.style.background).toBe('rgb(32, 32, 32)');
+    expect(iframeDocument.getElementById('ce-panel-transparent-frame')).toBeNull();
   });
 
   it('does not render a collapse button', () => {

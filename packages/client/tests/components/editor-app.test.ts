@@ -1306,13 +1306,98 @@ describe('EditorApp default layout', () => {
 
     iframe!.dispatchEvent(new Event('load'));
 
-    const tokenStyle = iframeDocument.getElementById('ce-theme-tokens');
-    expect(tokenStyle).not.toBeNull();
-    expect(tokenStyle!.textContent).toContain('--ce-workbench-bg:var(--ce-surface);');
+    expect(iframeDocument.getElementById('ce-theme-tokens')).toBeNull();
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-workbench-bg'))
+      .toBe('var(--ce-surface)');
+    expect(iframeDocument.getElementById('ce-base-ui-theme')?.textContent)
+      .toContain('color-scheme: var(--ce-color-scheme, dark);');
+  });
 
-    const baseUiStyle = iframeDocument.getElementById('ce-base-ui-theme');
-    expect(baseUiStyle).not.toBeNull();
-    expect(baseUiStyle!.textContent).toContain('button {');
+  it('binds and prunes host theme styles for floating panel iframes', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      theme: {
+        '--ce-accent': '#abcdef',
+      },
+      panelInstances: [{
+        id: 'floating-open',
+        panelName: '@itharbors/log.log',
+        carrier: 'floating',
+        state: 'open',
+        windowGroupId: null,
+      }],
+    }));
+
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+    await Promise.resolve();
+
+    const layer = el.querySelector('floating-panel-layer')!;
+    const floatingIframe = layer.shadowRoot!
+      .querySelector('ce-panel')!
+      .shadowRoot!
+      .querySelector('iframe') as HTMLIFrameElement;
+    const iframeDocument = document.implementation.createHTMLDocument('floating-panel');
+    Object.defineProperty(floatingIframe, 'contentDocument', {
+      configurable: true,
+      value: iframeDocument,
+    });
+
+    floatingIframe.dispatchEvent(new Event('load'));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#abcdef');
+    expect(iframeDocument.getElementById('ce-base-ui-theme')?.textContent)
+      .toContain('color-scheme: var(--ce-color-scheme, dark);');
+
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="minimize"]')?.click();
+    await Promise.resolve();
+    iframeDocument.documentElement.style.removeProperty('--ce-accent');
+    iframeDocument.getElementById('ce-base-ui-theme')?.remove();
+    floatingIframe.dispatchEvent(new Event('load'));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
+    expect(iframeDocument.getElementById('ce-base-ui-theme')).toBeNull();
+  });
+
+  it('disposes iframe theme bindings when disconnected', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const panel = Array.from(el.querySelectorAll('ce-panel')).find(
+      (candidate) => candidate.getAttribute('src')?.includes('%40itharbors%2Fplugin-list.list'),
+    ) as HTMLElement;
+    const iframe = panel.shadowRoot!.querySelector('iframe') as HTMLIFrameElement;
+    const iframeDocument = document.implementation.createHTMLDocument('plugin-list');
+    Object.defineProperty(iframe, 'contentDocument', { configurable: true, value: iframeDocument });
+    iframe.dispatchEvent(new Event('load'));
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).not.toBe('');
+
+    el.remove();
+    iframeDocument.documentElement.style.removeProperty('--ce-accent');
+    iframe.dispatchEvent(new Event('load'));
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
+  });
+
+  it('does not bind iframe themes after disconnecting before queued synchronization', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    (el as unknown as { render(): void }).render();
+    const panel = Array.from(el.querySelectorAll('ce-panel')).find(
+      (candidate) => candidate.getAttribute('src')?.includes('%40itharbors%2Fplugin-list.list'),
+    ) as HTMLElement;
+    const iframe = panel.shadowRoot!.querySelector('iframe') as HTMLIFrameElement;
+    const iframeDocument = document.implementation.createHTMLDocument('plugin-list');
+    Object.defineProperty(iframe, 'contentDocument', { configurable: true, value: iframeDocument });
+
+    el.remove();
+    await Promise.resolve();
+    iframe.dispatchEvent(new Event('load'));
+
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
   });
 
   it('wraps a single non-simple panel in a panel-group', async () => {

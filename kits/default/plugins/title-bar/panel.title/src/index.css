@@ -4,11 +4,12 @@
 }
 body {
   margin: 0;
-  background: #181818;
-  color: #d4d4d4;
+  background: var(--ce-surface, #101010);
+  color: var(--ce-text-primary, #d4d4d4);
   font-size: 12px;
 }
 #panel-root {
+  background: var(--ce-surface, #101010);
   box-sizing: border-box;
   display: flex;
   align-items: center;
@@ -17,7 +18,7 @@ body {
   min-width: 0;
   padding: 0 12px;
   overflow: hidden;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--ce-border, #2a2a2a);
 }
 .product {
   flex-shrink: 0;
