@@ -1,10 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import { ApplicationRuntime } from '../../src/application/runtime';
 import { createServer } from '../../src/server';
 import { testAssembly } from '../helpers/assembly';
 
 describe('application server lifecycle', () => {
+  it('keeps application plugins and sessions on one snapshot after caller assembly mutation', async () => {
+    const callerAssembly = {
+      ...testAssembly,
+      kitSources: testAssembly.kitSources.map((source) => ({ ...source })),
+    };
+    const server = createServer({ assembly: callerAssembly });
+    callerAssembly.kitSources = [{
+      directory: path.join(path.dirname(testAssembly.kitSources[0].directory), 'notifications'),
+      source: 'development',
+    }];
+    callerAssembly.defaultKit = '@itharbors/kit-notifications';
+
+    const port = await server.start(0);
+    const [catalogResponse, bootstrapResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${port}/api/kits`),
+      fetch(`http://127.0.0.1:${port}/api/application/bootstrap`),
+    ]);
+    const catalog = await catalogResponse.json();
+    const bootstrap = await bootstrapResponse.json();
+    await server.stop();
+
+    expect(catalog.kits.map((kit: { name: string }) => kit.name)).toEqual([
+      '@itharbors/kit-default',
+    ]);
+    expect(bootstrap.plugins).toEqual([]);
+    expect(bootstrap.diagnostics).toEqual([]);
+  });
+
   it('starts the application runtime before accepting connections and disposes it after sessions', async () => {
     const events: string[] = [];
     const applicationRuntime = {

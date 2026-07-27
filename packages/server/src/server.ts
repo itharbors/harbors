@@ -9,6 +9,7 @@ import type { Editor } from './editor/types';
 import { createApp } from './app';
 import {
   createDefaultAssemblyConfig,
+  normalizeAssemblyConfig,
   type AssemblyConfig,
   type AssemblyKitSource,
   type KitSourceKind,
@@ -87,13 +88,15 @@ export function createServer(options: ServerOptions = {}) {
   const channel = new SSEChannel();
   const broker = new BrowserRequestBroker();
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
-  const assembly = options.assembly ?? createDefaultAssemblyConfig(
-    path.resolve(serverDir, '../../..'),
-    {
-      defaultKit: options.defaultKit,
-      kitSources: options.kitSources,
-    },
-  );
+  const assembly = freezeAssemblySnapshot(options.assembly
+    ? normalizeAssemblyConfig(options.assembly)
+    : createDefaultAssemblyConfig(
+        path.resolve(serverDir, '../../..'),
+        {
+          defaultKit: options.defaultKit,
+          kitSources: options.kitSources,
+        },
+      ));
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
@@ -214,4 +217,15 @@ export function createServer(options: ServerOptions = {}) {
     editorMap,
     applicationRuntime,
   };
+}
+
+function freezeAssemblySnapshot(assembly: AssemblyConfig): AssemblyConfig {
+  const kitSources = Object.freeze(assembly.kitSources.map((source) => Object.freeze({
+    directory: source.directory,
+    source: source.source,
+  })));
+  return Object.freeze({
+    ...assembly,
+    kitSources,
+  }) as AssemblyConfig;
 }

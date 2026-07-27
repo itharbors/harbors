@@ -316,6 +316,7 @@ describe('kit lifecycle', () => {
 
     try {
       await editor.kit.load(defaultKit);
+      const previousDirectory = editor.kit.getCurrentDirectory();
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
       expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
       expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
@@ -324,6 +325,7 @@ describe('kit lifecycle', () => {
       await expect(editor.kit.switchKit(failingKit)).rejects.toThrow('bad plugin load failed');
 
       expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+      expect(editor.kit.getCurrentDirectory()).toBe(previousDirectory);
       expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
       expect(editor.plugin.listLoaded()).toContain('@itharbors/plugin-list');
       expect(editor.plugin.listLoaded()).not.toContain('good-plugin');
