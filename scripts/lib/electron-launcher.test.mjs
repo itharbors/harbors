@@ -302,7 +302,7 @@ test('uses aggregate multi-Kit menus for every Electron window', async () => {
   assert.match(electronSource, /requestedKit: resolveRequestedKitName\(/);
 });
 
-test('builds tray entries for available and persisted unavailable Kits', () => {
+test('builds tray entries only for the current Catalog while retaining workspace input', () => {
   const opened = [];
   let quitCount = 0;
   const template = buildTrayTemplate({
@@ -323,15 +323,14 @@ test('builds tray entries for available and persisted unavailable Kits', () => {
   assert.deepEqual(template.map(({ label, enabled, type }) => ({ label, enabled, type })), [
     { label: 'Default Kit', enabled: true, type: undefined },
     { label: 'SQLite', enabled: true, type: undefined },
-    { label: '@itharbors/kit-removed (Unavailable)', enabled: false, type: undefined },
     { label: undefined, enabled: undefined, type: 'separator' },
     { label: 'Kit Manager…', enabled: undefined, type: undefined },
     { label: undefined, enabled: undefined, type: 'separator' },
     { label: 'Quit ITHARBORS', enabled: undefined, type: undefined },
   ]);
   template[1].click();
-  template[4].click();
-  template[6].click();
+  template[3].click();
+  template[5].click();
   assert.deepEqual(opened, ['@itharbors/kit-sqlite', 'kit-manager']);
   assert.equal(quitCount, 1);
 });
