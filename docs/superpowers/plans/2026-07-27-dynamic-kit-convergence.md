@@ -316,7 +316,7 @@ Add root scripts with the exact division:
 
 ```json
 "prestart": "npm run build:runtime",
-"plugins:build:runtime": "node scripts/ce-plugin.mjs build --runtime && node scripts/prepare-notification-skill-resource.mjs",
+"plugins:build:runtime": "node scripts/ce-plugin.mjs build --runtime",
 "build:runtime": "npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build:runtime"
 ```
 

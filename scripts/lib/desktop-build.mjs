@@ -39,12 +39,6 @@ const DESKTOP_ASSETS = Object.freeze([
 async function runtimeEntries(repositoryRoot) {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
-    ...BUILTIN_KITS.flatMap(({ slug }) => [
-      { source: `kits/${slug}/package.json`, destination: `kits/${slug}/package.json` },
-      { source: `kits/${slug}/layout.json`, destination: `kits/${slug}/layout.json` },
-      { source: `kits/${slug}/main.html`, destination: `kits/${slug}/main.html` },
-      { source: `kits/${slug}/secondary.html`, destination: `kits/${slug}/secondary.html` },
-    ]),
     {
       source: '.agents/skills/notify-user/SKILL.md',
       destination: 'resources/notify-user/SKILL.md',
@@ -71,7 +65,7 @@ async function runtimeEntries(repositoryRoot) {
       },
     );
   }
-  entries.push(...await builtinKitPluginEntries(repositoryRoot));
+  entries.push(...await builtinKitEntries(repositoryRoot));
   return entries;
 }
 
@@ -83,11 +77,16 @@ function portable(relative) {
   return relative.split(path.sep).join('/');
 }
 
+function portableIdentity(relative) {
+  return portable(relative).normalize('NFC').toLowerCase();
+}
+
 function validateRelative(value, label) {
   if (
     typeof value !== 'string'
     || value.length === 0
     || path.isAbsolute(value)
+    || value.includes('\\')
     || value.split(/[\\/]/u).includes('..')
   ) {
     throw new Error(label === 'Desktop source'
@@ -99,8 +98,14 @@ function validateRelative(value, label) {
 
 function rejectNonBuiltinKit(relative) {
   const parts = portable(relative).split('/');
-  if (parts[0] === 'kits' && parts[1] && !BUILTIN_KIT_SLUGS.has(parts[1])) {
-    throw new Error(`Desktop runtime cannot include product Kit ${parts[1]}`);
+  if (portableIdentity(parts[0] ?? '') !== 'kits') return;
+  if (parts[0] !== 'kits') throw new Error(`Desktop source spelling alias is not portable: ${relative}`);
+  if (!parts[1]) return;
+  const builtinSlug = [...BUILTIN_KIT_SLUGS]
+    .find((slug) => portableIdentity(slug) === portableIdentity(parts[1]));
+  if (!builtinSlug) throw new Error(`Desktop runtime cannot include product Kit ${parts[1]}`);
+  if (parts[1] !== builtinSlug) {
+    throw new Error(`Desktop source spelling alias is not portable: ${relative}`);
   }
 }
 
@@ -127,61 +132,215 @@ async function checkedFile(repositoryRoot, source) {
   return absolute;
 }
 
-function builtDirectory(entry) {
-  if (
-    typeof entry !== 'string'
-    || entry.length === 0
-    || entry.includes('\\')
-    || path.posix.isAbsolute(entry)
-  ) {
-    throw new Error('Desktop plugin entrypoint must name a file beneath dist');
+function manifestRelativePath(entry, label) {
+  if (typeof entry !== 'string' || entry.length === 0 || entry.includes('\\') || path.posix.isAbsolute(entry)) {
+    throw new Error(`${label} must be a portable relative path`);
   }
-  const parts = entry.split('/');
-  if (
-    parts.some((part, index) => part.length === 0 || part === '..' || (part === '.' && index !== 0))
-    || path.posix.extname(parts.at(-1)) === ''
-  ) {
-    throw new Error('Desktop plugin entrypoint must name a file beneath dist');
+  const normalized = entry.startsWith('./') ? entry.slice(2) : entry;
+  const parts = normalized.split('/');
+  if (parts.some((part) => part.length === 0 || part === '.' || part === '..')) {
+    throw new Error(`${label} must be a portable relative path`);
   }
-  const directory = path.posix.dirname(entry);
-  const directoryParts = directory.split('/').filter((part) => part !== '.');
-  if (!directoryParts.includes('dist') || directoryParts.includes('src')) {
-    throw new Error('Desktop plugin entrypoint must name a file beneath dist');
-  }
-  return directory;
+  return normalized;
 }
 
-async function builtDirectoryEntry(repositoryRoot, pluginRoot, entry) {
-  const directory = builtDirectory(entry);
-  await checkedFile(repositoryRoot, `${pluginRoot}/${entry}`);
+function builtDirectory(entry, kind) {
+  const label = `Desktop plugin ${kind} entrypoint`;
+  let normalized;
+  try {
+    normalized = manifestRelativePath(entry, label);
+  } catch {
+    throw new Error(`${label} must name a built artifact beneath dist`);
+  }
+  const parts = normalized.split('/');
+  const directory = path.posix.dirname(normalized);
+  const directoryParts = directory.split('/').filter((part) => part !== '.');
+  if (!directoryParts.includes('dist') || directoryParts.includes('src')) {
+    throw new Error(`${label} must name a built artifact beneath dist`);
+  }
+  const filename = parts.at(-1);
+  if (kind === 'main' && !['.js', '.mjs', '.cjs'].includes(path.posix.extname(filename))) {
+    throw new Error(`${label} must name a .js, .mjs, or .cjs artifact beneath dist`);
+  }
+  if (kind === 'panel' && (filename !== 'index.html' || parts.at(-2) !== 'dist')) {
+    throw new Error(`${label} must name an index.html artifact beneath dist`);
+  }
+  return { directory, normalized };
+}
+
+async function builtDirectoryEntry(repositoryRoot, pluginRoot, entry, kind) {
+  const { directory, normalized } = builtDirectory(entry, kind);
+  await checkedFile(repositoryRoot, `${pluginRoot}/${normalized}`);
   const source = `${pluginRoot}/${directory}`;
   return { source, destination: source, recursive: true };
 }
 
-async function builtinKitPluginEntries(repositoryRoot) {
+function requireStringArray(value, label) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)
+    || value.some((item) => typeof item !== 'string' || item.trim().length === 0)
+    || new Set(value).size !== value.length) {
+    throw new Error(`${label} must contain unique non-empty strings`);
+  }
+  return [...value];
+}
+
+function readKitPluginNames(kit, label) {
+  const ordinary = requireStringArray(kit.plugin, `${label} plugin`);
+  const startup = kit.startup;
+  if (startup !== undefined && (!startup || typeof startup !== 'object' || Array.isArray(startup))) {
+    throw new Error(`${label} startup must be an object`);
+  }
+  const startupPlugins = requireStringArray(startup?.plugins, `${label} startup.plugins`);
+  const ordinaryNames = new Set(ordinary);
+  const overlap = startupPlugins.find((name) => ordinaryNames.has(name));
+  if (overlap) throw new Error(`${label} plugin ${overlap} is declared as ordinary and startup`);
+  return [...ordinary, ...startupPlugins];
+}
+
+async function readJsonManifest(filename, label) {
+  try {
+    return JSON.parse(await readFile(filename, 'utf8'));
+  } catch (error) {
+    throw new Error(`${label} is not valid JSON: ${error.message}`);
+  }
+}
+
+async function kitPayloadEntries(repositoryRoot, slug, kit) {
+  const label = `Desktop builtin Kit ${slug}`;
+  const layouts = kit?.layouts;
+  if (!layouts || typeof layouts !== 'object' || Array.isArray(layouts)
+    || typeof layouts.default !== 'string' || layouts.default.length === 0) {
+    throw new Error(`${label} layouts.default must be a non-empty path`);
+  }
+  const layoutEntries = Object.entries(layouts);
+  if (layoutEntries.some(([, entry]) => typeof entry !== 'string' || entry.length === 0)) {
+    throw new Error(`${label} layouts must contain non-empty paths`);
+  }
+  const windows = kit.windowEntries;
+  for (const kind of ['main', 'secondary']) {
+    if (!windows || typeof windows !== 'object' || Array.isArray(windows)
+      || typeof windows[kind] !== 'string' || windows[kind].length === 0) {
+      throw new Error(`${label} windowEntries.${kind} must be a non-empty path`);
+    }
+  }
+  const kitRoot = `kits/${slug}`;
+  const declaredFiles = [
+    ...layoutEntries.map(([name, entry]) => ({ entry, label: `${label} layout ${name}` })),
+    ...['main', 'secondary'].map((kind) => ({
+      entry: windows[kind],
+      label: `${label} windowEntries.${kind}`,
+    })),
+  ];
+  const entries = [];
+  const seen = new Set();
+  for (const declared of declaredFiles) {
+    const relative = manifestRelativePath(declared.entry, declared.label);
+    const source = `${kitRoot}/${relative}`;
+    if (seen.has(source)) continue;
+    seen.add(source);
+    await checkedFile(repositoryRoot, source);
+    entries.push({ source, destination: source });
+  }
+  return entries;
+}
+
+async function pluginPublicEntries(repositoryRoot, pluginRoot, manifest) {
+  const assets = manifest?.['ce-editor']?.assets;
+  if (assets === undefined) return [];
+  if (!assets || typeof assets !== 'object' || Array.isArray(assets)
+    || (assets.public !== undefined && !Array.isArray(assets.public))
+    || assets.public?.some((entry) => typeof entry !== 'string' || entry.length === 0)) {
+    throw new Error(`Desktop plugin public asset roots are malformed for ${manifest?.name ?? pluginRoot}`);
+  }
+  if (assets.public === undefined) return [];
+  const entries = [];
+  for (const declared of assets.public) {
+    const relative = manifestRelativePath(declared, 'Desktop plugin public asset root');
+    if (relative === '.' || relative.split('/').includes('src')) {
+      throw new Error(`Desktop plugin public asset root must not include source trees: ${declared}`);
+    }
+    const source = `${pluginRoot}/${relative}`;
+    let directory;
+    try {
+      directory = await checkedPath(repositoryRoot, source);
+    } catch (error) {
+      throw new Error(`Desktop plugin public asset root is invalid: ${error.message}`);
+    }
+    if (!(await lstat(directory)).isDirectory()) {
+      throw new Error(`Desktop plugin public asset root must be a directory: ${declared}`);
+    }
+    entries.push({ source, destination: source, recursive: true });
+  }
+  return entries;
+}
+
+async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames) {
+  const entries = [];
+  const pluginsRoot = `kits/${slug}/plugins`;
+  const pluginsDirectory = await checkedPath(repositoryRoot, pluginsRoot);
+  const pluginDirectories = (await readdir(pluginsDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  const byName = new Map();
+  for (const plugin of pluginDirectories) {
+    const pluginRoot = `${pluginsRoot}/${plugin}`;
+    const packageSource = `${pluginRoot}/package.json`;
+    const packageFile = await checkedFile(repositoryRoot, packageSource);
+    const manifest = await readJsonManifest(packageFile, `Desktop builtin plugin ${plugin}`);
+    if (typeof manifest?.name !== 'string' || manifest.name.length === 0) {
+      throw new Error(`Desktop builtin plugin ${plugin} must declare a package name`);
+    }
+    if (byName.has(manifest.name)) {
+      throw new Error(`Desktop builtin Kit ${slug} has duplicate plugin package ${manifest.name}`);
+    }
+    byName.set(manifest.name, { pluginRoot, packageSource, manifest });
+  }
+  const declared = new Set(declaredPluginNames);
+  for (const name of byName.keys()) {
+    if (!declared.has(name)) throw new Error(`Desktop builtin Kit ${slug} has undeclared plugin ${name}`);
+  }
+  for (const name of declaredPluginNames) {
+    const plugin = byName.get(name);
+    if (!plugin) throw new Error(`Desktop builtin Kit ${slug} is missing declared plugin ${name}`);
+    const { pluginRoot, packageSource, manifest } = plugin;
+    const panels = manifest?.['ce-editor']?.contribute?.panel;
+    if (panels !== undefined && (!panels || typeof panels !== 'object' || Array.isArray(panels))) {
+      throw new Error(`Desktop plugin panel contributions are malformed for ${name}`);
+    }
+    const panelEntries = Object.entries(panels ?? {})
+      .map(([panelName, panel]) => {
+        if (!panel || typeof panel !== 'object' || Array.isArray(panel)) {
+          throw new Error(`Desktop plugin panel ${panelName} is malformed for ${name}`);
+        }
+        return panel.entry;
+      })
+      .sort((left, right) => String(left).localeCompare(String(right)));
+    entries.push({ source: packageSource, destination: packageSource });
+    entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, manifest.main, 'main'));
+    for (const entry of panelEntries) {
+      entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, entry, 'panel'));
+    }
+    entries.push(...await pluginPublicEntries(repositoryRoot, pluginRoot, manifest));
+  }
+  return entries;
+}
+
+async function builtinKitEntries(repositoryRoot) {
   const entries = [];
   for (const { slug } of BUILTIN_KITS) {
-    const pluginsRoot = `kits/${slug}/plugins`;
-    const pluginsDirectory = await checkedPath(repositoryRoot, pluginsRoot);
-    const plugins = (await readdir(pluginsDirectory, { withFileTypes: true }))
-      .filter((entry) => entry.isDirectory())
-      .map((entry) => entry.name)
-      .sort();
-    for (const plugin of plugins) {
-      const pluginRoot = `${pluginsRoot}/${plugin}`;
-      const packageSource = `${pluginRoot}/package.json`;
-      const packageFile = await checkedFile(repositoryRoot, packageSource);
-      const manifest = JSON.parse(await readFile(packageFile, 'utf8'));
-      const panels = manifest?.['ce-editor']?.contribute?.panel;
-      const entriesToStage = [
-        manifest?.main,
-        ...Object.values(panels ?? {}).map((panel) => panel?.entry),
-      ].sort((left, right) => String(left).localeCompare(String(right)));
-      entries.push({ source: packageSource, destination: packageSource });
-      for (const entry of entriesToStage) {
-        entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, entry));
-      }
+    const packageSource = `kits/${slug}/package.json`;
+    const packageFile = await checkedFile(repositoryRoot, packageSource);
+    const manifest = await readJsonManifest(packageFile, `Desktop builtin Kit ${slug} package.json`);
+    const kit = manifest?.['ce-editor']?.kit;
+    if (!kit || typeof kit !== 'object' || Array.isArray(kit)) {
+      throw new Error(`Desktop builtin Kit ${slug} must declare ce-editor.kit`);
     }
+    const pluginNames = readKitPluginNames(kit, `Desktop builtin Kit ${slug}`);
+    entries.push({ source: packageSource, destination: packageSource });
+    entries.push(...await kitPayloadEntries(repositoryRoot, slug, kit));
+    entries.push(...await builtinKitPluginEntries(repositoryRoot, slug, pluginNames));
   }
   return entries;
 }
@@ -234,11 +393,18 @@ async function createCopyPlan({ repositoryRoot, outputRoot, entries }) {
   files.sort((left, right) => (
     left.destination < right.destination ? -1 : left.destination > right.destination ? 1 : 0
   ));
-  const destinations = new Set();
+  const destinations = [];
   for (const file of files) {
     const relative = portable(path.relative(outputRoot, file.destination));
-    if (destinations.has(relative)) throw new Error(`Desktop copy contains duplicate destination ${relative}`);
-    destinations.add(relative);
+    const identity = portableIdentity(relative);
+    if (destinations.some((existing) => (
+      existing === identity
+      || existing.startsWith(`${identity}/`)
+      || identity.startsWith(`${existing}/`)
+    ))) {
+      throw new Error(`Desktop copy contains duplicate destination collision ${relative}`);
+    }
+    destinations.push(identity);
   }
   return files;
 }

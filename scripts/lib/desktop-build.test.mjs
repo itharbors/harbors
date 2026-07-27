@@ -56,7 +56,24 @@ export const main = true;
     await write(root, `plugins/${plugin}/main/dist/index.js`, `export const ${plugin} = true;\n`);
     await write(root, `plugins/${plugin}/main/src/index.ts`, 'throw new Error();\n');
   }
-  await write(root, 'kits/default/package.json', JSON.stringify({ name: '@itharbors/kit-default' }));
+  await write(root, 'kits/default/package.json', JSON.stringify({
+    name: '@itharbors/kit-default',
+    'ce-editor': {
+      kit: {
+        layouts: { default: 'layout.json' },
+        windowEntries: { main: 'main.html', secondary: 'secondary.html' },
+        plugin: [
+          'log',
+          'message-debug',
+          'plugin-detail',
+          'plugin-list',
+          'status-bar',
+          'title-bar',
+          '@itharbors/fixture-plugin',
+        ],
+      },
+    },
+  }));
   await write(root, 'kits/default/layout.json', '{}');
   await write(root, 'kits/default/main.html', '<main></main>');
   await write(root, 'kits/default/secondary.html', '<main></main>');
@@ -181,10 +198,119 @@ for (const [description, update] of [
         repositoryRoot,
         outputRoot: path.join(repositoryRoot, 'dist', 'desktop-runtime'),
       }),
-      /Desktop plugin entrypoint must name a file beneath dist/u,
+      /Desktop plugin (?:main|panel) entrypoint must name a built artifact beneath dist/u,
     );
   });
 }
+
+for (const [description, prepare, update] of [
+  [
+    'a TypeScript main artifact',
+    (root) => write(root, 'kits/default/plugins/fixture-plugin/main/dist/index.ts', 'export default {};\n'),
+    (manifest) => { manifest.main = './main/dist/index.ts'; },
+  ],
+  [
+    'a panel artifact not named index.html',
+    (root) => write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/other.html', '<main></main>'),
+    (manifest) => {
+      manifest['ce-editor'].contribute.panel.fixture.entry = './panel.fixture/dist/other.html';
+    },
+  ],
+]) {
+  test(`rejects ${description} from a builtin plugin manifest`, async (t) => {
+    const repositoryRoot = await createRepositoryFixture(t);
+    await prepare(repositoryRoot);
+    await updateJson(repositoryRoot, 'kits/default/plugins/fixture-plugin/package.json', update);
+
+    await assert.rejects(
+      buildDesktop({
+        repositoryRoot,
+        outputRoot: path.join(repositoryRoot, 'dist', 'desktop-runtime'),
+      }),
+      /Desktop plugin (?:main|panel) entrypoint/iu,
+    );
+  });
+}
+
+test('derives builtin Kit layouts, windows, plugin outputs, and public assets from manifests', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'desktop-runtime');
+  await updateJson(repositoryRoot, 'kits/default/package.json', (manifest) => {
+    manifest['ce-editor'].kit.layouts = {
+      default: 'layouts/custom.json',
+      compact: 'layouts/compact.json',
+    };
+    manifest['ce-editor'].kit.windowEntries = {
+      main: 'windows/application.html',
+      secondary: 'windows/tool.html',
+    };
+  });
+  await write(repositoryRoot, 'kits/default/layouts/custom.json', '{"name":"custom"}');
+  await write(repositoryRoot, 'kits/default/layouts/compact.json', '{"name":"compact"}');
+  await write(repositoryRoot, 'kits/default/windows/application.html', '<main>application</main>');
+  await write(repositoryRoot, 'kits/default/windows/tool.html', '<main>tool</main>');
+  await updateJson(repositoryRoot, 'kits/default/plugins/fixture-plugin/package.json', (manifest) => {
+    manifest['ce-editor'].assets = { public: ['./assets/public'] };
+  });
+  await write(
+    repositoryRoot,
+    'kits/default/plugins/fixture-plugin/assets/public/logo.svg',
+    '<svg></svg>',
+  );
+
+  await buildDesktop({ repositoryRoot, outputRoot });
+
+  for (const relative of [
+    'kits/default/layouts/custom.json',
+    'kits/default/layouts/compact.json',
+    'kits/default/windows/application.html',
+    'kits/default/windows/tool.html',
+    'kits/default/plugins/fixture-plugin/main/dist/index.js',
+    'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.html',
+    'kits/default/plugins/fixture-plugin/assets/public/logo.svg',
+  ]) assert.equal(existsSync(path.join(outputRoot, relative)), true, relative);
+  for (const relative of [
+    'kits/default/layout.json',
+    'kits/default/main.html',
+    'kits/default/secondary.html',
+  ]) assert.equal(existsSync(path.join(outputRoot, relative)), false, relative);
+});
+
+test('rejects malformed builtin payload declarations before replacing output', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'desktop-runtime');
+  await write(repositoryRoot, 'dist/desktop-runtime/sentinel.txt', 'previous');
+  await updateJson(repositoryRoot, 'kits/default/package.json', (manifest) => {
+    delete manifest['ce-editor'].kit.windowEntries.secondary;
+  });
+
+  await assert.rejects(
+    buildDesktop({ repositoryRoot, outputRoot }),
+    /builtin Kit.*windowEntries\.secondary/iu,
+  );
+  assert.equal(await readFile(path.join(outputRoot, 'sentinel.txt'), 'utf8'), 'previous');
+});
+
+test('rejects missing or malformed declared plugin public asset roots', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'desktop-runtime');
+  await updateJson(repositoryRoot, 'kits/default/plugins/fixture-plugin/package.json', (manifest) => {
+    manifest['ce-editor'].assets = { public: ['./assets/missing'] };
+  });
+
+  await assert.rejects(
+    buildDesktop({ repositoryRoot, outputRoot }),
+    /public asset/iu,
+  );
+
+  await updateJson(repositoryRoot, 'kits/default/plugins/fixture-plugin/package.json', (manifest) => {
+    manifest['ce-editor'].assets = null;
+  });
+  await assert.rejects(
+    buildDesktop({ repositoryRoot, outputRoot }),
+    /public asset roots are malformed/iu,
+  );
+});
 
 test('rejects missing files, symlinks, repository escapes, duplicate destinations, and product Kits', async (t) => {
   const repositoryRoot = await createRepositoryFixture(t);
@@ -227,6 +353,54 @@ test('rejects missing files, symlinks, repository escapes, duplicate destination
     outputRoot,
     entries: [{ source: 'kits/mysql/package.json', destination: 'kits/mysql/package.json' }],
   }), /product Kit/iu);
+});
+
+test('rejects portable source aliases and destination identity collisions before writing', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const source = 'kits/default/package.json';
+  const cases = [
+    {
+      name: 'case-aliased non-builtin source',
+      entries: [{ source: 'KITS/csv/package.json', destination: 'kits/csv/package.json' }],
+      error: /source spelling alias|product Kit/iu,
+    },
+    {
+      name: 'case-equivalent destinations',
+      entries: [
+        { source, destination: 'Case/manifest.json' },
+        { source, destination: 'case/manifest.json' },
+      ],
+      error: /destination collision/iu,
+    },
+    {
+      name: 'Unicode-equivalent destinations',
+      entries: [
+        { source, destination: 'unicode/caf\u00e9.json' },
+        { source, destination: 'unicode/cafe\u0301.json' },
+      ],
+      error: /destination collision/iu,
+    },
+    {
+      name: 'file and directory prefix destinations',
+      entries: [
+        { source, destination: 'prefix/node' },
+        { source, destination: 'prefix/node/child.json' },
+      ],
+      error: /destination collision/iu,
+    },
+  ];
+
+  for (const [index, fixture] of cases.entries()) {
+    await t.test(fixture.name, async () => {
+      const outputRoot = path.join(repositoryRoot, 'dist', `portable-collision-${index}`);
+      await assert.rejects(stageDesktopFiles({
+        repositoryRoot,
+        outputRoot,
+        entries: fixture.entries,
+      }), fixture.error);
+      assert.equal(existsSync(outputRoot), false);
+    });
+  }
 });
 
 test('rejects sockets and symlinks found while expanding a directory', async (t) => {
