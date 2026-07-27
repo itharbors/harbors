@@ -1,12 +1,12 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { parseKitPackageManifest } from '@itharbors/kit-core';
 import { BUILTIN_KITS } from './builtin-kits.mjs';
 
 const SOURCE_PRIORITY = Object.freeze({
   installed: 1,
-  builtin: 2,
-  development: 3,
+  development: 2,
+  builtin: 3,
   explicit: 4,
 });
 
@@ -32,10 +32,11 @@ export async function discoverKits({
     candidates.push({ directory: installedKit?.directory, source: 'installed', installedKit });
   }
 
-  let catalog = await validateCandidates(candidates, { strictInstalled, onDiagnostic });
-  catalog = resolvePackageConflicts(catalog, onDiagnostic);
+  const { catalog, removedNames } = await resolveCatalog(
+    await validateCandidates(candidates, { strictInstalled, onDiagnostic }),
+    onDiagnostic,
+  );
   catalog.sort(compareKits);
-  assertUnique(catalog, (kit) => kit.menuRoot.id, 'Duplicate Kit menu root');
 
   if (!requestedKit) {
     return catalog;
@@ -52,11 +53,14 @@ export async function discoverKits({
     return catalog;
   }
 
+  if (removedNames.has(requestedKit)) {
+    throw new Error(`Requested Kit "${requestedKit}" has conflicting sources`);
+  }
+
   const explicitEntry = await readKitEntry(requestedPath, 'explicit');
   if (explicitEntry.status === 'valid') {
-    const combined = resolvePackageConflicts([...catalog, explicitEntry.entry], onDiagnostic)
-      .sort(compareKits);
-    assertUnique(combined, (kit) => kit.menuRoot.id, 'Duplicate Kit menu root');
+    const { catalog: combined } = await resolveCatalog([...catalog, explicitEntry.entry], onDiagnostic);
+    combined.sort(compareKits);
     return combined;
   }
   if (explicitEntry.status === 'invalid') {
@@ -145,30 +149,85 @@ async function validateCandidates(candidates, { strictInstalled, onDiagnostic })
   return catalog;
 }
 
-function resolvePackageConflicts(entries, onDiagnostic) {
+async function resolveCatalog(entries, onDiagnostic) {
+  const deduplicated = await deduplicateEntries(entries);
+  const packageResolved = resolveConflicts(
+    deduplicated,
+    (entry) => entry.name,
+    'Kit package name',
+    onDiagnostic,
+  );
+  const catalog = resolveConflicts(
+    packageResolved,
+    (entry) => entry.menuRoot.id,
+    'Kit menu root',
+    onDiagnostic,
+  );
+  const retained = new Set(catalog);
+  return {
+    catalog,
+    removedNames: new Set(deduplicated
+      .filter((entry) => !retained.has(entry))
+      .map((entry) => entry.name)),
+  };
+}
+
+async function deduplicateEntries(entries) {
+  const directories = new Map();
+  for (const entry of entries) {
+    const directory = await canonicalDirectory(entry.directory);
+    const existing = directories.get(directory);
+    if (!existing || SOURCE_PRIORITY[entry.source] > SOURCE_PRIORITY[existing.source]) {
+      directories.set(directory, entry);
+    }
+  }
+  return [...directories.values()];
+}
+
+async function canonicalDirectory(directory) {
+  try {
+    return await realpath(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return path.resolve(directory);
+    throw error;
+  }
+}
+
+function resolveConflicts(entries, selectKey, label, onDiagnostic) {
   const groups = new Map();
   for (const entry of entries) {
-    const group = groups.get(entry.name) ?? [];
+    const key = selectKey(entry);
+    const group = groups.get(key) ?? [];
     group.push(entry);
-    groups.set(entry.name, group);
+    groups.set(key, group);
   }
   const resolved = [];
-  for (const [name, group] of groups) {
+  for (const group of groups.values()) {
     if (group.length === 1) {
       resolved.push(group[0]);
       continue;
     }
     const highest = Math.max(...group.map((entry) => SOURCE_PRIORITY[entry.source]));
     const winners = group.filter((entry) => SOURCE_PRIORITY[entry.source] === highest);
-    if (winners.length !== 1) throw new Error(`Duplicate Kit package name: ${name}`);
-    const winner = winners[0];
-    resolved.push(winner);
-    for (const shadowed of group.filter((entry) => entry !== winner)) {
+    if (winners.length === 1) {
+      const winner = winners[0];
+      resolved.push(winner);
+      for (const shadowed of group.filter((entry) => entry !== winner)) {
+        onDiagnostic({
+          code: 'KIT_SOURCE_SHADOWED',
+          kit: selectKey(shadowed),
+          source: shadowed.source,
+          message: `${label} ${selectKey(shadowed)} from ${shadowed.source} was shadowed by ${winner.source}`,
+        });
+      }
+      continue;
+    }
+    for (const conflict of group) {
       onDiagnostic({
-        code: 'KIT_SOURCE_SHADOWED',
-        kit: name,
-        source: shadowed.source,
-        message: `Kit ${name} from ${shadowed.source} was shadowed by ${winner.source}`,
+        code: 'KIT_SOURCE_CONFLICT',
+        kit: selectKey(conflict),
+        source: conflict.source,
+        message: `${label} ${selectKey(conflict)} has conflicting ${conflict.source} sources`,
       });
     }
   }
@@ -268,15 +327,4 @@ function validatePluginList(value, field) {
   }
   if (new Set(value).size !== value.length) return `${field} must not contain duplicates`;
   return null;
-}
-
-function assertUnique(catalog, select, message) {
-  const seen = new Set();
-  for (const kit of catalog) {
-    const value = select(kit);
-    if (seen.has(value)) {
-      throw new Error(`${message}: ${value}`);
-    }
-    seen.add(value);
-  }
 }

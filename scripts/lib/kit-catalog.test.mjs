@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -288,18 +288,137 @@ test('rejects an unknown or invalid explicitly requested Kit', async () => {
   );
 });
 
-test('rejects duplicate Kit package names or menu root ids', async () => {
+test('isolates same-priority installed package conflicts while retaining healthy Kits', async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
-  await createKit(rootDir, 'a', { name: '@itharbors/kit-same', menuRoot: { id: 'a', label: 'A' } });
-  await createKit(rootDir, 'b', { name: '@itharbors/kit-same', menuRoot: { id: 'b', label: 'B' } });
+  const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
+  const first = await createInstalledKit(installedRoot, 'first', {
+    name: '@example/kit-conflict', menuRoot: { id: 'first', label: 'First' },
+  });
+  const second = await createInstalledKit(installedRoot, 'second', {
+    name: '@example/kit-conflict', menuRoot: { id: 'second', label: 'Second' },
+  });
+  const healthy = await createInstalledKit(installedRoot, 'healthy', {
+    name: '@example/kit-healthy', menuRoot: { id: 'healthy', label: 'Healthy' },
+  });
+  const diagnostics = [];
 
-  await assert.rejects(discoverKits({ rootDir }), /duplicate Kit package name/i);
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'stable',
+    installedKits: [first, second, healthy],
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
 
-  const otherRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
-  await createKit(otherRoot, 'a', { menuRoot: { id: 'same', label: 'A' } });
-  await createKit(otherRoot, 'b', { menuRoot: { id: 'same', label: 'B' } });
+  assert.deepEqual(catalog.map((kit) => kit.name), ['@example/kit-healthy']);
+  assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), [
+    'KIT_SOURCE_CONFLICT',
+    'KIT_SOURCE_CONFLICT',
+  ]);
+});
 
-  await assert.rejects(discoverKits({ rootDir: otherRoot }), /duplicate Kit menu root/i);
+test('isolates same-priority installed menu-root conflicts while retaining healthy Kits', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
+  const first = await createInstalledKit(installedRoot, 'first', {
+    name: '@example/kit-first', menuRoot: { id: 'shared', label: 'First' },
+  });
+  const second = await createInstalledKit(installedRoot, 'second', {
+    name: '@example/kit-second', menuRoot: { id: 'shared', label: 'Second' },
+  });
+  const healthy = await createInstalledKit(installedRoot, 'healthy', {
+    name: '@example/kit-healthy', menuRoot: { id: 'healthy', label: 'Healthy' },
+  });
+  const diagnostics = [];
+
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'stable',
+    installedKits: [first, second, healthy],
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.deepEqual(catalog.map((kit) => kit.name), ['@example/kit-healthy']);
+  assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), [
+    'KIT_SOURCE_CONFLICT',
+    'KIT_SOURCE_CONFLICT',
+  ]);
+});
+
+test('prefers builtin and development Kits over installed collisions', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'default', {
+    name: '@itharbors/kit-default', menuRoot: { id: 'default', label: 'Default' },
+  });
+  await createKit(rootDir, 'default-override', {
+    name: '@itharbors/kit-default', menuRoot: { id: 'development-default', label: 'Development Default' },
+  });
+  await createKit(rootDir, 'development', {
+    name: '@example/kit-development', menuRoot: { id: 'development', label: 'Development' },
+  });
+  const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
+  const builtinCollision = await createInstalledKit(installedRoot, 'builtin-collision', {
+    name: '@itharbors/kit-default', menuRoot: { id: 'installed-default', label: 'Installed Default' },
+  });
+  const developmentCollision = await createInstalledKit(installedRoot, 'development-collision', {
+    name: '@example/kit-development', menuRoot: { id: 'installed-development', label: 'Installed Development' },
+  });
+  const diagnostics = [];
+
+  const catalog = await discoverKits({
+    rootDir,
+    installedKits: [builtinCollision, developmentCollision],
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.deepEqual(catalog.map((kit) => kit.name), [
+    '@itharbors/kit-default',
+    '@example/kit-development',
+  ]);
+  assert.deepEqual(catalog.map((kit) => kit.source), [
+    'builtin',
+    'development',
+  ]);
+  assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), [
+    'KIT_SOURCE_SHADOWED',
+    'KIT_SOURCE_SHADOWED',
+    'KIT_SOURCE_SHADOWED',
+  ]);
+});
+
+test('deduplicates installed entries that resolve to the same real directory', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
+  const installed = await createInstalledKit(installedRoot, 'installed', {
+    name: '@example/kit-installed', menuRoot: { id: 'installed', label: 'Installed' },
+  });
+  const linkedDirectory = path.join(installedRoot, 'linked-installed');
+  await symlink(installed.directory, linkedDirectory, 'dir');
+  const diagnostics = [];
+
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'stable',
+    installedKits: [installed, { ...installed, directory: linkedDirectory }],
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.deepEqual(catalog.map((kit) => kit.name), ['@example/kit-installed']);
+  assert.deepEqual(diagnostics, []);
+});
+
+test('rejects a requested package name isolated by a same-priority conflict', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'first', {
+    name: '@example/kit-conflict', menuRoot: { id: 'first', label: 'First' },
+  });
+  await createKit(rootDir, 'second', {
+    name: '@example/kit-conflict', menuRoot: { id: 'second', label: 'Second' },
+  });
+
+  await assert.rejects(
+    discoverKits({ rootDir, requestedKit: '@example/kit-conflict' }),
+    /requested Kit.*conflict/i,
+  );
 });
 
 test('stable discovery includes only explicit builtin and active installed Kits', async () => {
@@ -379,6 +498,15 @@ test('invalid installed sources are isolated unless pending validation requests 
 
 function installedSource(directory, id, version) {
   return { id, version, directory, digest: 'a'.repeat(64), source: 'installed' };
+}
+
+async function createInstalledKit(rootDir, directoryName, options) {
+  const directory = await createKit(rootDir, directoryName, {
+    ...options,
+    version: options.version ?? '1.0.0',
+  });
+  await writeInstalledManifest(directory, options.name, options.version ?? '1.0.0');
+  return installedSource(directory, options.name, options.version ?? '1.0.0');
 }
 
 async function writeInstalledManifest(directory, id, version) {
