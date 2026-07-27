@@ -1,6 +1,7 @@
 import http from 'node:http';
 import https from 'node:https';
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
 
 export async function fetchApplicationBootstrap(baseUrl, fetchImpl = globalThis.fetch) {
   const response = await fetchImpl(new URL('/api/application/bootstrap', baseUrl));
@@ -46,7 +47,8 @@ export async function validateInstalledKitRuntime(
     throw new TypeError('Kit version is required');
   }
   if (selection.source !== 'installed') throw new TypeError('Kit source must be installed');
-  if (typeof selection.directory !== 'string' || !selection.directory.startsWith('/')) {
+  if (typeof selection.directory !== 'string'
+    || (!path.isAbsolute(selection.directory) && !path.win32.isAbsolute(selection.directory))) {
     throw new TypeError('Kit directory must be absolute');
   }
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
