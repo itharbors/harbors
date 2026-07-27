@@ -4,7 +4,6 @@ export function createDevServerEnv(baseEnv, requestedKit, kitSources = []) {
   const serverEnv = { ...baseEnv };
   delete serverEnv.CE_DEFAULT_KIT;
   delete serverEnv.CE_KIT_MODE;
-  delete serverEnv.HARBORS_INSTALLED_KITS;
   serverEnv.HARBORS_KIT_SOURCES = JSON.stringify(kitSources);
   if (requestedKit) serverEnv.CE_DEFAULT_KIT = requestedKit;
   return serverEnv;

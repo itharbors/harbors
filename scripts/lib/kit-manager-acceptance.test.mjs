@@ -25,6 +25,7 @@ import { KitReleaseResolver } from './kit-registry/resolver.mjs';
 
 const fixture = path.resolve('packages/kit-cli/tests/fixtures/minimal-kit');
 const repositoryRoot = path.resolve('.');
+const defaultKitDirectory = path.join(repositoryRoot, 'kits/default');
 const registryUrl = 'https://registry.fixture.test/index.v1.json';
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const workflow = 'example/kit-demo/.github/workflows/publish-kit.yml@refs/tags/v1';
@@ -82,6 +83,19 @@ function createBrowserWindowFake() {
 async function createVersionFixture(root, version) {
   const directory = path.join(root, `kit-${version}`);
   await cp(fixture, directory, { recursive: true });
+  await writeFile(path.join(directory, 'layout.json'), `${JSON.stringify({
+    windows: [{
+      id: 'demo-main',
+      kind: 'main',
+      type: 'panel-area',
+      layout: { type: 'leaf', panel: '@example/demo.main' },
+    }],
+  }, null, 2)}\n`, 'utf8');
+  await writeFile(
+    path.join(directory, 'plugins/demo/main/dist/index.js'),
+    'editor.plugin.define({});\n',
+    'utf8',
+  );
   for (const fileName of ['kit.json', 'package.json']) {
     const file = path.join(directory, fileName);
     const value = JSON.parse(await readFile(file, 'utf8'));
@@ -285,12 +299,32 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
     const { createServer } = await tsImport('../../packages/server/src/server.ts', import.meta.url);
     framework = createServer({
       defaultKit: '@example/kit-demo',
-      installedKitDirs: prepared.activeSources.map(({ directory }) => directory),
+      kitSources: [
+        { directory: defaultKitDirectory, source: 'builtin' },
+        ...prepared.activeSources.map(({ directory }) => ({ directory, source: 'installed' })),
+      ],
       host: '127.0.0.1',
     });
     const frameworkPort = await framework.start();
     const catalog = await (await fetch(`http://127.0.0.1:${frameworkPort}/api/kits`)).json();
     assert.equal(catalog.kits.some((kit) => kit.name === '@example/kit-demo'), true);
+    const sessionResponse = await fetch(`http://127.0.0.1:${frameworkPort}/api/session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'installed-kit-acceptance', kit: '@example/kit-demo' }),
+    });
+    assert.equal(sessionResponse.status, 201);
+    const { sessionId } = await sessionResponse.json();
+    const mainEntryResponse = await fetch(
+      `http://127.0.0.1:${frameworkPort}/api/window-entry/main?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    assert.equal(mainEntryResponse.status, 200);
+    assert.match(await mainEntryResponse.text(), /Demo Kit/u);
+    const secondaryEntryResponse = await fetch(
+      `http://127.0.0.1:${frameworkPort}/api/window-entry/secondary?sessionId=${encodeURIComponent(sessionId)}`,
+    );
+    assert.equal(secondaryEntryResponse.status, 200);
+    assert.match(await secondaryEntryResponse.text(), /Demo Kit Secondary/u);
     await framework.stop();
     framework = undefined;
 

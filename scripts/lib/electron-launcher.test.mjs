@@ -111,7 +111,6 @@ test('starts the Web stack without recursion and forwards requested Kit argument
 test('passes only an explicit requested Kit to the Web server without leaking stale host state', () => {
   const base = {
     PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single',
-    HARBORS_INSTALLED_KITS: '["/stale"]',
   };
   const kitSources = [{ directory: '/repo/kits/default', source: 'builtin' }];
 
@@ -124,7 +123,6 @@ test('passes only an explicit requested Kit to the Web server without leaking st
     HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
     CE_DEFAULT_KIT: '@itharbors/kit-mysql',
   });
-  assert.equal(base.HARBORS_INSTALLED_KITS, '["/stale"]');
 });
 
 test('creates an immutable Framework source snapshot from the resolved Catalog', () => {
