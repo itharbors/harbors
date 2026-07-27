@@ -47,9 +47,12 @@ Kit 名单或旧环境变量。
 ```ts
 interface AssemblyKitSource {
   directory: string;
-  source: 'builtin' | 'installed' | 'development';
+  source: 'builtin' | 'installed' | 'development' | 'explicit';
 }
 ```
+
+`explicit` 只表示用户在本次启动命令中明确指定的外部路径，不来自安装状态，也不会被持久化为商城来源。
+它保留现有命令行快捷方式，并且只在本次启动快照中生效。
 
 桌面进程将该快照通过唯一的 `HARBORS_KIT_SOURCES` 环境变量交给 Framework 子进程。Server 的程序化
 入口通过必填的 `kitSources` 选项接收同一结构。生产代码不再接受 `installedKitDirs`，不再读取
@@ -82,11 +85,13 @@ installed 目录就是资源加载的唯一依据。
 
 来源优先级固定为：
 
-1. `builtin`
-2. `development`
-3. `installed`
+1. 本次启动明确请求的 `explicit`
+2. `builtin`
+3. `development`
+4. `installed`
 
-该顺序保证 builtin 永远不能被商城覆盖，同时 `npm run dev` 的仓库源码临时遮蔽同 ID 的已安装版本。
+该顺序保证用户明确请求的单次路径保持现有启动语义、builtin 永远不能被商城覆盖，同时 `npm run dev`
+的仓库源码临时遮蔽同 ID 的已安装版本。
 包名和 `menuRoot` 使用同一套分组决策：
 
 - 最高优先级只有一个候选时选择它，并忽略该组的低优先级候选；
