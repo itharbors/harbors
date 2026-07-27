@@ -93,6 +93,9 @@ function validateRelative(value, label) {
       ? 'Desktop source is outside the repository'
       : 'Desktop destination is outside its output root');
   }
+  if (path.posix.normalize(value) !== value) {
+    throw new Error(`${label} spelling alias is not portable: ${value}`);
+  }
   return value;
 }
 

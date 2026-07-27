@@ -358,11 +358,17 @@ test('rejects missing files, symlinks, repository escapes, duplicate destination
 test('rejects portable source aliases and destination identity collisions before writing', async (t) => {
   const repositoryRoot = await createRepositoryFixture(t);
   const source = 'kits/default/package.json';
+  await write(repositoryRoot, 'kits/csv/package.json', '{}');
   const cases = [
     {
       name: 'case-aliased non-builtin source',
       entries: [{ source: 'KITS/csv/package.json', destination: 'kits/csv/package.json' }],
       error: /source spelling alias|product Kit/iu,
+    },
+    {
+      name: 'separator-aliased non-builtin source',
+      entries: [{ source: 'kits//csv/package.json', destination: 'kits/csv/package.json' }],
+      error: /source spelling alias/iu,
     },
     {
       name: 'case-equivalent destinations',
