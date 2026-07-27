@@ -128,19 +128,33 @@ async function checkedFile(repositoryRoot, source) {
 }
 
 function builtDirectory(entry) {
-  if (typeof entry !== 'string') return entry;
-  if (path.posix.isAbsolute(entry)) return entry;
+  if (
+    typeof entry !== 'string'
+    || entry.length === 0
+    || entry.includes('\\')
+    || path.posix.isAbsolute(entry)
+  ) {
+    throw new Error('Desktop plugin entrypoint must name a file beneath dist');
+  }
+  const parts = entry.split('/');
+  if (
+    parts.some((part, index) => part.length === 0 || part === '..' || (part === '.' && index !== 0))
+    || path.posix.extname(parts.at(-1)) === ''
+  ) {
+    throw new Error('Desktop plugin entrypoint must name a file beneath dist');
+  }
   const directory = path.posix.dirname(entry);
-  return directory === '.' ? entry : directory;
+  const directoryParts = directory.split('/').filter((part) => part !== '.');
+  if (!directoryParts.includes('dist') || directoryParts.includes('src')) {
+    throw new Error('Desktop plugin entrypoint must name a file beneath dist');
+  }
+  return directory;
 }
 
-function builtDirectoryEntry(pluginRoot, entry) {
+async function builtDirectoryEntry(repositoryRoot, pluginRoot, entry) {
   const directory = builtDirectory(entry);
-  const source = typeof directory === 'string' && path.posix.isAbsolute(directory)
-    ? directory
-    : typeof directory === 'string'
-      ? `${pluginRoot}/${directory}`
-      : directory;
+  await checkedFile(repositoryRoot, `${pluginRoot}/${entry}`);
+  const source = `${pluginRoot}/${directory}`;
   return { source, destination: source, recursive: true };
 }
 
@@ -163,10 +177,10 @@ async function builtinKitPluginEntries(repositoryRoot) {
         manifest?.main,
         ...Object.values(panels ?? {}).map((panel) => panel?.entry),
       ].sort((left, right) => String(left).localeCompare(String(right)));
-      entries.push(
-        { source: packageSource, destination: packageSource },
-        ...entriesToStage.map((entry) => builtDirectoryEntry(pluginRoot, entry)),
-      );
+      entries.push({ source: packageSource, destination: packageSource });
+      for (const entry of entriesToStage) {
+        entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, entry));
+      }
     }
   }
   return entries;

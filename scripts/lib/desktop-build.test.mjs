@@ -22,6 +22,13 @@ async function write(root, relative, contents = relative) {
   await writeFile(filename, contents);
 }
 
+async function updateJson(root, relative, update) {
+  const filename = path.join(root, relative);
+  const value = JSON.parse(await readFile(filename, 'utf8'));
+  update(value);
+  await writeFile(filename, JSON.stringify(value));
+}
+
 async function createRepositoryFixture(t) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-desktop-build-'));
   t.after(() => rm(root, { recursive: true, force: true }));
@@ -92,6 +99,7 @@ export const main = true;
   await write(root, 'kits/default/plugins/fixture-plugin/main/src/index.ts', 'throw new Error();\n');
   await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.html', '<main></main>');
   await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.js', 'export {};\n');
+  await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/src/index.html', '<main>source</main>');
   await write(root, '.agents/skills/notify-user/SKILL.md', 'name: notify-user\n');
   await write(root, '.agents/skills/notify-user/agents/openai.yaml', 'name: Notify User\n');
   await write(root, '.agents/skills/notify-user/scripts/notify.mjs', 'export {};\n');
@@ -153,6 +161,30 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   }
   assert.doesNotMatch(mainBundle, /node_modules\/@sigstore\//u);
 });
+
+for (const [description, update] of [
+  ['a main entrypoint below src', (manifest) => { manifest.main = './main/src/index.js'; }],
+  ['a directory-valued main entrypoint', (manifest) => { manifest.main = './main/dist'; }],
+  ['a panel entrypoint below src', (manifest) => {
+    manifest['ce-editor'].contribute.panel.fixture.entry = './panel.fixture/src/index.html';
+  }],
+  ['a directory-valued panel entrypoint', (manifest) => {
+    manifest['ce-editor'].contribute.panel.fixture.entry = './panel.fixture/dist';
+  }],
+]) {
+  test(`rejects ${description} from a builtin plugin manifest`, async (t) => {
+    const repositoryRoot = await createRepositoryFixture(t);
+    await updateJson(repositoryRoot, 'kits/default/plugins/fixture-plugin/package.json', update);
+
+    await assert.rejects(
+      buildDesktop({
+        repositoryRoot,
+        outputRoot: path.join(repositoryRoot, 'dist', 'desktop-runtime'),
+      }),
+      /Desktop plugin entrypoint must name a file beneath dist/u,
+    );
+  });
+}
 
 test('rejects missing files, symlinks, repository escapes, duplicate destinations, and product Kits', async (t) => {
   const repositoryRoot = await createRepositoryFixture(t);
