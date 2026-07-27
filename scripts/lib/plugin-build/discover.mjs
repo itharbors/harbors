@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { BUILTIN_KITS } from '../builtin-kits.mjs';
 import { readJsonFile, resolvePluginDir } from './fs.mjs';
 
 function appendPluginDirs(results, pluginsRoot) {
@@ -77,6 +78,18 @@ export function discoverAllPlugins(repoRoot) {
       if (!kit.isDirectory()) continue;
       appendPluginDirs(results, path.join(kitsRoot, kit.name, 'plugins'));
     }
+  }
+
+  return results.sort();
+}
+
+export function discoverRuntimePlugins(repoRoot) {
+  const rootDir = path.resolve(repoRoot);
+  const results = [];
+
+  appendPluginDirs(results, path.join(rootDir, 'plugins'));
+  for (const kit of BUILTIN_KITS) {
+    appendPluginDirs(results, path.join(rootDir, 'kits', kit.slug, 'plugins'));
   }
 
   return results.sort();

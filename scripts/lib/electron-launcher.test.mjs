@@ -177,7 +177,16 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.prestart, 'npm run build');
+  assert.equal(packageJson.scripts.prestart, 'npm run build:runtime');
+  assert.equal(
+    packageJson.scripts['plugins:build:runtime'],
+    'node scripts/ce-plugin.mjs build --runtime && node scripts/prepare-notification-skill-resource.mjs',
+  );
+  assert.equal(
+    packageJson.scripts['build:runtime'],
+    'npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build:runtime',
+  );
+  assert.match(packageJson.scripts.build, /npm run plugins:build(?:\s|$)/);
   assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
   assert.equal(packageJson.scripts.electron, 'npm run start --');
   assert.equal(packageJson.scripts.dev, 'node scripts/dev-electron.mjs');
