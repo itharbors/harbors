@@ -34,13 +34,21 @@ export async function triggerApplicationMenu(
 export async function validateInstalledKitRuntime(
   baseUrl,
   bootstrap,
-  kitId,
+  selection,
   {
     fetchImpl = globalThis.fetch,
     sessionId = `kit-activation-${randomUUID()}`,
   } = {},
 ) {
+  const kitId = selection?.id;
   if (typeof kitId !== 'string' || kitId.length === 0) throw new TypeError('Kit id is required');
+  if (typeof selection.version !== 'string' || selection.version.length === 0) {
+    throw new TypeError('Kit version is required');
+  }
+  if (selection.source !== 'installed') throw new TypeError('Kit source must be installed');
+  if (typeof selection.directory !== 'string' || !selection.directory.startsWith('/')) {
+    throw new TypeError('Kit directory must be absolute');
+  }
   if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
   const failedPlugin = Array.isArray(bootstrap?.plugins)
     ? bootstrap.plugins.find((plugin) => (
@@ -64,7 +72,7 @@ export async function validateInstalledKitRuntime(
   const response = await fetchImpl(new URL('/api/session', baseUrl), {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId, kit: kitId }),
+    body: JSON.stringify({ sessionId, kit: selection.directory }),
   });
   const payload = await readJson(response);
   if (!response.ok) throw responseError(response, payload);

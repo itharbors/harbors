@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir, realpath } from 'node:fs/promises';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -34,9 +34,12 @@ export async function resolvePlugin(name: string, ctx: PluginResolveContext): Pr
 
 export async function resolveKit(nameOrPath: string, ctx: KitResolveContext): Promise<string> {
   if (isPathLike(nameOrPath)) {
-    const explicitPath = path.resolve(nameOrPath);
-    if (fs.existsSync(path.join(explicitPath, 'package.json'))) {
-      if (!ctx.kitSources?.some((source) => path.resolve(source.directory) === explicitPath)) {
+    const explicitPath = await canonicalPath(nameOrPath);
+    if (explicitPath && fs.existsSync(path.join(explicitPath, 'package.json'))) {
+      const sourcePaths = await Promise.all(
+        (ctx.kitSources ?? []).map((source) => canonicalPath(source.directory)),
+      );
+      if (!sourcePaths.includes(explicitPath)) {
         throw new Error(`Kit "${nameOrPath}" not found`);
       }
       return explicitPath;
@@ -45,14 +48,23 @@ export async function resolveKit(nameOrPath: string, ctx: KitResolveContext): Pr
 
   for (const source of ctx.kitSources ?? []) {
     try {
-      const pkg = JSON.parse(await readFile(path.join(source.directory, 'package.json'), 'utf8'));
-      if (pkg.name === nameOrPath && pkg['ce-editor']?.kit) return path.resolve(source.directory);
+      const directory = await realpath(source.directory);
+      const pkg = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+      if (pkg.name === nameOrPath && pkg['ce-editor']?.kit) return directory;
     } catch {
       continue;
     }
   }
 
   throw new Error(`Kit "${nameOrPath}" not found`);
+}
+
+async function canonicalPath(value: string): Promise<string | undefined> {
+  try {
+    return await realpath(path.resolve(value));
+  } catch {
+    return undefined;
+  }
 }
 
 function isPathLike(value: string): boolean {

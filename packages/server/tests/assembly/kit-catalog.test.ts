@@ -43,14 +43,14 @@ describe('Kit catalog discovery', () => {
         id: 'default',
         name: '@itharbors/kit-default',
         label: 'Default Kit',
-        directory: defaultDirectory,
+        directory: fs.realpathSync(defaultDirectory),
         source: 'builtin',
       },
       {
         id: 'mysql',
         name: '@itharbors/kit-mysql',
         label: 'MySQL',
-        directory: mysqlDirectory,
+        directory: fs.realpathSync(mysqlDirectory),
         source: 'development',
       },
     ]);
@@ -100,14 +100,14 @@ describe('Kit catalog discovery', () => {
         id: 'default',
         name: '@itharbors/kit-default',
         label: 'Default Kit',
-        directory: path.join(kitsDir, 'default'),
+        directory: fs.realpathSync(path.join(kitsDir, 'default')),
         source: 'development',
       },
       {
         id: 'external',
         name: '@example/external-kit',
         label: 'External Kit',
-        directory: externalDirectory,
+        directory: fs.realpathSync(externalDirectory),
         source: 'explicit',
       },
     ]);
@@ -131,7 +131,7 @@ describe('Kit catalog discovery', () => {
 
     expect(catalog.find((entry) => entry.name === '@example/kit-installed')).toEqual({
       id: 'installed', name: '@example/kit-installed', label: 'Installed Kit',
-      directory: installedDirectory, source: 'installed',
+      directory: fs.realpathSync(installedDirectory), source: 'installed',
     });
   });
 

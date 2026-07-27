@@ -366,6 +366,7 @@ function startElectronApp() {
         validateCatalog: async (sources) => discoverKits({
           rootDir,
           profile: runtimeProfile === 'development' ? 'development' : 'stable',
+          requestedKit: electronOptions.requestedKit ?? undefined,
           installedKits: sources,
           failOnInstalledError: true,
         }),
@@ -601,11 +602,12 @@ async function startFrameworkAndTrackReadiness() {
   const activation = await finalizePendingKitActivations({
     store: kitStore,
     selections: pendingKitActivations,
+    catalog: kitCatalog,
     audit: kitManagerService.audit,
     validateRuntime: (selection) => validateInstalledKitRuntime(
       startUrl,
       bootstrap,
-      selection.id,
+      selection,
     ),
   });
   pendingKitActivations = [];

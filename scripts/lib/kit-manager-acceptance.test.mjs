@@ -10,12 +10,16 @@ import { tsImport } from 'tsx/esm/api';
 
 import { packKit } from '../../packages/kit-cli/dist/index.js';
 import { discoverKits } from './kit-catalog.mjs';
+import { validateInstalledKitRuntime } from './application-runtime-client.mjs';
 import { createKitManagerView } from './kit-manager-view.mjs';
 import { KIT_MANAGER_CHANNELS, registerKitManagerIpc } from './kit-manager-ipc.mjs';
 import { createKitManagerWindowController } from './kit-manager-window.mjs';
 import { KitArtifactInstaller } from './kit-store/installer.mjs';
 import { InstalledKitStore } from './kit-store/state.mjs';
-import { prepareInstalledKitsForStartup } from './kit-store/startup.mjs';
+import {
+  finalizePendingKitActivations,
+  prepareInstalledKitsForStartup,
+} from './kit-store/startup.mjs';
 import { KitAuditLog } from './kit-registry/audit.mjs';
 import { KitRegistryCache } from './kit-registry/cache.mjs';
 import { KitRegistryClient } from './kit-registry/client.mjs';
@@ -306,8 +310,32 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
       host: '127.0.0.1',
     });
     const frameworkPort = await framework.start();
+    const frameworkUrl = `http://127.0.0.1:${frameworkPort}`;
     const catalog = await (await fetch(`http://127.0.0.1:${frameworkPort}/api/kits`)).json();
     assert.equal(catalog.kits.some((kit) => kit.name === '@example/kit-demo'), true);
+    const bootstrap = await (await fetch(`${frameworkUrl}/api/application/bootstrap`)).json();
+    const activation = await finalizePendingKitActivations({
+      store,
+      selections: prepared.pendingActivations,
+      catalog: await discoverKits({
+        rootDir: repositoryRoot,
+        profile: 'stable',
+        installedKits: prepared.activeSources,
+      }),
+      validateRuntime: (selection) => validateInstalledKitRuntime(
+        frameworkUrl,
+        bootstrap,
+        selection,
+        { sessionId: 'installed-kit-runtime-validation' },
+      ),
+      audit,
+    });
+    assert.deepEqual(activation.outcomes, [{
+      id: '@example/kit-demo',
+      version: '1.2.4',
+      status: 'activated',
+    }]);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
     const sessionResponse = await fetch(`http://127.0.0.1:${frameworkPort}/api/session`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -94,7 +94,12 @@ test('validates an installed Kit through startup state and an actual disposable 
   await validateInstalledKitRuntime(
     'http://localhost:8080/editor',
     bootstrap,
-    '@example/kit-demo',
+    {
+      id: '@example/kit-demo',
+      version: '1.0.0',
+      source: 'installed',
+      directory: '/kit-store/example/kit-demo/1.0.0',
+    },
     {
       sessionId: 'activation-check',
       fetchImpl: async (url, init = {}) => {
@@ -112,7 +117,7 @@ test('validates an installed Kit through startup state and an actual disposable 
   ]);
   assert.deepEqual(JSON.parse(calls[0].init.body), {
     sessionId: 'activation-check',
-    kit: '@example/kit-demo',
+    kit: '/kit-store/example/kit-demo/1.0.0',
   });
 });
 
@@ -130,7 +135,12 @@ test('rejects a failed startup plugin before opening a disposable session', asyn
         error: 'native import failed',
       }],
     },
-    '@example/kit-demo',
+    {
+      id: '@example/kit-demo',
+      version: '1.0.0',
+      source: 'installed',
+      directory: '/kit-store/example/kit-demo/1.0.0',
+    },
     { fetchImpl: async () => { fetches += 1; } },
   ), /native import failed/);
   assert.equal(fetches, 0);
@@ -150,7 +160,12 @@ test('rejects a Kit-attributed startup conflict before opening a disposable sess
       }],
       plugins: [],
     },
-    '@example/kit-demo',
+    {
+      id: '@example/kit-demo',
+      version: '1.0.0',
+      source: 'installed',
+      directory: '/kit-store/example/kit-demo/1.0.0',
+    },
     { fetchImpl: async () => { fetches += 1; } },
   ), /different paths/);
   assert.equal(fetches, 0);

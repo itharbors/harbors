@@ -154,8 +154,23 @@ describe('resolvePlugin', () => {
       kitSources: [{ directory: allowed, source: 'development' }],
     };
 
-    await expect(resolveKit('@scope/kit-allowed', context)).resolves.toBe(allowed);
+    await expect(resolveKit('@scope/kit-allowed', context)).resolves.toBe(fs.realpathSync(allowed));
     await expect(resolveKit(excluded, context)).rejects.toThrow(/not found/i);
     await expect(resolveKit('@scope/kit-excluded', context)).rejects.toThrow(/not found/i);
+  });
+
+  it('matches an explicit Kit path to its authoritative source by canonical identity', async () => {
+    const realDirectory = path.join(projectRoot, 'real-kits', 'allowed');
+    const sourceAlias = path.join(projectRoot, 'kit-source-alias');
+    fs.mkdirSync(realDirectory, { recursive: true });
+    fs.writeFileSync(path.join(realDirectory, 'package.json'), JSON.stringify({
+      name: '@scope/kit-allowed',
+      'ce-editor': { kit: { layouts: { default: 'layout.json' }, plugin: [] } },
+    }));
+    fs.symlinkSync(realDirectory, sourceAlias);
+
+    await expect(resolveKit(realDirectory, {
+      kitSources: [{ directory: sourceAlias, source: 'installed' }],
+    })).resolves.toBe(fs.realpathSync(realDirectory));
   });
 });

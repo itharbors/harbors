@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import type { PublicKitCatalogEntry } from '@itharbors/plugin-types';
 import type { AssemblyConfig, AssemblyKitSource } from './config';
@@ -10,11 +10,10 @@ export interface KitCatalogEntry extends PublicKitCatalogEntry {
 }
 
 export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitCatalogEntry[]> {
-  const directories = new Map(
-    (await listAssemblyKitSources(assembly)).map((item) => [
-      path.resolve(item.directory), item.source,
-    ]),
-  );
+  const directories = new Map<string, AssemblyKitSource['source']>();
+  for (const item of await listAssemblyKitSources(assembly)) {
+    directories.set(await canonicalDirectory(item.directory), item.source);
+  }
   const selectedDirectory = path.resolve(await resolveKit(assembly.defaultKit, assembly));
   if (!directories.has(selectedDirectory)) directories.set(selectedDirectory, 'explicit');
 
@@ -33,6 +32,14 @@ export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitC
   assertUnique(entries, (entry) => entry.name, 'Duplicate Kit package name');
   assertUnique(entries, (entry) => entry.id, 'Duplicate Kit menu root');
   return entries;
+}
+
+async function canonicalDirectory(directory: string): Promise<string> {
+  try {
+    return await realpath(directory);
+  } catch {
+    return path.resolve(directory);
+  }
 }
 
 export async function listAssemblyKitSources(assembly: AssemblyConfig): Promise<AssemblyKitSource[]> {

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, realpath, symlink, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -45,7 +45,7 @@ test('discovers valid Kit manifests in deterministic order', async () => {
       menuRoot: { id: 'sqlite', label: 'SQLite' },
     },
   ]);
-  assert.equal(kits[0].directory, path.join(rootDir, 'kits', 'default'));
+  assert.equal(kits[0].directory, await realpath(path.join(rootDir, 'kits', 'default')));
   assert.deepEqual(kits.map(({ source, version }) => ({ source, version })), [
     { source: 'builtin', version: '0.0.1' },
     { source: 'development', version: '0.0.1' },
@@ -249,7 +249,7 @@ test('appends a valid requested Kit path outside the repository catalog', async 
     '@example/kit-external',
     '@itharbors/kit-sqlite',
   ]);
-  assert.equal(kits[1].directory, externalKit);
+  assert.equal(kits[1].directory, await realpath(externalKit));
   assert.equal(kits[1].source, 'explicit');
 });
 
@@ -398,11 +398,12 @@ test('deduplicates installed entries that resolve to the same real directory', a
   const catalog = await discoverKits({
     rootDir,
     profile: 'stable',
-    installedKits: [installed, { ...installed, directory: linkedDirectory }],
+    installedKits: [{ ...installed, directory: linkedDirectory }, installed],
     onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
   });
 
   assert.deepEqual(catalog.map((kit) => kit.name), ['@example/kit-installed']);
+  assert.equal(catalog[0].directory, await realpath(installed.directory));
   assert.deepEqual(diagnostics, []);
 });
 

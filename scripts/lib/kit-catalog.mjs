@@ -1,4 +1,5 @@
 import { readFile, readdir, realpath } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { parseKitPackageManifest } from '@itharbors/kit-core';
 import { BUILTIN_KITS } from './builtin-kits.mjs';
@@ -47,7 +48,7 @@ export async function discoverKits({
     return catalog;
   }
 
-  const requestedPath = path.resolve(rootDir, requestedKit);
+  const requestedPath = await canonicalDirectory(path.resolve(rootDir, requestedKit));
   const pathMatch = catalog.find((kit) => kit.directory === requestedPath);
   if (pathMatch) {
     return catalog;
@@ -72,7 +73,7 @@ export async function discoverKits({
 
 export function resolveRequestedKitName(catalog, requestedKit, rootDir) {
   if (!requestedKit) return null;
-  const requestedPath = path.resolve(rootDir, requestedKit);
+  const requestedPath = canonicalDirectorySync(path.resolve(rootDir, requestedKit));
   const match = catalog.find((kit) => (
     kit.name === requestedKit || kit.directory === requestedPath
   ));
@@ -80,6 +81,15 @@ export function resolveRequestedKitName(catalog, requestedKit, rootDir) {
     throw new Error(`Requested Kit "${requestedKit}" not found in Catalog`);
   }
   return match.name;
+}
+
+function canonicalDirectorySync(directory) {
+  try {
+    return realpathSync(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return path.resolve(directory);
+    throw error;
+  }
 }
 
 function compareKits(left, right) {
@@ -281,14 +291,15 @@ async function readKitEntry(directory, source, installedSource) {
 
   const menuRoot = manifest['ce-editor'].kit.menuRoot;
   const startupPlugins = manifest['ce-editor'].kit.startup?.plugins ?? [];
+  const resolvedDirectory = await canonicalDirectory(directory);
   return {
     status: 'valid',
     entry: {
       name: manifest.name,
       label: menuRoot.label,
       menuRoot: { id: menuRoot.id, label: menuRoot.label },
-      directory: path.resolve(directory),
-      manifestPath: path.resolve(manifestPath),
+      directory: resolvedDirectory,
+      manifestPath: path.join(resolvedDirectory, 'package.json'),
       startupPlugins: [...startupPlugins],
       source,
       version,
