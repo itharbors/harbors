@@ -141,4 +141,23 @@ describe('resolvePlugin', () => {
 
     await expect(resolveKit('@scope/kit-default', kitContext())).resolves.toBe(kitDir);
   });
+
+  it('rejects names and paths outside an authoritative source snapshot', async () => {
+    const allowed = path.join(projectRoot, 'kits', 'allowed');
+    const excluded = path.join(projectRoot, 'kits', 'excluded');
+    for (const [directory, name] of [[allowed, '@scope/kit-allowed'], [excluded, '@scope/kit-excluded']]) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+        name, 'ce-editor': { kit: { layouts: { default: 'layout.json' }, plugin: [] } },
+      }));
+    }
+    const context = {
+      ...kitContext(),
+      kitSources: [{ directory: allowed, source: 'development' }],
+    };
+
+    await expect(resolveKit('@scope/kit-allowed', context)).resolves.toBe(allowed);
+    await expect(resolveKit(excluded, context)).rejects.toThrow(/not found/i);
+    await expect(resolveKit('@scope/kit-excluded', context)).rejects.toThrow(/not found/i);
+  });
 });

@@ -1,16 +1,48 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import type { PublicKitCatalogEntry } from '@itharbors/plugin-types';
-import type { AssemblyConfig } from './config';
+import type { AssemblyConfig, AssemblyKitSource } from './config';
 import { resolveKit } from '../plugin/resolver';
 
 export interface KitCatalogEntry extends PublicKitCatalogEntry {
   directory: string;
-  source: 'builtin' | 'installed' | 'explicit';
+  source: 'builtin' | 'installed' | 'development' | 'explicit';
 }
 
 export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitCatalogEntry[]> {
-  const directories = new Map<string, KitCatalogEntry['source']>();
+  const directories = new Map(
+    (await listAssemblyKitSources(assembly)).map((item) => [
+      path.resolve(item.directory), item.source,
+    ]),
+  );
+  const selectedDirectory = path.resolve(await resolveKit(assembly.defaultKit, assembly));
+  if (!directories.has(selectedDirectory)) directories.set(selectedDirectory, 'explicit');
+
+  const entries: KitCatalogEntry[] = [];
+  for (const [directory, source] of directories) {
+    const entry = await readKitEntry(directory, source);
+    if (entry) {
+      entries.push(entry);
+    } else if (source === 'installed') {
+      throw new Error(`Invalid installed Kit manifest at ${directory}`);
+    } else if (directory === selectedDirectory) {
+      throw new Error(`Invalid Kit manifest for selected Kit "${assembly.defaultKit}"`);
+    }
+  }
+  entries.sort(compareEntries);
+  assertUnique(entries, (entry) => entry.name, 'Duplicate Kit package name');
+  assertUnique(entries, (entry) => entry.id, 'Duplicate Kit menu root');
+  return entries;
+}
+
+export async function listAssemblyKitSources(assembly: AssemblyConfig): Promise<AssemblyKitSource[]> {
+  if (assembly.kitSources !== null && assembly.kitSources !== undefined) {
+    return assembly.kitSources.map((item) => ({
+      directory: path.resolve(item.directory),
+      source: item.source,
+    }));
+  }
+  const directories = new Map<string, AssemblyKitSource['source']>();
   for (const kitsDirectory of new Set([
     path.resolve(assembly.builtinKitsDir),
     path.resolve(assembly.kitsDir),
@@ -30,28 +62,7 @@ export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitC
     directories.set(path.resolve(installedDirectory), 'installed');
   }
 
-  const selectedDirectory = path.resolve(await resolveKit(assembly.defaultKit, {
-    builtinKitsDir: assembly.builtinKitsDir,
-    kitsDir: assembly.kitsDir,
-    installedKitDirs: assembly.installedKitDirs,
-  }));
-  if (!directories.has(selectedDirectory)) directories.set(selectedDirectory, 'explicit');
-
-  const entries: KitCatalogEntry[] = [];
-  for (const [directory, source] of directories) {
-    const entry = await readKitEntry(directory, source);
-    if (entry) {
-      entries.push(entry);
-    } else if (source === 'installed') {
-      throw new Error(`Invalid installed Kit manifest at ${directory}`);
-    } else if (directory === selectedDirectory) {
-      throw new Error(`Invalid Kit manifest for selected Kit "${assembly.defaultKit}"`);
-    }
-  }
-  entries.sort(compareEntries);
-  assertUnique(entries, (entry) => entry.name, 'Duplicate Kit package name');
-  assertUnique(entries, (entry) => entry.id, 'Duplicate Kit menu root');
-  return entries;
+  return [...directories].map(([directory, source]) => ({ directory, source }));
 }
 
 async function readKitEntry(

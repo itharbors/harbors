@@ -1,22 +1,41 @@
 import { readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 import { parseKitPackageManifest } from '@itharbors/kit-core';
+import { BUILTIN_KITS } from './builtin-kits.mjs';
 
-export async function discoverKits({ rootDir, requestedKit, installedKits = [] } = {}) {
+const SOURCE_PRIORITY = Object.freeze({
+  installed: 1,
+  builtin: 2,
+  development: 3,
+  explicit: 4,
+});
+
+export async function discoverKits({
+  rootDir,
+  profile = 'development',
+  requestedKit,
+  installedKits = [],
+  failOnInstalledError,
+  onDiagnostic = () => {},
+} = {}) {
   if (typeof rootDir !== 'string' || rootDir.length === 0) {
     throw new TypeError('rootDir is required');
   }
-
-  const catalog = await discoverRepositoryKits(rootDir);
-  for (const installedKit of installedKits) {
-    const result = await readKitEntry(installedKit?.directory, 'installed', installedKit);
-    if (result.status !== 'valid') {
-      throw new Error(`Installed Kit ${installedKit?.id ?? '<unknown>'} is ${result.status}: ${result.reason ?? installedKit?.directory ?? '<unknown>'}`);
-    }
-    catalog.push(result.entry);
+  if (!['stable', 'development'].includes(profile)) {
+    throw new TypeError('profile must be stable or development');
   }
+  if (typeof onDiagnostic !== 'function') throw new TypeError('onDiagnostic must be a function');
+  const strictInstalled = failOnInstalledError ?? profile !== 'stable';
+
+  const candidates = await discoverRepositoryKits(rootDir, profile);
+  for (const installedKit of installedKits) {
+    candidates.push({ directory: installedKit?.directory, source: 'installed', installedKit });
+  }
+
+  let catalog = await validateCandidates(candidates, { strictInstalled, onDiagnostic });
+  catalog = resolvePackageConflicts(catalog, onDiagnostic);
   catalog.sort(compareKits);
-  assertUniqueCatalog(catalog);
+  assertUnique(catalog, (kit) => kit.menuRoot.id, 'Duplicate Kit menu root');
 
   if (!requestedKit) {
     return catalog;
@@ -35,8 +54,9 @@ export async function discoverKits({ rootDir, requestedKit, installedKits = [] }
 
   const explicitEntry = await readKitEntry(requestedPath, 'explicit');
   if (explicitEntry.status === 'valid') {
-    const combined = [...catalog, explicitEntry.entry].sort(compareKits);
-    assertUniqueCatalog(combined);
+    const combined = resolvePackageConflicts([...catalog, explicitEntry.entry], onDiagnostic)
+      .sort(compareKits);
+    assertUnique(combined, (kit) => kit.menuRoot.id, 'Duplicate Kit menu root');
     return combined;
   }
   if (explicitEntry.status === 'invalid') {
@@ -62,24 +82,97 @@ function compareKits(left, right) {
   return left.label.localeCompare(right.label) || left.name.localeCompare(right.name);
 }
 
-async function discoverRepositoryKits(rootDir) {
+async function discoverRepositoryKits(rootDir, profile) {
   const kitsDir = path.join(rootDir, 'kits');
+  const candidates = BUILTIN_KITS.map(({ slug }) => ({
+    directory: path.join(kitsDir, slug),
+    source: 'builtin',
+  }));
+  if (profile !== 'development') return candidates;
   let entries;
   try {
     entries = await readdir(kitsDir, { withFileTypes: true });
   } catch (error) {
-    if (error?.code === 'ENOENT') return [];
+    if (error?.code === 'ENOENT') return candidates;
     throw error;
   }
 
+  const builtinSlugs = new Set(BUILTIN_KITS.map((kit) => kit.slug));
+  for (const directory of entries
+    .filter((entry) => entry.isDirectory() && !builtinSlugs.has(entry.name))
+    .sort((a, b) => a.name.localeCompare(b.name))) {
+    candidates.push({ directory: path.join(kitsDir, directory.name), source: 'development' });
+  }
+  return candidates;
+}
+
+async function validateCandidates(candidates, { strictInstalled, onDiagnostic }) {
   const catalog = [];
-  for (const directory of entries.filter((entry) => entry.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-    const result = await readKitEntry(path.join(kitsDir, directory.name), 'builtin');
+  for (const candidate of candidates) {
+    const result = await readKitEntry(
+      candidate.directory,
+      candidate.source,
+      candidate.installedKit,
+    );
     if (result.status === 'valid') {
       catalog.push(result.entry);
+      continue;
+    }
+    if (candidate.source === 'builtin') {
+      if (result.status === 'missing') continue;
+      throw new Error(`Invalid builtin Kit manifest: ${result.reason}`);
+    }
+    if (candidate.source === 'installed') {
+      if (strictInstalled) {
+        throw new Error(`Installed Kit ${candidate.installedKit?.id ?? '<unknown>'} is ${result.status}: ${result.reason ?? '<unknown>'}`);
+      }
+      onDiagnostic({
+        code: 'INVALID_INSTALLED_KIT',
+        kit: candidate.installedKit?.id,
+        source: 'installed',
+        message: `Installed Kit ${candidate.installedKit?.id ?? '<unknown>'} was isolated`,
+      });
+      continue;
+    }
+    if (candidate.source === 'development') {
+      onDiagnostic({
+        code: 'INVALID_DEVELOPMENT_KIT',
+        source: 'development',
+        message: 'A development Kit was ignored because its manifest is invalid',
+      });
     }
   }
   return catalog;
+}
+
+function resolvePackageConflicts(entries, onDiagnostic) {
+  const groups = new Map();
+  for (const entry of entries) {
+    const group = groups.get(entry.name) ?? [];
+    group.push(entry);
+    groups.set(entry.name, group);
+  }
+  const resolved = [];
+  for (const [name, group] of groups) {
+    if (group.length === 1) {
+      resolved.push(group[0]);
+      continue;
+    }
+    const highest = Math.max(...group.map((entry) => SOURCE_PRIORITY[entry.source]));
+    const winners = group.filter((entry) => SOURCE_PRIORITY[entry.source] === highest);
+    if (winners.length !== 1) throw new Error(`Duplicate Kit package name: ${name}`);
+    const winner = winners[0];
+    resolved.push(winner);
+    for (const shadowed of group.filter((entry) => entry !== winner)) {
+      onDiagnostic({
+        code: 'KIT_SOURCE_SHADOWED',
+        kit: name,
+        source: shadowed.source,
+        message: `Kit ${name} from ${shadowed.source} was shadowed by ${winner.source}`,
+      });
+    }
+  }
+  return resolved;
 }
 
 async function readKitEntry(directory, source, installedSource) {
@@ -175,11 +268,6 @@ function validatePluginList(value, field) {
   }
   if (new Set(value).size !== value.length) return `${field} must not contain duplicates`;
   return null;
-}
-
-function assertUniqueCatalog(catalog) {
-  assertUnique(catalog, (kit) => kit.name, 'Duplicate Kit package name');
-  assertUnique(catalog, (kit) => kit.menuRoot.id, 'Duplicate Kit menu root');
 }
 
 function assertUnique(catalog, select, message) {

@@ -1,7 +1,8 @@
-import { readFile, readdir, realpath } from 'node:fs/promises';
+import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import type { AssemblyConfig } from '../assembly/config';
+import { listAssemblyKitSources } from '../assembly/kit-catalog';
 import { resolveKit, resolvePlugin } from '../plugin/resolver';
 import type { ApplicationDiagnostic, ApplicationPluginSpec } from './types';
 
@@ -91,24 +92,9 @@ export async function discoverApplicationPlugins(
 async function discoverKitPaths(assembly: AssemblyConfig): Promise<string[]> {
   const result: string[] = [];
   const seen = new Set<string>();
-  for (const kitsDir of [assembly.builtinKitsDir, assembly.kitsDir]) {
-    let entries;
+  for (const source of await listAssemblyKitSources(assembly)) {
     try {
-      entries = await readdir(kitsDir, { withFileTypes: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
-      throw error;
-    }
-    for (const entry of entries.filter((item) => item.isDirectory()).sort((a, b) => a.name.localeCompare(b.name))) {
-      const canonical = await realpath(path.join(kitsDir, entry.name));
-      if (seen.has(canonical)) continue;
-      seen.add(canonical);
-      result.push(canonical);
-    }
-  }
-  for (const installedKitDir of assembly.installedKitDirs) {
-    try {
-      const canonical = await realpath(installedKitDir);
+      const canonical = await realpath(source.directory);
       if (seen.has(canonical)) continue;
       seen.add(canonical);
       result.push(canonical);

@@ -134,6 +134,24 @@ describe('discoverApplicationPlugins', () => {
     ]);
   });
 
+  it('loads startup plugins only from the authoritative source snapshot', async () => {
+    const allowedPath = createPlugin(assembly.pluginsDir, 'allowed', '@scope/allowed');
+    const allowedKit = createKit('allowed', '@scope/kit-allowed', ['@scope/allowed']);
+    createPlugin(assembly.pluginsDir, 'excluded', '@scope/excluded');
+    createKit('excluded', '@scope/kit-excluded', ['@scope/excluded']);
+    assembly = {
+      ...assembly,
+      kitSources: [{ directory: allowedKit, source: 'development' }],
+      defaultKit: '@scope/kit-allowed',
+    } as AssemblyConfig;
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([{
+      name: '@scope/allowed', path: allowedPath, kits: ['@scope/kit-allowed'],
+    }]);
+  });
+
   it('adds startup plugins from an external configured Kit to repository plugins', async () => {
     const repositoryPath = createPlugin(assembly.pluginsDir, 'repository', '@scope/repository');
     createKit('repository', '@scope/kit-repository', ['@scope/repository']);

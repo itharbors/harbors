@@ -10,19 +10,33 @@ function requireAbsolutePath(env, name) {
   return value;
 }
 
-function parseInstalledKitDirs(value) {
-  const message = 'HARBORS_INSTALLED_KITS must be a JSON array of non-empty absolute paths';
+const KIT_SOURCE_KINDS = new Set(['builtin', 'installed', 'development', 'explicit']);
+
+function parseKitSources(value) {
+  const message = 'HARBORS_KIT_SOURCES must be a JSON array of exact source objects with unique absolute paths';
   let parsed;
   try {
     parsed = JSON.parse(value);
   } catch {
     throw new Error(message);
   }
-  if (!Array.isArray(parsed)
-    || parsed.some((item) => typeof item !== 'string' || item.length === 0 || !path.isAbsolute(item))) {
+  if (!Array.isArray(parsed)) {
     throw new Error(message);
   }
-  return Object.freeze([...parsed]);
+  const seen = new Set();
+  const sources = parsed.map((item) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)
+      || Object.keys(item).sort().join(',') !== 'directory,source'
+      || typeof item.directory !== 'string' || !path.isAbsolute(item.directory)
+      || !KIT_SOURCE_KINDS.has(item.source)
+      || seen.has(path.resolve(item.directory))) {
+      throw new Error(message);
+    }
+    const directory = path.resolve(item.directory);
+    seen.add(directory);
+    return Object.freeze({ directory, source: item.source });
+  });
+  return Object.freeze(sources);
 }
 
 function parseNotificationPort(value) {
@@ -43,7 +57,7 @@ export function parseDesktopFrameworkEnvironment(env) {
     runtimeRoot: requireAbsolutePath(env, 'HARBORS_RUNTIME_ROOT'),
     clientAssetsRoot: requireAbsolutePath(env, 'HARBORS_CLIENT_ASSETS_ROOT'),
     dbPath: requireAbsolutePath(env, 'HARBORS_DB_PATH'),
-    installedKitDirs: parseInstalledKitDirs(env.HARBORS_INSTALLED_KITS),
+    kitSources: parseKitSources(env.HARBORS_KIT_SOURCES),
     notificationPort: parseNotificationPort(env.HARBORS_NOTIFICATION_PORT),
     applicationControlToken,
     host: '127.0.0.1',
@@ -132,7 +146,7 @@ export async function runDesktopFrameworkProcess({
   try {
     const environment = parseDesktopFrameworkEnvironment(env);
     const assembly = createAssembly(environment.runtimeRoot, {
-      installedKitDirs: environment.installedKitDirs,
+      kitSources: environment.kitSources,
     });
     const framework = createServer({
       assembly,

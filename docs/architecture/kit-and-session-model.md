@@ -103,9 +103,9 @@ entry；策略和撤回文件只是低频治理输入。客户端和聚合器只
 Dock 提供五个 sender-bound IPC 操作，普通 Kit Renderer 无法调用，也不能提交 URL、路径或
 摘要。安装不热替换运行中代码，activate/rollback 只设置 pending。
 
-传入值像路径时，resolver 先尝试该路径并要求存在 `package.json`。否则在 assembly
-配置的 builtin kits 和 kits 目录中枚举一级子目录，使用目录名或 package name 匹配；此外只
-检查 assembly 明确传入的 `installedKitDirs`，不会扫描 Store 根或任意版本目录。
+Electron 先把 builtin、active installed 和开发模式允许的 development 候选交给统一来源解析器，
+再把唯一的 resolved source snapshot 交给 Framework。Server 只在这份快照中按路径或 package name
+解析 Kit，并重新校验运行时 manifest；不会扫描 Store 根、任意版本目录或快照之外的仓库目录。
 
 默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，installed 目录默认为空，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
@@ -114,13 +114,14 @@ Electron 在启动时先将 pending 版本暂存为 active 并用完整 Catalog 
 检查 application-scope 启动状态并通过一次临时 Session 真实加载普通插件。两层都成功后才提交
 激活；真实加载失败通过一次原子写入进入 badVersions，并把 previous 重新置为 pending 后自动
 重启。previous 也必须重新通过两层验证；再次失败或没有 previous 时原子清除该 Kit 的 active。
-完成这一步后再从 InstalledKitStore 读取 active 版本快照，将同一目录数组交给桌面
-Catalog 并序列化为 `HARBORS_INSTALLED_KITS` 传给 Server。桌面端校验发布 `kit.json` 与
-Store 记录的 id/version，Server 再独立校验运行时 `package.json`。builtin、installed 和
-显式开发路径之间出现 package name 或 menu root 冲突时直接拒绝，不采用覆盖优先级。
+完成这一步后再从 InstalledKitStore 读取 active 版本快照，将解析完成的来源集合序列化为
+`HARBORS_KIT_SOURCES` 传给 Server。桌面端校验发布 `kit.json` 与 Store 记录的 id/version，Server
+再独立校验运行时 `package.json`。内置 ID 在商城下载前直接拒绝；异常遗留冲突使用 builtin，开发
+进程中的源码临时遮蔽 installed，均不修改用户安装状态。
 
-Electron 默认通过 KitCatalog 扫描 `kits/*`，但启动时只保留静态目录并读取已有 workspace
-记录。首次从 Tray 选择 Kit 时才调用 `WorkspaceStore.getOrCreate()`，创建或恢复稳定
+Electron stable profile 只解析显式 builtin 与 active installed；development profile 额外扫描
+仓库 `kits/*`。解析只保留静态目录并读取已有 workspace 记录。首次从 Tray 选择 Kit 时才调用
+`WorkspaceStore.getOrCreate()`，创建或恢复稳定
 sessionId 并加载对应窗口；未选择的 Kit 不创建新 workspace、Server session 或运行时。
 `--kit <name-or-path>` 代表显式选择，因此启动就绪后只自动打开指定 Kit；Catalog 和 Tray
 仍保留其他仓库 Kit，未打开的 Kit 不创建运行时。显式外部路径经校验后临时追加到 Catalog。

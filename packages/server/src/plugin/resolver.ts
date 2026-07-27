@@ -12,6 +12,7 @@ export interface KitResolveContext {
   builtinKitsDir: string;
   kitsDir: string;
   installedKitDirs: string[];
+  kitSources?: Array<{ directory: string; source: string }> | null;
 }
 
 /**
@@ -38,8 +39,24 @@ export async function resolveKit(nameOrPath: string, ctx: KitResolveContext): Pr
   if (isPathLike(nameOrPath)) {
     const explicitPath = path.resolve(nameOrPath);
     if (fs.existsSync(path.join(explicitPath, 'package.json'))) {
+      if (ctx.kitSources !== null && ctx.kitSources !== undefined
+        && !ctx.kitSources.some((source) => path.resolve(source.directory) === explicitPath)) {
+        throw new Error(`Kit "${nameOrPath}" not found`);
+      }
       return explicitPath;
     }
+  }
+
+  if (ctx.kitSources !== null && ctx.kitSources !== undefined) {
+    for (const source of ctx.kitSources) {
+      try {
+        const pkg = JSON.parse(await readFile(path.join(source.directory, 'package.json'), 'utf8'));
+        if (pkg.name === nameOrPath && pkg['ce-editor']?.kit) return path.resolve(source.directory);
+      } catch {
+        continue;
+      }
+    }
+    throw new Error(`Kit "${nameOrPath}" not found`);
   }
 
   for (const installedDirectory of ctx.installedKitDirs) {

@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { normalizeAssemblyConfig } from '../../src/assembly/config';
 import { resolvePlugin, resolveKit } from '../../src/plugin/resolver';
-import { parseInstalledKitDirs } from '../../src/server';
+import { parseInstalledKitDirs, parseKitSources } from '../../src/server';
 
 const tmpDirs: string[] = [];
 
@@ -46,9 +46,30 @@ describe('normalizeAssemblyConfig', () => {
       builtinKitsDir: '/repo/builtin/kits',
       kitsDir: '/repo/kits',
       installedKitDirs: ['/store/one'],
+      kitSources: null,
       defaultKit: 'kit-from-cli',
     });
     expect(config.installedKitDirs).not.toBe(fileConfig.installedKitDirs);
+  });
+});
+
+describe('parseKitSources', () => {
+  it('accepts exact source records with unique absolute directories', () => {
+    expect(parseKitSources(undefined)).toBeUndefined();
+    expect(parseKitSources(JSON.stringify([
+      { directory: '/repo/kits/default', source: 'builtin' },
+      { directory: '/store/demo/1.0.0', source: 'installed' },
+    ]))).toEqual([
+      { directory: '/repo/kits/default', source: 'builtin' },
+      { directory: '/store/demo/1.0.0', source: 'installed' },
+    ]);
+    for (const value of [
+      '{', '{}', '["/kit"]',
+      '[{"directory":"relative","source":"builtin"}]',
+      '[{"directory":"/kit","source":"unknown"}]',
+      '[{"directory":"/kit","source":"builtin","extra":true}]',
+      '[{"directory":"/kit","source":"builtin"},{"directory":"/kit","source":"installed"}]',
+    ]) expect(() => parseKitSources(value)).toThrow('HARBORS_KIT_SOURCES');
   });
 });
 
