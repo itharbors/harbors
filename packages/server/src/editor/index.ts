@@ -68,6 +68,7 @@ interface CreateEditorOptions {
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
   const assembly = options.assembly;
+  let activeKitDirectory: string | undefined;
   const plugin = new PluginModule();
   const panel = new PanelModule();
   const config = new ConfigModule({
@@ -222,9 +223,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   async function resolveAndReadKit(kitNameOrPath: string): Promise<{ descriptor: KitDescriptor; kitPath: string }> {
     const { resolveKit } = await import('../plugin/resolver');
     const kitPath = await resolveKit(kitNameOrPath, {
-      builtinKitsDir: assembly.builtinKitsDir,
-      kitsDir: assembly.kitsDir,
-      installedKitDirs: assembly.installedKitDirs,
       kitSources: assembly.kitSources,
     });
     const pkg = JSON.parse(fs.readFileSync(path.join(kitPath, 'package.json'), 'utf-8')) as KitPackageJson;
@@ -413,6 +411,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     kit.register(descriptor);
     kit.switchKit(descriptor.name);
     windowManager = nextWindowManager;
+    activeKitDirectory = kitPath;
     return descriptor;
   }
 
@@ -530,6 +529,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       list: () => kit.list(),
       get: (name: string) => kit.get(name),
       getCurrent: () => kit.getCurrent(),
+      getCurrentDirectory: () => activeKitDirectory,
       switchKit: (kitName: string) => loadKit(kitName).then(() => undefined),
       applyLayout: (input: string | LayoutNode) => applyLayout(input),
       get layouts() {

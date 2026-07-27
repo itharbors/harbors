@@ -51,7 +51,7 @@ describe('Kit catalog discovery', () => {
         name: '@itharbors/kit-mysql',
         label: 'MySQL',
         directory: mysqlDirectory,
-        source: 'builtin',
+        source: 'development',
       },
     ]);
   });
@@ -89,6 +89,10 @@ describe('Kit catalog discovery', () => {
     const catalog = await discoverKitCatalog({
       ...assembly(),
       defaultKit: externalDirectory,
+      kitSources: [
+        { directory: path.join(kitsDir, 'default'), source: 'development' },
+        { directory: externalDirectory, source: 'explicit' },
+      ],
     });
 
     expect(catalog).toEqual([
@@ -97,7 +101,7 @@ describe('Kit catalog discovery', () => {
         name: '@itharbors/kit-default',
         label: 'Default Kit',
         directory: path.join(kitsDir, 'default'),
-        source: 'builtin',
+        source: 'development',
       },
       {
         id: 'external',
@@ -119,7 +123,10 @@ describe('Kit catalog discovery', () => {
 
     const catalog = await discoverKitCatalog({
       ...assembly(),
-      installedKitDirs: [installedDirectory],
+      kitSources: [
+        { directory: path.join(builtinKitsDir, 'default'), source: 'builtin' },
+        { directory: installedDirectory, source: 'installed' },
+      ],
     });
 
     expect(catalog.find((entry) => entry.name === '@example/kit-installed')).toEqual({
@@ -163,7 +170,10 @@ describe('Kit catalog discovery', () => {
 
     await expect(discoverKitCatalog({
       ...assembly(),
-      installedKitDirs: [invalidInstalled],
+      kitSources: [
+        { directory: path.join(builtinKitsDir, 'default'), source: 'builtin' },
+        { directory: invalidInstalled, source: 'installed' },
+      ],
     })).rejects.toThrow('Invalid installed Kit manifest');
   });
 
@@ -201,6 +211,7 @@ describe('Kit catalog discovery', () => {
     await expect(discoverKitCatalog({
       ...assembly(),
       defaultKit: directory,
+      kitSources: [{ directory, source: 'explicit' }],
     })).rejects.toThrow('Invalid Kit manifest for selected Kit');
   });
 
@@ -208,15 +219,19 @@ describe('Kit catalog discovery', () => {
     ['package name', { name: '@itharbors/duplicate', id: 'two', label: 'Two' }, 'Duplicate Kit package name'],
     ['menu root', { name: '@itharbors/kit-two', id: 'shared', label: 'Two' }, 'Duplicate Kit menu root'],
   ] as const)('rejects duplicate %s values', async (_kind, second, message) => {
-    createKit(builtinKitsDir, 'one', {
+    const firstDirectory = createKit(builtinKitsDir, 'one', {
       name: second.name === '@itharbors/duplicate' ? '@itharbors/duplicate' : '@itharbors/kit-one',
       id: second.id === 'shared' ? 'shared' : 'one',
       label: 'One',
     });
-    createKit(kitsDir, 'two', second);
+    const secondDirectory = createKit(kitsDir, 'two', second);
 
     await expect(discoverKitCatalog({
       ...assembly(),
+      kitSources: [
+        { directory: firstDirectory, source: 'builtin' },
+        { directory: secondDirectory, source: 'development' },
+      ],
       defaultKit: second.name === '@itharbors/duplicate'
         ? '@itharbors/duplicate'
         : '@itharbors/kit-one',
@@ -229,7 +244,14 @@ describe('Kit catalog discovery', () => {
       pluginsDir: path.join(root, 'plugins'),
       builtinKitsDir,
       kitsDir,
-      installedKitDirs: [],
+      kitSources: [
+        { directory: path.join(builtinKitsDir, 'default'), source: 'builtin' },
+        { directory: path.join(kitsDir, 'mysql'), source: 'development' },
+        { directory: path.join(kitsDir, 'sqlite'), source: 'development' },
+        { directory: path.join(kitsDir, 'one'), source: 'development' },
+        { directory: path.join(kitsDir, 'two'), source: 'development' },
+        { directory: path.join(root, 'external-kit'), source: 'explicit' },
+      ],
       defaultKit: '@itharbors/kit-default',
     };
   }

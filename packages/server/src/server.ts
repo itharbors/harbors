@@ -21,7 +21,6 @@ export interface ServerOptions {
   port?: number;
   dbPath?: string;
   defaultKit?: string;
-  installedKitDirs?: string[];
   kitSources?: AssemblyKitSource[];
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
@@ -45,36 +44,20 @@ export class ServerStoppingError extends Error {
   }
 }
 
-export function parseInstalledKitDirs(value: string | undefined): string[] {
-  if (value === undefined) return [];
-  const message = 'HARBORS_INSTALLED_KITS must be a JSON array of non-empty absolute paths';
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new Error(message);
-  }
-  if (!Array.isArray(parsed)
-    || parsed.some((item) => typeof item !== 'string' || item.length === 0 || !path.isAbsolute(item))) {
-    throw new Error(message);
-  }
-  return [...parsed];
-}
-
 const KIT_SOURCE_KINDS = new Set<KitSourceKind>([
   'builtin', 'installed', 'development', 'explicit',
 ]);
 
-export function parseKitSources(value: string | undefined): AssemblyKitSource[] | undefined {
-  if (value === undefined) return undefined;
+export function parseKitSources(value: string | undefined): AssemblyKitSource[] {
   const message = 'HARBORS_KIT_SOURCES must be a JSON array of exact source objects with unique absolute paths';
+  if (value === undefined) throw new Error(message);
   let parsed: unknown;
   try {
     parsed = JSON.parse(value);
   } catch {
     throw new Error(message);
   }
-  if (!Array.isArray(parsed)) throw new Error(message);
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error(message);
   const seen = new Set<string>();
   return parsed.map((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(message);
@@ -92,6 +75,12 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
 }
 
 export function createServer(options: ServerOptions = {}) {
+  if (!options.assembly && (!options.kitSources || options.kitSources.length === 0)) {
+    throw new Error('Server requires at least one Kit source');
+  }
+  if (options.assembly && options.assembly.kitSources.length === 0) {
+    throw new Error('Server requires at least one Kit source');
+  }
   const dbPath = options.dbPath || ':memory:';
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
@@ -102,7 +91,6 @@ export function createServer(options: ServerOptions = {}) {
     path.resolve(serverDir, '../../..'),
     {
       defaultKit: options.defaultKit,
-      installedKitDirs: options.installedKitDirs,
       kitSources: options.kitSources,
     },
   );

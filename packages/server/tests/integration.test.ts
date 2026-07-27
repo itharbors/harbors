@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer } from '../src/server';
+import { testAssembly } from './helpers/assembly';
 import type { ServerResponse } from 'node:http';
 import { Writable } from 'node:stream';
 
@@ -10,7 +11,7 @@ describe('Server Integration', () => {
   let testServer: ReturnType<typeof createServer>;
 
   beforeAll(async () => {
-    testServer = createServer();
+    testServer = createServer({ assembly: testAssembly });
     stop = testServer.stop;
     port = await testServer.start(0);
     baseURL = `http://localhost:${port}`;

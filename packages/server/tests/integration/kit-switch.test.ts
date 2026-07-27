@@ -227,11 +227,21 @@ function removeKits(...kitDirs: string[]) {
   }
 }
 
+function assemblyForKits(...kitDirectories: string[]) {
+  return {
+    ...testAssembly,
+    kitSources: [
+      ...testAssembly.kitSources,
+      ...kitDirectories.map((directory) => ({ directory, source: 'explicit' as const })),
+    ],
+  };
+}
+
 describe('kit lifecycle', () => {
   it('keeps builtin plugins loaded and unloads external kit plugins on switch', async () => {
-    const editor = createEditor('kit-switch', { assembly: testAssembly });
     const defaultKit = createDefaultKitFixture();
     const alternateKit = createAlternateKitFixture();
+    const editor = createEditor('kit-switch', { assembly: assemblyForKits(defaultKit, alternateKit) });
 
     try {
       await editor.kit.load(defaultKit);
@@ -255,12 +265,12 @@ describe('kit lifecycle', () => {
   });
 
   it('keeps builtin default menu available after detaching external kit contributors', async () => {
-    const editor = createEditor('kit-menu-defaults', {
-      assembly: testAssembly,
-      platform: 'win32',
-    });
     const defaultKit = createDefaultKitFixture();
     const alternateKit = createAlternateKitFixture();
+    const editor = createEditor('kit-menu-defaults', {
+      assembly: assemblyForKits(defaultKit, alternateKit),
+      platform: 'win32',
+    });
 
     try {
       await editor.kit.load(defaultKit);
@@ -277,8 +287,8 @@ describe('kit lifecycle', () => {
   });
 
   it('cleans all plugin owner state when kit plugin loading fails', async () => {
-    const editor = createEditor('kit-load-failure', { assembly: testAssembly });
     const kitDir = createFailingKit();
+    const editor = createEditor('kit-load-failure', { assembly: assemblyForKits(kitDir) });
 
     try {
       await expect(editor.kit.load(kitDir)).rejects.toThrow('bad plugin load failed');
@@ -298,9 +308,11 @@ describe('kit lifecycle', () => {
   });
 
   it('restores the previous kit when switching to a kit whose plugin load fails', async () => {
-    const editor = createEditor('kit-switch-failure-restore', { assembly: testAssembly });
     const defaultKit = createDefaultKitFixture();
     const failingKit = createFailingKit();
+    const editor = createEditor('kit-switch-failure-restore', {
+      assembly: assemblyForKits(defaultKit, failingKit),
+    });
 
     try {
       await editor.kit.load(defaultKit);
@@ -328,9 +340,11 @@ describe('kit lifecycle', () => {
   });
 
   it('restores the previous kit when a new plugin cannot be resolved', async () => {
-    const editor = createEditor('kit-switch-resolve-restore', { assembly: testAssembly });
     const defaultKit = createDefaultKitFixture();
     const unresolvableKit = createUnresolvableKit();
+    const editor = createEditor('kit-switch-resolve-restore', {
+      assembly: assemblyForKits(defaultKit, unresolvableKit),
+    });
 
     try {
       await editor.kit.load(defaultKit);
@@ -349,9 +363,11 @@ describe('kit lifecycle', () => {
   });
 
   it('restores the complete previous kit when unloading an old plugin fails', async () => {
-    const editor = createEditor('kit-switch-unload-restore', { assembly: testAssembly });
     const sourceKit = createUnloadFailingKit();
     const alternateKit = createAlternateKitFixture();
+    const editor = createEditor('kit-switch-unload-restore', {
+      assembly: assemblyForKits(sourceKit, alternateKit),
+    });
 
     try {
       await editor.kit.load(sourceKit);
@@ -369,9 +385,11 @@ describe('kit lifecycle', () => {
   });
 
   it('marks the editor unusable when restoring the previous kit also fails', async () => {
-    const editor = createEditor('kit-switch-rollback-failure', { assembly: testAssembly });
     const sourceKit = createRollbackFailingSourceKit();
     const failingKit = createFailingKit();
+    const editor = createEditor('kit-switch-rollback-failure', {
+      assembly: assemblyForKits(sourceKit, failingKit),
+    });
     delete (globalThis as typeof globalThis & { __kitRollbackLoadCount?: number }).__kitRollbackLoadCount;
 
     try {

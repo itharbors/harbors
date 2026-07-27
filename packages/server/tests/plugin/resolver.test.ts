@@ -53,9 +53,7 @@ describe('resolvePlugin', () => {
 
   function kitContext(): KitResolveContext {
     return {
-      builtinKitsDir: path.join(projectRoot, 'builtin-kits'),
-      kitsDir: path.join(projectRoot, 'kits'),
-      installedKitDirs: [],
+      kitSources: undefined as never,
     };
   }
 
@@ -131,7 +129,7 @@ describe('resolvePlugin', () => {
       .rejects.toThrow(/not found/);
   });
 
-  it('finds a kit by name in kits/ directory', async () => {
+  it('does not find a kit that exists only under the legacy kitsDir', async () => {
     const kitDir = path.join(projectRoot, 'kits', 'default');
     fs.mkdirSync(kitDir, { recursive: true });
     fs.writeFileSync(path.join(kitDir, 'package.json'), JSON.stringify({
@@ -139,7 +137,7 @@ describe('resolvePlugin', () => {
       'ce-editor': { kit: { layouts: { default: 'layout.json' }, plugin: [] } },
     }));
 
-    await expect(resolveKit('@scope/kit-default', kitContext())).resolves.toBe(kitDir);
+    await expect(resolveKit('@scope/kit-default', kitContext())).rejects.toThrow(/not found/i);
   });
 
   it('rejects names and paths outside an authoritative source snapshot', async () => {

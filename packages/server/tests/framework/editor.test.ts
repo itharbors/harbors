@@ -68,7 +68,7 @@ describe('createEditor', () => {
   });
 
   it('kit.switchKit reloads the requested kit and updates getCurrent', async () => {
-    await editor.kit.load('default');
+    await editor.kit.load('@itharbors/kit-default');
 
     await editor.kit.switchKit('@itharbors/kit-default');
 
@@ -113,6 +113,13 @@ describe('createEditor', () => {
         },
       },
     }));
+
+    editor = createEditor('test-session', {
+      assembly: {
+        ...testAssembly,
+        kitSources: [...testAssembly.kitSources, { directory: kitDir, source: 'explicit' }],
+      },
+    });
 
     await expect(editor.kit.load(kitDir)).rejects.toThrow(
       'must define ce-editor.kit.windowEntries.main and ce-editor.kit.windowEntries.secondary as strings',
@@ -448,7 +455,7 @@ describe('createEditor', () => {
   });
 
   it('exposes available layout names via editor.kit.layouts', async () => {
-    await editor.kit.load('default');
+    await editor.kit.load('@itharbors/kit-default');
 
     const names = editor.kit.layouts;
     expect(names).toContain('default');
@@ -456,7 +463,7 @@ describe('createEditor', () => {
   });
 
   it('applyLayout with a LayoutNode rearranges the main window', async () => {
-    await editor.kit.load('default');
+    await editor.kit.load('@itharbors/kit-default');
 
     const snapshotBefore = editor.window.getSnapshot();
     const mainBefore = snapshotBefore.windows.find((w) => w.kind === 'main');
@@ -474,13 +481,13 @@ describe('createEditor', () => {
   });
 
   it('applyLayout throws for unknown layout name', async () => {
-    await editor.kit.load('default');
+    await editor.kit.load('@itharbors/kit-default');
 
     expect(() => editor.kit.applyLayout('nonexistent-layout')).toThrow(/not found/);
   });
 
   it('applyLayout fires onLayoutChanged callback', async () => {
-    await editor.kit.load('default');
+    await editor.kit.load('@itharbors/kit-default');
 
     const snapshotBefore = editor.window.getSnapshot();
     const mainBefore = snapshotBefore.windows.find((w) => w.kind === 'main');
@@ -511,7 +518,7 @@ describe('createEditor', () => {
     expect(editor.plugin.listLoaded()).toEqual([]);
     expect(editor.panel.list()).toEqual([]);
     expect(editor.isUsable()).toBe(false);
-    await expect(editor.kit.load('default')).rejects.toThrow('Editor is unavailable');
+    await expect(editor.kit.load('@itharbors/kit-default')).rejects.toThrow('Editor is unavailable');
   });
 
   function createPlugin(name: string, contribute: object, code = 'editor.plugin.define({ methods: {} });'): string {

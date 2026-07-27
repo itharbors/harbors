@@ -1,4 +1,4 @@
-import { readFile, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { PublicKitCatalogEntry } from '@itharbors/plugin-types';
 import type { AssemblyConfig, AssemblyKitSource } from './config';
@@ -36,33 +36,10 @@ export async function discoverKitCatalog(assembly: AssemblyConfig): Promise<KitC
 }
 
 export async function listAssemblyKitSources(assembly: AssemblyConfig): Promise<AssemblyKitSource[]> {
-  if (assembly.kitSources !== null && assembly.kitSources !== undefined) {
-    return assembly.kitSources.map((item) => ({
-      directory: path.resolve(item.directory),
-      source: item.source,
-    }));
-  }
-  const directories = new Map<string, AssemblyKitSource['source']>();
-  for (const kitsDirectory of new Set([
-    path.resolve(assembly.builtinKitsDir),
-    path.resolve(assembly.kitsDir),
-  ])) {
-    let children;
-    try {
-      children = await readdir(kitsDirectory, { withFileTypes: true });
-    } catch (error) {
-      if (isMissingDirectory(error)) continue;
-      throw error;
-    }
-    for (const child of children) {
-      if (child.isDirectory()) directories.set(path.join(kitsDirectory, child.name), 'builtin');
-    }
-  }
-  for (const installedDirectory of assembly.installedKitDirs) {
-    directories.set(path.resolve(installedDirectory), 'installed');
-  }
-
-  return [...directories].map(([directory, source]) => ({ directory, source }));
+  return assembly.kitSources.map((item) => ({
+    directory: path.resolve(item.directory),
+    source: item.source,
+  }));
 }
 
 async function readKitEntry(
@@ -110,12 +87,6 @@ function assertUnique(
     if (seen.has(value)) throw new Error(`${message}: ${value}`);
     seen.add(value);
   }
-}
-
-function isMissingDirectory(error: unknown): boolean {
-  return error instanceof Error
-    && 'code' in error
-    && (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
