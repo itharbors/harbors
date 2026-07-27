@@ -59,7 +59,7 @@ function marketIndex({ revocations = [] } = {}) {
   };
 }
 
-function managerWithFakes({ snapshot, installedState, refreshSnapshot = snapshot } = {}) {
+function managerWithFakes({ snapshot, installedState, refreshSnapshot = snapshot, builtinKitIds = [] } = {}) {
   let refreshes = 0;
   const client = {
     snapshot: async () => snapshot,
@@ -81,6 +81,7 @@ function managerWithFakes({ snapshot, installedState, refreshSnapshot = snapshot
     },
     audit: { append: async () => undefined },
     runtime,
+    builtinKitIds,
   });
   return { manager, getRefreshes: () => refreshes };
 }
@@ -255,6 +256,26 @@ test('lists and refreshes a sanitized union of market and installed Kit state', 
   assert.equal(afterRefresh.source, 'network');
   assert.equal(afterRefresh.stale, false);
   assert.equal('error' in afterRefresh, false);
+});
+
+test('marks builtin Kits and rejects their installation before release resolution or download', async () => {
+  const snapshot = {
+    index: marketIndex(), source: 'cache', stale: false,
+    validatedAt: '2026-07-23T10:00:00.000Z',
+  };
+  const installedState = { schemaVersion: 1, kits: {} };
+  const value = managerWithFakes({
+    snapshot,
+    installedState,
+    builtinKitIds: ['@example/kit-demo'],
+  });
+
+  const listed = await value.manager.list();
+  assert.equal(listed.kits[0].builtin, true);
+  await assert.rejects(
+    value.manager.install({ id: '@example/kit-demo', version: '1.2.3', channel: 'stable' }),
+    (error) => error.code === 'BUILTIN_KIT_ID',
+  );
 });
 
 test('refreshes, resolves, downloads, and installs without activating, then replays idempotently', async () => {

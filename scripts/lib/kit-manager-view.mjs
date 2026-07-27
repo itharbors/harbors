@@ -195,7 +195,15 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     card.append(permissions);
 
     const actions = element(document, 'div', 'kit-card__actions');
-    if (!state.isInstalled) {
+    if (kit.builtin) {
+      actions.append(createButton(
+        document,
+        'Built in',
+        'builtin',
+        () => {},
+        { disabled: true },
+      ));
+    } else if (!state.isInstalled) {
       actions.append(createButton(
         document,
         kit.installed ? 'Install update' : 'Install',

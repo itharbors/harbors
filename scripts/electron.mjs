@@ -35,6 +35,7 @@ import {
   buildUpdateMenuItems,
   createBeforeQuitGate,
   createFrameworkArgs,
+  createKitSourceSnapshot,
   createKitWindowUrl,
   initializeKitHost,
   openOrFocusKitWindow,
@@ -102,6 +103,7 @@ let kitManagerBackgroundRefresh;
 let installedKits = [];
 let pendingKitActivations = [];
 let kitCatalog = [];
+let kitSources = [];
 let electronOptions;
 let quitting = false;
 const kitWindows = new Map();
@@ -361,15 +363,24 @@ function startElectronApp() {
       const prepared = await prepareInstalledKitsForStartup({
         store: kitStore,
         audit: kitManagerService.audit,
-        validateCatalog: async (sources) => discoverKits({ rootDir, installedKits: sources }),
+        validateCatalog: async (sources) => discoverKits({
+          rootDir,
+          profile: runtimeProfile === 'development' ? 'development' : 'stable',
+          installedKits: sources,
+          failOnInstalledError: true,
+        }),
       });
       installedKits = prepared.activeSources;
       pendingKitActivations = prepared.pendingActivations;
       kitCatalog = await discoverKits({
         rootDir,
+        profile: runtimeProfile === 'development' ? 'development' : 'stable',
         requestedKit: electronOptions.requestedKit ?? undefined,
         installedKits,
+        failOnInstalledError: false,
+        onDiagnostic: (diagnostic) => console.warn(`Kit Catalog: ${diagnostic.message}`),
       });
+      kitSources = createKitSourceSnapshot(kitCatalog);
       electronOptions = {
         ...electronOptions,
         requestedKit: resolveRequestedKitName(
@@ -477,7 +488,7 @@ async function startPackagedFramework() {
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
       HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
       HARBORS_APPLICATION_TOKEN: applicationControlToken,
-      HARBORS_INSTALLED_KITS: JSON.stringify(installedKits.map((kit) => kit.directory)),
+      HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
     },
   }));
   frameworkProcess = started.child;
@@ -504,7 +515,7 @@ function startDevelopmentFramework() {
       HARBORS_HOST_MODE: 'desktop',
       HARBORS_APPLICATION_TOKEN: applicationControlToken,
       HARBORS_BIND_HOST: '127.0.0.1',
-      HARBORS_INSTALLED_KITS: JSON.stringify(installedKits.map((kit) => kit.directory)),
+      HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
     },
     stdio: 'inherit',
   });

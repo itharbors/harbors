@@ -2,6 +2,8 @@ import { spawn } from 'node:child_process';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
 import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
 import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
+import { discoverKits } from './lib/kit-catalog.mjs';
+import { createKitSourceSnapshot } from './lib/electron-launcher.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -20,7 +22,19 @@ if (parsed.errors.length > 0) {
 
 const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const stack = createDevStackEnvironments(baseEnv, requestedKit);
+const kitSources = baseEnv.HARBORS_HOST_MODE === 'desktop'
+  ? JSON.parse(baseEnv.HARBORS_KIT_SOURCES)
+  : createKitSourceSnapshot(await discoverKits({
+    rootDir: process.cwd(),
+    profile: 'development',
+    requestedKit: requestedKit || undefined,
+  }));
+const stack = createDevStackEnvironments(
+  baseEnv,
+  requestedKit,
+  baseEnv.HARBORS_RUNTIME_PROFILE ?? 'development',
+  kitSources,
+);
 const devPages = createDevPages(requestedKit);
 
 console.log('Starting ITHARBORS dev stack');

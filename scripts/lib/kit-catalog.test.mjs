@@ -48,7 +48,7 @@ test('discovers valid Kit manifests in deterministic order', async () => {
   assert.equal(kits[0].directory, path.join(rootDir, 'kits', 'default'));
   assert.deepEqual(kits.map(({ source, version }) => ({ source, version })), [
     { source: 'builtin', version: '0.0.1' },
-    { source: 'builtin', version: '0.0.1' },
+    { source: 'development', version: '0.0.1' },
   ]);
 });
 
@@ -122,7 +122,7 @@ test('rejects missing or mismatched installed sources', async () => {
   }), /installed Kit.*identity/i);
 });
 
-test('rejects installed or explicit Kits that shadow another Catalog source', async () => {
+test('uses repository or explicit Kits instead of lower-priority installed sources', async () => {
   const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
   await createKit(rootDir, 'default', { name: '@itharbors/kit-default' });
   const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
@@ -134,17 +134,19 @@ test('rejects installed or explicit Kits that shadow another Catalog source', as
     publisher: 'itharbors', requires: { harbors: '>=1', kitApi: '>=1', protocolVersion: 1 },
     target: { platform: 'any', arch: 'any' }, permissions: [], entry: 'package.json',
   }));
-  await assert.rejects(discoverKits({
+  const catalog = await discoverKits({
     rootDir,
     installedKits: [{
       id: '@itharbors/kit-default', version: '1.0.0', directory: installedDirectory,
       digest: 'a'.repeat(64), source: 'installed',
     }],
-  }), /duplicate Kit package name/i);
+  });
+  assert.equal(catalog.find((kit) => kit.name === '@itharbors/kit-default')?.source, 'builtin');
 
   const externalRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-explicit-kit-'));
   const external = await createKit(externalRoot, 'external', { name: '@itharbors/kit-default' });
-  await assert.rejects(discoverKits({ rootDir, requestedKit: external }), /duplicate Kit package name/i);
+  const explicit = await discoverKits({ rootDir, requestedKit: external });
+  assert.equal(explicit.find((kit) => kit.name === '@itharbors/kit-default')?.source, 'explicit');
 });
 
 test('returns startup plugins in manifest order', async () => {
@@ -299,3 +301,100 @@ test('rejects duplicate Kit package names or menu root ids', async () => {
 
   await assert.rejects(discoverKits({ rootDir: otherRoot }), /duplicate Kit menu root/i);
 });
+
+test('stable discovery includes only explicit builtin and active installed Kits', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'default', { menuRoot: { id: 'default', label: 'Default Kit' } });
+  await createKit(rootDir, 'mysql', { menuRoot: { id: 'mysql', label: 'MySQL' } });
+  const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
+  const installedDirectory = await createKit(installedRoot, 'installed', {
+    name: '@example/kit-installed', version: '1.0.0',
+    menuRoot: { id: 'installed', label: 'Installed Kit' },
+  });
+  await writeInstalledManifest(installedDirectory, '@example/kit-installed', '1.0.0');
+
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'stable',
+    installedKits: [installedSource(installedDirectory, '@example/kit-installed', '1.0.0')],
+  });
+
+  assert.deepEqual(catalog.map(({ name, source }) => ({ name, source })), [
+    { name: '@itharbors/kit-default', source: 'builtin' },
+    { name: '@example/kit-installed', source: 'installed' },
+  ]);
+});
+
+test('development discovery adds repository Kits and temporarily shadows installed identities', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'default', { menuRoot: { id: 'default', label: 'Default Kit' } });
+  await createKit(rootDir, 'mysql', {
+    name: '@itharbors/kit-mysql', version: '2.0.0',
+    menuRoot: { id: 'mysql', label: 'MySQL' },
+  });
+  const installedRoot = await mkdtemp(path.join(os.tmpdir(), 'itharbors-installed-kit-'));
+  const installedDirectory = await createKit(installedRoot, 'mysql', {
+    name: '@itharbors/kit-mysql', version: '1.0.0',
+    menuRoot: { id: 'mysql', label: 'Installed MySQL' },
+  });
+  await writeInstalledManifest(installedDirectory, '@itharbors/kit-mysql', '1.0.0');
+  const source = installedSource(installedDirectory, '@itharbors/kit-mysql', '1.0.0');
+  const diagnostics = [];
+
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'development',
+    installedKits: [source],
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.deepEqual(catalog.map(({ name, source: kind, version }) => ({ name, kind, version })), [
+    { name: '@itharbors/kit-default', kind: 'builtin', version: '0.0.1' },
+    { name: '@itharbors/kit-mysql', kind: 'development', version: '2.0.0' },
+  ]);
+  assert.equal(diagnostics.some((item) => item.code === 'KIT_SOURCE_SHADOWED'), true);
+  assert.equal(source.directory, installedDirectory);
+});
+
+test('invalid installed sources are isolated unless pending validation requests strict failure', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'default', { menuRoot: { id: 'default', label: 'Default Kit' } });
+  const missing = installedSource(path.join(rootDir, 'missing'), '@example/kit-missing', '1.0.0');
+  const diagnostics = [];
+
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'stable',
+    installedKits: [missing],
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.deepEqual(catalog.map((kit) => kit.name), ['@itharbors/kit-default']);
+  assert.equal(diagnostics.some((item) => item.code === 'INVALID_INSTALLED_KIT'), true);
+  await assert.rejects(
+    discoverKits({ rootDir, profile: 'stable', installedKits: [missing], failOnInstalledError: true }),
+    /Installed Kit.*missing/i,
+  );
+});
+
+function installedSource(directory, id, version) {
+  return { id, version, directory, digest: 'a'.repeat(64), source: 'installed' };
+}
+
+async function writeInstalledManifest(directory, id, version) {
+  await writeFile(path.join(directory, 'kit.json'), JSON.stringify({
+    schemaVersion: 1,
+    id,
+    version,
+    channel: 'stable',
+    publisher: id.split('/')[0].slice(1),
+    requires: {
+      harbors: '>=1.0.0 <2.0.0',
+      kitApi: '>=1.0.0 <2.0.0',
+      protocolVersion: 1,
+    },
+    target: { platform: 'any', arch: 'any' },
+    permissions: [],
+    entry: 'package.json',
+  }));
+}

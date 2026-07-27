@@ -7,7 +7,12 @@ import { SSEChannel } from './sse/channel';
 import { BrowserRequestBroker } from './framework/browser-request-broker';
 import type { Editor } from './editor/types';
 import { createApp } from './app';
-import { createDefaultAssemblyConfig, type AssemblyConfig } from './assembly/config';
+import {
+  createDefaultAssemblyConfig,
+  type AssemblyConfig,
+  type AssemblyKitSource,
+  type KitSourceKind,
+} from './assembly/config';
 import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
@@ -17,6 +22,7 @@ export interface ServerOptions {
   dbPath?: string;
   defaultKit?: string;
   installedKitDirs?: string[];
+  kitSources?: AssemblyKitSource[];
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
@@ -55,6 +61,36 @@ export function parseInstalledKitDirs(value: string | undefined): string[] {
   return [...parsed];
 }
 
+const KIT_SOURCE_KINDS = new Set<KitSourceKind>([
+  'builtin', 'installed', 'development', 'explicit',
+]);
+
+export function parseKitSources(value: string | undefined): AssemblyKitSource[] | undefined {
+  if (value === undefined) return undefined;
+  const message = 'HARBORS_KIT_SOURCES must be a JSON array of exact source objects with unique absolute paths';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(message);
+  }
+  if (!Array.isArray(parsed)) throw new Error(message);
+  const seen = new Set<string>();
+  return parsed.map((item: unknown) => {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(message);
+    const record = item as Record<string, unknown>;
+    if (Object.keys(record).sort().join(',') !== 'directory,source'
+      || typeof record.directory !== 'string' || !path.isAbsolute(record.directory)
+      || typeof record.source !== 'string' || !KIT_SOURCE_KINDS.has(record.source as KitSourceKind)) {
+      throw new Error(message);
+    }
+    const directory = path.resolve(record.directory);
+    if (seen.has(directory)) throw new Error(message);
+    seen.add(directory);
+    return { directory, source: record.source as KitSourceKind };
+  });
+}
+
 export function createServer(options: ServerOptions = {}) {
   const dbPath = options.dbPath || ':memory:';
   const store = new SessionStore(dbPath);
@@ -64,7 +100,11 @@ export function createServer(options: ServerOptions = {}) {
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
   const assembly = options.assembly ?? createDefaultAssemblyConfig(
     path.resolve(serverDir, '../../..'),
-    { defaultKit: options.defaultKit, installedKitDirs: options.installedKitDirs },
+    {
+      defaultKit: options.defaultKit,
+      installedKitDirs: options.installedKitDirs,
+      kitSources: options.kitSources,
+    },
   );
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',

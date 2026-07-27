@@ -9,6 +9,7 @@ import {
   createBeforeQuitGate,
   createFrameworkArgs,
   createKitWindowUrl,
+  createKitSourceSnapshot,
   mergeMenuTrees,
   initializeKitHost,
   openOrFocusKitWindow,
@@ -108,16 +109,40 @@ test('starts the Web stack without recursion and forwards requested Kit argument
 });
 
 test('passes only an explicit requested Kit to the Web server without leaking stale host state', () => {
-  const base = { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' };
+  const base = {
+    PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single',
+    HARBORS_INSTALLED_KITS: '["/stale"]',
+  };
+  const kitSources = [{ directory: '/repo/kits/default', source: 'builtin' }];
 
-  assert.deepEqual(createDevServerEnv(base, ''), {
+  assert.deepEqual(createDevServerEnv(base, '', kitSources), {
     PATH: '/bin',
+    HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
   });
-  assert.deepEqual(createDevServerEnv(base, '@itharbors/kit-mysql'), {
+  assert.deepEqual(createDevServerEnv(base, '@itharbors/kit-mysql', kitSources), {
     PATH: '/bin',
+    HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
     CE_DEFAULT_KIT: '@itharbors/kit-mysql',
   });
-  assert.deepEqual(base, { PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single' });
+  assert.equal(base.HARBORS_INSTALLED_KITS, '["/stale"]');
+});
+
+test('creates an immutable Framework source snapshot from the resolved Catalog', () => {
+  const catalog = [{
+    name: '@itharbors/kit-default', directory: '/repo/kits/default', source: 'builtin',
+  }, {
+    name: '@example/kit-demo', directory: '/store/demo/1.0.0', source: 'installed',
+  }];
+
+  const snapshot = createKitSourceSnapshot(catalog);
+
+  assert.deepEqual(snapshot, [
+    { directory: '/repo/kits/default', source: 'builtin' },
+    { directory: '/store/demo/1.0.0', source: 'installed' },
+  ]);
+  assert.equal(Object.isFrozen(snapshot), true);
+  assert.equal(Object.isFrozen(snapshot[0]), true);
+  assert.equal('name' in snapshot[0], false);
 });
 
 test('isolates each Web child process from inherited legacy port variables', () => {
@@ -761,7 +786,7 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /registerKitManagerIpc/);
   assert.match(source, /openKitManager/);
   assert.match(source, /discoverKits\(\{[\s\S]*installedKits/);
-  assert.match(source, /HARBORS_INSTALLED_KITS:\s*JSON\.stringify\(installedKits\.map/);
+  assert.match(source, /HARBORS_KIT_SOURCES:\s*JSON\.stringify\(kitSources\)/);
   assert.doesNotMatch(source, /prewarmKitWindows/);
   assert.match(source, /initializeKitHost/);
   assert.doesNotMatch(source, /openKit\(kitCatalog\[0\]\.name\)/);
@@ -784,7 +809,7 @@ test('uses only Electron run-as-node and IPC for packaged Framework startup', as
   assert.match(packagedStart, /HARBORS_RUNTIME_ROOT/);
   assert.match(packagedStart, /HARBORS_CLIENT_ASSETS_ROOT/);
   assert.match(packagedStart, /HARBORS_DB_PATH/);
-  assert.match(packagedStart, /HARBORS_INSTALLED_KITS/);
+  assert.match(packagedStart, /HARBORS_KIT_SOURCES/);
   assert.doesNotMatch(packagedStart, /npm|vite|tsx|\bnode\b/iu);
   const spawned = packagedStart.indexOf('const started = startDesktopFrameworkProcess');
   const owned = packagedStart.indexOf('frameworkProcess = started.child');

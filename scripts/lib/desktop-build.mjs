@@ -8,6 +8,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { BUILTIN_KITS } from './builtin-kits.mjs';
 
 const PRODUCT_KITS = new Set(['mysql', 'notifications', 'sqlite']);
 const FRAMEWORK_PLUGINS = Object.freeze(['config', 'menu', 'message', 'panel']);
@@ -45,10 +46,12 @@ const DESKTOP_ASSETS = Object.freeze([
 function runtimeEntries() {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
-    { source: 'kits/default/package.json', destination: 'kits/default/package.json' },
-    { source: 'kits/default/layout.json', destination: 'kits/default/layout.json' },
-    { source: 'kits/default/main.html', destination: 'kits/default/main.html' },
-    { source: 'kits/default/secondary.html', destination: 'kits/default/secondary.html' },
+    ...BUILTIN_KITS.flatMap(({ slug }) => [
+      { source: `kits/${slug}/package.json`, destination: `kits/${slug}/package.json` },
+      { source: `kits/${slug}/layout.json`, destination: `kits/${slug}/layout.json` },
+      { source: `kits/${slug}/main.html`, destination: `kits/${slug}/main.html` },
+      { source: `kits/${slug}/secondary.html`, destination: `kits/${slug}/secondary.html` },
+    ]),
     {
       source: '.agents/skills/notify-user/SKILL.md',
       destination: 'resources/notify-user/SKILL.md',

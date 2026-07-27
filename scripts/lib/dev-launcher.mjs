@@ -1,14 +1,16 @@
 import { resolveRuntimePorts, resolveRuntimeProfile } from './runtime-ports.mjs';
 
-export function createDevServerEnv(baseEnv, requestedKit) {
+export function createDevServerEnv(baseEnv, requestedKit, kitSources = []) {
   const serverEnv = { ...baseEnv };
   delete serverEnv.CE_DEFAULT_KIT;
   delete serverEnv.CE_KIT_MODE;
+  delete serverEnv.HARBORS_INSTALLED_KITS;
+  serverEnv.HARBORS_KIT_SOURCES = JSON.stringify(kitSources);
   if (requestedKit) serverEnv.CE_DEFAULT_KIT = requestedKit;
   return serverEnv;
 }
 
-export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'development') {
+export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'development', kitSources = []) {
   const runtimeProfile = resolveRuntimeProfile(baseEnv.HARBORS_RUNTIME_PROFILE, profile);
   const ports = resolveRuntimePorts(baseEnv, runtimeProfile);
   const common = {
@@ -27,7 +29,7 @@ export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'dev
       SERVER_PORT: String(ports.server),
       CLIENT_PORT: String(ports.client),
     },
-    serverEnv: { ...createDevServerEnv(common, requestedKit), PORT: String(ports.server) },
+    serverEnv: { ...createDevServerEnv(common, requestedKit, kitSources), PORT: String(ports.server) },
     clientEnv: { ...common, CLIENT_PORT: String(ports.client) },
   };
 }

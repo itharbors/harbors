@@ -128,6 +128,31 @@ describe('Kit catalog discovery', () => {
     });
   });
 
+  it('uses an authoritative source snapshot instead of rescanning repository Kits', async () => {
+    const defaultDirectory = createKit(builtinKitsDir, 'default', {
+      name: '@itharbors/kit-default', id: 'default', label: 'Default Kit',
+    });
+    createKit(kitsDir, 'mysql', {
+      name: '@itharbors/kit-mysql', id: 'mysql', label: 'MySQL',
+    });
+    const installedDirectory = createKit(path.join(root, 'store', 'encoded'), '1.0.0', {
+      name: '@example/kit-installed', id: 'installed', label: 'Installed Kit',
+    });
+    const configured = {
+      ...assembly(),
+      kitSources: [
+        { directory: defaultDirectory, source: 'builtin' },
+        { directory: installedDirectory, source: 'installed' },
+      ],
+    } as AssemblyConfig;
+
+    const catalog = await discoverKitCatalog(configured);
+
+    expect(catalog.map((entry) => entry.name)).toEqual([
+      '@itharbors/kit-default', '@example/kit-installed',
+    ]);
+  });
+
   it('rejects an invalid active installed Kit instead of silently dropping it', async () => {
     createKit(builtinKitsDir, 'default', {
       name: '@itharbors/kit-default', id: 'default', label: 'Default Kit',
