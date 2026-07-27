@@ -61,12 +61,37 @@ export const main = true;
     ['status-bar', 'panel.status'],
     ['title-bar', 'panel.title'],
   ]) {
-    await write(root, `kits/default/plugins/${plugin}/package.json`, JSON.stringify({ name: plugin }));
+    await write(root, `kits/default/plugins/${plugin}/package.json`, JSON.stringify({
+      name: plugin,
+      main: './main/dist/index.js',
+      'ce-editor': {
+        contribute: {
+          panel: {
+            [plugin]: { entry: `./${panel}/dist/index.html` },
+          },
+        },
+      },
+    }));
     await write(root, `kits/default/plugins/${plugin}/main/dist/index.js`, 'export default {};\n');
     await write(root, `kits/default/plugins/${plugin}/main/src/index.ts`, 'throw new Error();\n');
     await write(root, `kits/default/plugins/${plugin}/${panel}/dist/index.html`, '<main></main>');
     await write(root, `kits/default/plugins/${plugin}/${panel}/dist/index.js`, 'export {};\n');
   }
+  await write(root, 'kits/default/plugins/fixture-plugin/package.json', JSON.stringify({
+    name: '@itharbors/fixture-plugin',
+    main: './main/dist/index.js',
+    'ce-editor': {
+      contribute: {
+        panel: {
+          fixture: { entry: './panel.fixture/dist/index.html' },
+        },
+      },
+    },
+  }));
+  await write(root, 'kits/default/plugins/fixture-plugin/main/dist/index.js', 'export default {};\n');
+  await write(root, 'kits/default/plugins/fixture-plugin/main/src/index.ts', 'throw new Error();\n');
+  await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.html', '<main></main>');
+  await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.js', 'export {};\n');
   await write(root, '.agents/skills/notify-user/SKILL.md', 'name: notify-user\n');
   await write(root, '.agents/skills/notify-user/agents/openai.yaml', 'name: Notify User\n');
   await write(root, '.agents/skills/notify-user/scripts/notify.mjs', 'export {};\n');
@@ -93,7 +118,11 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   assert.equal(existsSync(path.join(outputRoot, 'resources', 'notify-user', 'tests')), false);
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'log', 'main', 'src')), false);
-  for (const forbidden of ['mysql', 'sqlite', 'notifications']) {
+  assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'package.json')), true);
+  assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'main', 'dist', 'index.js')), true);
+  assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'panel.fixture', 'dist', 'index.html')), true);
+  assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'main', 'src')), false);
+  for (const forbidden of ['csv', 'mysql', 'notifications', 'sqlite']) {
     assert.equal(existsSync(path.join(outputRoot, 'kits', forbidden)), false);
   }
   assert.deepEqual(result.inventory, [...result.inventory].sort());
@@ -156,6 +185,11 @@ test('rejects missing files, symlinks, repository escapes, duplicate destination
       { source: 'kits/default/layout.json', destination: 'same.json' },
     ],
   }), /duplicate destination/iu);
+  await assert.rejects(stageDesktopFiles({
+    repositoryRoot,
+    outputRoot,
+    entries: [{ source: 'kits/csv/package.json', destination: 'kits/csv/package.json' }],
+  }), /product Kit/iu);
   await assert.rejects(stageDesktopFiles({
     repositoryRoot,
     outputRoot,

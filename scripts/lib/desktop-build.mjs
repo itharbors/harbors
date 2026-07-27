@@ -3,6 +3,7 @@ import {
   copyFile,
   lstat,
   mkdir,
+  readFile,
   readdir,
   realpath,
   rm,
@@ -10,16 +11,8 @@ import {
 import path from 'node:path';
 import { BUILTIN_KITS } from './builtin-kits.mjs';
 
-const PRODUCT_KITS = new Set(['mysql', 'notifications', 'sqlite']);
+const BUILTIN_KIT_SLUGS = new Set(BUILTIN_KITS.map(({ slug }) => slug));
 const FRAMEWORK_PLUGINS = Object.freeze(['config', 'menu', 'message', 'panel']);
-const DEFAULT_KIT_PLUGINS = Object.freeze([
-  ['log', 'panel.log'],
-  ['message-debug', 'panel.debug'],
-  ['plugin-detail', 'panel.detail'],
-  ['plugin-list', 'panel.list'],
-  ['status-bar', 'panel.status'],
-  ['title-bar', 'panel.title'],
-]);
 
 const DESKTOP_ASSETS = Object.freeze([
   ...[
@@ -43,7 +36,7 @@ const DESKTOP_ASSETS = Object.freeze([
   }),
 ]);
 
-function runtimeEntries() {
+async function runtimeEntries(repositoryRoot) {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
     ...BUILTIN_KITS.flatMap(({ slug }) => [
@@ -78,18 +71,7 @@ function runtimeEntries() {
       },
     );
   }
-  for (const [plugin, panel] of DEFAULT_KIT_PLUGINS) {
-    const base = `kits/default/plugins/${plugin}`;
-    entries.push(
-      { source: `${base}/package.json`, destination: `${base}/package.json` },
-      { source: `${base}/main/dist`, destination: `${base}/main/dist`, recursive: true },
-      {
-        source: `${base}/${panel}/dist`,
-        destination: `${base}/${panel}/dist`,
-        recursive: true,
-      },
-    );
-  }
+  entries.push(...await builtinKitPluginEntries(repositoryRoot));
   return entries;
 }
 
@@ -115,16 +97,16 @@ function validateRelative(value, label) {
   return value;
 }
 
-function rejectProductKit(relative) {
+function rejectNonBuiltinKit(relative) {
   const parts = portable(relative).split('/');
-  if (parts[0] === 'kits' && PRODUCT_KITS.has(parts[1])) {
+  if (parts[0] === 'kits' && parts[1] && !BUILTIN_KIT_SLUGS.has(parts[1])) {
     throw new Error(`Desktop runtime cannot include product Kit ${parts[1]}`);
   }
 }
 
 async function checkedPath(repositoryRoot, source) {
   validateRelative(source, 'Desktop source');
-  rejectProductKit(source);
+  rejectNonBuiltinKit(source);
   const absolute = path.resolve(repositoryRoot, source);
   if (!inside(repositoryRoot, absolute)) throw new Error('Desktop source is outside the repository');
   let current = repositoryRoot;
@@ -143,6 +125,51 @@ async function checkedFile(repositoryRoot, source) {
     throw new Error(`Desktop source is missing or not a regular file: ${source}`);
   }
   return absolute;
+}
+
+function builtDirectory(entry) {
+  if (typeof entry !== 'string') return entry;
+  if (path.posix.isAbsolute(entry)) return entry;
+  const directory = path.posix.dirname(entry);
+  return directory === '.' ? entry : directory;
+}
+
+function builtDirectoryEntry(pluginRoot, entry) {
+  const directory = builtDirectory(entry);
+  const source = typeof directory === 'string' && path.posix.isAbsolute(directory)
+    ? directory
+    : typeof directory === 'string'
+      ? `${pluginRoot}/${directory}`
+      : directory;
+  return { source, destination: source, recursive: true };
+}
+
+async function builtinKitPluginEntries(repositoryRoot) {
+  const entries = [];
+  for (const { slug } of BUILTIN_KITS) {
+    const pluginsRoot = `kits/${slug}/plugins`;
+    const pluginsDirectory = await checkedPath(repositoryRoot, pluginsRoot);
+    const plugins = (await readdir(pluginsDirectory, { withFileTypes: true }))
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort();
+    for (const plugin of plugins) {
+      const pluginRoot = `${pluginsRoot}/${plugin}`;
+      const packageSource = `${pluginRoot}/package.json`;
+      const packageFile = await checkedFile(repositoryRoot, packageSource);
+      const manifest = JSON.parse(await readFile(packageFile, 'utf8'));
+      const panels = manifest?.['ce-editor']?.contribute?.panel;
+      const entriesToStage = [
+        manifest?.main,
+        ...Object.values(panels ?? {}).map((panel) => panel?.entry),
+      ].sort((left, right) => String(left).localeCompare(String(right)));
+      entries.push(
+        { source: packageSource, destination: packageSource },
+        ...entriesToStage.map((entry) => builtDirectoryEntry(pluginRoot, entry)),
+      );
+    }
+  }
+  return entries;
 }
 
 async function expandTree(repositoryRoot, sourceRoot, destinationRoot, files) {
@@ -175,7 +202,7 @@ async function createCopyPlan({ repositoryRoot, outputRoot, entries }) {
     }
     const sourceRelative = validateRelative(entry.source, 'Desktop source');
     const destinationRelative = validateRelative(entry.destination, 'Desktop destination');
-    rejectProductKit(sourceRelative);
+    rejectNonBuiltinKit(sourceRelative);
     const source = await checkedPath(repositoryRoot, sourceRelative);
     const destination = path.resolve(outputRoot, destinationRelative);
     if (!inside(outputRoot, destination)) throw new Error('Desktop destination is outside its output root');
@@ -259,7 +286,7 @@ export async function buildDesktop({ repositoryRoot, outputRoot }) {
   const runtimeFiles = await createCopyPlan({
     repositoryRoot: root,
     outputRoot: output,
-    entries: runtimeEntries(),
+    entries: await runtimeEntries(root),
   });
 
   await rm(desktopDist, { recursive: true, force: true });
