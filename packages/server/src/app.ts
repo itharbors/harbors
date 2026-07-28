@@ -17,8 +17,7 @@ import { createPanelInstanceRouter } from './routes/panel-instance';
 import { createPanelOpenRouter } from './routes/panel-open';
 import { createWindowEntryRouter } from './routes/window-entry';
 import { createWindowGroupRouter } from './routes/window-group';
-import type { AssemblyConfig, AssemblyConfigOverride } from './assembly/config';
-import { normalizeAssemblyConfig } from './assembly/config';
+import type { AssemblyConfig } from './assembly/config';
 import { discoverKitCatalog } from './assembly/kit-catalog';
 import { SessionRuntimeRegistry } from './session/runtime-registry';
 import { HttpError } from './http/errors';
@@ -32,7 +31,6 @@ import { createClientAssetRouter } from './routes/client-asset';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
-  override?: AssemblyConfigOverride;
   applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'triggerMenu' | 'subscribe'>;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
@@ -47,10 +45,7 @@ export function createApp(
   const stopDisconnectHandling = channel.onSessionDisconnected((sessionId) => {
     broker.rejectSession(sessionId, new Error('Browser disconnected'));
   });
-  const assembly = normalizeAssemblyConfig(
-    appOptions.assembly,
-    appOptions.override,
-  );
+  const assembly = appOptions.assembly;
   const kitCatalogPromise = discoverKitCatalog(assembly);
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
     const editor = createEditor(session.sessionId, {

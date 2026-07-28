@@ -4,4 +4,8 @@ import { createDefaultAssemblyConfig } from '../../src/assembly/config';
 
 const currentDir = path.dirname(fileURLToPath(import.meta.url));
 
-export const testAssembly = createDefaultAssemblyConfig(path.resolve(currentDir, '../../../..'));
+const projectRoot = path.resolve(currentDir, '../../../..');
+
+export const testAssembly = createDefaultAssemblyConfig(projectRoot, {
+  kitSources: [{ directory: path.join(projectRoot, 'kits/default'), source: 'builtin' }],
+});

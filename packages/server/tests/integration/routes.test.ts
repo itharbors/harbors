@@ -60,8 +60,13 @@ async function invokeRoute(
 
 describe('framework routes', () => {
   it('bootstrap returns normalized menuTree from the editor menu state', async () => {
-    const editor = createEditor('s1', { assembly: testAssembly });
     const kitDir = mkdtempSync(path.join(tmpdir(), 'routes-menu-kit-'));
+    const editor = createEditor('s1', {
+      assembly: {
+        ...testAssembly,
+        kitSources: [...testAssembly.kitSources, { directory: kitDir, source: 'explicit' }],
+      },
+    });
     const pluginDir = path.join(kitDir, 'plugins', 'p');
     mkdirSync(pluginDir, { recursive: true });
     writeFileSync(path.join(kitDir, 'layout.json'), JSON.stringify({
@@ -172,8 +177,13 @@ describe('framework routes', () => {
   });
 
   it('bootstrap keeps every default window loaded from a kit layout', async () => {
-    const editor = createEditor('s1', { assembly: testAssembly });
     const kitDir = mkdtempSync(path.join(tmpdir(), 'routes-multi-window-kit-'));
+    const editor = createEditor('s1', {
+      assembly: {
+        ...testAssembly,
+        kitSources: [...testAssembly.kitSources, { directory: kitDir, source: 'explicit' }],
+      },
+    });
     writeFileSync(path.join(kitDir, 'layout.json'), JSON.stringify({
       windows: [
         { id: 'main', type: 'panel-area', layout: { type: 'leaf', panel: '@itharbors/log.log' } },

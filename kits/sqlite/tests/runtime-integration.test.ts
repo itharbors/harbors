@@ -9,6 +9,10 @@ import { createEditor } from '../../../packages/server/src/editor/index';
 import { createRuntimeDatabase } from './fixtures/create-runtime-database';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const kitSources = [
+  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
+  { directory: path.join(projectRoot, 'kits/sqlite'), source: 'development' },
+];
 
 describe('SQLite kit runtime integration', () => {
   const tempDirs: string[] = [];
@@ -24,7 +28,7 @@ describe('SQLite kit runtime integration', () => {
     tempDirs.push(tempDir);
     const databasePath = path.join(tempDir, 'smoke.sqlite');
     const editor = createEditor('sqlite-kit-smoke', {
-      assembly: createDefaultAssemblyConfig(projectRoot),
+      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
     });
 
     try {
@@ -110,7 +114,7 @@ describe('SQLite kit runtime integration', () => {
       fixtureDatabase.close();
     }
     const editor = createEditor('sqlite-kit-runtime-relationships', {
-      assembly: createDefaultAssemblyConfig(projectRoot),
+      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
     });
 
     try {
@@ -144,7 +148,7 @@ describe('SQLite kit runtime integration', () => {
     const databasePath = path.join(tempDir, 'fixture.sqlite');
     createRuntimeDatabase(databasePath);
     const editor = createEditor('sqlite-kit-runtime-policy', {
-      assembly: createDefaultAssemblyConfig(projectRoot),
+      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
     });
 
     try {

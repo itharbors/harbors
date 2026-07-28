@@ -103,7 +103,6 @@ export function buildTrayTemplate({
   unreadCount = 0,
   notificationKitName = null,
 }, adapters) {
-  const availableNames = new Set(kits.map((kit) => kit.name));
   const availableEntries = kits.map((kit) => ({
     label: kit.name === notificationKitName
       ? formatNotificationKitLabel(kit.label, unreadCount)
@@ -111,16 +110,9 @@ export function buildTrayTemplate({
     enabled: true,
     click: () => adapters.openKit(kit.name),
   }));
-  const unavailableEntries = workspaceRecords
-    .filter((record) => record.available === false && !availableNames.has(record.kitName))
-    .map((record) => ({
-      label: `${record.kitName} (Unavailable)`,
-      enabled: false,
-    }));
 
   return [
     ...availableEntries,
-    ...unavailableEntries,
     { type: 'separator' },
     { label: 'Kit Manager…', click: () => adapters.openKitManager() },
     { type: 'separator' },

@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
 import type { Editor } from '../editor/types';
 import { HttpError } from '../http/errors';
@@ -20,13 +20,16 @@ export function createWindowEntryRouter(editorMap: Map<string, Editor>) {
       throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
     }
 
-    const kitRoot = resolveKitRoot(editor, kit.name);
+    const kitRoot = editor.kit.getCurrentDirectory();
     if (!kitRoot) {
       throw new HttpError(404, 'KIT_ENTRY_NOT_FOUND', 'Kit entry not found');
     }
 
     const kind = match[1] as 'main' | 'secondary';
     const entry = kind === 'main' ? kit.windowEntries.main : kit.windowEntries.secondary;
+    if (!isRelativeEntry(entry)) {
+      throw new HttpError(404, 'KIT_ENTRY_NOT_FOUND', 'Kit entry not found');
+    }
     const entryPath = path.resolve(kitRoot, entry);
     if (!entryPath.startsWith(kitRoot + path.sep) || !existsSync(entryPath)) {
       throw new HttpError(404, 'KIT_ENTRY_NOT_FOUND', 'Kit entry not found');
@@ -91,21 +94,6 @@ const WINDOW_ENTRY_STYLE = `  <style data-ce-window-entry-style>
     }
   </style>`;
 
-function resolveKitRoot(editor: Editor, kitName: string): string | null {
-  const pluginInfo = editor.plugin.getInfo(kitName);
-  if (pluginInfo) return path.resolve(pluginInfo.path);
-
-  for (const workspaceRoot of getWorkspaceRootCandidates()) {
-    const workspaceKitRoot = findWorkspacePackageRoot(path.join(workspaceRoot, 'kits'), kitName);
-    if (workspaceKitRoot) return workspaceKitRoot;
-
-    const nodeModuleRoot = path.join(workspaceRoot, 'node_modules', ...kitName.split('/'));
-    if (isPackageRoot(nodeModuleRoot, kitName)) return nodeModuleRoot;
-  }
-
-  return null;
-}
-
 function hasWindowGroup(editor: Editor, windowGroupId: string): boolean {
   return editor.window.getSnapshot().windows.some((windowGroup) => windowGroup.id === windowGroupId);
 }
@@ -114,35 +102,6 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.trim().length > 0;
 }
 
-function getWorkspaceRootCandidates(): string[] {
-  const cwd = process.cwd();
-  return Array.from(new Set([
-    cwd,
-    path.resolve(cwd, '..'),
-    path.resolve(cwd, '../..'),
-  ]));
-}
-
-function findWorkspacePackageRoot(kitsDir: string, kitName: string): string | null {
-  if (!existsSync(kitsDir)) return null;
-
-  for (const item of readdirSync(kitsDir, { withFileTypes: true })) {
-    if (!item.isDirectory()) continue;
-    const candidate = path.join(kitsDir, item.name);
-    if (isPackageRoot(candidate, kitName)) return candidate;
-  }
-
-  return null;
-}
-
-function isPackageRoot(candidate: string, packageName: string): boolean {
-  const packageJsonPath = path.join(candidate, 'package.json');
-  if (!existsSync(packageJsonPath)) return false;
-
-  try {
-    const pkg = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as { name?: unknown };
-    return pkg.name === packageName;
-  } catch {
-    return false;
-  }
+function isRelativeEntry(entry: string): boolean {
+  return !path.isAbsolute(entry) && !entry.split(/[\\/]+/u).includes('..');
 }

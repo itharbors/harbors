@@ -6,6 +6,10 @@ import { createDefaultAssemblyConfig } from '../../../packages/server/src/assemb
 import { createEditor } from '../../../packages/server/src/editor/index';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const kitSources = [
+  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
+  { directory: path.join(projectRoot, 'kits/mysql'), source: 'development' },
+];
 const connectionUrl = process.env.MYSQL_TEST_URL;
 
 describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
@@ -16,7 +20,7 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
     const childName = `harbors_child_${suffix}`;
     const viewName = `harbors_view_${suffix}`;
     const editor = createEditor(`mysql-kit-${suffix}`, {
-      assembly: createDefaultAssemblyConfig(projectRoot),
+      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
     });
     const call = <T>(method: string, input?: unknown): Promise<T> => Promise.resolve(
       input === undefined

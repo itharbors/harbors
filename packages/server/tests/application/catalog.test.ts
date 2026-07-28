@@ -16,7 +16,11 @@ describe('discoverApplicationPlugins', () => {
       pluginsDir: path.join(root, 'plugins'),
       builtinKitsDir: path.join(root, 'builtin-kits'),
       kitsDir: path.join(root, 'kits'),
-      installedKitDirs: [],
+      kitSources: [
+        ...['a', 'b', 'c', 'allowed', 'excluded', 'repository', 'malformed', 'overlap', 'invalid-shell', 'malformed-startup', 'blank-name', 'duplicate-ordinary']
+          .map((directory) => ({ directory: path.join(root, 'kits', directory), source: 'development' as const })),
+        { directory: path.join(root, 'external-kit'), source: 'explicit' },
+      ],
       defaultKit: '@scope/kit-default',
     };
     for (const directory of [
@@ -198,7 +202,10 @@ describe('discoverApplicationPlugins', () => {
       'background',
       '@scope/installed-background',
     );
-    assembly.installedKitDirs = [installedKit];
+    assembly.kitSources = [
+      ...assembly.kitSources,
+      { directory: installedKit, source: 'installed' },
+    ];
 
     const result = await discoverApplicationPlugins({ assembly });
 

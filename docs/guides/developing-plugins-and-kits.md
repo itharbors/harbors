@@ -235,7 +235,9 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-官方实现固定保存在主分支的 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`。每个目录独立维护
+Default 是唯一的 builtin Kit。CSV、SQLite、MySQL 与 Notifications 是官方市场 Kit；其实现固定保存在
+主分支的 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`，这些仓库目录只会由
+`npm run dev` 自动加载。每个目录独立维护
 `kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
 不会发布 Kit 或 Framework。
@@ -338,7 +340,7 @@ npm run dev -- --kit ./kits/my-kit
 
 ## SQLite Kit
 
-仓库内置的 `@itharbors/kit-sqlite` 提供本地 SQLite 数据库工作台。启动前先构建它的插件：
+官方市场 Kit `@itharbors/kit-sqlite` 提供本地 SQLite 数据库工作台。启动前先构建它的插件：
 
 ```bash
 npm run plugins:build
@@ -355,7 +357,7 @@ SQL 页每次执行一个语句，可运行查询、DDL 或 DML；结果集每�
 
 ## CSV Kit
 
-仓库内置的 `@itharbors/kit-csv` 是只读 CSV/TSV 文本检查器。它支持 UTF-8（含 BOM）与
+官方市场 Kit `@itharbors/kit-csv` 是只读 CSV/TSV 文本检查器。它支持 UTF-8（含 BOM）与
 GB18030，允许在打开前确认逗号、制表符或分号分隔符和表头配置，并对不规则记录给出警告。
 
 ```bash
@@ -368,7 +370,7 @@ CSV 并拒绝覆盖源文件或已有目标。完整格式、查询语义与资�
 
 ## MySQL Kit
 
-仓库内置的 `@itharbors/kit-mysql` 提供远程 MySQL 数据库工作台。启动前先构建它的插件：
+官方市场 Kit `@itharbors/kit-mysql` 提供远程 MySQL 数据库工作台。启动前先构建它的插件：
 
 ```bash
 npm run plugins:build

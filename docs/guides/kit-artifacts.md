@@ -89,9 +89,10 @@ application-scope 插件状态，并创建一次可回收 Session 真实加载�
 置为 pending 后重启。previous 也必须重新通过 Catalog 与真实加载；再次失败则原子禁用该 Kit，
 避免重启循环。`installed.json` 使用同目录临时文件、fsync 和 rename。
 
-Electron 启动时只读取完成 pending 校验后的 active 版本，并通过 `HARBORS_INSTALLED_KITS`
-把绝对目录快照传给 Server。Server 不扫描 Store 根，也不猜测版本；环境变量必须是非空
-绝对路径组成的 JSON 数组。目录变化在下一次桌面启动时生效。
+Electron 启动时只读取完成 pending 校验后的 active 版本，并通过 `HARBORS_KIT_SOURCES`
+把权威 Kit 来源快照传给 Server：Default builtin 目录以及当前 active 的已安装目录。每个已安装
+Kit 只有 active 版本目录会进入快照；Server 不扫描 Store 根，也不猜测版本。环境变量必须是非空
+的 JSON 数组，数组元素是带有绝对 `directory` 与 `source` 的来源对象。目录变化在下一次桌面启动时生效。
 
 ## Desktop Kit Manager
 

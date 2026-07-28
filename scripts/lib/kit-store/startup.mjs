@@ -1,3 +1,6 @@
+import { realpath } from 'node:fs/promises';
+import path from 'node:path';
+
 function requireMethod(value, method, context) {
   if (!value || typeof value[method] !== 'function') {
     throw new TypeError(`${context}.${method} is required`);
@@ -10,6 +13,45 @@ async function safeAudit(audit, entry) {
 
 function kitAuditIdentity(id, version, channel) {
   return { id, version, channel };
+}
+
+async function canonicalDirectory(directory) {
+  if (typeof directory !== 'string' || directory.length === 0) {
+    throw new Error('Installed Kit directory is required');
+  }
+  try {
+    return await realpath(directory);
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return path.resolve(directory);
+    throw error;
+  }
+}
+
+async function bindInstalledSelection(selection, activeSources, catalog) {
+  if (!Array.isArray(activeSources)) throw new TypeError('active sources must be an array');
+  if (!Array.isArray(catalog)) throw new TypeError('validated Catalog must be an array');
+  const activeSource = activeSources.find((entry) => (
+    entry?.id === selection.id
+    && entry.version === selection.version
+    && entry.source === 'installed'
+  ));
+  if (!activeSource) {
+    throw new Error(`Installed Kit ${selection.id}@${selection.version} is absent from active sources`);
+  }
+  const expectedDirectory = await canonicalDirectory(activeSource.directory);
+  for (const entry of catalog) {
+    if (entry?.name !== selection.id
+      || entry.version !== selection.version
+      || entry.source !== 'installed') continue;
+    if (await canonicalDirectory(entry.directory) === expectedDirectory) {
+      return {
+        ...selection,
+        source: 'installed',
+        directory: expectedDirectory,
+      };
+    }
+  }
+  throw new Error(`Installed Kit ${selection.id}@${selection.version} is absent from the resolved Catalog`);
 }
 
 export async function prepareInstalledKitsForStartup({ store, validateCatalog, audit }) {
@@ -31,8 +73,9 @@ export async function prepareInstalledKitsForStartup({ store, validateCatalog, a
     const kit = kitAuditIdentity(selection.id, selection.version, selection.channel);
     await store.stageActivation(selection.id, selection.version);
     try {
-      await validateCatalog(await store.listActiveSources());
-      pendingActivations.push(selection);
+      const activeSources = await store.listActiveSources();
+      const catalog = await validateCatalog(activeSources);
+      pendingActivations.push(await bindInstalledSelection(selection, activeSources, catalog));
       outcomes.push({ id: selection.id, version: selection.version, status: 'pending-runtime' });
       continue;
     } catch {
@@ -48,8 +91,9 @@ export async function prepareInstalledKitsForStartup({ store, validateCatalog, a
         };
         try {
           await store.stageActivation(recovery.id, recovery.version);
-          await validateCatalog(await store.listActiveSources());
-          pendingActivations.push(recovery);
+          const activeSources = await store.listActiveSources();
+          const catalog = await validateCatalog(activeSources);
+          pendingActivations.push(await bindInstalledSelection(recovery, activeSources, catalog));
           await safeAudit(audit, {
             event: 'kit.rollback', outcome: 'success', source: 'local',
             kit: kitAuditIdentity(selection.id, recovery.version, selection.channel),
@@ -79,6 +123,7 @@ export async function prepareInstalledKitsForStartup({ store, validateCatalog, a
 export async function finalizePendingKitActivations({
   store,
   selections,
+  catalog,
   validateRuntime,
   audit,
 }) {
@@ -86,6 +131,7 @@ export async function finalizePendingKitActivations({
     requireMethod(store, method, 'store');
   }
   if (!Array.isArray(selections)) throw new TypeError('selections must be an array');
+  if (!Array.isArray(catalog)) throw new TypeError('catalog must be an array');
   if (typeof validateRuntime !== 'function') throw new TypeError('validateRuntime is required');
   requireMethod(audit, 'append', 'audit');
 
@@ -93,7 +139,8 @@ export async function finalizePendingKitActivations({
   for (const selection of selections) {
     const kit = kitAuditIdentity(selection.id, selection.version, selection.channel);
     try {
-      await validateRuntime(selection);
+      const exactSelection = await bindInstalledSelection(selection, [selection], catalog);
+      await validateRuntime(exactSelection);
     } catch {
       const failure = await store.failActivation(selection.id, selection.version);
       await safeAudit(audit, {

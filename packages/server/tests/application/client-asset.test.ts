@@ -6,6 +6,7 @@ import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createClientAssetRouter } from '../../src/routes/client-asset';
 import { createServer } from '../../src/server';
+import { testAssembly } from '../helpers/assembly';
 
 const temporaryDirectories: string[] = [];
 
@@ -164,6 +165,7 @@ describe('createClientAssetRouter', () => {
       dispose: async () => undefined,
     } as never;
     const server = createServer({
+      assembly: testAssembly,
       clientAssetsRoot: root,
       applicationRuntime,
       host: '127.0.0.1',

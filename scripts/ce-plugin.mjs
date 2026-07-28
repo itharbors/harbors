@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { discoverAllPlugins, discoverPlugin } from './lib/plugin-build/discover.mjs';
+import { discoverAllPlugins, discoverPlugin, discoverRuntimePlugins } from './lib/plugin-build/discover.mjs';
 import { cleanDir } from './lib/plugin-build/fs.mjs';
 import { compileMainScript, compilePanelScripts } from './lib/plugin-build/scripts.mjs';
 import { copyPanelStyles } from './lib/plugin-build/styles.mjs';
@@ -13,17 +13,20 @@ function parseArgs(argv) {
 
 function ensureTarget(target) {
   if (!target) {
-    throw new Error('Expected <plugin-dir|--all>');
+    throw new Error('Expected <plugin-dir|--all|--runtime>');
   }
   return target;
 }
 
 function discoverTargets(target) {
-  if (ensureTarget(target) !== '--all') {
+  const resolvedTarget = ensureTarget(target);
+  if (resolvedTarget !== '--all' && resolvedTarget !== '--runtime') {
     return [target];
   }
 
-  const plugins = discoverAllPlugins(process.cwd());
+  const plugins = resolvedTarget === '--runtime'
+    ? discoverRuntimePlugins(process.cwd())
+    : discoverAllPlugins(process.cwd());
   if (plugins.length === 0) {
     throw new Error('No plugins found');
   }

@@ -111,7 +111,6 @@ test('starts the Web stack without recursion and forwards requested Kit argument
 test('passes only an explicit requested Kit to the Web server without leaking stale host state', () => {
   const base = {
     PATH: '/bin', CE_DEFAULT_KIT: 'stale-kit', CE_KIT_MODE: 'single',
-    HARBORS_INSTALLED_KITS: '["/stale"]',
   };
   const kitSources = [{ directory: '/repo/kits/default', source: 'builtin' }];
 
@@ -124,7 +123,6 @@ test('passes only an explicit requested Kit to the Web server without leaking st
     HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
     CE_DEFAULT_KIT: '@itharbors/kit-mysql',
   });
-  assert.equal(base.HARBORS_INSTALLED_KITS, '["/stale"]');
 });
 
 test('creates an immutable Framework source snapshot from the resolved Catalog', () => {
@@ -177,7 +175,24 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.prestart, 'npm run build');
+  assert.equal(packageJson.scripts.prestart, 'npm run build:runtime');
+  assert.equal(
+    packageJson.scripts['plugins:build:runtime'],
+    'node scripts/ce-plugin.mjs build --runtime',
+  );
+  assert.equal(
+    packageJson.scripts['build:runtime'],
+    'npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build:runtime',
+  );
+  assert.match(packageJson.scripts.build, /npm run plugins:build(?:\s|$)/);
+  assert.match(
+    packageJson.scripts['plugins:build'],
+    /prepare-notification-skill-resource\.mjs/u,
+  );
+  assert.match(
+    packageJson.scripts.test,
+    /scripts\/lib\/plugin-build\/discover\.test\.mjs/u,
+  );
   assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
   assert.equal(packageJson.scripts.electron, 'npm run start --');
   assert.equal(packageJson.scripts.dev, 'node scripts/dev-electron.mjs');
@@ -302,7 +317,7 @@ test('uses aggregate multi-Kit menus for every Electron window', async () => {
   assert.match(electronSource, /requestedKit: resolveRequestedKitName\(/);
 });
 
-test('builds tray entries for available and persisted unavailable Kits', () => {
+test('builds tray entries only for the current Catalog while retaining workspace input', () => {
   const opened = [];
   let quitCount = 0;
   const template = buildTrayTemplate({
@@ -323,15 +338,14 @@ test('builds tray entries for available and persisted unavailable Kits', () => {
   assert.deepEqual(template.map(({ label, enabled, type }) => ({ label, enabled, type })), [
     { label: 'Default Kit', enabled: true, type: undefined },
     { label: 'SQLite', enabled: true, type: undefined },
-    { label: '@itharbors/kit-removed (Unavailable)', enabled: false, type: undefined },
     { label: undefined, enabled: undefined, type: 'separator' },
     { label: 'Kit Manager…', enabled: undefined, type: undefined },
     { label: undefined, enabled: undefined, type: 'separator' },
     { label: 'Quit ITHARBORS', enabled: undefined, type: undefined },
   ]);
   template[1].click();
-  template[4].click();
-  template[6].click();
+  template[3].click();
+  template[5].click();
   assert.deepEqual(opened, ['@itharbors/kit-sqlite', 'kit-manager']);
   assert.equal(quitCount, 1);
 });
@@ -837,6 +851,10 @@ test('commits pending installed Kits only after Catalog and actual Framework loa
   const initialize = source.indexOf('await initializeKitHost');
   assert.ok(prepare >= 0 && discover > prepare && initialize > discover);
   assert.match(source, /validateCatalog:\s*async \(sources\).*discoverKits/s);
+  assert.match(
+    source.slice(prepare, discover),
+    /requestedKit:\s*electronOptions\.requestedKit\s*\?\?\s*undefined/u,
+  );
   const startFramework = source.indexOf('const started = await startFramework()');
   const finalize = source.indexOf('await finalizePendingKitActivations');
   assert.ok(startFramework >= 0 && finalize > startFramework);

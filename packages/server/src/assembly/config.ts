@@ -5,8 +5,7 @@ export interface AssemblyConfig {
   pluginsDir: string;
   builtinKitsDir: string;
   kitsDir: string;
-  installedKitDirs: string[];
-  kitSources?: AssemblyKitSource[] | null;
+  kitSources: AssemblyKitSource[];
   defaultKit: string;
 }
 
@@ -28,8 +27,7 @@ export function createDefaultAssemblyConfig(
     pluginsDir: path.join(projectRoot, 'plugins'),
     builtinKitsDir: path.join(projectRoot, 'kits'),
     kitsDir: path.join(projectRoot, 'kits'),
-    installedKitDirs: [],
-    kitSources: null,
+    kitSources: [],
     defaultKit: '@itharbors/kit-default',
   }, override);
 }
@@ -43,14 +41,13 @@ export function normalizeAssemblyConfig(
     pluginsDir: override.pluginsDir ?? fileConfig.pluginsDir,
     builtinKitsDir: override.builtinKitsDir ?? fileConfig.builtinKitsDir,
     kitsDir: override.kitsDir ?? fileConfig.kitsDir,
-    installedKitDirs: [...(override.installedKitDirs ?? fileConfig.installedKitDirs ?? [])],
-    kitSources: cloneKitSources(override.kitSources ?? fileConfig.kitSources ?? null),
+    kitSources: cloneKitSources(override.kitSources ?? fileConfig.kitSources),
     defaultKit: override.defaultKit ?? fileConfig.defaultKit,
   };
 }
 
-function cloneKitSources(value: AssemblyKitSource[] | null): AssemblyKitSource[] | null {
-  return value === null ? null : value.map((item) => ({
+function cloneKitSources(value: AssemblyKitSource[]): AssemblyKitSource[] {
+  return value.map((item) => ({
     directory: path.resolve(item.directory),
     source: item.source,
   }));
