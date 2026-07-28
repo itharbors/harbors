@@ -34,6 +34,7 @@ import { resolveRuntimePorts, resolveRuntimeProfile } from './lib/runtime-ports.
 import {
   buildTrayTemplate,
   buildUpdateMenuItems,
+  closeKitWindow,
   createBeforeQuitGate,
   createFrameworkArgs,
   createKitSourceSnapshot,
@@ -43,6 +44,7 @@ import {
   parseElectronOptions,
   persistOpenWindowBounds,
   registerDesktopSignalHandlers,
+  reloadKitWindows,
   selectMenuWindow,
   shouldStartElectronApp,
   shutdownDesktopServices,
@@ -57,6 +59,9 @@ import {
   prepareInstalledKitsForStartup,
 } from './lib/kit-store/startup.mjs';
 import { createKitManagerService } from './lib/kit-manager-service.mjs';
+import { KitArtifactUninstaller } from './lib/kit-store/uninstaller.mjs';
+import { createKitRuntimeCoordinator } from './lib/kit-runtime-coordinator.mjs';
+import { createLiveKitManager } from './lib/live-kit-manager.mjs';
 import { registerKitManagerIpc } from './lib/kit-manager-ipc.mjs';
 import { createKitManagerWindowController } from './lib/kit-manager-window.mjs';
 import {
@@ -96,6 +101,9 @@ let trayWorkspaceRecords = [];
 let workspaceStore;
 let kitStore;
 let kitManagerService;
+let kitArtifactUninstaller;
+let kitRuntimeCoordinator;
+let liveKitManager;
 let kitManagerWindowController;
 let kitManagerIpcRegistration;
 let kitManagerCloseDrain = Promise.resolve();
@@ -103,6 +111,7 @@ let kitManagerRefreshTimer;
 let kitManagerBackgroundRefresh;
 let installedKits = [];
 let pendingKitActivations = [];
+let pendingKitUninstalls = [];
 let kitCatalog = [];
 let kitSources = [];
 let electronOptions;
@@ -130,6 +139,7 @@ let notificationPort;
 let codexSkillSource;
 let applicationMenuTree = [];
 let applicationRuntimeClient;
+let frameworkReloading = false;
 let notificationStoreUnsubscribe;
 let notificationStopPromise;
 let toastQueue;
@@ -366,6 +376,10 @@ function startElectronApp() {
         store: kitStore,
         runtime: kitRuntime,
       });
+      kitArtifactUninstaller = new KitArtifactUninstaller({
+        storeRoot: kitStoreRoot,
+        store: kitStore,
+      });
       const prepared = await prepareInstalledKitsForStartup({
         store: kitStore,
         audit: kitManagerService.audit,
@@ -379,6 +393,7 @@ function startElectronApp() {
       });
       installedKits = prepared.activeSources;
       pendingKitActivations = prepared.pendingActivations;
+      pendingKitUninstalls = prepared.pendingUninstalls;
       kitCatalog = await discoverKits({
         rootDir,
         profile: runtimeProfile === 'development' ? 'development' : 'stable',
@@ -400,6 +415,14 @@ function startElectronApp() {
         throw new Error('No valid Kits were discovered');
       }
       workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
+      kitRuntimeCoordinator = createKitRuntimeCoordinator({
+        applyActivation: applyLiveKitActivation,
+        applyUninstall: applyLiveKitUninstall,
+      });
+      liveKitManager = createLiveKitManager({
+        manager: kitManagerService.manager,
+        coordinator: kitRuntimeCoordinator,
+      });
       kitManagerWindowController = createKitManagerWindowController({
         BrowserWindow,
         preloadPath: kitManagerPreloadPath,
@@ -534,14 +557,16 @@ function startDevelopmentFramework() {
 function observeFrameworkProcess(child) {
   child.on('error', (error) => {
     console.error('Failed to start framework:', error.message);
-    process.exitCode = 1;
-    app.quit();
+    if (!frameworkReloading) {
+      process.exitCode = 1;
+      app.quit();
+    }
   });
 
   child.on('exit', (code, signal) => {
     if (code !== 0 && signal !== 'SIGTERM' && signal !== 'SIGINT') {
       console.error(`Framework exited with code ${code ?? 'null'} and signal ${signal ?? 'null'}`);
-      app.quit();
+      if (!frameworkReloading) app.quit();
     }
   });
 }
@@ -566,7 +591,7 @@ async function openKitManager() {
     kitManagerIpcRegistration = registerKitManagerIpc({
       ipcMain,
       getManagerWindow: () => kitManagerWindowController?.getWindow(),
-      service: kitManagerService.manager,
+      service: liveKitManager,
     });
   }
   try {
@@ -592,13 +617,76 @@ async function stopKitManagerService() {
     registration?.drain(),
     kitManagerCloseDrain,
     kitManagerBackgroundRefresh,
+    kitRuntimeCoordinator?.dispose(),
   ].filter(Boolean));
   kitManagerBackgroundRefresh = undefined;
 }
 
 async function startFrameworkAndTrackReadiness() {
   await startNotificationService();
+  let generation = {
+    installedKits,
+    pendingActivations: pendingKitActivations,
+    pendingUninstalls: pendingKitUninstalls,
+    catalog: kitCatalog,
+    sources: kitSources,
+  };
+  let launched = await launchFrameworkGeneration(generation);
+  if (launched.activation.restartRequired) {
+    await stopFrameworkGeneration();
+    generation = await buildFrameworkGeneration();
+    launched = await launchFrameworkGeneration(generation);
+    if (launched.activation.restartRequired) {
+      throw new Error('Kit Runtime recovery failed during desktop startup');
+    }
+  }
+  const remainingUninstalls = await finishPendingKitUninstalls(generation.pendingUninstalls);
+  generation = Object.freeze({ ...generation, pendingUninstalls: remainingUninstalls });
+  await publishFrameworkGeneration(generation, launched.bootstrap, { reloadWindows: false });
+  scheduleUpdateCheck();
+}
+
+async function buildFrameworkGeneration({ removedKitId } = {}) {
+  const prepared = await prepareInstalledKitsForStartup({
+    store: kitStore,
+    audit: kitManagerService.audit,
+    validateCatalog: async (sources) => discoverKits({
+      rootDir,
+      profile: runtimeProfile === 'development' ? 'development' : 'stable',
+      requestedKit: electronOptions.requestedKit === removedKitId
+        ? undefined
+        : electronOptions.requestedKit ?? undefined,
+      installedKits: sources,
+      failOnInstalledError: true,
+    }),
+  });
+  const catalog = await discoverKits({
+    rootDir,
+    profile: runtimeProfile === 'development' ? 'development' : 'stable',
+    requestedKit: electronOptions.requestedKit === removedKitId
+      ? undefined
+      : electronOptions.requestedKit ?? undefined,
+    installedKits: prepared.activeSources,
+    failOnInstalledError: false,
+    onDiagnostic: (diagnostic) => console.warn(`Kit Catalog: ${diagnostic.message}`),
+  });
+  if (catalog.length === 0) throw new Error('No valid Kits were discovered');
+  return Object.freeze({
+    installedKits: prepared.activeSources,
+    pendingActivations: prepared.pendingActivations,
+    pendingUninstalls: prepared.pendingUninstalls,
+    preparationOutcomes: prepared.outcomes,
+    catalog,
+    sources: createKitSourceSnapshot(catalog),
+  });
+}
+
+async function launchFrameworkGeneration(generation) {
+  kitSources = generation.sources;
   frameworkStopPromise = undefined;
+  frameworkReadyPromise = undefined;
+  frameworkProcess = undefined;
+  frameworkStop = undefined;
   const started = await startFramework();
   frameworkProcess = started.child;
   frameworkStop = started.stop;
@@ -607,8 +695,8 @@ async function startFrameworkAndTrackReadiness() {
   const bootstrap = await frameworkReadyPromise;
   const activation = await finalizePendingKitActivations({
     store: kitStore,
-    selections: pendingKitActivations,
-    catalog: kitCatalog,
+    selections: generation.pendingActivations,
+    catalog: generation.catalog,
     audit: kitManagerService.audit,
     validateRuntime: (selection) => validateInstalledKitRuntime(
       startUrl,
@@ -616,11 +704,27 @@ async function startFrameworkAndTrackReadiness() {
       selection,
     ),
   });
+  return { bootstrap, activation };
+}
+
+async function stopFrameworkGeneration() {
+  applicationRuntimeClient?.close();
+  applicationRuntimeClient = undefined;
+  await stopFramework();
+  frameworkProcess = undefined;
+  frameworkStop = undefined;
+  frameworkStopPromise = undefined;
+  frameworkReadyPromise = undefined;
+}
+
+async function publishFrameworkGeneration(generation, bootstrap, { reloadWindows = true } = {}) {
+  installedKits = generation.installedKits;
   pendingKitActivations = [];
-  if (activation.restartRequired) {
-    app.relaunch();
-    throw new Error('A Kit failed its first runtime load; restored state will be applied after restart');
-  }
+  pendingKitUninstalls = generation.pendingUninstalls;
+  kitCatalog = generation.catalog;
+  kitSources = generation.sources;
+  sessionMenus.clear();
+  for (const sessionId of Array.from(menuSyncWaiters.keys())) resolveMenuSyncWaiters(sessionId);
   updateApplicationBootstrap(bootstrap);
   applicationRuntimeClient = createApplicationRuntimeClient({
     baseUrl: startUrl,
@@ -628,7 +732,138 @@ async function startFrameworkAndTrackReadiness() {
     onError: (error) => console.error('Application event stream failed:', error.message),
   });
   applicationRuntimeClient.startEvents();
-  scheduleUpdateCheck();
+  trayWorkspaceRecords = await workspaceStore.list(kitCatalog);
+  refreshApplicationTray();
+  if (reloadWindows && !quitting) {
+    await reloadKitWindows({
+      kitWindows,
+      catalog: kitCatalog,
+      startUrl,
+      workspaceStore,
+    });
+  }
+}
+
+async function finishPendingKitUninstalls(pending) {
+  const remaining = [];
+  for (const { id } of pending) {
+    try {
+      await kitArtifactUninstaller.removeStaged(id);
+      await kitStore.commitUninstall(id);
+    } catch (error) {
+      remaining.push({ id });
+      console.error(`Failed to finish uninstalling ${id}:`, error.message);
+    }
+  }
+  return remaining;
+}
+
+function kitRuntimeOperationError(message, cause) {
+  return Object.assign(new Error(message, { cause }), { code: 'KIT_RUNTIME_APPLY_FAILED' });
+}
+
+async function applyLiveKitActivation(input) {
+  const selection = input.rollback
+    ? await kitManagerService.manager.rollback(input.id)
+    : await kitManagerService.manager.activate(input);
+  if (!selection.pending) return { ...selection, runtimeReloaded: false };
+  await replaceFrameworkForKitMutation({
+    kind: 'activation',
+    id: selection.id,
+    version: selection.version,
+  });
+  return { id: selection.id, version: selection.version, runtimeReloaded: true };
+}
+
+async function applyLiveKitUninstall(id) {
+  await kitStore.stageUninstall(id);
+  const reopenOnFailure = closeKitWindow(kitWindows, id);
+  try {
+    await replaceFrameworkForKitMutation({ kind: 'uninstall', id, reopenOnFailure });
+  } catch (error) {
+    const record = (await kitStore.snapshot()).kits[id];
+    if (record?.pendingUninstall) await kitStore.cancelUninstall(id);
+    throw error;
+  }
+  const removed = await kitArtifactUninstaller.removeStaged(id);
+  await kitStore.commitUninstall(id);
+  pendingKitUninstalls = pendingKitUninstalls.filter((entry) => entry.id !== id);
+  return { ...removed, runtimeReloaded: true };
+}
+
+async function replaceFrameworkForKitMutation(operation) {
+  frameworkReloading = true;
+  let generation;
+  try {
+    generation = await buildFrameworkGeneration({
+      removedKitId: operation.kind === 'uninstall' ? operation.id : undefined,
+    });
+    const preparationFailed = operation.kind === 'activation'
+      && generation.preparationOutcomes.some((outcome) => (
+        outcome.id === operation.id
+        && outcome.version === operation.version
+        && outcome.status !== 'pending-runtime'
+      ));
+    await stopFrameworkGeneration();
+    let launched;
+    try {
+      launched = await launchFrameworkGeneration(generation);
+    } catch (error) {
+      await recoverFrameworkMutation(operation, error);
+    }
+
+    const runtimeFailed = operation.kind === 'activation'
+      && launched.activation.outcomes.some((outcome) => (
+        outcome.id === operation.id
+        && outcome.version === operation.version
+        && outcome.status !== 'activated'
+      ));
+    if (runtimeFailed) {
+      await stopFrameworkGeneration();
+      const recovery = await buildFrameworkGeneration();
+      const recovered = await launchFrameworkGeneration(recovery);
+      if (recovered.activation.restartRequired) {
+        throw kitRuntimeOperationError('Kit Runtime recovery failed');
+      }
+      await publishFrameworkGeneration(recovery, recovered.bootstrap);
+      throw kitRuntimeOperationError('Kit failed to load; the previous Runtime was restored');
+    }
+
+    await publishFrameworkGeneration(generation, launched.bootstrap);
+    if (preparationFailed) {
+      throw kitRuntimeOperationError('Kit failed Catalog validation; the previous Runtime was restored');
+    }
+  } finally {
+    frameworkReloading = false;
+  }
+}
+
+async function recoverFrameworkMutation(operation, originalError) {
+  await stopFrameworkGeneration().catch(() => undefined);
+  if (operation.kind === 'uninstall') {
+    const record = (await kitStore.snapshot()).kits[operation.id];
+    if (record?.pendingUninstall) await kitStore.cancelUninstall(operation.id);
+  } else {
+    const record = (await kitStore.snapshot()).kits[operation.id];
+    if (record?.pending === operation.version && record.active === operation.version) {
+      await kitStore.failActivation(operation.id, operation.version);
+    } else if (record?.pending === operation.version) {
+      await kitStore.clearPending(operation.id, operation.version);
+    }
+  }
+  try {
+    const recovery = await buildFrameworkGeneration();
+    const recovered = await launchFrameworkGeneration(recovery);
+    if (recovered.activation.restartRequired) throw new Error('recovered Kit failed to load');
+    await publishFrameworkGeneration(recovery, recovered.bootstrap);
+    if (operation.reopenOnFailure && !quitting) await openKit(operation.id);
+  } catch (recoveryError) {
+    throw new AggregateError(
+      [originalError, recoveryError],
+      'Kit Runtime replacement and recovery both failed',
+    );
+  }
+  throw kitRuntimeOperationError('Kit Runtime replacement failed; the previous Runtime was restored', originalError);
 }
 
 function scheduleUpdateCheck(delayMs = 5000) {
