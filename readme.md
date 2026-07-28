@@ -13,7 +13,7 @@ ITHARBORS 是一个以插件为核心的桌面应用开发框架。它提供基�
 - **插件优先的运行时**：功能、面板、菜单和消息处理器均通过插件声明和实现。
 - **基于 Kit 的组合**：一个 Kit 定义应用启动插件，以及单个编辑器会话按需加载的插件、布局、窗口入口和主题。
 - **可验证 Kit 制品**：提供确定性 `.hkit` 打包、检查、本地事务安装和 active 版本目录接入。
-- **桌面 Kit 市场**：托盘中的 Kit Manager 提供严格 Registry、Sigstore 来源验证、权限提示、离线缓存、安装、重启激活和自动回滚。
+- **桌面 Kit 市场**：托盘中的 Kit Manager 提供严格 Registry、Sigstore 来源验证、权限提示、离线缓存，以及无需重启 Electron 的安装、更新、回滚和删除。
 - **Kit 独立发布**：专属 Tag 从 `main:kits/<name>` 选择一个 Kit，自动生成 `.hkit` Release Asset、SBOM、Artifact Attestation 与 GitHub Pages 市场索引。
 - **会话隔离**：每个会话拥有独立的运行时、当前 Kit 和已加载的外部插件。
 - **消息中枢**：面板与插件之间通过服务端路由的 request / broadcast API 通信。
@@ -44,13 +44,14 @@ npm run dev
 `npm run dev` 会启动隔离的开发 Electron，额外加载仓库 `kits/*` 中的开发 Kit，加载各 Kit 声明的应用级启动插件并显示系统托盘图标，但不会
 自动打开默认 Kit。单击或右键托盘
 图标，从列表选择 Default、CSV、SQLite、MySQL 或 Notifications；首次选择会按需加载，之后再次选择只会打开或
-聚焦已有窗口。选择 **Kit Manager…** 可刷新市场、安装 Stable/Preview Kit，并把版本排入下一次
-安全重启激活。首个可信 Kit Release 完成发布和索引部署前，Registry 可能为空。
+聚焦已有窗口。选择 **Kit Manager…** 可刷新市场、安装 Stable/Preview Kit；安装、更新、启用、
+回滚和删除会在当前 Electron 会话中立即应用。运行时切换只替换后台 Framework 子进程，托盘、
+Kit Manager 和 Notification Host 保持运行。首个可信 Kit Release 完成发布和索引部署前，Registry 可能为空。
 
 `npm run start` 使用与正式桌面包相同的 Kit 来源规则：只加载显式内置 Kit 和用户已经安装、激活的
 商城 Kit，不扫描仓库中的普通开发 Kit。商城版本安装在
 `<userData>/kit-store/kits/<encoded-kit-id>/<version>`；同一个 Kit 可以保留多个不可变版本，但只有
-active 版本参与下一次启动。内置 Kit 不能从商城重复安装。
+active 版本参与当前及后续 Framework generation。内置 Kit 不能从商城重复安装或删除。
 
 | 服务 | 稳定 Electron（`npm run start`） | 隔离开发 Electron（`npm run dev`） | 职责 |
 | --- | --- | --- | --- |

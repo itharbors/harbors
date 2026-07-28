@@ -204,7 +204,7 @@ start 固定从 `origin/main` 创建 `kit-change/<kit>/<type>/<slug>` 隔离 wor
 
 ## 当前交付状态
 
-桌面市场、受限 Electron IPC、生产 GitHub attestation verifier、安装、重启激活、自动回滚、
+桌面市场、受限 Electron IPC、生产 GitHub attestation verifier、安装/更新/删除热更新、自动回滚、
 Server Catalog、Tag 驱动 GitHub Release、可信 Release 扫描、Registry Pages aggregation、
 路径级 CI 与 `kit-workflow` 均已在代码中交付。旧 Kit refs 仅作为临时回退来源，不再接收开发或
 发布提交；暂停的 `harbors-kits` 仓库不参与当前链路。首次远端启用仍按上节逐项审核执行，在首个
