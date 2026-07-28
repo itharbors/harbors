@@ -19,11 +19,13 @@ export async function runCachedTask({
     dependencyDigests,
     inputs: inputEntries.map(({ path: entryPath, sha256 }) => ({ path: entryPath, sha256 })),
     outputs: task.outputs,
+    runtime: { executable: process.execPath, version: process.version },
     taskName: task.name,
   });
   const recordPath = path.join(cacheDir, `${safeTaskName(task.name)}.json`);
   const record = await readRecord(recordPath);
   const currentOutputs = await collectEntries(rootPath, task.outputs, { missing: 'miss' });
+  const currentResultDigest = currentOutputs === null ? null : digestJson({ inputDigest, outputs: currentOutputs });
 
   if (!force
     && record?.schemaVersion === SCHEMA_VERSION
@@ -31,7 +33,7 @@ export async function runCachedTask({
     && record.inputDigest === inputDigest
     && currentOutputs !== null
     && manifestsEqual(record.outputs, currentOutputs)
-    && typeof record.resultDigest === 'string') {
+    && record.resultDigest === currentResultDigest) {
     return { status: 'hit', inputDigest, resultDigest: record.resultDigest };
   }
 

@@ -21,6 +21,20 @@ test('builds once and hits the cache when the task inputs are unchanged', async 
   assert.equal(second.status, 'hit');
   assert.equal(await readFile(join(rootDir, 'executions.log'), 'utf8'), 'run\n');
   assert.match(second.resultDigest, /^[a-f0-9]{64}$/u);
+  assert.equal(cacheDir, join(rootDir, '.cache', 'harbors-build', 'v1'));
+  await cacheRecordPath(cacheDir);
+});
+
+test('rebuilds when the Node runtime version changes', async (t) => {
+  const fixture = await createFixture(t);
+  const originalVersion = process.version;
+  t.after(() => Object.defineProperty(process, 'version', { value: originalVersion }));
+  Object.defineProperty(process, 'version', { value: 'v100.0.0-cache-test' });
+  await primeCache(fixture);
+  Object.defineProperty(process, 'version', { value: 'v200.0.0-cache-test' });
+
+  assert.equal((await runCachedTask(fixture)).status, 'built');
+  await assertExecutionCount(fixture.rootDir, 2);
 });
 
 test('rebuilds when an input file changes', async (t) => {
@@ -117,6 +131,19 @@ test('rebuilds when the existing cache record has another schema version', async
   await assertExecutionCount(fixture.rootDir, 2);
 });
 
+test('rebuilds when the existing cache record has a corrupted result digest', async (t) => {
+  const fixture = await createFixture(t);
+  await primeCache(fixture);
+  const recordPath = await cacheRecordPath(fixture.cacheDir);
+  const record = JSON.parse(await readFile(recordPath, 'utf8'));
+  await writeFile(recordPath, JSON.stringify({ ...record, resultDigest: '0'.repeat(64) }));
+
+  const result = await runCachedTask(fixture);
+  assert.equal(result.status, 'built');
+  assert.notEqual(result.resultDigest, '0'.repeat(64));
+  await assertExecutionCount(fixture.rootDir, 2);
+});
+
 test('force rebuilds an otherwise valid cache hit', async (t) => {
   const fixture = await createFixture(t);
   await primeCache(fixture);
@@ -139,7 +166,7 @@ async function createFixture(t, options = {}) {
   await mkdir(join(rootDir, 'src'), { recursive: true });
   await writeFile(join(rootDir, 'src', 'input.txt'), 'initial');
   t.after(() => rm(rootDir, { recursive: true, force: true }));
-  return { rootDir, cacheDir: join(rootDir, '.cache'), task: createFixtureTask(), ...options };
+  return { rootDir, cacheDir: join(rootDir, '.cache', 'harbors-build', 'v1'), task: createFixtureTask(), ...options };
 }
 
 async function primeCache(options) {
