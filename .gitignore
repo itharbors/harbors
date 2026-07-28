@@ -14,3 +14,4 @@ tsconfig.tsbuildinfo
 /harbors-kits/
 /dist/desktop-runtime/
 /dist/desktop-release/
+/.cache/harbors-build/
