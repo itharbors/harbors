@@ -161,7 +161,10 @@ export function createKitManagerService({
     fetchImpl,
     now,
   });
-  const provenanceVerifier = new GitHubArtifactAttestationVerifier({ fetchImpl });
+  const provenanceVerifier = new GitHubArtifactAttestationVerifier({
+    fetchImpl,
+    githubToken: env.HARBORS_KIT_GITHUB_TOKEN,
+  });
   const resolver = new KitReleaseResolver({
     snapshotProvider: client,
     fetchImpl,

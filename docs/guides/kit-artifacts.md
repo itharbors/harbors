@@ -107,6 +107,17 @@ process 同时校验调用 sender。Stable 默认展开，Preview 默认折叠�
 `HARBORS_KIT_PUBLISHER_POLICIES_JSON` 和 `HARBORS_KIT_AUTO_UPDATE_PUBLISHERS` 覆盖配置；非法或
 非 HTTPS 配置会 fail closed。
 
+Kit 安装默认使用 GitHub 匿名 API 容量获取 artifact attestation。开发或受控走查遇到匿名限流时，
+可把现有 GitHub CLI 凭据仅传给当前 Electron 进程：
+
+```bash
+HARBORS_KIT_GITHUB_TOKEN="$(gh auth token)" npm run electron
+```
+
+该 token 不会持久化，也不会进入 Kit Manager 配置、快照、日志或错误；它只发送到由受信仓库与
+artifact digest 推导出的 canonical GitHub attestation API 请求，不会发送到 Registry、Release、
+bundle 或 Kit artifact 下载地址。
+
 ## GitHub 自动发布
 
 CSV、SQLite、MySQL、Notifications 的发布源分别是 `main` 上的 `kits/csv`、`kits/sqlite`、
