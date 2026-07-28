@@ -387,6 +387,22 @@ test('rejects portable source aliases and destination identity collisions before
       error: /destination collision/iu,
     },
     {
+      name: 'full-case-fold expansion-equivalent destinations',
+      entries: [
+        { source, destination: 'fold/straße.json' },
+        { source, destination: 'fold/STRASSE.json' },
+      ],
+      error: /destination collision/iu,
+    },
+    {
+      name: 'full-case-fold special-letter-equivalent destinations',
+      entries: [
+        { source, destination: 'fold/ς.json' },
+        { source, destination: 'fold/σ.json' },
+      ],
+      error: /destination collision/iu,
+    },
+    {
       name: 'file and directory prefix destinations',
       entries: [
         { source, destination: 'prefix/node' },
