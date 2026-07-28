@@ -9,6 +9,7 @@ export const KIT_MANAGER_CHANNELS = Object.freeze({
   install: 'harbors:kit-manager:install',
   activate: 'harbors:kit-manager:activate',
   rollback: 'harbors:kit-manager:rollback',
+  uninstall: 'harbors:kit-manager:uninstall',
 });
 
 class IpcInputError extends Error {}
@@ -56,6 +57,11 @@ function parseRollback(args) {
   return id(args[0]);
 }
 
+function parseUninstall(args) {
+  if (args.length !== 1) throw new IpcInputError();
+  return id(args[0]);
+}
+
 function serializeError(error) {
   if (error instanceof IpcInputError) {
     return { code: 'INVALID_INPUT', message: 'Invalid Kit Manager request' };
@@ -95,6 +101,7 @@ export function registerKitManagerIpc({ ipcMain, getManagerWindow, service }) {
     install: { parse: parseInstall, invoke: (value) => service.install(value) },
     activate: { parse: parseActivate, invoke: (value) => service.activate(value) },
     rollback: { parse: parseRollback, invoke: (value) => service.rollback(value) },
+    uninstall: { parse: parseUninstall, invoke: (value) => service.uninstall(value) },
   };
   const inFlight = new Set();
   let active = true;
