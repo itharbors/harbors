@@ -36,8 +36,9 @@ async function createView({ api, initial = snapshot(), confirmInstall } = {}) {
     list: async () => initial,
     refresh: async () => initial,
     install: async (value) => { calls.push(['install', value]); return { status: 'installed' }; },
-    activate: async (value) => { calls.push(['activate', value]); return { requiresRestart: true }; },
-    rollback: async (value) => { calls.push(['rollback', value]); return { requiresRestart: true }; },
+    activate: async (value) => { calls.push(['activate', value]); return { runtimeReloaded: true }; },
+    rollback: async (value) => { calls.push(['rollback', value]); return { runtimeReloaded: true }; },
+    uninstall: async (value) => { calls.push(['uninstall', value]); return { runtimeReloaded: true }; },
   };
   const resolvedApi = { ...defaultApi, ...api };
   const view = createKitManagerView({
@@ -122,7 +123,7 @@ test('renders stable and collapsed preview berths with permissions and lifecycle
   assert.match(stable.textContent, /SQLite Workbench/);
   assert.match(stable.textContent, /itharbors/);
   assert.match(stable.textContent, /1\.2\.0/);
-  assert.match(stable.textContent, /等待重启/);
+  assert.match(stable.textContent, /正在应用/);
   assert.match(stable.textContent, /原生代码 — 高风险/);
   assert.equal(stable.querySelector('[data-action="activate"]').disabled, true);
   assert.ok(stable.querySelector('[data-action="rollback"]'));
@@ -130,7 +131,8 @@ test('renders stable and collapsed preview berths with permissions and lifecycle
   assert.equal(preview.open, false);
   assert.match(preview.textContent, /预览版/);
   assert.match(preview.textContent, /已标记异常/);
-  assert.match(preview.querySelector('[data-action="activate"]').textContent, /重启后重试/);
+  assert.match(preview.querySelector('[data-action="activate"]').textContent, /立即重试/);
+  assert.equal(value.document.querySelectorAll('[data-action="uninstall"]').length, 1);
 });
 
 test('renders builtin Kits without an install action', async () => {
@@ -166,7 +168,8 @@ test('confirms native code, installs a selected channel, and refreshes the insta
         kits: [{
           ...snapshot().kits[0],
           installed: {
-            channel: 'stable', autoUpdate: true, versions: ['1.2.0'], badVersions: [],
+            active: '1.2.0', channel: 'stable', autoUpdate: true,
+            versions: ['1.2.0'], badVersions: [],
           },
         }],
       });
@@ -183,7 +186,7 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   await installStarted;
   assert.match(
     value.document.querySelector('#operation-status').textContent,
-    /正在安装 SQLite Workbench 1\.2\.0/,
+    /正在安装并应用 SQLite Workbench 1\.2\.0/,
   );
   assert.equal(value.document.querySelector('#operation-status').getAttribute('role'), 'status');
   releaseInstall();
@@ -194,8 +197,9 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   assert.deepEqual(calls, [[
     'install', { id: '@itharbors/kit-sqlite', version: '1.2.0', channel: 'stable' },
   ]]);
-  assert.match(value.document.querySelector('#operation-status').textContent, /已安装.*重启并启用/);
-  assert.match(value.document.querySelector('[data-channel="stable"]').textContent, /已安装/);
+  assert.match(value.document.querySelector('#operation-status').textContent, /已安装并启用/);
+  assert.doesNotMatch(value.document.querySelector('#operation-status').textContent, /重启/);
+  assert.match(value.document.querySelector('[data-channel="stable"]').textContent, /已启用/);
 });
 
 test('does not install native code when confirmation is declined', async () => {
@@ -245,6 +249,46 @@ test('queues activation, explicit bad retry, and rollback while disabling concur
   value.document.querySelector('[data-channel="stable"] [data-action="rollback"]').click();
   await value.view.whenIdle();
   assert.deepEqual(calls[2], ['rollback', '@itharbors/kit-sqlite']);
+  assert.doesNotMatch(value.document.querySelector('#operation-status').textContent, /重启/);
+});
+
+test('renders one uninstall action, confirms all-version deletion, and refreshes projection', async () => {
+  let current = snapshot({
+    kits: [{
+      ...snapshot().kits[0],
+      channels: { preview: snapshot().kits[0].channels.preview },
+      installed: {
+        active: '1.3.0-preview.abc1234', channel: 'preview', autoUpdate: false,
+        versions: ['1.2.0', '1.3.0-preview.abc1234'], badVersions: [],
+      },
+    }],
+  });
+  const calls = [];
+  const confirmations = [];
+  const value = await createView({
+    api: {
+      list: async () => current,
+      uninstall: async (kitId) => {
+        calls.push(['uninstall', kitId]);
+        current = snapshot({ kits: [] });
+        return { runtimeReloaded: true };
+      },
+    },
+    confirmInstall: (message) => { confirmations.push(message); return true; },
+  });
+  await value.view.start();
+
+  const buttons = value.document.querySelectorAll('[data-action="uninstall"]');
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].closest('[data-channel]').dataset.channel, 'preview');
+  buttons[0].click();
+  await value.view.whenIdle();
+
+  assert.deepEqual(calls, [['uninstall', '@itharbors/kit-sqlite']]);
+  assert.match(confirmations.at(-1), /关闭该 Kit 窗口/);
+  assert.match(confirmations.at(-1), /全部已安装版本/);
+  assert.match(value.document.querySelector('#operation-status').textContent, /已删除/);
+  assert.equal(value.document.querySelector('[data-action="uninstall"]'), null);
 });
 
 test('recovers controls after refresh and operation errors without inserting remote HTML', async () => {

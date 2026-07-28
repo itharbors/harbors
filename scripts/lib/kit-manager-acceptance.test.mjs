@@ -267,6 +267,7 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
       install: (value) => invoke('install', value),
       activate: (value) => invoke('activate', value),
       rollback: (value) => invoke('rollback', value),
+      uninstall: (value) => invoke('uninstall', value),
     };
     const html = await readFile(new URL('../kit-manager.html', import.meta.url), 'utf8');
     const dom = new JSDOM(html, { url: 'file:///kit-manager.html' });

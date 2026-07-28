@@ -39,7 +39,7 @@ function channelState(kit, channel, reference) {
 }
 
 function statusText(state) {
-  if (state.pending) return '等待重启';
+  if (state.pending) return '正在应用';
   if (state.active) return '已启用';
   if (state.bad) return '已标记异常';
   if (state.isInstalled) return '已安装';
@@ -73,7 +73,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
   if (!document || typeof document.querySelector !== 'function') {
     throw new TypeError('document is required');
   }
-  for (const method of ['list', 'refresh', 'install', 'activate', 'rollback']) {
+  for (const method of ['list', 'refresh', 'install', 'activate', 'rollback', 'uninstall']) {
     if (typeof api?.[method] !== 'function') {
       throw new TypeError(`api.${method} is required`);
     }
@@ -128,32 +128,55 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
 
   function install(kit, channel, reference) {
     return queue(async () => {
-      if (reference.permissions.includes('native-code')) {
-        const accepted = await confirmInstall(
-          `${kit.label ?? kit.id} ${reference.version} 包含原生代码。原生代码拥有较高的本机访问权限。是否安装此版本？`,
-        );
-        if (!accepted) return;
-      }
-      setOperationMessage(`正在安装 ${kit.label ?? kit.id} ${reference.version}…`);
+      const nativeRisk = reference.permissions.includes('native-code')
+        ? '此版本包含原生代码，拥有较高的本机访问权限。'
+        : '';
+      const accepted = await confirmInstall(
+        `${kit.label ?? kit.id} ${reference.version}：${nativeRisk}应用版本时会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
+      );
+      if (!accepted) return;
+      const updating = Boolean(kit.installed);
+      setOperationMessage(`正在${updating ? '安装更新并应用' : '安装并应用'} ${kit.label ?? kit.id} ${reference.version}…`);
       await api.install({ id: kit.id, version: reference.version, channel });
       await reloadInstalledProjection();
-      setOperationMessage(`已安装 ${kit.label ?? kit.id} ${reference.version}。准备好后可重启并启用。`);
+      setOperationMessage(`已${updating ? '更新' : '安装'}并启用 ${kit.label ?? kit.id} ${reference.version}。`);
     });
   }
 
   function activate(kit, reference, state) {
     return queue(async () => {
+      const accepted = await confirmInstall(
+        '立即启用会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？',
+      );
+      if (!accepted) return;
       await api.activate({ id: kit.id, version: reference.version, retryBad: state.bad });
       await reloadInstalledProjection();
-      setOperationMessage(`${kit.label ?? kit.id} ${reference.version} 将在重启后启用。`);
+      setOperationMessage(`已启用 ${kit.label ?? kit.id} ${reference.version}。`);
     });
   }
 
   function rollback(kit) {
     return queue(async () => {
+      const accepted = await confirmInstall(
+        '立即回滚会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？',
+      );
+      if (!accepted) return;
       await api.rollback(kit.id);
       await reloadInstalledProjection();
-      setOperationMessage(`${kit.label ?? kit.id} 将在重启后回滚。`);
+      setOperationMessage(`已回滚 ${kit.label ?? kit.id}。`);
+    });
+  }
+
+  function uninstall(kit) {
+    return queue(async () => {
+      const accepted = await confirmInstall(
+        `删除 ${kit.label ?? kit.id} 将关闭该 Kit 窗口并删除全部已安装版本；其他 Kit 窗口会重新加载。是否继续？`,
+      );
+      if (!accepted) return;
+      setOperationMessage(`正在删除 ${kit.label ?? kit.id}…`);
+      await api.uninstall(kit.id);
+      await reloadInstalledProjection();
+      setOperationMessage(`已删除 ${kit.label ?? kit.id}。`);
     });
   }
 
@@ -219,7 +242,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     } else if (!state.active) {
       actions.append(createButton(
         document,
-        state.bad ? '重启后重试' : '重启后启用',
+        state.bad ? '立即重试' : '立即启用',
         'activate',
         () => activate(kit, reference, state),
         { disabled: state.pending },
@@ -231,6 +254,20 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         `回滚到 ${kit.installed.previous}`,
         'rollback',
         () => rollback(kit),
+        { secondary: true },
+      ));
+    }
+    const ownsUninstall = kit.installed && (
+      (kit.channels?.stable && channel === 'stable')
+      || (!kit.channels?.stable && kit.channels?.preview && channel === 'preview')
+      || (!kit.channels?.stable && !kit.channels?.preview && channel === 'stable')
+    );
+    if (!kit.builtin && ownsUninstall) {
+      actions.append(createButton(
+        document,
+        '删除 Kit',
+        'uninstall',
+        () => uninstall(kit),
         { secondary: true },
       ));
     }
@@ -262,7 +299,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       if (kit.channels?.stable) {
         stableList.append(createCard(kit, 'stable', kit.channels.stable));
         stableCount += 1;
-      } else if (kit.installed) {
+      } else if (kit.installed && !kit.channels?.preview) {
         const fallbackVersion = kit.installed.active
           ?? kit.installed.pending
           ?? kit.installed.versions.at(-1);
