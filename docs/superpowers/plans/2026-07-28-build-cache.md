@@ -31,7 +31,7 @@
 - Create: `scripts/lib/build-cache.test.mjs`
 
 **Interfaces:**
-- Consumes task objects shaped as `{ name, command: { file, args }, inputs, outputs, outputExcludes? }` plus `rootDir`, `cacheDir`, dependency result digests, and `force`.
+- Consumes task objects shaped as `{ name, command: { file, args }, inputs, outputs, outputExcludes?, emptyOutputs? }` plus `rootDir`, `cacheDir`, dependency result digests, and `force`.
 - Produces `runCachedTask(options): Promise<{ status: 'hit' | 'built', inputDigest: string, resultDigest: string }>`.
 - Produces cache records `{ schemaVersion, taskName, inputDigest, outputs, resultDigest }` written atomically after successful commands.
 

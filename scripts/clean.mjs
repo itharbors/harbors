@@ -2,14 +2,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { BUILD_CACHE_ROOT } from './lib/build-cache-contract.mjs';
+import { WORKSPACE_BUILD_OUTPUTS } from './lib/build-tasks.mjs';
+
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 
 export function cleanBuildArtifacts(root) {
   const targets = new Set([
-    '.cache/harbors-build',
-    'packages/client/dist',
-    'packages/plugin-types/dist',
-    'packages/server/dist',
+    BUILD_CACHE_ROOT,
+    ...WORKSPACE_BUILD_OUTPUTS,
   ]);
 
   collectPluginDistDirs(root, targets, 'plugins');

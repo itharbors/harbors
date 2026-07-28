@@ -86,6 +86,7 @@ The input digest includes:
 - the digest of every upstream task;
 - the sorted path and content of every declared input file.
 - the task's repository-relative `outputExcludes` list.
+- the task's canonical repository-relative `emptyOutputs` list.
 
 Input enumeration follows explicit files and directories, ignores generated
 output directories and `node_modules`, preserves dotfiles, and follows no
@@ -99,8 +100,9 @@ extra, or modified owned output files cause a miss. Every exclusion must be
 inside one of the task's declared output roots. Two tasks cannot claim the same
 output root or parent/child roots unless the parent lists the exact child root as
 an exclusion; the child task then owns and validates that subtree exactly.
-Output roots must exist after a successful command; empty output roots are valid
-only when a task declares that explicitly.
+Output roots must exist and contain at least one regular owned file after a
+successful command. Empty output roots are valid only when that exact canonical
+root appears in the task's path-safe `emptyOutputs` declaration.
 
 ### Task graph
 

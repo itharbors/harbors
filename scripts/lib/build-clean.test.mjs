@@ -11,14 +11,28 @@ test('removes build-cache records and existing build outputs', async (t) => {
   t.after(() => rm(rootDir, { recursive: true, force: true }));
 
   const cacheRecord = join(rootDir, '.cache', 'harbors-build', 'v1', 'runtime.json');
-  const buildOutput = join(rootDir, 'packages', 'client', 'dist', 'index.js');
+  const workspaceOutputRoots = [
+    'packages/plugin-types/dist',
+    'packages/csv-contracts/dist',
+    'packages/sqlite-contracts/dist',
+    'packages/mysql-contracts/dist',
+    'packages/relationship-graph/dist',
+    'packages/kit-core/dist',
+    'packages/kit-cli/dist',
+    'packages/client/dist',
+    'packages/server/dist',
+  ];
   await mkdir(join(rootDir, '.cache', 'harbors-build', 'v1'), { recursive: true });
-  await mkdir(join(rootDir, 'packages', 'client', 'dist'), { recursive: true });
   await writeFile(cacheRecord, '{}');
-  await writeFile(buildOutput, 'export {};');
+  for (const outputRoot of workspaceOutputRoots) {
+    await mkdir(join(rootDir, outputRoot), { recursive: true });
+    await writeFile(join(rootDir, outputRoot, 'output.js'), 'export {};');
+  }
 
   cleanBuildArtifacts(rootDir);
 
   await assert.rejects(access(join(rootDir, '.cache', 'harbors-build')), { code: 'ENOENT' });
-  await assert.rejects(access(join(rootDir, 'packages', 'client', 'dist')), { code: 'ENOENT' });
+  for (const outputRoot of workspaceOutputRoots) {
+    await assert.rejects(access(join(rootDir, outputRoot)), { code: 'ENOENT' });
+  }
 });

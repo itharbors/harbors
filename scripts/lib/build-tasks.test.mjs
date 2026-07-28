@@ -142,7 +142,7 @@ test('rejects duplicate and unowned nested output roots', () => {
       },
       { name: 'child', outputs: ['shared/dist/resources'] },
     ]),
-    /Output root "shared\/dist\/resources" claimed by child overlaps parent output root "shared\/dist" without an exact exclusion/,
+    /Output exclusion "shared\/dist\/owned-by-someone-else" for parent is not the exact output root of another task/,
   );
   assert.throws(
     () => validateBuildTasks([
@@ -156,10 +156,36 @@ test('rejects duplicate and unowned nested output roots', () => {
   );
   assert.throws(
     () => validateBuildTasks([
+      {
+        name: 'parent',
+        outputs: ['shared/dist'],
+        outputExcludes: ['shared/dist/typo'],
+      },
+      { name: 'child', outputs: ['shared/dist/resources'] },
+    ]),
+    /Output exclusion "shared\/dist\/typo" for parent is not the exact output root of another task/,
+  );
+  assert.throws(
+    () => validateBuildTasks([
       { name: 'first', outputs: ['shared/a/../dist'] },
       { name: 'second', outputs: ['shared/dist'] },
     ]),
     /Duplicate build output root "shared\/dist" claimed by first and second/,
+  );
+});
+
+test('validates exclusions against the global task universe when a selected subgraph omits the child', () => {
+  const parent = {
+    name: 'parent',
+    outputs: ['shared/dist'],
+    outputExcludes: ['shared/dist/resources'],
+  };
+  const child = { name: 'child', outputs: ['shared/dist/resources'] };
+
+  assert.doesNotThrow(() => validateBuildTasks([parent], [parent, child]));
+  assert.throws(
+    () => validateBuildTasks([parent], [parent]),
+    /Output exclusion "shared\/dist\/resources" for parent is not the exact output root of another task/,
   );
 });
 

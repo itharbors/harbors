@@ -1,8 +1,8 @@
 import path from 'node:path';
 
+import { BUILD_CACHE_RELATIVE_DIR } from './build-cache-contract.mjs';
 import { discoverAllPlugins, discoverPlugin, discoverRuntimePlugins } from './plugin-build/discover.mjs';
 
-const CACHE_PATH = ['.cache', 'harbors-build', 'v1'];
 const NOTIFICATION_BACKGROUND_PLUGIN = 'kits/notifications/plugins/notification-background';
 const NOTIFY_USER_RESOURCE_OUTPUT = `${NOTIFICATION_BACKGROUND_PLUGIN}/main/dist/resources/notify-user`;
 
@@ -26,6 +26,9 @@ const WORKSPACE_TASKS = [
     config: ['packages/server/tsconfig.build.json', 'packages/server/tsconfig.json'],
   }),
 ];
+export const WORKSPACE_BUILD_OUTPUTS = Object.freeze(
+  WORKSPACE_TASKS.flatMap((task) => task.outputs),
+);
 
 const WORKSPACE_DEPENDENCIES = new Map([
   ['@itharbors/plugin-types', 'workspace:plugin-types'],
@@ -50,10 +53,21 @@ export function createBuildPlan(rootDir, graphName) {
 
   const rootPath = path.resolve(rootDir);
   const workspaceTasks = selectWorkspaceTasks(selection.workspace);
-  const pluginDirectories = selection.plugins === 'runtime'
-    ? discoverRuntimePlugins(rootPath)
-    : discoverAllPlugins(rootPath);
-  const pluginTasks = pluginDirectories.map((pluginDir) => createPluginTask(rootPath, pluginDir));
+  const allPluginTasks = discoverAllPlugins(rootPath)
+    .map((pluginDir) => createPluginTask(rootPath, pluginDir));
+  const selectedPluginDirectories = new Set(
+    (selection.plugins === 'runtime'
+      ? discoverRuntimePlugins(rootPath)
+      : discoverAllPlugins(rootPath))
+      .map((pluginDir) => toRepositoryPath(rootPath, pluginDir)),
+  );
+  const pluginTasks = allPluginTasks.filter((task) => selectedPluginDirectories.has(task.pluginDir));
+  const notificationResourceTask = createNotificationResourceTask();
+  const taskUniverse = [
+    ...WORKSPACE_TASKS,
+    ...allPluginTasks,
+    notificationResourceTask,
+  ];
   const selectedTaskNames = new Set([
     ...workspaceTasks.map(({ name }) => name),
     ...pluginTasks.map(({ name }) => name),
@@ -65,16 +79,15 @@ export function createBuildPlan(rootDir, graphName) {
   const tasks = [
     ...workspaceTasks,
     ...selectedPlugins,
-    ...(selection.notificationResource ? [createNotificationResourceTask()] : []),
+    ...(selection.notificationResource ? [notificationResourceTask] : []),
   ];
 
-  validateBuildTasks(tasks);
-  return { cacheDir: path.join(rootPath, ...CACHE_PATH), tasks };
+  validateBuildTasks(tasks, taskUniverse);
+  return { cacheDir: path.join(rootPath, BUILD_CACHE_RELATIVE_DIR), tasks };
 }
 
-export function validateBuildTasks(tasks) {
-  const outputOwners = [];
-  for (const task of tasks) {
+export function validateBuildTasks(tasks, taskUniverse = tasks) {
+  const taskOwnership = taskUniverse.map((task) => {
     const outputs = task.outputs.map(canonicalTaskPath);
     const outputExcludes = new Set((task.outputExcludes ?? []).map(canonicalTaskPath));
     for (const outputExclude of outputExcludes) {
@@ -84,31 +97,52 @@ export function validateBuildTasks(tasks) {
         );
       }
     }
-    for (const output of outputs) {
-      for (const owner of outputOwners) {
-        if (output === owner.output) {
-          throw new Error(`Duplicate build output root "${output}" claimed by ${owner.name} and ${task.name}`);
-        }
-        if (isNestedOutput(output, owner.output)
-          && !owner.outputExcludes.has(output)) {
-          throw outputOwnershipError({
-            childName: task.name,
-            childOutput: output,
-            parentName: owner.name,
-            parentOutput: owner.output,
-          });
-        }
-        if (isNestedOutput(owner.output, output)
-          && !outputExcludes.has(owner.output)) {
-          throw outputOwnershipError({
-            childName: owner.name,
-            childOutput: owner.output,
-            parentName: task.name,
-            parentOutput: output,
-          });
-        }
+    return { name: task.name, outputExcludes, outputs };
+  });
+  const outputOwners = taskOwnership.flatMap((task) => task.outputs.map((output) => ({
+    name: task.name,
+    output,
+    outputExcludes: task.outputExcludes,
+  })));
+
+  for (const task of taskOwnership) {
+    for (const outputExclude of task.outputExcludes) {
+      if (!outputOwners.some((owner) => (
+        owner.name !== task.name && owner.output === outputExclude
+      ))) {
+        throw new Error(
+          `Output exclusion "${outputExclude}" for ${task.name} is not the exact output root of another task`,
+        );
       }
-      outputOwners.push({ name: task.name, output, outputExcludes });
+    }
+  }
+
+  for (let index = 0; index < outputOwners.length; index += 1) {
+    const owner = outputOwners[index];
+    for (const candidate of outputOwners.slice(index + 1)) {
+      if (candidate.output === owner.output) {
+        throw new Error(
+          `Duplicate build output root "${owner.output}" claimed by ${owner.name} and ${candidate.name}`,
+        );
+      }
+      if (isNestedOutput(candidate.output, owner.output)
+        && !owner.outputExcludes.has(candidate.output)) {
+        throw outputOwnershipError({
+          childName: candidate.name,
+          childOutput: candidate.output,
+          parentName: owner.name,
+          parentOutput: owner.output,
+        });
+      }
+      if (isNestedOutput(owner.output, candidate.output)
+        && !candidate.outputExcludes.has(owner.output)) {
+        throw outputOwnershipError({
+          childName: owner.name,
+          childOutput: owner.output,
+          parentName: candidate.name,
+          parentOutput: candidate.output,
+        });
+      }
     }
   }
 }
