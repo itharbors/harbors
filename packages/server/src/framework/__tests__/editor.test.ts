@@ -44,6 +44,7 @@ describe('panel plugin contributions', () => {
     const editor = createEditor('test-session', {
       assembly: createDefaultAssemblyConfig(projectRoot, {
         pluginsDir: pluginRoot,
+        kitSources: [{ directory: path.join(projectRoot, 'kits/default'), source: 'builtin' }],
       }),
     });
 
@@ -58,7 +59,9 @@ describe('panel plugin contributions', () => {
 
   it('opens a secondary window-group for a multi-instance panel', async () => {
     const editor = createEditor('test-session', {
-      assembly: createDefaultAssemblyConfig(projectRoot),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources: [{ directory: path.join(projectRoot, 'kits/default'), source: 'builtin' }],
+      }),
     });
 
     await editor.kit.load('@itharbors/kit-default');

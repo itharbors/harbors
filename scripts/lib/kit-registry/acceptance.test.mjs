@@ -18,6 +18,7 @@ import { KitRegistryManager } from './manager.mjs';
 import { KitReleaseResolver } from './resolver.mjs';
 
 const fixture = path.resolve('packages/kit-cli/tests/fixtures/minimal-kit');
+const defaultKitDirectory = path.resolve('kits/default');
 const registryUrl = 'https://registry.fixture.test/index.v1.json';
 const releaseUrl = 'https://github.com/example/kit-demo/releases/download/v1.2.3/release.json';
 const assetUrl = 'https://github.com/example/kit-demo/releases/download/v1.2.3/demo.hkit';
@@ -208,7 +209,10 @@ test('acceptance: Registry refresh through installed Server discovery preserves 
     );
     framework = createServer({
       defaultKit: manifest.id,
-      installedKitDirs: activeSources.map(({ directory }) => directory),
+      kitSources: [
+        { directory: defaultKitDirectory, source: 'builtin' },
+        ...activeSources.map(({ directory }) => ({ directory, source: 'installed' })),
+      ],
       host: '127.0.0.1',
     });
     const frameworkPort = await framework.start();

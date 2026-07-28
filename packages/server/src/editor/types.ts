@@ -154,6 +154,7 @@ export interface Editor {
     list(): KitDescriptor[];
     get(name: string): KitDescriptor | undefined;
     getCurrent(): KitDescriptor | undefined;
+    getCurrentDirectory(): string | undefined;
     switchKit(kitName: string): Promise<void>;
     applyLayout(input: string | LayoutNode): void;
     readonly layouts: string[];

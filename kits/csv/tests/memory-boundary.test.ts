@@ -38,7 +38,12 @@ describe('CSV kit memory boundary', () => {
         await once(writer, 'close');
 
         editor = createEditor('csv-kit-memory-boundary', {
-          assembly: createDefaultAssemblyConfig(projectRoot),
+          assembly: createDefaultAssemblyConfig(projectRoot, {
+            kitSources: [
+              { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
+              { directory: path.join(projectRoot, 'kits/csv'), source: 'development' },
+            ],
+          }),
         });
         await editor.kit.load(path.join(projectRoot, 'kits/csv'));
         globalThis.gc?.();

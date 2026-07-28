@@ -8,6 +8,10 @@ import { createEditor } from '../../../packages/server/src/editor/index';
 import { createCsvFixture } from './fixtures/create-csv-fixture';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const kitSources = [
+  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
+  { directory: path.join(projectRoot, 'kits/csv'), source: 'development' },
+];
 
 describe('CSV kit runtime integration', () => {
   const tempDirs: string[] = [];
@@ -26,7 +30,7 @@ describe('CSV kit runtime integration', () => {
     const sourceBefore = fs.readFileSync(sourcePath);
     const outputPath = path.join(tempDir, 'filtered.csv');
     const editor = createEditor('csv-kit-runtime', {
-      assembly: createDefaultAssemblyConfig(projectRoot),
+      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
     });
 
     try {

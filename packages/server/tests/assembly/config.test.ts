@@ -4,7 +4,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import { normalizeAssemblyConfig } from '../../src/assembly/config';
 import { resolvePlugin, resolveKit } from '../../src/plugin/resolver';
-import { parseInstalledKitDirs, parseKitSources } from '../../src/server';
+import { parseKitSources } from '../../src/server';
 
 const tmpDirs: string[] = [];
 
@@ -32,7 +32,7 @@ describe('normalizeAssemblyConfig', () => {
       pluginsDir: '/repo/plugins',
       builtinKitsDir: '/repo/builtin/kits',
       kitsDir: '/repo/kits',
-      installedKitDirs: ['/store/one'],
+      kitSources: [{ directory: '/repo/builtin/kits/default', source: 'builtin' as const }],
       defaultKit: 'kit-from-file',
     };
     const config = normalizeAssemblyConfig(fileConfig, {
@@ -45,17 +45,15 @@ describe('normalizeAssemblyConfig', () => {
       pluginsDir: '/repo/plugins-cli',
       builtinKitsDir: '/repo/builtin/kits',
       kitsDir: '/repo/kits',
-      installedKitDirs: ['/store/one'],
-      kitSources: null,
+      kitSources: [{ directory: '/repo/builtin/kits/default', source: 'builtin' }],
       defaultKit: 'kit-from-cli',
     });
-    expect(config.installedKitDirs).not.toBe(fileConfig.installedKitDirs);
+    expect(config.kitSources).not.toBe(fileConfig.kitSources);
   });
 });
 
 describe('parseKitSources', () => {
   it('accepts exact source records with unique absolute directories', () => {
-    expect(parseKitSources(undefined)).toBeUndefined();
     expect(parseKitSources(JSON.stringify([
       { directory: '/repo/kits/default', source: 'builtin' },
       { directory: '/store/demo/1.0.0', source: 'installed' },
@@ -64,26 +62,12 @@ describe('parseKitSources', () => {
       { directory: '/store/demo/1.0.0', source: 'installed' },
     ]);
     for (const value of [
-      '{', '{}', '["/kit"]',
+      undefined, '{', '{}', '[]', '["/kit"]',
       '[{"directory":"relative","source":"builtin"}]',
       '[{"directory":"/kit","source":"unknown"}]',
       '[{"directory":"/kit","source":"builtin","extra":true}]',
       '[{"directory":"/kit","source":"builtin"},{"directory":"/kit","source":"installed"}]',
     ]) expect(() => parseKitSources(value)).toThrow('HARBORS_KIT_SOURCES');
-  });
-});
-
-describe('parseInstalledKitDirs', () => {
-  it('accepts only a JSON array of non-empty absolute paths and returns a clone', () => {
-    expect(parseInstalledKitDirs(undefined)).toEqual([]);
-    expect(parseInstalledKitDirs('["/store/one","/store/two"]')).toEqual([
-      '/store/one', '/store/two',
-    ]);
-    for (const value of ['{', '{}', '[""]', '["relative"]', '[1]']) {
-      expect(() => parseInstalledKitDirs(value)).toThrow(
-        'HARBORS_INSTALLED_KITS must be a JSON array of non-empty absolute paths',
-      );
-    }
   });
 });
 
@@ -137,7 +121,7 @@ describe('resolver uses explicit directories only', () => {
     })).rejects.toThrow('Plugin "beta" not found');
   });
 
-  it('resolves default kit from builtinKitsDir', async () => {
+  it('does not resolve a Kit that exists only under the legacy kitsDir', async () => {
     const root = mkTmpDir('assembly-default-kit');
     const builtinKitsDir = path.join(root, 'builtin-kits');
 
@@ -153,62 +137,8 @@ describe('resolver uses explicit directories only', () => {
     });
     fs.writeFileSync(path.join(builtinKitsDir, 'default-kit', 'layout.json'), JSON.stringify({ windows: [] }));
 
-    const resolved = await resolveKit('default-kit', {
-      builtinKitsDir,
-      kitsDir: path.join(root, 'kits'),
-      installedKitDirs: [],
-    });
-
-    expect(resolved).toBe(path.join(builtinKitsDir, 'default-kit'));
-  });
-
-  it('treats bare kit names as package names instead of paths under kitsDir', async () => {
-    const root = mkTmpDir('assembly-kit-name');
-    const builtinKitsDir = path.join(root, 'builtin-kits');
-    const kitsDir = path.join(root, 'kits');
-
-    writePkg(path.join(builtinKitsDir, 'builtin-default'), {
-      name: 'default-kit',
-      type: 'module',
-      'ce-editor': {
-        kit: {
-          layouts: { default: './layout.json' },
-          plugin: [],
-        },
-      },
-    });
-    writePkg(path.join(kitsDir, 'default-kit'), {
-      name: 'shadow-path',
-      type: 'module',
-      'ce-editor': {
-        kit: {
-          layouts: { default: './layout.json' },
-          plugin: [],
-        },
-      },
-    });
-
-    const resolved = await resolveKit('default-kit', {
-      builtinKitsDir,
-      kitsDir,
-      installedKitDirs: [],
-    });
-
-    expect(resolved).toBe(path.join(builtinKitsDir, 'builtin-default'));
-  });
-
-  it('resolves an active installed Kit only from explicit installed directories', async () => {
-    const root = mkTmpDir('assembly-installed-kit');
-    const installed = path.join(root, 'store', 'encoded', '1.0.0');
-    writePkg(installed, {
-      name: '@example/kit-installed',
-      'ce-editor': { kit: { layouts: { default: 'layout.json' }, plugin: [] } },
-    });
-
-    await expect(resolveKit('@example/kit-installed', {
-      builtinKitsDir: path.join(root, 'builtin-kits'),
-      kitsDir: path.join(root, 'kits'),
-      installedKitDirs: [installed],
-    })).resolves.toBe(installed);
+    await expect(resolveKit('default-kit', {
+      kitSources: undefined as never,
+    })).rejects.toThrow(/not found/i);
   });
 });

@@ -3,6 +3,7 @@ import { createServer } from '../../src/server';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { testAssembly } from '../helpers/assembly';
 
 describe('Framework Integration', () => {
   let port: number;
@@ -10,9 +11,16 @@ describe('Framework Integration', () => {
   let baseURL: string;
   let editorMap: Map<string, ReturnType<typeof createServer>['editorMap'] extends Map<string, infer E> ? E : never>;
   const tempDirs: string[] = [];
+  const repositoryKitSources = [
+    { directory: path.join(testAssembly.builtinKitsDir, 'default'), source: 'builtin' as const },
+    { directory: path.join(testAssembly.kitsDir, 'mysql'), source: 'development' as const },
+    { directory: path.join(testAssembly.kitsDir, 'sqlite'), source: 'development' as const },
+  ];
 
   beforeAll(async () => {
-    const server = createServer();
+    const server = createServer({
+      assembly: { ...testAssembly, kitSources: repositoryKitSources },
+    });
     stop = server.stop;
     editorMap = server.editorMap;
     port = await server.start(0);
@@ -108,6 +116,12 @@ describe('Framework Integration', () => {
     }));
     const server = createServer({
       defaultKit: externalKit,
+      kitSources: [
+        { directory: path.join(testAssembly.builtinKitsDir, 'default'), source: 'builtin' },
+        { directory: path.join(testAssembly.kitsDir, 'mysql'), source: 'development' },
+        { directory: path.join(testAssembly.kitsDir, 'sqlite'), source: 'development' },
+        { directory: externalKit, source: 'explicit' },
+      ],
     });
     const customPort = await server.start(0);
     try {
@@ -145,7 +159,7 @@ describe('Framework Integration', () => {
     }
   });
 
-  it('creates a session from an explicitly active installed Kit directory', async () => {
+  it('serves main and secondary entries from an explicitly selected installed Kit', async () => {
     const installedKit = mkdtempSync(path.join(tmpdir(), 'harbors-installed-session-'));
     tempDirs.push(installedKit);
     writeFileSync(path.join(installedKit, 'package.json'), JSON.stringify({
@@ -161,11 +175,14 @@ describe('Framework Integration', () => {
       },
     }));
     writeFileSync(path.join(installedKit, 'layout.json'), JSON.stringify({ windows: [] }));
-    writeFileSync(path.join(installedKit, 'main.html'), '<!doctype html>');
-    writeFileSync(path.join(installedKit, 'secondary.html'), '<!doctype html>');
+    writeFileSync(path.join(installedKit, 'main.html'), '<!doctype html><p>installed-main-marker</p>');
+    writeFileSync(path.join(installedKit, 'secondary.html'), '<!doctype html><p>installed-secondary-marker</p>');
     const server = createServer({
       defaultKit: '@example/kit-installed',
-      installedKitDirs: [installedKit],
+      kitSources: [
+        { directory: path.join(testAssembly.builtinKitsDir, 'default'), source: 'builtin' },
+        { directory: installedKit, source: 'installed' },
+      ],
     });
     const installedPort = await server.start(0);
     try {
@@ -179,6 +196,16 @@ describe('Framework Integration', () => {
         `http://localhost:${installedPort}/api/bootstrap/installed-session`,
       );
       await expect(bootstrap.json()).resolves.toMatchObject({ kitName: '@example/kit-installed' });
+      const mainEntry = await fetch(
+        `http://localhost:${installedPort}/api/window-entry/main?sessionId=installed-session`,
+      );
+      expect(mainEntry.status).toBe(200);
+      expect(await mainEntry.text()).toContain('installed-main-marker');
+      const secondaryEntry = await fetch(
+        `http://localhost:${installedPort}/api/window-entry/secondary?sessionId=installed-session`,
+      );
+      expect(secondaryEntry.status).toBe(200);
+      expect(await secondaryEntry.text()).toContain('installed-secondary-marker');
     } finally {
       await server.stop();
     }
@@ -246,7 +273,7 @@ describe('Framework Integration', () => {
   });
 
   it('POST /api/session uses the server default kit when one is configured', async () => {
-    const server = createServer({ defaultKit: '@itharbors/kit-default' });
+    const server = createServer({ assembly: testAssembly, defaultKit: '@itharbors/kit-default' });
     const customPort = await server.start(0);
     const customBaseURL = `http://localhost:${customPort}`;
 

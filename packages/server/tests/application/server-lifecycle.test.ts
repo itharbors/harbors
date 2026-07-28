@@ -1,9 +1,39 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
+import path from 'node:path';
 import { ApplicationRuntime } from '../../src/application/runtime';
 import { createServer } from '../../src/server';
+import { testAssembly } from '../helpers/assembly';
 
 describe('application server lifecycle', () => {
+  it('keeps application plugins and sessions on one snapshot after caller assembly mutation', async () => {
+    const callerAssembly = {
+      ...testAssembly,
+      kitSources: testAssembly.kitSources.map((source) => ({ ...source })),
+    };
+    const server = createServer({ assembly: callerAssembly });
+    callerAssembly.kitSources = [{
+      directory: path.join(path.dirname(testAssembly.kitSources[0].directory), 'notifications'),
+      source: 'development',
+    }];
+    callerAssembly.defaultKit = '@itharbors/kit-notifications';
+
+    const port = await server.start(0);
+    const [catalogResponse, bootstrapResponse] = await Promise.all([
+      fetch(`http://127.0.0.1:${port}/api/kits`),
+      fetch(`http://127.0.0.1:${port}/api/application/bootstrap`),
+    ]);
+    const catalog = await catalogResponse.json();
+    const bootstrap = await bootstrapResponse.json();
+    await server.stop();
+
+    expect(catalog.kits.map((kit: { name: string }) => kit.name)).toEqual([
+      '@itharbors/kit-default',
+    ]);
+    expect(bootstrap.plugins).toEqual([]);
+    expect(bootstrap.diagnostics).toEqual([]);
+  });
+
   it('starts the application runtime before accepting connections and disposes it after sessions', async () => {
     const events: string[] = [];
     const applicationRuntime = {
@@ -26,7 +56,7 @@ describe('application server lifecycle', () => {
       subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => { events.push('application:dispose'); }),
     };
-    const server = createServer({ applicationRuntime });
+    const server = createServer({ assembly: testAssembly, applicationRuntime });
     vi.spyOn(server.registry, 'disposeAll').mockImplementation(async () => {
       events.push('sessions:dispose');
     });
@@ -46,6 +76,7 @@ describe('application server lifecycle', () => {
 
   it('allows degraded application startup to listen', async () => {
     const server = createServer({
+      assembly: testAssembly,
       applicationRuntime: {
         start: vi.fn(async () => ({
           phase: 'degraded' as const,
@@ -75,6 +106,7 @@ describe('application server lifecycle', () => {
 
   it('binds the desktop control plane to loopback and protects application mutations', async () => {
     const server = createServer({
+      assembly: testAssembly,
       host: '127.0.0.1',
       applicationControlToken: 'launch-secret',
       applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'desktop' }),
@@ -104,6 +136,7 @@ describe('application server lifecycle', () => {
 
   it('finishes graceful shutdown while an application event stream is connected', async () => {
     const server = createServer({
+      assembly: testAssembly,
       applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'desktop' }),
     });
     const port = await server.start(0);
@@ -137,7 +170,7 @@ describe('application server lifecycle', () => {
       subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => undefined),
     };
-    const server = createServer({ applicationRuntime });
+    const server = createServer({ assembly: testAssembly, applicationRuntime });
 
     const starting = server.start(0);
     const stopping = server.stop();
