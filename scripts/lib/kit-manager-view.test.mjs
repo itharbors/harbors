@@ -62,6 +62,12 @@ test('uses a locked-down local document with semantic landmarks and no inline or
   for (const element of ['aside', 'header', 'main', 'section', 'footer']) {
     assert.match(html, new RegExp(`<${element}\\b`, 'i'));
   }
+  const document = new JSDOM(html).window.document;
+  assert.equal(document.documentElement.lang, 'zh-CN');
+  assert.match(document.body.textContent, /Kit 管理/);
+  assert.match(document.body.textContent, /稳定版/);
+  assert.match(document.body.textContent, /预览版/);
+  assert.match(document.body.textContent, /仅限已验证 Kit/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /:focus-visible/);
   assert.match(
@@ -76,22 +82,22 @@ test('renders loading, online empty, offline cache, and unavailable states with 
   const value = await createView({ api: { list: async () => pending } });
   const starting = value.view.start();
   assert.equal(value.document.querySelector('main').getAttribute('aria-busy'), 'true');
-  assert.match(value.document.querySelector('#registry-status').textContent, /Loading/i);
+  assert.match(value.document.querySelector('#registry-status').textContent, /正在加载 Kit 仓库/);
   resolveList(snapshot({ kits: [] }));
   await starting;
-  assert.match(value.document.querySelector('#registry-status').textContent, /Registry online/i);
-  assert.match(value.document.querySelector('#stable-empty').textContent, /No Kits are published yet/i);
+  assert.match(value.document.querySelector('#registry-status').textContent, /Kit 仓库在线/);
+  assert.match(value.document.querySelector('#stable-empty').textContent, /尚未发布 Kit/);
 
   value.view.render(snapshot({
     source: 'cache', stale: true, kits: [],
     error: { code: 'NETWORK_ERROR', message: 'Registry refresh failed' },
   }));
-  assert.match(value.document.querySelector('#registry-status').textContent, /Offline cache/i);
+  assert.match(value.document.querySelector('#registry-status').textContent, /离线缓存/);
   assert.match(value.document.querySelector('#registry-notice').textContent, /Registry refresh failed/i);
 
   value.view.render(snapshot({ source: 'none', stale: true, validatedAt: null, kits: [] }));
-  assert.match(value.document.querySelector('#registry-status').textContent, /Market unavailable/i);
-  assert.match(value.document.querySelector('#stable-empty').textContent, /Refresh when.*online/i);
+  assert.match(value.document.querySelector('#registry-status').textContent, /Kit 仓库不可用/);
+  assert.match(value.document.querySelector('#stable-empty').textContent, /联网后刷新/);
 });
 
 test('renders stable and collapsed preview berths with permissions and lifecycle state', async () => {
@@ -116,15 +122,15 @@ test('renders stable and collapsed preview berths with permissions and lifecycle
   assert.match(stable.textContent, /SQLite Workbench/);
   assert.match(stable.textContent, /itharbors/);
   assert.match(stable.textContent, /1\.2\.0/);
-  assert.match(stable.textContent, /Queued for restart/i);
-  assert.match(stable.textContent, /Native code — elevated risk/i);
+  assert.match(stable.textContent, /等待重启/);
+  assert.match(stable.textContent, /原生代码 — 高风险/);
   assert.equal(stable.querySelector('[data-action="activate"]').disabled, true);
   assert.ok(stable.querySelector('[data-action="rollback"]'));
   const preview = value.document.querySelector('#preview-section');
   assert.equal(preview.open, false);
-  assert.match(preview.textContent, /Preview/);
-  assert.match(preview.textContent, /Marked bad/i);
-  assert.match(preview.querySelector('[data-action="activate"]').textContent, /Retry after restart/i);
+  assert.match(preview.textContent, /预览版/);
+  assert.match(preview.textContent, /已标记异常/);
+  assert.match(preview.querySelector('[data-action="activate"]').textContent, /重启后重试/);
 });
 
 test('renders builtin Kits without an install action', async () => {
@@ -137,7 +143,7 @@ test('renders builtin Kits without an install action', async () => {
   await value.view.start();
 
   const button = value.document.querySelector('[data-channel="stable"] [data-action="builtin"]');
-  assert.equal(button.textContent, 'Built in');
+  assert.equal(button.textContent, '内置');
   assert.equal(button.disabled, true);
   assert.equal(value.document.querySelector('[data-action="install"]'), null);
   assert.deepEqual(value.calls, []);
@@ -177,18 +183,19 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   await installStarted;
   assert.match(
     value.document.querySelector('#operation-status').textContent,
-    /Installing SQLite Workbench 1\.2\.0/,
+    /正在安装 SQLite Workbench 1\.2\.0/,
   );
   assert.equal(value.document.querySelector('#operation-status').getAttribute('role'), 'status');
   releaseInstall();
   await value.view.whenIdle();
   assert.equal(confirmations.length, 1);
-  assert.match(confirmations[0], /native code/i);
+  assert.match(confirmations[0], /包含原生代码/);
+  assert.match(confirmations[0], /1\.2\.0/);
   assert.deepEqual(calls, [[
     'install', { id: '@itharbors/kit-sqlite', version: '1.2.0', channel: 'stable' },
   ]]);
-  assert.match(value.document.querySelector('#operation-status').textContent, /Installed.*restart/i);
-  assert.match(value.document.querySelector('[data-channel="stable"]').textContent, /Installed/i);
+  assert.match(value.document.querySelector('#operation-status').textContent, /已安装.*重启并启用/);
+  assert.match(value.document.querySelector('[data-channel="stable"]').textContent, /已安装/);
 });
 
 test('does not install native code when confirmation is declined', async () => {

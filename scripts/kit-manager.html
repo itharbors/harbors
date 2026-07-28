@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8">
     <meta
@@ -7,32 +7,32 @@
       content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; base-uri 'none'; form-action 'none'"
     >
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>ITHARBORS Kit Dock</title>
+    <title>ITHARBORS Kit 管理</title>
     <link rel="stylesheet" href="./kit-manager.css">
   </head>
   <body>
     <div class="dock-shell">
-      <aside class="dock-mark" aria-label="ITHARBORS Kit Dock">
+      <aside class="dock-mark" aria-label="ITHARBORS Kit 管理">
         <span class="dock-mark__brand">ITHARBORS</span>
-        <span class="dock-mark__title" aria-hidden="true">KIT / DOCK</span>
+        <span class="dock-mark__title" aria-hidden="true">KIT / 管理</span>
         <span class="dock-mark__rule"></span>
-        <span class="dock-mark__caption">Verified cargo only</span>
+        <span class="dock-mark__caption">仅限已验证 Kit</span>
       </aside>
 
       <main id="manager-main" aria-busy="false">
         <header class="dock-header">
           <div>
-            <p class="eyebrow">Extension control</p>
-            <h1>Kit dock</h1>
-            <p class="lede">Install verified Kits now. Change the active version on a safe restart.</p>
+            <p class="eyebrow">扩展管理</p>
+            <h1>Kit 管理</h1>
+            <p class="lede">立即安装已验证的 Kit，并在安全重启后切换启用版本。</p>
           </div>
           <div class="registry-console" aria-live="polite">
             <span class="registry-console__lamp" aria-hidden="true"></span>
             <div>
-              <strong id="registry-status">Loading Registry…</strong>
-              <span id="registry-detail">Checking the last verified market snapshot.</span>
+              <strong id="registry-status">正在加载 Kit 仓库…</strong>
+              <span id="registry-detail">正在检查最近验证的仓库快照。</span>
             </div>
-            <button id="refresh-button" class="button button--quiet" type="button">Refresh</button>
+            <button id="refresh-button" class="button button--quiet" type="button">刷新</button>
           </div>
         </header>
 
@@ -42,10 +42,10 @@
         <section class="berth-section" aria-labelledby="stable-heading">
           <div class="section-heading">
             <div>
-              <p class="eyebrow">Release channel</p>
-              <h2 id="stable-heading">Stable berths</h2>
+              <p class="eyebrow">发布通道</p>
+              <h2 id="stable-heading">稳定版</h2>
             </div>
-            <span class="section-heading__note">Reviewed releases · safe restart activation</span>
+            <span class="section-heading__note">已审核版本 · 重启后安全启用</span>
           </div>
           <p id="stable-empty" class="empty-state" hidden></p>
           <div id="stable-list" class="kit-grid"></div>
@@ -54,20 +54,20 @@
         <details id="preview-section" class="preview-section">
           <summary>
             <span>
-              <span class="eyebrow">Opt-in channel</span>
-              <strong>Preview berths</strong>
+              <span class="eyebrow">自选通道</span>
+              <strong>预览版</strong>
             </span>
-            <span class="preview-section__warning">May change without notice</span>
+            <span class="preview-section__warning">内容可能随时变更</span>
           </summary>
-          <section aria-label="Preview Kits">
-            <p id="preview-empty" class="empty-state" hidden>No Preview releases are listed.</p>
+          <section aria-label="预览版 Kit">
+            <p id="preview-empty" class="empty-state" hidden>暂无预览版。</p>
             <div id="preview-list" class="kit-grid"></div>
           </section>
         </details>
 
         <footer class="dock-footer">
-          <strong>Versions stay immutable.</strong>
-          <span>Uninstall is not available yet because active workspace references must be preserved safely.</span>
+          <strong>已发布版本不可变更。</strong>
+          <span>暂不支持卸载，以便安全保留工作区中的有效引用。</span>
         </footer>
       </main>
     </div>
