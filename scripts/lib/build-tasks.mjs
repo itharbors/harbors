@@ -53,19 +53,14 @@ export function createBuildPlan(rootDir, graphName) {
 
   const rootPath = path.resolve(rootDir);
   const workspaceTasks = selectWorkspaceTasks(selection.workspace);
-  const allPluginTasks = discoverAllPlugins(rootPath)
-    .map((pluginDir) => createPluginTask(rootPath, pluginDir));
-  const selectedPluginDirectories = new Set(
-    (selection.plugins === 'runtime'
-      ? discoverRuntimePlugins(rootPath)
-      : discoverAllPlugins(rootPath))
-      .map((pluginDir) => toRepositoryPath(rootPath, pluginDir)),
-  );
-  const pluginTasks = allPluginTasks.filter((task) => selectedPluginDirectories.has(task.pluginDir));
+  const pluginDirectories = selection.plugins === 'runtime'
+    ? discoverRuntimePlugins(rootPath)
+    : discoverAllPlugins(rootPath);
+  const pluginTasks = pluginDirectories.map((pluginDir) => createPluginTask(rootPath, pluginDir));
   const notificationResourceTask = createNotificationResourceTask();
   const taskUniverse = [
     ...WORKSPACE_TASKS,
-    ...allPluginTasks,
+    ...pluginTasks,
     notificationResourceTask,
   ];
   const selectedTaskNames = new Set([

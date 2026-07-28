@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -80,6 +82,19 @@ test('omits workspace tasks from plugin-only plans while retaining selected task
     plugins.tasks.at(-1).dependencies,
     ['plugin:kits/notifications/plugins/notification-background'],
   );
+});
+
+test('keeps runtime planning isolated from broken non-runtime plugin manifests', async (t) => {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'harbors-runtime-discovery-'));
+  t.after(() => rm(fixtureRoot, { recursive: true, force: true }));
+  await writeRuntimeDiscoveryFixture(fixtureRoot);
+
+  assert.throws(
+    () => createBuildPlan(fixtureRoot, 'all'),
+    SyntaxError,
+  );
+  assert.doesNotThrow(() => createBuildPlan(fixtureRoot, 'runtime'));
+  assert.doesNotThrow(() => createBuildPlan(fixtureRoot, 'plugins-runtime'));
 });
 
 test('tracks workspace dependency outputs as plugin inputs and retains their task dependencies only when selected', () => {
@@ -212,4 +227,20 @@ function pluginOutputRoots(pluginDir) {
     ...(plugin.main ? [path.relative(rootDir, plugin.main.distDir)] : []),
     ...plugin.panels.map((panel) => path.relative(rootDir, panel.distDir)),
   ];
+}
+
+async function writeRuntimeDiscoveryFixture(rootDir) {
+  const runtimePluginDir = path.join(rootDir, 'kits/default/plugins/runtime-plugin');
+  const brokenPluginDir = path.join(rootDir, 'kits/mysql/plugins/broken-plugin');
+  await mkdir(runtimePluginDir, { recursive: true });
+  await mkdir(brokenPluginDir, { recursive: true });
+  await writeFile(path.join(rootDir, 'kits/default/package.json'), JSON.stringify({
+    name: '@fixture/default-kit',
+    'ce-editor': { kit: { plugin: ['@fixture/runtime-plugin'] } },
+  }));
+  await writeFile(path.join(runtimePluginDir, 'package.json'), JSON.stringify({
+    name: '@fixture/runtime-plugin',
+    main: 'main/dist/index.js',
+  }));
+  await writeFile(path.join(brokenPluginDir, 'package.json'), '{ malformed plugin manifest');
 }
