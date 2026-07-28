@@ -178,17 +178,14 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
   assert.equal(packageJson.scripts.prestart, 'npm run build:runtime');
   assert.equal(
     packageJson.scripts['plugins:build:runtime'],
-    'node scripts/ce-plugin.mjs build --runtime',
+    'node scripts/build.mjs plugins-runtime',
   );
   assert.equal(
     packageJson.scripts['build:runtime'],
-    'npm run build -w @itharbors/plugin-types && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && npm run build -w packages/client && npm run build -w packages/server && npm run plugins:build:runtime',
+    'node scripts/build.mjs runtime',
   );
-  assert.match(packageJson.scripts.build, /npm run plugins:build(?:\s|$)/);
-  assert.match(
-    packageJson.scripts['plugins:build'],
-    /prepare-notification-skill-resource\.mjs/u,
-  );
+  assert.equal(packageJson.scripts.build, 'node scripts/build.mjs all');
+  assert.equal(packageJson.scripts['plugins:build'], 'node scripts/build.mjs plugins');
   assert.match(
     packageJson.scripts.test,
     /scripts\/lib\/plugin-build\/discover\.test\.mjs/u,
