@@ -213,7 +213,7 @@ test('rejects Release identities that do not match the Registry projection', asy
 test('rejects incompatible or ambiguous compatible assets', async () => {
   const incompatibleManifest = {
     ...manifest,
-    target: { platform: runtime.platform === 'linux' ? 'darwin' : 'linux', arch: 'arm64' },
+    requires: { ...manifest.requires, harbors: '>=2.0.0 <3.0.0' },
   };
   await assert.rejects(
     createResolver({
@@ -222,7 +222,10 @@ test('rejects incompatible or ambiguous compatible assets', async () => {
         assets: [{ ...release.assets[0], manifest: incompatibleManifest }],
       },
     }).resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
-    (error) => error.code === 'INCOMPATIBLE_ASSET',
+    (error) => (
+      error.code === 'INCOMPATIBLE_ASSET'
+      && /Harbors 1\.0\.0 does not satisfy >=2\.0\.0 <3\.0\.0/.test(error.message)
+    ),
   );
   await assert.rejects(
     createResolver({

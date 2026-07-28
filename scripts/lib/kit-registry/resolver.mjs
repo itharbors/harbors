@@ -1,4 +1,5 @@
 import {
+  checkKitCompatibility,
   parseReleaseManifest,
   selectCompatibleAsset,
 } from '@itharbors/kit-core';
@@ -263,9 +264,15 @@ export class KitReleaseResolver {
     try {
       asset = selectCompatibleAsset(release, runtime);
     } catch (error) {
+      const compatibility = release.assets.map((candidate) => (
+        checkKitCompatibility(candidate.manifest, runtime)
+      ));
+      const detail = compatibility.every((result) => !result.compatible)
+        ? compatibility.find((result) => !result.compatible)?.message
+        : undefined;
       throw new KitRegistryResolutionError(
         'INCOMPATIBLE_ASSET',
-        `Release ${release.id}@${release.version} has no unique compatible asset`,
+        `Release ${release.id}@${release.version} has no unique compatible asset${detail ? `: ${detail}` : ''}`,
         { cause: error },
       );
     }
