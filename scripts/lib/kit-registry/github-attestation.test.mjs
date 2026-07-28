@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createDefaultBundleVerifier,
   deriveGitHubAttestationUrl,
   GitHubArtifactAttestationVerifier,
 } from './github-attestation.mjs';
@@ -130,6 +131,66 @@ function createVerifier({
   });
   return { verifier, requests };
 }
+
+test('loads Sigstore after installing the Electron ECDSA compatibility shim', async () => {
+  const cryptoCalls = [];
+  const cryptoModule = {
+    verify(algorithm, data, key, signature) {
+      cryptoCalls.push({ algorithm, data, key, signature });
+      return algorithm === 'sha256';
+    },
+  };
+  const sigstoreCalls = [];
+  let imports = 0;
+  const verifyBundle = createDefaultBundleVerifier({
+    runtimeVersions: { electron: '43.2.0', openssl: '0.0.0' },
+    cryptoModule,
+    importSigstore: async () => {
+      imports += 1;
+      const capturedVerify = cryptoModule.verify;
+      return {
+        async verify(...args) {
+          sigstoreCalls.push(args);
+          assert.equal(capturedVerify(undefined, 'data', { asymmetricKeyType: 'ec' }, 'sig'), true);
+          assert.equal(capturedVerify(
+            undefined,
+            'data',
+            { key: { asymmetricKeyType: 'ec' } },
+            'sig',
+          ), true);
+          assert.equal(capturedVerify(undefined, 'data', { asymmetricKeyType: 'ed25519' }, 'sig'), false);
+          assert.equal(capturedVerify(
+            undefined,
+            'data',
+            { key: { asymmetricKeyType: 'ed25519' } },
+            'sig',
+          ), false);
+        },
+      };
+    },
+  });
+
+  assert.equal(imports, 0);
+  const options = { certificateIssuer: 'https://token.actions.githubusercontent.com' };
+  await verifyBundle({ bundle: true }, options);
+  await verifyBundle({ bundle: false }, options);
+
+  assert.equal(imports, 1);
+  assert.deepEqual(sigstoreCalls, [
+    [{ bundle: true }, options],
+    [{ bundle: false }, options],
+  ]);
+  assert.deepEqual(cryptoCalls.map(({ algorithm }) => algorithm), [
+    'sha256',
+    'sha256',
+    undefined,
+    undefined,
+    'sha256',
+    'sha256',
+    undefined,
+    undefined,
+  ]);
+});
 
 test('derives the only accepted GitHub repository attestation URL', () => {
   assert.equal(deriveGitHubAttestationUrl(repository, digest), attestationUrl);
