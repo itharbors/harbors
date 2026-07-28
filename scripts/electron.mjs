@@ -62,6 +62,7 @@ import { createKitManagerService } from './lib/kit-manager-service.mjs';
 import { KitArtifactUninstaller } from './lib/kit-store/uninstaller.mjs';
 import { createKitRuntimeCoordinator } from './lib/kit-runtime-coordinator.mjs';
 import { createLiveKitManager } from './lib/live-kit-manager.mjs';
+import { BUILTIN_KIT_IDS } from './lib/builtin-kits.mjs';
 import { registerKitManagerIpc } from './lib/kit-manager-ipc.mjs';
 import { createKitManagerWindowController } from './lib/kit-manager-window.mjs';
 import {
@@ -422,6 +423,7 @@ function startElectronApp() {
       liveKitManager = createLiveKitManager({
         manager: kitManagerService.manager,
         coordinator: kitRuntimeCoordinator,
+        builtinKitIds: BUILTIN_KIT_IDS,
       });
       kitManagerWindowController = createKitManagerWindowController({
         BrowserWindow,
