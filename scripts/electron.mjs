@@ -24,6 +24,7 @@ import {
 } from './lib/notification-host.mjs';
 import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
 import { resolveCurrentProcessRuntime, resolveFrameworkRuntime } from './lib/framework-runtime.mjs';
+import { resolveDesktopVersion } from './lib/desktop-version.mjs';
 import { resolveDesktopPaths } from './lib/desktop-paths.mjs';
 import {
   createPackagedFrameworkSpec,
@@ -332,15 +333,20 @@ function startElectronApp() {
       startUrl = app.isPackaged
         ? undefined
         : process.env.ELECTRON_START_URL || `http://localhost:${runtimePorts.gateway}/`;
+      const desktopVersion = resolveDesktopVersion({
+        isPackaged: app.isPackaged,
+        packagedVersion: app.getVersion(),
+        repositoryRoot,
+      });
       kitRuntime = Object.freeze({
-        harborsVersion: app.getVersion(),
+        harborsVersion: desktopVersion,
         kitApiVersion: '1.0.0',
         protocolVersion: 1,
         ...(app.isPackaged ? resolveCurrentProcessRuntime(process) : resolveFrameworkRuntime()),
       });
       updateController = createAppUpdater({
         updater: autoUpdater,
-        currentVersion: app.getVersion(),
+        currentVersion: desktopVersion,
         isPackaged: app.isPackaged,
         releaseSigned: hasOfficialMacSignature({
           isPackaged: app.isPackaged,
