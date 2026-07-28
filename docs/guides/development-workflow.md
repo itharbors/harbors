@@ -76,6 +76,14 @@ SQLite       http://localhost:49380/kits/sqlite
 MySQL        http://localhost:49380/kits/mysql
 ```
 
+### Web 优先、Electron 收口
+
+日常开发中，如果改动同时适用于 Web 与 Electron 宿主，优先使用 `npm run dev:web` 和浏览器完成
+调试与回归，以缩短启动链路并降低桌面进程调试成本。涉及系统托盘、BrowserWindow 生命周期、原生
+对话框、桌面 IPC、通知、自动更新、打包或操作系统集成时，应在开发过程中直接使用 Electron。
+
+所有改动在最终交付前仍必须使用 Electron 完成一次验收；Web 测试通过不能替代 Electron 验收门禁。
+
 `/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
 已有 session 首次初始化后以其已加载 Kit 为准，不能通过替换 URL 中的 `kit` 隐式切换。
 
