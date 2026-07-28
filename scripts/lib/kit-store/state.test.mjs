@@ -211,6 +211,49 @@ test('updates auto-update policy without changing installed or active versions',
   await assert.rejects(store.setAutoUpdate(id, 'yes'), /boolean/i);
 });
 
+test('stages uninstall outside active sources and cancel restores the active Kit', async () => {
+  const { store } = await createStore();
+  await store.recordInstalled(installed('1.0.0'));
+  await store.activate(id, '1.0.0');
+
+  await store.stageUninstall(id);
+
+  assert.equal((await store.snapshot()).kits[id].pendingUninstall, true);
+  assert.deepEqual(await store.listActiveSources(), []);
+  await store.cancelUninstall(id);
+  assert.equal((await store.snapshot()).kits[id].pendingUninstall, undefined);
+  assert.equal((await store.listActiveSources())[0].version, '1.0.0');
+});
+
+test('lists every staged uninstall directory in version order and commits the whole record', async () => {
+  const { store } = await createStore();
+  await store.recordInstalled(installed('2.0.0'));
+  await store.recordInstalled(installed('1.0.0'));
+  await store.stageUninstall(id);
+  await store.stageUninstall(id);
+
+  assert.deepEqual(await store.pendingUninstallDirectories(id), [
+    { id, version: '1.0.0', directory: '/kit-store/1.0.0' },
+    { id, version: '2.0.0', directory: '/kit-store/2.0.0' },
+  ]);
+  await store.commitUninstall(id);
+  assert.equal((await store.snapshot()).kits[id], undefined);
+});
+
+test('rejects state changes and uninstall commits outside a staged uninstall', async () => {
+  const { store } = await createStore();
+  await assert.rejects(store.stageUninstall(id), /not installed/i);
+  await store.recordInstalled(installed('1.0.0'));
+  await assert.rejects(store.pendingUninstallDirectories(id), /not staged/i);
+  await assert.rejects(store.commitUninstall(id), /not staged/i);
+  await assert.rejects(store.cancelUninstall(id), /not staged/i);
+  await store.stageUninstall(id);
+  await assert.rejects(store.recordInstalled(installed('2.0.0')), /being uninstalled/i);
+  await assert.rejects(store.setPending(id, '1.0.0'), /being uninstalled/i);
+  await assert.rejects(store.activate(id, '1.0.0'), /being uninstalled/i);
+  await assert.rejects(store.rollback(id), /being uninstalled/i);
+});
+
 test('rejects transitions to missing Kit records or versions', async () => {
   const { store } = await createStore();
   await assert.rejects(store.setPending(id, '1.0.0'), /not installed/i);
