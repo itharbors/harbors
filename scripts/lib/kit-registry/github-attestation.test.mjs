@@ -292,6 +292,43 @@ test('rejects empty or control-bearing GitHub tokens', () => {
   }
 });
 
+test('reports a bounded retry time when the GitHub attestation API is rate limited', async () => {
+  for (const status of [403, 429]) {
+    const { verifier } = createVerifier({
+      fetchImpl: async () => new Response('{}', {
+        status,
+        headers: {
+          'x-ratelimit-remaining': '0',
+          'x-ratelimit-reset': '1785241677',
+        },
+      }),
+    });
+    await assert.rejects(
+      verifier.verify(expected()),
+      (error) => (
+        error.code === 'ATTESTATION_RATE_LIMITED'
+        && error.message === 'GitHub verification rate limit reached. Retry after 2026-07-28T12:27:57.000Z.'
+      ),
+    );
+  }
+});
+
+test('does not trust malformed or incomplete GitHub rate-limit headers', async () => {
+  for (const headers of [
+    {},
+    { 'x-ratelimit-remaining': '1', 'x-ratelimit-reset': '1785241677' },
+    { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': 'not-a-time' },
+  ]) {
+    const { verifier } = createVerifier({
+      fetchImpl: async () => new Response('{}', { status: 403, headers }),
+    });
+    await assert.rejects(
+      verifier.verify(expected()),
+      (error) => error.code === 'ATTESTATION_FETCH_FAILED',
+    );
+  }
+});
+
 test('rejects an attestation URL that is not exactly derived from repository and digest', async () => {
   for (const changed of [
     'https://evil.test/attestations/sha256:abc',

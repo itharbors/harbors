@@ -214,12 +214,31 @@ async function readLimitedJson(response, maxBytes, tooLargeCode, invalidCode, la
   }
 }
 
+function rateLimitReset(response) {
+  if (![403, 429].includes(response.status)) return undefined;
+  if (response.headers.get('x-ratelimit-remaining') !== '0') return undefined;
+  const raw = response.headers.get('x-ratelimit-reset');
+  if (raw === null || !/^[1-9][0-9]{0,9}$/u.test(raw)) return undefined;
+  const resetSeconds = Number(raw);
+  if (!Number.isSafeInteger(resetSeconds)) return undefined;
+  const reset = new Date(resetSeconds * 1000);
+  if (Number.isNaN(reset.getTime())) return undefined;
+  return reset.toISOString();
+}
+
 async function fetchJson({ fetchImpl, url, init, timeoutMs, maxBytes, codes, label }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error(`${label} timed out`)), timeoutMs);
   try {
     const response = await fetchImpl(url, { ...init, signal: controller.signal, redirect: 'error' });
     if (!response?.ok) {
+      const reset = response && codes.rateLimited ? rateLimitReset(response) : undefined;
+      if (reset) {
+        throw new GitHubAttestationError(
+          codes.rateLimited,
+          `GitHub verification rate limit reached. Retry after ${reset}.`,
+        );
+      }
       throw new GitHubAttestationError(codes.fetch, `${label} request failed`);
     }
     return await readLimitedJson(response, maxBytes, codes.tooLarge, codes.invalid, label);
@@ -343,6 +362,7 @@ export class GitHubArtifactAttestationVerifier {
       maxBytes: this.#maxApiResponseBytes,
       codes: {
         fetch: 'ATTESTATION_FETCH_FAILED',
+        rateLimited: 'ATTESTATION_RATE_LIMITED',
         tooLarge: 'ATTESTATION_RESPONSE_TOO_LARGE',
         invalid: 'ATTESTATION_RESPONSE_INVALID',
       },
