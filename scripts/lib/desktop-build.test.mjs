@@ -355,6 +355,19 @@ test('rejects missing files, symlinks, repository escapes, duplicate destination
   }), /product Kit/iu);
 });
 
+test('rejects recursive staging from the Kits root before writing product Kit descendants', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'kit-root-stage');
+  await write(repositoryRoot, 'kits/csv/secret.txt', 'secret');
+
+  await assert.rejects(stageDesktopFiles({
+    repositoryRoot,
+    outputRoot,
+    entries: [{ source: 'kits', destination: 'kits', recursive: true }],
+  }), /Kit root|product Kit/iu);
+  assert.equal(existsSync(outputRoot), false);
+});
+
 test('rejects portable source aliases and destination identity collisions before writing', async (t) => {
   const repositoryRoot = await createRepositoryFixture(t);
   const source = 'kits/default/package.json';
@@ -399,6 +412,22 @@ test('rejects portable source aliases and destination identity collisions before
       entries: [
         { source, destination: 'fold/ς.json' },
         { source, destination: 'fold/σ.json' },
+      ],
+      error: /destination collision/iu,
+    },
+    {
+      name: 'Unicode 16 Garay case-fold-equivalent destinations',
+      entries: [
+        { source, destination: 'fold/\u{10d50}.json' },
+        { source, destination: 'fold/\u{10d70}.json' },
+      ],
+      error: /destination collision/iu,
+    },
+    {
+      name: 'supplementary-plane Deseret case-fold-equivalent destinations',
+      entries: [
+        { source, destination: 'fold/\u{10400}.json' },
+        { source, destination: 'fold/\u{10428}.json' },
       ],
       error: /destination collision/iu,
     },

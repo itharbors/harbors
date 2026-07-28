@@ -435,7 +435,7 @@ function rejectNonBuiltinKit(relative) {
   const parts = portable(relative).split('/');
   if (portableIdentity(parts[0] ?? '') !== 'kits') return;
   if (parts[0] !== 'kits') throw new Error(`Desktop source spelling alias is not portable: ${relative}`);
-  if (!parts[1]) return;
+  if (!parts[1]) throw new Error('Desktop runtime cannot include the Kit root');
   const builtinSlug = [...BUILTIN_KIT_SLUGS]
     .find((slug) => portableIdentity(slug) === portableIdentity(parts[1]));
   if (!builtinSlug) throw new Error(`Desktop runtime cannot include product Kit ${parts[1]}`);
