@@ -46,7 +46,7 @@ test('selects every full build task before all plugins and notification resource
     discoverAllPlugins(rootDir).map((value) => path.relative(rootDir, value)),
   );
   assert.deepEqual(all.tasks.at(-1), {
-    name: 'resource:notification-skill',
+    name: 'resource:notify-user',
     kind: 'resource',
     command: { file: 'node', args: ['scripts/prepare-notification-skill-resource.mjs'] },
     inputs: [
@@ -57,6 +57,10 @@ test('selects every full build task before all plugins and notification resource
     outputs: ['kits/notifications/plugins/notification-background/main/dist/resources/notify-user'],
     dependencies: ['plugin:kits/notifications/plugins/notification-background'],
   });
+  assert.deepEqual(
+    all.tasks.find((task) => task.name === 'plugin:kits/notifications/plugins/notification-background').outputExcludes,
+    ['kits/notifications/plugins/notification-background/main/dist/resources/notify-user'],
+  );
 });
 
 test('omits workspace tasks from plugin-only plans while retaining selected task ordering', () => {
@@ -106,10 +110,53 @@ test('rejects unknown build graphs', () => {
   assert.throws(() => createBuildPlan(rootDir, 'unknown'), /Unknown build graph: unknown/);
 });
 
-test('rejects tasks with duplicate output roots', () => {
+test('rejects duplicate and unowned nested output roots', () => {
   assert.throws(
     () => validateBuildTasks([
       { name: 'first', outputs: ['shared/dist'] },
+      { name: 'second', outputs: ['shared/dist'] },
+    ]),
+    /Duplicate build output root "shared\/dist" claimed by first and second/,
+  );
+  assert.throws(
+    () => validateBuildTasks([
+      { name: 'parent', outputs: ['shared/dist'] },
+      { name: 'child', outputs: ['shared/dist/resources'] },
+    ]),
+    /Output root "shared\/dist\/resources" claimed by child overlaps parent output root "shared\/dist" without an exact exclusion/,
+  );
+  assert.doesNotThrow(() => validateBuildTasks([
+    {
+      name: 'parent',
+      outputs: ['shared/dist'],
+      outputExcludes: ['shared/dist/resources'],
+    },
+    { name: 'child', outputs: ['shared/dist/resources'] },
+  ]));
+  assert.throws(
+    () => validateBuildTasks([
+      {
+        name: 'parent',
+        outputs: ['shared/dist'],
+        outputExcludes: ['shared/dist/owned-by-someone-else'],
+      },
+      { name: 'child', outputs: ['shared/dist/resources'] },
+    ]),
+    /Output root "shared\/dist\/resources" claimed by child overlaps parent output root "shared\/dist" without an exact exclusion/,
+  );
+  assert.throws(
+    () => validateBuildTasks([
+      {
+        name: 'parent',
+        outputs: ['shared/dist'],
+        outputExcludes: ['other-task/dist'],
+      },
+    ]),
+    /Output exclusion "other-task\/dist" for parent is outside its declared output roots/,
+  );
+  assert.throws(
+    () => validateBuildTasks([
+      { name: 'first', outputs: ['shared/a/../dist'] },
       { name: 'second', outputs: ['shared/dist'] },
     ]),
     /Duplicate build output root "shared\/dist" claimed by first and second/,

@@ -49,8 +49,8 @@ hit only when all of the following hold:
 
 1. A successful record exists for the current cache schema and task name.
 2. The recorded input digest equals the current input digest.
-3. The current output manifest exactly matches the manifest recorded after the
-   successful build.
+3. The current owned-output manifest exactly matches the manifest recorded
+   after the successful build.
 
 Otherwise, the runner executes the task and writes a new record only after the
 command succeeds and the declared outputs exist.
@@ -66,7 +66,8 @@ run Vite, esbuild, resource-copy, and validation steps.
 
 `scripts/lib/build-cache.mjs` owns generic cache behavior:
 
-- recursively enumerate regular files under declared input and output paths;
+- recursively enumerate regular files under declared input paths and owned
+  output paths;
 - hash relative paths, file bytes, and task/dependency metadata with SHA-256;
 - compare the current output manifest with the recorded manifest;
 - execute one task and return `hit` or `built`;
@@ -84,16 +85,22 @@ The input digest includes:
 - `process.version`, `process.platform`, and `process.arch`;
 - the digest of every upstream task;
 - the sorted path and content of every declared input file.
+- the task's repository-relative `outputExcludes` list.
 
 Input enumeration follows explicit files and directories, ignores generated
 output directories and `node_modules`, preserves dotfiles, and follows no
 symbolic links. A deleted file changes the sorted manifest and therefore the
 digest.
 
-The output manifest stores every regular output file's repository-relative
-path, size, and SHA-256 digest. Missing, extra, or modified output files cause a
-miss. Output roots must exist after a successful command; empty output roots are
-valid only when a task declares that explicitly.
+The owned-output manifest stores every regular output file's
+repository-relative path, size, and SHA-256 digest beneath a task's output
+roots, excluding any repository-relative `outputExcludes` child paths. Missing,
+extra, or modified owned output files cause a miss. Every exclusion must be
+inside one of the task's declared output roots. Two tasks cannot claim the same
+output root or parent/child roots unless the parent lists the exact child root as
+an exclusion; the child task then owns and validates that subtree exactly.
+Output roots must exist after a successful command; empty output roots are valid
+only when a task declares that explicitly.
 
 ### Task graph
 
@@ -117,7 +124,9 @@ that its compiler resolves. Because plugin tasks are independent cache units,
 editing one plugin does not rebuild the other plugins.
 
 The notification skill-resource preparation remains a separate task after the
-notification plugins it consumes.
+notification plugins it consumes. Its `notify-user` resource subtree is excluded
+from the notification-background plugin's owned-output manifest and is instead
+owned and exactly validated by the resource task.
 
 The `all` graph contains every task currently reached by `npm run build`. The
 `runtime` graph contains exactly the smaller task set currently reached by

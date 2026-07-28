@@ -4,7 +4,7 @@
 
 **Goal:** Add a correct local content-fingerprint cache to root workspace and plugin builds so unchanged runtime builds complete in less than two seconds.
 
-**Architecture:** A generic cache engine hashes task inputs and dependency results, validates the exact current output manifest, and records only successful builds. A repository-specific task graph maps the existing workspace and per-plugin build commands onto that engine; the root npm scripts select all, runtime, or plugin-only graphs.
+**Architecture:** A generic cache engine hashes task inputs and dependency results, validates the exact current owned-output manifest, and records only successful builds. A repository-specific task graph maps the existing workspace and per-plugin build commands onto that engine; the root npm scripts select all, runtime, or plugin-only graphs.
 
 **Tech Stack:** Node.js ESM, npm workspaces, SHA-256, Node test runner, TypeScript, Vite, existing plugin compiler
 
@@ -13,8 +13,9 @@
 - Do not add a third-party build-system dependency.
 - Keep build tasks sequential; cold-build parallelization is outside this change.
 - Cache records are local metadata under `.cache/harbors-build/v1` and never restore absent outputs.
-- A hit requires an equal input digest and an exact output path, size, and SHA-256 manifest.
-- Input digests include task command, Node runtime identity, upstream result digests, and sorted input file paths and bytes.
+- A hit requires an equal input digest and an exact owned-output path, size, and SHA-256 manifest.
+- Input digests include task command, Node runtime identity, upstream result digests, sorted input file paths and bytes, and output ownership exclusions.
+- A task may exclude a repository-relative child path inside a declared output root; only the task that declares that exact child root owns it. Other parent/child output collisions are rejected.
 - Build failures never create or replace a successful cache record.
 - `--force` bypasses reads and refreshes successful records.
 - `npm run clean` removes both generated outputs and `.cache/harbors-build`.
@@ -30,7 +31,7 @@
 - Create: `scripts/lib/build-cache.test.mjs`
 
 **Interfaces:**
-- Consumes task objects shaped as `{ name, command: { file, args }, inputs, outputs }` plus `rootDir`, `cacheDir`, dependency result digests, and `force`.
+- Consumes task objects shaped as `{ name, command: { file, args }, inputs, outputs, outputExcludes? }` plus `rootDir`, `cacheDir`, dependency result digests, and `force`.
 - Produces `runCachedTask(options): Promise<{ status: 'hit' | 'built', inputDigest: string, resultDigest: string }>`.
 - Produces cache records `{ schemaVersion, taskName, inputDigest, outputs, resultDigest }` written atomically after successful commands.
 
@@ -103,9 +104,11 @@ mutations are not all detected.
 - [ ] **Step 4: Complete exact input/output manifest invalidation**
 
 Hash sorted repository-relative paths and bytes for inputs. Capture sorted
-output entries containing `{ path, size, sha256 }` and require deep equality on
-cache reads. Compute `resultDigest` from the input digest and canonical output
-manifest so downstream tasks observe changed generated content.
+owned output entries containing `{ path, size, sha256 }` and require deep
+equality on cache reads. Skip `outputExcludes` while capturing the owned-output
+manifest; each exclusion must remain inside a declared output root and is part
+of the input digest. Compute `resultDigest` from the input digest and canonical
+owned-output manifest so downstream tasks observe changed generated content.
 
 Run the focused test and expect PASS.
 
@@ -227,16 +230,19 @@ Define the notification resource task with source inputs
 `.agents/skills/notify-user`, `scripts/prepare-notification-skill-resource.mjs`,
 and `scripts/lib/codex-skill-resource.mjs`; its output is the copied resource
 directory beneath the notification-background plugin `dist` and it depends on
-that plugin task.
+that plugin task. Declare that exact resource directory as the notification
+background plugin task's `outputExcludes`, so the resource task exclusively owns
+and validates the nested subtree.
 
 Run the focused task-graph tests and expect PASS.
 
 - [ ] **Step 4: Add validation tests for unknown graphs and unsafe duplicate outputs**
 
-Assert `createBuildPlan(rootDir, 'unknown')` throws. Add a fixture task-list
-validation test proving two tasks cannot claim the same output root, because
-independent records would otherwise race or invalidate each other. Implement
-the validation and run the focused tests.
+Assert `createBuildPlan(rootDir, 'unknown')` throws. Add fixture task-list
+validation tests proving two tasks cannot claim the same output root or nested
+roots unless the parent excludes the exact child root, because independent
+records would otherwise race or invalidate each other. Implement the validation
+and run the focused tests.
 
 - [ ] **Step 5: Commit the task graph**
 

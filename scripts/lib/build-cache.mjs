@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { lstat, mkdir, readFile, readdir, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export async function runCachedTask({
   rootDir,
@@ -13,18 +13,21 @@ export async function runCachedTask({
   force = false,
 }) {
   const rootPath = path.resolve(rootDir);
+  const outputExcludes = resolveOutputExcludes(rootPath, task);
   const inputEntries = await collectEntries(rootPath, task.inputs, { missing: 'error' });
   const inputDigest = digestJson({
     command: task.command,
     dependencyDigests,
     inputs: inputEntries.map(({ path: entryPath, sha256 }) => ({ path: entryPath, sha256 })),
     outputs: task.outputs,
+    outputExcludes: outputExcludes.map(({ repositoryPath }) => repositoryPath),
     runtime: { executable: process.execPath, version: process.version },
     taskName: task.name,
   });
   const recordPath = path.join(cacheDir, `${safeTaskName(task.name)}.json`);
   const record = await readRecord(recordPath);
-  const currentOutputs = await collectEntries(rootPath, task.outputs, { missing: 'miss' });
+  const outputExcludePaths = outputExcludes.map(({ absolutePath }) => absolutePath);
+  const currentOutputs = await collectEntries(rootPath, task.outputs, { missing: 'miss', outputExcludes: outputExcludePaths });
   const currentResultDigest = currentOutputs === null ? null : digestJson({ inputDigest, outputs: currentOutputs });
 
   if (!force
@@ -49,7 +52,7 @@ export async function runCachedTask({
     throw error;
   }
 
-  const outputs = await collectEntries(rootPath, task.outputs, { missing: 'error' });
+  const outputs = await collectEntries(rootPath, task.outputs, { missing: 'error', outputExcludes: outputExcludePaths });
   const resultDigest = digestJson({ inputDigest, outputs });
   const nextRecord = {
     schemaVersion: SCHEMA_VERSION,
@@ -62,17 +65,18 @@ export async function runCachedTask({
   return { status: 'built', inputDigest, resultDigest };
 }
 
-async function collectEntries(rootDir, declaredPaths, { missing }) {
+async function collectEntries(rootDir, declaredPaths, { missing, outputExcludes = [] }) {
   const entries = [];
   for (const declaredPath of declaredPaths) {
     const absolutePath = resolveDeclaredPath(rootDir, declaredPath);
-    const found = await collectPath(rootDir, absolutePath, entries, missing);
+    const found = await collectPath(rootDir, absolutePath, entries, missing, outputExcludes);
     if (!found && missing === 'miss') return null;
   }
   return entries.sort((left, right) => left.path.localeCompare(right.path));
 }
 
-async function collectPath(rootDir, absolutePath, entries, missing) {
+async function collectPath(rootDir, absolutePath, entries, missing, outputExcludes) {
+  if (outputExcludes.some((excludedPath) => isPathWithin(absolutePath, excludedPath))) return true;
   let stats;
   try {
     stats = await lstat(absolutePath);
@@ -96,7 +100,7 @@ async function collectPath(rootDir, absolutePath, entries, missing) {
   if (stats.isDirectory()) {
     const children = await readdir(absolutePath);
     for (const child of children.sort((left, right) => left.localeCompare(right))) {
-      const found = await collectPath(rootDir, path.join(absolutePath, child), entries, missing);
+      const found = await collectPath(rootDir, path.join(absolutePath, child), entries, missing, outputExcludes);
       if (!found && missing === 'miss') return false;
     }
   }
@@ -109,6 +113,32 @@ function resolveDeclaredPath(rootDir, declaredPath) {
     throw new Error(`Declared path escapes rootDir: ${declaredPath}`);
   }
   return absolutePath;
+}
+
+function resolveOutputExcludes(rootDir, task) {
+  const outputRoots = task.outputs.map((output) => resolveDeclaredPath(rootDir, output));
+  const exclusions = new Map();
+  for (const outputExclude of task.outputExcludes ?? []) {
+    if (path.isAbsolute(outputExclude)) {
+      throw new Error(`Output exclusion must be repository-relative: ${outputExclude}`);
+    }
+    const absoluteExclude = resolveDeclaredPath(rootDir, outputExclude);
+    if (!outputRoots.some((outputRoot) => isPathStrictlyWithin(absoluteExclude, outputRoot))) {
+      throw new Error(`Output exclusion must be inside a declared output root: ${outputExclude}`);
+    }
+    exclusions.set(toRepositoryPath(rootDir, absoluteExclude), absoluteExclude);
+  }
+  return [...exclusions.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([repositoryPath, absolutePath]) => ({ repositoryPath, absolutePath }));
+}
+
+function isPathWithin(candidatePath, parentPath) {
+  return candidatePath === parentPath || candidatePath.startsWith(`${parentPath}${path.sep}`);
+}
+
+function isPathStrictlyWithin(candidatePath, parentPath) {
+  return candidatePath.startsWith(`${parentPath}${path.sep}`);
 }
 
 function toRepositoryPath(rootDir, absolutePath) {

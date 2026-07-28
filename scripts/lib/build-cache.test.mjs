@@ -92,6 +92,82 @@ test('rebuilds when an extra declared output appears', async (t) => {
   await assertExecutionCount(fixture.rootDir, 2);
 });
 
+test('ignores added, changed, and removed child-owned outputs while still invalidating owned output changes', async (t) => {
+  const fixture = await createFixture(t);
+  fixture.task = { ...fixture.task, outputExcludes: ['dist/resources/notify-user'] };
+  await primeCache(fixture);
+
+  const childRoot = join(fixture.rootDir, 'dist', 'resources', 'notify-user');
+  await mkdir(childRoot, { recursive: true });
+  await writeFile(join(childRoot, 'resource.txt'), 'added');
+  assert.equal((await runCachedTask(fixture)).status, 'hit');
+
+  await writeFile(join(childRoot, 'resource.txt'), 'changed');
+  assert.equal((await runCachedTask(fixture)).status, 'hit');
+
+  await rm(childRoot, { recursive: true, force: true });
+  assert.equal((await runCachedTask(fixture)).status, 'hit');
+
+  await writeFile(join(fixture.rootDir, 'dist', 'output.txt'), 'corrupted');
+  assert.equal((await runCachedTask(fixture)).status, 'built');
+  await assertExecutionCount(fixture.rootDir, 2);
+});
+
+test('rebuilds when output ownership exclusions change', async (t) => {
+  const fixture = await createFixture(t);
+  await primeCache(fixture);
+  fixture.task = { ...fixture.task, outputExcludes: ['dist/resources/notify-user'] };
+
+  assert.equal((await runCachedTask(fixture)).status, 'built');
+  await assertExecutionCount(fixture.rootDir, 2);
+});
+
+test('rejects an output exclusion outside every declared output root', async (t) => {
+  const fixture = await createFixture(t);
+  fixture.task = { ...fixture.task, outputExcludes: ['other-task/dist'] };
+
+  await assert.rejects(
+    runCachedTask(fixture),
+    /Output exclusion must be inside a declared output root: other-task\/dist/,
+  );
+});
+
+test('rejects an output exclusion equal to a declared output root', async (t) => {
+  const fixture = await createFixture(t);
+  fixture.task = { ...fixture.task, outputExcludes: ['dist'] };
+
+  await assert.rejects(
+    runCachedTask(fixture),
+    /Output exclusion must be inside a declared output root: dist/,
+  );
+});
+
+test('canonicalizes output exclusion order before calculating the task digest', async (t) => {
+  const fixture = await createFixture(t);
+  fixture.task = {
+    ...fixture.task,
+    outputExcludes: ['dist/resources/second', 'dist/resources/first'],
+  };
+  await primeCache(fixture);
+  fixture.task = {
+    ...fixture.task,
+    outputExcludes: ['dist/resources/first', 'dist/resources/second'],
+  };
+
+  assert.equal((await runCachedTask(fixture)).status, 'hit');
+  await assertExecutionCount(fixture.rootDir, 1);
+});
+
+test('rejects an absolute output exclusion path', async (t) => {
+  const fixture = await createFixture(t);
+  fixture.task = { ...fixture.task, outputExcludes: [join(fixture.rootDir, 'dist', 'resources')] };
+
+  await assert.rejects(
+    runCachedTask(fixture),
+    /Output exclusion must be repository-relative:/,
+  );
+});
+
 test('rebuilds when a dependency result digest changes', async (t) => {
   const fixture = await createFixture(t, { dependencyDigests: ['upstream-a'] });
   await primeCache(fixture);
