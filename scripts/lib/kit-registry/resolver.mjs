@@ -5,6 +5,7 @@ import {
 } from '@itharbors/kit-core';
 
 import { fetchGitHubReleaseAsset } from './github-release-fetch.mjs';
+import { GitHubAttestationError } from './github-attestation.mjs';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -321,6 +322,9 @@ export class KitReleaseResolver {
     try {
       claims = await this.#provenanceVerifier.verify(expectedClaims);
     } catch (error) {
+      if (error instanceof GitHubAttestationError && error.code === 'ATTESTATION_RATE_LIMITED') {
+        throw new KitRegistryResolutionError(error.code, error.message, { cause: error });
+      }
       throw new KitRegistryResolutionError(
         'PROVENANCE_FAILED',
         'Artifact attestation verification failed',
