@@ -239,6 +239,13 @@ summary:focus-visible {
   font-size: 0.86rem;
 }
 
+.operation-status {
+  position: sticky;
+  top: 12px;
+  z-index: 4;
+  background: var(--dock-paper);
+}
+
 .operation-status:empty {
   display: none;
 }

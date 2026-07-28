@@ -129,6 +129,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         );
         if (!accepted) return;
       }
+      setOperationMessage(`Installing ${kit.label ?? kit.id} ${reference.version}…`);
       await api.install({ id: kit.id, version: reference.version, channel });
       await reloadInstalledProjection();
       setOperationMessage(`Installed ${kit.label ?? kit.id} ${reference.version}. Activate it after restart when ready.`);

@@ -64,6 +64,10 @@ test('uses a locked-down local document with semantic landmarks and no inline or
   }
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /:focus-visible/);
+  assert.match(
+    css,
+    /\.operation-status\s*\{[^}]*position:\s*sticky;[^}]*top:\s*12px;[^}]*z-index:\s*[1-9]\d*;/su,
+  );
 });
 
 test('renders loading, online empty, offline cache, and unavailable states with direction', async () => {
@@ -142,10 +146,16 @@ test('renders builtin Kits without an install action', async () => {
 test('confirms native code, installs a selected channel, and refreshes the installed projection', async () => {
   const calls = [];
   let current = snapshot();
+  let releaseInstall;
+  const installGate = new Promise((resolve) => { releaseInstall = resolve; });
+  let markInstallStarted;
+  const installStarted = new Promise((resolve) => { markInstallStarted = resolve; });
   const api = {
     list: async () => current,
     install: async (input) => {
       calls.push(['install', input]);
+      markInstallStarted();
+      await installGate;
       current = snapshot({
         kits: [{
           ...snapshot().kits[0],
@@ -164,6 +174,13 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   });
   await value.view.start();
   value.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
+  await installStarted;
+  assert.match(
+    value.document.querySelector('#operation-status').textContent,
+    /Installing SQLite Workbench 1\.2\.0/,
+  );
+  assert.equal(value.document.querySelector('#operation-status').getAttribute('role'), 'status');
+  releaseInstall();
   await value.view.whenIdle();
   assert.equal(confirmations.length, 1);
   assert.match(confirmations[0], /native code/i);
