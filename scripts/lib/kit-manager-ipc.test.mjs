@@ -19,7 +19,7 @@ function event(senderId = 7) {
   return { sender: { id: senderId } };
 }
 
-test('registers only the six fixed Kit Manager operations and validates their inputs', async () => {
+test('registers only the seven fixed Kit Manager operations and validates their inputs', async () => {
   const calls = [];
   const service = {
     list: async () => { calls.push(['list']); return { kits: [] }; },
@@ -27,6 +27,7 @@ test('registers only the six fixed Kit Manager operations and validates their in
     install: async (value) => { calls.push(['install', value]); return value; },
     activate: async (value) => { calls.push(['activate', value]); return value; },
     rollback: async (value) => { calls.push(['rollback', value]); return value; },
+    deactivate: async (value) => { calls.push(['deactivate', value]); return value; },
     uninstall: async (value) => { calls.push(['uninstall', value]); return value; },
   };
   const ipcMain = createIpcMain();
@@ -48,12 +49,14 @@ test('registers only the six fixed Kit Manager operations and validates their in
     id: '@example/demo', version: '1.2.3', retryBad: true,
   });
   await ipcMain.handlers.get(KIT_MANAGER_CHANNELS.rollback)(event(), '@example/demo');
+  await ipcMain.handlers.get(KIT_MANAGER_CHANNELS.deactivate)(event(), '@example/demo');
   await ipcMain.handlers.get(KIT_MANAGER_CHANNELS.uninstall)(event(), '@example/demo');
   assert.deepEqual(calls, [
     ['list'], ['refresh'],
     ['install', { id: '@example/demo', version: '1.2.3', channel: 'stable' }],
     ['activate', { id: '@example/demo', version: '1.2.3', retryBad: true }],
-    ['rollback', '@example/demo'], ['uninstall', '@example/demo'],
+    ['rollback', '@example/demo'], ['deactivate', '@example/demo'],
+    ['uninstall', '@example/demo'],
   ]);
 
   for (const [channel, args] of [
@@ -62,6 +65,9 @@ test('registers only the six fixed Kit Manager operations and validates their in
     [KIT_MANAGER_CHANNELS.install, [{ id: '@example/demo', version: '1.2.3', channel: 'stable', url: 'https://evil.test' }]],
     [KIT_MANAGER_CHANNELS.activate, [{ id: '@example/demo', version: '1.2.3', retryBad: 'yes' }]],
     [KIT_MANAGER_CHANNELS.rollback, ['/tmp/demo']],
+    [KIT_MANAGER_CHANNELS.deactivate, [{ id: '@example/demo' }]],
+    [KIT_MANAGER_CHANNELS.deactivate, ['@example/demo', '/tmp/demo']],
+    [KIT_MANAGER_CHANNELS.deactivate, ['../kits/demo']],
     [KIT_MANAGER_CHANNELS.uninstall, [{ id: '@example/demo' }]],
     [KIT_MANAGER_CHANNELS.uninstall, ['@example/demo', '/tmp/demo']],
     [KIT_MANAGER_CHANNELS.uninstall, ['../kits/demo']],

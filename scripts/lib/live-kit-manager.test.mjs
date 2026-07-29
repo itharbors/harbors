@@ -18,6 +18,10 @@ function setup({ builtinKitIds = [] } = {}) {
       calls.push(['applyActivation', structuredClone(value)]);
       return { id: value.id, version: value.version, runtimeReloaded: true };
     },
+    async applyDeactivation(id) {
+      calls.push(['applyDeactivation', id]);
+      return { id, version: '1.0.0', runtimeReloaded: true };
+    },
     async applyUninstall(id) {
       calls.push(['applyUninstall', id]);
       return { id, removedVersions: ['1.0.0'], runtimeReloaded: true };
@@ -47,7 +51,7 @@ test('installs then automatically activates the exact selected version without r
   ]);
 });
 
-test('routes activation, rollback, and uninstall through the runtime coordinator', async () => {
+test('routes activation, rollback, deactivation, and uninstall through the runtime coordinator', async () => {
   const { calls, live } = setup();
 
   assert.deepEqual(await live.activate({
@@ -60,6 +64,12 @@ test('routes activation, rollback, and uninstall through the runtime coordinator
     runtimeReloaded: true,
   });
   await live.rollback('@example/kit-demo');
+  assert.deepEqual(await live.deactivate('@example/kit-demo'), {
+    id: '@example/kit-demo',
+    version: '1.0.0',
+    requiresRestart: false,
+    runtimeReloaded: true,
+  });
   assert.deepEqual(await live.uninstall('@example/kit-demo'), {
     id: '@example/kit-demo',
     removedVersions: ['1.0.0'],
@@ -71,14 +81,17 @@ test('routes activation, rollback, and uninstall through the runtime coordinator
       id: '@example/kit-demo', version: '1.0.0', retryBad: true,
     }],
     ['applyActivation', { id: '@example/kit-demo', rollback: true }],
+    ['applyDeactivation', '@example/kit-demo'],
     ['applyUninstall', '@example/kit-demo'],
   ]);
 });
 
-test('delegates read operations and rejects builtin or malformed uninstall identities', async () => {
+test('delegates reads and rejects builtin or malformed destructive identities', async () => {
   const { calls, live } = setup({ builtinKitIds: ['@itharbors/kit-csv'] });
   assert.deepEqual(await live.list(), { kits: [] });
   assert.deepEqual(await live.refresh(), { source: 'network' });
+  await assert.rejects(live.deactivate('@itharbors/kit-csv'), /built into Harbors/i);
+  await assert.rejects(live.deactivate('../kits/csv'), /lowercase scoped/i);
   await assert.rejects(live.uninstall('@itharbors/kit-csv'), /built into Harbors/i);
   await assert.rejects(live.uninstall('../kits/csv'), /lowercase scoped/i);
   assert.deepEqual(calls, [['list'], ['refresh']]);
@@ -90,6 +103,7 @@ test('does not hide a runtime replacement failure behind a restart response', as
   };
   const coordinator = {
     async applyActivation() { throw new Error('previous runtime restored'); },
+    async applyDeactivation() {},
     async applyUninstall() {},
   };
   const live = createLiveKitManager({ manager, coordinator });

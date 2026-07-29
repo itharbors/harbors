@@ -9,6 +9,7 @@ export const KIT_MANAGER_CHANNELS = Object.freeze({
   install: 'harbors:kit-manager:install',
   activate: 'harbors:kit-manager:activate',
   rollback: 'harbors:kit-manager:rollback',
+  deactivate: 'harbors:kit-manager:deactivate',
   uninstall: 'harbors:kit-manager:uninstall',
 });
 
@@ -101,6 +102,7 @@ export function registerKitManagerIpc({ ipcMain, getManagerWindow, service }) {
     install: { parse: parseInstall, invoke: (value) => service.install(value) },
     activate: { parse: parseActivate, invoke: (value) => service.activate(value) },
     rollback: { parse: parseRollback, invoke: (value) => service.rollback(value) },
+    deactivate: { parse: parseUninstall, invoke: (value) => service.deactivate(value) },
     uninstall: { parse: parseUninstall, invoke: (value) => service.uninstall(value) },
   };
   const inFlight = new Set();

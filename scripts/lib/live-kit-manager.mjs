@@ -24,7 +24,7 @@ function liveResult(value, { includePending = true } = {}) {
 
 export function createLiveKitManager({ manager, coordinator, builtinKitIds = [] }) {
   for (const method of ['list', 'refresh', 'install']) requireMethod(manager, method, 'manager');
-  for (const method of ['applyActivation', 'applyUninstall']) {
+  for (const method of ['applyActivation', 'applyDeactivation', 'applyUninstall']) {
     requireMethod(coordinator, method, 'coordinator');
   }
   if (!Array.isArray(builtinKitIds)) throw new TypeError('builtinKitIds must be an array');
@@ -48,6 +48,11 @@ export function createLiveKitManager({ manager, coordinator, builtinKitIds = [] 
     async rollback(value) {
       const id = kitId(value);
       return liveResult(await coordinator.applyActivation({ id, rollback: true }));
+    },
+    async deactivate(value) {
+      const id = kitId(value);
+      if (builtin.has(id)) throw new Error(`Kit ${id} is built into Harbors`);
+      return liveResult(await coordinator.applyDeactivation(id), { includePending: false });
     },
     async uninstall(value) {
       const id = kitId(value);
