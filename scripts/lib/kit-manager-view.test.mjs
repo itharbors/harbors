@@ -128,6 +128,36 @@ test('renders loading, online empty, offline cache, and unavailable states with 
   assert.match(value.document.querySelector('#stable-empty').textContent, /联网后刷新/);
 });
 
+test('keeps the compact header count aligned with unique installed Kits', async () => {
+  const baseKit = snapshot().kits[0];
+  const installedKits = ['csv', 'mysql', 'notifications', 'sqlite'].map((slug) => ({
+    ...baseKit,
+    id: `@itharbors/kit-${slug}`,
+    label: slug,
+    channels: { stable: baseKit.channels.stable },
+    installed: {
+      active: '1.2.0', channel: 'stable', autoUpdate: true,
+      versions: ['1.2.0'], badVersions: [],
+    },
+  }));
+  const value = await createView({ initial: snapshot({ kits: installedKits }) });
+
+  await value.view.start();
+
+  const installedCount = value.document.querySelector('#installed-count');
+  assert.ok(installedCount);
+  assert.equal(installedCount.textContent, '4 个已安装');
+  value.view.render(snapshot({ kits: [] }));
+  assert.equal(installedCount.textContent, '0 个已安装');
+
+  const css = await readFile(cssUrl, 'utf8');
+  const styleDom = new JSDOM(`<!doctype html><style>${css}</style><div class="dock-shell"><header class="dock-header"></header></div>`);
+  const shellStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.dock-shell'));
+  const headerStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.dock-header'));
+  assert.equal(shellStyle.gridTemplateColumns, '68px minmax(0, 1fr)');
+  assert.equal(headerStyle.display, 'grid');
+});
+
 test('renders stable and collapsed preview berths with permissions and lifecycle state', async () => {
   const value = await createView({
     initial: snapshot({

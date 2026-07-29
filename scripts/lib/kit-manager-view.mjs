@@ -104,6 +104,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
   const registryDetail = required(document, '#registry-detail');
   const registryNotice = required(document, '#registry-notice');
   const operationStatus = required(document, '#operation-status');
+  const installedCountNode = required(document, '#installed-count');
   const refreshButton = required(document, '#refresh-button');
   const stableList = required(document, '#stable-list');
   const stableEmpty = required(document, '#stable-empty');
@@ -356,6 +357,10 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     currentSnapshot = snapshot;
     stableList.replaceChildren();
     previewList.replaceChildren();
+    const installedCount = new Set(
+      (snapshot?.kits ?? []).filter((kit) => kit.installed).map((kit) => kit.id),
+    ).size;
+    installedCountNode.textContent = `${installedCount} 个已安装`;
     const source = snapshot?.source;
     if (source === 'network' && !snapshot.stale) {
       registryStatus.textContent = 'Kit 仓库在线';

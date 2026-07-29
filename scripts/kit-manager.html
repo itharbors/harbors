@@ -12,11 +12,11 @@
   </head>
   <body>
     <div class="dock-shell">
-      <aside class="dock-mark" aria-label="ITHARBORS Kit 管理">
-        <span class="dock-mark__brand">ITHARBORS</span>
-        <span class="dock-mark__title" aria-hidden="true">KIT / 管理</span>
-        <span class="dock-mark__rule"></span>
-        <span class="dock-mark__caption">仅限已验证 Kit</span>
+      <aside class="dock-mark" aria-label="ITHARBORS">
+        <span class="dock-mark__monogram" aria-hidden="true">H</span>
+        <span class="dock-mark__track" aria-hidden="true"></span>
+        <span class="dock-mark__caption">VERIFIED KITS</span>
+        <span class="sr-only">仅限已验证 Kit</span>
       </aside>
 
       <main id="manager-main" aria-busy="false">
@@ -24,7 +24,10 @@
           <div>
             <p class="eyebrow">扩展管理</p>
             <h1>Kit 管理</h1>
-            <p class="lede">立即安装已验证的 Kit，并在运行中安全切换启用版本。</p>
+            <div class="header-intro">
+              <p class="lede">安装已验证的 Kit，并安全切换本机版本。</p>
+              <span id="installed-count" class="installed-count">0 个已安装</span>
+            </div>
           </div>
           <div class="registry-console" aria-live="polite">
             <span class="registry-console__lamp" aria-hidden="true"></span>
