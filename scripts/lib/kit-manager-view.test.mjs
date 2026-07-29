@@ -126,13 +126,41 @@ test('renders stable and collapsed preview berths with permissions and lifecycle
   assert.match(stable.textContent, /正在应用/);
   assert.match(stable.textContent, /原生代码 — 高风险/);
   assert.equal(stable.querySelector('[data-action="activate"]').disabled, true);
-  assert.ok(stable.querySelector('[data-action="rollback"]'));
   const preview = value.document.querySelector('#preview-section');
   assert.equal(preview.open, false);
   assert.match(preview.textContent, /预览版/);
   assert.match(preview.textContent, /已标记异常/);
   assert.match(preview.querySelector('[data-action="activate"]').textContent, /立即重试/);
   assert.equal(value.document.querySelectorAll('[data-action="uninstall"]').length, 1);
+});
+
+test('shows every retained version with current and abnormal state on the installed owner row', async () => {
+  const value = await createView({
+    initial: snapshot({
+      kits: [{
+        ...snapshot().kits[0],
+        installed: {
+          active: '1.10.0', previous: '1.9.0', channel: 'stable', autoUpdate: true,
+          versions: ['2.0.0', '1.10.0', '1.9.0'],
+          badVersions: ['2.0.0'],
+        },
+      }],
+    }),
+  });
+
+  await value.view.start();
+
+  const stable = value.document.querySelector('[data-channel="stable"]');
+  const select = stable.querySelector('[data-role="installed-version"]');
+  assert.deepEqual([...select.options].map((option) => option.value), [
+    '2.0.0', '1.10.0', '1.9.0',
+  ]);
+  assert.match(select.options[0].textContent, /异常/);
+  assert.match(select.options[1].textContent, /当前/);
+  assert.equal(select.value, '1.10.0');
+  assert.equal(stable.querySelector('[data-action="switch-version"]').disabled, true);
+  assert.equal(value.document.querySelector('[data-channel="preview"] [data-role="installed-version"]'), null);
+  assert.equal(value.document.querySelector('[data-action="rollback"]'), null);
 });
 
 test('renders builtin Kits without an install action', async () => {
@@ -148,7 +176,14 @@ test('renders builtin Kits without an install action', async () => {
   assert.equal(button.textContent, '内置');
   assert.equal(button.disabled, true);
   assert.equal(value.document.querySelector('[data-action="install"]'), null);
+  assert.equal(value.document.querySelector('[data-role="installed-version"]'), null);
   assert.deepEqual(value.calls, []);
+});
+
+test('does not show version history before a Kit is installed', async () => {
+  const value = await createView();
+  await value.view.start();
+  assert.equal(value.document.querySelector('[data-role="installed-version"]'), null);
 });
 
 test('confirms native code, installs a selected channel, and refreshes the installed projection', async () => {
@@ -210,45 +245,58 @@ test('does not install native code when confirmation is declined', async () => {
   assert.deepEqual(value.calls, []);
 });
 
-test('queues activation, explicit bad retry, and rollback while disabling concurrent controls', async () => {
+test('switches to retained versions and explicitly retries abnormal versions', async () => {
   let releaseActivation;
   const activationGate = new Promise((resolve) => { releaseActivation = resolve; });
   const calls = [];
+  const confirmations = [];
   const installed = snapshot({
     kits: [{
       ...snapshot().kits[0],
       installed: {
-        active: '1.1.0', previous: '1.0.0', channel: 'stable', autoUpdate: true,
-        versions: ['1.0.0', '1.1.0', '1.2.0', '1.3.0-preview.abc1234'],
-        badVersions: ['1.3.0-preview.abc1234'],
+        active: '1.10.0', previous: '1.9.0', channel: 'stable', autoUpdate: true,
+        versions: ['2.0.0', '1.10.0', '1.9.0'],
+        badVersions: ['2.0.0'],
       },
     }],
   });
   const api = {
     list: async () => installed,
     activate: async (input) => { calls.push(['activate', input]); await activationGate; },
-    rollback: async (input) => { calls.push(['rollback', input]); },
   };
-  const value = await createView({ api });
+  const value = await createView({
+    api,
+    confirmInstall: (message) => { confirmations.push(message); return true; },
+  });
   await value.view.start();
-  const activate = value.document.querySelector('[data-channel="stable"] [data-action="activate"]');
-  activate.click();
+  let select = value.document.querySelector('[data-role="installed-version"]');
+  let switchButton = value.document.querySelector('[data-action="switch-version"]');
+  select.value = '1.9.0';
+  select.dispatchEvent(new value.dom.window.Event('change'));
+  assert.equal(switchButton.textContent, '切换到此版本');
+  assert.equal(switchButton.disabled, false);
+  switchButton.click();
   assert.equal(value.document.querySelector('main').getAttribute('aria-busy'), 'true');
-  assert.equal([...value.document.querySelectorAll('button')].every((button) => button.disabled), true);
+  assert.equal([...value.document.querySelectorAll('button, select')].every((control) => control.disabled), true);
   releaseActivation();
   await value.view.whenIdle();
   assert.deepEqual(calls[0], ['activate', {
-    id: '@itharbors/kit-sqlite', version: '1.2.0', retryBad: false,
+    id: '@itharbors/kit-sqlite', version: '1.9.0', retryBad: false,
   }]);
+  assert.match(confirmations[0], /1\.9\.0/);
+  assert.match(confirmations[0], /重新加载所有 Kit 窗口/);
 
-  value.document.querySelector('[data-channel="preview"] [data-action="activate"]').click();
+  select = value.document.querySelector('[data-role="installed-version"]');
+  switchButton = value.document.querySelector('[data-action="switch-version"]');
+  select.value = '2.0.0';
+  select.dispatchEvent(new value.dom.window.Event('change'));
+  assert.equal(switchButton.textContent, '重试此版本');
+  switchButton.click();
   await value.view.whenIdle();
   assert.deepEqual(calls[1], ['activate', {
-    id: '@itharbors/kit-sqlite', version: '1.3.0-preview.abc1234', retryBad: true,
+    id: '@itharbors/kit-sqlite', version: '2.0.0', retryBad: true,
   }]);
-  value.document.querySelector('[data-channel="stable"] [data-action="rollback"]').click();
-  await value.view.whenIdle();
-  assert.deepEqual(calls[2], ['rollback', '@itharbors/kit-sqlite']);
+  assert.match(confirmations[1], /2\.0\.0/);
   assert.doesNotMatch(value.document.querySelector('#operation-status').textContent, /重启/);
 });
 

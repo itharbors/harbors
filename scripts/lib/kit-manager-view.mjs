@@ -46,6 +46,25 @@ function statusText(state) {
   return '可安装';
 }
 
+function ownsInstalledControls(kit, channel) {
+  return Boolean(kit.installed) && (
+    (kit.channels?.stable && channel === 'stable')
+    || (!kit.channels?.stable && kit.channels?.preview && channel === 'preview')
+    || (!kit.channels?.stable && !kit.channels?.preview && channel === 'stable')
+  );
+}
+
+function preferredInstalledVersion(installed) {
+  return installed?.active ?? installed?.pending ?? installed?.versions?.[0];
+}
+
+function installedVersionLabel(installed, version) {
+  let label = version;
+  if (installed.active === version) label += '（当前）';
+  if (installed.badVersions.includes(version)) label += '（异常）';
+  return label;
+}
+
 function createButton(document, label, action, onClick, { secondary = false, disabled = false } = {}) {
   const button = element(
     document,
@@ -95,8 +114,8 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
 
   function setBusy(busy) {
     main.setAttribute('aria-busy', String(busy));
-    for (const button of document.querySelectorAll('button')) {
-      button.disabled = busy || button.dataset.permanentDisabled === 'true';
+    for (const control of document.querySelectorAll('button, select')) {
+      control.disabled = busy || control.dataset.permanentDisabled === 'true';
     }
   }
 
@@ -155,15 +174,19 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     });
   }
 
-  function rollback(kit) {
+  function activateInstalledVersion(kit, version) {
     return queue(async () => {
       const accepted = await confirmInstall(
-        '立即回滚会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？',
+        `切换到 ${version} 会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
       );
       if (!accepted) return;
-      await api.rollback(kit.id);
+      await api.activate({
+        id: kit.id,
+        version,
+        retryBad: kit.installed.badVersions.includes(version),
+      });
       await reloadInstalledProjection();
-      setOperationMessage(`已回滚 ${kit.label ?? kit.id}。`);
+      setOperationMessage(`已切换 ${kit.label ?? kit.id} 到 ${version}。`);
     });
   }
 
@@ -223,6 +246,46 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     }
     card.append(permissions);
 
+    if (!kit.builtin && ownsInstalledControls(kit, channel)) {
+      const versionControl = element(document, 'div', 'kit-card__installed');
+      const label = element(document, 'label', 'kit-card__version-control');
+      label.append(element(document, 'span', 'version-label', '已安装版本'));
+      const select = element(document, 'select', 'version-select');
+      select.dataset.role = 'installed-version';
+      for (const version of kit.installed.versions) {
+        const option = element(
+          document,
+          'option',
+          '',
+          installedVersionLabel(kit.installed, version),
+        );
+        option.value = version;
+        select.append(option);
+      }
+      select.value = preferredInstalledVersion(kit.installed);
+      label.append(select);
+      versionControl.append(label);
+      const switchButton = createButton(
+        document,
+        '切换到此版本',
+        'switch-version',
+        () => activateInstalledVersion(kit, select.value),
+        { secondary: true },
+      );
+      const syncSwitchButton = () => {
+        const active = select.value === kit.installed.active;
+        switchButton.textContent = kit.installed.badVersions.includes(select.value)
+          ? '重试此版本'
+          : '切换到此版本';
+        switchButton.dataset.permanentDisabled = String(active);
+        switchButton.disabled = active;
+      };
+      select.addEventListener('change', syncSwitchButton);
+      syncSwitchButton();
+      versionControl.append(switchButton);
+      card.append(versionControl);
+    }
+
     const actions = element(document, 'div', 'kit-card__actions');
     if (kit.builtin) {
       actions.append(createButton(
@@ -248,21 +311,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         { disabled: state.pending },
       ));
     }
-    if (channel === 'stable' && kit.installed?.previous) {
-      actions.append(createButton(
-        document,
-        `回滚到 ${kit.installed.previous}`,
-        'rollback',
-        () => rollback(kit),
-        { secondary: true },
-      ));
-    }
-    const ownsUninstall = kit.installed && (
-      (kit.channels?.stable && channel === 'stable')
-      || (!kit.channels?.stable && kit.channels?.preview && channel === 'preview')
-      || (!kit.channels?.stable && !kit.channels?.preview && channel === 'stable')
-    );
-    if (!kit.builtin && ownsUninstall) {
+    if (!kit.builtin && ownsInstalledControls(kit, channel)) {
       actions.append(createButton(
         document,
         '删除 Kit',
