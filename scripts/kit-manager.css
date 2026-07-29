@@ -546,6 +546,10 @@ h2,
   background: rgb(255 255 255 / 34%);
 }
 
+.empty-state[hidden] {
+  display: none;
+}
+
 .preview-section {
   margin: 17px 0 28px;
   border-top: 1px solid var(--dock-line);
@@ -561,6 +565,15 @@ h2,
   padding: 8px 4px;
   cursor: pointer;
   list-style: none;
+}
+
+.preview-section summary > span:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.preview-section summary .eyebrow {
+  margin-bottom: 0;
 }
 
 .preview-section summary::-webkit-details-marker {
@@ -640,6 +653,11 @@ h2,
     height: 1px;
     margin: 0 12px;
     flex: 1;
+  }
+
+  .dock-mark__track::before,
+  .dock-mark__track::after {
+    display: none;
   }
 
   main {

@@ -95,14 +95,17 @@ test('renders one horizontal resource row per channel with four stable regions',
     assert.ok(row.querySelector('.kit-row__actions'));
   }
 
-  const styleDom = new JSDOM(`<!doctype html><style>${css}</style><div class="kit-list"><article class="kit-row"></article></div>`);
+  const styleDom = new JSDOM(`<!doctype html><style>${css}</style><p class="empty-state" hidden>空状态</p><div class="kit-list"><article class="kit-row"></article></div>`);
   const listStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.kit-list'));
   const rowStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.kit-row'));
+  const hiddenEmptyStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.empty-state'));
   assert.equal(listStyle.display, 'grid');
   assert.equal(listStyle.gridTemplateColumns, 'minmax(0, 1fr)');
   assert.equal(rowStyle.display, 'grid');
   assert.equal(rowStyle.minHeight, '118px');
   assert.equal(rowStyle.borderLeftWidth, '4px');
+  assert.equal(hiddenEmptyStyle.display, 'none');
+  assert.match(css, /\.empty-state\[hidden\]\s*\{[^}]*display:\s*none;/);
   assert.match(html, /class="kit-list"/);
 });
 
