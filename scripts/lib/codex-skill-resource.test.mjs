@@ -10,6 +10,7 @@ import {
   prepareCodexSkillResource,
   resolveCodexSkillSource,
 } from './codex-skill-resource.mjs';
+import { createBuildPlan } from './build-tasks.mjs';
 
 const scriptsDir = fileURLToPath(new URL('..', import.meta.url));
 const electronSource = fs.readFileSync(path.join(scriptsDir, 'electron.mjs'), 'utf8');
@@ -63,7 +64,12 @@ test('copies the canonical Skill into the packaged plugin resources', async (t) 
   assert.equal(await readFile(path.join(destinationDir, 'scripts', 'notify.mjs'), 'utf8'), '// bundled\n');
 });
 
-test('runs the resource copy after every plugin build', () => {
-  const rootPackage = JSON.parse(fs.readFileSync(path.join(scriptsDir, '..', 'package.json'), 'utf8'));
-  assert.match(rootPackage.scripts['plugins:build'], /prepare-notification-skill-resource\.mjs/);
+test('places the notification Skill resource after its owning plugin build', () => {
+  const tasks = createBuildPlan(path.join(scriptsDir, '..'), 'plugins').tasks;
+  const plugin = 'plugin:kits/notifications/plugins/notification-background';
+  const resourceIndex = tasks.findIndex((task) => task.name === 'resource:notify-user');
+  const pluginIndex = tasks.findIndex((task) => task.name === plugin);
+
+  assert.ok(resourceIndex > pluginIndex);
+  assert.deepEqual(tasks[resourceIndex].dependencies, [plugin]);
 });
