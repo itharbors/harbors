@@ -147,7 +147,7 @@ async function createVersionFixture(root, version) {
   };
 }
 
-test('acceptance: Kit Manager installs, updates, rolls back, and uninstalls through live Framework generations', async () => {
+test('acceptance: Kit Manager installs, updates, switches retained versions, and uninstalls through live Framework generations', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-manager-acceptance-'));
   let fixtureServer;
   let framework;
@@ -155,7 +155,7 @@ test('acceptance: Kit Manager installs, updates, rolls back, and uninstalls thro
   let registration;
   try {
     const releases = new Map();
-    for (const version of ['1.2.3', '1.2.4']) {
+    for (const version of ['1.2.3', '1.2.4', '1.10.0']) {
       const item = await createVersionFixture(root, version);
       releases.set(version, item);
     }
@@ -393,12 +393,32 @@ test('acceptance: Kit Manager installs, updates, rolls back, and uninstalls thro
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
     await assertRuntimeVersion('1.2.4');
 
-    dom.window.document.querySelector('[data-channel="stable"] [data-action="rollback"]').click();
+    publishedVersion = '1.10.0';
+    dom.window.document.querySelector('#refresh-button').click();
+    await view.whenIdle();
+    dom.window.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
     await view.whenIdle();
     assert.equal(runtimeGeneration, 4);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.10.0');
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
+    await assertRuntimeVersion('1.10.0');
+
+    const managerIdentity = controller.getWindow();
+    const managerWebContentsId = managerIdentity.webContents.id;
+    const versionSelect = dom.window.document.querySelector('[data-role="installed-version"]');
+    assert.deepEqual([...versionSelect.options].map((option) => option.value), [
+      '1.10.0', '1.2.4', '1.2.3',
+    ]);
+    versionSelect.value = '1.2.3';
+    versionSelect.dispatchEvent(new dom.window.Event('change'));
+    dom.window.document.querySelector('[data-action="switch-version"]').click();
+    await view.whenIdle();
+    assert.equal(runtimeGeneration, 5);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.2.3');
-    assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.2.4');
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.10.0');
     await assertRuntimeVersion('1.2.3');
+    assert.equal(controller.getWindow(), managerIdentity);
+    assert.equal(controller.getWindow().webContents.id, managerWebContentsId);
 
     const installedFiles = Object.values(
       (await store.snapshot()).kits['@example/kit-demo'].versions,
@@ -406,7 +426,7 @@ test('acceptance: Kit Manager installs, updates, rolls back, and uninstalls thro
     await Promise.all(installedFiles.map((file) => readFile(file, 'utf8')));
     dom.window.document.querySelector('[data-channel="stable"] [data-action="uninstall"]').click();
     await view.whenIdle();
-    assert.equal(runtimeGeneration, 5);
+    assert.equal(runtimeGeneration, 6);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'], undefined);
     await assertRuntimeVersion(undefined);
     for (const file of installedFiles) {

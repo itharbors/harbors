@@ -94,15 +94,19 @@ Electron 启动时只读取完成 pending 校验后的 active 版本，并通过
 把权威 Kit 来源快照传给 Server：Default builtin 目录以及当前 active 的已安装目录。每个已安装
 Kit 只有 active 版本目录会进入快照；Server 不扫描 Store 根，也不猜测版本。环境变量必须是非空
 的 JSON 数组，数组元素是带有绝对 `directory` 与 `source` 的来源对象。目录变化在下一次桌面启动时生效。
-每次 Manager 运行时事务都会重新生成这份快照，所以安装、更新、回滚和删除也会在当前 Electron
+每次 Manager 运行时事务都会重新生成这份快照，所以安装、更新、版本切换和删除也会在当前 Electron
 会话中立即生效。
 
 ## Desktop Kit Manager
 
 Electron 托盘中的 **Kit Manager…** 打开独立本地 `file://` Kit Dock。窗口使用 sandbox、
 context isolation 和独立 preload，只暴露 `list/refresh/install/activate/rollback/uninstall` 六个方法；main
-process 同时校验调用 sender。Stable 默认展开，Preview 默认折叠；离线缓存、权限、native-code
-风险、installed/active/pending/bad 和 previous rollback 都会明确展示。删除会先把 Kit 标记为
+process 同时校验调用 sender。Stable 默认展开，Preview 默认折叠，每个频道引用占一条横向资源行；
+离线缓存、权限、native-code 风险和 installed/active/pending/bad 状态都会明确展示。一个 Kit
+保留在本机的全部版本按 SemVer 从新到旧列出，当前版本和异常版本分别标记，用户可选择任一历史
+版本并立即通过 Framework 替换事务切换；底层 `rollback` IPC 继续保留兼容，但界面不再提供重复的
+previous 快捷按钮。下载和制品校验期间，Kit 所在行展示不定进度圈及“正在下载并验证”状态；Registry
+当前不提供可信的字节进度，因此界面不会伪造百分比。删除会先把 Kit 标记为
 `pendingUninstall` 并从新 Runtime sources 排除；Framework 验证成功后才删除 Store 管理的全部版本目录
 并提交状态。目标 Kit 窗口关闭，其他 Kit 窗口保留原 BrowserWindow 与 session 并自动重新加载。
 
