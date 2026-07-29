@@ -101,6 +101,8 @@ test('renders one horizontal resource row per channel with four stable regions',
   assert.equal(listStyle.display, 'grid');
   assert.equal(listStyle.gridTemplateColumns, 'minmax(0, 1fr)');
   assert.equal(rowStyle.display, 'grid');
+  assert.equal(rowStyle.minHeight, '118px');
+  assert.equal(rowStyle.borderLeftWidth, '4px');
   assert.match(html, /class="kit-list"/);
 });
 
@@ -215,7 +217,12 @@ test('shows every retained version with current and abnormal state on the instal
   assert.match(select.options[0].textContent, /异常/);
   assert.match(select.options[1].textContent, /当前/);
   assert.equal(select.value, '1.10.0');
-  assert.equal(stable.querySelector('[data-action="switch-version"]').disabled, true);
+  const switchButton = stable.querySelector('[data-action="switch-version"]');
+  assert.equal(switchButton.disabled, true);
+  assert.equal(switchButton.textContent, '当前已启用');
+  const uninstallButton = stable.querySelector('[data-action="uninstall"]');
+  assert.equal(uninstallButton.textContent, '删除');
+  assert.equal(uninstallButton.classList.contains('button--danger'), true);
   assert.equal(value.document.querySelector('[data-channel="preview"] [data-role="installed-version"]'), null);
   assert.equal(value.document.querySelector('[data-action="rollback"]'), null);
 });

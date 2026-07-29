@@ -65,11 +65,17 @@ function installedVersionLabel(installed, version) {
   return label;
 }
 
-function createButton(document, label, action, onClick, { secondary = false, disabled = false } = {}) {
+function createButton(
+  document,
+  label,
+  action,
+  onClick,
+  { secondary = false, danger = false, disabled = false } = {},
+) {
   const button = element(
     document,
     'button',
-    `button${secondary ? ' button--secondary' : ''}`,
+    `button${secondary ? ' button--secondary' : ''}${danger ? ' button--danger' : ''}`,
     label,
   );
   button.type = 'button';
@@ -288,9 +294,12 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       );
       const syncSwitchButton = () => {
         const active = select.value === kit.installed.active;
-        switchButton.textContent = kit.installed.badVersions.includes(select.value)
-          ? '重试此版本'
-          : '切换到此版本';
+        switchButton.textContent = active
+          ? '当前已启用'
+          : kit.installed.badVersions.includes(select.value)
+            ? '重试此版本'
+            : '切换到此版本';
+        switchButton.classList.toggle('button--current', active);
         switchButton.dataset.permanentDisabled = String(active);
         switchButton.disabled = active;
       };
@@ -343,10 +352,10 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     if (!kit.builtin && ownsInstalledControls(kit, channel)) {
       actions.append(createButton(
         document,
-        '删除 Kit',
+        '删除',
         'uninstall',
         () => uninstall(kit),
-        { secondary: true },
+        { secondary: true, danger: true },
       ));
     }
     row.append(actions);
