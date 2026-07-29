@@ -374,6 +374,35 @@ h2,
   margin: 14px 0 22px;
 }
 
+.kit-row__progress {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  margin: 0 0 16px;
+  color: var(--dock-cobalt);
+  font-family: var(--utility);
+  font-size: 0.76rem;
+}
+
+.kit-row__progress[hidden] {
+  display: none;
+}
+
+.kit-row__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgb(36 88 211 / 22%);
+  border-top-color: var(--dock-cobalt);
+  border-radius: 50%;
+  animation: kit-row-spin 720ms linear infinite;
+}
+
+@keyframes kit-row-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .kit-card__actions {
   align-items: stretch;
   justify-content: flex-start;
@@ -517,5 +546,9 @@ h2,
   *::after {
     scroll-behavior: auto !important;
     transition-duration: 0.01ms !important;
+  }
+
+  .kit-row__spinner {
+    animation: none;
   }
 }

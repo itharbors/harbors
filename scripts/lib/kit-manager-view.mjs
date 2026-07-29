@@ -145,7 +145,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     return operation;
   }
 
-  function install(kit, channel, reference) {
+  function install(kit, channel, reference, row) {
     return queue(async () => {
       const nativeRisk = reference.permissions.includes('native-code')
         ? '此版本包含原生代码，拥有较高的本机访问权限。'
@@ -155,10 +155,18 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       );
       if (!accepted) return;
       const updating = Boolean(kit.installed);
-      setOperationMessage(`正在${updating ? '安装更新并应用' : '安装并应用'} ${kit.label ?? kit.id} ${reference.version}…`);
-      await api.install({ id: kit.id, version: reference.version, channel });
-      await reloadInstalledProjection();
-      setOperationMessage(`已${updating ? '更新' : '安装'}并启用 ${kit.label ?? kit.id} ${reference.version}。`);
+      const progress = row.querySelector('.kit-row__progress');
+      row.dataset.operation = 'install';
+      progress.hidden = false;
+      try {
+        setOperationMessage(`正在${updating ? '安装更新并应用' : '安装并应用'} ${kit.label ?? kit.id} ${reference.version}…`);
+        await api.install({ id: kit.id, version: reference.version, channel });
+        await reloadInstalledProjection();
+        setOperationMessage(`已${updating ? '更新' : '安装'}并启用 ${kit.label ?? kit.id} ${reference.version}。`);
+      } finally {
+        delete row.dataset.operation;
+        progress.hidden = true;
+      }
     });
   }
 
@@ -286,6 +294,14 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       card.append(versionControl);
     }
 
+    const progress = element(document, 'div', 'kit-row__progress');
+    progress.hidden = true;
+    const spinner = element(document, 'span', 'kit-row__spinner');
+    spinner.setAttribute('aria-hidden', 'true');
+    progress.append(spinner);
+    progress.append(element(document, 'span', '', '正在下载并验证…'));
+    card.append(progress);
+
     const actions = element(document, 'div', 'kit-card__actions');
     if (kit.builtin) {
       actions.append(createButton(
@@ -300,7 +316,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         document,
         kit.installed ? '安装更新' : '安装',
         'install',
-        () => install(kit, channel, reference),
+        () => install(kit, channel, reference, card),
       ));
     } else if (!state.active) {
       actions.append(createButton(

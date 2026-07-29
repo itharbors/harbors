@@ -219,6 +219,11 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   await value.view.start();
   value.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
   await installStarted;
+  let stable = value.document.querySelector('[data-channel="stable"]');
+  assert.equal(stable.dataset.operation, 'install');
+  assert.equal(stable.querySelector('.kit-row__progress').hidden, false);
+  assert.match(stable.querySelector('.kit-row__progress').textContent, /正在下载并验证/);
+  assert.equal(stable.querySelector('.kit-row__spinner').getAttribute('aria-hidden'), 'true');
   assert.match(
     value.document.querySelector('#operation-status').textContent,
     /正在安装并应用 SQLite Workbench 1\.2\.0/,
@@ -235,6 +240,9 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   assert.match(value.document.querySelector('#operation-status').textContent, /已安装并启用/);
   assert.doesNotMatch(value.document.querySelector('#operation-status').textContent, /重启/);
   assert.match(value.document.querySelector('[data-channel="stable"]').textContent, /已启用/);
+  stable = value.document.querySelector('[data-channel="stable"]');
+  assert.equal(stable.dataset.operation, undefined);
+  assert.equal(stable.querySelector('.kit-row__progress').hidden, true);
 });
 
 test('does not install native code when confirmation is declined', async () => {
@@ -358,4 +366,7 @@ test('recovers controls after refresh and operation errors without inserting rem
   await value.view.whenIdle();
   assert.match(value.document.querySelector('#operation-status').textContent, /Artifact rejected/);
   assert.equal(value.document.querySelector('[data-action="install"]').disabled, false);
+  const stable = value.document.querySelector('[data-channel="stable"]');
+  assert.equal(stable.dataset.operation, undefined);
+  assert.equal(stable.querySelector('.kit-row__progress').hidden, true);
 });
