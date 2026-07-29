@@ -185,41 +185,64 @@ git commit -m "[Bug] 暴露 Kit 停用操作"
 ### Task 3: Electron Runtime 停用与故障恢复
 
 **Files:**
+- Create: `scripts/lib/kit-live-deactivation.mjs`
+- Test: `scripts/lib/kit-live-deactivation.test.mjs`
 - Modify: `scripts/electron.mjs`
-- Test: `scripts/lib/electron-launcher.test.mjs`
 - Test: `scripts/lib/kit-manager-acceptance.test.mjs`
 
 **Interfaces:**
 - Consumes: `kitStore.deactivate(id)`、`kitStore.activate(id, version)`、`replaceFrameworkForKitMutation(operation)`。
-- Produces: `applyLiveKitDeactivation(id): Promise<{ id, version, runtimeReloaded: true }>`。
+- Produces: `createLiveKitDeactivation(adapters)` 返回 `applyLiveKitDeactivation(id): Promise<{ id, version, runtimeReloaded: true }>`。
+- Produces: `restoreLiveKitDeactivation(operation, adapters)`，供普通失败与 Framework recovery 共用。
 - Extends operation union with `{ kind: 'deactivation', id, version, reopenOnFailure }`。
 
-- [ ] **Step 1: 写 Electron source-contract 失败测试**
+- [ ] **Step 1: 写可执行的停用事务失败测试**
 
-断言源码将 `applyDeactivation: applyLiveKitDeactivation` 注入 coordinator adapter，并含以下恢复边界：停用前保存 active version、`closeKitWindow`、失败时 `kitStore.activate(operation.id, operation.version)`、恢复后 `openKit(operation.id)`。
+使用真实 `InstalledKitStore`，仅注入 Framework 替换与窗口边界。覆盖两条行为：成功时 Store 无 active、窗口关闭且不重开；替换失败时 Store 恢复原 active、窗口重开且原错误继续抛出。
 
-- [ ] **Step 2: 验证 Electron source-contract 测试失败**
+- [ ] **Step 2: 验证事务测试因模块缺失失败**
 
-Run: `node --test scripts/lib/electron-launcher.test.mjs`
+Run: `node --test scripts/lib/kit-live-deactivation.test.mjs`
 
-Expected: FAIL，源码缺少 deactivation adapter/恢复分支。
+Expected: FAIL，模块或导出不存在。
 
-- [ ] **Step 3: 实现 Electron 停用事务**
+- [ ] **Step 3: 实现可注入停用事务并接入 Electron**
 
 ```js
-async function applyLiveKitDeactivation(id) {
-  const { version } = await kitStore.deactivate(id);
-  const reopenOnFailure = closeKitWindow(kitWindows, id);
-  try {
-    await replaceFrameworkForKitMutation({ kind: 'deactivation', id, version, reopenOnFailure });
-  } catch (error) {
-    const record = (await kitStore.snapshot()).kits[id];
-    if (record && !record.active) await kitStore.activate(id, version);
-    throw error;
-  }
-  return { id, version, runtimeReloaded: true };
+export function createLiveKitDeactivation({ store, closeWindow, replaceFramework, openWindow, isQuitting }) {
+  return async function applyLiveKitDeactivation(id) {
+    const { version } = await store.deactivate(id);
+    const operation = { kind: 'deactivation', id, version, reopenOnFailure: closeWindow(id) };
+    try {
+      await replaceFramework(operation);
+    } catch (error) {
+      await restoreLiveKitDeactivation(operation, { store, openWindow, isQuitting });
+      throw error;
+    }
+    return { id, version, runtimeReloaded: true };
+  };
+}
+
+export async function restoreLiveKitDeactivation(operation, { store, openWindow, isQuitting }) {
+  const record = (await store.snapshot()).kits[operation.id];
+  if (record && !record.active) await store.activate(operation.id, operation.version);
+  if (operation.reopenOnFailure && !isQuitting()) await openWindow(operation.id);
 }
 ```
+
+Electron 构造函数注入现有依赖：
+
+```js
+const applyLiveKitDeactivation = createLiveKitDeactivation({
+  store: kitStore,
+  closeWindow: (id) => closeKitWindow(kitWindows, id),
+  replaceFramework: (operation) => replaceFrameworkForKitMutation(operation),
+  openWindow: (id) => openKit(id),
+  isQuitting: () => quitting,
+});
+```
+
+`recoverFrameworkMutation` 的 deactivation 分支在构建 recovery generation 前调用 `restoreLiveKitDeactivation`。普通 build failure 由外层 catch 恢复；launch failure 由 recovery 分支恢复。
 
 在 `recoverFrameworkMutation` 的 deactivation 分支中先恢复旧 active，再构建恢复 generation；成功恢复后重新打开目标窗口。`removedKitId` 仍只用于 uninstall。
 
@@ -229,14 +252,14 @@ Acceptance harness coordinator 增加 `applyDeactivation`，使用 Store 的 dea
 
 - [ ] **Step 5: 运行 Electron 与 acceptance 测试**
 
-Run: `node --test scripts/lib/electron-launcher.test.mjs scripts/lib/kit-manager-acceptance.test.mjs`
+Run: `node --test scripts/lib/kit-live-deactivation.test.mjs scripts/lib/kit-manager-acceptance.test.mjs scripts/lib/electron-launcher.test.mjs`
 
 Expected: PASS。
 
 - [ ] **Step 6: 提交 Runtime 层**
 
 ```bash
-git add scripts/electron.mjs scripts/lib/electron-launcher.test.mjs scripts/lib/kit-manager-acceptance.test.mjs
+git add scripts/lib/kit-live-deactivation.mjs scripts/lib/kit-live-deactivation.test.mjs scripts/electron.mjs scripts/lib/kit-manager-acceptance.test.mjs
 git commit -m "[Bug] 即时卸载已停用 Kit"
 ```
 
