@@ -28,6 +28,7 @@ import { KitArtifactDownloader } from './kit-registry/downloader.mjs';
 import { KitRegistryManager } from './kit-registry/manager.mjs';
 import { KitReleaseResolver } from './kit-registry/resolver.mjs';
 import { createKitRuntimeCoordinator } from './kit-runtime-coordinator.mjs';
+import { createLiveKitDeactivation } from './kit-live-deactivation.mjs';
 import { createLiveKitManager } from './live-kit-manager.mjs';
 
 const fixture = path.resolve('packages/kit-cli/tests/fixtures/minimal-kit');
@@ -147,7 +148,7 @@ async function createVersionFixture(root, version) {
   };
 }
 
-test('acceptance: Kit Manager installs, updates, switches retained versions, and uninstalls through live Framework generations', async () => {
+test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls through live Framework generations', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-manager-acceptance-'));
   let fixtureServer;
   let framework;
@@ -310,6 +311,13 @@ test('acceptance: Kit Manager installs, updates, switches retained versions, and
 
     await startRuntimeGeneration();
     await assertRuntimeVersion(undefined);
+    const applyDeactivation = createLiveKitDeactivation({
+      store,
+      closeWindow: () => false,
+      replaceFramework: () => startRuntimeGeneration(),
+      openWindow: async () => {},
+      isQuitting: () => false,
+    });
     const coordinator = createKitRuntimeCoordinator({
       async applyActivation(input) {
         const selection = input.rollback
@@ -325,6 +333,7 @@ test('acceptance: Kit Manager installs, updates, switches retained versions, and
         }
         return { id: selection.id, version: selection.version, runtimeReloaded: true };
       },
+      applyDeactivation,
       async applyUninstall(id) {
         await store.stageUninstall(id);
         try {
@@ -367,6 +376,7 @@ test('acceptance: Kit Manager installs, updates, switches retained versions, and
       install: (value) => invoke('install', value),
       activate: (value) => invoke('activate', value),
       rollback: (value) => invoke('rollback', value),
+      deactivate: (value) => invoke('deactivate', value),
       uninstall: (value) => invoke('uninstall', value),
     };
     const html = await readFile(new URL('../kit-manager.html', import.meta.url), 'utf8');
@@ -403,6 +413,25 @@ test('acceptance: Kit Manager installs, updates, switches retained versions, and
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
     await assertRuntimeVersion('1.10.0');
 
+    await liveManager.deactivate('@example/kit-demo');
+    assert.equal(runtimeGeneration, 5);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, undefined);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.10.0');
+    assert.deepEqual(
+      Object.keys((await store.snapshot()).kits['@example/kit-demo'].versions).sort(),
+      ['1.10.0', '1.2.3', '1.2.4'],
+    );
+    await assertRuntimeVersion(undefined);
+
+    await liveManager.activate({
+      id: '@example/kit-demo', version: '1.10.0', retryBad: false,
+    });
+    assert.equal(runtimeGeneration, 6);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.10.0');
+    await assertRuntimeVersion('1.10.0');
+    dom.window.document.querySelector('#refresh-button').click();
+    await view.whenIdle();
+
     const managerIdentity = controller.getWindow();
     const managerWebContentsId = managerIdentity.webContents.id;
     const versionSelect = dom.window.document.querySelector('[data-role="installed-version"]');
@@ -413,7 +442,7 @@ test('acceptance: Kit Manager installs, updates, switches retained versions, and
     versionSelect.dispatchEvent(new dom.window.Event('change'));
     dom.window.document.querySelector('[data-action="switch-version"]').click();
     await view.whenIdle();
-    assert.equal(runtimeGeneration, 5);
+    assert.equal(runtimeGeneration, 7);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.2.3');
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.10.0');
     await assertRuntimeVersion('1.2.3');
@@ -426,7 +455,7 @@ test('acceptance: Kit Manager installs, updates, switches retained versions, and
     await Promise.all(installedFiles.map((file) => readFile(file, 'utf8')));
     dom.window.document.querySelector('[data-channel="stable"] [data-action="uninstall"]').click();
     await view.whenIdle();
-    assert.equal(runtimeGeneration, 6);
+    assert.equal(runtimeGeneration, 8);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'], undefined);
     await assertRuntimeVersion(undefined);
     for (const file of installedFiles) {

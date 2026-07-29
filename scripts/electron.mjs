@@ -61,6 +61,10 @@ import {
 import { createKitManagerService } from './lib/kit-manager-service.mjs';
 import { KitArtifactUninstaller } from './lib/kit-store/uninstaller.mjs';
 import { createKitRuntimeCoordinator } from './lib/kit-runtime-coordinator.mjs';
+import {
+  createLiveKitDeactivation,
+  restoreLiveKitDeactivation,
+} from './lib/kit-live-deactivation.mjs';
 import { createLiveKitManager } from './lib/live-kit-manager.mjs';
 import { BUILTIN_KIT_IDS } from './lib/builtin-kits.mjs';
 import { registerKitManagerIpc } from './lib/kit-manager-ipc.mjs';
@@ -418,6 +422,13 @@ function startElectronApp() {
       workspaceStore = new WorkspaceStore(path.join(app.getPath('userData'), 'workspaces.json'));
       kitRuntimeCoordinator = createKitRuntimeCoordinator({
         applyActivation: applyLiveKitActivation,
+        applyDeactivation: createLiveKitDeactivation({
+          store: kitStore,
+          closeWindow: (id) => closeKitWindow(kitWindows, id),
+          replaceFramework: (operation) => replaceFrameworkForKitMutation(operation),
+          openWindow: (id) => openKit(id),
+          isQuitting: () => quitting,
+        }),
         applyUninstall: applyLiveKitUninstall,
       });
       liveKitManager = createLiveKitManager({
@@ -845,6 +856,12 @@ async function recoverFrameworkMutation(operation, originalError) {
   if (operation.kind === 'uninstall') {
     const record = (await kitStore.snapshot()).kits[operation.id];
     if (record?.pendingUninstall) await kitStore.cancelUninstall(operation.id);
+  } else if (operation.kind === 'deactivation') {
+    await restoreLiveKitDeactivation(operation, {
+      store: kitStore,
+      openWindow: (id) => openKit(id),
+      isQuitting: () => quitting,
+    });
   } else {
     const record = (await kitStore.snapshot()).kits[operation.id];
     if (record?.pending === operation.version && record.active === operation.version) {
