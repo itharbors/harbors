@@ -118,6 +118,22 @@ test('separates installation, pending selection, activation, update, and rollbac
   assert.equal(record.previous, '1.1.0');
 });
 
+test('deactivates an active Kit while retaining every installed version', async () => {
+  const { store } = await createStore();
+  await store.recordInstalled(installed('1.0.0'));
+  await store.recordInstalled(installed('2.0.0'));
+  await store.activate(id, '2.0.0');
+
+  assert.deepEqual(await store.deactivate(id), { id, version: '2.0.0' });
+  const record = (await store.snapshot()).kits[id];
+  assert.equal(record.active, undefined);
+  assert.equal(record.pending, undefined);
+  assert.equal(record.previous, '2.0.0');
+  assert.deepEqual(Object.keys(record.versions).sort(), ['1.0.0', '2.0.0']);
+  assert.deepEqual(await store.listActiveSources(), []);
+  await assert.rejects(store.deactivate(id), /not active/i);
+});
+
 test('keeps a staged activation pending until runtime validation commits it', async () => {
   const { store } = await createStore();
   await store.recordInstalled(installed('1.0.0'));

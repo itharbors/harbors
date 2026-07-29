@@ -6,6 +6,7 @@ function requireMethod(value, method) {
 
 export function createKitRuntimeCoordinator(adapters) {
   requireMethod(adapters, 'applyActivation');
+  requireMethod(adapters, 'applyDeactivation');
   requireMethod(adapters, 'applyUninstall');
   let tail = Promise.resolve();
   let disposing = false;
@@ -20,6 +21,9 @@ export function createKitRuntimeCoordinator(adapters) {
   return Object.freeze({
     applyActivation(selection) {
       return enqueue(() => adapters.applyActivation(selection));
+    },
+    applyDeactivation(id) {
+      return enqueue(() => adapters.applyDeactivation(id));
     },
     applyUninstall(id) {
       return enqueue(() => adapters.applyUninstall(id));

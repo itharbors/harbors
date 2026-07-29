@@ -244,6 +244,17 @@ export class InstalledKitStore {
     });
   }
 
+  async deactivate(id) {
+    return this.#mutateRecord(id, (record) => {
+      if (!record.active) throw new Error(`Kit ${id} is not active`);
+      const version = record.active;
+      record.previous = version;
+      delete record.active;
+      delete record.pending;
+      return { id, version };
+    });
+  }
+
   async rollback(id) {
     return this.#mutateRecord(id, (record) => {
       if (!record.previous) throw new Error(`Kit ${id} has no previous version to roll back`);
