@@ -77,6 +77,33 @@ test('uses a locked-down local document with semantic landmarks and no inline or
   );
 });
 
+test('renders one horizontal resource row per channel with four stable regions', async () => {
+  const [html, css] = await Promise.all([
+    readFile(htmlUrl, 'utf8'),
+    readFile(cssUrl, 'utf8'),
+  ]);
+  const value = await createView();
+  await value.view.start();
+
+  assert.equal(value.document.querySelector('#stable-list').className, 'kit-list');
+  assert.equal(value.document.querySelector('#preview-list').className, 'kit-list');
+  for (const row of value.document.querySelectorAll('[data-kit-id]')) {
+    assert.equal(row.classList.contains('kit-row'), true);
+    assert.ok(row.querySelector('.kit-row__identity'));
+    assert.ok(row.querySelector('.kit-row__release'));
+    assert.ok(row.querySelector('.kit-row__installed'));
+    assert.ok(row.querySelector('.kit-row__actions'));
+  }
+
+  const styleDom = new JSDOM(`<!doctype html><style>${css}</style><div class="kit-list"><article class="kit-row"></article></div>`);
+  const listStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.kit-list'));
+  const rowStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.kit-row'));
+  assert.equal(listStyle.display, 'grid');
+  assert.equal(listStyle.gridTemplateColumns, 'minmax(0, 1fr)');
+  assert.equal(rowStyle.display, 'grid');
+  assert.match(html, /class="kit-list"/);
+});
+
 test('renders loading, online empty, offline cache, and unavailable states with direction', async () => {
   let resolveList;
   const pending = new Promise((resolve) => { resolveList = resolve; });

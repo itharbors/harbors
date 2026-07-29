@@ -211,14 +211,21 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     });
   }
 
-  function createCard(kit, channel, reference) {
+  function createRow(kit, channel, reference) {
     const state = channelState(kit, channel, reference);
     const risk = reference.permissions.includes('native-code');
-    const card = element(document, 'article', `kit-card${risk ? ' kit-card--risk' : ''}`);
-    card.dataset.kitId = kit.id;
-    card.dataset.channel = channel;
+    const row = element(document, 'article', `kit-row${risk ? ' kit-row--risk' : ''}`);
+    row.dataset.kitId = kit.id;
+    row.dataset.channel = channel;
 
-    const top = element(document, 'div', 'kit-card__topline');
+    const identity = element(document, 'div', 'kit-row__identity');
+    identity.append(element(document, 'h3', '', kit.label ?? kit.id));
+    identity.append(element(document, 'p', 'kit-row__publisher', kit.publisher ?? '本地安装'));
+    identity.append(element(document, 'p', 'kit-row__summary', kit.summary ?? '安装来源不在当前 Kit 仓库中。'));
+    row.append(identity);
+
+    const release = element(document, 'div', 'kit-row__release');
+    const top = element(document, 'div', 'kit-row__topline');
     top.append(element(document, 'span', 'channel-tag', CHANNEL_LABELS[channel] ?? channel));
     const status = element(
       document,
@@ -227,17 +234,14 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       statusText(state),
     );
     top.append(status);
-    card.append(top);
-    card.append(element(document, 'h3', '', kit.label ?? kit.id));
-    card.append(element(document, 'p', 'kit-card__publisher', kit.publisher ?? '本地安装'));
-    card.append(element(document, 'p', 'kit-card__summary', kit.summary ?? '安装来源不在当前 Kit 仓库中。'));
+    release.append(top);
 
-    const versionRow = element(document, 'div', 'kit-card__version');
+    const versionRow = element(document, 'div', 'kit-row__version');
     versionRow.append(element(document, 'span', 'version-label', '版本'));
     versionRow.append(element(document, 'code', '', reference.version));
-    card.append(versionRow);
+    release.append(versionRow);
 
-    const permissions = element(document, 'div', 'kit-card__permissions');
+    const permissions = element(document, 'div', 'kit-row__permissions');
     if (reference.permissionsUnavailable) {
       permissions.append(element(document, 'span', 'permission permission--risk', '权限信息不可用'));
     } else if (reference.permissions.length === 0) {
@@ -252,11 +256,12 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         ));
       }
     }
-    card.append(permissions);
+    release.append(permissions);
+    row.append(release);
 
+    const installed = element(document, 'div', 'kit-row__installed');
     if (!kit.builtin && ownsInstalledControls(kit, channel)) {
-      const versionControl = element(document, 'div', 'kit-card__installed');
-      const label = element(document, 'label', 'kit-card__version-control');
+      const label = element(document, 'label', 'kit-row__version-control');
       label.append(element(document, 'span', 'version-label', '已安装版本'));
       const select = element(document, 'select', 'version-select');
       select.dataset.role = 'installed-version';
@@ -272,7 +277,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       }
       select.value = preferredInstalledVersion(kit.installed);
       label.append(select);
-      versionControl.append(label);
+      installed.append(label);
       const switchButton = createButton(
         document,
         '切换到此版本',
@@ -290,8 +295,14 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       };
       select.addEventListener('change', syncSwitchButton);
       syncSwitchButton();
-      versionControl.append(switchButton);
-      card.append(versionControl);
+      installed.append(switchButton);
+    } else {
+      installed.append(element(
+        document,
+        'p',
+        'kit-row__installed-note',
+        kit.installed ? '历史版本在主频道行中管理。' : '尚未安装到本机。',
+      ));
     }
 
     const progress = element(document, 'div', 'kit-row__progress');
@@ -300,9 +311,10 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     spinner.setAttribute('aria-hidden', 'true');
     progress.append(spinner);
     progress.append(element(document, 'span', '', '正在下载并验证…'));
-    card.append(progress);
+    installed.append(progress);
+    row.append(installed);
 
-    const actions = element(document, 'div', 'kit-card__actions');
+    const actions = element(document, 'div', 'kit-row__actions');
     if (kit.builtin) {
       actions.append(createButton(
         document,
@@ -316,7 +328,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         document,
         kit.installed ? '安装更新' : '安装',
         'install',
-        () => install(kit, channel, reference, card),
+        () => install(kit, channel, reference, row),
       ));
     } else if (!state.active) {
       actions.append(createButton(
@@ -336,8 +348,8 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         { secondary: true },
       ));
     }
-    card.append(actions);
-    return card;
+    row.append(actions);
+    return row;
   }
 
   function render(snapshot) {
@@ -362,14 +374,14 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     let previewCount = 0;
     for (const kit of snapshot?.kits ?? []) {
       if (kit.channels?.stable) {
-        stableList.append(createCard(kit, 'stable', kit.channels.stable));
+        stableList.append(createRow(kit, 'stable', kit.channels.stable));
         stableCount += 1;
       } else if (kit.installed && !kit.channels?.preview) {
         const fallbackVersion = kit.installed.active
           ?? kit.installed.pending
           ?? kit.installed.versions.at(-1);
         if (fallbackVersion) {
-          stableList.append(createCard(kit, 'stable', {
+          stableList.append(createRow(kit, 'stable', {
             version: fallbackVersion,
             permissions: [],
             permissionsUnavailable: true,
@@ -378,7 +390,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         }
       }
       if (kit.channels?.preview) {
-        previewList.append(createCard(kit, 'preview', kit.channels.preview));
+        previewList.append(createRow(kit, 'preview', kit.channels.preview));
         previewCount += 1;
       }
     }
