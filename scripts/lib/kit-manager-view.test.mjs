@@ -38,6 +38,7 @@ async function createView({ api, initial = snapshot(), confirmInstall } = {}) {
     install: async (value) => { calls.push(['install', value]); return { status: 'installed' }; },
     activate: async (value) => { calls.push(['activate', value]); return { runtimeReloaded: true }; },
     rollback: async (value) => { calls.push(['rollback', value]); return { runtimeReloaded: true }; },
+    deactivate: async (value) => { calls.push(['deactivate', value]); return { runtimeReloaded: true }; },
     uninstall: async (value) => { calls.push(['uninstall', value]); return { runtimeReloaded: true }; },
   };
   const resolvedApi = { ...defaultApi, ...api };
@@ -68,6 +69,7 @@ test('uses a locked-down local document with semantic landmarks and no inline or
   assert.match(document.body.textContent, /Kit 管理/);
   assert.match(document.body.textContent, /稳定版/);
   assert.match(document.body.textContent, /预览版/);
+  assert.match(document.body.textContent, /停用/);
   assert.match(document.body.textContent, /仅限已验证 Kit/);
   assert.match(css, /prefers-reduced-motion/);
   assert.match(css, /:focus-visible/);
@@ -228,6 +230,54 @@ test('shows every retained version with current and abnormal state on the instal
   assert.equal(uninstallButton.classList.contains('button--danger'), true);
   assert.equal(value.document.querySelector('[data-channel="preview"] [data-role="installed-version"]'), null);
   assert.equal(value.document.querySelector('[data-action="rollback"]'), null);
+});
+
+test('deactivates an active Kit while keeping its versions ready to enable again', async () => {
+  let current = snapshot({
+    kits: [{
+      ...snapshot().kits[0],
+      installed: {
+        active: '1.10.0', previous: '1.9.0', channel: 'stable', autoUpdate: true,
+        versions: ['1.10.0', '1.9.0'], badVersions: [],
+      },
+    }],
+  });
+  const calls = [];
+  const confirmations = [];
+  const value = await createView({
+    api: {
+      list: async () => current,
+      deactivate: async (kitId) => {
+        calls.push(['deactivate', kitId]);
+        current = snapshot({
+          kits: [{
+            ...snapshot().kits[0],
+            installed: {
+              previous: '1.10.0', channel: 'stable', autoUpdate: true,
+              versions: ['1.10.0', '1.9.0'], badVersions: [],
+            },
+          }],
+        });
+        return { runtimeReloaded: true };
+      },
+    },
+    confirmInstall: (message) => { confirmations.push(message); return true; },
+  });
+  await value.view.start();
+
+  const deactivateButton = value.document.querySelector('[data-action="deactivate"]');
+  assert.equal(deactivateButton.textContent, '停用');
+  deactivateButton.click();
+  await value.view.whenIdle();
+
+  assert.deepEqual(calls, [['deactivate', '@itharbors/kit-sqlite']]);
+  assert.match(confirmations[0], /保留全部已安装版本/);
+  assert.match(value.document.querySelector('#operation-status').textContent, /已停用/);
+  assert.equal(value.document.querySelector('[data-action="deactivate"]'), null);
+  const select = value.document.querySelector('[data-role="installed-version"]');
+  assert.deepEqual([...select.options].map((option) => option.value), ['1.10.0', '1.9.0']);
+  assert.equal(select.value, '1.10.0');
+  assert.equal(value.document.querySelector('[data-action="switch-version"]').textContent, '启用此版本');
 });
 
 test('renders builtin Kits without an install action', async () => {

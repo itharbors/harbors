@@ -55,7 +55,10 @@ function ownsInstalledControls(kit, channel) {
 }
 
 function preferredInstalledVersion(installed) {
-  return installed?.active ?? installed?.pending ?? installed?.versions?.[0];
+  return installed?.active
+    ?? installed?.pending
+    ?? installed?.previous
+    ?? installed?.versions?.[0];
 }
 
 function installedVersionLabel(installed, version) {
@@ -98,7 +101,9 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
   if (!document || typeof document.querySelector !== 'function') {
     throw new TypeError('document is required');
   }
-  for (const method of ['list', 'refresh', 'install', 'activate', 'rollback', 'uninstall']) {
+  for (const method of [
+    'list', 'refresh', 'install', 'activate', 'rollback', 'deactivate', 'uninstall',
+  ]) {
     if (typeof api?.[method] !== 'function') {
       throw new TypeError(`api.${method} is required`);
     }
@@ -191,8 +196,9 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
 
   function activateInstalledVersion(kit, version) {
     return queue(async () => {
+      const enabling = kit.installed.active === undefined;
       const accepted = await confirmInstall(
-        `切换到 ${version} 会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
+        `${enabling ? '启用' : '切换到'} ${version} 会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
       );
       if (!accepted) return;
       await api.activate({
@@ -201,7 +207,24 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         retryBad: kit.installed.badVersions.includes(version),
       });
       await reloadInstalledProjection();
-      setOperationMessage(`已切换 ${kit.label ?? kit.id} 到 ${version}。`);
+      setOperationMessage(
+        enabling
+          ? `已启用 ${kit.label ?? kit.id} ${version}。`
+          : `已切换 ${kit.label ?? kit.id} 到 ${version}。`,
+      );
+    });
+  }
+
+  function deactivate(kit) {
+    return queue(async () => {
+      const accepted = await confirmInstall(
+        `停用 ${kit.label ?? kit.id} 将关闭该 Kit 窗口并重新加载其他 Kit 窗口；保留全部已安装版本。是否继续？`,
+      );
+      if (!accepted) return;
+      setOperationMessage(`正在停用 ${kit.label ?? kit.id}…`);
+      await api.deactivate(kit.id);
+      await reloadInstalledProjection();
+      setOperationMessage(`已停用 ${kit.label ?? kit.id}。`);
     });
   }
 
@@ -294,11 +317,11 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       );
       const syncSwitchButton = () => {
         const active = select.value === kit.installed.active;
-        switchButton.textContent = active
-          ? '当前已启用'
-          : kit.installed.badVersions.includes(select.value)
-            ? '重试此版本'
-            : '切换到此版本';
+        let label = '切换到此版本';
+        if (active) label = '当前已启用';
+        else if (kit.installed.active === undefined) label = '启用此版本';
+        else if (kit.installed.badVersions.includes(select.value)) label = '重试此版本';
+        switchButton.textContent = label;
         switchButton.classList.toggle('button--current', active);
         switchButton.dataset.permanentDisabled = String(active);
         switchButton.disabled = active;
@@ -347,6 +370,19 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         'activate',
         () => activate(kit, reference, state),
         { disabled: state.pending },
+      ));
+    }
+    if (
+      !kit.builtin
+      && ownsInstalledControls(kit, channel)
+      && kit.installed.active !== undefined
+    ) {
+      actions.append(createButton(
+        document,
+        '停用',
+        'deactivate',
+        () => deactivate(kit),
+        { secondary: true },
       ));
     }
     if (!kit.builtin && ownsInstalledControls(kit, channel)) {

@@ -413,7 +413,8 @@ test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls th
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
     await assertRuntimeVersion('1.10.0');
 
-    await liveManager.deactivate('@example/kit-demo');
+    dom.window.document.querySelector('[data-action="deactivate"]').click();
+    await view.whenIdle();
     assert.equal(runtimeGeneration, 5);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, undefined);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.10.0');
@@ -422,15 +423,16 @@ test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls th
       ['1.10.0', '1.2.3', '1.2.4'],
     );
     await assertRuntimeVersion(undefined);
+    assert.equal(
+      dom.window.document.querySelector('[data-action="switch-version"]').textContent,
+      '启用此版本',
+    );
 
-    await liveManager.activate({
-      id: '@example/kit-demo', version: '1.10.0', retryBad: false,
-    });
+    dom.window.document.querySelector('[data-action="switch-version"]').click();
+    await view.whenIdle();
     assert.equal(runtimeGeneration, 6);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.10.0');
     await assertRuntimeVersion('1.10.0');
-    dom.window.document.querySelector('#refresh-button').click();
-    await view.whenIdle();
 
     const managerIdentity = controller.getWindow();
     const managerWebContentsId = managerIdentity.webContents.id;
