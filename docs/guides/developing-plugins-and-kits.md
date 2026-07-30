@@ -235,8 +235,8 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-Default 是唯一的 builtin Kit。CSV、SQLite、MySQL 与 Notifications 是官方市场 Kit；其实现固定保存在
-主分支的 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`，这些仓库目录只会由
+Default 是唯一的 builtin Kit。Agent Guard、CSV、SQLite、MySQL 与 Notifications 是官方市场 Kit；其实现固定保存在
+主分支的 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`，这些仓库目录只会由
 `npm run dev` 自动加载。每个目录独立维护
 `kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
@@ -253,6 +253,11 @@ Registry entry。具体确认令牌、Stable/Preview 频道和回滚规则见
 只有必须在任何 Kit 窗口打开前可用、且不需要 UI 的能力才应放进 `startup.plugins`，例如本机
 服务桥接或全局安装动作。启动插件仍是标准插件 package，但 manifest 只能贡献应用菜单和
 Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser message。
+
+Agent Guard 是这一模型的完整示例：`agent-guard-background` 在应用启动时以低频率读取 macOS
+进程表和 `netstat` 累计计数，`agent-guard-center` 仅在用户打开 Kit 时建立会话和 2 秒 UI 轮询。
+后台快照默认 5 秒一次；UI 轮询不会提高后台采集频率。
+后台与面板通过 `application.request` 转发结构化快照，Panel 不获得进程控制能力。
 
 ```json
 {

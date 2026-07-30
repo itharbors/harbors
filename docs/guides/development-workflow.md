@@ -232,7 +232,7 @@ Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill
 | Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 | 单个 Kit | `origin/main` / `main` | `kit-change/<name>/<type>/<slug>` | `kit-workflow` |
 
-CSV、SQLite、MySQL 和 Notifications 分别保存在 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`。
+Agent Guard、CSV、SQLite、MySQL 和 Notifications 分别保存在 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`。
 Kit 合并只改变 `main` 上的目录内容，不发布 Release，也不修改或发布 Framework 版本。完整生命周期是：
 
 ```text

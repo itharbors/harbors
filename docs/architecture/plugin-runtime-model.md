@@ -92,6 +92,12 @@ application runtime 由白名单直接构造，不先创建完整 Editor 再删�
 `sessionId`、Kit、Panel、Window、Layout 或 Session config。Panel 贡献、`panel.*` 方法和
 browser message 在导入插件前即被拒绝。
 
+Session scope 的 server-side main 另有窄化的 `application.request(plugin, method, ...args)`，用于
+调用已经运行的应用启动插件。该桥不进入 Panel runtime；Agent Guard 的会话插件据此转发快照和
+经过校验的控制命令，而浏览器面板本身不能访问进程、文件系统或 ApplicationRuntime。声明
+`process-control` 的 Kit 只获得宿主审批信息，实际信号仍由应用级后台按 PID、启动时间、可执行
+身份、进程组和任务角色逐次复验。
+
 ## 生命周期
 
 ```mermaid

@@ -7,6 +7,12 @@
     "itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2"
   ],
   "kits": {
+    "agent-guard": {
+      "id": "@itharbors/kit-agent-guard",
+      "label": "Agent Guard",
+      "summary": "Claude Code 与 Codex 的本机零配置流量监控、异常预警和安全熔断",
+      "runner": "macos-14"
+    },
     "csv": {
       "id": "@itharbors/kit-csv",
       "label": "CSV",
