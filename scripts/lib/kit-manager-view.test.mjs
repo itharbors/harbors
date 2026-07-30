@@ -310,7 +310,9 @@ test('defines the Harbors master-detail visual contract and responsive single-pa
   ]) {
     assert.match(css, new RegExp(`${token}:`));
   }
-  assert.match(css, /@media\s*\(max-width:\s*719px\)/);
+  assert.match(css, /@media\s*\(max-width:\s*799px\)/);
+  assert.match(css, /@media\s*\(max-width:\s*799px\)\s*and\s*\(max-height:\s*699px\)/);
+  assert.match(css, /height:\s*calc\(100vh\s*-\s*296px\)/);
   assert.match(css, /\.manager-workspace\[data-mobile-view="detail"\]/);
   assert.match(css, /\.version-track__item::before/);
   assert.match(css, /prefers-reduced-motion:\s*reduce/);
