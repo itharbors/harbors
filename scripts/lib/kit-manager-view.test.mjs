@@ -28,6 +28,50 @@ function snapshot(overrides = {}) {
   };
 }
 
+function workspaceSnapshot(overrides = {}) {
+  const releases = snapshot().kits[0].channels;
+  return snapshot({
+    kits: [
+      {
+        id: '@itharbors/kit-csv',
+        label: 'CSV',
+        publisher: 'itharbors',
+        summary: 'CSV/TSV 文件浏览、筛选、排序与导出工作台',
+        channels: { stable: { ...releases.stable, version: '1.2.0' } },
+        installed: {
+          active: '1.2.0',
+          channel: 'stable',
+          autoUpdate: true,
+          versions: ['1.2.0', '1.1.0'],
+          badVersions: [],
+        },
+      },
+      {
+        id: '@itharbors/kit-mysql',
+        label: 'MySQL',
+        publisher: 'itharbors',
+        summary: 'MySQL 数据库连接、浏览、编辑与 SQL 工作台',
+        channels: { stable: { ...releases.stable, version: '2.0.0' } },
+        installed: {
+          active: '2.0.0',
+          channel: 'stable',
+          autoUpdate: true,
+          versions: ['2.0.0'],
+          badVersions: [],
+        },
+      },
+      {
+        id: '@itharbors/kit-notifications',
+        label: 'Notifications',
+        publisher: 'itharbors',
+        summary: '桌面通知中心',
+        channels: { stable: { ...releases.stable, version: '0.8.0' } },
+      },
+    ],
+    ...overrides,
+  });
+}
+
 async function createView({ api, initial = snapshot(), confirmInstall } = {}) {
   const html = await readFile(htmlUrl, 'utf8');
   const dom = new JSDOM(html, { url: 'file:///kit-manager.html' });
@@ -79,36 +123,106 @@ test('uses a locked-down local document with semantic landmarks and no inline or
   );
 });
 
-test('renders one horizontal resource row per channel with four stable regions', async () => {
-  const [html, css] = await Promise.all([
-    readFile(htmlUrl, 'utf8'),
-    readFile(cssUrl, 'utf8'),
-  ]);
+test('renders a master-detail workspace and keeps a valid Kit selected across refreshes', async () => {
+  const initial = workspaceSnapshot();
+  const value = await createView({ initial });
+
+  await value.view.start();
+
+  assert.ok(value.document.querySelector('#kit-search'));
+  assert.ok(value.document.querySelector('#kit-navigation'));
+  assert.ok(value.document.querySelector('#kit-detail'));
+  const items = value.document.querySelectorAll('[data-role="kit-list-item"]');
+  assert.equal(items.length, 3);
+  assert.equal(
+    value.document.querySelector('[data-role="kit-list-item"][aria-selected="true"]').dataset.kitId,
+    '@itharbors/kit-csv',
+  );
+  assert.match(value.document.querySelector('#kit-detail').textContent, /CSV/);
+  assert.equal(value.document.querySelector('[data-role="installed-version"]'), null);
+  assert.equal(value.document.querySelector('#kit-navigation [data-action="uninstall"]'), null);
+
+  value.document.querySelector('[data-kit-id="@itharbors/kit-mysql"]').click();
+  assert.match(value.document.querySelector('#kit-detail').textContent, /MySQL/);
+  value.view.render(workspaceSnapshot());
+  assert.equal(
+    value.document.querySelector('[data-role="kit-list-item"][aria-selected="true"]').dataset.kitId,
+    '@itharbors/kit-mysql',
+  );
+
+  value.view.render(workspaceSnapshot({
+    kits: initial.kits.filter((kit) => kit.id !== '@itharbors/kit-mysql'),
+  }));
+  assert.equal(
+    value.document.querySelector('[data-role="kit-list-item"][aria-selected="true"]').dataset.kitId,
+    '@itharbors/kit-csv',
+  );
+});
+
+test('filters the real Kit list by search and installed state with a directed empty result', async () => {
+  const value = await createView({ initial: workspaceSnapshot() });
+  await value.view.start();
+
+  const search = value.document.querySelector('#kit-search');
+  search.value = 'mysql';
+  search.dispatchEvent(new value.dom.window.Event('input'));
+  assert.deepEqual(
+    [...value.document.querySelectorAll('[data-role="kit-list-item"]')]
+      .map((item) => item.dataset.kitId),
+    ['@itharbors/kit-mysql'],
+  );
+  assert.match(value.document.querySelector('#kit-detail').textContent, /MySQL/);
+
+  value.document.querySelector('[data-filter="installed"]').click();
+  assert.equal(value.document.querySelectorAll('[data-role="kit-list-item"]').length, 1);
+  assert.match(value.document.querySelector('#kit-detail').textContent, /MySQL/);
+
+  search.value = 'missing kit';
+  search.dispatchEvent(new value.dom.window.Event('input'));
+  assert.equal(value.document.querySelectorAll('[data-role="kit-list-item"]').length, 0);
+  assert.equal(value.document.querySelector('#kit-list-empty').hidden, false);
+  assert.match(value.document.querySelector('#kit-list-empty').textContent, /没有符合条件的 Kit/);
+  assert.match(value.document.querySelector('#kit-detail').textContent, /选择一个 Kit/);
+});
+
+test('opens the preview channel when stable is empty on first load', async () => {
+  const baseKit = snapshot().kits[0];
+  const value = await createView({
+    initial: snapshot({
+      kits: [{
+        ...baseKit,
+        channels: { preview: baseKit.channels.preview },
+        installed: {
+          active: baseKit.channels.preview.version,
+          channel: 'preview',
+          autoUpdate: false,
+          versions: [baseKit.channels.preview.version],
+          badVersions: [],
+        },
+      }],
+    }),
+  });
+
+  await value.view.start();
+
+  assert.equal(value.document.querySelector('#channel-filter').value, 'preview');
+  assert.equal(value.document.querySelectorAll('[data-role="kit-list-item"]').length, 1);
+  assert.match(value.document.querySelector('#kit-detail').textContent, /SQLite Workbench/);
+});
+
+test('renders compact selectable list items without management controls', async () => {
   const value = await createView();
   await value.view.start();
 
-  assert.equal(value.document.querySelector('#stable-list').className, 'kit-list');
-  assert.equal(value.document.querySelector('#preview-list').className, 'kit-list');
-  for (const row of value.document.querySelectorAll('[data-kit-id]')) {
-    assert.equal(row.classList.contains('kit-row'), true);
-    assert.ok(row.querySelector('.kit-row__identity'));
-    assert.ok(row.querySelector('.kit-row__release'));
-    assert.ok(row.querySelector('.kit-row__installed'));
-    assert.ok(row.querySelector('.kit-row__actions'));
-  }
-
-  const styleDom = new JSDOM(`<!doctype html><style>${css}</style><p class="empty-state" hidden>空状态</p><div class="kit-list"><article class="kit-row"></article></div>`);
-  const listStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.kit-list'));
-  const rowStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.kit-row'));
-  const hiddenEmptyStyle = styleDom.window.getComputedStyle(styleDom.window.document.querySelector('.empty-state'));
-  assert.equal(listStyle.display, 'grid');
-  assert.equal(listStyle.gridTemplateColumns, 'minmax(0, 1fr)');
-  assert.equal(rowStyle.display, 'grid');
-  assert.equal(rowStyle.minHeight, '118px');
-  assert.equal(rowStyle.borderLeftWidth, '4px');
-  assert.equal(hiddenEmptyStyle.display, 'none');
-  assert.match(css, /\.empty-state\[hidden\]\s*\{[^}]*display:\s*none;/);
-  assert.match(html, /class="kit-list"/);
+  const item = value.document.querySelector('[data-role="kit-list-item"]');
+  assert.equal(item.tagName, 'BUTTON');
+  assert.equal(item.getAttribute('role'), 'option');
+  assert.match(item.textContent, /SQLite Workbench/);
+  assert.match(item.textContent, /1\.2\.0/);
+  assert.equal(item.querySelector('.permission'), null);
+  assert.equal(item.querySelector('[data-action]'), null);
+  assert.equal(item.querySelector('select'), null);
+  assert.match(value.document.querySelector('#kit-detail').textContent, /SQLite Workbench/);
 });
 
 test('renders loading, online empty, offline cache, and unavailable states with direction', async () => {
@@ -121,7 +235,8 @@ test('renders loading, online empty, offline cache, and unavailable states with 
   resolveList(snapshot({ kits: [] }));
   await starting;
   assert.match(value.document.querySelector('#registry-status').textContent, /Kit 仓库在线/);
-  assert.match(value.document.querySelector('#stable-empty').textContent, /尚未发布 Kit/);
+  assert.equal(value.document.querySelector('#kit-list-empty').hidden, false);
+  assert.match(value.document.querySelector('#kit-list-empty').textContent, /没有符合条件的 Kit/);
 
   value.view.render(snapshot({
     source: 'cache', stale: true, kits: [],
@@ -132,7 +247,7 @@ test('renders loading, online empty, offline cache, and unavailable states with 
 
   value.view.render(snapshot({ source: 'none', stale: true, validatedAt: null, kits: [] }));
   assert.match(value.document.querySelector('#registry-status').textContent, /Kit 仓库不可用/);
-  assert.match(value.document.querySelector('#stable-empty').textContent, /联网后刷新/);
+  assert.match(value.document.querySelector('#kit-detail').textContent, /选择一个 Kit/);
 });
 
 test('keeps the compact header count aligned with unique installed Kits', async () => {
@@ -165,7 +280,65 @@ test('keeps the compact header count aligned with unique installed Kits', async 
   assert.equal(headerStyle.display, 'grid');
 });
 
-test('renders stable and collapsed preview berths with permissions and lifecycle state', async () => {
+test('defines the Harbors master-detail visual contract and responsive single-pane mode', async () => {
+  const css = await readFile(cssUrl, 'utf8');
+  const styleDom = new JSDOM(`<!doctype html>
+    <style>${css}</style>
+    <section class="manager-workspace">
+      <aside class="kit-browser">
+        <button class="kit-list-item"></button>
+      </aside>
+      <section class="kit-detail"></section>
+    </section>`);
+  const workspaceStyle = styleDom.window.getComputedStyle(
+    styleDom.window.document.querySelector('.manager-workspace'),
+  );
+  const listItemStyle = styleDom.window.getComputedStyle(
+    styleDom.window.document.querySelector('.kit-list-item'),
+  );
+
+  assert.equal(workspaceStyle.display, 'grid');
+  assert.equal(workspaceStyle.gridTemplateColumns, '320px minmax(0, 1fr)');
+  assert.equal(listItemStyle.display, 'grid');
+  for (const token of [
+    '--manager-canvas',
+    '--manager-surface',
+    '--manager-ink',
+    '--manager-muted',
+    '--manager-action',
+    '--manager-risk',
+  ]) {
+    assert.match(css, new RegExp(`${token}:`));
+  }
+  assert.match(css, /@media\s*\(max-width:\s*719px\)/);
+  assert.match(css, /\.manager-workspace\[data-mobile-view="detail"\]/);
+  assert.match(css, /\.version-track__item::before/);
+  assert.match(css, /prefers-reduced-motion:\s*reduce/);
+  assert.match(css, /:focus-visible/);
+  assert.doesNotMatch(css, /\.kit-row__release|\.kit-row__installed/);
+});
+
+test('returns from mobile Kit details without changing installed state', async () => {
+  const value = await createView({ initial: workspaceSnapshot() });
+  await value.view.start();
+
+  value.document.querySelector('[data-kit-id="@itharbors/kit-mysql"]').click();
+  assert.equal(value.document.querySelector('#manager-workspace').dataset.mobileView, 'detail');
+  const back = value.document.querySelector('[data-action="back-to-list"]');
+  assert.equal(back.textContent, '返回 Kit 列表');
+  back.click();
+
+  assert.equal(value.document.querySelector('#manager-workspace').dataset.mobileView, 'list');
+  assert.equal(
+    value.document.querySelector(
+      '[data-role="kit-list-item"][aria-selected="true"]',
+    ).dataset.kitId,
+    '@itharbors/kit-mysql',
+  );
+  assert.deepEqual(value.calls, []);
+});
+
+test('renders overview, permission, and version tabs with high-risk permission semantics', async () => {
   const value = await createView({
     initial: snapshot({
       kits: [{
@@ -183,22 +356,21 @@ test('renders stable and collapsed preview berths with permissions and lifecycle
     }),
   });
   await value.view.start();
-  const stable = value.document.querySelector('[data-kit-id="@itharbors/kit-sqlite"][data-channel="stable"]');
-  assert.match(stable.textContent, /SQLite Workbench/);
-  assert.match(stable.textContent, /itharbors/);
-  assert.match(stable.textContent, /1\.2\.0/);
-  assert.match(stable.textContent, /正在应用/);
-  assert.match(stable.textContent, /原生代码 — 高风险/);
-  assert.equal(stable.querySelector('[data-action="activate"]').disabled, true);
-  const preview = value.document.querySelector('#preview-section');
-  assert.equal(preview.open, false);
-  assert.match(preview.textContent, /预览版/);
-  assert.match(preview.textContent, /已标记异常/);
-  assert.match(preview.querySelector('[data-action="activate"]').textContent, /立即重试/);
-  assert.equal(value.document.querySelectorAll('[data-action="uninstall"]').length, 1);
+  assert.deepEqual(
+    [...value.document.querySelectorAll('[data-detail-tab]')].map((tab) => tab.textContent),
+    ['概览', '权限', '版本记录'],
+  );
+  assert.match(value.document.querySelector('[role="tabpanel"]').textContent, /1\.2\.0/);
+  assert.match(value.document.querySelector('[role="tabpanel"]').textContent, /稳定版/);
+  value.document.querySelector('[data-detail-tab="permissions"]').click();
+  assert.match(value.document.querySelector('[role="tabpanel"]').textContent, /文件访问/);
+  const nativePermission = value.document.querySelector('[data-permission="native-code"]');
+  assert.match(nativePermission.textContent, /原生代码/);
+  assert.equal(nativePermission.dataset.risk, 'high');
+  assert.equal(value.document.querySelector('[data-action="activate"]').disabled, true);
 });
 
-test('shows every retained version with current and abnormal state on the installed owner row', async () => {
+test('shows every retained version on a version track with current and abnormal state', async () => {
   const value = await createView({
     initial: snapshot({
       kits: [{
@@ -214,21 +386,18 @@ test('shows every retained version with current and abnormal state on the instal
 
   await value.view.start();
 
-  const stable = value.document.querySelector('[data-channel="stable"]');
-  const select = stable.querySelector('[data-role="installed-version"]');
-  assert.deepEqual([...select.options].map((option) => option.value), [
+  value.document.querySelector('[data-detail-tab="versions"]').click();
+  const nodes = [...value.document.querySelectorAll('.version-track__item[data-version]')];
+  assert.deepEqual(nodes.map((node) => node.dataset.version), [
     '2.0.0', '1.10.0', '1.9.0',
   ]);
-  assert.match(select.options[0].textContent, /异常/);
-  assert.match(select.options[1].textContent, /当前/);
-  assert.equal(select.value, '1.10.0');
-  const switchButton = stable.querySelector('[data-action="switch-version"]');
-  assert.equal(switchButton.disabled, true);
-  assert.equal(switchButton.textContent, '当前已启用');
-  const uninstallButton = stable.querySelector('[data-action="uninstall"]');
-  assert.equal(uninstallButton.textContent, '删除');
-  assert.equal(uninstallButton.classList.contains('button--danger'), true);
-  assert.equal(value.document.querySelector('[data-channel="preview"] [data-role="installed-version"]'), null);
+  assert.equal(nodes[0].dataset.versionState, 'bad');
+  assert.match(nodes[0].textContent, /异常/);
+  assert.equal(nodes[1].dataset.versionState, 'active');
+  assert.match(nodes[1].textContent, /当前启用/);
+  assert.equal(nodes[1].querySelector('[data-action="activate-version"]'), null);
+  assert.equal(nodes[2].dataset.versionState, 'installed');
+  assert.equal(nodes[2].querySelector('[data-action="activate-version"]').textContent, '切换');
   assert.equal(value.document.querySelector('[data-action="rollback"]'), null);
 });
 
@@ -274,10 +443,16 @@ test('deactivates an active Kit while keeping its versions ready to enable again
   assert.match(confirmations[0], /保留全部已安装版本/);
   assert.match(value.document.querySelector('#operation-status').textContent, /已停用/);
   assert.equal(value.document.querySelector('[data-action="deactivate"]'), null);
-  const select = value.document.querySelector('[data-role="installed-version"]');
-  assert.deepEqual([...select.options].map((option) => option.value), ['1.10.0', '1.9.0']);
-  assert.equal(select.value, '1.10.0');
-  assert.equal(value.document.querySelector('[data-action="switch-version"]').textContent, '启用此版本');
+  value.document.querySelector('[data-detail-tab="versions"]').click();
+  assert.deepEqual(
+    [...value.document.querySelectorAll('.version-track__item[data-version]')]
+      .map((node) => node.dataset.version),
+    ['1.10.0', '1.9.0'],
+  );
+  assert.equal(
+    value.document.querySelector('[data-action="activate-version"][data-version="1.10.0"]').textContent,
+    '启用',
+  );
 });
 
 test('renders builtin Kits without an install action', async () => {
@@ -289,7 +464,7 @@ test('renders builtin Kits without an install action', async () => {
 
   await value.view.start();
 
-  const button = value.document.querySelector('[data-channel="stable"] [data-action="builtin"]');
+  const button = value.document.querySelector('[data-action="builtin"]');
   assert.equal(button.textContent, '内置');
   assert.equal(button.disabled, true);
   assert.equal(value.document.querySelector('[data-action="install"]'), null);
@@ -300,7 +475,9 @@ test('renders builtin Kits without an install action', async () => {
 test('does not show version history before a Kit is installed', async () => {
   const value = await createView();
   await value.view.start();
-  assert.equal(value.document.querySelector('[data-role="installed-version"]'), null);
+  value.document.querySelector('[data-detail-tab="versions"]').click();
+  assert.equal(value.document.querySelector('.version-track'), null);
+  assert.match(value.document.querySelector('[role="tabpanel"]').textContent, /尚未安装/);
 });
 
 test('confirms native code, installs a selected channel, and refreshes the installed projection', async () => {
@@ -334,13 +511,13 @@ test('confirms native code, installs a selected channel, and refreshes the insta
     confirmInstall: (details) => { confirmations.push(details); return true; },
   });
   await value.view.start();
-  value.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
+  value.document.querySelector('[data-action="install"]').click();
   await installStarted;
-  let stable = value.document.querySelector('[data-channel="stable"]');
-  assert.equal(stable.dataset.operation, 'install');
-  assert.equal(stable.querySelector('.kit-row__progress').hidden, false);
-  assert.match(stable.querySelector('.kit-row__progress').textContent, /正在下载并验证/);
-  assert.equal(stable.querySelector('.kit-row__spinner').getAttribute('aria-hidden'), 'true');
+  let detail = value.document.querySelector('#kit-detail');
+  assert.equal(detail.dataset.operation, 'install');
+  assert.equal(detail.querySelector('.kit-detail__progress').hidden, false);
+  assert.match(detail.querySelector('.kit-detail__progress').textContent, /正在下载并验证/);
+  assert.equal(detail.querySelector('.kit-detail__spinner').getAttribute('aria-hidden'), 'true');
   assert.match(
     value.document.querySelector('#operation-status').textContent,
     /正在安装并应用 SQLite Workbench 1\.2\.0/,
@@ -356,16 +533,16 @@ test('confirms native code, installs a selected channel, and refreshes the insta
   ]]);
   assert.match(value.document.querySelector('#operation-status').textContent, /已安装并启用/);
   assert.doesNotMatch(value.document.querySelector('#operation-status').textContent, /重启/);
-  assert.match(value.document.querySelector('[data-channel="stable"]').textContent, /已启用/);
-  stable = value.document.querySelector('[data-channel="stable"]');
-  assert.equal(stable.dataset.operation, undefined);
-  assert.equal(stable.querySelector('.kit-row__progress').hidden, true);
+  assert.match(value.document.querySelector('#kit-detail').textContent, /已启用/);
+  detail = value.document.querySelector('#kit-detail');
+  assert.equal(detail.dataset.operation, undefined);
+  assert.equal(detail.querySelector('.kit-detail__progress').hidden, true);
 });
 
 test('does not install native code when confirmation is declined', async () => {
   const value = await createView({ confirmInstall: () => false });
   await value.view.start();
-  value.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
+  value.document.querySelector('[data-action="install"]').click();
   await value.view.whenIdle();
   assert.deepEqual(value.calls, []);
 });
@@ -394,15 +571,16 @@ test('switches to retained versions and explicitly retries abnormal versions', a
     confirmInstall: (message) => { confirmations.push(message); return true; },
   });
   await value.view.start();
-  let select = value.document.querySelector('[data-role="installed-version"]');
-  let switchButton = value.document.querySelector('[data-action="switch-version"]');
-  select.value = '1.9.0';
-  select.dispatchEvent(new value.dom.window.Event('change'));
-  assert.equal(switchButton.textContent, '切换到此版本');
-  assert.equal(switchButton.disabled, false);
-  switchButton.click();
+  value.document.querySelector('[data-detail-tab="versions"]').click();
+  value.document.querySelector(
+    '[data-action="activate-version"][data-version="1.9.0"]',
+  ).click();
   assert.equal(value.document.querySelector('main').getAttribute('aria-busy'), 'true');
-  assert.equal([...value.document.querySelectorAll('button, select')].every((control) => control.disabled), true);
+  assert.equal(
+    value.document.querySelector('[data-action="activate-version"][data-version="2.0.0"]').disabled,
+    true,
+  );
+  assert.equal(value.document.querySelector('[data-role="kit-list-item"]').disabled, false);
   releaseActivation();
   await value.view.whenIdle();
   assert.deepEqual(calls[0], ['activate', {
@@ -411,12 +589,16 @@ test('switches to retained versions and explicitly retries abnormal versions', a
   assert.match(confirmations[0], /1\.9\.0/);
   assert.match(confirmations[0], /重新加载所有 Kit 窗口/);
 
-  select = value.document.querySelector('[data-role="installed-version"]');
-  switchButton = value.document.querySelector('[data-action="switch-version"]');
-  select.value = '2.0.0';
-  select.dispatchEvent(new value.dom.window.Event('change'));
-  assert.equal(switchButton.textContent, '重试此版本');
-  switchButton.click();
+  value.document.querySelector('[data-detail-tab="versions"]').click();
+  assert.equal(
+    value.document.querySelector(
+      '[data-action="activate-version"][data-version="2.0.0"]',
+    ).textContent,
+    '重试',
+  );
+  value.document.querySelector(
+    '[data-action="activate-version"][data-version="2.0.0"]',
+  ).click();
   await value.view.whenIdle();
   assert.deepEqual(calls[1], ['activate', {
     id: '@itharbors/kit-sqlite', version: '2.0.0', retryBad: true,
@@ -450,10 +632,13 @@ test('renders one uninstall action, confirms all-version deletion, and refreshes
     confirmInstall: (message) => { confirmations.push(message); return true; },
   });
   await value.view.start();
+  const channelFilter = value.document.querySelector('#channel-filter');
+  channelFilter.value = 'preview';
+  channelFilter.dispatchEvent(new value.dom.window.Event('change'));
 
   const buttons = value.document.querySelectorAll('[data-action="uninstall"]');
   assert.equal(buttons.length, 1);
-  assert.equal(buttons[0].closest('[data-channel]').dataset.channel, 'preview');
+  assert.equal(value.document.querySelector('#kit-detail').dataset.channel, 'preview');
   buttons[0].click();
   await value.view.whenIdle();
 
@@ -473,17 +658,17 @@ test('recovers controls after refresh and operation errors without inserting rem
   };
   const value = await createView({ api });
   await value.view.start();
-  assert.equal(value.document.querySelector('[data-channel="stable"] img'), null);
-  assert.match(value.document.querySelector('[data-channel="stable"] h3').textContent, /<img/);
+  assert.equal(value.document.querySelector('#kit-detail img'), null);
+  assert.match(value.document.querySelector('#kit-detail h2').textContent, /<img/);
   value.document.querySelector('#refresh-button').click();
   await value.view.whenIdle();
   assert.match(value.document.querySelector('#operation-status').textContent, /Registry unavailable/);
   assert.equal(value.document.querySelector('#refresh-button').disabled, false);
-  value.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
+  value.document.querySelector('[data-action="install"]').click();
   await value.view.whenIdle();
   assert.match(value.document.querySelector('#operation-status').textContent, /Artifact rejected/);
   assert.equal(value.document.querySelector('[data-action="install"]').disabled, false);
-  const stable = value.document.querySelector('[data-channel="stable"]');
-  assert.equal(stable.dataset.operation, undefined);
-  assert.equal(stable.querySelector('.kit-row__progress').hidden, true);
+  const detail = value.document.querySelector('#kit-detail');
+  assert.equal(detail.dataset.operation, undefined);
+  assert.equal(detail.querySelector('.kit-detail__progress').hidden, true);
 });

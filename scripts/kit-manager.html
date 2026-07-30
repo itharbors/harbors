@@ -42,31 +42,36 @@
         <div id="registry-notice" class="notice" role="status" hidden></div>
         <div id="operation-status" class="operation-status" role="status" aria-live="polite"></div>
 
-        <section class="berth-section" aria-labelledby="stable-heading">
-          <div class="section-heading">
-            <div>
-              <p class="eyebrow">发布通道</p>
-              <h2 id="stable-heading">稳定版</h2>
+        <section id="manager-workspace" class="manager-workspace" data-mobile-view="list">
+          <aside class="kit-browser" aria-label="Kit 列表">
+            <div class="kit-browser__toolbar">
+              <label class="search-field">
+                <span class="sr-only">搜索 Kit</span>
+                <input id="kit-search" type="search" placeholder="搜索 Kit">
+              </label>
+              <div class="filter-tabs" role="tablist" aria-label="Kit 筛选">
+                <button type="button" data-filter="all" aria-selected="true">全部</button>
+                <button type="button" data-filter="installed" aria-selected="false">已安装</button>
+                <button type="button" data-filter="updates" aria-selected="false">有更新</button>
+              </div>
+              <label class="channel-filter">
+                <span>频道</span>
+                <select id="channel-filter">
+                  <option value="stable">稳定版</option>
+                  <option value="preview">预览版</option>
+                </select>
+              </label>
             </div>
-            <span class="section-heading__note">已审核版本 · 安全即时启用</span>
-          </div>
-          <p id="stable-empty" class="empty-state" hidden></p>
-          <div id="stable-list" class="kit-list"></div>
-        </section>
-
-        <details id="preview-section" class="preview-section">
-          <summary>
-            <span>
-              <span class="eyebrow">自选通道</span>
-              <strong>预览版</strong>
-            </span>
-            <span class="preview-section__warning">内容可能随时变更</span>
-          </summary>
-          <section aria-label="预览版 Kit">
-            <p id="preview-empty" class="empty-state" hidden>暂无预览版。</p>
-            <div id="preview-list" class="kit-list"></div>
+            <p id="kit-list-empty" class="kit-list-empty" hidden></p>
+            <div id="kit-navigation" class="kit-navigation" role="listbox"></div>
+          </aside>
+          <section id="kit-detail" class="kit-detail" aria-live="polite">
+            <div class="kit-detail__empty">
+              <strong>选择一个 Kit</strong>
+              <span>查看用途、权限和本机版本。</span>
+            </div>
           </section>
-        </details>
+        </section>
 
         <footer class="dock-footer">
           <strong>已发布版本不可变更。</strong>

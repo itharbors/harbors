@@ -423,12 +423,17 @@ test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls th
       ['1.10.0', '1.2.3', '1.2.4'],
     );
     await assertRuntimeVersion(undefined);
+    dom.window.document.querySelector('[data-detail-tab="versions"]').click();
     assert.equal(
-      dom.window.document.querySelector('[data-action="switch-version"]').textContent,
-      '启用此版本',
+      dom.window.document.querySelector(
+        '[data-action="activate-version"][data-version="1.10.0"]',
+      ).textContent,
+      '启用',
     );
 
-    dom.window.document.querySelector('[data-action="switch-version"]').click();
+    dom.window.document.querySelector(
+      '[data-action="activate-version"][data-version="1.10.0"]',
+    ).click();
     await view.whenIdle();
     assert.equal(runtimeGeneration, 6);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.10.0');
@@ -436,13 +441,17 @@ test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls th
 
     const managerIdentity = controller.getWindow();
     const managerWebContentsId = managerIdentity.webContents.id;
-    const versionSelect = dom.window.document.querySelector('[data-role="installed-version"]');
-    assert.deepEqual([...versionSelect.options].map((option) => option.value), [
+    dom.window.document.querySelector('[data-detail-tab="versions"]').click();
+    assert.deepEqual(
+      [...dom.window.document.querySelectorAll('.version-track__item[data-version]')]
+        .map((node) => node.dataset.version),
+      [
       '1.10.0', '1.2.4', '1.2.3',
-    ]);
-    versionSelect.value = '1.2.3';
-    versionSelect.dispatchEvent(new dom.window.Event('change'));
-    dom.window.document.querySelector('[data-action="switch-version"]').click();
+      ],
+    );
+    dom.window.document.querySelector(
+      '[data-action="activate-version"][data-version="1.2.3"]',
+    ).click();
     await view.whenIdle();
     assert.equal(runtimeGeneration, 7);
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.2.3');

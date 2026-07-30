@@ -29,43 +29,58 @@ function publicMessage(error) {
     : '操作无法完成。';
 }
 
+function formatValidatedAt(value) {
+  if (!value) return '未保存已验证快照。';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? '已验证快照的时间不可用。'
+    : `验证于 ${date.toLocaleString('zh-CN')}`;
+}
+
+function fallbackReference(kit) {
+  const version = kit.installed?.active
+    ?? kit.installed?.pending
+    ?? kit.installed?.previous
+    ?? kit.installed?.versions?.[0];
+  if (!version) return undefined;
+  return { version, permissions: [], permissionsUnavailable: true };
+}
+
+function entryForChannel(kit, channel) {
+  const reference = kit.channels?.[channel];
+  if (reference) return { kit, channel, reference };
+  if (channel === 'stable' && kit.installed && !kit.channels?.preview) {
+    const fallback = fallbackReference(kit);
+    if (fallback) return { kit, channel, reference: fallback };
+  }
+  return undefined;
+}
+
+function entryStatus({ kit, reference }) {
+  const installed = kit.installed;
+  if (installed?.pending === reference.version) return '正在应用';
+  if (installed?.active === reference.version) return '已启用';
+  if (installed?.badVersions?.includes(reference.version)) return '异常';
+  if (installed?.versions?.includes(reference.version)) {
+    return installed.active ? '已安装' : '已停用';
+  }
+  return installed ? '有更新' : '未安装';
+}
+
+function isUpdate({ kit, reference }) {
+  return Boolean(kit.installed)
+    && !(kit.installed.versions?.includes(reference.version) ?? false);
+}
+
 function channelState(kit, channel, reference) {
   const installed = kit.installed;
-  const isInstalled = installed?.versions?.includes(reference.version) ?? false;
-  const active = installed?.active === reference.version;
-  const pending = installed?.pending === reference.version;
-  const bad = installed?.badVersions?.includes(reference.version) ?? false;
-  return { isInstalled, active, pending, bad, channel };
-}
-
-function statusText(state) {
-  if (state.pending) return '正在应用';
-  if (state.active) return '已启用';
-  if (state.bad) return '已标记异常';
-  if (state.isInstalled) return '已安装';
-  return '可安装';
-}
-
-function ownsInstalledControls(kit, channel) {
-  return Boolean(kit.installed) && (
-    (kit.channels?.stable && channel === 'stable')
-    || (!kit.channels?.stable && kit.channels?.preview && channel === 'preview')
-    || (!kit.channels?.stable && !kit.channels?.preview && channel === 'stable')
-  );
-}
-
-function preferredInstalledVersion(installed) {
-  return installed?.active
-    ?? installed?.pending
-    ?? installed?.previous
-    ?? installed?.versions?.[0];
-}
-
-function installedVersionLabel(installed, version) {
-  let label = version;
-  if (installed.active === version) label += '（当前）';
-  if (installed.badVersions.includes(version)) label += '（异常）';
-  return label;
+  return {
+    isInstalled: installed?.versions?.includes(reference.version) ?? false,
+    active: installed?.active === reference.version,
+    pending: installed?.pending === reference.version,
+    bad: installed?.badVersions?.includes(reference.version) ?? false,
+    channel,
+  };
 }
 
 function createButton(
@@ -89,12 +104,8 @@ function createButton(
   return button;
 }
 
-function formatValidatedAt(value) {
-  if (!value) return '未保存已验证快照。';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? '已验证快照的时间不可用。'
-    : `验证于 ${date.toLocaleString('zh-CN')}`;
+function entryKey(entry) {
+  return `${entry.kit.id}\u0000${entry.channel}`;
 }
 
 export function createKitManagerView({ document, api, confirmInstall = () => true }) {
@@ -117,16 +128,30 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
   const operationStatus = required(document, '#operation-status');
   const installedCountNode = required(document, '#installed-count');
   const refreshButton = required(document, '#refresh-button');
-  const stableList = required(document, '#stable-list');
-  const stableEmpty = required(document, '#stable-empty');
-  const previewList = required(document, '#preview-list');
-  const previewEmpty = required(document, '#preview-empty');
+  const workspace = required(document, '#manager-workspace');
+  const searchInput = required(document, '#kit-search');
+  const channelFilter = required(document, '#channel-filter');
+  const listEmpty = required(document, '#kit-list-empty');
+  const navigation = required(document, '#kit-navigation');
+  const detail = required(document, '#kit-detail');
+  const filterButtons = [...document.querySelectorAll('[data-filter]')];
+
+  const uiState = {
+    query: '',
+    filter: 'all',
+    channel: channelFilter.value || 'stable',
+    selectedKitId: undefined,
+    selectedChannel: undefined,
+    detailTab: 'overview',
+    channelInitialized: false,
+  };
   let currentSnapshot;
   let operation = Promise.resolve();
 
   function setBusy(busy) {
     main.setAttribute('aria-busy', String(busy));
-    for (const control of document.querySelectorAll('button, select')) {
+    refreshButton.disabled = busy;
+    for (const control of document.querySelectorAll('[data-action]')) {
       control.disabled = busy || control.dataset.permanentDisabled === 'true';
     }
   }
@@ -135,12 +160,6 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     operationStatus.textContent = message;
     operationStatus.dataset.outcome = error ? 'failure' : 'success';
     operationStatus.setAttribute('role', error ? 'alert' : 'status');
-  }
-
-  async function reloadInstalledProjection() {
-    if (typeof api.list !== 'function') return;
-    currentSnapshot = await api.list();
-    render(currentSnapshot);
   }
 
   function queue(task) {
@@ -157,40 +176,65 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     return operation;
   }
 
-  function install(kit, channel, reference, row) {
+  async function reloadInstalledProjection() {
+    currentSnapshot = await api.list();
+    render(currentSnapshot);
+  }
+
+  function install(selection, detailNode) {
     return queue(async () => {
-      const nativeRisk = reference.permissions.includes('native-code')
+      const permissions = selection.reference.permissions ?? [];
+      const nativeRisk = permissions.includes('native-code')
         ? '此版本包含原生代码，拥有较高的本机访问权限。'
         : '';
       const accepted = await confirmInstall(
-        `${kit.label ?? kit.id} ${reference.version}：${nativeRisk}应用版本时会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
+        `${selection.kit.label ?? selection.kit.id} ${selection.reference.version}：${nativeRisk}应用版本时会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
       );
       if (!accepted) return;
-      const updating = Boolean(kit.installed);
-      const progress = row.querySelector('.kit-row__progress');
-      row.dataset.operation = 'install';
+      const updating = Boolean(selection.kit.installed);
+      const progress = detailNode.querySelector('.kit-detail__progress');
+      detailNode.dataset.operation = 'install';
       progress.hidden = false;
       try {
-        setOperationMessage(`正在${updating ? '安装更新并应用' : '安装并应用'} ${kit.label ?? kit.id} ${reference.version}…`);
-        await api.install({ id: kit.id, version: reference.version, channel });
+        setOperationMessage(
+          `正在${updating ? '安装更新并应用' : '安装并应用'} ${selection.kit.label ?? selection.kit.id} ${selection.reference.version}…`,
+        );
+        await api.install({
+          id: selection.kit.id,
+          version: selection.reference.version,
+          channel: selection.channel,
+        });
         await reloadInstalledProjection();
-        setOperationMessage(`已${updating ? '更新' : '安装'}并启用 ${kit.label ?? kit.id} ${reference.version}。`);
+        setOperationMessage(
+          `已${updating ? '更新' : '安装'}并启用 ${selection.kit.label ?? selection.kit.id} ${selection.reference.version}。`,
+        );
       } finally {
-        delete row.dataset.operation;
+        delete detailNode.dataset.operation;
         progress.hidden = true;
       }
     });
   }
 
-  function activate(kit, reference, state) {
+  function activate(selection) {
     return queue(async () => {
+      const state = channelState(
+        selection.kit,
+        selection.channel,
+        selection.reference,
+      );
       const accepted = await confirmInstall(
         '立即启用会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？',
       );
       if (!accepted) return;
-      await api.activate({ id: kit.id, version: reference.version, retryBad: state.bad });
+      await api.activate({
+        id: selection.kit.id,
+        version: selection.reference.version,
+        retryBad: state.bad,
+      });
       await reloadInstalledProjection();
-      setOperationMessage(`已启用 ${kit.label ?? kit.id} ${reference.version}。`);
+      setOperationMessage(
+        `已启用 ${selection.kit.label ?? selection.kit.id} ${selection.reference.version}。`,
+      );
     });
   }
 
@@ -241,167 +285,354 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     });
   }
 
-  function createRow(kit, channel, reference) {
-    const state = channelState(kit, channel, reference);
-    const risk = reference.permissions.includes('native-code');
-    const row = element(document, 'article', `kit-row${risk ? ' kit-row--risk' : ''}`);
-    row.dataset.kitId = kit.id;
-    row.dataset.channel = channel;
+  function allEntries(snapshot) {
+    return (snapshot?.kits ?? [])
+      .map((kit) => entryForChannel(kit, uiState.channel))
+      .filter(Boolean);
+  }
 
-    const identity = element(document, 'div', 'kit-row__identity');
-    identity.append(element(document, 'h3', '', kit.label ?? kit.id));
-    identity.append(element(document, 'p', 'kit-row__publisher', kit.publisher ?? '本地安装'));
-    identity.append(element(document, 'p', 'kit-row__summary', kit.summary ?? '安装来源不在当前 Kit 仓库中。'));
-    row.append(identity);
+  function visibleEntries(snapshot) {
+    const query = uiState.query.trim().toLocaleLowerCase('zh-CN');
+    return allEntries(snapshot).filter((entry) => {
+      if (uiState.filter === 'installed' && !entry.kit.installed) return false;
+      if (uiState.filter === 'updates' && !isUpdate(entry)) return false;
+      if (!query) return true;
+      return [
+        entry.kit.label,
+        entry.kit.id,
+        entry.kit.publisher,
+        entry.kit.summary,
+      ].some((value) => String(value ?? '').toLocaleLowerCase('zh-CN').includes(query));
+    });
+  }
 
-    const release = element(document, 'div', 'kit-row__release');
-    const top = element(document, 'div', 'kit-row__topline');
-    top.append(element(document, 'span', 'channel-tag', CHANNEL_LABELS[channel] ?? channel));
-    const status = element(
+  function ensureSelection(entries) {
+    const selectedKey = uiState.selectedKitId && uiState.selectedChannel
+      ? `${uiState.selectedKitId}\u0000${uiState.selectedChannel}`
+      : undefined;
+    let selected = entries.find((entry) => entryKey(entry) === selectedKey);
+    selected ??= entries.find((entry) => entry.kit.installed);
+    selected ??= entries[0];
+    uiState.selectedKitId = selected?.kit.id;
+    uiState.selectedChannel = selected?.channel;
+    return selected;
+  }
+
+  function createListItem(entry, selected) {
+    const item = element(document, 'button', 'kit-list-item');
+    item.type = 'button';
+    item.setAttribute('role', 'option');
+    item.setAttribute('aria-selected', String(selected));
+    item.dataset.role = 'kit-list-item';
+    item.dataset.kitId = entry.kit.id;
+    item.dataset.channel = entry.channel;
+
+    const identity = element(document, 'span', 'kit-list-item__identity');
+    identity.append(element(document, 'strong', '', entry.kit.label ?? entry.kit.id));
+    identity.append(element(
       document,
       'span',
-      `state-tag${state.bad || state.pending ? ' state-tag--warning' : ''}`,
-      statusText(state),
-    );
-    top.append(status);
-    release.append(top);
+      'kit-list-item__summary',
+      entry.kit.summary ?? '安装来源不在当前 Kit 仓库中。',
+    ));
+    item.append(identity);
 
-    const versionRow = element(document, 'div', 'kit-row__version');
-    versionRow.append(element(document, 'span', 'version-label', '版本'));
-    versionRow.append(element(document, 'code', '', reference.version));
-    release.append(versionRow);
+    const meta = element(document, 'span', 'kit-list-item__meta');
+    meta.append(element(document, 'code', '', entry.reference.version));
+    meta.append(element(
+      document,
+      'span',
+      `kit-list-item__status kit-list-item__status--${entryStatus(entry)}`,
+      entryStatus(entry),
+    ));
+    item.append(meta);
 
-    const permissions = element(document, 'div', 'kit-row__permissions');
-    if (reference.permissionsUnavailable) {
-      permissions.append(element(document, 'span', 'permission permission--risk', '权限信息不可用'));
-    } else if (reference.permissions.length === 0) {
-      permissions.append(element(document, 'span', 'permission', '未声明额外权限'));
-    } else {
-      for (const permission of reference.permissions) {
-        permissions.append(element(
-          document,
-          'span',
-          `permission${permission === 'native-code' ? ' permission--risk' : ''}`,
-          PERMISSION_LABELS[permission] ?? permission,
-        ));
-      }
+    item.addEventListener('click', () => {
+      uiState.selectedKitId = entry.kit.id;
+      uiState.selectedChannel = entry.channel;
+      uiState.detailTab = 'overview';
+      workspace.dataset.mobileView = 'detail';
+      renderWorkspace();
+    });
+    return item;
+  }
+
+  function createDetailTabs(selection) {
+    const tabs = element(document, 'div', 'detail-tabs');
+    tabs.setAttribute('role', 'tablist');
+    tabs.setAttribute('aria-label', `${selection.kit.label ?? selection.kit.id} 详情`);
+    for (const [id, label] of [
+      ['overview', '概览'],
+      ['permissions', '权限'],
+      ['versions', '版本记录'],
+    ]) {
+      const button = element(document, 'button', 'detail-tab', label);
+      button.type = 'button';
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-selected', String(uiState.detailTab === id));
+      button.dataset.detailTab = id;
+      button.addEventListener('click', () => {
+        uiState.detailTab = id;
+        renderDetail(selection);
+      });
+      tabs.append(button);
     }
-    release.append(permissions);
-    row.append(release);
+    return tabs;
+  }
 
-    const installed = element(document, 'div', 'kit-row__installed');
-    if (!kit.builtin && ownsInstalledControls(kit, channel)) {
-      const label = element(document, 'label', 'kit-row__version-control');
-      label.append(element(document, 'span', 'version-label', '已安装版本'));
-      const select = element(document, 'select', 'version-select');
-      select.dataset.role = 'installed-version';
-      for (const version of kit.installed.versions) {
-        const option = element(
+  function renderVersionTrack(kit) {
+    if (!kit.installed?.versions?.length) {
+      return element(document, 'p', 'detail-empty', '尚未安装，暂无本机版本记录。');
+    }
+    const track = element(document, 'ol', 'version-track');
+    for (const version of kit.installed.versions) {
+      let state = 'installed';
+      let label = '已安装';
+      if (kit.installed.active === version) {
+        state = 'active';
+        label = '当前启用';
+      } else if (kit.installed.pending === version) {
+        state = 'pending';
+        label = '正在应用';
+      } else if (kit.installed.badVersions.includes(version)) {
+        state = 'bad';
+        label = '异常';
+      }
+
+      const item = element(document, 'li', 'version-track__item');
+      item.dataset.version = version;
+      item.dataset.versionState = state;
+      const node = element(document, 'span', 'version-track__node');
+      node.setAttribute('aria-hidden', 'true');
+      item.append(node);
+      const identity = element(document, 'div', 'version-track__identity');
+      identity.append(element(document, 'code', '', version));
+      identity.append(element(document, 'span', 'version-track__state', label));
+      item.append(identity);
+      if (state !== 'active' && state !== 'pending') {
+        const actionLabel = kit.installed.active === undefined
+          ? '启用'
+          : state === 'bad' ? '重试' : '切换';
+        const button = createButton(
           document,
-          'option',
-          '',
-          installedVersionLabel(kit.installed, version),
+          actionLabel,
+          'activate-version',
+          () => activateInstalledVersion(kit, version),
+          { secondary: true },
         );
-        option.value = version;
-        select.append(option);
+        button.dataset.version = version;
+        item.append(button);
       }
-      select.value = preferredInstalledVersion(kit.installed);
-      label.append(select);
-      installed.append(label);
-      const switchButton = createButton(
-        document,
-        '切换到此版本',
-        'switch-version',
-        () => activateInstalledVersion(kit, select.value),
-        { secondary: true },
-      );
-      const syncSwitchButton = () => {
-        const active = select.value === kit.installed.active;
-        let label = '切换到此版本';
-        if (active) label = '当前已启用';
-        else if (kit.installed.active === undefined) label = '启用此版本';
-        else if (kit.installed.badVersions.includes(select.value)) label = '重试此版本';
-        switchButton.textContent = label;
-        switchButton.classList.toggle('button--current', active);
-        switchButton.dataset.permanentDisabled = String(active);
-        switchButton.disabled = active;
-      };
-      select.addEventListener('change', syncSwitchButton);
-      syncSwitchButton();
-      installed.append(switchButton);
-    } else {
-      installed.append(element(
-        document,
-        'p',
-        'kit-row__installed-note',
-        kit.installed ? '历史版本在主频道行中管理。' : '尚未安装到本机。',
-      ));
+      track.append(item);
+    }
+    return track;
+  }
+
+  function renderDetailPanel(selection) {
+    const panel = element(document, 'div', 'kit-detail__panel');
+    panel.setAttribute('role', 'tabpanel');
+    if (uiState.detailTab === 'permissions') {
+      const permissions = selection.reference.permissions ?? [];
+      if (selection.reference.permissionsUnavailable) {
+        panel.append(element(
+          document,
+          'p',
+          'detail-empty detail-empty--warning',
+          '当前仓库未提供此本机版本的权限信息。',
+        ));
+      } else if (permissions.length === 0) {
+        panel.append(element(document, 'p', 'detail-empty', '此版本未声明额外权限。'));
+      } else {
+        const list = element(document, 'ul', 'permission-list');
+        for (const permission of permissions) {
+          const item = element(
+            document,
+            'li',
+            'permission-item',
+            PERMISSION_LABELS[permission] ?? permission,
+          );
+          item.dataset.permission = permission;
+          if (permission === 'native-code') item.dataset.risk = 'high';
+          list.append(item);
+        }
+        panel.append(list);
+      }
+      return panel;
+    }
+    if (uiState.detailTab === 'versions') {
+      panel.append(renderVersionTrack(selection.kit));
+      return panel;
     }
 
-    const progress = element(document, 'div', 'kit-row__progress');
-    progress.hidden = true;
-    const spinner = element(document, 'span', 'kit-row__spinner');
-    spinner.setAttribute('aria-hidden', 'true');
-    progress.append(spinner);
-    progress.append(element(document, 'span', '', '正在下载并验证…'));
-    installed.append(progress);
-    row.append(installed);
+    const facts = element(document, 'dl', 'kit-detail__facts');
+    facts.append(element(document, 'dt', '', '频道'));
+    facts.append(element(
+      document,
+      'dd',
+      '',
+      CHANNEL_LABELS[selection.channel] ?? selection.channel,
+    ));
+    facts.append(element(document, 'dt', '', '版本'));
+    facts.append(element(document, 'dd', '', selection.reference.version));
+    facts.append(element(document, 'dt', '', '发布者'));
+    facts.append(element(document, 'dd', '', selection.kit.publisher ?? '本地安装'));
+    facts.append(element(document, 'dt', '', '状态'));
+    facts.append(element(document, 'dd', '', entryStatus(selection)));
+    panel.append(facts);
+    return panel;
+  }
 
-    const actions = element(document, 'div', 'kit-row__actions');
-    if (kit.builtin) {
-      actions.append(createButton(
+  function createMainAction(selection) {
+    if (selection.kit.builtin) {
+      return createButton(document, '内置', 'builtin', () => {}, { disabled: true });
+    }
+    const state = channelState(selection.kit, selection.channel, selection.reference);
+    if (!state.isInstalled) {
+      return createButton(
         document,
-        '内置',
-        'builtin',
-        () => {},
-        { disabled: true },
-      ));
-    } else if (!state.isInstalled) {
-      actions.append(createButton(
-        document,
-        kit.installed ? '安装更新' : '安装',
+        selection.kit.installed ? '更新' : '安装',
         'install',
-        () => install(kit, channel, reference, row),
-      ));
-    } else if (!state.active) {
-      actions.append(createButton(
-        document,
-        state.bad ? '立即重试' : '立即启用',
-        'activate',
-        () => activate(kit, reference, state),
-        { disabled: state.pending },
-      ));
+        () => install(selection, detail),
+      );
     }
+    if (!state.active) {
+      return createButton(
+        document,
+        state.bad ? '重试' : '启用',
+        'activate',
+        () => activate(selection),
+        { disabled: state.pending },
+      );
+    }
+    return createButton(
+      document,
+      '停用',
+      'deactivate',
+      () => deactivate(selection.kit),
+      { secondary: true },
+    );
+  }
+
+  function renderDetail(selection) {
+    detail.replaceChildren();
+    delete detail.dataset.channel;
+    if (!selection) {
+      const empty = element(document, 'div', 'kit-detail__empty');
+      empty.append(element(document, 'strong', '', '选择一个 Kit'));
+      empty.append(element(document, 'span', '', '查看用途、权限和本机版本。'));
+      detail.append(empty);
+      return;
+    }
+    detail.dataset.channel = selection.channel;
+
+    const backButton = createButton(
+      document,
+      '返回 Kit 列表',
+      'back-to-list',
+      () => {
+        workspace.dataset.mobileView = 'list';
+      },
+      { secondary: true },
+    );
+    backButton.classList.add('kit-detail__back');
+    detail.append(backButton);
+
+    const header = element(document, 'header', 'kit-detail__header');
+    const heading = element(document, 'div', 'kit-detail__heading');
+    heading.append(element(
+      document,
+      'span',
+      'kit-detail__channel',
+      CHANNEL_LABELS[selection.channel] ?? selection.channel,
+    ));
+    heading.append(element(document, 'h2', '', selection.kit.label ?? selection.kit.id));
+    heading.append(element(
+      document,
+      'p',
+      'kit-detail__publisher',
+      `${selection.kit.publisher ?? '本地安装'} · 已验证`,
+    ));
+    heading.append(element(
+      document,
+      'p',
+      'kit-detail__summary',
+      selection.kit.summary ?? '安装来源不在当前 Kit 仓库中。',
+    ));
+    header.append(heading);
+    const actions = element(document, 'div', 'kit-detail__actions');
+    const mainAction = createMainAction(selection);
+    actions.append(mainAction);
     if (
-      !kit.builtin
-      && ownsInstalledControls(kit, channel)
-      && kit.installed.active !== undefined
+      selection.kit.installed?.active
+      && mainAction.dataset.action !== 'deactivate'
+      && !selection.kit.builtin
     ) {
       actions.append(createButton(
         document,
         '停用',
         'deactivate',
-        () => deactivate(kit),
+        () => deactivate(selection.kit),
         { secondary: true },
       ));
     }
-    if (!kit.builtin && ownsInstalledControls(kit, channel)) {
-      actions.append(createButton(
+    header.append(actions);
+    const progress = element(document, 'div', 'kit-detail__progress');
+    progress.hidden = true;
+    const spinner = element(document, 'span', 'kit-detail__spinner');
+    spinner.setAttribute('aria-hidden', 'true');
+    progress.append(spinner);
+    progress.append(element(document, 'span', '', '正在下载并验证…'));
+    header.append(progress);
+    detail.append(header);
+    detail.append(createDetailTabs(selection));
+    detail.append(renderDetailPanel(selection));
+    if (selection.kit.installed && !selection.kit.builtin) {
+      const danger = element(document, 'section', 'kit-detail__danger');
+      danger.append(element(document, 'div', '', '删除 Kit'));
+      danger.append(element(
+        document,
+        'p',
+        '',
+        '删除全部本机版本；此操作会关闭该 Kit 窗口。',
+      ));
+      danger.append(createButton(
         document,
         '删除',
         'uninstall',
-        () => uninstall(kit),
+        () => uninstall(selection.kit),
         { secondary: true, danger: true },
       ));
+      detail.append(danger);
     }
-    row.append(actions);
-    return row;
+  }
+
+  function renderWorkspace() {
+    const entries = visibleEntries(currentSnapshot);
+    const selected = ensureSelection(entries);
+    navigation.replaceChildren();
+    for (const entry of entries) {
+      navigation.append(createListItem(entry, entryKey(entry) === entryKey(selected)));
+    }
+    listEmpty.hidden = entries.length > 0;
+    listEmpty.textContent = entries.length > 0 ? '' : '没有符合条件的 Kit。请调整搜索或筛选。';
+    for (const button of filterButtons) {
+      button.setAttribute('aria-selected', String(button.dataset.filter === uiState.filter));
+    }
+    renderDetail(selected);
   }
 
   function render(snapshot) {
     currentSnapshot = snapshot;
-    stableList.replaceChildren();
-    previewList.replaceChildren();
+    if (!uiState.channelInitialized) {
+      const kits = snapshot?.kits ?? [];
+      const hasStable = kits.some((kit) => entryForChannel(kit, 'stable'));
+      const hasPreview = kits.some((kit) => entryForChannel(kit, 'preview'));
+      if (!hasStable && hasPreview) {
+        uiState.channel = 'preview';
+        channelFilter.value = 'preview';
+      }
+      uiState.channelInitialized = true;
+    }
     const installedCount = new Set(
       (snapshot?.kits ?? []).filter((kit) => kit.installed).map((kit) => kit.id),
     ).size;
@@ -419,63 +650,46 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     }
     registryNotice.hidden = snapshot?.error === undefined;
     registryNotice.textContent = snapshot?.error?.message ?? '';
-
-    let stableCount = 0;
-    let previewCount = 0;
-    for (const kit of snapshot?.kits ?? []) {
-      if (kit.channels?.stable) {
-        stableList.append(createRow(kit, 'stable', kit.channels.stable));
-        stableCount += 1;
-      } else if (kit.installed && !kit.channels?.preview) {
-        const fallbackVersion = kit.installed.active
-          ?? kit.installed.pending
-          ?? kit.installed.versions.at(-1);
-        if (fallbackVersion) {
-          stableList.append(createRow(kit, 'stable', {
-            version: fallbackVersion,
-            permissions: [],
-            permissionsUnavailable: true,
-          }));
-          stableCount += 1;
-        }
-      }
-      if (kit.channels?.preview) {
-        previewList.append(createRow(kit, 'preview', kit.channels.preview));
-        previewCount += 1;
-      }
-    }
-    stableEmpty.hidden = stableCount !== 0;
-    stableEmpty.textContent = source === 'none'
-      ? '当前没有可用的已验证 Kit 仓库。联网后刷新；已安装的 Kit 不受影响。'
-      : '尚未发布 Kit。刷新以检查新版本。';
-    previewEmpty.hidden = previewCount !== 0;
+    renderWorkspace();
   }
 
-  async function start() {
-    setBusy(true);
-    registryStatus.textContent = '正在加载 Kit 仓库…';
-    try {
-      render(await api.list());
-    } catch (error) {
-      render({ source: 'none', stale: true, validatedAt: null, kits: [] });
-      setOperationMessage(publicMessage(error), true);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  refreshButton.addEventListener('click', () => {
-    queue(async () => {
-      if (typeof api.refresh !== 'function') throw new Error('刷新功能不可用。');
-      render(await api.refresh());
-      setOperationMessage('Kit 仓库已刷新。');
-    });
+  searchInput.addEventListener('input', () => {
+    uiState.query = searchInput.value;
+    renderWorkspace();
   });
+  channelFilter.addEventListener('change', () => {
+    uiState.channel = channelFilter.value;
+    uiState.selectedChannel = undefined;
+    workspace.dataset.mobileView = 'list';
+    renderWorkspace();
+  });
+  for (const button of filterButtons) {
+    button.addEventListener('click', () => {
+      uiState.filter = button.dataset.filter;
+      renderWorkspace();
+    });
+  }
+  refreshButton.addEventListener('click', () => queue(async () => {
+    currentSnapshot = await api.refresh();
+    render(currentSnapshot);
+    setOperationMessage('Kit 仓库已刷新。');
+  }));
 
-  return {
-    start,
+  return Object.freeze({
+    async start() {
+      main.setAttribute('aria-busy', 'true');
+      try {
+        currentSnapshot = await api.list();
+        render(currentSnapshot);
+      } catch (error) {
+        render({ source: 'none', stale: true, kits: [], error: { message: publicMessage(error) } });
+      } finally {
+        main.setAttribute('aria-busy', 'false');
+      }
+    },
     render,
-    whenIdle: () => operation,
-    snapshot: () => structuredClone(currentSnapshot),
-  };
+    whenIdle() {
+      return operation;
+    },
+  });
 }
