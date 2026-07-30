@@ -36,5 +36,6 @@ export function resolveDesktopPaths({
     frameworkEntry: path.join(moduleRoot, 'framework.mjs'),
     dbPath: path.join(dataRoot, 'framework.db'),
     kitStoreRoot: path.join(dataRoot, 'kit-store'),
+    agentGuardDataDir: path.join(dataRoot, 'agent-guard'),
   });
 }
