@@ -27,6 +27,26 @@ export interface ProcessTreeSnapshot {
   processes: ProcessSnapshot[];
 }
 
+export interface ProcessTreeMetrics {
+  sameExecutableDepth: number;
+  maxWidth: number;
+  newTaskProcesses: number;
+  activeTaskProcesses: number;
+  bounded: boolean;
+}
+
+export interface ConnectionCounter {
+  observedAt: number;
+  pid: number;
+  processStartTime: number;
+  executableIdentity: string;
+  remoteAddress: string;
+  transport: 'tcp' | 'udp';
+  state: string;
+  bytesIn: bigint;
+  bytesOut: bigint;
+}
+
 export interface SessionActivity {
   agent: AgentId;
   observedAt: number;
