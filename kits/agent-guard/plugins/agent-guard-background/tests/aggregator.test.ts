@@ -31,6 +31,7 @@ function attributed(bytesIn: bigint, bytesOut: bigint, observedAt: number): Attr
     remoteAddress: '203.0.113.10:443', remoteDigest: '0123456789abcdef', processRole: 'task',
     counter: {
       observedAt, pid: 41, processStartTime: 1000, executableIdentity: 'id',
+      localAddress: '127.0.0.1:5000',
       remoteAddress: '203.0.113.10:443', transport: 'tcp', state: 'ESTABLISHED', bytesIn, bytesOut,
     },
   };

@@ -45,6 +45,20 @@ describe('Agent Guard service', () => {
       .rejects.toThrow(/unknown field|incidentId/iu);
     await expect(service.updatePolicy({ ...policy(), proxyPort: 8080 })).rejects.toThrow(/unknown field/iu);
   });
+
+  it('reports learning state until the persisted learning period ends', async () => {
+    let learning = true;
+    const service = createAgentGuardService({
+      collector: { start: vi.fn(), stop: vi.fn(), snapshot: () => ({ running: true, epoch: 1 }) },
+      controller: { pause: vi.fn(), resume: vi.fn(), terminateRecursive: vi.fn(), pausedTargets: () => [] },
+      initialPolicy: policy(), scheduleInterval: vi.fn(() => 1 as never),
+      clearScheduledInterval: vi.fn(), flushMetrics: vi.fn(), evaluate: vi.fn(),
+      isLearning: () => learning,
+    });
+    expect((await service.getSnapshot()).state).toBe('learning');
+    learning = false;
+    expect((await service.getSnapshot()).state).toBe('normal');
+  });
 });
 
 function policy() {

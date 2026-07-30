@@ -4,9 +4,9 @@
 
 **Goal:** Build a zero-configuration macOS arm64 Harbors Kit that monitors Claude Code and Codex connection bytes, attributes model endpoints without decrypting TLS, detects abnormal process/session growth, and safely controls only confirmed runaway task processes.
 
-**Architecture:** An application-scope background plugin owns adapters, one long-lived `nettop` collector, process/session observation, attribution, policy, persistence, notification, and process control. A lazy session-scope center plugin calls it through a new server-only application-message bridge. Daily NDJSON and atomic JSON retain only allowlisted metadata.
+**Architecture:** An application-scope background plugin owns adapters, bounded 5-second `netstat` snapshots, process/session observation, attribution, policy, persistence, notification, and process control. A lazy session-scope center plugin calls it through a new server-only application-message bridge. Daily NDJSON and atomic JSON retain only allowlisted metadata.
 
-**Tech Stack:** TypeScript 5.7, Node.js 22, Electron 43, Harbors ApplicationRuntime/Kit APIs, Vitest 2, macOS `nettop`/`ps`/POSIX signals, HTML/CSS/DOM.
+**Tech Stack:** TypeScript 5.7, Node.js 22, Electron 43, Harbors ApplicationRuntime/Kit APIs, Vitest 2, macOS `netstat`/`ps`/POSIX signals, HTML/CSS/DOM.
 
 ## Global Constraints
 
@@ -306,15 +306,13 @@ git add kits/agent-guard/plugins/agent-guard-background
 git commit -m '[Feature] 识别本机智能体与模型端点'
 ```
 
-### Task 5: Build low-overhead process and nettop observation
+### Task 5: Build low-overhead process and netstat observation
 
 **Files:**
 - Create: `kits/agent-guard/plugins/agent-guard-background/main/src/process-observer.ts`
-- Create: `kits/agent-guard/plugins/agent-guard-background/main/src/nettop-parser.ts`
-- Create: `kits/agent-guard/plugins/agent-guard-background/main/src/nettop-collector.ts`
+- Create: `kits/agent-guard/plugins/agent-guard-background/main/src/netstat-collector.ts`
 - Create: `kits/agent-guard/plugins/agent-guard-background/tests/process-observer.test.ts`
-- Create: `kits/agent-guard/plugins/agent-guard-background/tests/nettop-parser.test.ts`
-- Create: `kits/agent-guard/plugins/agent-guard-background/tests/nettop-collector.test.ts`
+- Create: `kits/agent-guard/plugins/agent-guard-background/tests/netstat-collector.test.ts`
 
 **Interfaces:**
 - Consumes: `ProcessSnapshot`, `ProcessTreeSnapshot`, and adapter role classification from Task 4.
@@ -326,8 +324,9 @@ git commit -m '[Feature] 识别本机智能体与模型端点'
 expect(buildProcessTree(snapshots, { maxNodes: 256 })).toMatchObject({
   metrics: { sameExecutableDepth: 4, newTaskProcesses: 8 },
 });
-expect(parseNettopRow(csvRow)).toEqual({
+expect(parseNetstatSnapshot(snapshot)[0]).toEqual({
   pid: 41,
+  localAddress: '127.0.0.1:5000',
   remoteAddress: '203.0.113.10:443',
   bytesIn: 2048n,
   bytesOut: 4096n,
@@ -337,30 +336,30 @@ expect(deltaAcrossEpoch.complete).toBe(false);
 
 - [ ] **Step 2: Prove tests fail**
 
-Run: `npm run test -w @itharbors/kit-agent-guard -- --run plugins/agent-guard-background/tests/process-observer.test.ts plugins/agent-guard-background/tests/nettop-parser.test.ts plugins/agent-guard-background/tests/nettop-collector.test.ts`
+Run: `npm run test -w @itharbors/kit-agent-guard -- --run plugins/agent-guard-background/tests/process-observer.test.ts plugins/agent-guard-background/tests/netstat-collector.test.ts`
 
 Expected: FAIL on missing modules.
 
-- [ ] **Step 3: Implement one persistent collector and minimal process snapshots**
+- [ ] **Step 3: Implement non-overlapping bounded snapshots and minimal process snapshots**
 
 ```ts
-const NETTOP_ARGS = Object.freeze([
-  '-L', '0', '-x', '-c', '-s', '2', '-J', 'state,bytes_in,bytes_out',
-]);
+const NETSTAT_ARGS = Object.freeze(['-anv', '-p', 'tcp']);
 ```
 
-Append repeated exact `-p <process-name>` filters. Keep one child alive, bound line length, restart after 1s/2s/4s/8s/30s, and increment epoch every restart. Read one `ps` snapshot every 2 seconds and immediately discard all command text except allowlisted executable markers. Bound trees to 256 nodes per Agent.
+Run one snapshot every 5 seconds with a 1.5-second timeout and 4 MiB output cap. Never overlap commands;
+retry after 2s/4s/8s/30s and increment epoch after every failure. Read one `ps` snapshot every 2 seconds and
+immediately discard all command text except allowlisted executable markers. Bound trees to 256 nodes per Agent.
 
 - [ ] **Step 4: Run tests and build**
 
-Run: `npm run test -w @itharbors/kit-agent-guard -- --run plugins/agent-guard-background/tests/process-observer.test.ts plugins/agent-guard-background/tests/nettop-parser.test.ts plugins/agent-guard-background/tests/nettop-collector.test.ts && npm run build -w @itharbors/kit-agent-guard`
+Run: `npm run test -w @itharbors/kit-agent-guard -- --run plugins/agent-guard-background/tests/process-observer.test.ts plugins/agent-guard-background/tests/netstat-collector.test.ts && npm run build -w @itharbors/kit-agent-guard`
 
-Expected: PASS for malformed/oversized CSV, rollback, restart, stop idempotency, PID reuse, and bounded trees.
+Expected: PASS for malformed/oversized snapshots, rollback, retry, stop idempotency, PID reuse, and bounded trees.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add kits/agent-guard/plugins/agent-guard-background/main/src/process-observer.ts kits/agent-guard/plugins/agent-guard-background/main/src/nettop-parser.ts kits/agent-guard/plugins/agent-guard-background/main/src/nettop-collector.ts kits/agent-guard/plugins/agent-guard-background/tests/process-observer.test.ts kits/agent-guard/plugins/agent-guard-background/tests/nettop-parser.test.ts kits/agent-guard/plugins/agent-guard-background/tests/nettop-collector.test.ts
+git add kits/agent-guard/plugins/agent-guard-background/main/src/process-observer.ts kits/agent-guard/plugins/agent-guard-background/main/src/netstat-collector.ts kits/agent-guard/plugins/agent-guard-background/tests/process-observer.test.ts kits/agent-guard/plugins/agent-guard-background/tests/netstat-collector.test.ts
 git commit -m '[Feature] 采集智能体连接与进程数据'
 ```
 

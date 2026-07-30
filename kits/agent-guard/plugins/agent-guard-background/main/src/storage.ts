@@ -77,6 +77,7 @@ export interface AgentGuardStore {
   appendMetrics(metrics: PersistedMetricV1[]): Promise<void>;
   appendIncidents(events: PersistedIncidentV1[]): Promise<void>;
   readIncidents(day: Date): Promise<PersistedIncidentV1[]>;
+  loadControlLedger(): Promise<ControlLedgerEntryV1[]>;
   saveControlLedger(entries: ControlLedgerEntryV1[]): Promise<void>;
   enforceRetention(now: Date): Promise<void>;
   listMetricFiles(): Promise<string[]>;
@@ -158,6 +159,16 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
     async saveControlLedger(entries) {
       await atomicJson('control-ledger.json', entries.map(normalizeLedger));
     },
+    async loadControlLedger() {
+      try {
+        const value: unknown = JSON.parse(await readFile(path.join(dataDir, 'control-ledger.json'), 'utf8'));
+        if (!Array.isArray(value)) throw new TypeError('control ledger must be an array');
+        return value.map(normalizeLedger);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+        throw error;
+      }
+    },
     async enforceRetention(now) {
       const names = (await readdir(dataDir)).sort((left, right) => {
         const leftMetric = left.startsWith('metrics-') ? 0 : 1;
@@ -194,6 +205,7 @@ function degradedStore(): AgentGuardStore {
     appendMetrics: readOnly,
     appendIncidents: readOnly,
     readIncidents: async () => [],
+    loadControlLedger: async () => [],
     saveControlLedger: readOnly,
     enforceRetention: async () => undefined,
     listMetricFiles: async () => [],

@@ -41,13 +41,14 @@ Relay 环境变量的存量进程；最终需要移除递归 Hook 并终止异�
 纯观察模式仍存在两个不可消除的限制：
 
 1. 在相邻进程快照之间完整启动并退出、且没有留下会话元数据的极短进程可能无法被发现。
-2. TLS 和 HTTP/2 隐藏请求边界，因此只能统计连接和字节，不能得出准确请求数。
+2. 在相邻网络快照之间完整建立并关闭的短连接可能漏记，其字节不会被估算补齐。
+3. TLS 和 HTTP/2 隐藏请求边界，因此只能统计连接和字节，不能得出准确请求数。
 
 产品文案和 API 字段必须保留这些语义，不提供 `requestCount` 一类虚假指标。
 
 ### 域名是归因结果，不是 TLS 观察结果
 
-`nettop` 能提供进程、远端地址、连接状态与累计字节，但不能可靠提供 TLS 请求使用的原始域名。
+`netstat -anv -p tcp` 能提供进程、两端地址、连接状态与累计字节，但不能可靠提供 TLS 请求使用的原始域名。
 Agent Guard 从 Agent 的当前 Provider 配置读取非敏感 endpoint，再将 hostname 按 TTL 解析为
 A/AAAA 地址集合，并与远端地址匹配。反向 DNS 只作为辅助线索，不作为确定证据。
 
@@ -133,9 +134,9 @@ Adapter 使用 `fs.watch` 接收配置或会话目录变化，并以低频完整
 
 ### macOS 网络累计采集器
 
-Collector 维护一个长生命周期 `nettop` CSV 子进程，而不是每个窗口重新执行命令。建议参数为
-logging、raw number、低刷新频率和显式 Agent 进程过滤。PID/进程集合变化时进行受控重启，并在
-重启边界保留上一轮累计游标，避免把累计值误当作新流量。
+Collector 默认每 5 秒执行一次有超时和输出上限的 `netstat -anv -p tcp` 快照。每次命令结束后才
+调度下一次，避免重叠；失败时指数退避并切换 epoch，避免把跨缺口累计值误当作连续流量。这个方案
+比常驻 `nettop` 显著降低目标 macOS 上的 CPU 和 RSS。
 
 Collector 输出经过严格列解析和上限约束后转换为：
 
@@ -145,6 +146,7 @@ interface ConnectionCounter {
   pid: number;
   processStartTime: number;
   executableIdentity: string;
+  localAddress: string;
   remoteAddress: string;
   transport: 'tcp' | 'udp';
   state: string;
@@ -158,8 +160,9 @@ interface ConnectionCounter {
 
 ### 进程观察器
 
-进程观察器以 2 秒为默认周期读取已知 Agent 及其祖先/后代的最小快照：PID、PPID、进程组、启动
-时间、可执行文件 identity 和经过 allowlist 的参数标记。它不读取完整环境变量和完整命令行。
+进程观察器以 5 秒为默认周期读取已知 Agent 及其祖先/后代的最小快照：PID、PPID、进程组、启动
+时间、可执行文件 identity、可执行名称标记和父子拓扑。它不请求环境变量或命令行参数；无法通过
+这些字段确认的顶层 CLI 只作为 host 监控，不参与自动控制。
 
 观察器构建有界进程树并计算：
 
@@ -274,7 +277,7 @@ Claude/Codex 配置 ──> Agent Adapter ──> Provider endpoint + process ro
                                           │
 DNS/IP 历史 ───────────────────────────────┤
                                           v
-nettop 累计计数 ──> Counter Delta ──> Attribution ──> Window Aggregator
+netstat 累计计数 ─> Counter Delta ──> Attribution ──> Window Aggregator
 进程/会话元数据 ────────────────────────────┘              │
                                                           v
                                               Baseline + Policy Engine
@@ -313,7 +316,7 @@ cooldown
 
 ## 错误处理与降级
 
-- `nettop` 不存在、退出或输出不兼容：指数退避重启；超过预算后 Collector degraded，只保留进程和
+- `netstat` 不存在、超时或输出不兼容：指数退避重试；超过预算后 Collector degraded，只保留进程和
   会话告警，不执行流量熔断。
 - 配置无法解析：保留上一个已验证配置到短 TTL；到期后归因降级，不自动控制。
 - DNS 失败或共享 IP：降低置信度，不自动控制。
@@ -328,22 +331,22 @@ cooldown
 ## 性能预算
 
 - UI 未打开时不存在持续 Renderer 工作。
-- Collector 使用一个长生命周期子进程，不按窗口反复 spawn。
-- 空闲默认 2–5 秒聚合，接近阈值时仅对相关 Agent 临时提高聚合频率。
+- Collector 使用不重叠、带 1.5 秒超时的轻量 `netstat` 快照，并在失败时指数退避。
+- 空闲默认 5 秒聚合；第一版不因接近阈值而提高采集频率。
 - 空闲 15 分钟平均增量 CPU 不超过 0.5%。
 - 压力场景持续增量 CPU 通常不超过 2%。
 - 后台与看门狗增量 RSS 合计不超过 50 MB。
 - 普通统计默认每天不超过 20 MB。
 
 性能数字是验收目标，必须由真实构建的 macOS arm64 运行结果证明，不能只用单元测试推断。若
-`nettop` 在目标系统上无法满足预算，实施必须优化过滤和聚合；不能通过放宽验收数字掩盖开销。
+采集器在目标系统上无法满足预算时，实施必须优化采样和聚合；不能通过放宽验收数字掩盖开销。
 
 ## 测试策略
 
 ### 单元测试
 
 - Claude/Codex 配置 allowlist、Provider endpoint、进程角色和安全控制目标选择；
-- `nettop` CSV fixture、累计差量、epoch、计数器倒退、PID 复用和不完整窗口；
+- `netstat` fixture、累计差量、epoch、计数器倒退、PID 复用和不完整窗口；
 - DNS TTL、共享 IP、IPv4/IPv6 与置信度降级；
 - 进程树深度、宽度、相同可执行文件递归和会话速率；
 - 滚动基线、冷启动、多窗口、多信号、cooldown 和规则覆盖；

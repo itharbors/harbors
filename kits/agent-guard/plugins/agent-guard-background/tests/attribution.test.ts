@@ -49,6 +49,7 @@ describe('connection attribution', () => {
 function connection(): ConnectionCounter {
   return {
     observedAt: 20_000, pid: 41, processStartTime: 1000, executableIdentity: 'id',
+    localAddress: '127.0.0.1:5000',
     remoteAddress: '203.0.113.10:443', transport: 'tcp', state: 'ESTABLISHED',
     bytesIn: 20n, bytesOut: 40n,
   };

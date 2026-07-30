@@ -1,3 +1,5 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -79,5 +81,13 @@ describe('Agent Guard public contracts', () => {
 
     expect(normalizePolicy(policy)).toEqual(policy);
     expect(() => normalizePolicy({ ...policy, proxyPort: 8080 })).toThrow(/unknown field/iu);
+  });
+
+  it('keeps complete argv and environment fields out of operating-system probes', () => {
+    const sourceRoot = path.resolve(__dirname, '../plugins/agent-guard-background/main/src');
+    const observer = fs.readFileSync(path.join(sourceRoot, 'process-observer.ts'), 'utf8');
+    const watchdog = fs.readFileSync(path.join(sourceRoot, 'watchdog.ts'), 'utf8');
+    expect(observer).toContain("'pid=,ppid=,pgid=,lstart=,comm='");
+    expect(`${observer}\n${watchdog}`).not.toMatch(/(?:args|command|env)=/u);
   });
 });

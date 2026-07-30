@@ -26,6 +26,7 @@ describe('incident replay', () => {
     });
     const result = engine.evaluate(runaway);
     expect(result).toMatchObject({ state: 'tripped', ruleId: 'structural-recursion-trip' });
+    expect(result.control?.action).toBe('terminate-recursive-subtree');
     expect(result.incidentId).toBe(new PolicyEngine(policy).evaluate(runaway).incidentId);
   });
 });

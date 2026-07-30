@@ -46,12 +46,12 @@ function classifyCodexProcess(process: ProcessSnapshot): AgentProcessRole | null
   const basename = path.basename(executable);
   const isCodex = basename === 'codex' || executable.includes('codex.app') || basename.includes('codex helper');
   if (!isCodex) return null;
-  if (
-    executable.includes('.app/')
-    || basename.includes('helper')
-    || process.commandMarkers.some((marker) => ['renderer', 'helper', 'app-server'].includes(marker))
-  ) return 'host';
-  if (process.commandMarkers.includes('exec') || process.commandMarkers.includes('task')) return 'task';
+  if (basename.includes('helper') || process.commandMarkers.some((marker) => (
+    ['renderer', 'helper', 'app-server'].includes(marker)
+  ))) return 'host';
+  if (basename === 'codex' && process.parentRoleHint === 'host') return 'task';
+  if (executable.includes('.app/')) return 'host';
+  if (process.parentRoleHint === 'host' || process.commandMarkers.includes('task')) return 'task';
   return 'host';
 }
 

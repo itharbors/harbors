@@ -45,6 +45,10 @@ describe('Agent Guard metadata storage', () => {
       schemaVersion: 1, incidentId: 'incident-1', pid: 41, processGroupId: 41,
       processStartTime: 1000, executableIdentity: 'sha256:claude', action: 'paused',
     }]);
+    expect(await store.loadControlLedger()).toEqual([{
+      schemaVersion: 1, incidentId: 'incident-1', pid: 41, processGroupId: 41,
+      processStartTime: 1000, executableIdentity: 'sha256:claude', action: 'paused',
+    }]);
 
     await store.enforceRetention(new Date('2026-07-30T12:00:00.000Z'));
 

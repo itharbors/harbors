@@ -41,6 +41,42 @@ describe('process controller', () => {
     expect(ledgers).toHaveLength(2);
   });
 
+  it('records every verified task-group member for per-process watchdog recovery', async () => {
+    const root = task();
+    const child = task({ pid: 42, ppid: 41, processGroupId: 41 });
+    const live = new Map([root, child].map((value) => [value.pid, value]));
+    const ledgers: any[] = [];
+    const controller = createProcessController({
+      getProcess: async (pid) => live.get(pid) ?? null,
+      listDescendants: async () => [child],
+      listProcessGroup: async () => [root, child],
+      signal: vi.fn(),
+      saveLedger: async (entries) => { ledgers.push(entries); },
+      wait: async () => undefined,
+    });
+    await controller.pause(root, 'incident-group');
+    expect(ledgers[0].map((entry: any) => entry.pid)).toEqual([41, 42]);
+  });
+
+  it('does not pause or retain a target when watchdog publication fails', async () => {
+    const target = task();
+    const signal = vi.fn();
+    const ledgers: unknown[] = [];
+    const controller = createProcessController({
+      getProcess: async () => target,
+      listDescendants: async () => [],
+      signal,
+      saveLedger: async (entries) => { ledgers.push(entries); },
+      onLedgerChanged: async () => { throw new Error('watchdog unavailable'); },
+      wait: async () => undefined,
+    });
+
+    await expect(controller.pause(target)).rejects.toThrow(/watchdog unavailable/iu);
+    expect(signal).not.toHaveBeenCalled();
+    expect(controller.pausedTargets()).toEqual([]);
+    expect(ledgers.at(-1)).toEqual([]);
+  });
+
   it('terminates verified recursive leaves before parents and kills only surviving originals', async () => {
     const root = task({ pid: 41, ppid: 1 });
     const child = task({ pid: 42, ppid: 41, processGroupId: 42 });
@@ -64,6 +100,18 @@ describe('process controller', () => {
 
   it('exposes stable error codes', () => {
     expect(new ControlTargetError('CONTROL_TARGET_STALE', 'stale').code).toBe('CONTROL_TARGET_STALE');
+  });
+
+  it('refuses a task that shares the protected Harbors process group', async () => {
+    const target = task();
+    const signal = vi.fn();
+    const controller = createProcessController({
+      getProcess: async () => target, listDescendants: async () => [], signal,
+      saveLedger: async () => undefined, wait: async () => undefined,
+      isProtectedProcessGroup: (processGroupId) => processGroupId === 41,
+    });
+    await expect(controller.pause(target)).rejects.toMatchObject({ code: 'CONTROL_TARGET_UNSAFE' });
+    expect(signal).not.toHaveBeenCalled();
   });
 });
 

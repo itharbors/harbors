@@ -27,15 +27,16 @@ describe('Claude and Codex adapters', () => {
       commandMarkers: ['renderer'],
     }))).toBe('host');
     expect(codex.classifyProcess(process({
-      executable: '/usr/local/bin/codex', commandMarkers: ['exec'], parentRoleHint: 'host',
+      executable: '/Applications/ChatGPT.app/Contents/Resources/codex',
+      commandMarkers: [], parentRoleHint: 'host',
     }))).toBe('task');
   });
 
   it('never chooses a host, helper, or host-shared process group as a control target', () => {
     const codex = createCodexAdapter();
-    const host = process({ pid: 10, processGroupId: 10, commandMarkers: ['app-server'] });
+    const host = process({ pid: 10, processGroupId: 10 });
     const sharedTask = process({
-      pid: 11, ppid: 10, processGroupId: 10, commandMarkers: ['exec'], parentRoleHint: 'host',
+      pid: 11, ppid: 10, processGroupId: 10, commandMarkers: [], parentRoleHint: 'host',
     });
     const sharedHostTree: ProcessTreeSnapshot = { observedAt: 10_000, processes: [host, sharedTask] };
     const incident: IncidentEvidence = {

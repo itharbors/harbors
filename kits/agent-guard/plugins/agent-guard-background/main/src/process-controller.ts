@@ -26,13 +26,20 @@ export class ControlTargetError extends Error {
 interface ProcessControllerOptions {
   getProcess(pid: number): Promise<LiveControlProcess | null>;
   listDescendants(pid: number): Promise<LiveControlProcess[]>;
+  listProcessGroup?: (processGroupId: number) => Promise<LiveControlProcess[]>;
   signal(target: number, signal: 'SIGSTOP' | 'SIGCONT' | 'SIGTERM' | 'SIGKILL'): void | Promise<void>;
   saveLedger(entries: ControlLedgerEntryV1[]): Promise<void>;
+  onLedgerChanged?: (entries: ControlLedgerEntryV1[]) => Promise<void> | void;
   wait(milliseconds: number): Promise<void>;
+  isProtectedProcessGroup?: (processGroupId: number) => boolean;
 }
 
 export function createProcessController(options: ProcessControllerOptions) {
-  const paused = new Map<number, { target: VerifiedControlTarget; incidentId: string }>();
+  const paused = new Map<number, {
+    target: VerifiedControlTarget;
+    incidentId: string;
+    members: VerifiedControlTarget[];
+  }>();
 
   const revalidate = async (target: VerifiedControlTarget): Promise<LiveControlProcess> => {
     if (target.role !== 'task' && target.role !== 'hook') {
@@ -49,30 +56,54 @@ export function createProcessController(options: ProcessControllerOptions) {
     if (live.role !== target.role || (live.role !== 'task' && live.role !== 'hook')) {
       throw new ControlTargetError('CONTROL_TARGET_UNSAFE', 'Control target role is unsafe');
     }
+    if (options.isProtectedProcessGroup?.(live.processGroupId)) {
+      throw new ControlTargetError('CONTROL_TARGET_UNSAFE', 'Control target shares a protected process group');
+    }
     return live;
   };
 
-  const persistLedger = () => options.saveLedger([...paused.values()].map(({ target, incidentId }) => ({
-    schemaVersion: 1,
-    incidentId,
-    pid: target.pid,
-    processGroupId: target.processGroupId,
-    processStartTime: target.processStartTime,
-    executableIdentity: target.executableIdentity,
-    action: 'paused',
-  })));
+  const ledgerEntries = () => (
+    [...paused.values()].flatMap(({ members, incidentId }) => members.map((target) => ({
+        schemaVersion: 1 as const,
+        incidentId,
+        pid: target.pid,
+        processGroupId: target.processGroupId,
+        processStartTime: target.processStartTime,
+        executableIdentity: target.executableIdentity,
+        action: 'paused' as const,
+      })))
+  );
+  const persistLedger = async () => {
+    const entries = ledgerEntries();
+    await options.saveLedger(entries);
+    await options.onLedgerChanged?.(entries);
+  };
+  const rollbackPause = async (pid: number) => {
+    paused.delete(pid);
+    const entries = ledgerEntries();
+    try { await options.saveLedger(entries); } catch { /* preserve the control failure */ }
+    try { await options.onLedgerChanged?.(entries); } catch { /* preserve the control failure */ }
+  };
 
   return {
     async pause(target: VerifiedControlTarget, incidentId = 'unknown') {
       if (paused.has(target.pid)) return;
-      await revalidate(target);
-      paused.set(target.pid, { target: { ...target }, incidentId });
-      await persistLedger();
+      const live = await revalidate(target);
+      const candidates = options.listProcessGroup
+        ? await options.listProcessGroup(target.processGroupId)
+        : [live];
+      const members = [...new Map(candidates.map((candidate) => [candidate.pid, candidate])).values()];
+      if (!members.some((candidate) => candidate.pid === target.pid)) members.push(live);
+      for (const member of members) await revalidate(member as VerifiedControlTarget);
+      paused.set(target.pid, {
+        target: { ...target }, incidentId,
+        members: members.map((member) => ({ ...member, role: member.role as 'task' | 'hook' })),
+      });
       try {
+        await persistLedger();
         await options.signal(-target.processGroupId, 'SIGSTOP');
       } catch (error) {
-        paused.delete(target.pid);
-        await persistLedger();
+        await rollbackPause(target.pid);
         throw error;
       }
     },

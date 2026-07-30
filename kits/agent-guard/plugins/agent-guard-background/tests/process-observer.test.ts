@@ -31,27 +31,28 @@ describe('process observer', () => {
     }).processes).toHaveLength(8);
   });
 
-  it('discards command text after deriving exact allowlisted markers', () => {
+  it('derives task hints from process topology without accepting argv fields', () => {
     const rows = parsePsRows([
-      '41\t1\t41\t1000\t/usr/local/bin/codex\tcodex exec --prompt secret-text',
-      '42\t41\t42\t1001\t/opt/bin/claude\tclaude -p secret-text',
+      '41\t1\t41\t1000\t/Applications/ChatGPT.app/Contents/MacOS/ChatGPT',
+      '42\t41\t42\t1001\t/Applications/ChatGPT.app/Contents/Resources/codex',
+      '43\t42\t43\t1002\t/opt/bin/claude\tsecret-argv-must-reject',
     ].join('\n'));
 
-    expect(rows[0].commandMarkers).toEqual(['exec']);
-    expect(rows[1].commandMarkers).toEqual(['hook']);
-    expect(JSON.stringify(rows)).not.toContain('secret-text');
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ commandMarkers: [], parentRoleHint: null });
+    expect(rows[1]).toMatchObject({ commandMarkers: [], parentRoleHint: 'host' });
+    expect(JSON.stringify(rows)).not.toContain('secret-argv');
   });
 
-  it('parses the fixed macOS ps layout without retaining full commands', () => {
+  it('parses executable paths with spaces from the argv-free macOS layout', () => {
     const rows = parsePsRows(
-      '  41     1    41 Wed Jul 30 12:34:56 2026 /usr/local/bin/codex codex exec --prompt secret-text',
+      '  41     1    41 Wed Jul 30 12:34:56 2026 /Applications/Codex.app/Contents/Frameworks/Codex Helper.app/Contents/MacOS/Codex Helper',
     );
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ pid: 41, ppid: 1, processGroupId: 41 });
     expect(rows[0].processStartTime).toBeGreaterThan(0);
-    expect(rows[0].commandMarkers).toEqual(['exec']);
-    expect(JSON.stringify(rows)).not.toContain('secret-text');
+    expect(rows[0].commandMarkers).toEqual(['helper']);
   });
 });
 

@@ -18,24 +18,26 @@ import { createClaudeAdapter } from './adapters/claude.js';
 import { createCodexAdapter } from './adapters/codex.js';
 import { DnsHistory, attributeConnection } from './attribution.js';
 import { RollingBaseline } from './baseline.js';
+import { BoundedMap, BoundedSet } from './bounded-cache.js';
 import {
   computeCounterDelta,
-  createNettopCollector,
-  createNettopStreamParser,
+  createNetstatCollector,
+  createNetstatSnapshotParser,
   type EpochCounter,
-} from './nettop-collector.js';
+} from './netstat-collector.js';
 import { observeProcesses } from './process-observer.js';
 import { buildProcessTree } from './process-observer.js';
 import { createProcessController, type VerifiedControlTarget } from './process-controller.js';
 import { PolicyEngine } from './policy.js';
 import { createIncidentNotifier } from './notifications.js';
 import { createAgentGuardStore, type PersistedIncidentV1, type PersistedMetricV1 } from './storage.js';
+import { createWatchdogClient } from './watchdog.js';
 import type { AgentProcessRole, ProcessSnapshot } from './types.js';
 
 interface CollectorLike {
   start(): void;
   stop(): void;
-  snapshot(): { running: boolean; epoch: number };
+  snapshot(): { running: boolean; epoch: number; incomplete?: boolean; lastObservedAt?: number | null };
 }
 
 interface ControllerLike {
@@ -57,6 +59,7 @@ interface AgentGuardServiceOptions {
   onStart?: () => Promise<void> | void;
   onDispose?: () => Promise<void> | void;
   onPolicyChanged?: (policy: PolicyV1) => Promise<void> | void;
+  isLearning?: () => boolean;
 }
 
 export function createAgentGuardService(options: AgentGuardServiceOptions) {
@@ -75,20 +78,27 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
       started = true;
       await options.onStart?.();
       options.collector.start();
-      timers.push(options.scheduleInterval(() => { void options.flushMetrics(); }, 10_000));
-      timers.push(options.scheduleInterval(() => { void options.evaluate(); }, policy.evaluationWindowSeconds * 1000));
+      timers.push(options.scheduleInterval(() => {
+        void Promise.resolve(options.flushMetrics()).catch(() => undefined);
+      }, 10_000));
+      timers.push(options.scheduleInterval(() => {
+        void Promise.resolve(options.evaluate()).catch(() => undefined);
+      }, policy.evaluationWindowSeconds * 1000));
     },
     async getSnapshot(): Promise<AgentGuardSnapshot> {
       const collector = options.collector.snapshot();
+      const incidentState = incidents.some((incident) => incident.state === 'tripped')
+        ? 'tripped'
+        : incidents.some((incident) => incident.state === 'warning') ? 'warning' : undefined;
       return normalizeSnapshot({
         schemaVersion: 1,
         observedAt: Date.now(),
-        state: collector.running ? 'normal' : 'degraded',
+        state: !collector.running || collector.incomplete ? 'degraded' : incidentState ?? (options.isLearning?.() ? 'learning' : 'normal'),
         collector: {
           status: collector.running ? 'running' : 'degraded',
           epoch: collector.epoch,
-          lastObservedAt: null,
-          incomplete: !collector.running,
+          lastObservedAt: collector.lastObservedAt ?? null,
+          incomplete: !collector.running || Boolean(collector.incomplete),
         },
         endpoints: options.endpoints?.() ?? [],
         incidents,
@@ -153,7 +163,7 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
   const policyPath = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)), '../../../../resources/policy-v1.json',
   );
-  const initialPolicy = normalizePolicy(JSON.parse(fs.readFileSync(policyPath, 'utf8')));
+  const basePolicy = normalizePolicy(JSON.parse(fs.readFileSync(policyPath, 'utf8')));
   const processMap = new Map<number, ProcessSnapshot>();
   const claude = createClaudeAdapter({
     settingsPath: path.join(os.homedir(), '.claude', 'settings.json'),
@@ -164,17 +174,24 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     sessionsDirectory: path.join(os.homedir(), '.codex', 'sessions'),
   });
   const adapters = [claude, codex] as const;
-  const configurations = await Promise.all(adapters.map((adapter) => adapter.discoverConfiguration()));
+  const fallbackAdapters = [createClaudeAdapter(), createCodexAdapter()] as const;
+  let configurations = await Promise.all(adapters.map(async (adapter, index) => {
+    try { return await adapter.discoverConfiguration(); }
+    catch { return fallbackAdapters[index].discoverConfiguration(); }
+  }));
   const store = await createAgentGuardStore({
     dataDir: env.HARBORS_AGENT_GUARD_DATA_DIR,
     hostMode: env.HARBORS_HOST_MODE === 'desktop' ? 'desktop' : 'web',
   });
   const persistedState = await store.loadState();
   const salt = persistedState ? Buffer.from(persistedState.saltHex, 'hex') : randomBytes(32);
+  const createdAt = persistedState?.createdAt ?? Date.now();
+  let policyOverrides = persistedState?.policyOverrides ?? {};
+  const initialPolicy = applyPolicyOverrides(basePolicy, policyOverrides);
   if (!persistedState && store.status === 'ready') {
     await store.saveState({
       schemaVersion: 1,
-      createdAt: Date.now(),
+      createdAt,
       saltHex: salt.toString('hex'),
       policyOverrides: {},
       baselines: [],
@@ -182,7 +199,7 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
   }
   const dns = new DnsHistory();
   const endpointTotals = new Map<string, AgentEndpointSnapshot>();
-  const previousCounters = new Map<string, EpochCounter>();
+  const previousCounters = new BoundedMap<string, EpochCounter>(8_192);
   const endpointRuntime = new Map<string, {
     remoteDigest: string;
     bytesIn: number;
@@ -196,10 +213,12 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     complete: boolean;
   }>();
   const previousAgentPids = [new Set<number>(), new Set<number>()];
-  const startedAt = Date.now();
+  const startedAt = createdAt;
   let lastEvaluationAt = startedAt;
   let policyEngine = new PolicyEngine(initialPolicy);
   let observerTimer: ReturnType<typeof setInterval> | undefined;
+  let configurationTimer: ReturnType<typeof setInterval> | undefined;
+  let dnsTimer: ReturnType<typeof setInterval> | undefined;
   let service: ReturnType<typeof createAgentGuardService>;
 
   const classify = (process: ProcessSnapshot): { role: AgentProcessRole; index: number } | undefined => {
@@ -208,10 +227,9 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     const codexRole = codex.classifyProcess(process);
     return codexRole ? { role: codexRole, index: 1 } : undefined;
   };
-  const streamParser = createNettopStreamParser({ resolveProcess: (pid) => processMap.get(pid) });
-  const collector = createNettopCollector({
-    processNames: ['claude', 'codex', 'Codex'],
-    parseLine: streamParser,
+  const snapshotParser = createNetstatSnapshotParser({ resolveProcess: (pid) => processMap.get(pid) });
+  const collector = createNetstatCollector({
+    parseSnapshot: snapshotParser,
     onCounter(value) {
       const process = processMap.get(value.counter.pid);
       const classified = process && classify(process);
@@ -222,7 +240,7 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         configuration: configurations[classified.index],
         salt,
       }, dns, Date.now());
-      const counterKey = `${value.counter.pid}\0${value.counter.processStartTime}\0${value.counter.remoteAddress}`;
+      const counterKey = `${value.counter.pid}\0${value.counter.processStartTime}\0${value.counter.localAddress}\0${value.counter.remoteAddress}`;
       const previous = previousCounters.get(counterKey);
       previousCounters.set(counterKey, value);
       if (!previous) return;
@@ -236,12 +254,13 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         bytesIn: 0, bytesOut: 0, bytesInPerMinute: 0, bytesOutPerMinute: 0,
         connections: 0, activeTasks: 0,
       };
+      const deltaIn = safeCounterNumber(delta.bytesIn);
+      const deltaOut = safeCounterNumber(delta.bytesOut);
       endpointTotals.set(endpointKey, {
         ...current,
         confidence: attributed.confidence,
-        bytesIn: current.bytesIn + Number(delta.bytesIn),
-        bytesOut: current.bytesOut + Number(delta.bytesOut),
-        connections: current.connections,
+        bytesIn: Math.min(Number.MAX_SAFE_INTEGER, current.bytesIn + deltaIn),
+        bytesOut: Math.min(Number.MAX_SAFE_INTEGER, current.bytesOut + deltaOut),
         activeTasks: classified.role === 'task' || classified.role === 'hook' ? 1 : 0,
       });
       const runtime = endpointRuntime.get(endpointKey) ?? {
@@ -249,15 +268,15 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         bytesIn: 0,
         bytesOut: 0,
         connections: new Set<string>(),
-        knownConnections: new Set<string>(),
+        knownConnections: new BoundedSet<string>(4_096),
         newConnections: new Set<string>(),
         processIds: new Set<number>(),
         history: [],
-        baseline: new RollingBaseline(),
+        baseline: restoreBaseline(endpointKey, persistedState?.baselines),
         complete: true,
       };
-      runtime.bytesIn += safeCounterNumber(delta.bytesIn);
-      runtime.bytesOut += safeCounterNumber(delta.bytesOut);
+      runtime.bytesIn = Math.min(Number.MAX_SAFE_INTEGER, runtime.bytesIn + deltaIn);
+      runtime.bytesOut = Math.min(Number.MAX_SAFE_INTEGER, runtime.bytesOut + deltaOut);
       runtime.connections.add(counterKey);
       if (!runtime.knownConnections.has(counterKey)) runtime.newConnections.add(counterKey);
       runtime.knownConnections.add(counterKey);
@@ -265,9 +284,11 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
       runtime.complete &&= delta.complete;
       endpointRuntime.set(endpointKey, runtime);
       const projected = endpointTotals.get(endpointKey)!;
-      projected.bytesIn = Math.min(Number.MAX_SAFE_INTEGER, projected.bytesIn + safeCounterNumber(delta.bytesIn));
-      projected.bytesOut = Math.min(Number.MAX_SAFE_INTEGER, projected.bytesOut + safeCounterNumber(delta.bytesOut));
       projected.connections = runtime.connections.size;
+    },
+    onIncomplete() {
+      previousCounters.clear();
+      for (const runtime of endpointRuntime.values()) runtime.complete = false;
     },
   });
   const getLive = async (pid: number) => {
@@ -275,6 +296,14 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     const classified = process && classify(process);
     return process && classified ? { ...process, role: classified.role } : null;
   };
+  const priorLedger = await store.loadControlLedger();
+  if (priorLedger.length > 0) {
+    const recovery = createWatchdogClient({});
+    await recovery.update(priorLedger);
+    await recovery.recover();
+    if (store.status === 'ready') await store.saveControlLedger([]);
+  }
+  const watchdog = createWatchdogClient({});
   const controller = createProcessController({
     getProcess: getLive,
     listDescendants: async (pid) => collectDescendants(pid, processMap)
@@ -282,9 +311,24 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         const classified = classify(process);
         return classified ? [{ ...process, role: classified.role }] : [];
       }),
+    listProcessGroup: async (processGroupId) => [...processMap.values()]
+      .filter((candidate) => candidate.processGroupId === processGroupId)
+      .flatMap((candidate) => {
+        const classified = classify(candidate);
+        return classified ? [{ ...candidate, role: classified.role }] : [];
+      }),
     signal: (target, name) => { process.kill(target, name); },
     saveLedger: (entries) => store.saveControlLedger(entries),
+    onLedgerChanged: (entries) => watchdog.update(entries),
     wait: (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    isProtectedProcessGroup: (processGroupId) => (
+      processMap.get(process.pid)?.processGroupId === processGroupId
+      || [...processMap.values()].some((candidate) => {
+        if (candidate.processGroupId !== processGroupId) return false;
+        const classified = classify(candidate);
+        return !classified || (classified.role !== 'task' && classified.role !== 'hook');
+      })
+    ),
   });
   const refreshProcesses = async () => {
     const processes = await observeProcesses();
@@ -293,6 +337,12 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
   };
   const notificationPort = parseNotificationPort(env.HARBORS_NOTIFICATION_PORT);
   const notifier = notificationPort ? createIncidentNotifier({ port: notificationPort }) : undefined;
+  const refreshConfigurations = async () => {
+    const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));
+    configurations = configurations.map((current, index) => (
+      discovered[index].status === 'fulfilled' ? discovered[index].value : current
+    ));
+  };
   const refreshDns = async () => {
     const now = Date.now();
     for (const configuration of configurations) {
@@ -304,7 +354,10 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
   };
   const evaluate = async () => {
     const now = Date.now();
-    const activities = await Promise.all(adapters.map((adapter) => adapter.discoverSessionActivity(lastEvaluationAt)));
+    const activityResults = await Promise.allSettled(
+      adapters.map((adapter) => adapter.discoverSessionActivity(lastEvaluationAt)),
+    );
+    const activities = activityResults.map((result) => result.status === 'fulfilled' ? result.value : []);
     const persistedMetrics: PersistedMetricV1[] = [];
     const persistedIncidents: PersistedIncidentV1[] = [];
     for (const [key, runtime] of endpointRuntime) {
@@ -328,6 +381,7 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
       runtime.history.push(bucket);
       projected.bytesInPerMinute = runtime.bytesIn;
       projected.bytesOutPerMinute = runtime.bytesOut;
+      projected.activeTasks = tree.metrics.activeTaskProcesses;
       runtime.history = runtime.history.filter((item) => (
         now - item.at < policyEngine.policy.trafficWindowMinutes * 60_000
       ));
@@ -397,7 +451,7 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         await notifier?.notify({
           agent: projected.agent, endpoint: projected.hostname, ruleId: result.ruleId,
           level: control ? 'tripped' : 'warning', summary,
-        });
+        }).catch(() => undefined);
         persistedIncidents.push({
           schemaVersion: 1, id: result.incidentId, at: now, ruleId: result.ruleId,
           state, agent: projected.agent, provider: projected.provider, hostname: projected.hostname,
@@ -416,6 +470,10 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     if (store.status === 'ready') {
       await store.appendMetrics(persistedMetrics);
       await store.appendIncidents(persistedIncidents);
+      await store.saveState({
+        schemaVersion: 1, createdAt: startedAt, saltHex: salt.toString('hex'), policyOverrides,
+        baselines: [...endpointRuntime].map(([key, runtime]) => ({ key, values: runtime.baseline.values() })),
+      });
     }
     lastEvaluationAt = now;
   };
@@ -430,19 +488,63 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     endpoints: () => [...endpointTotals.values()],
     onStart: async () => {
       await refreshProcesses();
+      await refreshConfigurations();
       await refreshDns();
-      observerTimer = setInterval(() => { void refreshProcesses(); }, 2_000);
+      observerTimer = setInterval(() => { void refreshProcesses().catch(() => undefined); }, 5_000);
+      configurationTimer = setInterval(() => { void refreshConfigurations(); }, 60_000);
+      dnsTimer = setInterval(() => { void refreshDns(); }, 4 * 60_000);
     },
     onDispose: async () => {
       if (observerTimer) clearInterval(observerTimer);
+      if (configurationTimer) clearInterval(configurationTimer);
+      if (dnsTimer) clearInterval(dnsTimer);
+      await watchdog.shutdown();
     },
-    onPolicyChanged: (policy) => { policyEngine = new PolicyEngine(policy); },
+    onPolicyChanged: async (policy) => {
+      policyEngine = new PolicyEngine(policy);
+      policyOverrides = {
+        fixedWarningOutboundMiB: policy.fixedWarning.outboundMiB,
+        fixedTripOutboundMiB: policy.fixedTrip.outboundMiB,
+      };
+      if (store.status === 'ready') {
+        await store.saveState({
+          schemaVersion: 1, createdAt: startedAt, saltHex: salt.toString('hex'), policyOverrides,
+          baselines: [...endpointRuntime].map(([key, runtime]) => ({ key, values: runtime.baseline.values() })),
+        });
+      }
+    },
+    isLearning: () => Date.now() - startedAt < policyEngine.policy.learningHours * 60 * 60_000,
   });
   return service;
 }
 
 function safeCounterNumber(value: bigint): number {
   return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value);
+}
+
+function restoreBaseline(
+  key: string,
+  persisted: Array<{ key: string; values: number[] }> | undefined,
+): RollingBaseline {
+  const baseline = new RollingBaseline();
+  for (const value of persisted?.find((item) => item.key === key)?.values ?? []) baseline.add(value);
+  return baseline;
+}
+
+function applyPolicyOverrides(policy: PolicyV1, overrides: Record<string, unknown>): PolicyV1 {
+  const warning = overrides.fixedWarningOutboundMiB;
+  const trip = overrides.fixedTripOutboundMiB;
+  return normalizePolicy({
+    ...policy,
+    fixedWarning: {
+      ...policy.fixedWarning,
+      outboundMiB: typeof warning === 'number' ? warning : policy.fixedWarning.outboundMiB,
+    },
+    fixedTrip: {
+      ...policy.fixedTrip,
+      outboundMiB: typeof trip === 'number' ? trip : policy.fixedTrip.outboundMiB,
+    },
+  });
 }
 
 function parseNotificationPort(value: string | undefined): number | undefined {

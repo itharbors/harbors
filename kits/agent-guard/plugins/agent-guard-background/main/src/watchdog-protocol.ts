@@ -7,13 +7,14 @@ export interface WatchdogEntry {
 export type WatchdogMessage =
   | { type: 'heartbeat' }
   | { type: 'update'; entries: WatchdogEntry[] }
+  | { type: 'recover' }
   | { type: 'shutdown' };
 
 type UnknownRecord = Record<string, unknown>;
 
 export function parseWatchdogMessage(value: unknown): WatchdogMessage {
   const input = exactRecord(value, ['type'], 'watchdog message', true);
-  if (input.type === 'heartbeat' || input.type === 'shutdown') {
+  if (input.type === 'heartbeat' || input.type === 'recover' || input.type === 'shutdown') {
     exactRecord(value, ['type'], 'watchdog message');
     return { type: input.type };
   }

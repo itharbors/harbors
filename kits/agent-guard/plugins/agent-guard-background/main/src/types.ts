@@ -40,6 +40,7 @@ export interface ConnectionCounter {
   pid: number;
   processStartTime: number;
   executableIdentity: string;
+  localAddress: string;
   remoteAddress: string;
   transport: 'tcp' | 'udp';
   state: string;

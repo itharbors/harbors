@@ -73,15 +73,19 @@ function positiveInteger(value: string, context: string): number {
   return parsed;
 }
 
-function allowlistedMarkers(executable: string, command: string): string[] {
-  const basename = path.basename(executable).toLowerCase();
+function allowlistedMarkers(executable: string): string[] {
   const markers: string[] = [];
-  if (basename === 'codex' && /(?:^|\s)exec(?:\s|$)/u.test(command)) markers.push('exec');
-  if (basename === 'claude' && /(?:^|\s)-(?:p|print)(?:\s|$)/u.test(command)) markers.push('hook');
   if (/Codex Helper \(Renderer\)/iu.test(executable)) markers.push('renderer');
   if (/Codex Helper/iu.test(executable) && !markers.includes('renderer')) markers.push('helper');
-  if (/(?:^|\s)app-server(?:\s|$)/u.test(command)) markers.push('app-server');
   return markers;
+}
+
+function isAgentExecutable(executable: string): boolean {
+  const basename = path.basename(executable).toLowerCase();
+  return basename === 'claude'
+    || basename === 'codex'
+    || basename === 'chatgpt'
+    || executable.toLowerCase().includes('/codex.app/');
 }
 
 export function parsePsRows(output: string): ProcessSnapshot[] {
@@ -91,19 +95,19 @@ export function parsePsRows(output: string): ProcessSnapshot[] {
     if (!line) continue;
     const tabFields = line.split('\t');
     const macFields = line.match(
-      /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\/\S+)\s*(.*)$/u,
+      /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\/.*)$/u,
     );
     let fields: string[];
-    if (tabFields.length === 6) {
+    if (tabFields.length === 5) {
       fields = tabFields;
     } else if (macFields) {
       const start = Date.parse(macFields[4]);
       if (!Number.isFinite(start)) continue;
-      fields = [macFields[1], macFields[2], macFields[3], String(start), macFields[5], macFields[6]];
+      fields = [macFields[1], macFields[2], macFields[3], String(start), macFields[5]];
     } else {
       continue;
     }
-    const [pid, ppid, processGroupId, processStartTime, executable, command] = fields;
+    const [pid, ppid, processGroupId, processStartTime, executable] = fields;
     if (!path.isAbsolute(executable)) continue;
     snapshots.push({
       pid: positiveInteger(pid, 'pid'),
@@ -112,16 +116,22 @@ export function parsePsRows(output: string): ProcessSnapshot[] {
       processStartTime: positiveInteger(processStartTime, 'processStartTime'),
       executable,
       executableIdentity: `path:${executable}`,
-      commandMarkers: allowlistedMarkers(executable, command),
+      commandMarkers: allowlistedMarkers(executable),
       parentRoleHint: null,
     });
   }
-  return snapshots;
+  const byPid = new Map(snapshots.map((snapshot) => [snapshot.pid, snapshot]));
+  return snapshots.map((snapshot) => {
+    const parent = byPid.get(snapshot.ppid);
+    return parent && isAgentExecutable(parent.executable)
+      ? { ...snapshot, parentRoleHint: 'host' }
+      : snapshot;
+  });
 }
 
 export async function observeProcesses(): Promise<ProcessSnapshot[]> {
   const { stdout } = await execFile('/bin/ps', [
-    '-axo', 'pid=,ppid=,pgid=,lstart=,comm=,args=',
+    '-axo', 'pid=,ppid=,pgid=,lstart=,comm=',
   ], { maxBuffer: MAX_PS_OUTPUT_BYTES });
   // Production callers may replace this command adapter with a tab-delimited native snapshot.
   // Never return raw ps text; an unsupported layout becomes an empty, incomplete observation.

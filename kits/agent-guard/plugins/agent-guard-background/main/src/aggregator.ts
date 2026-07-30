@@ -1,5 +1,5 @@
 import type { AttributionConfidence } from '@itharbors/agent-guard-contracts';
-import { computeCounterDelta } from './nettop-collector.js';
+import { computeCounterDelta } from './netstat-collector.js';
 import type { AttributedConnection } from './attribution.js';
 
 export interface AttributedCounterSample {
@@ -23,7 +23,7 @@ function connectionKey(connection: AttributedConnection): string {
   const value = connection.counter;
   return [
     value.pid, value.processStartTime, value.executableIdentity,
-    value.remoteAddress, value.transport,
+    value.localAddress, value.remoteAddress, value.transport,
   ].join('\0');
 }
 
