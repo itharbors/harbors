@@ -182,6 +182,32 @@ test('does not install native code when confirmation is declined', async () => {
   assert.deepEqual(value.calls, []);
 });
 
+test('marks process control as elevated risk and requires install confirmation', async () => {
+  const processControlSnapshot = snapshot({
+    kits: [{
+      ...snapshot().kits[0],
+      channels: {
+        stable: { version: '1.2.0', permissions: ['process-control'] },
+      },
+    }],
+  });
+  const confirmations = [];
+  const value = await createView({
+    initial: processControlSnapshot,
+    confirmInstall: (details) => { confirmations.push(details); return false; },
+  });
+
+  await value.view.start();
+  const card = value.document.querySelector('[data-channel="stable"]');
+  assert.match(card.querySelector('.permission--risk').textContent, /Process control.*elevated risk/i);
+  card.querySelector('[data-action="install"]').click();
+  await value.view.whenIdle();
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /process control/i);
+  assert.deepEqual(value.calls, []);
+});
+
 test('queues activation, explicit bad retry, and rollback while disabling concurrent controls', async () => {
   let releaseActivation;
   const activationGate = new Promise((resolve) => { releaseActivation = resolve; });

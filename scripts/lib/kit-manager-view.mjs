@@ -2,8 +2,13 @@ const PERMISSION_LABELS = Object.freeze({
   network: 'Network',
   filesystem: 'File access',
   'native-code': 'Native code — elevated risk',
+  'process-control': 'Process control — elevated risk',
   'application-startup': 'Starts with ITHARBORS',
 });
+
+function isElevatedRiskPermission(permission) {
+  return permission === 'native-code' || permission === 'process-control';
+}
 
 function required(document, selector) {
   const node = document.querySelector(selector);
@@ -123,9 +128,13 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
 
   function install(kit, channel, reference) {
     return queue(async () => {
-      if (reference.permissions.includes('native-code')) {
+      const elevatedPermissions = reference.permissions.filter(isElevatedRiskPermission);
+      if (elevatedPermissions.length > 0) {
+        const permissionLabels = elevatedPermissions
+          .map((permission) => PERMISSION_LABELS[permission].replace(' — elevated risk', ''))
+          .join(' and ');
         const accepted = await confirmInstall(
-          `${kit.label ?? kit.id} contains native code. Native code has elevated machine access. Install this version?`,
+          `${kit.label ?? kit.id} requests elevated machine access: ${permissionLabels}. Install this version?`,
         );
         if (!accepted) return;
       }
@@ -153,7 +162,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
 
   function createCard(kit, channel, reference) {
     const state = channelState(kit, channel, reference);
-    const risk = reference.permissions.includes('native-code');
+    const risk = reference.permissions.some(isElevatedRiskPermission);
     const card = element(document, 'article', `kit-card${risk ? ' kit-card--risk' : ''}`);
     card.dataset.kitId = kit.id;
     card.dataset.channel = channel;
@@ -187,7 +196,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
         permissions.append(element(
           document,
           'span',
-          `permission${permission === 'native-code' ? ' permission--risk' : ''}`,
+          `permission${isElevatedRiskPermission(permission) ? ' permission--risk' : ''}`,
           PERMISSION_LABELS[permission] ?? permission,
         ));
       }
