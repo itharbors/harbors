@@ -1,0 +1,35 @@
+{
+  "name": "@itharbors/kit-agent-guard",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build -w @itharbors/agent-guard-contracts && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/agent-guard-background && node ../../scripts/ce-plugin.mjs build plugins/agent-guard-center",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@itharbors/agent-guard-contracts": "^0.0.1"
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": {
+        "id": "agent-guard",
+        "label": "Agent Guard"
+      },
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "startup": {
+        "plugins": ["@itharbors/agent-guard-background"]
+      },
+      "plugin": ["@itharbors/agent-guard-center"],
+      "theme": {
+        "--ce-accent": "#ff8a3d"
+      }
+    }
+  }
+}
