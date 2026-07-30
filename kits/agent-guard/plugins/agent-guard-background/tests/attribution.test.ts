@@ -19,7 +19,25 @@ describe('connection attribution', () => {
     }, dns, 20_000)).toMatchObject({
       displayHostname: 'super-relay.byted.org',
       confidence: 'confirmed',
-      evidence: ['CONFIG_ENDPOINT', 'PROCESS_TASK', 'DNS_ADDRESS_MATCH'],
+      evidence: ['CONFIG_ENDPOINT', 'PROCESS_AGENT', 'PROCESS_TASK', 'DNS_ADDRESS_MATCH'],
+    });
+  });
+
+  it('marks configured host traffic probable without making it a control-grade task', () => {
+    const dns = new DnsHistory();
+    dns.update('relay.example.test', ['203.0.113.10'], 10_000, 60_000);
+    expect(attributeConnection({
+      counter: connection(),
+      processRole: 'host',
+      configuration: {
+        agent: 'codex', provider: 'relay', endpoint: 'https://relay.example.test/v1',
+        hookExecutables: [],
+      },
+      salt: Buffer.from('local-salt'),
+    }, dns, 20_000)).toMatchObject({
+      confidence: 'probable',
+      evidence: ['CONFIG_ENDPOINT', 'PROCESS_AGENT', 'DNS_ADDRESS_MATCH'],
+      processRole: 'host',
     });
   });
 

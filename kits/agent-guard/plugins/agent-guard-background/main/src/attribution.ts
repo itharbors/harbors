@@ -9,6 +9,7 @@ import type {
 
 export type AttributionEvidence =
   | 'CONFIG_ENDPOINT'
+  | 'PROCESS_AGENT'
   | 'PROCESS_TASK'
   | 'DNS_ADDRESS_MATCH'
   | 'REVERSE_DNS_HINT'
@@ -75,14 +76,14 @@ export function attributeConnection(
   const addressMatches = matches.includes(hostname);
   const shared = addressMatches && matches.length > 1;
   const reverseHint = input.reverseHostname?.toLowerCase() === hostname;
-  const evidence: AttributionEvidence[] = ['CONFIG_ENDPOINT'];
+  const evidence: AttributionEvidence[] = ['CONFIG_ENDPOINT', 'PROCESS_AGENT'];
   if (input.processRole === 'task' || input.processRole === 'hook') evidence.push('PROCESS_TASK');
   if (addressMatches) evidence.push('DNS_ADDRESS_MATCH');
   if (reverseHint && !addressMatches) evidence.push('REVERSE_DNS_HINT');
   if (shared) evidence.push('SHARED_ADDRESS');
   if (input.complete === false) evidence.push('DATA_INCOMPLETE');
   let confidence: AttributionConfidence = 'unknown';
-  if (evidence.includes('PROCESS_TASK')) confidence = 'probable';
+  if (evidence.includes('PROCESS_AGENT')) confidence = 'probable';
   if (addressMatches && evidence.includes('PROCESS_TASK') && !shared && input.complete !== false) {
     confidence = 'confirmed';
   }
