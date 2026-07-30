@@ -4,6 +4,7 @@ import type { Readable } from 'node:stream';
 
 import { parseNettopRow } from './nettop-parser.js';
 import type { ConnectionCounter } from './types.js';
+import type { ProcessSnapshot } from './types.js';
 
 export const NETTOP_ARGS = Object.freeze([
   '-L', '0', '-x', '-c', '-s', '2', '-J', 'state,bytes_in,bytes_out',
@@ -46,7 +47,7 @@ interface CollectorOptions {
   spawn?: typeof nodeSpawn;
   schedule?: typeof setTimeout;
   cancelSchedule?: typeof clearTimeout;
-  parseLine?: (line: string) => ConnectionCounter;
+  parseLine?: (line: string) => ConnectionCounter | null;
   onCounter?: (value: EpochCounter) => void;
   onIncomplete?: (epoch: number) => void;
 }
@@ -72,7 +73,8 @@ export function createNettopCollector(options: CollectorOptions) {
     const lines = createInterface({ input: launched.stdout, crlfDelay: Infinity });
     lines.on('line', (line) => {
       try {
-        options.onCounter?.({ epoch, counter: (options.parseLine ?? parseNettopRow)(line) });
+        const counter = (options.parseLine ?? parseNettopRow)(line);
+        if (counter) options.onCounter?.({ epoch, counter });
       } catch {
         options.onIncomplete?.(epoch);
       }
@@ -107,5 +109,37 @@ export function createNettopCollector(options: CollectorOptions) {
     snapshot() {
       return Object.freeze({ running, epoch, restartAttempt });
     },
+  };
+}
+
+export function createNettopStreamParser(options: {
+  resolveProcess(pid: number): ProcessSnapshot | undefined;
+  now?: () => number;
+}) {
+  let currentPid: number | undefined;
+  const now = options.now ?? Date.now;
+  return (line: string): ConnectionCounter | null => {
+    if (Buffer.byteLength(line) > 64 * 1024) throw new TypeError('nettop row length exceeds limit');
+    if (line.startsWith(',')) return null;
+    const processRow = line.match(/^.+\.(\d+),,[0-9]*,[0-9]*,$/u);
+    if (processRow) {
+      currentPid = Number(processRow[1]);
+      return null;
+    }
+    const connection = line.match(/^(tcp|udp)[46]\s+(.+)<->(.+),([^,]*),([0-9]*),([0-9]*),$/u);
+    if (!connection || currentPid === undefined) return null;
+    const process = options.resolveProcess(currentPid);
+    if (!process || !connection[5] || !connection[6]) return null;
+    return {
+      observedAt: now(),
+      pid: process.pid,
+      processStartTime: process.processStartTime,
+      executableIdentity: process.executableIdentity,
+      remoteAddress: connection[3],
+      transport: connection[1] as 'tcp' | 'udp',
+      state: connection[4] || 'UNKNOWN',
+      bytesIn: BigInt(connection[5]),
+      bytesOut: BigInt(connection[6]),
+    };
   };
 }

@@ -6,6 +6,7 @@ import {
   NETTOP_ARGS,
   computeCounterDelta,
   createNettopCollector,
+  createNettopStreamParser,
 } from '../main/src/nettop-collector.js';
 
 describe('nettop collector', () => {
@@ -59,6 +60,20 @@ describe('nettop collector', () => {
     collector.stop();
     collector.stop();
     expect(children[1].kill).toHaveBeenCalledTimes(1);
+  });
+
+  it('joins real nettop process and connection rows with the minimal process snapshot', () => {
+    const parser = createNettopStreamParser({
+      now: () => 2000,
+      resolveProcess: (pid) => pid === 41 ? {
+        pid, ppid: 1, processGroupId: 41, processStartTime: 1000,
+        executable: '/opt/bin/claude', executableIdentity: 'id',
+        commandMarkers: [], parentRoleHint: null,
+      } : undefined,
+    });
+    expect(parser('claude.41,,20,40,')).toBeNull();
+    expect(parser('tcp4 127.0.0.1:5000<->203.0.113.10:443,Established,20,40,'))
+      .toMatchObject({ pid: 41, remoteAddress: '203.0.113.10:443', bytesIn: 20n, bytesOut: 40n });
   });
 });
 
