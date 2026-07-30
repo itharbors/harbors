@@ -23,6 +23,8 @@ const snapshot = {
     confidence: 'confirmed',
     bytesIn: 1024,
     bytesOut: 2048,
+    bytesInPerMinute: 512,
+    bytesOutPerMinute: 1024,
     connections: 2,
     activeTasks: 1,
   }],

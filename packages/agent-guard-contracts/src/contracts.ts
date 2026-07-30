@@ -9,6 +9,8 @@ export interface AgentEndpointSnapshot {
   confidence: AttributionConfidence;
   bytesIn: number;
   bytesOut: number;
+  bytesInPerMinute: number;
+  bytesOutPerMinute: number;
   connections: number;
   activeTasks: number;
 }
@@ -134,7 +136,8 @@ function numericEnum<T extends number>(value: unknown, allowed: readonly T[], co
 function normalizeEndpoint(value: unknown, context: string): AgentEndpointSnapshot {
   const input = record(value, context);
   exact(input, [
-    'agent', 'provider', 'hostname', 'confidence', 'bytesIn', 'bytesOut', 'connections', 'activeTasks',
+    'agent', 'provider', 'hostname', 'confidence', 'bytesIn', 'bytesOut',
+    'bytesInPerMinute', 'bytesOutPerMinute', 'connections', 'activeTasks',
   ], context);
   return {
     agent: enumValue(input.agent, ['claude', 'codex'], `${context}.agent`),
@@ -143,6 +146,8 @@ function normalizeEndpoint(value: unknown, context: string): AgentEndpointSnapsh
     confidence: enumValue(input.confidence, ['confirmed', 'probable', 'unknown'], `${context}.confidence`),
     bytesIn: integer(input.bytesIn, `${context}.bytesIn`),
     bytesOut: integer(input.bytesOut, `${context}.bytesOut`),
+    bytesInPerMinute: integer(input.bytesInPerMinute, `${context}.bytesInPerMinute`),
+    bytesOutPerMinute: integer(input.bytesOutPerMinute, `${context}.bytesOutPerMinute`),
     connections: integer(input.connections, `${context}.connections`),
     activeTasks: integer(input.activeTasks, `${context}.activeTasks`),
   };

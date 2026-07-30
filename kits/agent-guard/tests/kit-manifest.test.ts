@@ -21,7 +21,7 @@ describe('Agent Guard Kit manifest', () => {
     expect(pkg['ce-editor'].kit.plugin).toEqual([
       '@itharbors/agent-guard-center',
     ]);
-    expect(layout.activePanel).toBe('@itharbors/agent-guard-center.center');
+    expect(layout.activePanel).toBe('@itharbors/agent-guard-center.guard');
   });
 
   it('ships the exact versioned v1 guard thresholds without proxy dependencies', () => {

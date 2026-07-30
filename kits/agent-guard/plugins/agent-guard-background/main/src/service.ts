@@ -233,7 +233,8 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         provider: attributed.provider,
         hostname: attributed.displayHostname,
         confidence: attributed.confidence,
-        bytesIn: 0, bytesOut: 0, connections: 0, activeTasks: 0,
+        bytesIn: 0, bytesOut: 0, bytesInPerMinute: 0, bytesOutPerMinute: 0,
+        connections: 0, activeTasks: 0,
       };
       endpointTotals.set(endpointKey, {
         ...current,
@@ -325,6 +326,8 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
         tasks: tree.metrics.newTaskProcesses,
       };
       runtime.history.push(bucket);
+      projected.bytesInPerMinute = runtime.bytesIn;
+      projected.bytesOutPerMinute = runtime.bytesOut;
       runtime.history = runtime.history.filter((item) => (
         now - item.at < policyEngine.policy.trafficWindowMinutes * 60_000
       ));

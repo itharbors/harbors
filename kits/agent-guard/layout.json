@@ -5,10 +5,10 @@
       "type": "panel-area",
       "layout": {
         "type": "leaf",
-        "panel": "@itharbors/agent-guard-center.center",
+        "panel": "@itharbors/agent-guard-center.guard",
         "panelType": "simple"
       }
     }
   ],
-  "activePanel": "@itharbors/agent-guard-center.center"
+  "activePanel": "@itharbors/agent-guard-center.guard"
 }
