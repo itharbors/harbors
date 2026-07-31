@@ -161,6 +161,40 @@ export async function openOrFocusKitWindow(kitName, registry, pendingLoads, crea
   return window;
 }
 
+export function closeKitWindow(kitWindows, kitName) {
+  const window = kitWindows.get(kitName);
+  if (!window || window.isDestroyed()) {
+    kitWindows.delete(kitName);
+    return false;
+  }
+  kitWindows.delete(kitName);
+  window.close();
+  return true;
+}
+
+export async function reloadKitWindows({
+  kitWindows,
+  catalog,
+  startUrl,
+  workspaceStore,
+}) {
+  const current = new Map(catalog.map((kit) => [kit.name, kit]));
+  for (const [kitName, window] of Array.from(kitWindows.entries())) {
+    if (!window || window.isDestroyed()) {
+      kitWindows.delete(kitName);
+      continue;
+    }
+    const kit = current.get(kitName);
+    if (!kit) {
+      closeKitWindow(kitWindows, kitName);
+      continue;
+    }
+    const workspace = await workspaceStore.getOrCreate(kit);
+    window.setTitle?.(`ITHARBORS — ${kit.label}`);
+    await window.loadURL(createKitWindowUrl(startUrl, kit, workspace));
+  }
+}
+
 export async function shutdownDesktopServices({
   persistWorkspace,
   stopKitManagerService = () => Promise.resolve(),

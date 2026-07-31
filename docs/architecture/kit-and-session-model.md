@@ -100,8 +100,9 @@ entry；策略和撤回文件只是低频治理输入。客户端和聚合器只
 `KitRegistryManager.list/refresh` 将远程市场和已安装状态合并为公开投影，但移除 Release URL、
 本地目录、digest、Commit 和 source。相同 Kit 的 install 操作串行化，不同 Kit 可以并行下载；
 刷新和安装写入不接受任意详情字段的 `audit.ndjson`。Electron main process 通过独立本地 Kit
-Dock 提供五个 sender-bound IPC 操作，普通 Kit Renderer 无法调用，也不能提交 URL、路径或
-摘要。安装不热替换运行中代码，activate/rollback 只设置 pending。
+Dock 提供六个 sender-bound IPC 操作，普通 Kit Renderer 无法调用，也不能提交 URL、路径或
+摘要。安装、更新、activate、rollback 和 uninstall 都由 main process 的串行 Runtime coordinator
+执行；Renderer 不能选择 Framework 命令、环境变量或删除路径。
 
 Electron 先把 builtin、active installed 和开发模式允许的 development 候选交给统一来源解析器，
 再把唯一的 resolved source snapshot 交给 Framework。Server 只在这份快照中按路径或 package name
@@ -110,14 +111,17 @@ Electron 先把 builtin、active installed 和开发模式允许的 development 
 默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，installed 目录默认为空，默认 Kit 是
 `@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
 
-Electron 在启动时先将 pending 版本暂存为 active 并用完整 Catalog 校验，再让 Framework
-检查 application-scope 启动状态并通过一次临时 Session 真实加载普通插件。两层都成功后才提交
-激活；真实加载失败通过一次原子写入进入 badVersions，并把 previous 重新置为 pending 后自动
-重启。previous 也必须重新通过两层验证；再次失败或没有 previous 时原子清除该 Kit 的 active。
-完成这一步后再从 InstalledKitStore 读取 active 版本快照，将解析完成的来源集合序列化为
-`HARBORS_KIT_SOURCES` 传给 Server。桌面端校验发布 `kit.json` 与 Store 记录的 id/version，Server
-再独立校验运行时 `package.json`。内置 ID 在商城下载前直接拒绝；异常遗留冲突使用 builtin，开发
-进程中的源码临时遮蔽 installed，均不修改用户安装状态。
+Electron 在启动或 Manager 运行时事务中先将 pending 版本暂存为 active 并用完整 Catalog 校验，
+再让新 Framework 检查 application-scope 启动状态并通过一次临时 Session 真实加载普通插件。两层
+都成功后才提交激活；真实加载失败通过一次原子写入进入 badVersions，并把 previous 重新置为
+pending 后自动恢复上一代 Framework。previous 也必须重新通过两层验证；再次失败或没有 previous
+时原子清除该 Kit 的 active。每个 generation 都从 InstalledKitStore 重新读取 active 版本快照，
+并把解析完成的来源集合序列化为 `HARBORS_KIT_SOURCES` 传给 Server。Electron 主进程、托盘、Kit
+Manager 和 Notification Host 在切换期间保持运行；现存 Kit 窗口复用 BrowserWindow 与 workspace
+session，并在新 Framework 就绪后重新加载。桌面端校验发布 `kit.json` 与 Store 记录的 id/version，
+Server 再独立校验运行时 `package.json`。删除先暂存并从下一代 sources 排除，Framework 验证成功后
+才删除由 Store 记录的版本目录并提交状态。内置 ID 在商城下载或删除前直接拒绝；异常遗留冲突使用
+builtin，开发进程中的源码临时遮蔽 installed，均不修改用户安装状态。
 
 Electron stable profile 只解析显式 builtin 与 active installed；development profile 额外扫描
 仓库 `kits/*`。解析只保留静态目录并读取已有 workspace 记录。首次从 Tray 选择 Kit 时才调用

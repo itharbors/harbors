@@ -76,6 +76,14 @@ SQLite       http://localhost:49380/kits/sqlite
 MySQL        http://localhost:49380/kits/mysql
 ```
 
+### Web 优先、Electron 收口
+
+日常开发中，如果改动同时适用于 Web 与 Electron 宿主，优先使用 `npm run dev:web` 和浏览器完成
+调试与回归，以缩短启动链路并降低桌面进程调试成本。涉及系统托盘、BrowserWindow 生命周期、原生
+对话框、桌面 IPC、通知、自动更新、打包或操作系统集成时，应在开发过程中直接使用 Electron。
+
+所有改动在最终交付前仍必须使用 Electron 完成一次验收；Web 测试通过不能替代 Electron 验收门禁。
+
 `/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
 已有 session 首次初始化后以其已加载 Kit 为准，不能通过替换 URL 中的 `kit` 隐式切换。
 
@@ -299,6 +307,10 @@ Tag。获得用户对这次发布的明确确认后，按输出设置 `HARBORS_K
 `[Refactor] 拆分插件加载器`、`[Optimize] 减少查询内存占用`、`[Test] 补充工作流回归测试`、
 `[Chore] 更新构建依赖`。类型大小写必须与表格完全一致；摘要使用简洁中文，末尾不加
 句号。每个提交只表达一个可审查的逻辑改动。
+
+通用变更分支的主类型决定 PR 标题与实现提交标签。`bug/*` 分支可以包含配套的独立
+`[Docs]` 和 `[Test]` 提交，分别用于补全修复说明与回归覆盖；实现代码仍使用 `[Bug]`。
+其他产品行为或工程类型应使用独立变更分支，不得借配套提交混入当前 Bug PR。
 
 ## 提交前最小检查
 

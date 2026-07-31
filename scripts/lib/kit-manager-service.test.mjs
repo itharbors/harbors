@@ -84,6 +84,48 @@ test('accepts only explicit HTTPS Registry and strict publisher policy overrides
   }
 });
 
+test('forwards an explicit Kit GitHub token without exposing it in public config', async () => {
+  const storeRoot = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-service-token-'));
+  roots.push(storeRoot);
+  const requests = [];
+  const service = createKitManagerService({
+    storeRoot,
+    runtime,
+    env: { HARBORS_KIT_GITHUB_TOKEN: 'development-token' },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return new Response(JSON.stringify({ attestations: [] }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    },
+  });
+  const digest = 'a'.repeat(64);
+  await assert.rejects(
+    service.provenanceVerifier.verify({
+      attestationUrl: `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${digest}`,
+      subjectName: 'kit-demo-1.0.0-any-any.hkit',
+      subjectSha256: digest,
+      repository: 'itharbors/harbors',
+      commit: '0123456789abcdef0123456789abcdef01234567',
+      workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/v1.0.0',
+      signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    }),
+    (error) => error.code === 'ATTESTATION_NOT_FOUND',
+  );
+
+  assert.equal(requests[0].init.headers.Authorization, 'Bearer development-token');
+  assert.equal(Object.hasOwn(service.config, 'githubToken'), false);
+  assert.equal(JSON.stringify(service.config).includes('development-token'), false);
+  assert.throws(
+    () => createKitManagerService({
+      storeRoot,
+      runtime,
+      env: { HARBORS_KIT_GITHUB_TOKEN: 'token\nvalue' },
+    }),
+    /githubToken/u,
+  );
+});
+
 test('composes the production service around one shared local Store', async () => {
   const storeRoot = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-service-'));
   roots.push(storeRoot);

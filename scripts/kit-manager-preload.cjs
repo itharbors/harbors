@@ -6,6 +6,8 @@ const channels = Object.freeze({
   install: 'harbors:kit-manager:install',
   activate: 'harbors:kit-manager:activate',
   rollback: 'harbors:kit-manager:rollback',
+  deactivate: 'harbors:kit-manager:deactivate',
+  uninstall: 'harbors:kit-manager:uninstall',
 });
 
 async function invoke(channel, ...args) {
@@ -31,5 +33,11 @@ contextBridge.exposeInMainWorld('harborsKitManager', Object.freeze({
   },
   rollback(value) {
     return invoke(channels.rollback, value);
+  },
+  deactivate(value) {
+    return invoke(channels.deactivate, value);
+  },
+  uninstall(value) {
+    return invoke(channels.uninstall, value);
   },
 }));

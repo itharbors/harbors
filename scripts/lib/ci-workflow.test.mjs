@@ -167,6 +167,11 @@ test('root test registers the focused Kit CI selector suite', async () => {
   assert.match(packageJson.scripts.test, /npm run test:kit-ci-selection/u);
 });
 
+test('root test registers live Kit deactivation coverage', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  assert.match(packageJson.scripts.test, /scripts\/lib\/kit-live-deactivation\.test\.mjs/u);
+});
+
 function workflowJob(workflow, name) {
   const marker = `\n  ${name}:\n`;
   const start = workflow.indexOf(marker);

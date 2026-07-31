@@ -62,8 +62,12 @@ export async function prepareInstalledKitsForStartup({ store, validateCatalog, a
   requireMethod(audit, 'append', 'audit');
 
   const initial = await store.snapshot();
+  const pendingUninstalls = Object.entries(initial.kits)
+    .filter(([, record]) => record.pendingUninstall === true)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([id]) => ({ id }));
   const pending = Object.entries(initial.kits)
-    .filter(([, record]) => record.pending !== undefined)
+    .filter(([, record]) => record.pending !== undefined && !record.pendingUninstall)
     .sort(([left], [right]) => left.localeCompare(right))
     .map(([id, record]) => ({ id, version: record.pending, channel: record.channel }));
   const outcomes = [];
@@ -117,7 +121,12 @@ export async function prepareInstalledKitsForStartup({ store, validateCatalog, a
     }
   }
 
-  return { activeSources: await store.listActiveSources(), outcomes, pendingActivations };
+  return {
+    activeSources: await store.listActiveSources(),
+    outcomes,
+    pendingActivations,
+    pendingUninstalls,
+  };
 }
 
 export async function finalizePendingKitActivations({

@@ -1,9 +1,11 @@
 import {
+  checkKitCompatibility,
   parseReleaseManifest,
   selectCompatibleAsset,
 } from '@itharbors/kit-core';
 
 import { fetchGitHubReleaseAsset } from './github-release-fetch.mjs';
+import { GitHubAttestationError } from './github-attestation.mjs';
 
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -263,9 +265,15 @@ export class KitReleaseResolver {
     try {
       asset = selectCompatibleAsset(release, runtime);
     } catch (error) {
+      const compatibility = release.assets.map((candidate) => (
+        checkKitCompatibility(candidate.manifest, runtime)
+      ));
+      const detail = compatibility.every((result) => !result.compatible)
+        ? compatibility.find((result) => !result.compatible)?.message
+        : undefined;
       throw new KitRegistryResolutionError(
         'INCOMPATIBLE_ASSET',
-        `Release ${release.id}@${release.version} has no unique compatible asset`,
+        `Release ${release.id}@${release.version} has no unique compatible asset${detail ? `: ${detail}` : ''}`,
         { cause: error },
       );
     }
@@ -314,6 +322,9 @@ export class KitReleaseResolver {
     try {
       claims = await this.#provenanceVerifier.verify(expectedClaims);
     } catch (error) {
+      if (error instanceof GitHubAttestationError && error.code === 'ATTESTATION_RATE_LIMITED') {
+        throw new KitRegistryResolutionError(error.code, error.message, { cause: error });
+      }
       throw new KitRegistryResolutionError(
         'PROVENANCE_FAILED',
         'Artifact attestation verification failed',
