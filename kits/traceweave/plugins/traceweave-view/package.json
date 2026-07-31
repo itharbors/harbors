@@ -4,7 +4,13 @@
   "type": "module",
   "main": "./main/dist/index.js",
   "dependencies": {
-    "@itharbors/traceweave-contracts": "0.0.1"
+    "@itharbors/traceweave-contracts": "0.0.1",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2"
   },
   "ce-editor": {
     "contribute": {

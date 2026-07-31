@@ -61,6 +61,8 @@ function typecheckPanel({ rootDir, sourceDir, tsconfigPath }) {
       '--skipLibCheck',
       '--strict',
       'false',
+      '--jsx',
+      'react-jsx',
       '--lib',
       'ES2022,DOM',
     ],

@@ -8,6 +8,12 @@
     "test:prepare": "npm run build && node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
     "test": "npm run test:prepare && vitest run --config vitest.config.ts"
   },
+  "devDependencies": {
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8"
+  },
   "ce-editor": {
     "kit": {
       "menuRoot": { "id": "traceweave", "label": "TraceWeave" },
