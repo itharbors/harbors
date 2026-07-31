@@ -249,13 +249,15 @@ function createActionAlert(message: string) {
 function createSummary() {
   const failedRuns = snapshot!.runs.filter((run) =>
     run.status === 'failed' || run.status === 'interrupted').length;
+  const enabledJobs = snapshot!.jobs.filter((job) => job.enabled).length;
+  const runningJobs = snapshot!.activeJobIds.length;
   const summary = document.createElement('section');
-  summary.className = 'metric-grid';
+  summary.className = 'summary-strip';
   summary.setAttribute('aria-label', '调度概览');
   summary.append(
     createMetricCard('计划总数', snapshot!.jobs.length, 'neutral'),
-    createMetricCard('已启用', snapshot!.jobs.filter((job) => job.enabled).length, 'success'),
-    createMetricCard('正在运行', snapshot!.activeJobIds.length, 'warning'),
+    createMetricCard('已启用', enabledJobs, enabledJobs > 0 ? 'success' : 'neutral'),
+    createMetricCard('正在运行', runningJobs, runningJobs > 0 ? 'warning' : 'neutral'),
     createMetricCard('失败记录', failedRuns, failedRuns > 0 ? 'danger' : 'neutral'),
   );
   return summary;
@@ -267,7 +269,7 @@ function createMetricCard(
   tone: 'neutral' | 'success' | 'warning' | 'danger',
 ) {
   const card = document.createElement('article');
-  card.className = `metric-card metric-${tone}`;
+  card.className = `summary-stat summary-${tone}`;
   card.dataset.testid = 'metric-card';
   const copy = document.createElement('span');
   copy.className = 'metric-label';
@@ -373,7 +375,10 @@ function createJobsSection() {
     emptyTitle.textContent = '还没有计划任务';
     const emptyDetail = document.createElement('p');
     emptyDetail.textContent = '创建第一个计划，选择脚本并确认下一次执行时间。';
-    emptyCell.append(emptyTitle, emptyDetail);
+    const emptyAction = createButton('新建计划', 'empty-new-job', () => {
+      openForm(null, { action: 'new-job' });
+    }, 'button-quiet button-inline-primary');
+    emptyCell.append(emptyTitle, emptyDetail, emptyAction);
     emptyRow.append(emptyCell);
     body.append(emptyRow);
   } else {
