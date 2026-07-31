@@ -14,6 +14,8 @@ describe('Agent Guard panel accessibility', () => {
     expect(`${html}\n${css}`).not.toMatch(/https?:\/\//iu);
     expect(css).toMatch(/:focus-visible/u);
     expect(css).toMatch(/prefers-reduced-motion/u);
+    expect(css).not.toMatch(/\.confidence-probable[^}]*warning-amber/su);
+    expect(css).toMatch(/overflow-wrap:\s*anywhere/u);
   });
 
   it('allows the Harbors host to run its injected panel bridge', () => {

@@ -68,7 +68,7 @@ function refresh(): Promise<void> {
       }
     } catch (error) {
       if (isCurrent(activeVersion, generation)) {
-        renderState(error instanceof Error ? error.message : '流量监控暂不可用', 'unavailable');
+        renderState('流量监控暂不可用', 'unavailable', errorDetail(error));
       }
     } finally {
       if (refreshPromise === operation) refreshPromise = null;
@@ -97,7 +97,7 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
       mutation = null;
       await refresh();
     } catch (error) {
-      renderState(error instanceof Error ? error.message : '操作失败', 'unavailable');
+      renderState('操作失败', 'unavailable', errorDetail(error));
     } finally {
       mutation = null;
       setButtonsDisabled(false);
@@ -222,7 +222,7 @@ function createIncident(incident: IncidentSummary): HTMLElement {
   const article = document.createElement('article');
   article.className = `incident-row incident-${incident.state}`;
   article.dataset.incidentId = incident.id;
-  const marker = textElement('span', 'incident-marker', incident.state === 'tripped' ? '已暂停' : '监控');
+  const marker = textElement('span', 'incident-marker', incidentStateLabel(incident.state));
   const body = document.createElement('div');
   body.className = 'incident-body';
   body.append(
@@ -282,6 +282,7 @@ function numberField(label: string, name: string, value: number, unit: string): 
   input.min = '1';
   input.step = '1';
   input.required = true;
+  input.autocomplete = 'off';
   input.value = String(value);
   line.append(input, textElement('small', '', unit));
   wrapper.append(line);
@@ -306,13 +307,14 @@ function createPrivacyNote(): HTMLElement {
   return note;
 }
 
-function renderState(message: string, state: string): void {
+function renderState(message: string, state: string, detail?: string): void {
   if (!root) return;
   const container = document.createElement('section');
   container.className = 'panel-state';
   container.dataset.state = state;
   container.setAttribute('role', state === 'unavailable' ? 'alert' : 'status');
   container.append(textElement('span', 'eyebrow', 'Agent Guard'), textElement('h1', '', message));
+  if (detail) container.append(textElement('p', 'state-detail', detail));
   if (state === 'unavailable') container.append(button('重试', 'retry', () => { void refresh(); }));
   root.replaceChildren(container);
 }
@@ -354,6 +356,15 @@ function formatRate(bytes: number): string {
 
 function confidenceLabel(value: AgentEndpointSnapshot['confidence']): string {
   return value === 'confirmed' ? '已确认' : value === 'probable' ? '较可信' : '未知';
+}
+
+function incidentStateLabel(value: IncidentSummary['state']): string {
+  return ({ warning: '警告', tripped: '已暂停', cooldown: '冷却观察' } as const)[value];
+}
+
+function errorDetail(error: unknown): string | undefined {
+  if (error instanceof Error) return error.message;
+  return typeof error === 'string' ? error : undefined;
 }
 
 function stateLabel(value: AgentGuardSnapshot['state']): string {
