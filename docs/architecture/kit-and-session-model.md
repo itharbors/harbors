@@ -140,6 +140,22 @@ Kit 选择器生成的新浏览器 session 与 Electron Workspace session 采用
 写入 Electron 的 WorkspaceStore。session 一旦建立 runtime，其 Kit 即为该 session 的权威
 状态；URL 中后续出现的其他 Kit 参数不会触发隐式切换。
 
+## Skill Manager 的来源与恢复状态
+
+Skill Manager 的全局目标固定为 `$CODEX_HOME/skills`，没有显式 `CODEX_HOME` 时等价于
+`~/.codex/skills`。可选来源目录只属于当前 Session 的运行时状态，不写入持久 workspace，Server
+重启后不会自动重新打开。切换或清除来源会递增 scan generation、取消旧扫描，并丢弃晚到的结果；
+Panel 同时以 revision 拒绝过期的详情和写操作。
+
+Server 在私有索引中保留真实目录，Renderer 只收到不透明目录 ID、Skill ID、摘要和展示标签，
+不能提交原始路径来扩大扫描或写入范围。扫描拒绝符号链接、路径逃逸、超限文件和非法
+`SKILL.md`；`.system` 目录固定映射为 `protected`，不会进入修改操作。
+
+停用与卸载都不会永久删除 Skill。Server 先核对目录身份和内容摘要，再把目录原子移动到
+`$CODEX_HOME/skill-manager-store/v1` 的 `disabled` 或 `trash` 区，并写入可恢复记录；恢复时再次
+核对摘要和目标占用。安装与更新同样在目标父目录中暂存和验证后发布，冲突或回滚失败会保留诊断
+记录，不会绕过边界继续写入。该 Kit 只管理本机文件，不访问网络或 GitHub。
+
 ## 插件范围
 
 ### 应用启动插件
@@ -220,6 +236,7 @@ BrowserRequestBroker 和数据库。
 - [Kit/plugin resolver](../../packages/server/src/plugin/resolver.ts)
 - [默认 Kit manifest](../../kits/default/package.json)
 - [默认布局](../../kits/default/layout.json)
+- [Skill Manager Kit](../../kits/skill-manager/package.json)
 
 关联阅读：[插件运行时模型](./plugin-runtime-model.md) ·
 [布局模型](./layout-model.md)

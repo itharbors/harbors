@@ -128,8 +128,8 @@ bundle 或 Kit artifact 下载地址。
 
 ## GitHub 自动发布
 
-CSV、SQLite、MySQL、Notifications 的发布源分别是 `main` 上的 `kits/csv`、`kits/sqlite`、
-`kits/mysql`、`kits/notifications`。普通 PR 合并只更新代码，不触发 Kit 或 Framework Release，也不要求修改
+CSV、SQLite、MySQL、Notifications、Skill Manager 的发布源分别是 `main` 上的 `kits/csv`、`kits/sqlite`、
+`kits/mysql`、`kits/notifications`、`kits/skill-manager`。普通 PR 合并只更新代码，不触发 Kit 或 Framework Release，也不要求修改
 Framework 版本。发布者从干净且与 `origin/main` 完全一致的 checkout 创建专属 Tag：
 
 ```text

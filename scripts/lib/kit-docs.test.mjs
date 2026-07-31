@@ -51,6 +51,7 @@ test('artifact and authoring guides document monorepo Kits and trusted Release d
     'kits/sqlite',
     'kits/mysql',
     'kits/notifications',
+    'kits/skill-manager',
     'kit/<name>/v<semver>',
     '.hkit',
     'Release Asset',
@@ -58,7 +59,7 @@ test('artifact and authoring guides document monorepo Kits and trusted Release d
     'registry/revocations.json',
     'index.v1.json',
     'https://itharbors.github.io/harbors/index.v1.json',
-  ]) assert.match(combined, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
+  ]) assert.ok(combined.includes(expected), expected);
   for (const command of [' validate ', ' pack ', ' inspect ']) {
     assert.match(artifacts, new RegExp(`npm run kit --${command}`, 'u'));
   }
@@ -88,6 +89,7 @@ test('root README and architecture describe Release Assets and automatic market 
     'kits/sqlite',
     'kits/mysql',
     'kits/notifications',
+    'kits/skill-manager',
     'kit/<name>/v<semver>',
     'Release Asset',
     'index.v1.json',
@@ -121,6 +123,32 @@ test('CSV Kit documentation states its read-only parsing, query, export, and res
   assert.match(csv, /逗号[^。]{0,40}制表符[^。]{0,40}分号/iu);
   assert.match(csv, /“导出当前结果”[^。]{0,80}新的/iu);
   assert.match(csv, /不会覆盖源文件/iu);
+});
+
+test('Skill Manager documentation states its source, state, and recovery boundaries', async () => {
+  const skillManager = compact(await read('kits/skill-manager/README.md'));
+  const architecture = compact(await read('docs/architecture/kit-and-session-model.md'));
+  const combined = `${skillManager} ${architecture}`;
+  for (const expected of [
+    '$CODEX_HOME/skills',
+    '~/.codex/skills',
+    '$CODEX_HOME/skill-manager-store/v1',
+    'source-only',
+    'current',
+    'update-available',
+    'global-only',
+    'disabled',
+    'trashed',
+    'protected',
+    'conflict',
+    'invalid',
+    '.system',
+    'npm run dev -- --kit ./kits/skill-manager',
+  ]) assert.ok(combined.includes(expected), expected);
+  assert.match(combined, /来源目录[^。]{0,80}(当前|本次) Session/iu);
+  assert.match(combined, /不[^。]{0,80}(永久删除|不可恢复)/iu);
+  assert.match(combined, /Renderer[^。]{0,80}(原始|真实)[^。]{0,30}路径/iu);
+  assert.match(combined, /(不访问|不会访问|不支持)[^。]{0,80}(网络|GitHub)/iu);
 });
 
 test('active official-Kit docs do not retain exact-three lists that omit CSV', async () => {
