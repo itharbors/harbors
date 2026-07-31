@@ -8,7 +8,7 @@ describe('Agent Guard panel', () => {
   });
   afterEach(() => vi.useRealTimers());
 
-  it('renders exact traffic semantics, confidence, incidents, and privacy boundary', async () => {
+  it('renders the Chinese dashboard while preserving technical identifiers', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
       if (method === 'getIncidents') return snapshot().incidents;
@@ -17,12 +17,59 @@ describe('Agent Guard panel', () => {
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
 
-    expect(document.querySelector('h1')?.textContent).toBe('Local agent traffic');
+    expect(document.querySelector('h1')?.textContent).toBe('本机智能体流量');
     expect(document.querySelector('[data-metric="bytes-out"]')?.textContent).toBe('12.0 MiB/min');
-    expect(document.querySelector('[data-confidence]')?.textContent).toBe('Confirmed');
+    expect(document.querySelector('[data-confidence]')?.textContent).toBe('已确认');
     expect(document.querySelector('[data-incident-id="incident-1"]')?.textContent).toContain('fixed-traffic-trip');
-    expect(document.body.textContent).toContain('Prompts, responses, credentials, and exact request totals are never collected.');
+    expect(document.body.textContent).toContain('观测路由');
+    expect(document.body.textContent).toContain('事件记录');
+    expect(document.body.textContent).toContain('双重信号触发暂停');
+    expect(document.body.textContent).toContain('仅采集本机连接元数据');
+    expect(document.body.textContent).toContain('relay.example.test');
+    expect(document.body.textContent).not.toContain('Local agent traffic');
     expect(document.body.textContent).not.toMatch(/request count|token cost/iu);
+    panel.unmount();
+  });
+
+  it('renders Chinese loading copy while the first snapshot is pending', async () => {
+    let release!: (value: unknown) => void;
+    const request = vi.fn(() => new Promise((resolve) => { release = resolve; }));
+    const panel = (await import('../panel.guard/src/index')).default;
+    const mounting = panel.mount({ message: { request } });
+    expect(document.body.textContent).toContain('正在启动本机流量监控');
+    release(snapshot());
+    await mounting;
+    panel.unmount();
+  });
+
+  it('renders Chinese unavailable copy for an unknown failure', async () => {
+    const request = vi.fn(async () => Promise.reject('offline'));
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    expect(document.body.textContent).toContain('流量监控暂不可用');
+    expect(document.querySelector('[data-action="retry"]')?.textContent).toBe('重试');
+    panel.unmount();
+  });
+
+  it('explains in Chinese when no model endpoint is active', async () => {
+    const idle = snapshot();
+    idle.endpoints = [];
+    const request = vi.fn(async () => idle);
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    expect(document.body.textContent).toContain('当前没有活跃的 Claude 或 Codex 模型端点，后台监控仍在继续。');
+    panel.unmount();
+  });
+
+  it('renders Chinese controls for a stopped incident', async () => {
+    const request = vi.fn(async () => snapshot());
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    const incident = document.querySelector('[data-incident-id="incident-1"]');
+    expect(incident?.textContent).toContain('已暂停');
+    expect(incident?.textContent).toContain('恢复任务');
+    expect(incident?.textContent).toContain('结束任务');
+    expect(incident?.textContent).toContain('忽略 15 分钟');
     panel.unmount();
   });
 

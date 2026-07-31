@@ -31,7 +31,7 @@ const panel = {
     if (!root) throw new Error('Agent Guard root is missing');
     mounted = true;
     signature = '';
-    renderState('Opening the local traffic watch…', 'loading');
+    renderState('正在启动本机流量监控…', 'loading');
     await refresh();
     if (mounted) timer = window.setInterval(() => { void refresh(); }, POLL_MS);
   },
@@ -68,7 +68,7 @@ function refresh(): Promise<void> {
       }
     } catch (error) {
       if (isCurrent(activeVersion, generation)) {
-        renderState(error instanceof Error ? error.message : 'Traffic monitor unavailable', 'unavailable');
+        renderState(error instanceof Error ? error.message : '流量监控暂不可用', 'unavailable');
       }
     } finally {
       if (refreshPromise === operation) refreshPromise = null;
@@ -97,7 +97,7 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
       mutation = null;
       await refresh();
     } catch (error) {
-      renderState(error instanceof Error ? error.message : 'Command failed', 'unavailable');
+      renderState(error instanceof Error ? error.message : '操作失败', 'unavailable');
     } finally {
       mutation = null;
       setButtonsDisabled(false);
@@ -120,7 +120,7 @@ function renderSnapshot(snapshot: AgentGuardSnapshot): void {
   status.className = 'sr-only';
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
-  status.textContent = `${snapshot.endpoints.length} endpoints observed; protection ${snapshot.state}`;
+  status.textContent = `已观测 ${snapshot.endpoints.length} 个端点，保护状态：${stateLabel(snapshot.state)}`;
   workspace.append(status);
   root.replaceChildren(workspace);
 }
@@ -130,10 +130,10 @@ function createHeader(snapshot: AgentGuardSnapshot): HTMLElement {
   header.className = 'protection-header';
   const identity = document.createElement('div');
   identity.className = 'identity';
-  identity.append(textElement('span', 'eyebrow', 'Zero-config watch / local machine'));
-  const title = textElement('h1', '', 'Local agent traffic');
+  identity.append(textElement('span', 'eyebrow', 'Agent Guard'));
+  const title = textElement('h1', '', '本机智能体流量');
   const description = textElement(
-    'p', 'lede', 'Cumulative connection bytes and task activity for known Agent processes.',
+    'p', 'lede', '监控已知智能体进程的累计连接字节与任务活动。',
   );
   identity.append(title, description);
 
@@ -141,9 +141,9 @@ function createHeader(snapshot: AgentGuardSnapshot): HTMLElement {
   seal.className = `protection-seal state-${snapshot.state}`;
   seal.dataset.state = snapshot.state;
   seal.append(
-    textElement('span', 'seal-label', snapshot.state === 'tripped' ? 'Flow stopped' : 'Protection'),
+    textElement('span', 'seal-label', snapshot.state === 'tripped' ? '流量已暂停' : '保护状态'),
     textElement('strong', '', stateLabel(snapshot.state)),
-    textElement('span', 'seal-detail', snapshot.collector.incomplete ? 'Collector gap — warning only' : `Epoch ${snapshot.collector.epoch}`),
+    textElement('span', 'seal-detail', snapshot.collector.incomplete ? '采集存在缺口，仅进行告警' : `采样周期 ${snapshot.collector.epoch}`),
   );
   header.append(identity, seal);
   return header;
@@ -154,12 +154,12 @@ function createTrafficSection(endpoints: AgentEndpointSnapshot[]): HTMLElement {
   section.className = 'traffic-deck';
   section.setAttribute('aria-labelledby', 'traffic-title');
   const heading = textElement('div', 'section-heading', '');
-  const title = textElement('h2', '', 'Observed routes');
+  const title = textElement('h2', '', '观测路由');
   title.id = 'traffic-title';
-  heading.append(title, textElement('span', 'section-note', '2-second cumulative counters · 60-second rates'));
+  heading.append(title, textElement('span', 'section-note', '每 2 秒读取累计值，按 60 秒计算速率'));
   section.append(heading);
   if (endpoints.length === 0) {
-    section.append(textElement('p', 'empty-route', 'No Claude or Codex model endpoints are active right now. Watching continues in the background.'));
+    section.append(textElement('p', 'empty-route', '当前没有活跃的 Claude 或 Codex 模型端点，后台监控仍在继续。'));
     return section;
   }
   const routes = document.createElement('div');
@@ -194,10 +194,10 @@ function createRoute(endpoint: AgentEndpointSnapshot): HTMLElement {
   const metrics = document.createElement('dl');
   metrics.className = 'route-metrics';
   metrics.append(
-    metric('Outbound', formatRate(endpoint.bytesOutPerMinute), 'bytes-out'),
-    metric('Inbound', formatRate(endpoint.bytesInPerMinute), 'bytes-in'),
-    metric('Connections', String(endpoint.connections), 'connections'),
-    metric('Active tasks', String(endpoint.activeTasks), 'active-tasks'),
+    metric('上行流量', formatRate(endpoint.bytesOutPerMinute), 'bytes-out'),
+    metric('下行流量', formatRate(endpoint.bytesInPerMinute), 'bytes-in'),
+    metric('连接数', String(endpoint.connections), 'connections'),
+    metric('活跃任务', String(endpoint.activeTasks), 'active-tasks'),
   );
   article.append(start, lane, destination, metrics);
   return article;
@@ -207,10 +207,10 @@ function createIncidentLedger(incidents: IncidentSummary[]): HTMLElement {
   const section = document.createElement('section');
   section.className = 'incident-ledger';
   const heading = textElement('div', 'section-heading', '');
-  heading.append(textElement('h2', '', 'Event ledger'), textElement('span', 'section-note', `${incidents.length} retained in this view`));
+  heading.append(textElement('h2', '', '事件记录'), textElement('span', 'section-note', `当前视图保留 ${incidents.length} 条记录`));
   section.append(heading);
   if (incidents.length === 0) {
-    section.append(textElement('p', 'ledger-empty', 'No abnormal Agent traffic has been recorded.'));
+    section.append(textElement('p', 'ledger-empty', '尚未记录到异常智能体流量。'));
     return section;
   }
   for (const incident of [...incidents].reverse()) section.append(createIncident(incident));
@@ -221,21 +221,21 @@ function createIncident(incident: IncidentSummary): HTMLElement {
   const article = document.createElement('article');
   article.className = `incident-row incident-${incident.state}`;
   article.dataset.incidentId = incident.id;
-  const marker = textElement('span', 'incident-marker', incident.state === 'tripped' ? 'STOP' : 'WATCH');
+  const marker = textElement('span', 'incident-marker', incident.state === 'tripped' ? '已暂停' : '监控');
   const body = document.createElement('div');
   body.className = 'incident-body';
   body.append(
     textElement('strong', '', incident.ruleId),
     textElement('p', '', incident.summary),
-    textElement('span', 'incident-meta', `${incident.agent} · ${incident.hostname} · ${confidenceLabel(incident.confidence)}`),
+    textElement('span', 'incident-meta', `${incident.agent} / ${incident.hostname} / ${confidenceLabel(incident.confidence)}`),
   );
   const actions = document.createElement('div');
   actions.className = 'incident-actions';
   if (incident.state === 'tripped') {
-    actions.append(button('Resume task', 'resume', () => runCommand({ type: 'resume', incidentId: incident.id })));
-    actions.append(button('End task', 'terminate', () => runCommand({ type: 'terminate', incidentId: incident.id })));
+    actions.append(button('恢复任务', 'resume', () => runCommand({ type: 'resume', incidentId: incident.id })));
+    actions.append(button('结束任务', 'terminate', () => runCommand({ type: 'terminate', incidentId: incident.id })));
   }
-  actions.append(button('Ignore 15 min', 'ignore', () => runCommand({
+  actions.append(button('忽略 15 分钟', 'ignore', () => runCommand({
     type: 'ignore', incidentId: incident.id, durationMinutes: 15,
   })));
   article.append(marker, body, actions);
@@ -246,9 +246,9 @@ function createPolicyPanel(): HTMLElement {
   const aside = document.createElement('aside');
   aside.className = 'policy-panel';
   aside.append(
-    textElement('span', 'eyebrow', 'Policy v1'),
-    textElement('h2', '', 'Two signals before a stop'),
-    textElement('p', '', 'Byte spikes warn first. Automatic pauses require confirmed model traffic plus repeated task or session growth.'),
+    textElement('span', 'eyebrow', '策略 v1'),
+    textElement('h2', '', '双重信号触发暂停'),
+    textElement('p', '', '字节流量突增会先触发警告。只有确认属于模型流量，并且任务或会话持续增长时，系统才会自动暂停。'),
   );
   const form = document.createElement('form');
   form.className = 'policy-form';
@@ -261,9 +261,9 @@ function createPolicyPanel(): HTMLElement {
     ));
   });
   form.append(
-    numberField('Warn at', 'warning-outbound', DEFAULT_POLICY.fixedWarning.outboundMiB, 'MiB / 10 min'),
-    numberField('Pause at', 'trip-outbound', DEFAULT_POLICY.fixedTrip.outboundMiB, 'MiB / 10 min'),
-    button('Save policy', 'save-policy', () => form.requestSubmit()),
+    numberField('警告阈值', 'warning-outbound', DEFAULT_POLICY.fixedWarning.outboundMiB, 'MiB / 10 分钟'),
+    numberField('暂停阈值', 'trip-outbound', DEFAULT_POLICY.fixedTrip.outboundMiB, 'MiB / 10 分钟'),
+    button('保存策略', 'save-policy', () => form.requestSubmit()),
   );
   aside.append(form);
   return aside;
@@ -299,8 +299,8 @@ function createPrivacyNote(): HTMLElement {
   const note = document.createElement('footer');
   note.className = 'privacy-note';
   note.append(
-    textElement('span', 'privacy-lock', 'LOCAL / METADATA ONLY'),
-    textElement('p', '', 'Prompts, responses, credentials, and exact request totals are never collected.'),
+    textElement('span', 'privacy-lock', '仅采集本机连接元数据'),
+    textElement('p', '', '不会采集提示词、响应内容、凭据或精确请求总数。'),
   );
   return note;
 }
@@ -312,7 +312,7 @@ function renderState(message: string, state: string): void {
   container.dataset.state = state;
   container.setAttribute('role', state === 'unavailable' ? 'alert' : 'status');
   container.append(textElement('span', 'eyebrow', 'Agent Guard'), textElement('h1', '', message));
-  if (state === 'unavailable') container.append(button('Try again', 'retry', () => { void refresh(); }));
+  if (state === 'unavailable') container.append(button('重试', 'retry', () => { void refresh(); }));
   root.replaceChildren(container);
 }
 
@@ -352,13 +352,13 @@ function formatRate(bytes: number): string {
 }
 
 function confidenceLabel(value: AgentEndpointSnapshot['confidence']): string {
-  return value === 'confirmed' ? 'Confirmed' : value === 'probable' ? 'Probable' : 'Unknown';
+  return value === 'confirmed' ? '已确认' : value === 'probable' ? '较可信' : '未知';
 }
 
 function stateLabel(value: AgentGuardSnapshot['state']): string {
   return ({
-    learning: 'Learning', normal: 'On watch', warning: 'Warning', tripped: 'Tripped',
-    cooldown: 'Cooling down', degraded: 'Degraded',
+    learning: '学习基线', normal: '正常监控', warning: '流量警告', tripped: '已暂停',
+    cooldown: '冷却观察', degraded: '降级监控',
   } as const)[value];
 }
 
