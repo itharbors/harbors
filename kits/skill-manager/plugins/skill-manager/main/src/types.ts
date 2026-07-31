@@ -110,6 +110,25 @@ export type RestoreInput = {
   expectedDigest: string;
 };
 
+export type MutationAction = 'install' | 'update' | 'disable' | 'uninstall' | 'restore';
+
+export type MutationInput = {
+  revision: number;
+  expectedDigest: string;
+  source?: SkillCandidate;
+  global?: SkillCandidate;
+  recoveryId?: string;
+};
+
+export type MutationReceipt = {
+  action: MutationAction;
+  status: 'completed' | 'recovery-required';
+  revision: number;
+  basename: string;
+  digest: string;
+  recoveryId?: string;
+};
+
 export type SkillManagerErrorCode =
   | 'INVALID_SKILL'
   | 'UNSAFE_PATH'
