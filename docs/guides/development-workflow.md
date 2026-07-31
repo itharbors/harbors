@@ -76,13 +76,15 @@ SQLite       http://localhost:49380/kits/sqlite
 MySQL        http://localhost:49380/kits/mysql
 ```
 
-### Web 优先、Electron 收口
+### Kit Web 优先、桌面能力按需验收
 
-日常开发中，如果改动同时适用于 Web 与 Electron 宿主，优先使用 `npm run dev:web` 和浏览器完成
-调试与回归，以缩短启动链路并降低桌面进程调试成本。涉及系统托盘、BrowserWindow 生命周期、原生
-对话框、桌面 IPC、通知、自动更新、打包或操作系统集成时，应在开发过程中直接使用 Electron。
+普通 Kit 的开发、调试和最终验收默认使用 `npm run dev:web` 与浏览器。只要改动在 Web 与 Electron
+中共享实现，浏览器验收即可作为该改动的界面验收证据，无需再执行统一的 Electron 收口。
 
-所有改动在最终交付前仍必须使用 Electron 完成一次验收；Web 测试通过不能替代 Electron 验收门禁。
+涉及系统托盘、BrowserWindow 生命周期、原生对话框、桌面 IPC、通知、自动更新、打包、操作系统
+集成，或明确修改 Web 与 Electron 不同的控件、入口或行为时，必须使用 Electron 开发或完成补充
+验收。同时影响共享 Kit 行为和桌面专属行为时，分别验证浏览器共享路径与 Electron 专属路径。
+普通 Kit 可以自愿执行 Electron 冒烟检查，但它不是统一门禁。
 
 `/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
 已有 session 首次初始化后以其已加载 Kit 为准，不能通过替换 URL 中的 `kit` 隐式切换。
