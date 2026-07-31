@@ -78,7 +78,7 @@ describe('Scheduler panel', () => {
     await panel.mount({ message: { request } });
 
     expect(request).toHaveBeenCalledWith(
-      '@itharbors/scheduler-service',
+      '@itharbors/scheduler-panel',
       'scheduler',
       'getSnapshot',
     );
@@ -149,7 +149,7 @@ describe('Scheduler panel', () => {
 
     const call = request.mock.calls.find((item) => item[2] === 'saveJob')!;
     expect(call.slice(0, 3)).toEqual([
-      '@itharbors/scheduler-service',
+      '@itharbors/scheduler-panel',
       'scheduler',
       'saveJob',
     ]);

@@ -569,7 +569,6 @@ test('marks process control as elevated risk and includes it in install confirma
   const permission = value.document.querySelector('[data-permission="process-control"]');
   assert.equal(permission.dataset.risk, 'high');
   assert.match(permission.textContent, /进程控制.*高风险/);
-
   value.document.querySelector('[data-action="install"]').click();
   await value.view.whenIdle();
 
@@ -577,6 +576,7 @@ test('marks process control as elevated risk and includes it in install confirma
   assert.match(confirmations[0], /进程控制/);
   assert.deepEqual(value.calls, []);
 });
+
 test('switches to retained versions and explicitly retries abnormal versions', async () => {
   let releaseActivation;
   const activationGate = new Promise((resolve) => { releaseActivation = resolve; });

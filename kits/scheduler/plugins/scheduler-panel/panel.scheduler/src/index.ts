@@ -54,7 +54,7 @@ type PanelContext = {
   };
 };
 
-const SERVICE = '@itharbors/scheduler-service';
+const SERVICE = '@itharbors/scheduler-panel';
 const ROUTE = 'scheduler';
 const POLL_INTERVAL_MS = 2_000;
 const MISFIRE_GRACE_MS = 30_000;

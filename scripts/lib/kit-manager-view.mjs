@@ -10,6 +10,7 @@ const CHANNEL_LABELS = Object.freeze({
   stable: '稳定版',
   preview: '预览版',
 });
+
 function required(document, selector) {
   const node = document.querySelector(selector);
   if (!node) throw new Error(`Kit Manager document is missing ${selector}`);
