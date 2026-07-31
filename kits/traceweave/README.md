@@ -12,7 +12,8 @@ npm run dev -- --kit ./kits/traceweave
 
 ## 使用
 
-- 左侧 Runs 列出活跃与归档会话；选择后默认进入 Flow。
+- 左侧 Sessions 只列出 Codex 顶层会话，不会把子 Agent 或 `exec` rollout 冒充独立会话。
+  Active 默认展开，Archived 默认折叠；选择会话后默认进入 Flow。
 - Flow 对每一轮固定呈现 Input → Understand → Execute → Output 四个位置。空阶段会明确显示
   “No recorded …”，不会用推测填充。
 - 点击非空阶段可展开按时间排序的步骤；点击步骤打开 Evidence inspector。
@@ -45,11 +46,11 @@ npm run verify:real -w @itharbors/kit-traceweave
 npm run kit:check -- traceweave --output-directory "$(mktemp -d)"
 ```
 
-`verify:real` 只输出 run、turn、node、edge、证据类型和告警的聚合数量，并核对源文件 size/mtime
+`verify:real` 只输出顶层 session 的 Active/Archived 分类，以及 turn、node、edge、证据类型和告警的聚合数量，并核对源文件 size/mtime
 保持不变；不会打印 prompt、工具参数或文件路径。没有可解析会话时会以 `no_eligible_run` 明确失败。
 
 常见问题：
 
-- Runs 为空：确认 `CODEX_HOME` 指向包含 `sessions` 或 `archived_sessions` 的目录，然后 Refresh。
+- Sessions 为空：确认 `CODEX_HOME` 指向包含 `sessions` 或 `archived_sessions` 的目录，然后 Refresh。
 - 某阶段为空：切换 Events 检查是否被证据筛选或回放位置隐藏；TraceWeave 不补造缺失事件。
 - 原始证据不可用：对应 JSONL 可能已移动或刷新；重新扫描后再选择 run。

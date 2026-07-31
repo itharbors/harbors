@@ -19,7 +19,8 @@ describe('real-session verifier', () => {
     });
 
     expect(stdout).toContain('TraceWeave real-session verification: PASS');
-    expect(stdout).toMatch(/runs=2 turns=2 nodes=\d+ edges=\d+/);
+    expect(stdout).toContain('sessions=2 active=1 archived=1');
+    expect(stdout).toMatch(/turns=2 nodes=\d+ edges=\d+/);
     expect(stdout).toContain('source_unchanged=true');
     expect(stdout).not.toContain(home.root);
     expect(stdout).not.toContain('I need to generate a model');

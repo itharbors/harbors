@@ -28,6 +28,9 @@ export async function verifyRealSession(codexHome) {
   const service = new TraceweaveService(codexHome);
   try {
     const summaries = await service.listRuns();
+    const active = summaries.filter((summary) => !summary.archived).length;
+    const archived = summaries.filter((summary) => summary.archived).length;
+    if (active + archived !== summaries.length) throw new Error('INVALID_SESSION_COUNTS');
     let trace;
     for (const summary of summaries.slice(0, 20)) {
       const candidate = await service.loadRun({ runId: summary.id });
@@ -43,7 +46,8 @@ export async function verifyRealSession(codexHome) {
 
     return [
       'TraceWeave real-session verification: PASS',
-      `runs=${summaries.length} turns=${trace.turns.length} nodes=${nodes.length} edges=${trace.turns.reduce((sum, turn) => sum + turn.edges.length, 0)}`,
+      `sessions=${summaries.length} active=${active} archived=${archived}`,
+      `turns=${trace.turns.length} nodes=${nodes.length} edges=${trace.turns.reduce((sum, turn) => sum + turn.edges.length, 0)}`,
       `observed=${nodes.filter((node) => node.evidence.class === 'observed').length} derived=${nodes.filter((node) => node.evidence.class === 'derived').length} inferred=${nodes.filter((node) => node.evidence.class === 'inferred').length}`,
       `warnings=${trace.warnings.length} source_unchanged=${unchanged}`,
     ].join('\n');

@@ -85,16 +85,25 @@ function sessionIdFromFilename(file: string): string {
     ?? name.slice(-36);
 }
 
+function isTopLevelRun(payload: Record<string, unknown>): boolean {
+  if (payload.source === 'exec') return false;
+  if (payload.source !== null && typeof payload.source === 'object' && !Array.isArray(payload.source)) {
+    return !('subagent' in payload.source);
+  }
+  return true;
+}
+
 export async function discoverCodexRuns(codexHome: string): Promise<DiscoveredRun[]> {
   const root = path.resolve(codexHome);
   const [files, index] = await Promise.all([rolloutFiles(root), readIndex(root)]);
-  const runs = await Promise.all(files.map(async rolloutPath => {
+  const discovered = await Promise.all(files.map(async rolloutPath => {
     const info = await stat(rolloutPath);
     const first = info.size > 0 ? await firstEvent(rolloutPath) : undefined;
     const payload = first?.payload && typeof first.payload === 'object' && !Array.isArray(first.payload)
       ? first.payload as Record<string, unknown> : {};
-    const sessionId = typeof payload.session_id === 'string' ? payload.session_id
-      : typeof payload.id === 'string' ? payload.id : sessionIdFromFilename(rolloutPath);
+    if (!isTopLevelRun(payload)) return undefined;
+    const sessionId = typeof payload.id === 'string' ? payload.id
+      : typeof payload.session_id === 'string' ? payload.session_id : sessionIdFromFilename(rolloutPath);
     const indexed = index.get(sessionId);
     const failed = info.size === 0 || !first;
     return {
@@ -113,5 +122,9 @@ export async function discoverCodexRuns(codexHome: string): Promise<DiscoveredRu
       mtimeMs: info.mtimeMs,
     };
   }));
+  const runs: DiscoveredRun[] = [];
+  for (const run of discovered) {
+    if (run !== undefined) runs.push(run);
+  }
   return runs.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
 }

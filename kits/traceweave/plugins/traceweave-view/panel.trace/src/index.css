@@ -43,6 +43,15 @@ button:focus-visible { outline: 2px solid var(--ce-accent, #e6944a); outline-off
 .run-rail__title { position: sticky; top: 0; z-index: 2; display: flex; align-items: center; justify-content: space-between; height: 42px; padding: 0 14px; border-bottom: 1px solid #242d36; background: #10171eee; color: #88949e; font-size: 10px; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; backdrop-filter: blur(8px); }
 .run-rail__title b { display: grid; min-width: 21px; height: 20px; place-items: center; border-radius: 10px; background: #26313b; color: #b7c0c8; font-size: 10px; }
 .run-rail ol, .flow-overview__turns, .flow-detail ol { margin: 0; padding: 0; list-style: none; }
+.run-rail__group-controls { position: sticky; top: 42px; z-index: 2; display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #26303a; background: #0d141af2; backdrop-filter: blur(8px); }
+.run-rail__group-toggle { display: grid; width: 100%; height: 34px; grid-template-columns: minmax(0, 1fr) auto 10px; align-items: center; gap: 5px; padding: 0 8px 0 11px; border: 0; border-right: 1px solid #26303a; background: transparent; color: #7f8b95; text-align: left; cursor: pointer; }
+.run-rail__group-toggle:last-child { border-right: 0; }
+.run-rail__group-toggle:hover { background: #141c24; color: #b7c0c7; }
+.run-rail__group-toggle[aria-expanded="true"] { background: #172029; color: #d5dce1; box-shadow: inset 0 -2px #e6944a; }
+.run-rail__group-toggle span { font: 700 9px ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+.run-rail__group-toggle b { color: #677580; font: 600 9px ui-monospace, monospace; }
+.run-rail__group-toggle i { color: #687681; font: 12px ui-monospace, monospace; font-style: normal; transform: rotate(-90deg); transform-origin: center; }
+.run-rail__group-toggle[aria-expanded="true"] i { transform: rotate(0); }
 .run-rail li { border-bottom: 1px solid #202933; }
 .run-rail li button { position: relative; display: grid; width: 100%; grid-template-columns: 10px minmax(0, 1fr); gap: 3px 7px; padding: 12px 13px; border: 0; border-left: 2px solid transparent; background: transparent; text-align: left; cursor: pointer; }
 .run-rail li button:hover { background: #151e27; }
@@ -194,6 +203,7 @@ dd { margin: 0; color: #dce2e6; font: 600 12px/1.2 ui-monospace, monospace; }
 
 @media (prefers-reduced-motion: no-preference) {
   .flow-stage > button { transition: border-color 120ms ease, transform 120ms ease; }
+  .run-rail__group-toggle i { transition: transform 120ms ease; }
 }
 
 @media (prefers-reduced-motion: reduce) {

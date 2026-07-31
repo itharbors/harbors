@@ -1,4 +1,5 @@
 import type { RunSummary } from '@itharbors/traceweave-contracts';
+import { useEffect, useState } from 'react';
 
 interface RunRailProps {
   runs: RunSummary[];
@@ -13,13 +14,45 @@ function compactDate(value: string): string {
 }
 
 export function RunRail({ runs, selectedId, onSelect }: RunRailProps) {
-  return (
-    <aside className="run-rail" aria-label="Codex runs">
-      <div className="run-rail__title">
-        <span>Runs</span><b>{runs.length}</b>
-      </div>
-      <ol>
-        {runs.map((run) => (
+  const activeRuns = runs.filter(run => !run.archived);
+  const archivedRuns = runs.filter(run => run.archived);
+  const selectedIsActive = activeRuns.some(run => run.id === selectedId);
+  const selectedIsArchived = archivedRuns.some(run => run.id === selectedId);
+  const [visibleGroup, setVisibleGroup] = useState<'active' | 'archived'>(
+    selectedIsArchived ? 'archived' : 'active',
+  );
+
+  useEffect(() => { if (selectedIsActive) setVisibleGroup('active'); }, [selectedIsActive]);
+  useEffect(() => { if (selectedIsArchived) setVisibleGroup('archived'); }, [selectedIsArchived]);
+
+  function groupToggle(
+    label: 'Active' | 'Archived',
+    groupedRuns: RunSummary[],
+  ) {
+    const group = label === 'Active' ? 'active' : 'archived';
+    const id = `traceweave-${group}-sessions`;
+    const open = visibleGroup === group;
+    return (
+      <button
+        type="button"
+        className="run-rail__group-toggle"
+        aria-label={`${label} sessions, ${groupedRuns.length}`}
+        aria-controls={id}
+        aria-expanded={open}
+        onClick={() => setVisibleGroup(group)}
+      >
+        <span>{label}</span>
+        <b>{groupedRuns.length}</b>
+        <i aria-hidden="true">⌄</i>
+      </button>
+    );
+  }
+
+  function groupList(label: 'Active' | 'Archived', groupedRuns: RunSummary[]) {
+    const id = `traceweave-${label.toLowerCase()}-sessions`;
+    return (
+      <ol id={id} aria-label={`${label} sessions`}>
+        {groupedRuns.map((run) => (
           <li key={run.id}>
             <button
               type="button"
@@ -35,6 +68,20 @@ export function RunRail({ runs, selectedId, onSelect }: RunRailProps) {
           </li>
         ))}
       </ol>
+    );
+  }
+
+  return (
+    <aside className="run-rail" aria-label="Codex sessions">
+      <div className="run-rail__title">
+        <span>Sessions</span><b>{runs.length}</b>
+      </div>
+      <div className="run-rail__group-controls" aria-label="Session categories">
+        {groupToggle('Active', activeRuns)}
+        {groupToggle('Archived', archivedRuns)}
+      </div>
+      {visibleGroup === 'active' && groupList('Active', activeRuns)}
+      {visibleGroup === 'archived' && groupList('Archived', archivedRuns)}
     </aside>
   );
 }
