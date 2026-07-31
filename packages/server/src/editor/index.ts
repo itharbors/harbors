@@ -53,6 +53,11 @@ interface ActiveExternalPlugin {
 
 interface CreateEditorOptions {
   assembly: AssemblyConfig;
+  dispatchApplicationRequest?: (
+    plugin: string,
+    name: string,
+    ...args: unknown[]
+  ) => Promise<unknown>;
   dispatchBrowserRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchPanelBroadcast?: (panelKey: string, method: string, args: unknown[]) => void;
   onLayoutChanged?: (sessionId: string, window: WindowDescriptor) => void;
@@ -117,6 +122,9 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     },
   };
   const message = new MessageModule({
+    dispatchFallbackRequest: options.dispatchApplicationRequest
+      ? (plugin, name, args) => options.dispatchApplicationRequest!(plugin, name, ...args)
+      : undefined,
     dispatchPanelRequest: (panelKey, method, args) => panel.dispatch(panelKey, method, args),
     dispatchBrowserRequest: options.dispatchBrowserRequest,
     dispatchPanelBroadcast: (pluginName, _topic, method, args) => {

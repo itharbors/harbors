@@ -9,11 +9,12 @@ import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
-const allKits = ['csv', 'mysql', 'notifications', 'sqlite'];
+const allKits = ['csv', 'mysql', 'notifications', 'scheduler', 'sqlite'];
 const runners = Object.freeze({
   csv: 'macos-14',
   mysql: 'ubuntu-latest',
   notifications: 'ubuntu-latest',
+  scheduler: 'ubuntu-latest',
   sqlite: 'macos-14',
 });
 const execFileAsync = promisify(execFile);
@@ -72,6 +73,7 @@ function expectedCliOutput(slugs) {
 test('selects only changed official Kits in deterministic order', () => {
   assert.deepEqual(selectKitSlugs(['kits/csv/package.json']), ['csv']);
   assert.deepEqual(selectKitSlugs(['kits/mysql/package.json']), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json']), ['scheduler']);
   assert.deepEqual(
     selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json']),
     ['notifications', 'sqlite'],

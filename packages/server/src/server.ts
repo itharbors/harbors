@@ -30,7 +30,7 @@ export interface ServerOptions {
   host?: string;
   applicationRuntime?: Pick<
     ApplicationRuntime,
-    'start' | 'getBootstrap' | 'triggerMenu' | 'subscribe' | 'dispose'
+    'start' | 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe' | 'dispose'
   >;
 }
 

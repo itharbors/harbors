@@ -828,6 +828,10 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
+  assert.equal(
+    [...source.matchAll(/HARBORS_DATA_ROOT:\s*desktopPaths\.dataRoot/g)].length,
+    2,
+  );
   assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
   assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
   assert.match(source, /app\.getVersion\(\)/);

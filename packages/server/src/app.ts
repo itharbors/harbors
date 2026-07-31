@@ -31,7 +31,7 @@ import { createClientAssetRouter } from './routes/client-asset';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
-  applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'triggerMenu' | 'subscribe'>;
+  applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe'>;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
 }
@@ -51,6 +51,8 @@ export function createApp(
     const editor = createEditor(session.sessionId, {
         assembly,
         initialLocale: options.locale,
+        dispatchApplicationRequest: (plugin, name, ...args) =>
+          appOptions.applicationRuntime.request(plugin, name, ...args),
         dispatchBrowserRequest: (panel, method, args) => broker.request(
           session.sessionId,
           (event) => channel.broadcast(session.sessionId, event),

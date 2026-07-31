@@ -4,6 +4,7 @@ import { sendJson } from './utils';
 import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isOptionalArray, isOptionalString, isRecord } from '../http/validation';
+import { MessageRouteNotFoundError } from '../framework/message';
 
 export function createMessageRequestRouter(editorMap: Map<string, Editor>) {
   return async function messageRequestRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -23,10 +24,15 @@ export function createMessageRequestRouter(editorMap: Map<string, Editor>) {
       throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
     }
 
-    if (!editor.message.queryRequest(body.plugin, body.name)) {
-      throw new HttpError(404, 'MESSAGE_ROUTE_NOT_FOUND', 'Message route not found');
+    let result: unknown;
+    try {
+      result = await editor.message.request(body.plugin, body.name, ...(body.args ?? []));
+    } catch (error) {
+      if (error instanceof MessageRouteNotFoundError) {
+        throw new HttpError(404, 'MESSAGE_ROUTE_NOT_FOUND', 'Message route not found');
+      }
+      throw error;
     }
-    const result = await editor.message.request(body.plugin, body.name, ...(body.args ?? []));
     sendJson(res, 200, { result });
   };
 }

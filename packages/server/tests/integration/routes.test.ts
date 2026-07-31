@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createEditor } from '../../src/editor/index';
 import { BrowserRequestBroker } from '../../src/framework/browser-request-broker';
 import { createBootstrapRouter } from '../../src/routes/bootstrap';
@@ -419,6 +419,30 @@ describe('framework routes', () => {
     await router(mockReq('POST', '/api/message/request?sessionId=s1', { plugin: 'calc', name: 'double', args: [21] }), res);
     expect(statusCode()).toBe(200);
     expect(JSON.parse(await body()).result).toBe(42);
+  });
+
+  it('message request reaches the application fallback when no Session route exists', async () => {
+    const dispatchApplicationRequest = vi.fn(async (
+      plugin: string,
+      name: string,
+      ...args: unknown[]
+    ) => ({ plugin, name, args }));
+    const editor = createEditor('s1', { assembly: testAssembly, dispatchApplicationRequest });
+    const router = createMessageRequestRouter(new Map([['s1', editor]]));
+    const { res, body, statusCode } = mockRes();
+
+    await router(mockReq('POST', '/api/message/request?sessionId=s1', {
+      plugin: '@scope/background',
+      name: 'scheduler',
+      args: ['getSnapshot'],
+    }), res);
+
+    expect(statusCode()).toBe(200);
+    expect(JSON.parse(await body()).result).toEqual({
+      plugin: '@scope/background',
+      name: 'scheduler',
+      args: ['getSnapshot'],
+    });
   });
 
   it('message broadcast fires all matching handlers', async () => {

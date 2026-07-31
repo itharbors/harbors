@@ -4,10 +4,21 @@ type MessageModuleOptions = {
   dispatchPanelRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchBrowserRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchPanelBroadcast?: (plugin: string, topic: string, panelMethod: string, args: unknown[]) => void;
+  dispatchFallbackRequest?: (plugin: string, name: string, args: unknown[]) => Promise<unknown>;
 };
 
 function requestKey(plugin: string, name: string): string {
   return `${plugin}:${name}`;
+}
+
+export class MessageRouteNotFoundError extends Error {
+  constructor(
+    readonly plugin: string,
+    readonly routeName: string,
+  ) {
+    super(`No request route registered for "${plugin}.${routeName}"`);
+    this.name = 'MessageRouteNotFoundError';
+  }
 }
 
 function isWildcardRoute<T extends { name: string }>(route: T): boolean {
@@ -113,7 +124,10 @@ export class MessageModule {
     }
 
     if (!route) {
-      throw new Error(`No request route registered for "${plugin}.${name}"`);
+      if (this.options.dispatchFallbackRequest) {
+        return this.options.dispatchFallbackRequest(plugin, name, args);
+      }
+      throw new MessageRouteNotFoundError(plugin, name);
     }
     const panelMethod = route.methods.find((method) => method.startsWith('panel.'));
     if (route.location === 'browser') {

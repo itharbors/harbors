@@ -22,7 +22,7 @@ const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 test('loads the exact official Kit set from one strict policy', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
-  assert.deepEqual(OFFICIAL_KIT_SLUGS, ['csv', 'mysql', 'notifications', 'sqlite']);
+  assert.deepEqual(OFFICIAL_KIT_SLUGS, ['csv', 'mysql', 'notifications', 'scheduler', 'sqlite']);
   assert.equal(policy.repository, 'itharbors/harbors');
   assert.deepEqual(policy.signerWorkflows, [
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
@@ -37,7 +37,7 @@ test('rejects unknown Kit slugs before resolving a path', async () => {
   );
 });
 
-test('loads four directory-local manifests with matching runtime identity', async () => {
+test('loads five directory-local manifests with matching runtime identity', async () => {
   for (const slug of OFFICIAL_KIT_SLUGS) {
     const kit = await loadOfficialKit({ repositoryRoot, slug });
     assert.equal(kit.directory, path.join(repositoryRoot, 'kits', slug));

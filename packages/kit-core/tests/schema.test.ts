@@ -90,6 +90,18 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(preview)).toEqual(preview);
   });
 
+  it('accepts process execution as an explicit Kit permission', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['filesystem', 'process-execution'],
+    };
+
+    expect(parseKitPackageManifest(manifest).permissions).toEqual([
+      'filesystem',
+      'process-execution',
+    ]);
+  });
+
   it.each([
     'kit-demo',
     '@example',

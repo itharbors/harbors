@@ -34,6 +34,7 @@ export function resolveDesktopPaths({
       ? path.join(runtimeRoot, 'client')
       : path.join(repository, 'packages', 'client', 'dist'),
     frameworkEntry: path.join(moduleRoot, 'framework.mjs'),
+    dataRoot,
     dbPath: path.join(dataRoot, 'framework.db'),
     kitStoreRoot: path.join(dataRoot, 'kit-store'),
   });

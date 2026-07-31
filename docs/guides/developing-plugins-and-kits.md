@@ -235,8 +235,8 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-Default 是唯一的 builtin Kit。CSV、SQLite、MySQL 与 Notifications 是官方市场 Kit；其实现固定保存在
-主分支的 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`，这些仓库目录只会由
+Default 是唯一的 builtin Kit。CSV、SQLite、MySQL、Notifications 与 Scheduler 是官方市场 Kit；其实现固定保存在
+主分支的 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`，这些仓库目录只会由
 `npm run dev` 自动加载。每个目录独立维护
 `kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并

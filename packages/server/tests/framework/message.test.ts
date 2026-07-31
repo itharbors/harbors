@@ -26,6 +26,46 @@ describe('MessageModule', () => {
     await expect(messageModule.request('math', 'add', 3, 4)).resolves.toBe(7);
   });
 
+  it('falls back to an application request only when no session route exists', async () => {
+    const fallback = vi.fn(async (plugin: string, name: string, args: unknown[]) => ({
+      plugin,
+      name,
+      args,
+    }));
+    const message = new MessageModule({ dispatchFallbackRequest: fallback });
+
+    await expect(message.request('@scope/background', 'status', 'detail')).resolves.toEqual({
+      plugin: '@scope/background',
+      name: 'status',
+      args: ['detail'],
+    });
+
+    message.registerRequest('@scope/background', 'status', () => 'session');
+    await expect(message.request('@scope/background', 'status')).resolves.toBe('session');
+    expect(fallback).toHaveBeenCalledTimes(1);
+  });
+
+  it('connects missing editor routes to the application runtime dispatcher', async () => {
+    const dispatchApplicationRequest = vi.fn(async (
+      plugin: string,
+      name: string,
+      ...args: unknown[]
+    ) => ({ plugin, name, args }));
+    const editor = createEditor('application-message-session', {
+      assembly: testAssembly,
+      dispatchApplicationRequest,
+    });
+
+    await expect(
+      editor.message.request('@scope/background', 'snapshot', { limit: 10 }),
+    ).resolves.toEqual({
+      plugin: '@scope/background',
+      name: 'snapshot',
+      args: [{ limit: 10 }],
+    });
+    expect(dispatchApplicationRequest).toHaveBeenCalledOnce();
+  });
+
   it('dispatches browser request methods through the injected dispatcher', async () => {
     const dispatch = vi.fn(async (panel, method, args) => ({ panel, method, args }));
     messageModule = new MessageModule({ dispatchBrowserRequest: dispatch });

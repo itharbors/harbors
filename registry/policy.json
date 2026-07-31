@@ -25,6 +25,12 @@
       "summary": "桌面通知中心与 Codex notify-user Skill 安装能力",
       "runner": "ubuntu-latest"
     },
+    "scheduler": {
+      "id": "@itharbors/kit-scheduler",
+      "label": "Scheduler",
+      "summary": "本地 Node.js 脚本的定时、循环与错过触发管理",
+      "runner": "ubuntu-latest"
+    },
     "sqlite": {
       "id": "@itharbors/kit-sqlite",
       "label": "SQLite",
