@@ -487,7 +487,7 @@ function createJobRow(job: SchedulerJob) {
   actions.append(
     createButton(running ? '运行中' : '立即运行', 'run-job', () => {
       void runAction('runJobNow', job.id);
-    }, 'button-quiet', running),
+    }, 'button-quiet button-inline-primary', running),
     createButton(job.enabled ? '暂停' : '恢复', 'toggle-job', () => {
       void runAction('setJobEnabled', job.id, !job.enabled);
     }, 'button-quiet'),
