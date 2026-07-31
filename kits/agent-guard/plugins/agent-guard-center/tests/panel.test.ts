@@ -20,6 +20,7 @@ describe('Agent Guard panel', () => {
     expect(document.querySelector('h1')?.textContent).toBe('本机智能体流量');
     expect(document.querySelector('[data-metric="bytes-out"]')?.textContent).toBe('12.0 MiB/min');
     expect(document.querySelector('[data-confidence]')?.textContent).toBe('已确认');
+    expect(document.querySelector('.flow-lane')?.getAttribute('data-active')).toBe('true');
     expect(document.querySelector('[data-incident-id="incident-1"]')?.textContent).toContain('fixed-traffic-trip');
     expect(document.body.textContent).toContain('观测路由');
     expect(document.body.textContent).toContain('事件记录');
@@ -70,6 +71,17 @@ describe('Agent Guard panel', () => {
     expect(incident?.textContent).toContain('恢复任务');
     expect(incident?.textContent).toContain('结束任务');
     expect(incident?.textContent).toContain('忽略 15 分钟');
+    panel.unmount();
+  });
+
+  it('keeps the route indicator still when both traffic rates are zero', async () => {
+    const idle = snapshot();
+    idle.endpoints[0].bytesInPerMinute = 0;
+    idle.endpoints[0].bytesOutPerMinute = 0;
+    const request = vi.fn(async () => idle);
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    expect(document.querySelector('.flow-lane')?.getAttribute('data-active')).toBe('false');
     panel.unmount();
   });
 

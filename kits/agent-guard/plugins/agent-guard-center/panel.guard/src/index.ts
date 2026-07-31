@@ -182,6 +182,7 @@ function createRoute(endpoint: AgentEndpointSnapshot): HTMLElement {
   );
   const lane = document.createElement('div');
   lane.className = 'flow-lane';
+  lane.dataset.active = String(endpoint.bytesInPerMinute > 0 || endpoint.bytesOutPerMinute > 0);
   lane.setAttribute('aria-hidden', 'true');
   lane.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
   const destination = document.createElement('div');
@@ -246,7 +247,7 @@ function createPolicyPanel(): HTMLElement {
   const aside = document.createElement('aside');
   aside.className = 'policy-panel';
   aside.append(
-    textElement('span', 'eyebrow', '策略 v1'),
+    textElement('span', 'policy-version', '策略 v1'),
     textElement('h2', '', '双重信号触发暂停'),
     textElement('p', '', '字节流量突增会先触发警告。只有确认属于模型流量，并且任务或会话持续增长时，系统才会自动暂停。'),
   );
