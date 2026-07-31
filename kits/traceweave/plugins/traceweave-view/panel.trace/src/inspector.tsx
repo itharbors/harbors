@@ -19,10 +19,17 @@ export function Inspector({ runId, node, api, onClose }: InspectorProps) {
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(true);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const originRef = useRef<HTMLElement | null>(
+    document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  );
   const details = useMemo(() => json(node.details), [node]);
   const eventId = node.evidence.sourceEventIds[0];
 
-  useEffect(() => { closeRef.current?.focus(); }, []);
+  useEffect(() => {
+    closeRef.current?.focus();
+    const origin = originRef.current;
+    return () => origin?.focus();
+  }, []);
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => { if (event.key === 'Escape') onClose(); };
     window.addEventListener('keydown', keydown);

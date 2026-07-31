@@ -77,7 +77,7 @@ export function App({ api }: AppProps) {
   return (
     <div className="trace-shell">
       <header className="trace-header">
-        <div className="trace-brand"><span aria-hidden="true">TW</span><div><strong>TraceWeave</strong><small>Codex orchestration observatory</small></div></div>
+        <div className="trace-brand"><span aria-hidden="true">TW</span><div><h1>TraceWeave</h1><small>Codex orchestration observatory</small></div></div>
         <Toolbar
           view={view} onViewChange={setView} onRefresh={() => void refresh()} refreshing={refreshing}
           visibility={visibility}

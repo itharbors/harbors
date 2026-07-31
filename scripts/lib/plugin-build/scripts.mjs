@@ -90,6 +90,7 @@ function bundlePanel({ rootDir, sourceDir, outDir, outputFile }) {
       '--format=esm',
       '--platform=browser',
       '--target=es2022',
+      '--jsx=automatic',
       `--outfile=${jsOutFile}`,
       '--log-level=warning',
     ],

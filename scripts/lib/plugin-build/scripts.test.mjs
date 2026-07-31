@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { copyPanelAssets } from './assets.mjs';
 import { compilePanelScripts } from './scripts.mjs';
 
 test('panel compilation bundles bare package imports for direct browser loading', () => {
@@ -85,6 +86,31 @@ test('panel compilation typechecks and bundles imported TSX modules', () => {
     const output = fs.readFileSync(path.join(distDir, 'index.js'), 'utf8');
     assert.match(output, /TraceWeave/);
     assert.doesNotMatch(output, /component\.js/);
+    assert.doesNotMatch(output, /React\.createElement/);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('panel asset copying excludes bundled TypeScript sources recursively', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-panel-assets-'));
+  try {
+    const sourceDir = path.join(rootDir, 'panel.demo/src');
+    const distDir = path.join(rootDir, 'panel.demo/dist');
+    fs.mkdirSync(path.join(sourceDir, 'components'), { recursive: true });
+    fs.writeFileSync(path.join(sourceDir, 'index.html'), '<main></main>\n');
+    fs.writeFileSync(path.join(sourceDir, 'index.ts'), 'export default {};\n');
+    fs.writeFileSync(path.join(sourceDir, 'app.tsx'), 'export const App = () => null;\n');
+    fs.writeFileSync(path.join(sourceDir, 'components/helper.ts'), 'export const helper = true;\n');
+    fs.writeFileSync(path.join(sourceDir, 'icon.svg'), '<svg></svg>\n');
+
+    copyPanelAssets({ panels: [{ sourceDir, distDir }] });
+
+    assert.equal(fs.existsSync(path.join(distDir, 'index.html')), true);
+    assert.equal(fs.existsSync(path.join(distDir, 'icon.svg')), true);
+    assert.equal(fs.existsSync(path.join(distDir, 'index.ts')), false);
+    assert.equal(fs.existsSync(path.join(distDir, 'app.tsx')), false);
+    assert.equal(fs.existsSync(path.join(distDir, 'components/helper.ts')), false);
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }

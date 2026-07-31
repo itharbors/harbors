@@ -38,27 +38,33 @@ export function copyFileIfExists(sourcePath, targetPath) {
   return true;
 }
 
-export function copyDirectoryContents(sourceDir, targetDir, ignoredNames = new Set()) {
+export function copyDirectoryContents(
+  sourceDir,
+  targetDir,
+  ignoredNames = new Set(),
+  ignoredExtensions = new Set(),
+) {
   if (!fs.existsSync(sourceDir)) return;
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
-    if (ignoredNames.has(entry.name)) continue;
+    if (ignoredNames.has(entry.name) || ignoredExtensions.has(path.extname(entry.name))) continue;
     const sourcePath = path.join(sourceDir, entry.name);
     const targetPath = path.join(targetDir, entry.name);
     if (entry.isDirectory()) {
-      copyDirectoryRecursive(sourcePath, targetPath);
+      copyDirectoryRecursive(sourcePath, targetPath, ignoredExtensions);
       continue;
     }
     copyFile(sourcePath, targetPath);
   }
 }
 
-function copyDirectoryRecursive(sourceDir, targetDir) {
+function copyDirectoryRecursive(sourceDir, targetDir, ignoredExtensions) {
   fs.mkdirSync(targetDir, { recursive: true });
   for (const entry of fs.readdirSync(sourceDir, { withFileTypes: true })) {
+    if (ignoredExtensions.has(path.extname(entry.name))) continue;
     const sourcePath = path.join(sourceDir, entry.name);
     const targetPath = path.join(targetDir, entry.name);
     if (entry.isDirectory()) {
-      copyDirectoryRecursive(sourcePath, targetPath);
+      copyDirectoryRecursive(sourcePath, targetPath, ignoredExtensions);
     } else {
       copyFile(sourcePath, targetPath);
     }

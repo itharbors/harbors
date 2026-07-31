@@ -6,7 +6,8 @@
   "scripts": {
     "build": "npm run build -w @itharbors/traceweave-contracts && node ../../scripts/ce-plugin.mjs build plugins/traceweave-core && node ../../scripts/ce-plugin.mjs build plugins/traceweave-view",
     "test:prepare": "npm run build && node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
-    "test": "npm run test:prepare && vitest run --config vitest.config.ts"
+    "test": "npm run test:prepare && vitest run --config vitest.config.ts",
+    "verify:real": "npm run build && node scripts/verify-real-session.ts"
   },
   "devDependencies": {
     "@types/react": "^19.2.2",

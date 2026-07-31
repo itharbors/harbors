@@ -51,6 +51,7 @@ describe('TraceWeave panel', () => {
     expect(request).toHaveBeenCalledWith('@itharbors/traceweave-core', 'listRuns');
     expect(request).toHaveBeenCalledWith('@itharbors/traceweave-core', 'loadRun', { runId: 'run-1' });
     expect(document.querySelector('[aria-label="Flow overview"]')).not.toBeNull();
+    expect(document.querySelector('h1')?.textContent).toBe('TraceWeave');
     expect(document.body.textContent).toContain('Build orchestration view');
     expect(document.body.textContent).toContain('Input');
     expect(document.body.textContent).toContain('Understand');

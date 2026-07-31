@@ -30,7 +30,7 @@ export function RunRail({ runs, selectedId, onSelect }: RunRailProps) {
               <span className={`run-rail__status run-rail__status--${run.status}`} aria-hidden="true" />
               <strong>{run.title}</strong>
               <span>{compactDate(run.updatedAt)}</span>
-              <small>{run.turnCount ?? '—'} turns · {run.workspace ?? 'Unknown workspace'}</small>
+              <small>{run.turnCount === undefined ? 'Session' : `${run.turnCount} turns`} · {run.workspace ?? 'Unknown workspace'}</small>
             </button>
           </li>
         ))}

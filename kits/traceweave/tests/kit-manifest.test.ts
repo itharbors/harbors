@@ -10,6 +10,7 @@ describe('TraceWeave Kit manifest', () => {
     const pkg = readJson(path.join(kitRoot, 'package.json'));
     const manifest = readJson(path.join(kitRoot, 'kit.json'));
     const layout = readJson(path.join(kitRoot, 'layout.json'));
+    const view = readJson(path.join(kitRoot, 'plugins/traceweave-view/package.json'));
 
     expect(pkg.name).toBe('@itharbors/kit-traceweave');
     expect(pkg['ce-editor'].kit.menuRoot).toEqual({ id: 'traceweave', label: 'TraceWeave' });
@@ -30,6 +31,10 @@ describe('TraceWeave Kit manifest', () => {
     expect(layout.activePanel).toBe('@itharbors/traceweave-view.trace');
     expect(manifest.permissions).toEqual(['filesystem']);
     expect(manifest.target).toEqual({ platform: 'any', arch: 'any' });
+    expect(pkg.dependencies).toBeUndefined();
+    expect(pkg.devDependencies).toMatchObject({ react: '^19.2.8', 'react-dom': '^19.2.8' });
+    expect(view.dependencies).toEqual({ '@itharbors/traceweave-contracts': '0.0.1' });
+    expect(view.devDependencies).toMatchObject({ react: '^19.2.8', 'react-dom': '^19.2.8' });
   });
 });
 
