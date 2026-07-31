@@ -15,4 +15,25 @@ describe('Agent Guard panel accessibility', () => {
     expect(css).toMatch(/:focus-visible/u);
     expect(css).toMatch(/prefers-reduced-motion/u);
   });
+
+  it('allows the Harbors host to run its injected panel bridge', () => {
+    expect(readCspDirectives().get('script-src')).toEqual(["'self'", "'unsafe-inline'"]);
+  });
+
+  it('allows the Harbors host to apply negotiated theme tokens', () => {
+    expect(readCspDirectives().get('style-src')).toEqual(["'self'", "'unsafe-inline'"]);
+  });
+
+  it('allows the panel bridge to request snapshots only from the local host', () => {
+    expect(readCspDirectives().get('connect-src')).toEqual(["'self'"]);
+  });
 });
+
+function readCspDirectives(): Map<string, string[]> {
+  const html = fs.readFileSync(path.join(panelRoot, 'index.html'), 'utf8');
+  const content = html.match(/http-equiv="Content-Security-Policy"\s+content="([^"]+)"/iu)?.[1];
+  return new Map((content ?? '').split(';').map((directive) => {
+    const [name, ...values] = directive.trim().split(/\s+/u);
+    return [name, values];
+  }));
+}
