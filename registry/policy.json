@@ -36,6 +36,12 @@
       "label": "SQLite",
       "summary": "SQLite 数据库浏览、编辑、关系图与 SQL 工作台",
       "runner": "macos-14"
+    },
+    "traceweave": {
+      "id": "@itharbors/kit-traceweave",
+      "label": "TraceWeave",
+      "summary": "Codex 多轮编排、执行证据与因果流程可视化工作台",
+      "runner": "ubuntu-latest"
     }
   }
 }

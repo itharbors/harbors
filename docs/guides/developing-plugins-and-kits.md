@@ -235,8 +235,8 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-Default 是唯一的 builtin Kit。Agent Guard、CSV、SQLite、MySQL 与 Notifications 是官方市场 Kit；其实现固定保存在
-主分支的 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`，这些仓库目录只会由
+Default 是唯一的 builtin Kit。Agent Guard、CSV、SQLite、MySQL、Notifications 与 TraceWeave 是官方市场 Kit；其实现固定保存在
+主分支的 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/traceweave`，这些仓库目录只会由
 `npm run dev` 自动加载。每个目录独立维护
 `kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
@@ -372,6 +372,19 @@ npm run dev -- --kit ./kits/csv
 Core 插件流式解析源文件并建立会话临时索引；Panel 仅获取当前页。数据页提供全字段搜索、字段筛选、
 稳定文本排序和 25/50/100/250 行分页，结构页按需读取空值数与最大长度。导出始终创建新的 UTF-8 BOM
 CSV 并拒绝覆盖源文件或已有目标。完整格式、查询语义与资源上限见 [CSV Kit README](../../kits/csv/README.md)。
+
+## TraceWeave Kit
+
+官方市场 Kit `@itharbors/kit-traceweave` 只读解析本机 Codex JSONL 会话，通过 Session main 插件与
+React Panel 间的 message request 展示四阶段 Flow、完整 Events、证据筛选、回放和脱敏检查器：
+
+```bash
+npm run dev -- --kit ./kits/traceweave
+```
+
+该 Kit 的数据插件不启动端口，不把 Codex Home 或 rollout 绝对路径发送给 Panel。独立的
+`@itharbors/traceweave-contracts` workspace 是 main/Panel 唯一共享协议。支持范围、证据语义、
+隐私边界和验证命令见 [TraceWeave Kit README](../../kits/traceweave/README.md)。
 
 ## MySQL Kit
 
