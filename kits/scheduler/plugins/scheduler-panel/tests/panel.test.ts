@@ -67,6 +67,8 @@ describe('Scheduler panel', () => {
     );
     expect(document.querySelector('main[aria-label="脚本调度工作台"]')).not.toBeNull();
     expect(document.querySelector('.scheduler-breadcrumb')?.textContent).toContain('Scheduler');
+    expect(document.querySelector('.summary-strip')).not.toBeNull();
+    expect(document.querySelectorAll('.summary-strip .summary-stat')).toHaveLength(4);
     expect(document.querySelectorAll('[data-testid="metric-card"]')).toHaveLength(4);
     expect(metricValue('计划总数')).toBe('1');
     expect(metricValue('已启用')).toBe('1');
@@ -233,9 +235,10 @@ describe('Scheduler panel', () => {
     expect(document.querySelectorAll('[data-action="new-job"]')).toHaveLength(1);
     expect(document.querySelector('.scheduler-workbench')).toBeNull();
 
-    click('[data-action="new-job"]');
+    click('[data-action="empty-new-job"]');
     expect(document.querySelector('.jobs-section')).not.toBeNull();
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(document.querySelector('#job-form-title')?.textContent).toBe('新建计划');
     panel.unmount();
 
     document.body.innerHTML = '<div id="panel-root"></div>';
