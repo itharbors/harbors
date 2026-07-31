@@ -1,0 +1,2 @@
+:root { color-scheme: dark; }
+body { margin: 0; background: var(--ce-bg-primary, #111820); color: var(--ce-text-primary, #e7edf2); }
