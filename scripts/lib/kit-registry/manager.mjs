@@ -1,3 +1,5 @@
+import semver from 'semver';
+
 const KIT_ID_PATTERN = /^@[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/;
 const VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const AUDIT_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -60,7 +62,7 @@ function installedProjection(record) {
     ...(record.pending === undefined ? {} : { pending: record.pending }),
     channel: record.channel,
     autoUpdate: record.autoUpdate,
-    versions: Object.keys(record.versions).sort((left, right) => left.localeCompare(right)),
+    versions: Object.keys(record.versions).sort(semver.rcompare),
     badVersions: [...record.badVersions],
   };
 }

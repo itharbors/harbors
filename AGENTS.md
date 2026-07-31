@@ -1,5 +1,11 @@
 # Harbors repository instructions
 
+## Development validation
+
+- Prefer `npm run dev:web` and browser-based testing during routine development when the behavior is shared by the Web and Electron hosts.
+- Use Electron during development when the change depends on desktop-only behavior such as the Tray, BrowserWindow lifecycle, native dialogs, desktop IPC, notifications, updates, packaging, or operating-system integration.
+- Always complete final acceptance in Electron; passing Web tests does not replace the Electron acceptance gate.
+
 ## Commit messages
 
 Use exactly one of these title formats:

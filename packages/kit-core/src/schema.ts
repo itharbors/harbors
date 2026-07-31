@@ -445,7 +445,16 @@ function parseInstalledRecord(value: unknown): InstalledKitRecord {
   const input = record(value, 'installed Kit record');
   exactKeys(
     input,
-    ['active', 'previous', 'pending', 'channel', 'autoUpdate', 'versions', 'badVersions'],
+    [
+      'active',
+      'previous',
+      'pending',
+      'pendingUninstall',
+      'channel',
+      'autoUpdate',
+      'versions',
+      'badVersions',
+    ],
     'installed Kit record',
   );
   const versionsInput = record(input.versions, 'installed Kit versions');
@@ -472,6 +481,9 @@ function parseInstalledRecord(value: unknown): InstalledKitRecord {
   const active = optionalVersion(input, 'active');
   const previous = optionalVersion(input, 'previous');
   const pending = optionalVersion(input, 'pending');
+  if (input.pendingUninstall !== undefined && input.pendingUninstall !== true) {
+    throw new Error('installed Kit pendingUninstall must be true when present');
+  }
   for (const [field, version] of Object.entries({ active, previous, pending })) {
     if (version !== undefined && versions[version] === undefined) {
       throw new Error(`installed Kit ${field} version ${version} is not installed`);
@@ -482,6 +494,7 @@ function parseInstalledRecord(value: unknown): InstalledKitRecord {
     ...(active === undefined ? {} : { active }),
     ...(previous === undefined ? {} : { previous }),
     ...(pending === undefined ? {} : { pending }),
+    ...(input.pendingUninstall === true ? { pendingUninstall: true as const } : {}),
     channel: parseChannel(input.channel, 'installed Kit channel'),
     autoUpdate: booleanValue(input.autoUpdate, 'installed Kit autoUpdate'),
     versions,

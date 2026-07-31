@@ -209,6 +209,27 @@ test('lists and refreshes a sanitized union of market and installed Kit state', 
         channel: 'stable',
         autoUpdate: true,
         versions: {
+          '2.0.0-preview.1': {
+            version: '2.0.0-preview.1',
+            directory: '/private/store/demo/2.0.0-preview.1',
+            digest: 'c'.repeat(64),
+            source: { publisher: 'example', repository: 'example/kit-demo', commit },
+            installedAt: '2026-07-23T02:00:00.000Z',
+          },
+          '1.10.0': {
+            version: '1.10.0',
+            directory: '/private/store/demo/1.10.0',
+            digest: 'b'.repeat(64),
+            source: { publisher: 'example', repository: 'example/kit-demo', commit },
+            installedAt: '2026-07-23T01:00:00.000Z',
+          },
+          '1.9.0': {
+            version: '1.9.0',
+            directory: '/private/store/demo/1.9.0',
+            digest: 'd'.repeat(64),
+            source: { publisher: 'example', repository: 'example/kit-demo', commit },
+            installedAt: '2026-07-23T00:30:00.000Z',
+          },
           '1.2.2': {
             version: '1.2.2',
             directory: '/private/store/demo/1.2.2',
@@ -243,7 +264,7 @@ test('lists and refreshes a sanitized union of market and installed Kit state', 
     previous: '1.2.1',
     channel: 'stable',
     autoUpdate: true,
-    versions: ['1.2.2'],
+    versions: ['2.0.0-preview.1', '1.10.0', '1.9.0', '1.2.2'],
     badVersions: ['1.1.0'],
   });
   const serialized = JSON.stringify(listed);

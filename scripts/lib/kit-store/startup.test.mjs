@@ -93,6 +93,47 @@ test('applies each startup pending version once before returning active sources'
     audit: { append: async () => undefined },
   });
   assert.deepEqual(second.outcomes, []);
+  assert.deepEqual(second.pendingUninstalls, []);
+});
+
+test('keeps staged uninstalls out of startup sources and returns them for cleanup', async () => {
+  const store = await createStore();
+  await install(store, '1.0.0');
+  await store.activate(id, '1.0.0');
+  await store.stageUninstall(id);
+  let catalogValidations = 0;
+
+  const result = await prepareInstalledKitsForStartup({
+    store,
+    validateCatalog: async () => {
+      catalogValidations += 1;
+      throw new Error('staged uninstall must not request activation validation');
+    },
+    audit: { append: async () => undefined },
+  });
+
+  assert.deepEqual(result.activeSources, []);
+  assert.deepEqual(result.pendingActivations, []);
+  assert.deepEqual(result.pendingUninstalls, [{ id }]);
+  assert.equal(catalogValidations, 0);
+  assert.equal((await store.snapshot()).kits[id].pendingUninstall, true);
+});
+
+test('does not reactivate a pending version once its Kit is staged for uninstall', async () => {
+  const store = await createStore();
+  await install(store, '1.0.0');
+  await store.setPending(id, '1.0.0');
+  await store.stageUninstall(id);
+
+  const result = await prepareInstalledKitsForStartup({
+    store,
+    validateCatalog: async () => { throw new Error('must not validate a removed Kit'); },
+    audit: { append: async () => undefined },
+  });
+
+  assert.deepEqual(result.activeSources, []);
+  assert.deepEqual(result.pendingActivations, []);
+  assert.deepEqual(result.pendingUninstalls, [{ id }]);
 });
 
 test('rejects a pending installed version shadowed by a development Catalog entry', async () => {

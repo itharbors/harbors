@@ -34,7 +34,13 @@ git -C "$repo_root" fetch origin --prune
 git -C "$repo_root" show-ref --verify --quiet refs/remotes/origin/main || fail 'origin/main is missing'
 test "$(git -C "$repo_root" rev-list --count origin/main..HEAD)" -gt 0 || fail 'change branch has no commits over origin/main'
 while IFS= read -r subject; do
-  case "$subject" in "[$label] "*) ;; *) fail "commits must start with [$label]: $subject" ;; esac
+  case "$subject" in
+    "[$label] "*) ;;
+    "[Docs] "*|"[Test] "*)
+      test "$change_type" = bug || fail "commits must start with [$label]: $subject"
+      ;;
+    *) fail "commits must start with [$label]: $subject" ;;
+  esac
 done < <(git -C "$repo_root" log --format=%s origin/main..HEAD)
 
 (cd "$repo_root" && npm run check)
