@@ -187,7 +187,57 @@ async function runAction(method: string, ...args: unknown[]) {
 
 function renderLoading() {
   if (!root) return;
-  root.replaceChildren(createState('正在读取调度时刻表…', 'loading'));
+  const loading = document.createElement('main');
+  loading.className = 'scheduler-workspace loading-shell';
+  loading.setAttribute('aria-label', '正在读取调度时刻表');
+  loading.setAttribute('aria-busy', 'true');
+
+  const status = document.createElement('span');
+  status.className = 'sr-only';
+  status.setAttribute('role', 'status');
+  status.textContent = '正在读取调度时刻表';
+
+  const header = document.createElement('div');
+  header.className = 'loading-header';
+  header.setAttribute('aria-hidden', 'true');
+  header.append(createSkeleton('loading-line loading-line--title'));
+  const headerMeta = createSkeleton('loading-line loading-line--meta');
+  header.append(headerMeta);
+
+  const summary = document.createElement('div');
+  summary.className = 'loading-summary';
+  summary.setAttribute('aria-hidden', 'true');
+  for (let index = 0; index < 4; index += 1) {
+    const item = document.createElement('div');
+    item.className = 'loading-summary__item';
+    item.append(
+      createSkeleton('loading-line loading-line--label'),
+      createSkeleton('loading-line loading-line--value'),
+    );
+    summary.append(item);
+  }
+
+  const tables = document.createElement('div');
+  tables.className = 'loading-tables';
+  tables.setAttribute('aria-hidden', 'true');
+  for (let index = 0; index < 2; index += 1) {
+    const table = document.createElement('section');
+    table.className = 'loading-table';
+    table.append(
+      createSkeleton('loading-line loading-line--section'),
+      createSkeleton('loading-block'),
+    );
+    tables.append(table);
+  }
+
+  loading.append(status, header, summary, tables);
+  root.replaceChildren(loading);
+}
+
+function createSkeleton(className: string) {
+  const skeleton = document.createElement('span');
+  skeleton.className = `loading-skeleton ${className}`;
+  return skeleton;
 }
 
 function renderUnavailable() {
@@ -557,7 +607,6 @@ function createJobForm() {
   const scriptBrowserHost = document.createElement('div');
   scriptBrowserHost.className = 'script-browser-host';
   script.field.append(scriptBrowserHost);
-  drawerBody.append(name.field, script.field);
 
   const fieldErrors = new Map<string, { control: HTMLInputElement; error: HTMLElement }>();
   for (const field of [name, script]) {
@@ -634,7 +683,7 @@ function createJobForm() {
       for (const entry of listing.entries) {
         const item = document.createElement('li');
         const button = createButton(
-          `${entry.kind === 'directory' ? '📁' : '◇'} ${entry.name}`,
+          entry.name,
           'browse-script-entry',
           () => {
             if (entry.kind === 'directory') {
@@ -672,7 +721,6 @@ function createJobForm() {
   );
   scheduleType.value = existing?.schedule.kind ?? 'once';
   scheduleField.append(scheduleLabel, scheduleType);
-  drawerBody.append(scheduleField);
 
   const defaultTime = toLocalInput(
     new Date(Date.parse(snapshot!.now) + DEFAULT_LEAD_MS).toISOString(),
@@ -733,13 +781,11 @@ function createJobForm() {
     : 'hour';
   unitField.append(unitLabel, unit);
   intervalGroup.append(start.field, intervalValue.field, unitField);
-  drawerBody.append(once.field, intervalGroup);
 
   const preview = document.createElement('section');
   preview.className = 'schedule-preview';
   preview.dataset.testid = 'schedule-preview';
   preview.setAttribute('aria-label', '执行预览');
-  drawerBody.append(preview);
 
   const policyField = document.createElement('label');
   policyField.className = 'form-field';
@@ -756,7 +802,18 @@ function createJobForm() {
   const policyHint = document.createElement('small');
   policyHint.textContent = 'Harbors 停止运行或系统休眠，超过计划时间 30 秒时使用此规则。';
   policyField.append(policyHint);
-  drawerBody.append(policyField);
+  drawerBody.append(
+    createFormGroup('job-form-basics', '基础信息', name.field, script.field),
+    createFormGroup(
+      'job-form-schedule',
+      '时间安排',
+      scheduleField,
+      once.field,
+      intervalGroup,
+      preview,
+    ),
+    createFormGroup('job-form-misfire', '错过触发', policyField),
+  );
 
   const formError = document.createElement('div');
   formError.className = 'form-error';
@@ -941,6 +998,17 @@ function createJobForm() {
     void submit();
   });
   return form;
+}
+
+function createFormGroup(id: string, title: string, ...children: HTMLElement[]) {
+  const group = document.createElement('section');
+  group.className = 'form-group';
+  group.setAttribute('aria-labelledby', id);
+  const heading = document.createElement('h3');
+  heading.id = id;
+  heading.textContent = title;
+  group.append(heading, ...children);
+  return group;
 }
 
 function createHistory() {

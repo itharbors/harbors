@@ -55,6 +55,23 @@ afterEach(() => {
 });
 
 describe('Scheduler panel', () => {
+  it('shows a layout-shaped loading skeleton until the first snapshot resolves', async () => {
+    let resolveSnapshot: ((value: typeof snapshot) => void) | undefined;
+    const pending = new Promise<typeof snapshot>((resolve) => {
+      resolveSnapshot = resolve;
+    });
+    const request = vi.fn(async () => pending);
+
+    const mounting = panel.mount({ message: { request } });
+
+    expect(document.querySelector('.loading-shell')).not.toBeNull();
+    expect(document.querySelectorAll('.loading-summary__item')).toHaveLength(4);
+    expect(document.querySelectorAll('.loading-table')).toHaveLength(2);
+
+    resolveSnapshot?.(structuredClone(snapshot));
+    await mounting;
+  });
+
   it('renders the admin summary, job table, and job controls', async () => {
     const request = vi.fn(async () => structuredClone(snapshot));
 
@@ -322,6 +339,8 @@ describe('Scheduler panel', () => {
     expect(drawer?.querySelector('.drawer-header #job-form-title')).not.toBeNull();
     expect(drawer?.querySelector('.drawer-body input[name="name"]')).not.toBeNull();
     expect(drawer?.querySelector<HTMLInputElement>('input[name="name"]')?.autocomplete).toBe('off');
+    expect([...document.querySelectorAll('.form-group > h3')].map((node) => node.textContent))
+      .toEqual(['基础信息', '时间安排', '错过触发']);
     expect(drawer?.querySelector('.form-actions')).not.toBeNull();
   });
 
