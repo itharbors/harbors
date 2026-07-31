@@ -28,6 +28,7 @@ const SHARED_FILES = new Set([
 ]);
 
 const TARGETED_PREFIXES = Object.freeze([
+  ['packages/agent-guard-contracts/', ['agent-guard']],
   ['packages/csv-contracts/', ['csv']],
   ['packages/mysql-contracts/', ['mysql']],
   ['packages/sqlite-contracts/', ['sqlite']],

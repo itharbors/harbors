@@ -8,6 +8,11 @@ const NOTIFY_USER_RESOURCE_OUTPUT = `${NOTIFICATION_BACKGROUND_PLUGIN}/main/dist
 
 const WORKSPACE_TASKS = [
   workspaceTask('plugin-types', '@itharbors/plugin-types', 'packages/plugin-types'),
+  workspaceTask(
+    'agent-guard-contracts',
+    '@itharbors/agent-guard-contracts',
+    'packages/agent-guard-contracts',
+  ),
   workspaceTask('csv-contracts', '@itharbors/csv-contracts', 'packages/csv-contracts'),
   workspaceTask('sqlite-contracts', '@itharbors/sqlite-contracts', 'packages/sqlite-contracts'),
   workspaceTask('mysql-contracts', '@itharbors/mysql-contracts', 'packages/mysql-contracts'),
@@ -37,6 +42,7 @@ export const WORKSPACE_BUILD_OUTPUTS = Object.freeze(
 
 const WORKSPACE_DEPENDENCIES = new Map([
   ['@itharbors/plugin-types', 'workspace:plugin-types'],
+  ['@itharbors/agent-guard-contracts', 'workspace:agent-guard-contracts'],
   ['@itharbors/csv-contracts', 'workspace:csv-contracts'],
   ['@itharbors/sqlite-contracts', 'workspace:sqlite-contracts'],
   ['@itharbors/mysql-contracts', 'workspace:mysql-contracts'],

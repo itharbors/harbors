@@ -31,6 +31,7 @@ test('selects every full build task before all plugins and notification resource
   const all = createBuildPlan(rootDir, 'all');
   const workspaceNames = [
     'workspace:plugin-types',
+    'workspace:agent-guard-contracts',
     'workspace:csv-contracts',
     'workspace:sqlite-contracts',
     'workspace:mysql-contracts',
@@ -131,6 +132,18 @@ test('tracks workspace dependency outputs as plugin inputs and retains their tas
     ...pluginOutputRoots(pluginDir),
   ]);
   assert.ok(allPlugin.outputs.every((output) => !allPlugin.inputs.includes(output)));
+});
+
+test('builds Agent Guard contracts before both Agent Guard plugins', () => {
+  const plan = createBuildPlan(rootDir, 'all');
+  for (const pluginDir of [
+    'kits/agent-guard/plugins/agent-guard-background',
+    'kits/agent-guard/plugins/agent-guard-center',
+  ]) {
+    const plugin = plan.tasks.find((task) => task.pluginDir === pluginDir);
+    assert.ok(plugin.dependencies.includes('workspace:agent-guard-contracts'));
+    assert.ok(plugin.inputs.includes('packages/agent-guard-contracts/dist'));
+  }
 });
 
 test('rejects unknown build graphs', () => {

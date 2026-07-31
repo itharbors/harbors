@@ -22,7 +22,7 @@ const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 test('loads the exact official Kit set from one strict policy', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
-  assert.deepEqual(OFFICIAL_KIT_SLUGS, ['csv', 'mysql', 'notifications', 'sqlite', 'traceweave']);
+  assert.deepEqual(OFFICIAL_KIT_SLUGS, ['agent-guard', 'csv', 'mysql', 'notifications', 'sqlite', 'traceweave']);
   assert.equal(policy.repository, 'itharbors/harbors');
   assert.deepEqual(policy.signerWorkflows, [
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',

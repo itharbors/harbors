@@ -1,0 +1,21 @@
+{
+  "name": "@itharbors/agent-guard-background",
+  "version": "0.0.1",
+  "type": "module",
+  "dependencies": {
+    "@itharbors/agent-guard-contracts": "^0.0.1"
+  },
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "getSnapshot": ["getSnapshot"],
+          "updatePolicy": ["updatePolicy"],
+          "executeCommand": ["executeCommand"],
+          "getIncidents": ["getIncidents"]
+        }
+      }
+    }
+  }
+}
