@@ -45,6 +45,39 @@ export type SkillScanResult = {
   truncated: boolean;
 };
 
+export type SkillStatus =
+  | 'source-only'
+  | 'current'
+  | 'update-available'
+  | 'global-only'
+  | 'disabled'
+  | 'trashed'
+  | 'protected'
+  | 'conflict'
+  | 'invalid';
+
+export type SkillAction = 'install' | 'update' | 'disable' | 'uninstall' | 'restore';
+
+export type CompareInput = {
+  source: SkillCandidate[];
+  global: SkillCandidate[];
+  recovery: SkillCandidate[];
+};
+
+export type SkillListItem = {
+  id: string;
+  name: string;
+  description: string;
+  basename: string;
+  status: SkillStatus;
+  actions: SkillAction[];
+  sourceDigest: string | null;
+  globalDigest: string | null;
+  recoveryDigest: string | null;
+  protected: boolean;
+  diagnostics: SkillDiagnostic[];
+};
+
 export type SkillManagerErrorCode =
   | 'INVALID_SKILL'
   | 'UNSAFE_PATH'
