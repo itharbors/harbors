@@ -43,7 +43,7 @@ npm run dev
 
 `npm run dev` 会启动隔离的开发 Electron，额外加载仓库 `kits/*` 中的开发 Kit，加载各 Kit 声明的应用级启动插件并显示系统托盘图标，但不会
 自动打开默认 Kit。单击或右键托盘
-图标，从列表选择 Default、CSV、SQLite、MySQL 或 Notifications；首次选择会按需加载，之后再次选择只会打开或
+图标，从列表选择 Default、CSV、SQLite、MySQL、Notifications 或 TraceWeave；首次选择会按需加载，之后再次选择只会打开或
 聚焦已有窗口。选择 **Kit Manager…** 可刷新市场、安装 Stable/Preview Kit；安装、更新、启用、
 回滚和删除会在当前 Electron 会话中立即应用。运行时切换只替换后台 Framework 子进程，托盘、
 Kit Manager 和 Notification Host 保持运行。首个可信 Kit Release 完成发布和索引部署前，Registry 可能为空。
@@ -76,6 +76,7 @@ npm run start
 ```bash
 npm run dev -- --kit ./kits/sqlite
 npm run dev -- --kit ./kits/csv
+npm run dev -- --kit ./kits/traceweave
 ```
 
 ### Agent 通知
@@ -155,7 +156,9 @@ Kit Manager 默认读取 `https://itharbors.github.io/harbors/index.v1.json`。�
 `HARBORS_KIT_PUBLISHER_POLICIES_JSON`、`HARBORS_KIT_AUTO_UPDATE_PUBLISHERS` 显式配置，非法配置
 会阻止市场服务启动。
 
-CSV、SQLite、MySQL、Notifications 分别维护在 `kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`。
+CSV、SQLite、MySQL、Notifications、TraceWeave 分别维护在 `kits/csv`、`kits/sqlite`、`kits/mysql`、
+`kits/notifications`、`kits/traceweave`。TraceWeave 将本机 Codex JSONL 会话只读投影为四阶段 Flow、
+完整 Events、回放与脱敏证据检查器；使用方式见 [TraceWeave Kit](./kits/traceweave/README.md)。
 Framework 与 Kit 变更都通过 PR 合入 `main`，但 Kit 使用仓库本地 `kit-workflow` 从
 `origin/main` 创建 `kit-change/<name>/<type>/<slug>` 隔离 worktree，并只检查目标 Kit。普通合并
 不会发布 Kit 或 Framework。
