@@ -33,6 +33,8 @@ interface Launch {
   scriptPath: string;
 }
 
+const BACKGROUND_RETRY_MS = 1_000;
+
 export function createScheduler({
   store,
   runner,
@@ -51,6 +53,8 @@ export function createScheduler({
   let operationTail = Promise.resolve();
   const activeByJob = new Map<string, string>();
   const executions = new Map<string, Promise<void>>();
+  const retryWaiters = new Map<unknown, () => void>();
+  const backgroundErrors = new Map<string, string>();
 
   async function initialize() {
     if (initialized) return;
@@ -68,7 +72,7 @@ export function createScheduler({
     state.runs = state.runs.slice(0, MAX_RUN_HISTORY);
     if (recovered) await store.save(state);
     initialized = true;
-    await wake();
+    await superviseWake();
   }
 
   async function dispose() {
@@ -78,6 +82,11 @@ export function createScheduler({
       clock.clearTimeout(timer);
       timer = undefined;
     }
+    for (const [retryTimer, resolve] of retryWaiters) {
+      clock.clearTimeout(retryTimer);
+      resolve();
+    }
+    retryWaiters.clear();
     await runner.dispose();
     await Promise.allSettled([...executions.values()]);
     await operationTail;
@@ -90,6 +99,9 @@ export function createScheduler({
       jobs: structuredClone(current.jobs),
       runs: structuredClone(current.runs),
       activeJobIds: [...activeByJob.keys()].sort(),
+      serviceError: backgroundErrors.size > 0
+        ? [...backgroundErrors.values()].join('; ')
+        : null,
     };
   }
 
@@ -263,12 +275,25 @@ export function createScheduler({
     scheduleNextWake();
   }
 
+  async function superviseWake(): Promise<void> {
+    try {
+      await wake();
+      backgroundErrors.delete('wake');
+    } catch (error) {
+      backgroundErrors.set('wake', errorMessage(error));
+      scheduleWakeRetry();
+    }
+  }
+
   function launchRun(launch: Launch) {
     const execution = runner.run(launch.runId, launch.scriptPath)
       .then(
         (result) => finishRun(launch, result),
         (error) => failRun(launch, error),
       )
+      .catch((error) => {
+        backgroundErrors.set(`run:${launch.runId}`, errorMessage(error));
+      })
       .finally(() => {
         executions.delete(launch.runId);
       });
@@ -300,25 +325,31 @@ export function createScheduler({
   }
 
   async function finalizeRun(launch: Launch, update: (run: JobRun) => void) {
-    await enqueue(async () => {
-      const current = requireState();
-      const run = current.runs.find((candidate) => candidate.id === launch.runId);
-      if (!run || run.status !== 'running') {
-        activeByJob.delete(launch.jobId);
-        return;
-      }
-      const previous = structuredClone(current);
-      update(run);
+    const errorKey = `run:${launch.runId}`;
+    while (!disposed) {
       try {
-        await store.save(current);
-      } catch (error) {
-        state = previous;
-        throw error;
-      } finally {
+        await enqueue(async () => {
+          const current = requireState();
+          const run = current.runs.find((candidate) => candidate.id === launch.runId);
+          if (!run || run.status !== 'running') return;
+          const previous = structuredClone(current);
+          update(run);
+          try {
+            await store.save(current);
+          } catch (error) {
+            state = previous;
+            throw error;
+          }
+        });
+        backgroundErrors.delete(errorKey);
         activeByJob.delete(launch.jobId);
+        scheduleNextWake();
+        return;
+      } catch (error) {
+        backgroundErrors.set(errorKey, errorMessage(error));
+        await waitForRetry();
       }
-    });
-    scheduleNextWake();
+    }
   }
 
   function createRunningRecord(
@@ -385,7 +416,32 @@ export function createScheduler({
       .sort((a, b) => a - b)[0];
     if (next === undefined) return;
     const delay = Math.min(60_000, Math.max(0, next - clock.now()));
-    timer = clock.setTimeout(() => wake(), delay);
+    timer = clock.setTimeout(() => {
+      timer = undefined;
+      void superviseWake();
+    }, delay);
+  }
+
+  function scheduleWakeRetry() {
+    if (!initialized || disposed) return;
+    if (timer !== undefined) clock.clearTimeout(timer);
+    timer = clock.setTimeout(() => {
+      timer = undefined;
+      void superviseWake();
+    }, BACKGROUND_RETRY_MS);
+  }
+
+  function waitForRetry(): Promise<void> {
+    if (disposed) return Promise.resolve();
+    return new Promise((resolve) => {
+      let retryTimer: unknown;
+      const finish = () => {
+        retryWaiters.delete(retryTimer);
+        resolve();
+      };
+      retryTimer = clock.setTimeout(finish, BACKGROUND_RETRY_MS);
+      retryWaiters.set(retryTimer, finish);
+    });
   }
 
   function enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -427,6 +483,10 @@ function trimHistory(state: SchedulerState) {
 
 function iso(timestamp: number): string {
   return new Date(timestamp).toISOString();
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function requireId(value: unknown): string {

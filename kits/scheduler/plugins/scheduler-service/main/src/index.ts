@@ -1,6 +1,7 @@
 import path from 'node:path';
 
 import { createScheduler, type Scheduler } from './scheduler.js';
+import { listScriptDirectory } from './script-browser.js';
 import { createScriptRunner } from './script-runner.js';
 import { createSchedulerStore } from './store.js';
 
@@ -28,6 +29,9 @@ editor.plugin.define({
   methods: {
     getSnapshot() {
       return requireScheduler().getSnapshot();
+    },
+    listScriptDirectory(input?: unknown) {
+      return listScriptDirectory(input);
     },
     saveJob(input: unknown) {
       return requireScheduler().saveJob(input);

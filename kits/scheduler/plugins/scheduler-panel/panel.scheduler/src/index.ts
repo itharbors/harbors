@@ -35,6 +35,17 @@ type SchedulerSnapshot = {
   jobs: SchedulerJob[];
   runs: JobRun[];
   activeJobIds: string[];
+  serviceError: string | null;
+};
+
+type ScriptDirectoryListing = {
+  currentPath: string;
+  parentPath: string | null;
+  entries: Array<{
+    name: string;
+    path: string;
+    kind: 'directory' | 'file';
+  }>;
 };
 
 type PanelContext = {
@@ -200,6 +211,9 @@ function renderWorkspace() {
   workspace.setAttribute('aria-label', '脚本调度工作台');
   workspace.append(createSkipLink(), createHeader());
 
+  if (snapshot.serviceError) {
+    workspace.append(createActionAlert(`后台状态保存失败，正在自动重试：${snapshot.serviceError}`));
+  }
   if (actionMessage) {
     workspace.append(createActionAlert(actionMessage));
   }
@@ -287,7 +301,7 @@ function createHeader() {
   const service = document.createElement('span');
   service.className = 'service-status';
   service.setAttribute('role', 'status');
-  setServiceStatus(service, true);
+  setServiceStatus(service, true, Boolean(snapshot!.serviceError));
   const timezone = document.createElement('small');
   timezone.className = 'timezone-label';
   timezone.textContent = localTimezone();
@@ -300,17 +314,20 @@ function createHeader() {
 
 function updateVisibleServiceStatus(available: boolean) {
   const service = root?.querySelector<HTMLElement>('.service-status');
-  if (service) setServiceStatus(service, available);
+  if (service) setServiceStatus(service, available, Boolean(snapshot?.serviceError));
 }
 
-function setServiceStatus(service: HTMLElement, available: boolean) {
+function setServiceStatus(service: HTMLElement, available: boolean, degraded = false) {
   service.classList.toggle('is-error', !available);
+  service.classList.toggle('is-degraded', available && degraded);
   const dot = document.createElement('span');
   dot.className = 'service-status-dot';
   dot.setAttribute('aria-hidden', 'true');
   service.replaceChildren(
     dot,
-    document.createTextNode(available ? '调度服务正常' : '调度服务连接中断'),
+    document.createTextNode(
+      !available ? '调度服务连接中断' : degraded ? '调度服务降级' : '调度服务正常',
+    ),
   );
 }
 
@@ -528,16 +545,13 @@ function createJobForm() {
   const scriptPicker = document.createElement('div');
   scriptPicker.className = 'script-picker';
   script.input.replaceWith(scriptPicker);
-  const fileInput = document.createElement('input');
-  fileInput.type = 'file';
-  fileInput.accept = '.js,.mjs,.cjs';
-  fileInput.hidden = true;
-  fileInput.tabIndex = -1;
   const chooseScript = createButton('选择脚本', 'choose-script', () => {
-    fileInput.click();
+    void browseScriptDirectory();
   }, 'button-quiet');
   scriptPicker.append(script.input, chooseScript);
-  script.field.append(fileInput);
+  const scriptBrowserHost = document.createElement('div');
+  scriptBrowserHost.className = 'script-browser-host';
+  script.field.append(scriptBrowserHost);
   drawerBody.append(name.field, script.field);
 
   const fieldErrors = new Map<string, { control: HTMLInputElement; error: HTMLElement }>();
@@ -546,6 +560,99 @@ function createJobForm() {
       control: field.input,
       error: createFieldError(field.field, field.input),
     });
+  }
+
+  let browserGeneration = 0;
+  async function browseScriptDirectory(directory?: string) {
+    if (!mounted || !context) return;
+    const generation = ++browserGeneration;
+    chooseScript.disabled = true;
+    chooseScript.textContent = '正在读取…';
+    try {
+      const value = await context.message.request(
+        SERVICE,
+        ROUTE,
+        'listScriptDirectory',
+        ...(directory ? [directory] : []),
+      );
+      if (!mounted || generation !== browserGeneration || !form.isConnected) return;
+      renderScriptBrowser(normalizeScriptDirectoryListing(value));
+    } catch (error) {
+      if (!mounted || generation !== browserGeneration || !form.isConnected) return;
+      setFieldError(
+        fieldErrors,
+        'scriptPath',
+        `无法读取脚本目录：${errorMessage(error)}`,
+      );
+    } finally {
+      if (generation === browserGeneration && chooseScript.isConnected) {
+        chooseScript.disabled = false;
+        chooseScript.textContent = '选择脚本';
+      }
+    }
+  }
+
+  function renderScriptBrowser(listing: ScriptDirectoryListing) {
+    const browser = document.createElement('section');
+    browser.className = 'script-browser';
+    browser.dataset.testid = 'script-browser';
+    browser.setAttribute('aria-label', '脚本文件浏览器');
+
+    const header = document.createElement('div');
+    header.className = 'script-browser__header';
+    const currentPath = document.createElement('code');
+    currentPath.textContent = listing.currentPath;
+    currentPath.title = listing.currentPath;
+    const closeBrowser = createButton('关闭', 'close-script-browser', () => {
+      browserGeneration += 1;
+      scriptBrowserHost.replaceChildren();
+      chooseScript.focus();
+    }, 'button-quiet');
+    header.append(currentPath, closeBrowser);
+
+    const navigation = document.createElement('div');
+    navigation.className = 'script-browser__navigation';
+    if (listing.parentPath) {
+      navigation.append(createButton('← 上级目录', 'browse-parent-directory', () => {
+        void browseScriptDirectory(listing.parentPath!);
+      }, 'button-quiet'));
+    }
+
+    const entries = document.createElement('ul');
+    entries.className = 'script-browser__entries';
+    if (listing.entries.length === 0) {
+      const empty = document.createElement('p');
+      empty.className = 'script-browser__empty';
+      empty.textContent = '此目录中没有子目录或可用的 Node.js 脚本。';
+      navigation.append(empty);
+    } else {
+      for (const entry of listing.entries) {
+        const item = document.createElement('li');
+        const button = createButton(
+          `${entry.kind === 'directory' ? '📁' : '◇'} ${entry.name}`,
+          'browse-script-entry',
+          () => {
+            if (entry.kind === 'directory') {
+              void browseScriptDirectory(entry.path);
+              return;
+            }
+            script.input.value = entry.path;
+            script.input.dispatchEvent(new Event('input', { bubbles: true }));
+            browserGeneration += 1;
+            scriptBrowserHost.replaceChildren();
+            chooseScript.focus();
+          },
+          'script-browser__entry',
+        );
+        button.dataset.scriptEntryPath = entry.path;
+        button.dataset.entryKind = entry.kind;
+        item.append(button);
+        entries.append(item);
+      }
+    }
+
+    browser.append(header, navigation, entries);
+    scriptBrowserHost.replaceChildren(browser);
   }
 
   const scheduleField = document.createElement('label');
@@ -805,19 +912,6 @@ function createJobForm() {
     return true;
   }
 
-  fileInput.addEventListener('change', () => {
-    const selected = fileInput.files?.[0] as (File & { path?: string }) | undefined;
-    if (selected?.path) {
-      script.input.value = selected.path;
-      script.input.dispatchEvent(new Event('input', { bubbles: true }));
-      return;
-    }
-    setFieldError(
-      fieldErrors,
-      'scriptPath',
-      '当前环境没有提供文件路径，请复制并粘贴脚本的绝对路径。',
-    );
-  });
   scheduleType.addEventListener('change', syncScheduleFields);
   form.addEventListener('input', (event) => {
     formDirty = true;
@@ -1210,10 +1304,53 @@ function normalizeSnapshot(value: unknown): SchedulerSnapshot {
     || !Array.isArray(input.jobs)
     || !Array.isArray(input.runs)
     || !Array.isArray(input.activeJobIds)
+    || (input.serviceError !== undefined
+      && input.serviceError !== null
+      && typeof input.serviceError !== 'string')
   ) {
     throw new Error('调度服务返回了无效数据');
   }
-  return structuredClone(value) as SchedulerSnapshot;
+  return {
+    ...(structuredClone(value) as Omit<SchedulerSnapshot, 'serviceError'>),
+    serviceError: typeof input.serviceError === 'string' ? input.serviceError : null,
+  };
+}
+
+function normalizeScriptDirectoryListing(value: unknown): ScriptDirectoryListing {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('脚本目录返回了无效数据');
+  }
+  const input = value as Record<string, unknown>;
+  if (
+    typeof input.currentPath !== 'string'
+    || (input.parentPath !== null && typeof input.parentPath !== 'string')
+    || !Array.isArray(input.entries)
+  ) {
+    throw new Error('脚本目录返回了无效数据');
+  }
+  const entries = input.entries.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('脚本目录返回了无效数据');
+    }
+    const candidate = entry as Record<string, unknown>;
+    if (
+      typeof candidate.name !== 'string'
+      || typeof candidate.path !== 'string'
+      || (candidate.kind !== 'directory' && candidate.kind !== 'file')
+    ) {
+      throw new Error('脚本目录返回了无效数据');
+    }
+    return {
+      name: candidate.name,
+      path: candidate.path,
+      kind: candidate.kind as 'directory' | 'file',
+    };
+  });
+  return {
+    currentPath: input.currentPath as string,
+    parentPath: input.parentPath as string | null,
+    entries,
+  };
 }
 
 function isCurrent(version: number, generation: number) {

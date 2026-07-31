@@ -364,7 +364,7 @@ expect(manifest['ce-editor'].kit.startup.plugins)
 expect(layout.windows[0].layout.panel)
   .toBe('@itharbors/scheduler-panel.scheduler');
 expect(kit.permissions).toEqual([
-  'application-startup', 'filesystem', 'process-execution',
+  'application-startup', 'filesystem', 'native-code',
 ]);
 assert.deepEqual(OFFICIAL_KIT_SLUGS, [
   'csv', 'mysql', 'notifications', 'scheduler', 'sqlite',

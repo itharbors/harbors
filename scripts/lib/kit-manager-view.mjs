@@ -3,7 +3,6 @@ const PERMISSION_LABELS = Object.freeze({
   filesystem: '文件访问',
   'native-code': '原生代码 — 高风险',
   'process-control': '进程控制 — 高风险',
-  'process-execution': '本地进程执行 — 高风险',
   'application-startup': '随 ITHARBORS 启动',
 });
 
@@ -74,9 +73,7 @@ function isUpdate({ kit, reference }) {
 }
 
 function isElevatedRiskPermission(permission) {
-  return permission === 'native-code'
-    || permission === 'process-control'
-    || permission === 'process-execution';
+  return permission === 'native-code' || permission === 'process-control';
 }
 
 function elevatedRiskNotice(permissions) {
@@ -86,9 +83,6 @@ function elevatedRiskNotice(permissions) {
   }
   if (permissions.includes('process-control')) {
     notices.push('此版本请求进程控制权限，能够暂停或结束本机进程。');
-  }
-  if (permissions.includes('process-execution')) {
-    notices.push('此版本可执行本地进程，拥有较高的本机访问权限。');
   }
   return notices.join('');
 }
