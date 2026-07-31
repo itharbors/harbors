@@ -1,0 +1,18 @@
+{
+  "name": "@itharbors/scheduler-panel",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "scheduler": {
+          "entry": "./panel.scheduler/dist/index.html",
+          "title": "Scheduler",
+          "minWidth": 720,
+          "minHeight": 520
+        }
+      }
+    }
+  }
+}

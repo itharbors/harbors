@@ -5,6 +5,7 @@ export const KIT_PERMISSIONS = [
   'filesystem',
   'native-code',
   'process-control',
+  'process-execution',
   'application-startup',
 ] as const;
 

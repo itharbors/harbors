@@ -20,8 +20,8 @@ function snapshot(overrides = {}) {
       publisher: 'itharbors',
       summary: 'Inspect and edit local SQLite databases.',
       channels: {
-        stable: { version: '1.2.0', permissions: ['filesystem', 'native-code'] },
-        preview: { version: '1.3.0-preview.abc1234', permissions: ['filesystem', 'native-code'] },
+        stable: { version: '1.2.0', permissions: ['filesystem', 'native-code', 'process-execution'] },
+        preview: { version: '1.3.0-preview.abc1234', permissions: ['filesystem', 'native-code', 'process-execution'] },
       },
     }],
     ...overrides,
@@ -369,6 +369,9 @@ test('renders overview, permission, and version tabs with high-risk permission s
   const nativePermission = value.document.querySelector('[data-permission="native-code"]');
   assert.match(nativePermission.textContent, /原生代码/);
   assert.equal(nativePermission.dataset.risk, 'high');
+  const processPermission = value.document.querySelector('[data-permission="process-execution"]');
+  assert.match(processPermission.textContent, /本地进程执行/);
+  assert.equal(processPermission.dataset.risk, 'high');
   assert.equal(value.document.querySelector('[data-action="activate"]').disabled, true);
 });
 
@@ -569,12 +572,37 @@ test('marks process control as elevated risk and includes it in install confirma
   const permission = value.document.querySelector('[data-permission="process-control"]');
   assert.equal(permission.dataset.risk, 'high');
   assert.match(permission.textContent, /进程控制.*高风险/);
+
   value.document.querySelector('[data-action="install"]').click();
   await value.view.whenIdle();
 
   assert.equal(confirmations.length, 1);
   assert.match(confirmations[0], /进程控制/);
   assert.deepEqual(value.calls, []);
+});
+
+test('requires confirmation before installing a process-execution Kit', async () => {
+  const initial = snapshot();
+  initial.kits[0].channels.stable.permissions = ['filesystem', 'process-execution'];
+  const confirmations = [];
+  const value = await createView({
+    initial,
+    confirmInstall: (details) => {
+      confirmations.push(details);
+      return false;
+    },
+  });
+  await value.view.start();
+  value.document.querySelector('[data-action="install"]').click();
+  await value.view.whenIdle();
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /执行本地进程/);
+  assert.deepEqual(value.calls, []);
+  value.document.querySelector('[data-detail-tab="permissions"]').click();
+  const permission = value.document.querySelector('[data-permission="process-execution"]');
+  assert.match(permission.textContent, /本地进程执行/);
+  assert.equal(permission.dataset.risk, 'high');
 });
 
 test('switches to retained versions and explicitly retries abnormal versions', async () => {
