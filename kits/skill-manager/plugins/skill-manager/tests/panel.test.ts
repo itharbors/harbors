@@ -34,11 +34,11 @@ describe('Skill Manager panel', () => {
     await definition.mount({ message: { request } });
     await vi.waitFor(() => expect(document.querySelector('[data-detail-name]')?.textContent).toBe('global-skill'));
 
-    expect(document.querySelector('h1')?.textContent).toBe('Skill Manager');
-    expect(document.querySelector('[data-mode]')?.textContent).toContain('Global');
-    expect(document.querySelector('[aria-label="Status filters"]')).not.toBeNull();
+    expect(document.querySelector('h1')?.textContent).toBe('Skill 管理器');
+    expect(document.querySelector('[data-mode]')?.textContent).toContain('全局 Skill');
+    expect(document.querySelector('[aria-label="状态筛选"]')).not.toBeNull();
     expect(document.querySelector('[role="listbox"]')).not.toBeNull();
-    expect(document.querySelector('[aria-label="Skill detail"]')).not.toBeNull();
+    expect(document.querySelector('[aria-label="Skill 详情"]')).not.toBeNull();
     expect(request).toHaveBeenCalledWith('@itharbors/skill-manager', 'getSkillDetail', {
       skillId: globalOnly.id,
       revision: 1,
@@ -79,7 +79,7 @@ describe('Skill Manager panel', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-current-directory]')?.textContent).toBe('~/source'));
     document.querySelector<HTMLButtonElement>('[data-action="use-directory"]')!.click();
 
-    await vi.waitFor(() => expect(document.querySelector('[data-mode]')?.textContent).toContain('Source'));
+    await vi.waitFor(() => expect(document.querySelector('[data-mode]')?.textContent).toContain('来源：'));
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
@@ -208,9 +208,44 @@ describe('Skill Manager panel', () => {
     definition.methods.onSnapshotChanged(makeSnapshot(1, [sourceOnly]));
     expect(document.querySelector('[data-skill-id]')?.getAttribute('data-skill-id')).toBe(globalOnly.id);
     definition.methods.onScanProgress({ state: 'started' });
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('Scanning');
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('正在扫描');
     definition.methods.onOperationProgress({ state: 'completed', action: 'disable' });
-    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('completed');
+    expect(document.querySelector('[aria-live="polite"]')?.textContent).toContain('已完成');
+  });
+
+  it('renders application chrome, statuses, actions, and confirmation in Chinese', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return makeSnapshot(1, [globalOnly]);
+      if (method === 'getSkillDetail') return detail(globalOnly, 'Global instructions');
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const definition = await loadPanel();
+
+    await definition.mount({ message: { request } });
+    await vi.waitFor(() => expect(document.querySelector('[data-detail-name]')).not.toBeNull());
+
+    expect(document.querySelector('.manager-identity p')?.textContent)
+      .toBe('查看全局 Skill，或与来源文件夹进行对比。');
+    expect(document.querySelector('[data-action="choose-source"]')?.textContent).toBe('选择来源');
+    expect(document.querySelector('[data-action="rescan"]')?.textContent).toBe('重新扫描');
+    expect(document.querySelector('[data-filter="all"]')?.textContent).toContain('全部 Skill');
+    expect(document.querySelector('[data-filter="global-only"]')?.textContent).toContain('仅全局');
+    expect(document.querySelector('label')?.textContent).toContain('搜索 Skill');
+    expect(document.querySelector('[data-action="disable"]')?.textContent).toBe('停用');
+    expect(document.querySelector('[data-action="uninstall"]')?.textContent).toBe('卸载');
+    expect(document.querySelector('.location-section h3')?.textContent).toBe('全局');
+
+    document.querySelector<HTMLButtonElement>('[data-action="uninstall"]')!.click();
+    expect(document.querySelector('[role="dialog"] h2')?.textContent).toBe('确认卸载 global-skill？');
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain('不会永久删除');
+    expect(document.querySelector('[data-action="cancel"]')?.textContent).toBe('取消');
+
+    const html = await readFile(path.join(
+      process.cwd(),
+      'plugins/skill-manager/panel.manager/src/index.html',
+    ), 'utf8');
+    expect(html).toContain('<html lang="zh-CN">');
+    expect(html).toContain('<noscript>Skill 管理器需要启用 JavaScript。</noscript>');
   });
 
   it('shows an actionable initial error state and retries the scan', async () => {

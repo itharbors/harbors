@@ -14,7 +14,7 @@
     "kit": {
       "menuRoot": {
         "id": "skill-manager",
-        "label": "Skill Manager"
+        "label": "Skill 管理器"
       },
       "layouts": {
         "default": "layout.json"

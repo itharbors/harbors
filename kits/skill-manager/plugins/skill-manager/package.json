@@ -11,7 +11,7 @@
       "panel": {
         "manager": {
           "entry": "./panel.manager/dist/index.html",
-          "title": "Skill Manager",
+          "title": "Skill 管理器",
           "minWidth": 720,
           "minHeight": 480,
           "multiInstance": false

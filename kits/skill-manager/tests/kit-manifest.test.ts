@@ -26,6 +26,10 @@ describe('Skill Manager Kit manifest', () => {
       permissions: ['filesystem'],
     });
     expect(pkg['ce-editor'].kit.plugin).toEqual(['@itharbors/skill-manager']);
+    expect(pkg['ce-editor'].kit.menuRoot).toEqual({
+      id: 'skill-manager',
+      label: 'Skill 管理器',
+    });
     expect(pkg.dependencies).toEqual({ yaml: '2.9.0' });
     expect(pkg['ce-editor'].kit.layouts).toEqual({ default: 'layout.json' });
     expect(pkg['ce-editor'].kit.windowEntries).toEqual({
@@ -51,7 +55,7 @@ describe('Skill Manager Kit manifest', () => {
     });
     expect(plugin['ce-editor'].contribute.panel.manager).toMatchObject({
       entry: './panel.manager/dist/index.html',
-      title: 'Skill Manager',
+      title: 'Skill 管理器',
       multiInstance: false,
     });
     expect(plugin['ce-editor'].contribute.message.request).toEqual({
@@ -68,8 +72,10 @@ describe('Skill Manager Kit manifest', () => {
       '@itharbors/skill-manager.scan.progress': ['panel.onScanProgress'],
       '@itharbors/skill-manager.operation.progress': ['panel.onOperationProgress'],
     });
-    expect(mainEntry).toContain('<title>Skill Manager</title>');
-    expect(secondaryEntry).toContain('<title>Skill Manager</title>');
+    expect(mainEntry).toContain('<html lang="zh-CN">');
+    expect(mainEntry).toContain('<title>Skill 管理器</title>');
+    expect(secondaryEntry).toContain('<html lang="zh-CN">');
+    expect(secondaryEntry).toContain('<title>Skill 管理器</title>');
   });
 
   it('runs Skill Manager tests from the repository test gate', () => {

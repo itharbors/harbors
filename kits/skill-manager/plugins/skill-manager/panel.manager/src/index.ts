@@ -87,22 +87,22 @@ const STATUS_ORDER: SkillStatus[] = [
   'invalid',
 ];
 const STATUS_LABELS: Record<SkillStatus, string> = {
-  'source-only': 'Source only',
-  current: 'Current',
-  'update-available': 'Update available',
-  'global-only': 'Global only',
-  disabled: 'Disabled',
-  trashed: 'Trash',
-  protected: 'Protected',
-  conflict: 'Conflict',
-  invalid: 'Invalid',
+  'source-only': '仅来源',
+  current: '已同步',
+  'update-available': '可更新',
+  'global-only': '仅全局',
+  disabled: '已停用',
+  trashed: '回收站',
+  protected: '受保护',
+  conflict: '有冲突',
+  invalid: '无效',
 };
 const ACTION_LABELS: Record<SkillAction, string> = {
-  install: 'Install',
-  update: 'Update',
-  disable: 'Disable',
-  uninstall: 'Uninstall',
-  restore: 'Restore',
+  install: '安装',
+  update: '更新',
+  disable: '停用',
+  uninstall: '卸载',
+  restore: '恢复',
 };
 
 let context: PanelContext | null = null;
@@ -122,7 +122,7 @@ let browser: DirectoryPage | null = null;
 let dialog: DialogState | null = null;
 let pendingAction: SkillAction | null = null;
 let error: string | null = null;
-let liveMessage = 'Skill Manager ready';
+let liveMessage = 'Skill 管理器已就绪';
 
 const definition = {
   async mount(ctx: PanelContext) {
@@ -130,7 +130,7 @@ const definition = {
     requestGeneration += 1;
     context = ctx;
     root = document.querySelector('#panel-root');
-    if (!root) throw new Error('Panel root element #panel-root not found');
+    if (!root) throw new Error('未找到面板根元素 #panel-root');
     mounted = true;
     resetState();
     renderLoading();
@@ -166,16 +166,16 @@ const definition = {
     },
     onScanProgress(payload: unknown) {
       const value = asRecord(payload);
-      if (value?.state === 'started') setLiveMessage('Scanning Skill directories');
-      if (value?.state === 'completed') setLiveMessage('Skill scan completed');
-      if (value?.state === 'failed') setLiveMessage('Skill scan failed');
+      if (value?.state === 'started') setLiveMessage('正在扫描 Skill 目录');
+      if (value?.state === 'completed') setLiveMessage('Skill 扫描完成');
+      if (value?.state === 'failed') setLiveMessage('Skill 扫描失败');
     },
     onOperationProgress(payload: unknown) {
       const value = asRecord(payload);
-      const action = typeof value?.action === 'string' ? value.action : 'Action';
-      if (value?.state === 'started') setLiveMessage(`${capitalize(action)} started`);
-      if (value?.state === 'completed') setLiveMessage(`${capitalize(action)} completed`);
-      if (value?.state === 'failed') setLiveMessage(`${capitalize(action)} failed`);
+      const action = localizedAction(value?.action);
+      if (value?.state === 'started') setLiveMessage(`${action}正在进行`);
+      if (value?.state === 'completed') setLiveMessage(`${action}已完成`);
+      if (value?.state === 'failed') setLiveMessage(`${action}失败`);
     },
   },
 };
@@ -193,7 +193,7 @@ function resetState(): void {
   dialog = null;
   pendingAction = null;
   error = null;
-  liveMessage = 'Skill Manager ready';
+  liveMessage = 'Skill 管理器已就绪';
 }
 
 function applySnapshot(next: Snapshot): void {
@@ -266,24 +266,24 @@ function createToolbar(): HTMLElement {
   const header = element('header', 'manager-toolbar');
   const identity = element('div', 'manager-identity');
   const title = document.createElement('h1');
-  title.textContent = 'Skill Manager';
+  title.textContent = 'Skill 管理器';
   const subtitle = document.createElement('p');
-  subtitle.textContent = 'Inspect global Skills or compare a source folder.';
+  subtitle.textContent = '查看全局 Skill，或与来源文件夹进行对比。';
   identity.append(title, subtitle);
 
   const controls = element('div', 'toolbar-controls');
   const mode = element('span', 'mode-label');
   mode.dataset.mode = '';
   mode.textContent = snapshot?.mode === 'source'
-    ? `Source: ${snapshot.sourceRootLabel ?? 'selected folder'}`
-    : 'Global Skills';
-  const choose = button('Choose source', 'choose-source', (event) => {
+    ? `来源：${snapshot.sourceRootLabel ?? '已选文件夹'}`
+    : '全局 Skill';
+  const choose = button('选择来源', 'choose-source', (event) => {
     void openDirectoryBrowser(event.currentTarget as HTMLElement);
   });
-  const rescan = button('Rescan', 'rescan', () => { void runSimpleSnapshotRequest('rescan'); });
+  const rescan = button('重新扫描', 'rescan', () => { void runSimpleSnapshotRequest('rescan'); });
   controls.append(mode, choose);
   if (snapshot?.mode === 'source') {
-    controls.append(button('Clear source', 'clear-source', () => {
+    controls.append(button('清除来源', 'clear-source', () => {
       void runSimpleSnapshotRequest('clearSource');
     }));
   }
@@ -301,10 +301,10 @@ function createWorkspace(): HTMLElement {
 
 function createFilterRail(): HTMLElement {
   const rail = element('aside', 'filter-rail');
-  rail.setAttribute('aria-label', 'Status filters');
+  rail.setAttribute('aria-label', '状态筛选');
   const heading = document.createElement('h2');
-  heading.textContent = 'Status';
-  rail.append(heading, filterButton('All Skills', 'all', snapshot?.items.length ?? 0));
+  heading.textContent = '状态';
+  rail.append(heading, filterButton('全部 Skill', 'all', snapshot?.items.length ?? 0));
   for (const status of STATUS_ORDER) {
     rail.append(filterButton(STATUS_LABELS[status], status, snapshot?.counts[status] ?? 0));
   }
@@ -330,14 +330,14 @@ function filterButton(label: string, value: 'all' | SkillStatus, count: number):
 
 function createSkillColumn(): HTMLElement {
   const column = element('section', 'skill-column');
-  column.setAttribute('aria-label', 'Skills');
+  column.setAttribute('aria-label', 'Skill 列表');
   const header = element('div', 'list-header');
   const label = document.createElement('label');
-  label.textContent = 'Search Skills';
+  label.textContent = '搜索 Skill';
   const search = document.createElement('input');
   search.type = 'search';
   search.value = query;
-  search.placeholder = 'Name or description';
+  search.placeholder = '名称或描述';
   search.dataset.search = '';
   search.disabled = pendingAction !== null;
   search.addEventListener('input', () => {
@@ -352,18 +352,18 @@ function createSkillColumn(): HTMLElement {
 
   const list = element('div', 'skill-list');
   list.setAttribute('role', 'listbox');
-  list.setAttribute('aria-label', 'Skill results');
+  list.setAttribute('aria-label', 'Skill 搜索结果');
   if (!snapshot && error) {
     const failure = element('section', 'empty-state error-state');
     failure.dataset.state = 'error';
     const heading = document.createElement('h2');
-    heading.textContent = 'Could not load Skills';
+    heading.textContent = '无法加载 Skill';
     const copy = document.createElement('p');
     copy.textContent = error;
     failure.append(
       heading,
       copy,
-      button('Try again', 'retry', () => { void runSimpleSnapshotRequest('rescan'); }),
+      button('重试', 'retry', () => { void runSimpleSnapshotRequest('rescan'); }),
     );
     list.append(failure);
     column.append(header, list);
@@ -374,11 +374,11 @@ function createSkillColumn(): HTMLElement {
     const empty = element('section', 'empty-state');
     empty.dataset.state = 'empty';
     const heading = document.createElement('h2');
-    heading.textContent = snapshot?.items.length ? 'No matching Skills' : 'No Skills found';
+    heading.textContent = snapshot?.items.length ? '没有匹配的 Skill' : '未找到 Skill';
     const copy = document.createElement('p');
     copy.textContent = snapshot?.mode === 'source'
-      ? 'Choose another source folder or clear the current source.'
-      : 'Add a Skill to $CODEX_HOME/skills or choose a source folder.';
+      ? '请选择其他来源文件夹，或清除当前来源。'
+      : '请将 Skill 添加到 $CODEX_HOME/skills，或选择来源文件夹。';
     empty.append(heading, copy);
     list.append(empty);
   } else {
@@ -410,14 +410,14 @@ function createSkillRow(item: SkillItem, visible: SkillItem[]): HTMLButtonElemen
   status.textContent = STATUS_LABELS[item.status];
   top.append(name, status);
   const description = element('span', 'skill-description');
-  description.textContent = item.description || 'No description';
+  description.textContent = item.description || '暂无描述';
   row.append(top, description);
   return row;
 }
 
 function createDetailPane(): HTMLElement {
   const pane = element('aside', 'detail-pane');
-  pane.setAttribute('aria-label', 'Skill detail');
+  pane.setAttribute('aria-label', 'Skill 详情');
   pane.dataset.detailPane = '';
   pane.append(detailContent());
   return pane;
@@ -435,9 +435,9 @@ function detailContent(): HTMLElement {
   if (!item) {
     const empty = element('section', 'detail-empty');
     const heading = document.createElement('h2');
-    heading.textContent = 'Select a Skill';
+    heading.textContent = '请选择一个 Skill';
     const copy = document.createElement('p');
-    copy.textContent = 'Manifest, digest, source text, and actions appear here.';
+    copy.textContent = '清单、摘要、源文件内容和可用操作会显示在这里。';
     empty.append(heading, copy);
     return empty;
   }
@@ -451,7 +451,7 @@ function detailContent(): HTMLElement {
     const heading = document.createElement('h2');
     heading.textContent = item.name;
     const copy = document.createElement('p');
-    copy.textContent = error ?? 'Detail is unavailable.';
+    copy.textContent = error ?? '详情暂不可用。';
     unavailable.append(heading, copy);
     return unavailable;
   }
@@ -463,7 +463,7 @@ function detailContent(): HTMLElement {
   title.dataset.detailName = '';
   title.textContent = detail.name;
   const description = document.createElement('p');
-  description.textContent = detail.description || 'No description';
+  description.textContent = detail.description || '暂无描述';
   header.append(status, title, description);
 
   const actions = element('div', 'detail-actions');
@@ -479,9 +479,9 @@ function detailContent(): HTMLElement {
   if (item.actions.length > 0) content.append(actions);
 
   for (const [label, location] of [
-    ['Source', detail.source],
-    ['Global', detail.global],
-    ['Recovery', detail.recovery],
+    ['来源', detail.source],
+    ['全局', detail.global],
+    ['恢复记录', detail.recovery],
   ] as const) {
     if (location) content.append(createLocation(label, location));
   }
@@ -495,12 +495,12 @@ function createLocation(label: string, location: DetailLocation): HTMLElement {
   const heading = document.createElement('h3');
   heading.textContent = label;
   const meta = element('dl', 'location-meta');
-  appendDefinition(meta, 'Folder', location.basename);
-  appendDefinition(meta, 'Digest', location.digest.slice(0, 12));
+  appendDefinition(meta, '文件夹', location.basename);
+  appendDefinition(meta, '摘要', location.digest.slice(0, 12));
   const source = document.createElement('pre');
   source.textContent = location.text;
   source.tabIndex = 0;
-  source.setAttribute('aria-label', `${label} SKILL.md source`);
+  source.setAttribute('aria-label', `${label} SKILL.md 源文件`);
   section.append(heading, meta, source);
   return section;
 }
@@ -508,7 +508,7 @@ function createLocation(label: string, location: DetailLocation): HTMLElement {
 function createDiagnostics(diagnostics: SkillItem['diagnostics']): HTMLElement {
   const section = element('section', 'diagnostics');
   const heading = document.createElement('h3');
-  heading.textContent = 'Diagnostics';
+  heading.textContent = '诊断';
   section.append(heading);
   for (const diagnostic of diagnostics) {
     const item = document.createElement('p');
@@ -574,7 +574,7 @@ async function selectBrowserDirectory(): Promise<void> {
     const value = await request('selectSource', { directoryId: browser.current.id });
     closeDialog(false);
     applySnapshot(normalizeSnapshot(value));
-    setLiveMessage('Source folder selected');
+    setLiveMessage('已选择来源文件夹');
   } catch (caught) {
     error = errorMessage(caught);
     closeDialog(true);
@@ -610,20 +610,20 @@ async function confirmAction(): Promise<void> {
     pendingAction = null;
     closeDialog(false);
     applySnapshot(normalizeSnapshot(result?.snapshot));
-    setLiveMessage(`${ACTION_LABELS[action]} completed`);
+    setLiveMessage(`${ACTION_LABELS[action]}已完成`);
   } catch (caught) {
     pendingAction = null;
     error = errorMessage(caught);
     closeDialog(true);
     render();
-    setLiveMessage(`${ACTION_LABELS[action]} failed`);
+    setLiveMessage(`${ACTION_LABELS[action]}失败`);
   }
 }
 
 async function runSimpleSnapshotRequest(method: 'rescan' | 'clearSource'): Promise<void> {
   if (pendingAction) return;
   const generation = ++requestGeneration;
-  setLiveMessage(method === 'rescan' ? 'Scanning Skill directories' : 'Clearing source folder');
+  setLiveMessage(method === 'rescan' ? '正在扫描 Skill 目录' : '正在清除来源文件夹');
   try {
     const value = await request(method);
     if (!isCurrentRequest(generation)) return;
@@ -659,14 +659,14 @@ function directoryDialogContent(): DocumentFragment {
   const fragment = document.createDocumentFragment();
   const header = element('header', 'dialog-header');
   const title = document.createElement('h2');
-  title.textContent = 'Choose source folder';
+  title.textContent = '选择来源文件夹';
   const copy = document.createElement('p');
-  copy.textContent = 'Only folders discovered in this session can be selected.';
+  copy.textContent = '只能选择本次会话中已发现的文件夹。';
   header.append(title, copy);
   fragment.append(header);
   if (dialog?.kind === 'directory' && dialog.loading) {
     const loading = element('div', 'browser-loading');
-    loading.textContent = 'Loading folders';
+    loading.textContent = '正在加载文件夹';
     fragment.append(loading);
   } else if (browser) {
     const current = element('p', 'current-directory');
@@ -674,7 +674,7 @@ function directoryDialogContent(): DocumentFragment {
     current.textContent = browser.current.label;
     const list = element('div', 'directory-list');
     if (browser.parentId) {
-      const parent = button('Parent folder', 'parent-directory', () => {
+      const parent = button('上一级文件夹', 'parent-directory', () => {
         void navigateDirectory(browser!.parentId!);
       });
       list.append(parent);
@@ -688,8 +688,8 @@ function directoryDialogContent(): DocumentFragment {
   }
   const actions = element('div', 'dialog-actions');
   actions.append(
-    button('Cancel', 'cancel', () => closeDialog(true)),
-    button('Use this folder', 'use-directory', () => { void selectBrowserDirectory(); }),
+    button('取消', 'cancel', () => closeDialog(true)),
+    button('使用此文件夹', 'use-directory', () => { void selectBrowserDirectory(); }),
   );
   const use = actions.querySelector<HTMLButtonElement>('[data-action="use-directory"]');
   if (use) use.disabled = !browser || dialog?.kind !== 'directory' || dialog.loading;
@@ -701,12 +701,12 @@ function actionDialogContent(value: Extract<DialogState, { kind: 'action' }>): D
   const fragment = document.createDocumentFragment();
   const item = snapshot?.items.find((candidate) => candidate.id === value.itemId);
   const title = document.createElement('h2');
-  title.textContent = `${ACTION_LABELS[value.action]} ${item?.name ?? 'Skill'}?`;
+  title.textContent = `确认${ACTION_LABELS[value.action]} ${item?.name ?? 'Skill'}？`;
   const copy = document.createElement('p');
   copy.textContent = confirmationCopy(value.action);
   const actions = element('div', 'dialog-actions');
   actions.append(
-    button('Cancel', 'cancel', () => closeDialog(true)),
+    button('取消', 'cancel', () => closeDialog(true)),
     button(ACTION_LABELS[value.action], 'confirm', () => { void confirmAction(); }),
   );
   fragment.append(title, copy, actions);
@@ -782,17 +782,17 @@ function digestForAction(item: SkillItem, action: SkillAction): string | null {
 }
 
 function confirmationCopy(action: SkillAction): string {
-  if (action === 'install') return 'Copy this source Skill into the global Skills folder.';
-  if (action === 'update') return 'Replace the global Skill after preserving a rollback backup.';
-  if (action === 'disable') return 'Move this Skill into the recoverable disabled area.';
-  if (action === 'uninstall') return 'Move this Skill into recoverable trash. Nothing is permanently deleted.';
-  return 'Restore this Skill to its original global folder.';
+  if (action === 'install') return '将这个来源 Skill 复制到全局 Skill 文件夹。';
+  if (action === 'update') return '保留可回滚备份后，替换全局 Skill。';
+  if (action === 'disable') return '将这个 Skill 移入可恢复的停用区。';
+  if (action === 'uninstall') return '将这个 Skill 移入可恢复的回收站，不会永久删除任何内容。';
+  return '将这个 Skill 恢复到原来的全局文件夹。';
 }
 
 function normalizeSnapshot(value: unknown): Snapshot {
   const record = asRecord(value);
   if (!record || !Number.isSafeInteger(record.revision) || !Array.isArray(record.items)) {
-    throw new Error('Skill Manager returned an invalid snapshot');
+    throw new Error('Skill 管理器返回了无效快照');
   }
   return value as Snapshot;
 }
@@ -808,7 +808,7 @@ function trySnapshot(value: unknown): Snapshot | null {
 function normalizeDetail(value: unknown): SkillDetail {
   const record = asRecord(value);
   if (!record || typeof record.id !== 'string' || typeof record.name !== 'string') {
-    throw new Error('Skill Manager returned invalid detail');
+    throw new Error('Skill 管理器返回了无效详情');
   }
   return value as SkillDetail;
 }
@@ -817,7 +817,7 @@ function normalizeDirectoryPage(value: unknown): DirectoryPage {
   const record = asRecord(value);
   const current = asRecord(record?.current);
   if (!current || typeof current.id !== 'string' || typeof current.label !== 'string' || !Array.isArray(record?.children)) {
-    throw new Error('Skill Manager returned an invalid directory page');
+    throw new Error('Skill 管理器返回了无效目录数据');
   }
   return value as DirectoryPage;
 }
@@ -827,7 +827,7 @@ function isCurrentRequest(generation: number): boolean {
 }
 
 function request(method: string, input?: unknown): Promise<unknown> {
-  if (!context) throw new Error('Skill Manager panel is not mounted');
+  if (!context) throw new Error('Skill 管理器面板尚未挂载');
   return context.message.request(PLUGIN, method, input);
 }
 
@@ -868,8 +868,10 @@ function appendDefinition(list: HTMLDListElement, term: string, description: str
   list.append(dt, dd);
 }
 
-function capitalize(value: string): string {
-  return value.length ? `${value[0].toUpperCase()}${value.slice(1)}` : value;
+function localizedAction(value: unknown): string {
+  return typeof value === 'string' && value in ACTION_LABELS
+    ? ACTION_LABELS[value as SkillAction]
+    : '操作';
 }
 
 function cssEscape(value: string): string {
