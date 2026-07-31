@@ -53,6 +53,7 @@ interface ActiveExternalPlugin {
 
 interface CreateEditorOptions {
   assembly: AssemblyConfig;
+  applicationRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   dispatchBrowserRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchPanelBroadcast?: (panelKey: string, method: string, args: unknown[]) => void;
   onLayoutChanged?: (sessionId: string, window: WindowDescriptor) => void;
@@ -457,6 +458,15 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     sessionId,
     isUsable: () => usable,
     dispose,
+    application: {
+      request: (pluginName, name, ...args) => {
+        assertUsable();
+        if (!options.applicationRequest) {
+          return Promise.reject(new Error('Application Runtime is unavailable'));
+        }
+        return options.applicationRequest(pluginName, name, ...args);
+      },
+    },
     config,
     i18n,
     plugin: {

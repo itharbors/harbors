@@ -4,6 +4,7 @@ export const KIT_PERMISSIONS = [
   'network',
   'filesystem',
   'native-code',
+  'process-control',
   'application-startup',
 ] as const;
 

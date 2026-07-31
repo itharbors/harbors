@@ -103,6 +103,30 @@ describe('PluginModule', () => {
     expect(plugin.getInfo('log')).toMatchObject({ kind: 'external' });
   });
 
+  it('lets session plugin main entries request application plugin methods', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-application-bridge-'));
+    const pluginDir = mkPlugin(root, 'guard-center', 'guard-center', `
+      let requestApplication;
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) { requestApplication = runtime.application.request; },
+        },
+        methods: {
+          snapshot() { return requestApplication('background', 'snapshot'); },
+        },
+      });
+    `);
+    const applicationRequest = vi.fn(async () => ({ status: 'ready' }));
+    const editor = createEditor('application-bridge-editor', { assembly, applicationRequest });
+
+    await editor.plugin.register(pluginDir);
+    await editor.plugin.load(pluginDir);
+
+    await expect(editor.plugin.callPlugin('guard-center', 'snapshot'))
+      .resolves.toEqual({ status: 'ready' });
+    expect(applicationRequest).toHaveBeenCalledWith('background', 'snapshot');
+  });
+
   it('uses a globally unique import nonce across plugin module instances', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-import-nonce-'));
     const pluginDir = mkPlugin(root, 'shared', 'shared');

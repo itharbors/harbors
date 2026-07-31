@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "evaluationWindowSeconds": 60,
+  "consecutiveWindows": 3,
+  "trafficWindowMinutes": 10,
+  "learningHours": 24,
+  "dynamicWarning": {
+    "medianMultiplier": 5,
+    "madMultiplier": 6,
+    "minOutboundMiBPerMinute": 8,
+    "corroborators": {
+      "sessionsPerMinute": 6,
+      "tasksPerMinute": 8,
+      "connectionsPerMinute": 20
+    }
+  },
+  "fixedWarning": {
+    "outboundMiB": 128,
+    "sessionsOrTasks": 20
+  },
+  "fixedTrip": {
+    "outboundMiB": 256,
+    "sessionsOrTasks": 30,
+    "minimumConfidence": "confirmed"
+  },
+  "structuralTrip": {
+    "recursiveDepth": 4,
+    "recursiveTasks": 8,
+    "recursiveWindowSeconds": 120,
+    "burstTasks": 20,
+    "burstActiveTasks": 8,
+    "burstWindowSeconds": 60
+  }
+}

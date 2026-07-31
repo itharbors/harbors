@@ -23,6 +23,8 @@ flowchart LR
     Toast["桌面弹窗 / 任务栏角标"]
     Gateway["Gateway :48380"]
     Server["Server :48381"]
+    AppRuntime["Application Runtime / startup plugins"]
+    Guard["Agent Guard: ps + netstat + private metadata"]
     Client["Vite Client :48382"]
     DB[("SQLite 会话元数据")]
     Panel["Panel iframe"]
@@ -36,6 +38,8 @@ flowchart LR
     Browser --> Gateway
     Electron --> Gateway
     Gateway -- "/api/* 与 /sse/*" --> Server
+    Server --> AppRuntime
+    AppRuntime --> Guard
     Gateway -- "其他请求" --> Client
     Server --> DB
     Client --> Panel
@@ -112,6 +116,12 @@ flowchart TD
 | Kit 目录与窗口注册表 | Electron main process | 应用生命周期 |
 | Kit sessionId 与窗口 bounds | Electron userData `workspaces.json` | 跨 Electron 重启 |
 | 通知、未读数与弹窗队列 | Electron main process 的 Notification Host | 当前桌面应用生命周期，最多 500 条 |
+| Agent Guard 基线、分钟指标、事件与控制账本 | Electron `userData/agent-guard`，目录 0700、文件 0600 | 指标 7 天、事件 30 天；未恢复的暂停账本优先保留 |
+
+Agent Guard 不安装代理、不修改 Claude/Codex 配置，也不解密 TLS。它把进程树、已知 Agent
+配置端点、DNS 历史和 `netstat` 累计字节组合成带置信度的连接归因；因此“连接数”不是 HTTP
+请求数，Relay 域名也只有在进程、配置和地址证据同时成立时才会被视为确认的模型流量。
+相邻 5 秒快照之间完整建立并关闭的短连接可能漏记，缺口不会被估算为可自动控制的证据。
 
 ## Web 与 Electron
 

@@ -827,6 +827,7 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /createApplicationRuntimeClient/);
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
+  assert.match(source, /HARBORS_AGENT_GUARD_DATA_DIR:\s*desktopPaths\.agentGuardDataDir/);
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
   assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
   assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
@@ -863,6 +864,7 @@ test('uses only Electron run-as-node and IPC for packaged Framework startup', as
   assert.match(packagedStart, /HARBORS_RUNTIME_ROOT/);
   assert.match(packagedStart, /HARBORS_CLIENT_ASSETS_ROOT/);
   assert.match(packagedStart, /HARBORS_DB_PATH/);
+  assert.match(packagedStart, /HARBORS_AGENT_GUARD_DATA_DIR/);
   assert.match(packagedStart, /HARBORS_KIT_SOURCES/);
   assert.doesNotMatch(packagedStart, /npm|vite|tsx|\bnode\b/iu);
   const spawned = packagedStart.indexOf('const started = startDesktopFrameworkProcess');
@@ -870,6 +872,19 @@ test('uses only Electron run-as-node and IPC for packaged Framework startup', as
   const ready = packagedStart.indexOf('await started.ready');
   assert.ok(spawned >= 0 && owned > spawned && owned < ready);
   assert.match(packagedStart, /frameworkStop = started\.stop/);
+});
+
+test('passes the Agent Guard data directory to the development Framework', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  const developmentStart = source.slice(
+    source.indexOf('function startDevelopmentFramework'),
+    source.indexOf('function observeFrameworkProcess'),
+  );
+
+  assert.match(
+    developmentStart,
+    /HARBORS_AGENT_GUARD_DATA_DIR:\s*desktopPaths\.agentGuardDataDir/,
+  );
 });
 
 test('consults the supervised Framework stop result even after the child exits early', async () => {

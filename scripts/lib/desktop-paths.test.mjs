@@ -19,6 +19,7 @@ test('keeps packaged desktop paths under Resources and userData', () => {
     frameworkEntry: '/Applications/ITHARBORS.app/Contents/Resources/app.asar/dist/framework.mjs',
     dbPath: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
     kitStoreRoot: '/Users/me/Library/Application Support/ITHARBORS/kit-store',
+    agentGuardDataDir: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
   });
 });
 
@@ -35,6 +36,10 @@ test('keeps development paths rooted in the repository', () => {
   assert.equal(result.runtimeRoot, '/workspace/harbors');
   assert.equal(result.clientAssetsRoot, '/workspace/harbors/packages/client/dist');
   assert.equal(result.frameworkEntry, '/workspace/harbors/scripts/framework.mjs');
+  assert.equal(
+    result.agentGuardDataDir,
+    '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
+  );
 });
 
 test('rejects relative packaged roots', () => {

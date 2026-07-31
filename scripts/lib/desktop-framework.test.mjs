@@ -12,6 +12,7 @@ function validEnvironment(application = '/Applications/ITHARBORS.app') {
     HARBORS_RUNTIME_ROOT: `${application}/Contents/Resources/runtime`,
     HARBORS_CLIENT_ASSETS_ROOT: `${application}/Contents/Resources/runtime/client`,
     HARBORS_DB_PATH: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
+    HARBORS_AGENT_GUARD_DATA_DIR: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
     HARBORS_KIT_SOURCES: JSON.stringify([
       {
         directory: '/Applications/ITHARBORS.app/Contents/Resources/runtime/kits/default',
@@ -35,6 +36,7 @@ test('requires absolute packaged paths and loopback configuration', () => {
     runtimeRoot: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
     clientAssetsRoot: '/Applications/ITHARBORS.app/Contents/Resources/runtime/client',
     dbPath: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
+    agentGuardDataDir: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
     kitSources: [
       {
         directory: '/Applications/ITHARBORS.app/Contents/Resources/runtime/kits/default',
@@ -58,12 +60,34 @@ test('requires absolute packaged paths and loopback configuration', () => {
     ['HARBORS_RUNTIME_ROOT', '../runtime'],
     ['HARBORS_CLIENT_ASSETS_ROOT', 'client'],
     ['HARBORS_DB_PATH', './framework.db'],
+    ['HARBORS_AGENT_GUARD_DATA_DIR', './agent-guard'],
   ]) {
     assert.throws(
       () => parseDesktopFrameworkEnvironment({ ...valid, [field]: value }),
       new RegExp(`${field}.*absolute`, 'iu'),
     );
   }
+});
+
+test('forwards the Agent Guard data directory to the desktop server', async () => {
+  let serverOptions;
+  const port = await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: (options) => {
+      serverOptions = options;
+      return { start: async () => 43123, stop: async () => undefined };
+    },
+    send: () => undefined,
+    subscribeShutdown: () => () => undefined,
+    exit: () => undefined,
+  });
+
+  assert.equal(port, 43123);
+  assert.equal(
+    serverOptions.agentGuardDataDir,
+    '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
+  );
 });
 
 test('rejects malformed installed Kits, notification ports, and application tokens', () => {

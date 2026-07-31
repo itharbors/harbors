@@ -549,6 +549,34 @@ test('does not install native code when confirmation is declined', async () => {
   assert.deepEqual(value.calls, []);
 });
 
+test('marks process control as elevated risk and includes it in install confirmation', async () => {
+  const processControlSnapshot = snapshot({
+    kits: [{
+      ...snapshot().kits[0],
+      channels: {
+        stable: { version: '1.2.0', permissions: ['process-control'] },
+      },
+    }],
+  });
+  const confirmations = [];
+  const value = await createView({
+    initial: processControlSnapshot,
+    confirmInstall: (message) => { confirmations.push(message); return false; },
+  });
+
+  await value.view.start();
+  value.document.querySelector('[data-detail-tab="permissions"]').click();
+  const permission = value.document.querySelector('[data-permission="process-control"]');
+  assert.equal(permission.dataset.risk, 'high');
+  assert.match(permission.textContent, /进程控制.*高风险/);
+  value.document.querySelector('[data-action="install"]').click();
+  await value.view.whenIdle();
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /进程控制/);
+  assert.deepEqual(value.calls, []);
+});
+
 test('switches to retained versions and explicitly retries abnormal versions', async () => {
   let releaseActivation;
   const activationGate = new Promise((resolve) => { releaseActivation = resolve; });

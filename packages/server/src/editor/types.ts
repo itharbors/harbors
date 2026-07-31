@@ -9,6 +9,9 @@ import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapsh
 
 export interface PluginRuntime {
   readonly sessionId: string;
+  application: {
+    request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
+  };
   config: EditorConfig;
   i18n: EditorI18n;
   message: {
@@ -115,6 +118,7 @@ export interface Editor {
   readonly sessionId: string;
   isUsable(): boolean;
   dispose(): Promise<void>;
+  application: PluginRuntime['application'];
   config: EditorConfig;
   i18n: EditorI18n;
   plugin: {
