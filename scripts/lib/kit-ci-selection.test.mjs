@@ -9,13 +9,14 @@ import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
-const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'sqlite'];
+const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'sqlite', 'traceweave'];
 const runners = Object.freeze({
   'agent-guard': 'macos-14',
   csv: 'macos-14',
   mysql: 'ubuntu-latest',
   notifications: 'ubuntu-latest',
   sqlite: 'macos-14',
+  traceweave: 'ubuntu-latest',
 });
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
