@@ -90,6 +90,15 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(preview)).toEqual(preview);
   });
 
+  it('rejects permissions outside the Registry v1 contract', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['filesystem', 'process-execution'],
+    };
+
+    expect(() => parseKitPackageManifest(manifest)).toThrow(/permission/i);
+  });
+
   it.each([
     'kit-demo',
     '@example',

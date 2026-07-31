@@ -147,7 +147,7 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'main', 'dist', 'index.js')), true);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'panel.fixture', 'dist', 'index.html')), true);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'main', 'src')), false);
-  for (const forbidden of ['agent-guard', 'csv', 'mysql', 'notifications', 'sqlite']) {
+  for (const forbidden of ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'sqlite']) {
     assert.equal(existsSync(path.join(outputRoot, 'kits', forbidden)), false);
   }
   assert.deepEqual(result.inventory, [...result.inventory].sort());

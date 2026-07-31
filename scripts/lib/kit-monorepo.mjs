@@ -11,6 +11,7 @@ export const OFFICIAL_KIT_SLUGS = Object.freeze([
   'csv',
   'mysql',
   'notifications',
+  'scheduler',
   'sqlite',
   'traceweave',
 ]);

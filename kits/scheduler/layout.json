@@ -1,0 +1,14 @@
+{
+  "windows": [
+    {
+      "id": "scheduler-main",
+      "type": "panel-area",
+      "layout": {
+        "type": "leaf",
+        "panel": "@itharbors/scheduler-panel.scheduler",
+        "panelType": "simple"
+      }
+    }
+  ],
+  "activePanel": "@itharbors/scheduler-panel.scheduler"
+}
