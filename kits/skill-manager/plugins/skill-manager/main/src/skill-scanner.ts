@@ -7,6 +7,7 @@ import { parseSkillFrontmatter } from './frontmatter.ts';
 import {
   SkillManagerError,
   type ScanOptions,
+  type RecoveryEntry,
   type SkillCandidate,
   type SkillDiagnostic,
   type SkillOrigin,
@@ -94,6 +95,21 @@ export async function scanGlobalRoot(
     toPortablePath(path.relative(root, right.directory)),
   ));
   return { candidates, diagnostics, truncated: state.truncated };
+}
+
+export function recoveryEntriesToCandidates(entries: RecoveryEntry[]): SkillCandidate[] {
+  return entries
+    .map((entry) => ({
+      id: entry.id,
+      origin: entry.action,
+      directory: entry.directory,
+      basename: entry.originalBasename,
+      manifest: entry.valid && entry.manifest ? { ...entry.manifest } : null,
+      digest: entry.valid ? entry.digest : null,
+      protected: false,
+      diagnostics: entry.diagnostics.map((diagnostic) => ({ ...diagnostic })),
+    }))
+    .sort((left, right) => compareText(left.id, right.id));
 }
 
 async function visitSourceDirectory(

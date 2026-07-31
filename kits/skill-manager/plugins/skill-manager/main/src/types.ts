@@ -78,6 +78,38 @@ export type SkillListItem = {
   diagnostics: SkillDiagnostic[];
 };
 
+export type RecoveryAction = 'disabled' | 'trash';
+
+export type RecoveryRecord = {
+  schemaVersion: 1;
+  id: string;
+  action: RecoveryAction;
+  skillName: string;
+  originalBasename: string;
+  digest: string;
+  createdAt: string;
+};
+
+export type RecoveryEntry = RecoveryRecord & {
+  directory: string;
+  manifest: SkillManifest | null;
+  valid: boolean;
+  diagnostics: SkillDiagnostic[];
+};
+
+export type MoveInput = {
+  globalRoot: string;
+  candidate: SkillCandidate;
+  action: RecoveryAction;
+  expectedDigest: string;
+};
+
+export type RestoreInput = {
+  globalRoot: string;
+  id: string;
+  expectedDigest: string;
+};
+
 export type SkillManagerErrorCode =
   | 'INVALID_SKILL'
   | 'UNSAFE_PATH'
