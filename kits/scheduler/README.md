@@ -22,7 +22,7 @@ Harbors 本身不会注册操作系统级定时服务。应用未运行时脚本
 process.execPath <absolute-script-path>
 ```
 
-执行过程不经过 shell，工作目录为脚本所在目录，环境变量继承 Harbors 进程。脚本拥有当前用户对本机文件和网络的权限；安装 Kit 时应认真审阅 `filesystem` 与 `process-execution` 权限。
+执行过程不经过 shell，工作目录为脚本所在目录，环境变量继承 Harbors 进程。脚本拥有当前用户对本机文件和网络的权限；安装 Kit 时应认真审阅 `filesystem` 与 `native-code` 权限。这里的 `native-code` 是 Registry v1 对本地代码执行能力的保守高风险声明。
 
 每次运行的 stdout 和 stderr 分别保留末尾 64 KiB。Harbors 退出时先发送 `SIGTERM`，5 秒后仍未退出才发送 `SIGKILL`。
 

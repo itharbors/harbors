@@ -102,7 +102,7 @@ Kit 只有 active 版本目录会进入快照；Server 不扫描 Store 根，也
 Electron 托盘中的 **Kit Manager…** 打开独立本地 `file://` Kit Dock。窗口使用 sandbox、
 context isolation 和独立 preload，只暴露 `list/refresh/install/activate/rollback/uninstall` 六个方法；main
 process 同时校验调用 sender。Stable 默认展开，Preview 默认折叠，每个频道引用占一条横向资源行；
-离线缓存、权限、native-code 与 process-execution 风险和 installed/active/pending/bad 状态都会明确展示。一个 Kit
+离线缓存、权限、native-code 风险和 installed/active/pending/bad 状态都会明确展示。一个 Kit
 保留在本机的全部版本按 SemVer 从新到旧列出，当前版本和异常版本分别标记，用户可选择任一历史
 版本并立即通过 Framework 替换事务切换；底层 `rollback` IPC 继续保留兼容，但界面不再提供重复的
 previous 快捷按钮。下载和制品校验期间，Kit 所在行展示不定进度圈及“正在下载并验证”状态；Registry

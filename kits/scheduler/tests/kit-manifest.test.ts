@@ -44,11 +44,12 @@ describe('Scheduler Kit assembly', () => {
       channel: 'preview',
       publisher: 'itharbors',
       target: { platform: 'any', arch: 'any' },
+      requires: { harbors: '>=0.1.0-preview.1 <0.1.0' },
     });
     expect(kit.permissions).toEqual([
       'application-startup',
       'filesystem',
-      'process-execution',
+      'native-code',
     ]);
   });
 
@@ -59,6 +60,7 @@ describe('Scheduler Kit assembly', () => {
     expect(service['ce-editor'].contribute.panel).toBeUndefined();
     expect(service['ce-editor'].contribute.message.request.scheduler).toEqual([
       'getSnapshot',
+      'listScriptDirectory',
       'saveJob',
       'deleteJob',
       'setJobEnabled',

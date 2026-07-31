@@ -123,7 +123,7 @@ type JobRun = {
 
 ## 官方 Kit 与发布边界
 
-新增 `scheduler` 到 Registry policy、官方 Kit 集合、CI 选择矩阵和根测试命令。它与 CSV、SQLite、MySQL、Notifications 一样是市场 Kit，不加入内置 Kit 列表。版本从 `0.1.0-preview.1` 开始，权限声明为 `filesystem`、`process-execution`、`application-startup`。
+新增 `scheduler` 到 Registry policy、官方 Kit 集合、CI 选择矩阵和根测试命令。它与 CSV、SQLite、MySQL、Notifications 一样是市场 Kit，不加入内置 Kit 列表。版本从 `0.1.0-preview.1` 开始，权限声明为 `filesystem`、`native-code`、`application-startup`；Registry v1 中以现有高风险 `native-code` 权限保守覆盖本地 Node.js 脚本执行。
 
 ## 测试与验收
 

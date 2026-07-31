@@ -2,7 +2,6 @@ const PERMISSION_LABELS = Object.freeze({
   network: '网络访问',
   filesystem: '文件访问',
   'native-code': '原生代码 — 高风险',
-  'process-execution': '本地进程执行 — 高风险',
   'application-startup': '随 ITHARBORS 启动',
 });
 
@@ -10,7 +9,6 @@ const CHANNEL_LABELS = Object.freeze({
   stable: '稳定版',
   preview: '预览版',
 });
-const ELEVATED_PERMISSIONS = new Set(['native-code', 'process-execution']);
 
 function required(document, selector) {
   const node = document.querySelector(selector);
@@ -186,12 +184,8 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
   function install(selection, detailNode) {
     return queue(async () => {
       const permissions = selection.reference.permissions ?? [];
-      const elevatedCapabilities = [
-        permissions.includes('native-code') ? '包含原生代码' : '',
-        permissions.includes('process-execution') ? '可执行本地进程' : '',
-      ].filter(Boolean).join('并且');
-      const elevatedRisk = elevatedCapabilities
-        ? `此版本${elevatedCapabilities}，拥有较高的本机访问权限。`
+      const elevatedRisk = permissions.includes('native-code')
+        ? '此版本包含原生代码，拥有较高的本机访问权限。'
         : '';
       const accepted = await confirmInstall(
         `${selection.kit.label ?? selection.kit.id} ${selection.reference.version}：${elevatedRisk}应用版本时会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
@@ -458,7 +452,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
             PERMISSION_LABELS[permission] ?? permission,
           );
           item.dataset.permission = permission;
-          if (ELEVATED_PERMISSIONS.has(permission)) item.dataset.risk = 'high';
+          if (permission === 'native-code') item.dataset.risk = 'high';
           list.append(item);
         }
         panel.append(list);

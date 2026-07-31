@@ -95,6 +95,19 @@ describe('Scheduler panel', () => {
       .toContain('done');
   });
 
+  it('surfaces a degraded scheduler when background persistence is retrying', async () => {
+    const request = vi.fn(async () => ({
+      ...structuredClone(snapshot),
+      serviceError: 'state write failed',
+    }));
+
+    await panel.mount({ message: { request } });
+
+    expect(document.querySelector('.service-status')?.textContent).toContain('调度服务降级');
+    expect(document.querySelector('[role="alert"]')?.textContent)
+      .toContain('state write failed');
+  });
+
   it('creates a one-time job from labeled form controls', async () => {
     const request = vi.fn(async (
       _plugin: string,
@@ -130,6 +143,52 @@ describe('Scheduler panel', () => {
         runAt: new Date('2026-08-02T03:30').toISOString(),
       },
     });
+  });
+
+  it('browses service-provided script directories and selects a supported file', async () => {
+    const request = vi.fn(async (
+      _plugin: string,
+      _route: string,
+      method: string,
+      directory?: string,
+    ) => {
+      if (method === 'getSnapshot') return structuredClone(snapshot);
+      if (method !== 'listScriptDirectory') return undefined;
+      if (directory === '/Users/demo/jobs') {
+        return {
+          currentPath: '/Users/demo/jobs',
+          parentPath: '/Users/demo',
+          entries: [{
+            name: 'cleanup.mjs',
+            path: '/Users/demo/jobs/cleanup.mjs',
+            kind: 'file',
+          }],
+        };
+      }
+      return {
+        currentPath: '/Users/demo',
+        parentPath: '/Users',
+        entries: [{ name: 'jobs', path: '/Users/demo/jobs', kind: 'directory' }],
+      };
+    });
+    await panel.mount({ message: { request } });
+    click('[data-action="new-job"]');
+
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+    click('[data-action="choose-script"]');
+    await eventually(() => hasCall(request, 'listScriptDirectory'));
+    expect(document.querySelector('[data-testid="script-browser"]')?.textContent)
+      .toContain('/Users/demo');
+
+    click('[data-script-entry-path="/Users/demo/jobs"]');
+    await eventually(() => request.mock.calls.some(
+      (call) => call[2] === 'listScriptDirectory' && call[3] === '/Users/demo/jobs',
+    ));
+    click('[data-script-entry-path="/Users/demo/jobs/cleanup.mjs"]');
+
+    expect(document.querySelector<HTMLInputElement>('input[name="scriptPath"]')?.value)
+      .toBe('/Users/demo/jobs/cleanup.mjs');
+    expect(document.querySelector('[data-testid="script-browser"]')).toBeNull();
   });
 
   it('dispatches pause, manual run, and confirmed delete actions', async () => {

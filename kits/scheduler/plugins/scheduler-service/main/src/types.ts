@@ -55,6 +55,7 @@ export interface SchedulerSnapshot {
   jobs: SchedulerJob[];
   runs: JobRun[];
   activeJobIds: string[];
+  serviceError: string | null;
 }
 
 export interface SchedulerStore {

@@ -9,6 +9,7 @@
         "request": {
           "scheduler": [
             "getSnapshot",
+            "listScriptDirectory",
             "saveJob",
             "deleteJob",
             "setJobEnabled",

@@ -238,6 +238,62 @@ describe('scheduler engine', () => {
     expect(runner.calls).toHaveLength(1);
     await scheduler.dispose();
   });
+
+  it('keeps the service available and retries a scheduled wake after persistence fails', async () => {
+    const clock = new FakeClock('2026-08-01T00:00:00.000Z');
+    const store = new MemoryStore(stateWithJob({
+      schedule: {
+        kind: 'interval',
+        startAt: '2026-08-01T00:00:00.000Z',
+        everyMs: 60_000,
+      },
+      nextRunAt: '2026-08-01T00:00:00.000Z',
+    }));
+    store.failNextSaves();
+    const runner = new FakeRunner();
+    const scheduler = createScheduler({ store, runner, clock });
+
+    await scheduler.initialize();
+
+    expect(runner.calls).toHaveLength(0);
+    expect(scheduler.getSnapshot().serviceError).toContain('state write failed');
+    await clock.advanceTo('2026-08-01T00:00:01.000Z');
+    await runner.waitForCalls(1);
+    await eventually(() => scheduler.getSnapshot().runs[0]?.status === 'succeeded');
+    expect(scheduler.getSnapshot().serviceError).toBeNull();
+    await scheduler.dispose();
+  });
+
+  it('retains active bookkeeping until a failed completion write is retried', async () => {
+    const clock = new FakeClock('2026-08-01T00:00:00.000Z');
+    const store = new MemoryStore(stateWithJob({
+      schedule: {
+        kind: 'interval',
+        startAt: '2026-08-01T00:00:00.000Z',
+        everyMs: 60_000,
+      },
+      nextRunAt: '2026-08-01T00:00:00.000Z',
+    }));
+    const runner = new FakeRunner({ hold: true });
+    const scheduler = createScheduler({ store, runner, clock });
+    await scheduler.initialize();
+    await runner.waitForCalls(1);
+    store.failNextSaves();
+
+    runner.releaseAll();
+    await eventually(() => scheduler.getSnapshot().serviceError !== null);
+
+    expect(scheduler.getSnapshot().runs[0]?.status).toBe('running');
+    expect(scheduler.getSnapshot().activeJobIds).toEqual(['job-1']);
+    await clock.advanceTo('2026-08-01T00:00:01.000Z');
+    await eventually(() => {
+      const current = scheduler.getSnapshot();
+      return current.runs[0]?.status === 'succeeded' && current.activeJobIds.length === 0;
+    });
+    expect(scheduler.getSnapshot().activeJobIds).toEqual([]);
+    expect(scheduler.getSnapshot().serviceError).toBeNull();
+    await scheduler.dispose();
+  });
 });
 
 function stateWithJob(overrides: Record<string, unknown> = {}): SchedulerState {
@@ -261,6 +317,7 @@ function stateWithJob(overrides: Record<string, unknown> = {}): SchedulerState {
 
 class MemoryStore implements SchedulerStore {
   state: SchedulerState;
+  private remainingFailures = 0;
 
   constructor(state: SchedulerState = { schemaVersion: 1, jobs: [], runs: [] }) {
     this.state = structuredClone(state);
@@ -271,7 +328,15 @@ class MemoryStore implements SchedulerStore {
   }
 
   async save(state: SchedulerState) {
+    if (this.remainingFailures > 0) {
+      this.remainingFailures -= 1;
+      throw new Error('state write failed');
+    }
     this.state = structuredClone(state);
+  }
+
+  failNextSaves(count = 1) {
+    this.remainingFailures = count;
   }
 }
 

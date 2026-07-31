@@ -5,7 +5,7 @@
   "channel": "preview",
   "publisher": "itharbors",
   "requires": {
-    "harbors": ">=0.0.1 <0.1.0",
+    "harbors": ">=0.1.0-preview.1 <0.1.0",
     "kitApi": "^1.0.0",
     "protocolVersion": 1
   },
@@ -16,7 +16,7 @@
   "permissions": [
     "application-startup",
     "filesystem",
-    "process-execution"
+    "native-code"
   ],
   "entry": "package.json"
 }

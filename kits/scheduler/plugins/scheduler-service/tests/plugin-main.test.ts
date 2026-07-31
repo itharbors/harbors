@@ -40,6 +40,7 @@ describe('scheduler service application plugin', () => {
     expect(Object.keys(definition!.methods).sort()).toEqual([
       'deleteJob',
       'getSnapshot',
+      'listScriptDirectory',
       'runJobNow',
       'saveJob',
       'setJobEnabled',
