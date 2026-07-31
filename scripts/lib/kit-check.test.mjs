@@ -64,6 +64,13 @@ test('checks MySQL with its exact affected build, test, pack, and inspect sequen
   });
 });
 
+test('checks Agent Guard with its macOS-only build, test, pack, and inspect sequence', async () => {
+  await checkCommandSequence({
+    slug: 'agent-guard',
+    artifactName: 'kit-agent-guard-0.1.0-preview.1-darwin-arm64.hkit',
+  });
+});
+
 test('checks Notifications through its Kit-local build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'notifications',
@@ -179,7 +186,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <csv|mysql|notifications|sqlite> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|sqlite> --output-directory <absolute-directory>\n');
   }
 });
 

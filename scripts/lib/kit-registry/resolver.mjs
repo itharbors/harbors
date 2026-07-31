@@ -288,13 +288,13 @@ export class KitReleaseResolver {
         'Registry permissions do not match the selected Kit asset',
       );
     }
-    if (
-      releasedPermissions.includes('application-startup')
-      && release.publisher !== 'itharbors'
-    ) {
+    const officialOnlyPermission = releasedPermissions.find((permission) => (
+      permission === 'application-startup' || permission === 'process-control'
+    ));
+    if (officialOnlyPermission && release.publisher !== 'itharbors') {
       throw new KitRegistryResolutionError(
         'PERMISSION_NOT_ALLOWED',
-        'Only the official itharbors publisher may request application-startup',
+        `Only the official itharbors publisher may request ${officialOnlyPermission}`,
       );
     }
     const revocation = snapshot.index.revocations.find((candidate) => (

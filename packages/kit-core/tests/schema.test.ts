@@ -120,10 +120,19 @@ describe('parseKitPackageManifest', () => {
     })).toThrow(/preview/i);
   });
 
+  it('accepts the process-control permission', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['network', 'process-control'],
+    } as const;
+
+    expect(parseKitPackageManifest(manifest)).toEqual(manifest);
+  });
+
   it('rejects unknown and duplicate permissions', () => {
     expect(() => parseKitPackageManifest({
       ...kitManifest,
-      permissions: ['network', 'process-control'],
+      permissions: ['network', 'system-proxy'],
     })).toThrow(/permission/i);
     expect(() => parseKitPackageManifest({
       ...kitManifest,
