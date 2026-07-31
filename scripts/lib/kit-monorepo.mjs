@@ -6,7 +6,13 @@ const POLICY_FILE = 'registry/policy.json';
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
 const ALLOWED_RUNNERS = new Set(['ubuntu-latest', 'macos-14']);
 
-export const OFFICIAL_KIT_SLUGS = Object.freeze(['csv', 'mysql', 'notifications', 'sqlite']);
+export const OFFICIAL_KIT_SLUGS = Object.freeze([
+  'csv',
+  'mysql',
+  'notifications',
+  'sqlite',
+  'traceweave',
+]);
 
 export async function loadKitPolicy({
   repositoryRoot,

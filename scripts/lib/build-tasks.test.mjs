@@ -34,6 +34,7 @@ test('selects every full build task before all plugins and notification resource
     'workspace:csv-contracts',
     'workspace:sqlite-contracts',
     'workspace:mysql-contracts',
+    'workspace:traceweave-contracts',
     'workspace:relationship-graph',
     'workspace:kit-core',
     'workspace:kit-cli',
@@ -63,6 +64,17 @@ test('selects every full build task before all plugins and notification resource
     all.tasks.find((task) => task.name === 'plugin:kits/notifications/plugins/notification-background').outputExcludes,
     ['kits/notifications/plugins/notification-background/main/dist/resources/notify-user'],
   );
+});
+
+test('builds TraceWeave contracts before both TraceWeave plugins', () => {
+  const tasks = createBuildPlan(rootDir, 'all').tasks;
+  const core = tasks.find((task) => task.pluginDir === 'kits/traceweave/plugins/traceweave-core');
+  const view = tasks.find((task) => task.pluginDir === 'kits/traceweave/plugins/traceweave-view');
+
+  assert.deepEqual(core.dependencies, ['workspace:traceweave-contracts']);
+  assert.deepEqual(view.dependencies, ['workspace:traceweave-contracts']);
+  assert.ok(core.inputs.includes('packages/traceweave-contracts/dist'));
+  assert.ok(view.inputs.includes('packages/traceweave-contracts/dist'));
 });
 
 test('omits workspace tasks from plugin-only plans while retaining selected task ordering', () => {

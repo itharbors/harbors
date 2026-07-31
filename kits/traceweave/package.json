@@ -1,0 +1,23 @@
+{
+  "name": "@itharbors/kit-traceweave",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build -w @itharbors/traceweave-contracts && node ../../scripts/ce-plugin.mjs build plugins/traceweave-core && node ../../scripts/ce-plugin.mjs build plugins/traceweave-view",
+    "test:prepare": "npm run build && node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
+    "test": "npm run test:prepare && vitest run --config vitest.config.ts"
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": { "id": "traceweave", "label": "TraceWeave" },
+      "layouts": { "default": "layout.json" },
+      "windowEntries": { "main": "main.html", "secondary": "secondary.html" },
+      "plugin": [
+        "@itharbors/traceweave-core",
+        "@itharbors/traceweave-view"
+      ],
+      "theme": { "--ce-accent": "#e6944a" }
+    }
+  }
+}

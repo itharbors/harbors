@@ -85,6 +85,13 @@ test('checks CSV with its exact affected build, test, pack, and inspect sequence
   });
 });
 
+test('checks TraceWeave through its portable Kit pipeline', async () => {
+  await checkCommandSequence({
+    slug: 'traceweave',
+    artifactName: 'kit-traceweave-0.1.0-preview.1-any-any.hkit',
+  });
+});
+
 test('rejects an unknown slug before running a command', async () => {
   const calls = [];
   await assert.rejects(
@@ -179,7 +186,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <csv|mysql|notifications|sqlite> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <csv|mysql|notifications|sqlite|traceweave> --output-directory <absolute-directory>\n');
   }
 });
 
