@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import { lstat, readFile, readdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { digestSkillDirectory } from './digest.ts';
-import { parseSkillFrontmatter } from './frontmatter.ts';
+import { digestSkillDirectory } from './digest.js';
+import { parseSkillFrontmatter } from './frontmatter.js';
 import {
   SkillManagerError,
   type ScanOptions,
@@ -12,7 +12,7 @@ import {
   type SkillDiagnostic,
   type SkillOrigin,
   type SkillScanResult,
-} from './types.ts';
+} from './types.js';
 
 const IGNORED_SOURCE_DIRECTORIES = new Set([
   '.git',

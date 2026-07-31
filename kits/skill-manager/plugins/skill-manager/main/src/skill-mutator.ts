@@ -14,13 +14,13 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 
-import { digestSkillDirectory } from './digest.ts';
+import { digestSkillDirectory } from './digest.js';
 import {
   assertDirectoryIdentity,
   canonicalDirectory,
   type DirectoryIdentity,
-} from './safe-path.ts';
-import type { SkillStore } from './skill-store.ts';
+} from './safe-path.js';
+import type { SkillStore } from './skill-store.js';
 import {
   SkillManagerError,
   type MutationAction,
@@ -28,7 +28,7 @@ import {
   type MutationReceipt,
   type ScanLimits,
   type SkillCandidate,
-} from './types.ts';
+} from './types.js';
 
 const DEFAULT_LIMITS: ScanLimits = {
   maxFiles: 5_000,

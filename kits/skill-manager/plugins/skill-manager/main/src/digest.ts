@@ -6,7 +6,7 @@ import {
   SkillManagerError,
   type ScanLimits,
   type SkillDigest,
-} from './types.ts';
+} from './types.js';
 
 type FileEntry = {
   absolutePath: string;

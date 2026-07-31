@@ -1,6 +1,6 @@
 import { parseDocument } from 'yaml';
 
-import { SkillManagerError, type SkillManifest } from './types.ts';
+import { SkillManagerError, type SkillManifest } from './types.js';
 
 const MAX_SKILL_NAME_LENGTH = 64;
 const MAX_DESCRIPTION_LENGTH = 1024;

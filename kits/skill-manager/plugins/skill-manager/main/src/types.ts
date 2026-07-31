@@ -129,6 +129,39 @@ export type MutationReceipt = {
   recoveryId?: string;
 };
 
+export type SkillSnapshot = {
+  revision: number;
+  generation: number;
+  mode: 'global' | 'source';
+  globalRootLabel: string;
+  sourceRootLabel: string | null;
+  scanning: boolean;
+  truncated: boolean;
+  counts: Record<SkillStatus, number>;
+  items: SkillListItem[];
+  diagnostics: SkillDiagnostic[];
+};
+
+export type SkillDetail = {
+  id: string;
+  revision: number;
+  name: string;
+  description: string;
+  status: SkillStatus;
+  diagnostics: SkillDiagnostic[];
+  source: SkillDetailLocation | null;
+  global: SkillDetailLocation | null;
+  recovery: SkillDetailLocation | null;
+};
+
+export type SkillDetailLocation = {
+  origin: SkillOrigin;
+  basename: string;
+  manifest: SkillManifest;
+  digest: string;
+  text: string;
+};
+
 export type SkillManagerErrorCode =
   | 'INVALID_SKILL'
   | 'UNSAFE_PATH'

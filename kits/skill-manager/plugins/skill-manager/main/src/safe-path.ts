@@ -1,7 +1,7 @@
 import { lstat, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
-import { SkillManagerError } from './types.ts';
+import { SkillManagerError } from './types.js';
 
 export type DirectoryIdentity = {
   dev: number;

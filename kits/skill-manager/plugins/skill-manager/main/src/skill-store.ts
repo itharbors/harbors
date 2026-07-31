@@ -12,12 +12,12 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 
-import { digestSkillDirectory } from './digest.ts';
-import { parseSkillFrontmatter } from './frontmatter.ts';
+import { digestSkillDirectory } from './digest.js';
+import { parseSkillFrontmatter } from './frontmatter.js';
 import {
   assertDirectoryIdentity,
   canonicalDirectory,
-} from './safe-path.ts';
+} from './safe-path.js';
 import {
   SkillManagerError,
   type MoveInput,
@@ -27,7 +27,7 @@ import {
   type ScanLimits,
   type SkillDiagnostic,
   type SkillManifest,
-} from './types.ts';
+} from './types.js';
 
 const DEFAULT_LIMITS: ScanLimits = {
   maxFiles: 5_000,

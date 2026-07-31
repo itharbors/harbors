@@ -7,8 +7,8 @@ import {
   canonicalDirectory,
   isPathWithin,
   type DirectoryIdentity,
-} from './safe-path.ts';
-import { SkillManagerError } from './types.ts';
+} from './safe-path.js';
+import { SkillManagerError } from './types.js';
 
 export type DirectoryPage = {
   current: { id: string; label: string };

@@ -7,7 +7,7 @@ import type {
   SkillDiagnostic,
   SkillListItem,
   SkillStatus,
-} from './types.ts';
+} from './types.js';
 
 type CandidateGroup = {
   key: string;
