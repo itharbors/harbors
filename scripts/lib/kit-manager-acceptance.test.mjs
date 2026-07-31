@@ -15,6 +15,7 @@ import { createKitManagerView } from './kit-manager-view.mjs';
 import { KIT_MANAGER_CHANNELS, registerKitManagerIpc } from './kit-manager-ipc.mjs';
 import { createKitManagerWindowController } from './kit-manager-window.mjs';
 import { KitArtifactInstaller } from './kit-store/installer.mjs';
+import { KitArtifactUninstaller } from './kit-store/uninstaller.mjs';
 import { InstalledKitStore } from './kit-store/state.mjs';
 import {
   finalizePendingKitActivations,
@@ -26,6 +27,9 @@ import { KitRegistryClient } from './kit-registry/client.mjs';
 import { KitArtifactDownloader } from './kit-registry/downloader.mjs';
 import { KitRegistryManager } from './kit-registry/manager.mjs';
 import { KitReleaseResolver } from './kit-registry/resolver.mjs';
+import { createKitRuntimeCoordinator } from './kit-runtime-coordinator.mjs';
+import { createLiveKitDeactivation } from './kit-live-deactivation.mjs';
+import { createLiveKitManager } from './live-kit-manager.mjs';
 
 const fixture = path.resolve('packages/kit-cli/tests/fixtures/minimal-kit');
 const repositoryRoot = path.resolve('.');
@@ -104,6 +108,9 @@ async function createVersionFixture(root, version) {
     const file = path.join(directory, fileName);
     const value = JSON.parse(await readFile(file, 'utf8'));
     value.version = version;
+    if (fileName === 'package.json') {
+      value['ce-editor'].kit.menuRoot.label = `Demo Kit ${version}`;
+    }
     await writeFile(file, `${JSON.stringify(value, null, 2)}\n`, 'utf8');
   }
   const packed = await packKit({ directory, output: path.join(root, `demo-${version}.hkit`) });
@@ -141,7 +148,7 @@ async function createVersionFixture(root, version) {
   };
 }
 
-test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls back', async () => {
+test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls through live Framework generations', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-manager-acceptance-'));
   let fixtureServer;
   let framework;
@@ -149,7 +156,7 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
   let registration;
   try {
     const releases = new Map();
-    for (const version of ['1.2.3', '1.2.4']) {
+    for (const version of ['1.2.3', '1.2.4', '1.10.0']) {
       const item = await createVersionFixture(root, version);
       releases.set(version, item);
     }
@@ -240,6 +247,108 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
       autoUpdatePublishers: ['example'],
     });
 
+    const { createServer } = await tsImport('../../packages/server/src/server.ts', import.meta.url);
+    const uninstaller = new KitArtifactUninstaller({ storeRoot, store });
+    let runtimeUrl;
+    let runtimeGeneration = 0;
+
+    async function startRuntimeGeneration() {
+      if (framework) {
+        await framework.stop();
+        framework = undefined;
+      }
+      const prepared = await prepareInstalledKitsForStartup({
+        store,
+        audit,
+        validateCatalog: async (sources) => discoverKits({
+          rootDir: repositoryRoot,
+          profile: 'stable',
+          installedKits: sources,
+        }),
+      });
+      const catalog = await discoverKits({
+        rootDir: repositoryRoot,
+        profile: 'stable',
+        installedKits: prepared.activeSources,
+      });
+      framework = createServer({
+        defaultKit: '@itharbors/kit-default',
+        kitSources: [
+          { directory: defaultKitDirectory, source: 'builtin' },
+          ...prepared.activeSources.map(({ directory }) => ({ directory, source: 'installed' })),
+        ],
+        host: '127.0.0.1',
+      });
+      const frameworkPort = await framework.start();
+      runtimeUrl = `http://127.0.0.1:${frameworkPort}`;
+      const bootstrap = await (await fetch(`${runtimeUrl}/api/application/bootstrap`)).json();
+      const activation = await finalizePendingKitActivations({
+        store,
+        selections: prepared.pendingActivations,
+        catalog,
+        validateRuntime: (selection) => validateInstalledKitRuntime(
+          runtimeUrl,
+          bootstrap,
+          selection,
+          { sessionId: `installed-kit-runtime-validation-${runtimeGeneration + 1}` },
+        ),
+        audit,
+      });
+      if (activation.restartRequired) {
+        throw new Error('Acceptance Framework generation requested another restart');
+      }
+      runtimeGeneration += 1;
+      return { prepared, catalog, activation };
+    }
+
+    async function assertRuntimeVersion(version) {
+      const response = await fetch(`${runtimeUrl}/api/kits`);
+      assert.equal(response.status, 200);
+      const catalog = await response.json();
+      const kit = catalog.kits.find((candidate) => candidate.name === '@example/kit-demo');
+      assert.equal(kit?.label, version ? `Demo Kit ${version}` : undefined);
+    }
+
+    await startRuntimeGeneration();
+    await assertRuntimeVersion(undefined);
+    const applyDeactivation = createLiveKitDeactivation({
+      store,
+      closeWindow: () => false,
+      replaceFramework: () => startRuntimeGeneration(),
+      openWindow: async () => {},
+      isQuitting: () => false,
+    });
+    const coordinator = createKitRuntimeCoordinator({
+      async applyActivation(input) {
+        const selection = input.rollback
+          ? await manager.rollback(input.id)
+          : await manager.activate(input);
+        if (!selection.pending) return { ...selection, runtimeReloaded: false };
+        const generation = await startRuntimeGeneration();
+        const outcome = generation.activation.outcomes.find((candidate) => (
+          candidate.id === selection.id && candidate.version === selection.version
+        ));
+        if (outcome?.status !== 'activated') {
+          throw new Error('Acceptance Kit activation failed');
+        }
+        return { id: selection.id, version: selection.version, runtimeReloaded: true };
+      },
+      applyDeactivation,
+      async applyUninstall(id) {
+        await store.stageUninstall(id);
+        try {
+          await startRuntimeGeneration();
+        } catch (error) {
+          await store.cancelUninstall(id);
+          throw error;
+        }
+        const removed = await uninstaller.removeStaged(id);
+        await store.commitUninstall(id);
+        return { ...removed, runtimeReloaded: true };
+      },
+    });
+    const liveManager = createLiveKitManager({ manager, coordinator });
+
     const BrowserWindow = createBrowserWindowFake();
     controller = createKitManagerWindowController({
       BrowserWindow,
@@ -251,7 +360,7 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
     registration = registerKitManagerIpc({
       ipcMain,
       getManagerWindow: () => controller.getWindow(),
-      service: manager,
+      service: liveManager,
     });
     const invoke = async (name, ...args) => {
       const response = await ipcMain.handlers.get(KIT_MANAGER_CHANNELS[name])(
@@ -267,6 +376,8 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
       install: (value) => invoke('install', value),
       activate: (value) => invoke('activate', value),
       rollback: (value) => invoke('rollback', value),
+      deactivate: (value) => invoke('deactivate', value),
+      uninstall: (value) => invoke('uninstall', value),
     };
     const html = await readFile(new URL('../kit-manager.html', import.meta.url), 'utf8');
     const dom = new JSDOM(html, { url: 'file:///kit-manager.html' });
@@ -277,95 +388,91 @@ test('acceptance: Kit Dock installs, restarts, reaches Server Catalog, and rolls
     await view.whenIdle();
     dom.window.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
     await view.whenIdle();
-    dom.window.document.querySelector('[data-channel="stable"] [data-action="activate"]').click();
-    await view.whenIdle();
-    let prepared = await prepareInstalledKitsForStartup({
-      store,
-      audit,
-      validateCatalog: async (sources) => discoverKits({ rootDir: repositoryRoot, installedKits: sources }),
-    });
-    assert.equal(prepared.activeSources[0].version, '1.2.3');
+    assert.equal(runtimeGeneration, 2);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.2.3');
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
+    await assertRuntimeVersion('1.2.3');
 
     publishedVersion = '1.2.4';
     dom.window.document.querySelector('#refresh-button').click();
     await view.whenIdle();
     dom.window.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
     await view.whenIdle();
-    dom.window.document.querySelector('[data-channel="stable"] [data-action="activate"]').click();
-    await view.whenIdle();
-    prepared = await prepareInstalledKitsForStartup({
-      store,
-      audit,
-      validateCatalog: async (sources) => discoverKits({ rootDir: repositoryRoot, installedKits: sources }),
-    });
-    assert.equal(prepared.activeSources[0].version, '1.2.4');
-
-    const { createServer } = await tsImport('../../packages/server/src/server.ts', import.meta.url);
-    framework = createServer({
-      defaultKit: '@example/kit-demo',
-      kitSources: [
-        { directory: defaultKitDirectory, source: 'builtin' },
-        ...prepared.activeSources.map(({ directory }) => ({ directory, source: 'installed' })),
-      ],
-      host: '127.0.0.1',
-    });
-    const frameworkPort = await framework.start();
-    const frameworkUrl = `http://127.0.0.1:${frameworkPort}`;
-    const catalog = await (await fetch(`http://127.0.0.1:${frameworkPort}/api/kits`)).json();
-    assert.equal(catalog.kits.some((kit) => kit.name === '@example/kit-demo'), true);
-    const bootstrap = await (await fetch(`${frameworkUrl}/api/application/bootstrap`)).json();
-    const activation = await finalizePendingKitActivations({
-      store,
-      selections: prepared.pendingActivations,
-      catalog: await discoverKits({
-        rootDir: repositoryRoot,
-        profile: 'stable',
-        installedKits: prepared.activeSources,
-      }),
-      validateRuntime: (selection) => validateInstalledKitRuntime(
-        frameworkUrl,
-        bootstrap,
-        selection,
-        { sessionId: 'installed-kit-runtime-validation' },
-      ),
-      audit,
-    });
-    assert.deepEqual(activation.outcomes, [{
-      id: '@example/kit-demo',
-      version: '1.2.4',
-      status: 'activated',
-    }]);
+    assert.equal(runtimeGeneration, 3);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.2.4');
     assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
-    const sessionResponse = await fetch(`http://127.0.0.1:${frameworkPort}/api/session`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'installed-kit-acceptance', kit: '@example/kit-demo' }),
-    });
-    assert.equal(sessionResponse.status, 201);
-    const { sessionId } = await sessionResponse.json();
-    const mainEntryResponse = await fetch(
-      `http://127.0.0.1:${frameworkPort}/api/window-entry/main?sessionId=${encodeURIComponent(sessionId)}`,
-    );
-    assert.equal(mainEntryResponse.status, 200);
-    assert.match(await mainEntryResponse.text(), /Demo Kit/u);
-    const secondaryEntryResponse = await fetch(
-      `http://127.0.0.1:${frameworkPort}/api/window-entry/secondary?sessionId=${encodeURIComponent(sessionId)}`,
-    );
-    assert.equal(secondaryEntryResponse.status, 200);
-    assert.match(await secondaryEntryResponse.text(), /Demo Kit Secondary/u);
-    await framework.stop();
-    framework = undefined;
+    await assertRuntimeVersion('1.2.4');
 
-    view.render(await api.list());
-    dom.window.document.querySelector('[data-channel="stable"] [data-action="rollback"]').click();
+    publishedVersion = '1.10.0';
+    dom.window.document.querySelector('#refresh-button').click();
     await view.whenIdle();
-    prepared = await prepareInstalledKitsForStartup({
-      store,
-      audit,
-      validateCatalog: async (sources) => discoverKits({ rootDir: repositoryRoot, installedKits: sources }),
-    });
-    assert.equal(prepared.activeSources[0].version, '1.2.3');
-    assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.2.4');
+    dom.window.document.querySelector('[data-channel="stable"] [data-action="install"]').click();
+    await view.whenIdle();
+    assert.equal(runtimeGeneration, 4);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.10.0');
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].pending, undefined);
+    await assertRuntimeVersion('1.10.0');
+
+    dom.window.document.querySelector('[data-action="deactivate"]').click();
+    await view.whenIdle();
+    assert.equal(runtimeGeneration, 5);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, undefined);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.10.0');
+    assert.deepEqual(
+      Object.keys((await store.snapshot()).kits['@example/kit-demo'].versions).sort(),
+      ['1.10.0', '1.2.3', '1.2.4'],
+    );
+    await assertRuntimeVersion(undefined);
+    dom.window.document.querySelector('[data-detail-tab="versions"]').click();
+    assert.equal(
+      dom.window.document.querySelector(
+        '[data-action="activate-version"][data-version="1.10.0"]',
+      ).textContent,
+      '启用',
+    );
+
+    dom.window.document.querySelector(
+      '[data-action="activate-version"][data-version="1.10.0"]',
+    ).click();
+    await view.whenIdle();
+    assert.equal(runtimeGeneration, 6);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.10.0');
+    await assertRuntimeVersion('1.10.0');
+
+    const managerIdentity = controller.getWindow();
+    const managerWebContentsId = managerIdentity.webContents.id;
+    dom.window.document.querySelector('[data-detail-tab="versions"]').click();
+    assert.deepEqual(
+      [...dom.window.document.querySelectorAll('.version-track__item[data-version]')]
+        .map((node) => node.dataset.version),
+      [
+      '1.10.0', '1.2.4', '1.2.3',
+      ],
+    );
+    dom.window.document.querySelector(
+      '[data-action="activate-version"][data-version="1.2.3"]',
+    ).click();
+    await view.whenIdle();
+    assert.equal(runtimeGeneration, 7);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].active, '1.2.3');
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'].previous, '1.10.0');
+    await assertRuntimeVersion('1.2.3');
+    assert.equal(controller.getWindow(), managerIdentity);
+    assert.equal(controller.getWindow().webContents.id, managerWebContentsId);
+
+    const installedFiles = Object.values(
+      (await store.snapshot()).kits['@example/kit-demo'].versions,
+    ).map(({ directory }) => path.join(directory, 'kit.json'));
+    await Promise.all(installedFiles.map((file) => readFile(file, 'utf8')));
+    dom.window.document.querySelector('[data-channel="stable"] [data-action="uninstall"]').click();
+    await view.whenIdle();
+    assert.equal(runtimeGeneration, 8);
+    assert.equal((await store.snapshot()).kits['@example/kit-demo'], undefined);
+    await assertRuntimeVersion(undefined);
+    for (const file of installedFiles) {
+      await assert.rejects(readFile(file), { code: 'ENOENT' });
+    }
+    assert.match(dom.window.document.querySelector('#operation-status').textContent, /已删除 Demo Kit/u);
   } finally {
     registration?.unregister();
     await registration?.drain();

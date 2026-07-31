@@ -110,6 +110,7 @@ export interface InstalledKitRecord {
   active?: string;
   previous?: string;
   pending?: string;
+  pendingUninstall?: true;
   channel: KitChannel;
   autoUpdate: boolean;
   versions: Record<string, InstalledKitVersion>;

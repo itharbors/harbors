@@ -5,6 +5,7 @@ import {
   assertResolvedRegistryAsset,
   KitReleaseResolver,
 } from './resolver.mjs';
+import { GitHubAttestationError } from './github-attestation.mjs';
 
 const sha256 = 'a'.repeat(64);
 const commit = '0123456789abcdef0123456789abcdef01234567';
@@ -213,7 +214,7 @@ test('rejects Release identities that do not match the Registry projection', asy
 test('rejects incompatible or ambiguous compatible assets', async () => {
   const incompatibleManifest = {
     ...manifest,
-    target: { platform: runtime.platform === 'linux' ? 'darwin' : 'linux', arch: 'arm64' },
+    requires: { ...manifest.requires, harbors: '>=2.0.0 <3.0.0' },
   };
   await assert.rejects(
     createResolver({
@@ -222,7 +223,10 @@ test('rejects incompatible or ambiguous compatible assets', async () => {
         assets: [{ ...release.assets[0], manifest: incompatibleManifest }],
       },
     }).resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
-    (error) => error.code === 'INCOMPATIBLE_ASSET',
+    (error) => (
+      error.code === 'INCOMPATIBLE_ASSET'
+      && /Harbors 1\.0\.0 does not satisfy >=2\.0\.0 <3\.0\.0/.test(error.message)
+    ),
   );
   await assert.rejects(
     createResolver({
@@ -346,6 +350,36 @@ test('allows an exact trusted workflow file across cryptographically verified re
     },
   }).resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime });
   assert.equal(resolved.source.workflow, workflow);
+});
+
+test('preserves only a typed GitHub attestation rate limit for Kit Manager', async () => {
+  const limited = new GitHubAttestationError(
+    'ATTESTATION_RATE_LIMITED',
+    'GitHub verification rate limit reached. Retry after 2026-07-28T12:27:57.000Z.',
+  );
+  const resolver = createResolver({
+    verifier: { verify: async () => { throw limited; } },
+  });
+  await assert.rejects(
+    resolver.resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
+    (error) => (
+      error.code === 'ATTESTATION_RATE_LIMITED'
+      && error.message === limited.message
+      && error.cause === limited
+    ),
+  );
+
+  const generic = createResolver({
+    verifier: {
+      verify: async () => {
+        throw Object.assign(new Error('secret'), { code: 'ATTESTATION_RATE_LIMITED' });
+      },
+    },
+  });
+  await assert.rejects(
+    generic.resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
+    (error) => error.code === 'PROVENANCE_FAILED' && !error.message.includes('secret'),
+  );
 });
 
 test('requires every verified attestation claim to match the selected asset and source', async (t) => {

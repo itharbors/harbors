@@ -10,11 +10,13 @@ import {
   createFrameworkArgs,
   createKitWindowUrl,
   createKitSourceSnapshot,
+  closeKitWindow,
   mergeMenuTrees,
   initializeKitHost,
   openOrFocusKitWindow,
   parseElectronOptions,
   persistOpenWindowBounds,
+  reloadKitWindows,
   registerDesktopSignalHandlers,
   selectMenuWindow,
   shutdownDesktopServices,
@@ -479,6 +481,47 @@ test('clears a failed Kit load so the next selection can retry', async () => {
   assert.equal(pendingLoads.size, 0);
 });
 
+test('closes a deleted Kit window and reloads surviving shells with stable workspace sessions', async () => {
+  const loaded = [];
+  let deletedClosed = 0;
+  const survivingWindow = {
+    isDestroyed: () => false,
+    loadURL: async (url) => { loaded.push(url); },
+    setTitle() {},
+    close() { throw new Error('surviving shell must stay open'); },
+  };
+  const deletedWindow = {
+    isDestroyed: () => false,
+    loadURL: async () => { throw new Error('deleted Kit must not reload'); },
+    setTitle() {},
+    close() { deletedClosed += 1; },
+  };
+  const windows = new Map([
+    ['@example/surviving', survivingWindow],
+    ['@example/deleted', deletedWindow],
+  ]);
+
+  assert.equal(closeKitWindow(windows, '@example/deleted'), true);
+  await reloadKitWindows({
+    kitWindows: windows,
+    catalog: [{
+      name: '@example/surviving',
+      label: 'Surviving',
+      directory: '/store/kits/surviving/2.0.0',
+    }],
+    startUrl: 'http://127.0.0.1:49380/',
+    workspaceStore: {
+      getOrCreate: async () => ({ sessionId: 'stable-session' }),
+    },
+  });
+
+  assert.equal(deletedClosed, 1);
+  assert.equal(loaded.length, 1);
+  const url = new URL(loaded[0]);
+  assert.equal(url.searchParams.get('session'), 'stable-session');
+  assert.equal(url.searchParams.get('kit'), '/store/kits/surviving/2.0.0');
+});
+
 test('drains Kit Manager work before stopping the Framework and notification services', async () => {
   const events = [];
   let releaseManager;
@@ -841,7 +884,7 @@ test('consults the supervised Framework stop result even after the child exits e
   assert.ok(supervised >= 0 && exited > supervised);
 });
 
-test('commits pending installed Kits only after Catalog and actual Framework load validation', async () => {
+test('commits pending installed Kits through an in-process Framework generation recovery', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const prepare = source.indexOf('await prepareInstalledKitsForStartup');
   const discover = source.indexOf('kitCatalog = await discoverKits');
@@ -856,7 +899,16 @@ test('commits pending installed Kits only after Catalog and actual Framework loa
   const finalize = source.indexOf('await finalizePendingKitActivations');
   assert.ok(startFramework >= 0 && finalize > startFramework);
   assert.match(source, /validateRuntime:\s*\(selection\) => validateInstalledKitRuntime/s);
-  assert.match(source, /activation\.restartRequired[\s\S]*app\.relaunch\(\)/);
+  assert.match(source, /activation\.restartRequired[\s\S]*stopFrameworkGeneration\(\)/);
+  assert.match(source, /createKitRuntimeCoordinator/);
+  assert.match(source, /createLiveKitManager/);
+  assert.match(source, /service:\s*liveKitManager/);
+  assert.doesNotMatch(source, /app\.relaunch\(\)/);
+  const launchGeneration = source.slice(
+    source.indexOf('async function launchFrameworkGeneration'),
+    source.indexOf('async function stopFrameworkGeneration'),
+  );
+  assert.doesNotMatch(launchGeneration, /startNotificationService/);
   assert.match(source, /registration\?\.drain/);
 });
 

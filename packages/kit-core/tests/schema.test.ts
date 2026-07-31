@@ -340,6 +340,25 @@ describe('parseInstalledKitState', () => {
     expect(parseInstalledKitState(installedState)).toEqual(installedState);
   });
 
+  it('accepts only the true staged-uninstall marker', () => {
+    const record = installedState.kits['@example/kit-demo'];
+    expect(parseInstalledKitState({
+      ...installedState,
+      kits: {
+        '@example/kit-demo': { ...record, pendingUninstall: true },
+      },
+    }).kits['@example/kit-demo'].pendingUninstall).toBe(true);
+
+    for (const pendingUninstall of [false, null, 'true']) {
+      expect(() => parseInstalledKitState({
+        ...installedState,
+        kits: {
+          '@example/kit-demo': { ...record, pendingUninstall },
+        },
+      })).toThrow(/pendingUninstall/i);
+    }
+  });
+
   it('rejects corrupt records and dangling active versions', () => {
     expect(() => parseInstalledKitState({ schemaVersion: 1, kits: [] })).toThrow(/kits/i);
     expect(() => parseInstalledKitState({

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  createDefaultBundleVerifier,
   deriveGitHubAttestationUrl,
   GitHubArtifactAttestationVerifier,
 } from './github-attestation.mjs';
@@ -131,6 +132,66 @@ function createVerifier({
   return { verifier, requests };
 }
 
+test('loads Sigstore after installing the Electron ECDSA compatibility shim', async () => {
+  const cryptoCalls = [];
+  const cryptoModule = {
+    verify(algorithm, data, key, signature) {
+      cryptoCalls.push({ algorithm, data, key, signature });
+      return algorithm === 'sha256';
+    },
+  };
+  const sigstoreCalls = [];
+  let imports = 0;
+  const verifyBundle = createDefaultBundleVerifier({
+    runtimeVersions: { electron: '43.2.0', openssl: '0.0.0' },
+    cryptoModule,
+    importSigstore: async () => {
+      imports += 1;
+      const capturedVerify = cryptoModule.verify;
+      return {
+        async verify(...args) {
+          sigstoreCalls.push(args);
+          assert.equal(capturedVerify(undefined, 'data', { asymmetricKeyType: 'ec' }, 'sig'), true);
+          assert.equal(capturedVerify(
+            undefined,
+            'data',
+            { key: { asymmetricKeyType: 'ec' } },
+            'sig',
+          ), true);
+          assert.equal(capturedVerify(undefined, 'data', { asymmetricKeyType: 'ed25519' }, 'sig'), false);
+          assert.equal(capturedVerify(
+            undefined,
+            'data',
+            { key: { asymmetricKeyType: 'ed25519' } },
+            'sig',
+          ), false);
+        },
+      };
+    },
+  });
+
+  assert.equal(imports, 0);
+  const options = { certificateIssuer: 'https://token.actions.githubusercontent.com' };
+  await verifyBundle({ bundle: true }, options);
+  await verifyBundle({ bundle: false }, options);
+
+  assert.equal(imports, 1);
+  assert.deepEqual(sigstoreCalls, [
+    [{ bundle: true }, options],
+    [{ bundle: false }, options],
+  ]);
+  assert.deepEqual(cryptoCalls.map(({ algorithm }) => algorithm), [
+    'sha256',
+    'sha256',
+    undefined,
+    undefined,
+    'sha256',
+    'sha256',
+    undefined,
+    undefined,
+  ]);
+});
+
 test('derives the only accepted GitHub repository attestation URL', () => {
   assert.equal(deriveGitHubAttestationUrl(repository, digest), attestationUrl);
   for (const value of ['example', '../example/repo', 'example/repo/extra', 'Example/repo']) {
@@ -227,6 +288,43 @@ test('rejects empty or control-bearing GitHub tokens', () => {
     assert.throws(
       () => createVerifier({ githubToken }),
       /githubToken/u,
+    );
+  }
+});
+
+test('reports a bounded retry time when the GitHub attestation API is rate limited', async () => {
+  for (const status of [403, 429]) {
+    const { verifier } = createVerifier({
+      fetchImpl: async () => new Response('{}', {
+        status,
+        headers: {
+          'x-ratelimit-remaining': '0',
+          'x-ratelimit-reset': '1785241677',
+        },
+      }),
+    });
+    await assert.rejects(
+      verifier.verify(expected()),
+      (error) => (
+        error.code === 'ATTESTATION_RATE_LIMITED'
+        && error.message === 'GitHub verification rate limit reached. Retry after 2026-07-28T12:27:57.000Z.'
+      ),
+    );
+  }
+});
+
+test('does not trust malformed or incomplete GitHub rate-limit headers', async () => {
+  for (const headers of [
+    {},
+    { 'x-ratelimit-remaining': '1', 'x-ratelimit-reset': '1785241677' },
+    { 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': 'not-a-time' },
+  ]) {
+    const { verifier } = createVerifier({
+      fetchImpl: async () => new Response('{}', { status: 403, headers }),
+    });
+    await assert.rejects(
+      verifier.verify(expected()),
+      (error) => error.code === 'ATTESTATION_FETCH_FAILED',
     );
   }
 });

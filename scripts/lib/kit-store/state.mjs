@@ -115,6 +115,9 @@ export class InstalledKitStore {
     return this.#enqueue(async () => {
       const state = clone(await this.#load());
       const existingRecord = state.kits[id];
+      if (existingRecord?.pendingUninstall) {
+        throw new Error(`Kit ${id} is being uninstalled`);
+      }
       const existingVersion = existingRecord?.versions?.[version];
       if (existingVersion) {
         if (existingVersion.digest !== digest) {
@@ -142,11 +145,14 @@ export class InstalledKitStore {
     });
   }
 
-  async #mutateRecord(id, operation) {
+  async #mutateRecord(id, operation, { allowPendingUninstall = false } = {}) {
     return this.#enqueue(async () => {
       const state = clone(await this.#load());
       const record = state.kits[id];
       if (!record) throw new Error(`Kit ${id} is not installed`);
+      if (record.pendingUninstall && !allowPendingUninstall) {
+        throw new Error(`Kit ${id} is being uninstalled`);
+      }
       const result = operation(record);
       await this.#persist(state);
       return result;
@@ -238,6 +244,17 @@ export class InstalledKitStore {
     });
   }
 
+  async deactivate(id) {
+    return this.#mutateRecord(id, (record) => {
+      if (!record.active) throw new Error(`Kit ${id} is not active`);
+      const version = record.active;
+      record.previous = version;
+      delete record.active;
+      delete record.pending;
+      return { id, version };
+    });
+  }
+
   async rollback(id) {
     return this.#mutateRecord(id, (record) => {
       if (!record.previous) throw new Error(`Kit ${id} has no previous version to roll back`);
@@ -264,12 +281,52 @@ export class InstalledKitStore {
     });
   }
 
+  async stageUninstall(id) {
+    return this.#mutateRecord(id, (record) => {
+      record.pendingUninstall = true;
+    }, { allowPendingUninstall: true });
+  }
+
+  async cancelUninstall(id) {
+    return this.#mutateRecord(id, (record) => {
+      if (!record.pendingUninstall) throw new Error(`Kit ${id} uninstall is not staged`);
+      delete record.pendingUninstall;
+    }, { allowPendingUninstall: true });
+  }
+
+  async pendingUninstallDirectories(id) {
+    return this.#enqueue(async () => {
+      const record = (await this.#load()).kits[id];
+      if (!record) throw new Error(`Kit ${id} is not installed`);
+      if (!record.pendingUninstall) throw new Error(`Kit ${id} uninstall is not staged`);
+      return Object.entries(record.versions)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([version, installedVersion]) => ({
+          id,
+          version,
+          directory: installedVersion.directory,
+        }));
+    });
+  }
+
+  async commitUninstall(id) {
+    return this.#enqueue(async () => {
+      const state = clone(await this.#load());
+      const record = state.kits[id];
+      if (!record) throw new Error(`Kit ${id} is not installed`);
+      if (!record.pendingUninstall) throw new Error(`Kit ${id} uninstall is not staged`);
+      delete state.kits[id];
+      await this.#persist(state);
+    });
+  }
+
   async listActiveSources() {
     return this.#enqueue(async () => {
       const state = await this.#load();
       return Object.entries(state.kits)
         .sort(([left], [right]) => left.localeCompare(right))
         .flatMap(([id, record]) => {
+          if (record.pendingUninstall) return [];
           const active = record.active && record.versions[record.active];
           if (!active) return [];
           return [{

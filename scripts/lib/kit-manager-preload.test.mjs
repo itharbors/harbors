@@ -5,7 +5,7 @@ import vm from 'node:vm';
 
 const preloadUrl = new URL('../kit-manager-preload.cjs', import.meta.url);
 
-test('exposes exactly five fixed invoke-only methods', async () => {
+test('exposes exactly seven fixed invoke-only methods', async () => {
   const source = await readFile(preloadUrl, 'utf8');
   const calls = [];
   let exposed;
@@ -27,19 +27,26 @@ test('exposes exactly five fixed invoke-only methods', async () => {
   });
 
   assert.equal(exposed.name, 'harborsKitManager');
-  assert.deepEqual(Object.keys(exposed.value).sort(), ['activate', 'install', 'list', 'refresh', 'rollback']);
+  assert.deepEqual(Object.keys(exposed.value).sort(), [
+    'activate', 'deactivate', 'install', 'list', 'refresh', 'rollback', 'uninstall',
+  ]);
   await exposed.value.list();
   await exposed.value.refresh();
   await exposed.value.install({ id: '@example/demo', version: '1.2.3', channel: 'stable' });
   await exposed.value.activate({ id: '@example/demo', version: '1.2.3' });
   await exposed.value.rollback('@example/demo');
+  await exposed.value.deactivate('@example/demo');
+  await exposed.value.uninstall('@example/demo');
   assert.deepEqual(calls.map(([channel]) => channel), [
     'harbors:kit-manager:list',
     'harbors:kit-manager:refresh',
     'harbors:kit-manager:install',
     'harbors:kit-manager:activate',
     'harbors:kit-manager:rollback',
+    'harbors:kit-manager:deactivate',
+    'harbors:kit-manager:uninstall',
   ]);
+  assert.deepEqual(calls.at(-1), ['harbors:kit-manager:uninstall', '@example/demo']);
   assert.doesNotMatch(source, /ipcRenderer\.send|ipcRenderer\.on|shell|execute|path/i);
 });
 

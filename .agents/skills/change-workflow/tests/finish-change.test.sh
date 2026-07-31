@@ -35,6 +35,21 @@ test_finish_rejects_state_and_label() {
   assert_contains "$output" 'working tree is not clean'
 }
 
+test_bug_finish_accepts_supporting_docs_and_tests() {
+  prepare_change bug
+  printf 'documentation\n' > "$WORKTREE/documentation.md"
+  git -C "$WORKTREE" add documentation.md
+  git -C "$WORKTREE" commit -m '[Docs] 补充修复说明' >/dev/null
+  printf 'regression\n' > "$WORKTREE/regression.test"
+  git -C "$WORKTREE" add regression.test
+  git -C "$WORKTREE" commit -m '[Test] 补充回归测试' >/dev/null
+
+  output=$("$FINISH" '完成缺陷修复' "$BODY")
+
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+  assert_contains "$(cat "$GH_LOG")" 'pr create --base main --head bug/finish-case --title [Bug] 完成缺陷修复'
+}
+
 test_finish_stops_on_checks_and_verification() {
   prepare_change optimize
   export NPM_FAIL=1
@@ -53,5 +68,6 @@ run_finish_tests() {
   run_case 'finish supports all types' test_finish_supports_all_types
   run_case 'finish rejects context and summary' test_finish_rejects_context_and_summary
   run_case 'finish rejects state and label' test_finish_rejects_state_and_label
+  run_case 'bug finish accepts supporting docs and tests' test_bug_finish_accepts_supporting_docs_and_tests
   run_case 'finish stops on checks and verification' test_finish_stops_on_checks_and_verification
 }

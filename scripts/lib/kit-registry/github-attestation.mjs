@@ -1,4 +1,4 @@
-import { verify as verifySigstoreBundle } from 'sigstore';
+import { createRequire } from 'node:module';
 import snappy from 'snappyjs';
 
 const GITHUB_API_ORIGIN = 'https://api.github.com';
@@ -9,6 +9,54 @@ const DEFAULT_MAX_BUNDLE_BYTES = 5 * 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const REPOSITORY_PART_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/;
+const ELECTRON_CRYPTO_VERIFY_COMPAT = Symbol.for('itharbors.electronCryptoVerifyCompat');
+const require = createRequire(import.meta.url);
+
+function installElectronCryptoVerifyCompat(cryptoModule) {
+  if (cryptoModule[ELECTRON_CRYPTO_VERIFY_COMPAT]) return;
+  const originalVerify = cryptoModule.verify;
+  if (typeof originalVerify !== 'function') {
+    throw new TypeError('crypto.verify is required');
+  }
+  cryptoModule.verify = function verify(algorithm, data, key, signature) {
+    const asymmetricKeyType = key?.asymmetricKeyType ?? key?.key?.asymmetricKeyType;
+    const selectedAlgorithm = algorithm === undefined && asymmetricKeyType === 'ec'
+      ? 'sha256'
+      : algorithm;
+    return originalVerify.call(this, selectedAlgorithm, data, key, signature);
+  };
+  Object.defineProperty(cryptoModule, ELECTRON_CRYPTO_VERIFY_COMPAT, {
+    value: true,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+}
+
+export function createDefaultBundleVerifier({
+  runtimeVersions = process.versions,
+  cryptoModule = require('crypto'),
+  importSigstore = () => import('sigstore'),
+} = {}) {
+  let verifyPromise;
+  return async function verifyBundle(bundle, options) {
+    if (!verifyPromise) {
+      if (runtimeVersions?.electron && runtimeVersions?.openssl === '0.0.0') {
+        installElectronCryptoVerifyCompat(cryptoModule);
+      }
+      verifyPromise = Promise.resolve(importSigstore()).then((module) => {
+        if (typeof module?.verify !== 'function') {
+          throw new TypeError('Sigstore verifier is unavailable');
+        }
+        return module.verify;
+      });
+    }
+    const verifySigstoreBundle = await verifyPromise;
+    await verifySigstoreBundle(bundle, options);
+  };
+}
+
+const defaultVerifyBundle = createDefaultBundleVerifier();
 
 export class GitHubAttestationError extends Error {
   constructor(code, message, options) {
@@ -166,12 +214,31 @@ async function readLimitedJson(response, maxBytes, tooLargeCode, invalidCode, la
   }
 }
 
+function rateLimitReset(response) {
+  if (![403, 429].includes(response.status)) return undefined;
+  if (response.headers.get('x-ratelimit-remaining') !== '0') return undefined;
+  const raw = response.headers.get('x-ratelimit-reset');
+  if (raw === null || !/^[1-9][0-9]{0,9}$/u.test(raw)) return undefined;
+  const resetSeconds = Number(raw);
+  if (!Number.isSafeInteger(resetSeconds)) return undefined;
+  const reset = new Date(resetSeconds * 1000);
+  if (Number.isNaN(reset.getTime())) return undefined;
+  return reset.toISOString();
+}
+
 async function fetchJson({ fetchImpl, url, init, timeoutMs, maxBytes, codes, label }) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(new Error(`${label} timed out`)), timeoutMs);
   try {
     const response = await fetchImpl(url, { ...init, signal: controller.signal, redirect: 'error' });
     if (!response?.ok) {
+      const reset = response && codes.rateLimited ? rateLimitReset(response) : undefined;
+      if (reset) {
+        throw new GitHubAttestationError(
+          codes.rateLimited,
+          `GitHub verification rate limit reached. Retry after ${reset}.`,
+        );
+      }
       throw new GitHubAttestationError(codes.fetch, `${label} request failed`);
     }
     return await readLimitedJson(response, maxBytes, codes.tooLarge, codes.invalid, label);
@@ -247,10 +314,6 @@ function assertStatement(statement, expected) {
   if (!commitMatches) throw new Error('Source commit does not match');
 }
 
-async function defaultVerifyBundle(bundle, options) {
-  await verifySigstoreBundle(bundle, undefined, options);
-}
-
 export class GitHubArtifactAttestationVerifier {
   #fetch;
   #githubToken;
@@ -299,6 +362,7 @@ export class GitHubArtifactAttestationVerifier {
       maxBytes: this.#maxApiResponseBytes,
       codes: {
         fetch: 'ATTESTATION_FETCH_FAILED',
+        rateLimited: 'ATTESTATION_RATE_LIMITED',
         tooLarge: 'ATTESTATION_RESPONSE_TOO_LARGE',
         invalid: 'ATTESTATION_RESPONSE_INVALID',
       },

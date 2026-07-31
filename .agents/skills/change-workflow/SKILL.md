@@ -21,7 +21,7 @@ Choose a slug matching `^[a-z0-9]+(-[a-z0-9]+)*$`, run the start script from the
 
 ## Develop and commit
 
-Confirm the current branch before editing. Run focused tests, inspect `git status --short`, `git diff`, and `git diff --cached`, stage only relevant files, and never use `git add .`. Every commit uses the label matching its branch, with a concise Chinese summary and no trailing period.
+Confirm the current branch before editing. Run focused tests, inspect `git status --short`, `git diff`, and `git diff --cached`, stage only relevant files, and never use `git add .`. Every commit uses the label matching its branch, with a concise Chinese summary and no trailing period. A `bug/*` branch may use `[Docs]` or `[Test]` for supporting documentation-only or test-only commits; its implementation commits remain `[Bug]`.
 
 ## Finish and create a PR
 
