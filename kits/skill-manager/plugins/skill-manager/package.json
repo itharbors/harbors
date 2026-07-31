@@ -1,0 +1,38 @@
+{
+  "name": "@itharbors/skill-manager",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "yaml": "2.9.0"
+  },
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "manager": {
+          "entry": "./panel.manager/dist/index.html",
+          "title": "Skill Manager",
+          "minWidth": 720,
+          "minHeight": 480,
+          "multiInstance": false
+        }
+      },
+      "message": {
+        "request": {
+          "getSnapshot": ["getSnapshot"],
+          "browseDirectory": ["browseDirectory"],
+          "selectSource": ["selectSource"],
+          "clearSource": ["clearSource"],
+          "rescan": ["rescan"],
+          "getSkillDetail": ["getSkillDetail"],
+          "performAction": ["performAction"]
+        },
+        "broadcast": {
+          "@itharbors/skill-manager.snapshot.changed": ["panel.onSnapshotChanged"],
+          "@itharbors/skill-manager.scan.progress": ["panel.onScanProgress"],
+          "@itharbors/skill-manager.operation.progress": ["panel.onOperationProgress"]
+        }
+      }
+    }
+  }
+}

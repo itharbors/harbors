@@ -9,11 +9,12 @@ import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
-const allKits = ['csv', 'mysql', 'notifications', 'sqlite'];
+const allKits = ['csv', 'mysql', 'notifications', 'skill-manager', 'sqlite'];
 const runners = Object.freeze({
   csv: 'macos-14',
   mysql: 'ubuntu-latest',
   notifications: 'ubuntu-latest',
+  'skill-manager': 'ubuntu-latest',
   sqlite: 'macos-14',
 });
 const execFileAsync = promisify(execFile);

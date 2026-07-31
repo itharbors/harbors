@@ -25,6 +25,12 @@
       "summary": "桌面通知中心与 Codex notify-user Skill 安装能力",
       "runner": "ubuntu-latest"
     },
+    "skill-manager": {
+      "id": "@itharbors/kit-skill-manager",
+      "label": "Skill Manager",
+      "summary": "Codex Skill 全局安装与来源目录比较管理工具",
+      "runner": "ubuntu-latest"
+    },
     "sqlite": {
       "id": "@itharbors/kit-sqlite",
       "label": "SQLite",
