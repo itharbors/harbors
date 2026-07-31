@@ -1,11 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
-import type { RunSummary, TraceNode, TraceRun } from '@itharbors/traceweave-contracts';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { EvidenceClass, RunSummary, TraceNode, TraceRun } from '@itharbors/traceweave-contracts';
 
 import type { TraceweaveClient } from './api.js';
+import { EventBoard } from './event-board.js';
 import { FlowOverview } from './flow-overview.js';
+import { Inspector } from './inspector.js';
 import { RunRail } from './run-rail.js';
 import { StatusView } from './status-view.js';
-import { Toolbar, type TraceView } from './toolbar.js';
+import { Toolbar, type EvidenceVisibility, type TraceView } from './toolbar.js';
+import { usePrefersReducedMotion, useReplay } from './use-replay.js';
 
 interface AppProps { api: TraceweaveClient }
 
@@ -18,6 +21,13 @@ export function App({ api }: AppProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string>();
+  const [visibility, setVisibility] = useState<EvidenceVisibility>({ observed: true, derived: true, inferred: true });
+  const [hideSuccessfulTools, setHideSuccessfulTools] = useState(false);
+  const maxOffset = useMemo(() => Math.max(0, ...(run?.turns.flatMap((turn) => turn.nodes.flatMap((node) => node.evidence.rawOffsets)) ?? [])), [run]);
+  const replay = useReplay(maxOffset, usePrefersReducedMotion());
+  const hiddenEvidence = useMemo(() => new Set(
+    (Object.keys(visibility) as EvidenceClass[]).filter((classification) => !visibility[classification]),
+  ), [visibility]);
 
   const selectRun = useCallback(async (runId: string) => {
     setSelectedId(runId);
@@ -68,7 +78,14 @@ export function App({ api }: AppProps) {
     <div className="trace-shell">
       <header className="trace-header">
         <div className="trace-brand"><span aria-hidden="true">TW</span><div><strong>TraceWeave</strong><small>Codex orchestration observatory</small></div></div>
-        <Toolbar view={view} onViewChange={setView} onRefresh={() => void refresh()} refreshing={refreshing} />
+        <Toolbar
+          view={view} onViewChange={setView} onRefresh={() => void refresh()} refreshing={refreshing}
+          visibility={visibility}
+          onToggleEvidence={(classification) => setVisibility((current) => ({ ...current, [classification]: !current[classification] }))}
+          hideSuccessfulTools={hideSuccessfulTools}
+          onToggleSuccessfulTools={() => setHideSuccessfulTools((current) => !current)}
+          replay={replay}
+        />
       </header>
       <div className="trace-workbench">
         <RunRail runs={runs} selectedId={selectedId} onSelect={(id) => void selectRun(id)} />
@@ -76,16 +93,10 @@ export function App({ api }: AppProps) {
           {error ? <StatusView title="Trace unavailable" detail={error} action="Try again" onAction={() => void loadRuns()} />
             : loading ? <StatusView title="Reading Codex sessions" detail="Parsing local rollout evidence…" />
               : !runs.length ? <StatusView title="No Codex runs found" detail="TraceWeave reads local sessions from your configured Codex home." action="Refresh" onAction={() => void refresh()} />
-                : run && view === 'flow' ? <FlowOverview run={run} onSelectNode={setSelectedNode} />
-                  : run ? <StatusView title="Events view" detail="The complete evidence graph is loading next." /> : null}
+                : run && view === 'flow' ? <FlowOverview run={run} onSelectNode={setSelectedNode} replayOffset={replay.offset} />
+                  : run ? <EventBoard run={run} hiddenEvidence={hiddenEvidence} hideSuccessfulTools={hideSuccessfulTools} replayOffset={replay.offset} onSelectNode={setSelectedNode} /> : null}
         </main>
-        {selectedNode ? (
-          <aside className="node-peek" aria-label="Selected trace node">
-            <button type="button" aria-label="Close inspector" onClick={() => setSelectedNode(undefined)}>×</button>
-            <span>{selectedNode.kind}</span><h2>{selectedNode.label}</h2><p>{selectedNode.summary}</p>
-            <dl><div><dt>Evidence</dt><dd>{selectedNode.evidence.class}</dd></div><div><dt>Status</dt><dd>{selectedNode.status}</dd></div></dl>
-          </aside>
-        ) : null}
+        {selectedNode && run ? <Inspector runId={run.id} node={selectedNode} api={api} onClose={() => setSelectedNode(undefined)} /> : null}
       </div>
     </div>
   );
