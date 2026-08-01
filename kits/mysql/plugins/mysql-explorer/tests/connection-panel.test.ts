@@ -954,6 +954,388 @@ describe('MySQL connection panel', () => {
     expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
   });
 
+  it('reconciles profiles after a confirmed save succeeds following a mode change', async () => {
+    let resolveSave: ((value: unknown) => void) | undefined;
+    const pendingSave = new Promise<unknown>((resolve) => { resolveSave = resolve; });
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1 ? [] : [profile];
+      if (method === 'connect') return connection;
+      if (method === 'saveCurrentConnection') return pendingSave;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector('[data-action="save-connection"]')).not.toBeNull());
+    setValue('profile-label', '本机开发库');
+    (document.querySelector('[data-action="save-connection"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+
+    resolveSave?.(profile);
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('本机开发库'));
+    expect(listCalls).toBe(2);
+    expect(request.mock.calls.filter((call) => call[1] === 'connectSaved')).toHaveLength(0);
+    expect(request.mock.calls.filter((call) => call[1] === 'connect')).toHaveLength(1);
+  });
+
+  it('reconciles a confirmed delete while preserving the newly selected profile', async () => {
+    let resolveDelete: ((value: unknown) => void) | undefined;
+    const pendingDelete = new Promise<unknown>((resolve) => { resolveDelete = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1
+        ? [profile, secondProfile]
+        : [secondProfile];
+      if (method === 'deleteConnectionProfile') return pendingDelete;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="delete-profile"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    resolveDelete?.({ deleted: true, profileId });
+
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1));
+    expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
+    expect(document.querySelector('[data-field="profile"]')?.textContent).not.toContain('本机开发库');
+  });
+
+  it('reconciles updated profile metadata while preserving a newer selection', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    const reconciledProfile = {
+      ...profile,
+      label: '重新同步的连接',
+      updatedAt: '2026-08-01T12:00:00.000Z',
+    };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1
+        ? [profile, secondProfile]
+        : [reconciledProfile, secondProfile];
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    resolveUpdate?.({ ...profile, updatedAt: '2026-08-01T12:00:00.000Z' });
+
+    await vi.waitFor(() => expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('重新同步的连接'));
+    expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
+    expect(document.body.innerHTML).not.toContain('next-secret');
+  });
+
+  it('discards a pending reconciliation after unmount and credential-unavailable remount', async () => {
+    let resolveSave: ((value: unknown) => void) | undefined;
+    let resolveReconcile: ((value: unknown) => void) | undefined;
+    const pendingSave = new Promise<unknown>((resolve) => { resolveSave = resolve; });
+    const pendingReconcile = new Promise<unknown>((resolve) => { resolveReconcile = resolve; });
+    let listCalls = 0;
+    const oldRequest = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1 ? [] : pendingReconcile;
+      if (method === 'connect') return connection;
+      if (method === 'saveCurrentConnection') return pendingSave;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request: oldRequest } });
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector('[data-action="save-connection"]')).not.toBeNull());
+    setValue('profile-label', '本机开发库');
+    (document.querySelector('[data-action="save-connection"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    resolveSave?.(profile);
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+
+    definition.unmount();
+    const newRequest = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return credentialsDisabled;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    await definition.mount({ message: { request: newRequest } });
+    resolveReconcile?.([profile]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('[data-connection-mode="saved"]')).toBeNull();
+    expect(document.body.textContent).toContain('当前宿主未启用本机凭据');
+    expect(newRequest.mock.calls.filter((call) => call[1] === 'listConnectionProfiles')).toHaveLength(0);
+  });
+
+  it('lets a newer reconciliation win when an older profile list resolves last', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    let resolveDelete: ((value: unknown) => void) | undefined;
+    let resolveOlderList: ((value: unknown) => void) | undefined;
+    let resolveNewerList: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const pendingDelete = new Promise<unknown>((resolve) => { resolveDelete = resolve; });
+    const olderList = new Promise<unknown>((resolve) => { resolveOlderList = resolve; });
+    const newerList = new Promise<unknown>((resolve) => { resolveNewerList = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    const olderProfile = { ...profile, label: '较旧的列表' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') {
+        listCalls += 1;
+        if (listCalls === 1) return [profile, secondProfile];
+        return listCalls === 2 ? olderList : newerList;
+      }
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      if (method === 'deleteConnectionProfile') return pendingDelete;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'first-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-connection-mode="manual"]') as HTMLButtonElement).click();
+    resolveUpdate?.({ ...profile, updatedAt: '2026-08-01T11:00:00.000Z' });
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    (document.querySelector('[data-action="delete-profile"]') as HTMLButtonElement).click();
+    const selectDuringDelete = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    selectDuringDelete.value = profileId;
+    selectDuringDelete.dispatchEvent(new Event('change', { bubbles: true }));
+    resolveDelete?.({ deleted: true, profileId: secondProfileId });
+    await vi.waitFor(() => expect(listCalls).toBe(3));
+
+    resolveNewerList?.([profile]);
+    await vi.waitFor(() => expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1));
+    resolveOlderList?.([olderProfile, secondProfile]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1);
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
+    expect(document.querySelector('[data-field="profile"]')?.textContent).not.toContain('较旧的列表');
+    expect(document.querySelector('[data-field="profile"]')?.textContent).not.toContain('另一个连接');
+  });
+
+  it('does not let an older reconciliation overwrite a newer directly applied mutation', async () => {
+    let resolveFirstUpdate: ((value: unknown) => void) | undefined;
+    let resolveSecondUpdate: ((value: unknown) => void) | undefined;
+    let resolveOlderList: ((value: unknown) => void) | undefined;
+    const firstUpdate = new Promise<unknown>((resolve) => { resolveFirstUpdate = resolve; });
+    const secondUpdate = new Promise<unknown>((resolve) => { resolveSecondUpdate = resolve; });
+    const olderList = new Promise<unknown>((resolve) => { resolveOlderList = resolve; });
+    const directlyAppliedProfile = { ...profile, label: '较新的直接结果' };
+    const olderProfile = { ...profile, label: '较旧的同步列表' };
+    let listCalls = 0;
+    let updateCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1 ? [profile] : olderList;
+      if (method === 'updateConnectionProfile') return ++updateCalls === 1 ? firstUpdate : secondUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'first-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-connection-mode="manual"]') as HTMLButtonElement).click();
+    resolveFirstUpdate?.({ ...profile, updatedAt: '2026-08-01T11:00:00.000Z' });
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'second-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    resolveSecondUpdate?.(directlyAppliedProfile);
+    await vi.waitFor(() => expect(document.body.textContent).toContain('密码已更新并重新连接。'));
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('较新的直接结果');
+
+    resolveOlderList?.([olderProfile]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('较新的直接结果');
+    expect(document.querySelector('[data-field="profile"]')?.textContent).not.toContain('较旧的同步列表');
+    expect(document.body.innerHTML).not.toContain('first-secret');
+    expect(document.body.innerHTML).not.toContain('second-secret');
+  });
+
+  it('keeps the existing profiles and selection when reconciliation fails', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') {
+        listCalls += 1;
+        return listCalls === 1
+          ? [profile, secondProfile]
+          : { $mysqlError: { code: 'CREDENTIAL_OPERATION_FAILED', message: '底层错误不应直接显示' } };
+      }
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    resolveUpdate?.({ ...profile, updatedAt: '2026-08-01T12:00:00.000Z' });
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('保存的连接列表刷新失败，请重试。'));
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(2);
+    expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
+    expect(document.body.textContent).not.toContain('底层错误不应直接显示');
+  });
+
+  it('does not reconcile a stale mutation response that reports an error', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') {
+        listCalls += 1;
+        return [profile, secondProfile];
+      }
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    resolveUpdate?.({ $mysqlError: { code: 'AUTH_FAILED', message: '更新失败' } });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(listCalls).toBe(1);
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(2);
+    expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
+    expect(document.body.innerHTML).not.toContain('next-secret');
+  });
+
+  it('shows the stable invalid-profile explanation for a reconciliation', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    const reconciledProfile = { ...profile, label: '已同步连接' };
+    const invalidProfile = { ...secondProfile, id: 'not-a-uuid', label: '无效连接' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1
+        ? [profile, secondProfile]
+        : [reconciledProfile, invalidProfile];
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+
+    resolveUpdate?.({ ...profile, updatedAt: '2026-08-01T12:00:00.000Z' });
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('部分保存的连接资料无效，已忽略。'));
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1);
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('已同步连接');
+    expect(document.body.textContent).not.toContain('无效连接');
+  });
+
+  it('sanitizes reconciled profiles without replacing newer user feedback', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    let resolveProfiles: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const pendingProfiles = new Promise<unknown>((resolve) => { resolveProfiles = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    const reconciledProfile = { ...profile, label: '已同步连接' };
+    const invalidProfile = { ...secondProfile, id: 'not-a-uuid', label: '无效连接' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1
+        ? [profile, secondProfile]
+        : pendingProfiles;
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    resolveUpdate?.({ ...profile, updatedAt: '2026-08-01T12:00:00.000Z' });
+    await vi.waitFor(() => expect(listCalls).toBe(2));
+
+    (document.querySelector('[data-connection-mode="manual"]') as HTMLButtonElement).click();
+    setValue('host', '');
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('请输入 MySQL 主机。');
+    resolveProfiles?.([reconciledProfile, invalidProfile]);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('请输入 MySQL 主机。');
+    expect(document.body.textContent).not.toContain('部分保存的连接资料无效，已忽略。');
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1);
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('已同步连接');
+    expect(document.body.textContent).not.toContain('无效连接');
+  });
+
   it('implements arrow, Home, and End keyboard activation for the connection tabs', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getConnectionState') return disconnected;

@@ -63,6 +63,11 @@ type SanitizedProfiles = {
   droppedInvalid: boolean;
 };
 
+type ProfileListToken = {
+  mountGeneration: number;
+  profileListGeneration: number;
+};
+
 const DISCONNECTED: ConnectionSnapshot = {
   connected: false,
   endpoint: null,
@@ -98,6 +103,8 @@ let mountGeneration = 0;
 let hydrationGeneration = 0;
 let connectionGeneration = 0;
 let interactionGeneration = 0;
+let profileListGeneration = 0;
+let feedbackGeneration = 0;
 let actionSequence = 0;
 let activeAction: ActionToken | null = null;
 
@@ -127,6 +134,7 @@ const definition = {
     let profiles: MysqlConnectionProfile[] = [];
     let profileError: PanelError | null = null;
     if (capability.available) {
+      const profileListToken = beginProfileList();
       try {
         const sanitized = sanitizeProfiles(await requestCore<unknown>('listConnectionProfiles'));
         profiles = sanitized.profiles;
@@ -136,7 +144,9 @@ const definition = {
       } catch (caught) {
         profileError = panelError(caught);
       }
-      if (!isCurrentHydration(hydration)) return;
+      if (!isCurrentHydration(hydration) || !isCurrentProfileList(profileListToken)) return;
+    } else {
+      profileListGeneration += 1;
     }
 
     saved = {
@@ -183,6 +193,8 @@ const definition = {
     passwordUpdateVisible = false;
     connectionGeneration = 0;
     interactionGeneration = 0;
+    profileListGeneration += 1;
+    feedbackGeneration = 0;
   },
 
   methods: {
@@ -244,6 +256,8 @@ function resetState(): void {
   hydrationGeneration += 1;
   connectionGeneration = 0;
   interactionGeneration = 0;
+  profileListGeneration += 1;
+  feedbackGeneration = 0;
 }
 
 function isCurrentHydration(token: HydrationToken): boolean {
@@ -260,6 +274,7 @@ function acceptConnection(next: ConnectionSnapshot): void {
   if (next.profileId && saved.profiles.some((profile) => profile.id === next.profileId)) {
     saved.selectedProfileId = next.profileId;
   }
+  feedbackGeneration += 1;
   error = null;
   notice = null;
   invalidField = null;
@@ -311,6 +326,7 @@ function validateConnectionForm(): ConnectionValidation | null {
 }
 
 function showValidation(validation: ConnectionValidation): void {
+  feedbackGeneration += 1;
   invalidField = validation.field;
   error = { message: validation.message };
   notice = null;
@@ -348,11 +364,16 @@ async function saveCurrentConnection(): Promise<void> {
       if (isActionResultCurrent(token)) throw new Error('MySQL 返回了无效的连接资料。');
       return;
     }
-    if (!isProfileResultCurrent(token, next)) return;
+    if (!isProfileResultCurrent(token, next)) {
+      reconcileProfilesAfterConfirmedMutation(token);
+      return;
+    }
+    profileListGeneration += 1;
     upsertProfile(next);
     saved.selectedProfileId = next.id;
     manualConnectEligible = false;
     profileLabel = '';
+    feedbackGeneration += 1;
     notice = '连接已保存到本机凭据库。';
   });
 }
@@ -377,10 +398,15 @@ async function updatePassword(): Promise<void> {
       if (isActionResultCurrent(token)) throw new Error('MySQL 返回了无效的连接资料。');
       return;
     }
-    if (!isProfileResultCurrent(token, next)) return;
+    if (!isProfileResultCurrent(token, next)) {
+      reconcileProfilesAfterConfirmedMutation(token);
+      return;
+    }
+    profileListGeneration += 1;
     upsertProfile(next);
     passwordUpdateVisible = false;
     manualConnectEligible = false;
+    feedbackGeneration += 1;
     notice = '密码已更新并重新连接。';
   });
 }
@@ -394,12 +420,17 @@ async function deleteProfile(): Promise<void> {
       if (isActionResultCurrent(token)) throw new Error('MySQL 返回了无效的删除结果。');
       return;
     }
-    if (!isDeleteResultCurrent(token, profileId)) return;
+    if (!isDeleteResultCurrent(token, profileId)) {
+      reconcileProfilesAfterConfirmedMutation(token);
+      return;
+    }
+    profileListGeneration += 1;
     saved.profiles = saved.profiles.filter((profile) => profile.id !== profileId);
     saved.selectedProfileId = selectAvailableProfile(null, saved.profiles);
     replacementPassword = '';
     passwordUpdateVisible = false;
     manualConnectEligible = false;
+    feedbackGeneration += 1;
     notice = '已删除本机保存的连接和密码。';
   });
 }
@@ -427,6 +458,7 @@ async function runAction(
 ): Promise<void> {
   if (activity !== null) return;
   activity = kind;
+  feedbackGeneration += 1;
   error = null;
   notice = null;
   invalidField = null;
@@ -443,7 +475,10 @@ async function runAction(
   try {
     await action(token);
   } catch (caught) {
-    if (isActionResultCurrent(token)) error = panelError(caught);
+    if (isActionResultCurrent(token)) {
+      feedbackGeneration += 1;
+      error = panelError(caught);
+    }
   } finally {
     if (!isActiveAction(token)) return;
     activeAction = null;
@@ -465,6 +500,60 @@ function isActiveAction(token: ActionToken): boolean {
 
 function isActionResultCurrent(token: ActionToken): boolean {
   return isActiveAction(token) && token.interactionGeneration === interactionGeneration;
+}
+
+function isActionMountCurrent(token: ActionToken): boolean {
+  return token.mountGeneration === mountGeneration
+    && context !== undefined
+    && root?.isConnected === true;
+}
+
+function beginProfileList(): ProfileListToken {
+  return {
+    mountGeneration,
+    profileListGeneration: ++profileListGeneration,
+  };
+}
+
+function isCurrentProfileList(token: ProfileListToken): boolean {
+  return token.mountGeneration === mountGeneration
+    && token.profileListGeneration === profileListGeneration
+    && context !== undefined
+    && root?.isConnected === true;
+}
+
+function reconcileProfilesAfterConfirmedMutation(token: ActionToken): void {
+  if (!isActionMountCurrent(token) || saved.capability?.available !== true) return;
+  const profileListToken = beginProfileList();
+  const startingFeedbackGeneration = feedbackGeneration;
+  void reconcileProfiles(profileListToken, startingFeedbackGeneration);
+}
+
+async function reconcileProfiles(
+  token: ProfileListToken,
+  startingFeedbackGeneration: number,
+): Promise<void> {
+  try {
+    const sanitized = sanitizeProfiles(await requestCore<unknown>('listConnectionProfiles'));
+    if (!isCurrentProfileList(token) || saved.capability?.available !== true) return;
+    const preferredProfileId = saved.selectedProfileId;
+    saved.profiles = sanitized.profiles;
+    saved.selectedProfileId = selectReconciledProfile(preferredProfileId, sanitized.profiles);
+    if (sanitized.droppedInvalid && feedbackGeneration === startingFeedbackGeneration) {
+      feedbackGeneration += 1;
+      error = { message: '部分保存的连接资料无效，已忽略。' };
+      notice = null;
+    }
+    render();
+  } catch {
+    if (!isCurrentProfileList(token) || saved.capability?.available !== true) return;
+    if (feedbackGeneration === startingFeedbackGeneration) {
+      feedbackGeneration += 1;
+      error = { message: '保存的连接列表刷新失败，请重试。' };
+      notice = null;
+      render();
+    }
+  }
 }
 
 function isProfileResultCurrent(token: ActionToken, profile: MysqlConnectionProfile): boolean {
@@ -663,6 +752,7 @@ function bindEvents(): void {
   root?.querySelector('[data-action="show-password-update"]')?.addEventListener('click', () => {
     passwordUpdateVisible = true;
     replacementPassword = '';
+    feedbackGeneration += 1;
     error = null;
     notice = null;
     render();
@@ -672,6 +762,7 @@ function bindEvents(): void {
     passwordUpdateVisible = false;
     replacementPassword = '';
     invalidField = null;
+    feedbackGeneration += 1;
     error = null;
     render();
   });
@@ -708,6 +799,7 @@ function bindEvents(): void {
     passwordUpdateVisible = false;
     replacementPassword = '';
     invalidField = null;
+    feedbackGeneration += 1;
     error = null;
     notice = null;
     render();
@@ -724,6 +816,7 @@ function switchMode(next: ConnectionMode, focusTab = false): void {
   replacementPassword = '';
   passwordUpdateVisible = false;
   invalidField = null;
+  feedbackGeneration += 1;
   error = null;
   notice = null;
   render();
@@ -749,6 +842,7 @@ function handleModeKeydown(event: KeyboardEvent): void {
 function clearFieldError(field: InvalidField | 'password' | 'database'): void {
   if (invalidField !== field) return;
   invalidField = null;
+  feedbackGeneration += 1;
   error = null;
   render();
   queueMicrotask(() => root?.querySelector<HTMLInputElement>(`[data-field="${field}"]`)?.focus());
@@ -838,6 +932,15 @@ function selectAvailableProfile(
   return profiles.some((profile) => profile.id === preferredId)
     ? preferredId
     : profiles[0]?.id ?? null;
+}
+
+function selectReconciledProfile(
+  preferredId: string | null,
+  profiles: MysqlConnectionProfile[],
+): string | null {
+  if (profiles.some((profile) => profile.id === preferredId)) return preferredId;
+  if (profiles.some((profile) => profile.id === connection.profileId)) return connection.profileId;
+  return profiles[0]?.id ?? null;
 }
 
 function sanitizeCapability(value: unknown): MysqlCredentialCapability {
