@@ -37,6 +37,12 @@
       "summary": "本地 Node.js 脚本的定时、循环与错过触发管理",
       "runner": "ubuntu-latest"
     },
+    "skill-manager": {
+      "id": "@itharbors/kit-skill-manager",
+      "label": "Skill Manager",
+      "summary": "Codex Skill 全局安装与来源目录比较管理工具",
+      "runner": "ubuntu-latest"
+    },
     "sqlite": {
       "id": "@itharbors/kit-sqlite",
       "label": "SQLite",

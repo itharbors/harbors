@@ -7,7 +7,7 @@ import { checkOfficialKit } from './lib/kit-check.mjs';
 import { OFFICIAL_KIT_SLUGS } from './lib/kit-monorepo.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
-const USAGE = 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|sqlite|traceweave> --output-directory <absolute-directory>\n';
+const USAGE = 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave> --output-directory <absolute-directory>\n';
 
 function sanitizeErrorMessage(error) {
   const message = error instanceof Error ? error.message : String(error);

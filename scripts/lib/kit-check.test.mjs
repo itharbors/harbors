@@ -78,6 +78,13 @@ test('checks Notifications through its Kit-local build, test, pack, and inspect 
   });
 });
 
+test('checks Skill Manager through its Kit-local build, test, pack, and inspect sequence', async () => {
+  await checkCommandSequence({
+    slug: 'skill-manager',
+    artifactName: 'kit-skill-manager-0.1.0-preview.1-any-any.hkit',
+  });
+});
+
 test('checks Scheduler through its Kit-local build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'scheduler',
@@ -200,7 +207,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|sqlite|traceweave> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave> --output-directory <absolute-directory>\n');
   }
 });
 
