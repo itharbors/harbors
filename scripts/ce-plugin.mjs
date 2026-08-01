@@ -1,10 +1,13 @@
 #!/usr/bin/env node
-import { discoverAllPlugins, discoverPlugin, discoverRuntimePlugins } from './lib/plugin-build/discover.mjs';
-import { cleanDir } from './lib/plugin-build/fs.mjs';
-import { compileMainScript, compilePanelScripts } from './lib/plugin-build/scripts.mjs';
-import { copyPanelStyles } from './lib/plugin-build/styles.mjs';
-import { copyPanelAssets } from './lib/plugin-build/assets.mjs';
-import { validateBuiltOutputs, validatePluginManifest } from './lib/plugin-build/validate.mjs';
+import {
+  buildPlugin,
+  checkPlugin,
+  discoverAllPlugins,
+  discoverPlugin,
+  discoverRuntimePlugins,
+} from '@itharbors/kit-cli';
+
+import { BUILTIN_KITS } from './lib/builtin-kits.mjs';
 
 function parseArgs(argv) {
   const [command, target] = argv;
@@ -25,7 +28,7 @@ function discoverTargets(target) {
   }
 
   const plugins = resolvedTarget === '--runtime'
-    ? discoverRuntimePlugins(process.cwd())
+    ? discoverRuntimePlugins(process.cwd(), BUILTIN_KITS.map((kit) => kit.slug))
     : discoverAllPlugins(process.cwd());
   if (plugins.length === 0) {
     throw new Error('No plugins found');
@@ -33,35 +36,16 @@ function discoverTargets(target) {
   return plugins;
 }
 
-function buildPlugin(plugin) {
-  if (plugin.main) {
-    cleanDir(plugin.main.distDir);
-    compileMainScript(plugin);
-  }
-
-  for (const panel of plugin.panels) {
-    cleanDir(panel.distDir);
-  }
-  compilePanelScripts(plugin);
-  copyPanelStyles(plugin);
-  copyPanelAssets(plugin);
-  validateBuiltOutputs(plugin);
-}
-
 function run(command, target) {
   switch (command) {
     case 'check':
       for (const pluginDir of discoverTargets(target)) {
-        const plugin = discoverPlugin(pluginDir);
-        validatePluginManifest(plugin);
-        validateBuiltOutputs(plugin);
+        checkPlugin(discoverPlugin(pluginDir));
       }
       return;
     case 'build':
       for (const pluginDir of discoverTargets(target)) {
-        const plugin = discoverPlugin(pluginDir);
-        validatePluginManifest(plugin);
-        buildPlugin(plugin);
+        buildPlugin(discoverPlugin(pluginDir));
       }
       return;
     default:
