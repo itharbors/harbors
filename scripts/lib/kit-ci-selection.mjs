@@ -1,5 +1,3 @@
-import { OFFICIAL_KIT_SLUGS } from './kit-monorepo.mjs';
-
 const SHARED_PREFIXES = Object.freeze([
   'packages/kit-core/',
   'packages/kit-cli/',
@@ -41,6 +39,7 @@ const TARGETED_FILES = new Map([
   ['scripts/lib/codex-skill-resource.mjs', ['notifications']],
 ]);
 
+const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
 const UNSAFE_PATH_CHARACTERS = /[\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:\//u;
 
@@ -61,24 +60,45 @@ function assertCanonicalRepositoryPath(value) {
   return parts;
 }
 
-export function selectKitSlugs(paths) {
+function assertTrustedSlugs(trustedSlugs) {
+  if (!Array.isArray(trustedSlugs)) {
+    throw new TypeError('trustedSlugs must be an array');
+  }
+  const seen = new Set();
+  for (const slug of trustedSlugs) {
+    if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {
+      throw new Error('trustedSlugs must contain canonical Kit slugs');
+    }
+    if (seen.has(slug)) {
+      throw new Error(`trustedSlugs contains duplicate slug: ${slug}`);
+    }
+    seen.add(slug);
+  }
+  return Object.freeze([...trustedSlugs].sort());
+}
+
+export function selectKitSlugs(paths, trustedSlugs) {
   if (!Array.isArray(paths)) throw new TypeError('paths must be an array');
+  const trusted = assertTrustedSlugs(trustedSlugs);
+  const trustedSet = new Set(trusted);
   const selected = new Set();
   for (const value of paths) {
     const parts = assertCanonicalRepositoryPath(value);
     if (SHARED_FILES.has(value) || SHARED_PREFIXES.some((prefix) => value.startsWith(prefix))) {
-      for (const slug of OFFICIAL_KIT_SLUGS) selected.add(slug);
+      for (const slug of trusted) selected.add(slug);
       continue;
     }
     const targeted = TARGETED_FILES.get(value)
       ?? TARGETED_PREFIXES.find(([prefix]) => value.startsWith(prefix))?.[1];
     if (targeted) {
-      for (const slug of targeted) selected.add(slug);
+      for (const slug of targeted) {
+        if (trustedSet.has(slug)) selected.add(slug);
+      }
       continue;
     }
     if (parts[0] !== 'kits' || parts.length === 1) continue;
     const slug = parts[1];
-    if (!OFFICIAL_KIT_SLUGS.includes(slug)) {
+    if (!trustedSet.has(slug)) {
       if (slug !== 'default') throw new Error(`Unknown Kit directory: ${slug}`);
       continue;
     }

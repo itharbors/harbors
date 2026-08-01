@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { selectKitSlugs } from './lib/kit-ci-selection.mjs';
-import { loadTrustedMarketKit } from './lib/kit-monorepo.mjs';
+import { loadKitPolicy, loadTrustedMarketKit } from './lib/kit-monorepo.mjs';
 
 const execFileAsync = promisify(execFile);
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
@@ -82,10 +82,14 @@ async function main(args) {
     return 2;
   }
   try {
-    const slugs = selectKitSlugs(await changedPaths(args[0], args[1]));
+    const repositoryRoot = process.cwd();
+    const paths = await changedPaths(args[0], args[1]);
+    const policy = await loadKitPolicy({ repositoryRoot });
+    const trustedSlugs = Object.keys(policy.kits).sort();
+    const slugs = selectKitSlugs(paths, trustedSlugs);
     const include = [];
     for (const slug of slugs) {
-      const descriptor = await loadTrustedMarketKit({ repositoryRoot: process.cwd(), slug });
+      const descriptor = await loadTrustedMarketKit({ repositoryRoot, slug });
       include.push({ kit: slug, runner: descriptor.ciRunner });
     }
     process.stdout.write(`MATRIX_JSON=${JSON.stringify({ include })}\n`);

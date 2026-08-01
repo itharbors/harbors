@@ -13,16 +13,16 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
-  OFFICIAL_KIT_SLUGS,
   loadTrustedMarketKit,
   loadKitPolicy,
 } from './kit-monorepo.mjs';
+import { discoverRepositoryKits } from './repository-kits.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
 test('loads the exact official Kit set from one strict policy', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
-  assert.deepEqual(OFFICIAL_KIT_SLUGS, [
+  assert.deepEqual(Object.keys(policy.kits).sort(), [
     'agent-guard',
     'csv',
     'mysql',
@@ -61,6 +61,30 @@ test('rejects a Kit that is not trusted for market publication', async () => {
   );
 });
 
+test('rejects a discoverable Kit whose slug is absent from the trust policy', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-untrusted-'));
+  try {
+    await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
+    await cp(path.join(repositoryRoot, 'kits', 'sqlite'), path.join(root, 'kits', 'unapproved'), { recursive: true });
+    const packageJson = JSON.parse(await readFile(path.join(root, 'kits', 'unapproved', 'package.json'), 'utf8'));
+    packageJson.name = '@itharbors/kit-unapproved';
+    await writeFile(path.join(root, 'kits', 'unapproved', 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
+    const manifest = JSON.parse(await readFile(path.join(root, 'kits', 'unapproved', 'kit.json'), 'utf8'));
+    manifest.id = '@itharbors/kit-unapproved';
+    await writeFile(path.join(root, 'kits', 'unapproved', 'kit.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+
+    const discovered = await discoverRepositoryKits({ repositoryRoot: root });
+    assert.equal(discovered.some((kit) => kit.slug === 'unapproved'), true);
+
+    await assert.rejects(
+      loadTrustedMarketKit({ repositoryRoot: root, slug: 'unapproved' }),
+      /not trusted for market publication/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('rejects builtin Kit distributions from market publication', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-builtin-'));
   try {
@@ -81,7 +105,8 @@ test('rejects builtin Kit distributions from market publication', async () => {
 });
 
 test('loads every trusted market Kit with descriptor-derived display metadata', async () => {
-  for (const slug of OFFICIAL_KIT_SLUGS) {
+  const policy = await loadKitPolicy({ repositoryRoot });
+  for (const slug of Object.keys(policy.kits).sort()) {
     const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
     assert.equal(kit.directory, path.join(repositoryRoot, 'kits', slug));
     assert.equal(kit.manifest.id, kit.id);
@@ -175,8 +200,9 @@ test('rejects a Kit whose root lock identity differs from its descriptor', async
 });
 
 test('each Kit root owns every external runtime dependency used by its plugins', async () => {
+  const policy = await loadKitPolicy({ repositoryRoot });
   const packageLock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
-  for (const slug of OFFICIAL_KIT_SLUGS) {
+  for (const slug of Object.keys(policy.kits).sort()) {
     const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
     const pluginNames = [
       ...(kit.packageJson['ce-editor'].kit.plugin ?? []),
@@ -209,7 +235,8 @@ test('keeps only low-frequency governance files in the tracked Registry source',
 });
 
 test('contains no legacy plugin directories outside each Kit declaration', async () => {
-  for (const slug of OFFICIAL_KIT_SLUGS) {
+  const policy = await loadKitPolicy({ repositoryRoot });
+  for (const slug of Object.keys(policy.kits).sort()) {
     const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
     const declared = new Set([
       ...(kit.packageJson['ce-editor'].kit.plugin ?? []),

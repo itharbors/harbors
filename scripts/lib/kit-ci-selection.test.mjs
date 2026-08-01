@@ -8,22 +8,24 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
-import { loadKitPolicy } from './kit-monorepo.mjs';
+import { loadKitPolicy, loadTrustedMarketKit } from './kit-monorepo.mjs';
 
-const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'skill-manager', 'sqlite', 'traceweave'];
-const runners = Object.freeze({
-  'agent-guard': 'macos-14',
-  csv: 'macos-14',
-  mysql: 'ubuntu-latest',
-  notifications: 'ubuntu-latest',
-  'skill-manager': 'ubuntu-latest',
-  scheduler: 'ubuntu-latest',
-  sqlite: 'macos-14',
-  traceweave: 'ubuntu-latest',
-});
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/select-kit-ci.mjs');
+
+// Derive the authoritative trusted slug set and runner map from the repository
+// policy and descriptors at runtime, rather than hard-coding them.
+const policy = await loadKitPolicy({ repositoryRoot });
+const allKits = Object.keys(policy.kits).sort();
+const runners = Object.freeze(
+  Object.fromEntries(
+    await Promise.all(allKits.map(async (slug) => {
+      const descriptor = await loadTrustedMarketKit({ repositoryRoot, slug });
+      return [slug, descriptor.ciRunner];
+    })),
+  ),
+);
 
 async function git(repository, ...args) {
   return (await execFileAsync('git', args, { cwd: repository, encoding: 'utf8' })).stdout.trim();
@@ -95,20 +97,20 @@ function expectedCliOutput(slugs) {
 }
 
 test('selects only changed official Kits in deterministic order', () => {
-  assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json']), ['agent-guard']);
-  assert.deepEqual(selectKitSlugs(['kits/csv/package.json']), ['csv']);
-  assert.deepEqual(selectKitSlugs(['kits/mysql/package.json']), ['mysql']);
-  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json']), ['scheduler']);
+  assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json'], allKits), ['agent-guard']);
+  assert.deepEqual(selectKitSlugs(['kits/csv/package.json'], allKits), ['csv']);
+  assert.deepEqual(selectKitSlugs(['kits/mysql/package.json'], allKits), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json'], allKits), ['scheduler']);
   assert.deepEqual(
-    selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json']),
+    selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json'], allKits),
     ['notifications', 'sqlite'],
   );
-  assert.deepEqual(selectKitSlugs(['kits/sqlite', 'kits/sqlite/kit.json']), ['sqlite']);
+  assert.deepEqual(selectKitSlugs(['kits/sqlite', 'kits/sqlite/kit.json'], allKits), ['sqlite']);
 });
 
 test('ignores unrelated paths and the non-official default fixture', () => {
-  assert.deepEqual(selectKitSlugs(['docs/README.md']), []);
-  assert.deepEqual(selectKitSlugs(['kits/default/kit.json']), []);
+  assert.deepEqual(selectKitSlugs(['docs/README.md'], allKits), []);
+  assert.deepEqual(selectKitSlugs(['kits/default/kit.json'], allKits), []);
 });
 
 test('selects all official Kits for shared build, validation, Registry, and workflow paths', () => {
@@ -133,7 +135,7 @@ test('selects all official Kits for shared build, validation, Registry, and work
     '.github/workflows/publish-kit-reusable.yml',
     '.github/workflows/publish-kit-registry.yml',
   ]) {
-    assert.deepEqual(selectKitSlugs([sharedPath]), allKits, sharedPath);
+    assert.deepEqual(selectKitSlugs([sharedPath], allKits), allKits, sharedPath);
   }
 });
 
@@ -151,16 +153,16 @@ test('maps direct Kit-check dependency surfaces to only their affected Kits', ()
     ['scripts/lib/plugin-build/validate.mjs', allKits],
   ];
   for (const [changedPath, expected] of cases) {
-    assert.deepEqual(selectKitSlugs([changedPath]), expected, changedPath);
+    assert.deepEqual(selectKitSlugs([changedPath], allKits), expected, changedPath);
   }
 });
 
 test('rejects unknown Kit directories', () => {
   assert.throws(
-    () => selectKitSlugs(['kits/unknown/package.json']),
+    () => selectKitSlugs(['kits/unknown/package.json'], allKits),
     /unknown Kit directory/i,
   );
-  assert.throws(() => selectKitSlugs(['kits/unknown']), /unknown Kit directory/i);
+  assert.throws(() => selectKitSlugs(['kits/unknown'], allKits), /unknown Kit directory/i);
 });
 
 test('rejects non-canonical repository paths instead of ambiguously classifying them', () => {
@@ -180,13 +182,27 @@ test('rejects non-canonical repository paths instead of ambiguously classifying 
     'kits/sqlite/bad\u0085name',
   ]) {
     assert.throws(
-      () => selectKitSlugs([changedPath]),
+      () => selectKitSlugs([changedPath], allKits),
       /canonical repository path/i,
       JSON.stringify(changedPath),
     );
   }
-  assert.throws(() => selectKitSlugs('kits/sqlite/package.json'), /paths must be an array/i);
-  assert.throws(() => selectKitSlugs([null]), /canonical repository path/i);
+  assert.throws(() => selectKitSlugs('kits/sqlite/package.json', allKits), /paths must be an array/i);
+  assert.throws(() => selectKitSlugs([null], allKits), /canonical repository path/i);
+});
+
+test('rejects invalid trusted slug collections', () => {
+  assert.throws(
+    () => selectKitSlugs([], 'sqlite'),
+    /trustedSlugs must be an array/u,
+  );
+  for (const trustedSlugs of [['sqlite', 'sqlite'], ['../sqlite'], ['SQLite'], [null]]) {
+    assert.throws(
+      () => selectKitSlugs([], trustedSlugs),
+      /trustedSlugs/u,
+      JSON.stringify(trustedSlugs),
+    );
+  }
 });
 
 test('CLI selects descriptor-derived runners from a real NUL-delimited Git diff', async () => {

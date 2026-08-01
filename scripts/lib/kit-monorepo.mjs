@@ -1,24 +1,10 @@
-import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 import { loadRepositoryKit } from './repository-kits.mjs';
 
 const POLICY_FILE = 'registry/policy.json';
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
-
-function readPolicySlugs(repositoryRoot) {
-  const policyPath = path.join(repositoryRoot, POLICY_FILE);
-  const raw = JSON.parse(readFileSync(policyPath, 'utf8'));
-  return Object.keys(raw.kits ?? {}).sort();
-}
-
-// Derived from the central trust policy at runtime so the slug set is never
-// hard-coded outside the governance file.
-export const OFFICIAL_KIT_SLUGS = Object.freeze(
-  readPolicySlugs(fileURLToPath(new URL('../../', import.meta.url))),
-);
 
 export async function loadKitPolicy({
   repositoryRoot,
