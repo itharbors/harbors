@@ -301,6 +301,26 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
+  it('navigates relative to the focused inactive Tab', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    const incidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
+    incidents.focus();
+    incidents.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+
+    const overview = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!;
+    expect(overview.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(overview);
+    panel.unmount();
+  });
+
   it('preserves incident Tab state, policy drafts, focus, and scroll through polling', async () => {
     vi.useFakeTimers();
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);

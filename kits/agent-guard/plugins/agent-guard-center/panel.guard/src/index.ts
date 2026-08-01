@@ -176,7 +176,7 @@ function createDashboardTab(tab: DashboardTab, label: string, incidentCount: num
   if (tab === 'incidents') value.setAttribute('aria-label', `事件记录，${incidentCount} 条`);
   value.addEventListener('keydown', (event) => {
     const target = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
-      ? activeTab === 'overview' ? 'incidents' : 'overview'
+      ? tab === 'overview' ? 'incidents' : 'overview'
       : event.key === 'Home' ? 'overview'
       : event.key === 'End' ? 'incidents'
       : event.key === 'Enter' || event.key === ' ' ? tab
