@@ -16,7 +16,7 @@ import {
   createHistoryAxisTicks,
   summarizeHistoryByAgent,
   type HistoryRange,
-} from './history-view-model';
+} from './history-view-model.js';
 
 type PanelContext = {
   message: { request(plugin: string, name: string, ...args: unknown[]): Promise<unknown> };
