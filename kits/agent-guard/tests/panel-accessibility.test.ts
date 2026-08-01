@@ -38,6 +38,13 @@ describe('Agent Guard panel accessibility', () => {
     expect(css).toMatch(/@media\s*\(max-height:\s*679px\)/u);
   });
 
+  it('gives a 320px-wide overview an internal vertical scroll fallback', () => {
+    const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[^}]*\.dashboard-content\s*\{[^}]*overflow-y:\s*auto/su);
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?#overview-panel\s*\{[^}]*height:\s*auto[^}]*grid-template-rows:\s*none/su);
+    expect(css).toMatch(/@media\s*\(max-width:\s*640px\)\s*\{[\s\S]*?\.history-deck\s*\{[^}]*overflow:\s*visible/su);
+  });
+
   it('reserves the active panel row after an inline operation error', () => {
     const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
     expect(css).toMatch(/\.dashboard-content\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/su);

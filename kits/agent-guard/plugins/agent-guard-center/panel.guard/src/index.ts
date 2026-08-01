@@ -41,6 +41,7 @@ let historyResult: TrafficHistoryResult | null = null;
 let historyResultQueryKey: string | null = null;
 let historyStatus: HistoryStatus | null = null;
 let historyError: string | null = null;
+let historyManagementError: { operation: 'backfill' | 'clear'; detail: string } | null = null;
 let historyVersion = 0;
 let historyRange: HistoryRange = '24h';
 let historyDomain: 'network' | 'model-usage' = 'network';
@@ -69,6 +70,7 @@ const panel = {
     activeTab = 'overview';
     policyDraft = null;
     mutationError = null;
+    historyManagementError = null;
     renderState('正在启动本机流量监控…', 'loading');
     await refresh();
     if (mounted) void refreshHistory();
@@ -91,6 +93,7 @@ const panel = {
     activeTab = 'overview';
     policyDraft = null;
     mutationError = null;
+    historyManagementError = null;
   },
 };
 
@@ -570,6 +573,7 @@ function createBackfillSettings(): HTMLElement {
   );
   control.disabled = !historyStatus;
   aside.append(control);
+  appendHistoryManagementError(aside, 'backfill');
   return aside;
 }
 
@@ -604,7 +608,16 @@ function createCacheSettings(): HTMLElement {
       if (latestSnapshot) renderSnapshot(latestSnapshot);
     }));
   }
+  appendHistoryManagementError(aside, 'clear');
   return aside;
+}
+
+function appendHistoryManagementError(container: HTMLElement, operation: 'backfill' | 'clear'): void {
+  if (historyManagementError?.operation !== operation) return;
+  const message = textElement('p', 'history-management-error', historyManagementError.detail);
+  message.dataset.historyManagementError = operation;
+  message.setAttribute('role', 'alert');
+  container.append(message);
 }
 
 async function updateBackfill(enabled: boolean): Promise<void> {
@@ -613,9 +626,10 @@ async function updateBackfill(enabled: boolean): Promise<void> {
     historyStatus = normalizeHistoryStatus(await context.message.request(
       PLUGIN, 'updateHistorySettings', { localSessionBackfill: enabled },
     ));
+    historyManagementError = null;
     if (latestSnapshot) renderSnapshot(latestSnapshot);
   } catch (error) {
-    historyError = errorDetail(error) ?? '历史设置更新失败';
+    historyManagementError = { operation: 'backfill', detail: errorDetail(error) ?? '历史设置更新失败' };
     if (latestSnapshot) renderSnapshot(latestSnapshot);
   }
 }
@@ -626,11 +640,12 @@ async function clearHistoryData(): Promise<void> {
     historyStatus = normalizeHistoryStatus(await context.message.request(
       PLUGIN, 'clearHistory', { confirmation: 'clear-history' },
     ));
+    historyManagementError = null;
     historyResult = null;
     clearConfirmation = false;
     await refreshHistory();
   } catch (error) {
-    historyError = errorDetail(error) ?? '历史清理失败';
+    historyManagementError = { operation: 'clear', detail: errorDetail(error) ?? '历史清理失败' };
     if (latestSnapshot) renderSnapshot(latestSnapshot);
   }
 }

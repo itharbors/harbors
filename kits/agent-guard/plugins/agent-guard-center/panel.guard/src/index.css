@@ -104,6 +104,7 @@ dd { margin: 5px 0 0; font: 650 14px/1.2 "SF Mono", ui-monospace, monospace; fon
 .history-legend li::before { width: 18px; height: 0; border-top: 2px solid var(--signal-cyan); content: ""; }
 .history-legend li:nth-child(even)::before { border-color: var(--breaker-copper); border-top-style: dashed; }
 .history-management { justify-content: flex-end; min-height: 34px; }
+.history-management-error { flex-basis: 100%; margin: 0; color: var(--breaker-copper); font-size: 11px; overflow-wrap: anywhere; }
 .history-management [data-action="confirm-clear-history"] { border-color: rgba(255, 138, 61, .65); color: var(--breaker-copper); }
 
 .lower-deck { display: grid; grid-template-columns: minmax(0, 2.1fr) minmax(280px, .9fr); gap: 20px; padding: 16px 0; }
@@ -151,6 +152,9 @@ button:disabled { opacity: .45; cursor: wait; }
   .agent-history-identity { grid-column: 1 / -1; border-right: 0; border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 640px) {
+  .dashboard-content { overflow-y: auto; }
+  #overview-panel { height: auto; grid-template-rows: none; }
+  .history-deck { overflow: visible; }
   .guard-workspace { padding: 18px; }
   .protection-header { grid-template-columns: 1fr; }
   .protection-seal { width: 100%; }

@@ -281,6 +281,77 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
+  it('keeps rejected backfill changes local to Settings without replacing overview history', async () => {
+    let updateAttempts = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      if (method === 'updateHistorySettings') {
+        updateAttempts += 1;
+        if (updateAttempts === 1) throw new Error('Backfill bridge rejected the update');
+        return { ...historyStatus(), settings: { localSessionBackfill: false } };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    await vi.waitFor(() => expect(document.querySelectorAll('.agent-history-row')).toHaveLength(2));
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    const toggle = document.querySelector<HTMLButtonElement>('[data-action="toggle-backfill"]')!;
+    toggle.focus();
+    toggle.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-history-management-error]')?.textContent)
+      .toContain('Backfill bridge rejected the update'));
+    expect(document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(document.querySelector('[data-action="toggle-backfill"]'));
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!.click();
+    expect(document.querySelectorAll('.agent-history-row')).toHaveLength(2);
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-action="toggle-backfill"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-history-management-error]')).toBeNull());
+    panel.unmount();
+  });
+
+  it('keeps clear confirmation and focus when clearing history is rejected in Settings', async () => {
+    let clearAttempts = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      if (method === 'clearHistory') {
+        clearAttempts += 1;
+        if (clearAttempts === 1) throw new Error('Clear bridge rejected the request');
+        return { ...historyStatus(), generation: 4 };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    await vi.waitFor(() => expect(document.querySelectorAll('.agent-history-row')).toHaveLength(2));
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-action="clear-history"]')!.click();
+    const confirm = document.querySelector<HTMLButtonElement>('[data-action="confirm-clear-history"]')!;
+    confirm.focus();
+    confirm.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-history-management-error]')?.textContent)
+      .toContain('Clear bridge rejected the request'));
+    expect(document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('[data-action="confirm-clear-history"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="cancel-clear-history"]')).not.toBeNull();
+    expect(document.activeElement).toBe(document.querySelector('[data-action="confirm-clear-history"]'));
+
+    document.querySelector<HTMLButtonElement>('[data-action="confirm-clear-history"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-history-management-error]')).toBeNull());
+    panel.unmount();
+  });
+
   it('renders no-record cache labels instead of epoch dates for an empty history', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
