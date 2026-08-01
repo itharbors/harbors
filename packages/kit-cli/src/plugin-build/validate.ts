@@ -15,8 +15,8 @@ function isDistPanelEntry(value: unknown): value is string {
   return typeof value === 'string' && /(^|\/)dist\/index\.html$/u.test(value);
 }
 
-export function validatePluginManifest(plugin: PluginProject): void {
-  const { pkg, main, panels } = plugin;
+export function validateRuntimePluginManifest(plugin: PluginProject): void {
+  const { pkg, main } = plugin;
   const name = pkg.name;
   if (typeof name !== 'string' || name.trim().length === 0) {
     throw new Error('Plugin package.json missing name');
@@ -28,8 +28,6 @@ export function validatePluginManifest(plugin: PluginProject): void {
   }
   resolveInsidePlugin(plugin.rootDir, pkg.main, `Plugin "${name}" package.json main`);
   if (!main) throw new Error(`Plugin "${name}" package.json main must point to a dist JavaScript entry`);
-  assertFileExists(main.entryFile, 'plugin main source');
-
   const contribute = objectValue(ceEditor.contribute);
   const panelDefinitions = objectValue(contribute?.panel) ?? {};
   for (const [panelName, definitionValue] of Object.entries(panelDefinitions)) {
@@ -39,7 +37,12 @@ export function validatePluginManifest(plugin: PluginProject): void {
     }
     resolveInsidePlugin(plugin.rootDir, definition.entry, `Plugin "${name}" panel contribution "${panelName}" entry`);
   }
-  for (const panel of panels) {
+}
+
+export function validatePluginManifest(plugin: PluginProject): void {
+  validateRuntimePluginManifest(plugin);
+  if (plugin.main) assertFileExists(plugin.main.entryFile, 'plugin main source');
+  for (const panel of plugin.panels) {
     assertFileExists(panel.scriptEntryFile, `panel script source for ${panel.name}`);
     assertFileExists(panel.htmlSourceFile, `panel html source for ${panel.name}`);
   }

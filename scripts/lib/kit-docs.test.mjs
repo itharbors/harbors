@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { access, readFile, readdir } from 'node:fs/promises';
 import test from 'node:test';
+import { discoverRepositoryKits } from './repository-kits.mjs';
 
 const repositoryRoot = new URL('../../', import.meta.url);
 
@@ -42,17 +43,14 @@ test('active Kit docs define one mainline development and Tag release lifecycle'
   assert.match(development, /共享[^。]{0,80}(全部|所有)[^。]{0,30}Kit[^。]{0,20}CI/iu);
 });
 
-test('artifact and authoring guides document monorepo Kits and trusted Release discovery', async () => {
+test('artifact and authoring guides document descriptor discovery and trusted Release discovery', async () => {
   const artifacts = compact(await read('docs/guides/kit-artifacts.md'));
   const authoring = compact(await read('docs/guides/developing-plugins-and-kits.md'));
   const combined = `${artifacts} ${authoring}`;
   for (const expected of [
-    'kits/agent-guard',
-    'kits/csv',
-    'kits/sqlite',
-    'kits/mysql',
-    'kits/notifications',
-    'kits/skill-manager',
+    'descriptor',
+    'distribution',
+    'kits/',
     'kit/<name>/v<semver>',
     '.hkit',
     'Release Asset',
@@ -82,16 +80,13 @@ test('artifact and authoring guides document monorepo Kits and trusted Release d
   ]) assert.match(artifacts, new RegExp(guarantee, 'iu'), guarantee);
 });
 
-test('root README and architecture describe Release Assets and automatic market projection', async () => {
+test('root README and architecture describe dynamic descriptors and automatic market projection', async () => {
   const readme = compact(await read('readme.md'));
   const architecture = compact(await read('docs/architecture/kit-and-session-model.md'));
   for (const expected of [
-    'kits/agent-guard',
-    'kits/csv',
-    'kits/sqlite',
-    'kits/mysql',
-    'kits/notifications',
-    'kits/skill-manager',
+    'descriptor',
+    'distribution',
+    'kits/',
     'kit/<name>/v<semver>',
     'Release Asset',
     'index.v1.json',
@@ -99,6 +94,76 @@ test('root README and architecture describe Release Assets and automatic market 
     'registry/revocations.json',
   ]) assert.match(`${readme} ${architecture}`, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
   assert.match(`${readme} ${architecture}`, /自动[^。]{0,80}(扫描|发现)[^。]{0,80}Release/iu);
+});
+
+test('active sources and root docs contain no central builtin constants or product slug tables', async () => {
+  await assert.rejects(access(new URL('scripts/lib/builtin-kits.mjs', repositoryRoot)));
+  const sourcePaths = [
+    'scripts/ce-plugin.mjs',
+    'scripts/dev.mjs',
+    'scripts/electron.mjs',
+    'scripts/lib/kit-catalog.mjs',
+    'scripts/lib/plugin-build/discover.mjs',
+    'scripts/lib/desktop-build.mjs',
+    'packages/kit-cli/src/plugin-build/discover.ts',
+  ];
+  const rootDocs = [
+    'readme.md',
+    'docs/README.md',
+    'docs/architecture/system-overview.md',
+    'docs/architecture/kit-and-session-model.md',
+    'docs/guides/developing-plugins-and-kits.md',
+    'docs/guides/development-workflow.md',
+    'docs/guides/kit-artifacts.md',
+    'docs/guides/app-releases.md',
+    'docs/architecture/layout-model.md',
+    'docs/architecture/plugin-runtime-model.md',
+  ];
+  const sources = await Promise.all(sourcePaths.map(read));
+  const prose = await Promise.all(rootDocs.map(read));
+  assert.doesNotMatch(sources.join('\n'), /BUILTIN_KITS|BUILTIN_KIT_IDS/u);
+  assert.doesNotMatch(
+    [...sources, ...prose].join('\n'),
+    /kits\/(?:agent-guard|csv|default|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
+  );
+  assert.doesNotMatch(
+    prose.join('\n'),
+    /@itharbors\/kit-(?:agent-guard|csv|default|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
+  );
+  assert.doesNotMatch(prose.join('\n'), /根\s*`?package-lock\.json`?/u);
+  assert.doesNotMatch(
+    prose.join('\n'),
+    /^(?:[│├└].*\b(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)\b.*)$/gmu,
+  );
+  assert.doesNotMatch(
+    prose.join('\n'),
+    /(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)(?:、|,|，| 和 | 与 ).*(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)/u,
+  );
+});
+
+test('every Kit README owns its lifecycle, permissions, platform, and boundary contract', async () => {
+  const descriptors = await discoverRepositoryKits({
+    repositoryRoot: new URL('../../', import.meta.url).pathname,
+  });
+  const kitEntries = await readdir(new URL('kits/', repositoryRoot), { withFileTypes: true });
+  for (const entry of kitEntries.filter((item) => item.isDirectory())) {
+    const relative = `kits/${entry.name}/README.md`;
+    const contents = await read(relative);
+    const descriptor = descriptors.find((item) => item.slug === entry.name);
+    for (const command of [
+      `npm ci --prefix kits/${entry.name}`,
+      `npm run ${descriptor.scripts.build} --prefix kits/${entry.name}`,
+      `npm run ${descriptor.scripts.test} --prefix kits/${entry.name}`,
+    ]) assert.ok(contents.includes(command), `${relative}: ${command}`);
+    if (descriptor.scripts.smoke) {
+      assert.ok(contents.includes(`npm run smoke --prefix kits/${entry.name}`), `${relative}: smoke`);
+    } else {
+      assert.match(contents, /完整检查|full check/iu, `${relative}: full check`);
+    }
+    for (const heading of ['Permissions', 'Platform', 'Ownership boundary']) {
+      assert.match(contents, new RegExp(`^## ${heading}$`, 'mu'), `${relative}: ${heading}`);
+    }
+  }
 });
 
 test('CSV Kit documentation states its read-only parsing, query, export, and resource contract', async () => {

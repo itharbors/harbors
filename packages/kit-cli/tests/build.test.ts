@@ -3,9 +3,35 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { buildKit, testKit, type KitCommandRunner } from '../src/index.js';
+import {
+  buildKit,
+  checkPlugin,
+  checkRuntimePlugin,
+  discoverPlugin,
+  discoverRuntimePlugins,
+  testKit,
+  type KitCommandRunner,
+} from '../src/index.js';
 
 const temporaryDirectories: string[] = [];
+
+it('checks staged runtime plugins without requiring source files', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-staged-plugin-'));
+  temporaryDirectories.push(root);
+  await mkdir(path.join(root, 'main', 'dist'), { recursive: true });
+  await writeFile(path.join(root, 'package.json'), JSON.stringify({
+    name: '@fixture/staged-plugin',
+    version: '1.0.0',
+    type: 'module',
+    main: './main/dist/index.js',
+    'ce-editor': { contribute: {} },
+  }));
+  await writeFile(path.join(root, 'main', 'dist', 'index.js'), 'export default {};\n');
+
+  const plugin = discoverPlugin(root);
+  expect(() => checkRuntimePlugin(plugin)).not.toThrow();
+  expect(() => checkPlugin(plugin)).toThrow(/main source/iu);
+});
 
 async function createKit(options: {
   plugins?: Array<{ directory: string; name: string }>;
@@ -200,6 +226,100 @@ describe('buildKit', () => {
     await expect(buildKit({ directory })).resolves.toMatchObject({ id: '@fixture/kit-demo' });
     await expect(access(path.join(directory, 'current-build-ran'))).rejects.toThrow();
     await expect(access(path.join(sibling, 'sibling-build-ran'))).rejects.toThrow();
+  });
+});
+
+describe('discoverRuntimePlugins', () => {
+  it('selects arbitrary builtin descriptors without a central slug list', async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-runtime-discovery-'));
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, 'plugins', 'framework'), { recursive: true });
+    await writeFile(path.join(root, 'plugins', 'framework', 'package.json'), '{"name":"@fixture/framework"}');
+    await mkdir(path.join(root, 'kits', 'surprise', 'plugins', 'runtime'), { recursive: true });
+    await writeFile(path.join(root, 'kits', 'surprise', 'package.json'), JSON.stringify({
+      name: '@fixture/kit-surprise',
+      'ce-editor': { kit: { menuRoot: { id: 'surprise', label: 'Surprise' }, plugin: ['@fixture/runtime'] } },
+    }));
+    await writeFile(
+      path.join(root, 'kits', 'surprise', 'plugins', 'runtime', 'package.json'),
+      '{"name":"@fixture/runtime"}',
+    );
+    await mkdir(path.join(root, 'kits', 'market', 'plugins', 'excluded'), { recursive: true });
+    await writeFile(path.join(root, 'kits', 'market', 'plugins', 'excluded', 'package.json'), '{"name":"@fixture/excluded"}');
+
+    const plugins = discoverRuntimePlugins(root, [
+      {
+        slug: 'surprise',
+        directory: path.join(root, 'kits', 'surprise'),
+        id: '@fixture/kit-surprise',
+        distribution: 'builtin',
+        isDefault: true,
+        menuRoot: { id: 'surprise', label: 'Surprise' },
+        packageJson: { 'ce-editor': { kit: { menuRoot: { id: 'surprise' } } } },
+      },
+      {
+        slug: 'market',
+        directory: path.join(root, 'kits', 'market'),
+        id: '@fixture/kit-market',
+        distribution: 'market',
+        isDefault: false,
+        menuRoot: { id: 'market', label: 'Market' },
+        packageJson: { 'ce-editor': { kit: { menuRoot: { id: 'market' } } } },
+      },
+    ]);
+
+    expect(plugins.map((plugin) => path.relative(root, plugin))).toEqual([
+      path.join('kits', 'surprise', 'plugins', 'runtime'),
+      path.join('plugins', 'framework'),
+    ]);
+  });
+
+  it.each([
+    ['package id', '@fixture/shared', 'one', '@fixture/shared', 'two'],
+    ['menu root', '@fixture/one', 'shared', '@fixture/two', 'shared'],
+  ])('rejects duplicate builtin %s', (_label, firstId, firstMenu, secondId, secondMenu) => {
+    expect(() => discoverRuntimePlugins('/repo', [
+      { slug: 'one', directory: '/repo/kits/one', id: firstId, distribution: 'builtin', isDefault: true, menuRoot: { id: firstMenu, label: firstMenu }, packageJson: {} },
+      { slug: 'two', directory: '/repo/kits/two', id: secondId, distribution: 'builtin', isDefault: false, menuRoot: { id: secondMenu, label: secondMenu }, packageJson: {} },
+    ])).toThrow(/duplicate builtin Kit (?:id|menu root)/iu);
+  });
+
+  it.each(['outside', 'neighbor', 'slug-mismatch', 'symlink', 'alias-symlink'])('rejects untrusted builtin descriptor directory: %s', async (kind) => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-runtime-trust-'));
+    temporaryDirectories.push(root);
+    await mkdir(path.join(root, 'kits', 'safe', 'plugins'), { recursive: true });
+    await writeFile(path.join(root, 'kits', 'safe', 'package.json'), JSON.stringify({
+      'ce-editor': { kit: { menuRoot: { id: 'safe' }, plugin: [] } },
+    }));
+    let slug = 'safe';
+    let directory = path.join(root, 'kits', 'safe');
+    if (kind === 'outside') {
+      directory = await mkdtemp(path.join(os.tmpdir(), 'harbors-runtime-outside-'));
+      temporaryDirectories.push(directory);
+    } else if (kind === 'neighbor') {
+      await mkdir(path.join(root, 'neighbor'), { recursive: true });
+      directory = path.join(root, 'neighbor');
+    } else if (kind === 'slug-mismatch') {
+      slug = 'other';
+    } else if (kind === 'symlink') {
+      const target = directory;
+      directory = path.join(root, 'kits', 'linked');
+      await symlink(target, directory, 'dir');
+      slug = 'linked';
+    } else {
+      const target = directory;
+      directory = path.join(root, 'safe-alias');
+      await symlink(target, directory, 'dir');
+    }
+    expect(() => discoverRuntimePlugins(root, [{
+      slug,
+      directory,
+      id: '@fixture/kit-safe',
+      distribution: 'builtin',
+      isDefault: true,
+      menuRoot: { id: 'safe', label: 'Safe' },
+      packageJson: {},
+    }])).toThrow(/canonical repository directory|directory is invalid/iu);
   });
 });
 

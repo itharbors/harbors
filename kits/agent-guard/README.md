@@ -47,3 +47,24 @@ npm run smoke -- --duration-seconds 900 \
 ```
 
 烟测脚本不接受 PID，只创建和控制自己的隔离子进程，并在 `finally` 中恢复、结束和清理夹具。
+
+## Local lifecycle
+
+```bash
+npm ci --prefix kits/agent-guard
+npm run build --prefix kits/agent-guard
+npm run test:kit --prefix kits/agent-guard
+npm run smoke --prefix kits/agent-guard
+```
+
+## Permissions
+
+`network`、`filesystem`、`process-control`、`application-startup`、`notifications`。
+
+## Platform
+
+仅支持 macOS arm64。
+
+## Ownership boundary
+
+功能实现、依赖、测试与烟测均由本目录拥有。

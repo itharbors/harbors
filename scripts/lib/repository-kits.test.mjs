@@ -11,7 +11,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { discoverRepositoryKits, loadRepositoryKit } from './repository-kits.mjs';
+import {
+  discoverRepositoryBuiltinKits,
+  discoverRepositoryKits,
+  loadRepositoryKit,
+} from './repository-kits.mjs';
 
 const repositoryRoot = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
 
@@ -83,6 +87,7 @@ test('discovers a temporary Kit without a static slug list', async () => {
         distribution: kit.distribution,
         ciRunner: kit.ciRunner,
         summary: kit.summary,
+        menuRoot: kit.menuRoot,
       },
       {
         slug: 'zeta',
@@ -91,7 +96,104 @@ test('discovers a temporary Kit without a static slug list', async () => {
         distribution: 'market',
         ciRunner: 'ubuntu-latest',
         summary: 'Zeta fixture',
+        menuRoot: { id: 'zeta', label: 'Zeta' },
       },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin runtime discovery ignores a malformed market Kit', async () => {
+  const root = await createTempRepository();
+  try {
+    await writeKit(root, 'default', {
+      kit: { ...baseKit, id: '@example/kit-default' },
+      packageJson: {
+        ...basePackageJson,
+        name: '@example/kit-default',
+        'ce-editor': {
+          kit: {
+            ...basePackageJson['ce-editor'].kit,
+            menuRoot: { id: 'default', label: 'Default' },
+          },
+        },
+        harbors: { ...basePackageJson.harbors, distribution: 'builtin', default: true },
+      },
+    });
+    await writeKit(root, 'broken-market', {
+      kit: { broken: true },
+      packageJson: {
+        name: '@example/kit-broken-market',
+        harbors: { distribution: 'market' },
+      },
+    });
+
+    const kits = await discoverRepositoryBuiltinKits({ repositoryRoot: root });
+    assert.deepEqual(kits.map((kit) => kit.id), ['@example/kit-default']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin runtime discovery rejects a malformed explicitly builtin Kit', async () => {
+  const root = await createTempRepository();
+  try {
+    await writeKit(root, 'broken', {
+      kit: { broken: true },
+      packageJson: {
+        name: '@example/kit-broken',
+        harbors: { distribution: 'builtin' },
+      },
+    });
+
+    await assert.rejects(
+      discoverRepositoryBuiltinKits({ repositoryRoot: root }),
+      /schemaVersion|Kit package manifest/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('builtin runtime discovery requires exactly one default builtin Kit', async () => {
+  const root = await createTempRepository();
+  try {
+    const builtinPackage = (name, menuRoot, isDefault) => ({
+      ...basePackageJson,
+      name,
+      'ce-editor': {
+        kit: {
+          ...basePackageJson['ce-editor'].kit,
+          menuRoot: { id: menuRoot, label: menuRoot },
+        },
+      },
+      harbors: {
+        ...basePackageJson.harbors,
+        distribution: 'builtin',
+        ...(isDefault ? { default: true } : {}),
+      },
+    });
+    await writeKit(root, 'first', {
+      kit: { ...baseKit, id: '@example/kit-first' },
+      packageJson: builtinPackage('@example/kit-first', 'first', false),
+    });
+    await assert.rejects(
+      discoverRepositoryBuiltinKits({ repositoryRoot: root }),
+      /exactly one default/u,
+    );
+
+    await writeKit(root, 'second', {
+      kit: { ...baseKit, id: '@example/kit-second' },
+      packageJson: builtinPackage('@example/kit-second', 'second', true),
+    });
+    await writeKit(root, 'first', {
+      kit: { ...baseKit, id: '@example/kit-first' },
+      packageJson: builtinPackage('@example/kit-first', 'first', true),
+    });
+    await assert.rejects(
+      discoverRepositoryBuiltinKits({ repositoryRoot: root }),
+      /exactly one default/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -177,7 +279,7 @@ test('rejects an unsupported CI runner', async () => {
   }
 });
 
-test('rejects a duplicate real directory exposed through a symlink', async () => {
+test('rejects a Kit directory exposed through a symlink', async () => {
   const root = await createTempRepository();
   try {
     await writeKit(root, 'zeta', { kit: baseKit, packageJson: basePackageJson });
@@ -185,10 +287,72 @@ test('rejects a duplicate real directory exposed through a symlink', async () =>
 
     await assert.rejects(
       discoverRepositoryKits({ repositoryRoot: root }),
-      /duplicate Kit id/u,
+      /real directory|canonical physical directory/u,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('rejects duplicate menu root ids across Kits', async () => {
+  const root = await createTempRepository();
+  try {
+    await writeKit(root, 'zeta', { kit: baseKit, packageJson: basePackageJson });
+    await writeKit(root, 'other', {
+      kit: { ...baseKit, id: '@example/kit-other' },
+      packageJson: {
+        ...basePackageJson,
+        name: '@example/kit-other',
+        'ce-editor': {
+          kit: {
+            ...basePackageJson['ce-editor'].kit,
+            menuRoot: { id: 'zeta', label: 'Other' },
+          },
+        },
+      },
+    });
+
+    await assert.rejects(
+      discoverRepositoryKits({ repositoryRoot: root }),
+      /duplicate Kit menu root id discovered: zeta/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('requires exactly one default role when builtin Kits exist', async () => {
+  for (const defaults of [[false], [true, true]]) {
+    const root = await createTempRepository();
+    try {
+      for (const [index, isDefault] of defaults.entries()) {
+        const slug = `builtin-${index}`;
+        await writeKit(root, slug, {
+          kit: { ...baseKit, id: `@example/kit-${slug}` },
+          packageJson: {
+            ...basePackageJson,
+            name: `@example/kit-${slug}`,
+            'ce-editor': {
+              kit: {
+                ...basePackageJson['ce-editor'].kit,
+                menuRoot: { id: slug, label: slug },
+              },
+            },
+            harbors: {
+              ...basePackageJson.harbors,
+              distribution: 'builtin',
+              default: isDefault,
+            },
+          },
+        });
+      }
+      await assert.rejects(
+        discoverRepositoryKits({ repositoryRoot: root }),
+        /builtin Kits must declare exactly one default/u,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   }
 });
 
@@ -270,6 +434,7 @@ test('freezes returned descriptor records', async () => {
     assert.equal(Object.isFrozen(kit.resources), true);
     assert.equal(Object.isFrozen(kit.legacyDataDirectories), true);
     assert.equal(Object.isFrozen(kit.permissions), true);
+    assert.equal(Object.isFrozen(kit.menuRoot), true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

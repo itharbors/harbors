@@ -13,6 +13,7 @@ export interface RepositoryKitScripts {
 
 export interface RepositoryKitPackageMetadata {
   readonly distribution: KitDistribution;
+  readonly isDefault: boolean;
   readonly ciRunner: SupportedRunner;
   readonly summary: string;
   readonly scripts: RepositoryKitScripts;
@@ -26,7 +27,9 @@ export interface RepositoryKitDescriptor {
   readonly id: string;
   readonly version: string;
   readonly label: string;
+  readonly menuRoot: Readonly<{ id: string; label: string }>;
   readonly distribution: KitDistribution;
+  readonly isDefault: boolean;
   readonly target: KitTarget;
   readonly permissions: readonly KitPermission[];
   readonly ciRunner: SupportedRunner;
@@ -140,13 +143,20 @@ function parseScripts(value: unknown): RepositoryKitScripts {
 
 export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageMetadata {
   const input = record(value, 'harbors');
-  exactKeys(input, ['distribution', 'ci', 'docs', 'resources', 'storage', 'scripts'], 'harbors');
+  exactKeys(input, ['distribution', 'default', 'ci', 'docs', 'resources', 'storage', 'scripts'], 'harbors');
 
   const distribution = enumValue<KitDistribution>(
     input.distribution,
     ['builtin', 'market'],
     'harbors.distribution',
   );
+  if (input.default !== undefined && typeof input.default !== 'boolean') {
+    throw new Error('harbors.default must be a boolean');
+  }
+  const isDefault = input.default === true;
+  if (isDefault && distribution !== 'builtin') {
+    throw new Error('harbors.default may be true only for builtin distribution');
+  }
 
   const ci = record(input.ci, 'harbors.ci');
   exactKeys(ci, ['runner'], 'harbors.ci');
@@ -168,6 +178,7 @@ export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageM
 
   return Object.freeze({
     distribution,
+    isDefault,
     ciRunner,
     summary,
     scripts: Object.freeze(scripts),

@@ -48,6 +48,7 @@ import {
   reloadKitWindows,
   selectMenuWindow,
   shouldStartElectronApp,
+  shouldUseBundledFramework,
   shutdownDesktopServices,
   finishDesktopShutdown,
   showKitChooser,
@@ -59,6 +60,7 @@ import {
   prepareInstalledKitsForStartup,
 } from './lib/kit-store/startup.mjs';
 import { createKitManagerService } from './lib/kit-manager-service.mjs';
+import { discoverRepositoryBuiltinKits } from './lib/repository-kits.mjs';
 import { KitArtifactUninstaller } from './lib/kit-store/uninstaller.mjs';
 import { createKitRuntimeCoordinator } from './lib/kit-runtime-coordinator.mjs';
 import {
@@ -66,7 +68,6 @@ import {
   restoreLiveKitDeactivation,
 } from './lib/kit-live-deactivation.mjs';
 import { createLiveKitManager } from './lib/live-kit-manager.mjs';
-import { BUILTIN_KIT_IDS } from './lib/builtin-kits.mjs';
 import { registerKitManagerIpc } from './lib/kit-manager-ipc.mjs';
 import { createKitManagerWindowController } from './lib/kit-manager-window.mjs';
 import {
@@ -333,17 +334,22 @@ function startElectronApp() {
   app.whenReady()
     .then(async () => {
       electronOptions = parseElectronOptions(process.argv.slice(2));
+      runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
       desktopPaths = resolveDesktopPaths({
         isPackaged: app.isPackaged,
+        runtimeProfile,
         repositoryRoot,
         resourcesPath: process.resourcesPath,
         moduleDirectory,
         userData: app.getPath('userData'),
       });
       rootDir = desktopPaths.rootDir;
-      runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
       runtimePorts = resolveRuntimePorts(process.env, runtimeProfile);
-      startUrl = app.isPackaged
+      const bundledFramework = shouldUseBundledFramework({
+        isPackaged: app.isPackaged,
+        runtimeProfile,
+      });
+      startUrl = bundledFramework
         ? undefined
         : process.env.ELECTRON_START_URL || `http://localhost:${runtimePorts.gateway}/`;
       const desktopVersion = resolveDesktopVersion({
@@ -355,7 +361,7 @@ function startElectronApp() {
         harborsVersion: desktopVersion,
         kitApiVersion: '1.0.0',
         protocolVersion: 1,
-        ...(app.isPackaged ? resolveCurrentProcessRuntime(process) : resolveFrameworkRuntime()),
+        ...(bundledFramework ? resolveCurrentProcessRuntime(process) : resolveFrameworkRuntime()),
       });
       updateController = createAppUpdater({
         updater: autoUpdater,
@@ -374,10 +380,15 @@ function startElectronApp() {
       updateUnsubscribe = updateController.subscribe(handleUpdateSnapshot);
       const kitStoreRoot = desktopPaths.kitStoreRoot;
       kitStore = new InstalledKitStore(kitStoreRoot);
+      const repositoryKitDescriptors = await discoverRepositoryBuiltinKits({ repositoryRoot: rootDir });
+      const builtinKitIds = repositoryKitDescriptors
+        .filter((descriptor) => descriptor.distribution === 'builtin')
+        .map((descriptor) => descriptor.id);
       kitManagerService = createKitManagerService({
         storeRoot: kitStoreRoot,
         store: kitStore,
         runtime: kitRuntime,
+        builtinKitIds,
       });
       kitArtifactUninstaller = new KitArtifactUninstaller({
         storeRoot: kitStoreRoot,
@@ -432,7 +443,7 @@ function startElectronApp() {
       liveKitManager = createLiveKitManager({
         manager: kitManagerService.manager,
         coordinator: kitRuntimeCoordinator,
-        builtinKitIds: BUILTIN_KIT_IDS,
+        builtinKitIds,
       });
       kitManagerWindowController = createKitManagerWindowController({
         BrowserWindow,
@@ -507,7 +518,9 @@ function startElectronApp() {
 }
 
 async function startFramework() {
-  if (app.isPackaged) return startPackagedFramework();
+  if (shouldUseBundledFramework({ isPackaged: app.isPackaged, runtimeProfile })) {
+    return startPackagedFramework();
+  }
   return startDevelopmentFramework();
 }
 
@@ -516,6 +529,7 @@ async function startPackagedFramework() {
   const started = startDesktopFrameworkProcess(createPackagedFrameworkSpec({
     executable: process.execPath,
     frameworkEntry: desktopPaths.frameworkEntry,
+    cwd: desktopPaths.runtimeRoot,
     env: {
       ...process.env,
       HARBORS_RUNTIME_ROOT: desktopPaths.runtimeRoot,

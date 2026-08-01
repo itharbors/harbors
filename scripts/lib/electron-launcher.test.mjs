@@ -23,6 +23,7 @@ import {
   finishDesktopShutdown,
   showKitChooser,
   shouldStartElectronApp,
+  shouldUseBundledFramework,
 } from './electron-launcher.mjs';
 import { createDevPages, createDevServerEnv, createDevStackEnvironments } from './dev-launcher.mjs';
 
@@ -66,6 +67,12 @@ test('starts packaged Electron when LaunchServices does not provide the bundled 
     entryPath: modulePath,
     modulePath,
   }), true);
+});
+
+test('uses the bundled Framework for stable source and packaged runs only', () => {
+  assert.equal(shouldUseBundledFramework({ isPackaged: false, runtimeProfile: 'stable' }), true);
+  assert.equal(shouldUseBundledFramework({ isPackaged: false, runtimeProfile: 'development' }), false);
+  assert.equal(shouldUseBundledFramework({ isPackaged: true, runtimeProfile: 'development' }), true);
 });
 
 test('registers SIGTERM and SIGINT as one graceful desktop quit, then disposes both listeners', () => {
@@ -177,7 +184,7 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.prestart, 'npm run build:runtime');
+  assert.equal(packageJson.scripts.prestart, 'npm run desktop:prepare');
   assert.equal(
     packageJson.scripts['plugins:build:runtime'],
     'node scripts/build.mjs plugins-runtime',
@@ -198,6 +205,7 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
   const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   assert.match(electronSource, /resolveRuntimePorts/);
   assert.match(electronSource, /HARBORS_RUNTIME_PROFILE/);
+  assert.match(electronSource, /shouldUseBundledFramework/u);
 });
 
 test('limits the default cleanup command to development ports', async () => {
@@ -846,7 +854,7 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
   assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
   assert.match(source, /app\.getVersion\(\)/);
-  assert.match(source, /app\.isPackaged\s*\?\s*resolveCurrentProcessRuntime\(process\)\s*:\s*resolveFrameworkRuntime\(\)/);
+  assert.match(source, /bundledFramework\s*\?\s*resolveCurrentProcessRuntime\(process\)\s*:\s*resolveFrameworkRuntime\(\)/);
   assert.match(source, /prepareInstalledKitsForStartup/);
   assert.match(source, /finalizePendingKitActivations/);
   assert.match(source, /validateInstalledKitRuntime/);
@@ -918,6 +926,8 @@ test('consults the supervised Framework stop result even after the child exits e
 
 test('commits pending installed Kits through an in-process Framework generation recovery', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  assert.match(source, /discoverRepositoryBuiltinKits/u);
+  assert.doesNotMatch(source, /discoverRepositoryKits\s*\(/u);
   const prepare = source.indexOf('await prepareInstalledKitsForStartup');
   const discover = source.indexOf('kitCatalog = await discoverKits');
   const initialize = source.indexOf('await initializeKitHost');

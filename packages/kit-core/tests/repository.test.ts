@@ -31,6 +31,7 @@ describe('parseRepositoryKitPackage', () => {
 
     expect(metadata).toEqual({
       distribution: 'market',
+      isDefault: false,
       ciRunner: 'ubuntu-latest',
       summary: 'Product summary',
       scripts: { build: 'build', test: 'test:kit', smoke: 'smoke' },
@@ -50,6 +51,25 @@ describe('parseRepositoryKitPackage', () => {
     });
 
     expect(metadata.distribution).toBe('builtin');
+    expect(metadata.isDefault).toBe(false);
+  });
+
+  it('accepts default only for a builtin distribution', () => {
+    expect(parseRepositoryKitPackage({
+      ...validHarbors,
+      distribution: 'builtin',
+      default: true,
+    }).isDefault).toBe(true);
+
+    expect(() => parseRepositoryKitPackage({
+      ...validHarbors,
+      default: true,
+    })).toThrow(/harbors.default.*builtin/u);
+    expect(() => parseRepositoryKitPackage({
+      ...validHarbors,
+      distribution: 'builtin',
+      default: 'yes',
+    })).toThrow(/harbors.default must be a boolean/u);
   });
 
   it('omits smoke when not declared', () => {

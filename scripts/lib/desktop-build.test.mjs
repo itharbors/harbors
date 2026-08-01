@@ -5,6 +5,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -13,8 +14,27 @@ import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { pathToFileURL } from 'node:url';
 
-import { buildDesktop, stageDesktopFiles } from './desktop-build.mjs';
+import {
+  buildDesktop as buildDesktopWithDescriptors,
+  stageBuiltinKit,
+  stageDesktopFiles as stageDesktopFilesWithDescriptors,
+} from './desktop-build.mjs';
+import { prepareDesktopRuntime } from './desktop-prepare.mjs';
+import { discoverRepositoryKits } from './repository-kits.mjs';
+
+function defaultDescriptor() {
+  return fixtureDescriptor('default', 'builtin', '@itharbors/kit-default', 'default');
+}
+
+function buildDesktop(options) {
+  return buildDesktopWithDescriptors({ descriptors: [defaultDescriptor()], ...options });
+}
+
+function stageDesktopFiles(options) {
+  return stageDesktopFilesWithDescriptors({ descriptors: [defaultDescriptor()], ...options });
+}
 
 async function write(root, relative, contents = relative) {
   const filename = path.join(root, relative);
@@ -58,8 +78,10 @@ export const main = true;
   }
   await write(root, 'kits/default/package.json', JSON.stringify({
     name: '@itharbors/kit-default',
+    version: '1.0.0',
     'ce-editor': {
       kit: {
+        menuRoot: { id: 'default', label: 'Default' },
         layouts: { default: 'layout.json' },
         windowEntries: { main: 'main.html', secondary: 'secondary.html' },
         plugin: [
@@ -73,6 +95,25 @@ export const main = true;
         ],
       },
     },
+    harbors: {
+      distribution: 'builtin',
+      ci: { runner: 'ubuntu-latest' },
+      docs: { summary: 'Default fixture' },
+      resources: [],
+      storage: { legacyDataDirectories: [] },
+      scripts: { build: 'build', test: 'test:kit', smoke: 'smoke' },
+    },
+  }));
+  await write(root, 'kits/default/kit.json', JSON.stringify({
+    schemaVersion: 1,
+    id: '@itharbors/kit-default',
+    version: '1.0.0',
+    channel: 'stable',
+    publisher: 'fixture',
+    requires: { harbors: '>=0.0.1 <1.0.0', kitApi: '^1.0.0', protocolVersion: 1 },
+    target: { platform: 'any', arch: 'any' },
+    permissions: [],
+    entry: 'package.json',
   }));
   await write(root, 'kits/default/layout.json', '{}');
   await write(root, 'kits/default/main.html', '<main></main>');
@@ -126,6 +167,411 @@ async function topLevel(directory) {
     .map((entry) => entry.name)
     .sort();
 }
+
+function fixtureDescriptor(slug, distribution, id = `@fixture/kit-${slug}`, menuRootId = slug) {
+  return {
+    slug,
+    id,
+    distribution,
+    isDefault: distribution === 'builtin',
+    menuRoot: { id: menuRootId, label: menuRootId },
+    resources: [],
+    packageJson: { 'ce-editor': { kit: { menuRoot: { id: menuRootId } } } },
+  };
+}
+
+async function createMinimalKit(root, slug) {
+  await write(root, `kits/${slug}/package.json`, JSON.stringify({
+    name: `@fixture/kit-${slug}`,
+    version: '1.0.0',
+    'ce-editor': {
+      kit: {
+        menuRoot: { id: slug, label: slug },
+        layouts: { default: 'layout.json' },
+        windowEntries: { main: 'main.html', secondary: 'secondary.html' },
+        plugin: [],
+      },
+    },
+    harbors: {
+      distribution: 'builtin',
+      default: true,
+      ci: { runner: 'ubuntu-latest' },
+      docs: { summary: `${slug} fixture` },
+      resources: ['resources'],
+      storage: { legacyDataDirectories: [] },
+      scripts: { build: 'build', test: 'test:kit' },
+    },
+  }));
+  await write(root, `kits/${slug}/kit.json`, JSON.stringify({
+    schemaVersion: 1,
+    id: `@fixture/kit-${slug}`,
+    version: '1.0.0',
+    channel: 'stable',
+    publisher: 'fixture',
+    requires: { harbors: '>=0.0.1 <1.0.0', kitApi: '^1.0.0', protocolVersion: 1 },
+    target: { platform: 'any', arch: 'any' },
+    permissions: [],
+    entry: 'package.json',
+  }));
+  await write(root, `kits/${slug}/layout.json`, '{}');
+  await write(root, `kits/${slug}/main.html`, '<main></main>');
+  await write(root, `kits/${slug}/secondary.html`, '<main></main>');
+  await mkdir(path.join(root, 'kits', slug, 'plugins'), { recursive: true });
+}
+
+test('stages an arbitrary builtin descriptor and excludes market descriptors', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  await createMinimalKit(repositoryRoot, 'surprise');
+  await write(repositoryRoot, 'kits/surprise/resources/runtime.txt', 'runtime');
+  const outputRoot = path.join(repositoryRoot, 'dist', 'descriptor-runtime');
+
+  await buildDesktop({
+    repositoryRoot,
+    outputRoot,
+    descriptors: [
+      { ...fixtureDescriptor('surprise', 'builtin'), resources: ['resources'] },
+      fixtureDescriptor('default', 'market', '@itharbors/kit-default', 'default'),
+    ],
+  });
+
+  assert.deepEqual(await topLevel(path.join(outputRoot, 'kits')), ['surprise']);
+  assert.equal(await readFile(path.join(outputRoot, 'kits/surprise/resources/runtime.txt'), 'utf8'), 'runtime');
+  assert.equal(existsSync(path.join(outputRoot, 'kits/surprise/kit.json')), true);
+  const packaged = await discoverRepositoryKits({ repositoryRoot: outputRoot });
+  assert.deepEqual(packaged.map(({ slug, distribution, isDefault }) => ({ slug, distribution, isDefault })), [
+    { slug: 'surprise', distribution: 'builtin', isDefault: true },
+  ]);
+});
+
+test('stages Kit-owned production dependencies from a validated private payload', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  await createMinimalKit(repositoryRoot, 'dependent');
+  await updateJson(repositoryRoot, 'kits/dependent/package.json', (manifest) => {
+    manifest['ce-editor'].kit.plugin = ['@fixture/dependent-plugin'];
+  });
+  await write(repositoryRoot, 'kits/dependent/plugins/dependent-plugin/package.json', JSON.stringify({
+    name: '@fixture/dependent-plugin',
+    version: '1.0.0',
+    type: 'module',
+    main: './main/dist/index.js',
+    dependencies: { 'kit-owned-runtime': '1.0.0' },
+    'ce-editor': { contribute: {} },
+  }));
+  await write(
+    repositoryRoot,
+    'kits/dependent/plugins/dependent-plugin/main/dist/index.js',
+    "import { value } from 'kit-owned-runtime'; export default value;\n",
+  );
+  await write(repositoryRoot, 'kits/dependent/node_modules/kit-owned-runtime/package.json', JSON.stringify({
+    name: 'kit-owned-runtime', version: '1.0.0', type: 'module', main: './index.js',
+  }));
+  await write(
+    repositoryRoot,
+    'kits/dependent/node_modules/kit-owned-runtime/index.js',
+    "export const value = 'private dependency';\n",
+  );
+  const outputRoot = path.join(repositoryRoot, 'dist', 'dependent-runtime');
+
+  await stageBuiltinKit({
+    repositoryRoot,
+    outputRoot,
+    descriptor: fixtureDescriptor('dependent', 'builtin'),
+  });
+
+  const stagedDependency = path.join(
+    outputRoot,
+    'kits/dependent/node_modules/kit-owned-runtime/index.js',
+  );
+  assert.equal(existsSync(stagedDependency), true);
+  const plugin = await import(pathToFileURL(path.join(
+    outputRoot,
+    'kits/dependent/plugins/dependent-plugin/main/dist/index.js',
+  )).href);
+  assert.equal(plugin.default, 'private dependency');
+});
+
+test('production prepare builds and stages builtin Kits only from private install roots', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'prepared-runtime');
+  const source = {
+    ...fixtureDescriptor('surprise', 'builtin'),
+    version: '1.0.0',
+    scripts: { build: 'build' },
+    target: { platform: 'any', arch: 'any' },
+    permissions: [],
+  };
+  const runRoot = path.join(repositoryRoot, '.private-run');
+  const installRoot = path.join(runRoot, 'repository', 'kits', 'surprise');
+  const calls = [];
+
+  await prepareDesktopRuntime({
+    repositoryRoot,
+    outputRoot,
+    descriptors: [source, fixtureDescriptor('market', 'market')],
+    ensureInstall: async ({ descriptor, cacheRoot }) => {
+      calls.push(`install:${descriptor.slug}`);
+      assert.equal(cacheRoot, path.join(repositoryRoot, '.cache', 'harbors-kit-installs'));
+      await mkdir(installRoot, { recursive: true });
+      return { installRoot, runRoot };
+    },
+    runCommand: async (_command, args, options) => {
+      calls.push(`build:${options.cwd}`);
+      assert.equal(args[1], 'build');
+      await write(options.cwd, 'dist/private.txt', 'built privately');
+    },
+    loadKit: async ({ repositoryRoot: loadedRoot, slug }) => {
+      calls.push(`load:${loadedRoot}:${slug}`);
+      return { ...source, directory: installRoot };
+    },
+    buildFramework: async ({ outputRoot: aggregateRoot, descriptors }) => {
+      assert.deepEqual(descriptors, []);
+      await write(aggregateRoot, 'framework.txt', 'framework');
+      return { outputRoot: aggregateRoot, inventory: [] };
+    },
+    stageKit: async ({ repositoryRoot: privateRoot, outputRoot: stagedRoot, descriptor }) => {
+      calls.push(`stage:${privateRoot}:${descriptor.directory}`);
+      assert.equal(privateRoot, path.join(runRoot, 'repository'));
+      assert.equal(descriptor.directory, installRoot);
+      await write(stagedRoot, 'kits/surprise/package.json', '{}');
+      await write(stagedRoot, 'kits/surprise/kit.json', '{}');
+      await write(stagedRoot, 'kits/surprise/resources/private.txt', 'private');
+    },
+  });
+
+  assert.equal(existsSync(path.join(repositoryRoot, 'kits/surprise/dist')), false);
+  assert.equal(await readFile(path.join(outputRoot, 'kits/surprise/resources/private.txt'), 'utf8'), 'private');
+  assert.equal(existsSync(runRoot), false);
+  assert.deepEqual(calls.map((item) => item.split(':')[0]), ['install', 'build', 'load', 'stage']);
+});
+
+test('production prepare preserves output and cleans every opened private run after a builtin failure', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'prepared-runtime-failure');
+  await write(outputRoot, 'sentinel.txt', 'previous');
+  const descriptors = ['one', 'two'].map((slug, index) => ({
+    ...fixtureDescriptor(slug, 'builtin', `@fixture/kit-${slug}`, slug),
+    isDefault: index === 0,
+    version: '1.0.0',
+    scripts: { build: 'build' },
+    target: { platform: 'any', arch: 'any' },
+    permissions: [],
+  }));
+  const runRoots = [];
+
+  await assert.rejects(prepareDesktopRuntime({
+    repositoryRoot,
+    outputRoot,
+    descriptors,
+    ensureInstall: async ({ descriptor }) => {
+      const runRoot = path.join(repositoryRoot, `.private-${descriptor.slug}`);
+      const installRoot = path.join(runRoot, 'repository', 'kits', descriptor.slug);
+      runRoots.push(runRoot);
+      await mkdir(installRoot, { recursive: true });
+      return { installRoot, runRoot };
+    },
+    runCommand: async (_command, _args, { cwd }) => {
+      if (cwd.endsWith(`${path.sep}two`)) throw new Error('second builtin build failed');
+    },
+    loadKit: async ({ slug }) => ({
+      ...descriptors.find((descriptor) => descriptor.slug === slug),
+      directory: path.join(repositoryRoot, `.private-${slug}`, 'repository', 'kits', slug),
+    }),
+  }), /second builtin build failed/u);
+
+  assert.equal(await readFile(path.join(outputRoot, 'sentinel.txt'), 'utf8'), 'previous');
+  assert.equal(runRoots.every((runRoot) => !existsSync(runRoot)), true);
+});
+
+test('production prepare rejects complete built descriptor drift and cleans the private run', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const source = {
+    ...fixtureDescriptor('drift', 'builtin'),
+    version: '1.0.0', scripts: { build: 'build', test: 'test' },
+    target: { platform: 'any', arch: 'any' }, permissions: [],
+    manifest: { id: '@fixture/kit-drift', target: { platform: 'any', arch: 'any' } },
+    packageJson: { 'ce-editor': { kit: { plugin: ['one'], layouts: { default: 'layout.json' }, windowEntries: { main: 'main.html', secondary: 'secondary.html' } } }, harbors: { scripts: { build: 'build', test: 'test' } } },
+  };
+  const runRoot = path.join(repositoryRoot, '.private-drift');
+  const installRoot = path.join(runRoot, 'repository', 'kits', 'drift');
+  await assert.rejects(prepareDesktopRuntime({
+    repositoryRoot,
+    outputRoot: path.join(repositoryRoot, 'dist', 'drift-output'),
+    descriptors: [source],
+    ensureInstall: async () => {
+      await mkdir(installRoot, { recursive: true });
+      return { installRoot, runRoot };
+    },
+    runCommand: async () => {},
+    loadKit: async () => ({
+      ...source,
+      directory: installRoot,
+      packageJson: {
+        ...source.packageJson,
+        'ce-editor': {
+          kit: {
+            ...source.packageJson['ce-editor'].kit,
+            plugin: ['mutated'],
+            layouts: { default: 'mutated-layout.json' },
+            windowEntries: { main: 'mutated.html', secondary: 'mutated-secondary.html' },
+          },
+        },
+        harbors: {
+          ...source.packageJson.harbors,
+          resources: ['mutated-resource'],
+          scripts: { build: 'mutated-build', test: 'mutated-test' },
+        },
+      },
+    }),
+  }), /descriptor drift/u);
+  assert.equal(existsSync(runRoot), false);
+});
+
+test('transactional desktop replacement restores old output when publishing the aggregate fails', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'transaction-output');
+  await write(outputRoot, 'sentinel.txt', 'old');
+  const descriptor = {
+    ...fixtureDescriptor('one', 'builtin'), version: '1.0.0', scripts: { build: 'build' },
+    target: { platform: 'any', arch: 'any' }, permissions: [],
+  };
+  const runRoot = path.join(repositoryRoot, '.private-transaction');
+  const installRoot = path.join(runRoot, 'repository', 'kits', 'one');
+  let renameCalls = 0;
+  await assert.rejects(prepareDesktopRuntime({
+    repositoryRoot, outputRoot, descriptors: [descriptor],
+    ensureInstall: async () => { await mkdir(installRoot, { recursive: true }); return { installRoot, runRoot }; },
+    runCommand: async () => {},
+    loadKit: async () => ({ ...descriptor, directory: installRoot }),
+    buildFramework: async ({ outputRoot: root }) => { await write(root, 'framework.txt', 'new'); },
+    stageKit: async ({ outputRoot: root }) => { await write(root, 'kits/one/package.json', '{}'); },
+    renamePath: async (source, destination) => {
+      renameCalls += 1;
+      if (renameCalls === 2) throw new Error('publish rename failed');
+      await rename(source, destination);
+    },
+  }), /publish rename failed/u);
+  assert.equal(await readFile(path.join(outputRoot, 'sentinel.txt'), 'utf8'), 'old');
+  assert.equal((await readdir(path.dirname(outputRoot))).some((name) => name.includes('.backup-')), false);
+  assert.equal((await readdir(path.dirname(outputRoot))).some((name) => name.startsWith('.desktop-runtime-')), false);
+});
+
+test('transactional desktop replacement cleans aggregate when publishing without old output fails', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'transaction-empty-output');
+  const descriptor = {
+    ...fixtureDescriptor('one', 'builtin'), version: '1.0.0', scripts: { build: 'build' },
+    target: { platform: 'any', arch: 'any' }, permissions: [],
+  };
+  const runRoot = path.join(repositoryRoot, '.private-empty-transaction');
+  const installRoot = path.join(runRoot, 'repository', 'kits', 'one');
+  await assert.rejects(prepareDesktopRuntime({
+    repositoryRoot, outputRoot, descriptors: [descriptor],
+    ensureInstall: async () => { await mkdir(installRoot, { recursive: true }); return { installRoot, runRoot }; },
+    runCommand: async () => {}, loadKit: async () => ({ ...descriptor, directory: installRoot }),
+    buildFramework: async ({ outputRoot: root }) => { await write(root, 'framework.txt', 'new'); },
+    stageKit: async ({ outputRoot: root }) => { await write(root, 'kits/one/package.json', '{}'); },
+    renamePath: async () => { throw new Error('publish without old failed'); },
+  }), /publish without old failed/u);
+  assert.equal(existsSync(outputRoot), false);
+  assert.equal((await readdir(path.dirname(outputRoot))).some((name) => name.startsWith('.desktop-runtime-')), false);
+});
+
+test('transactional desktop replacement preserves the only old copy when rollback is concurrently blocked', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'transaction-contended-output');
+  await write(outputRoot, 'sentinel.txt', 'old');
+  const descriptor = {
+    ...fixtureDescriptor('one', 'builtin'), version: '1.0.0', scripts: { build: 'build' },
+    target: { platform: 'any', arch: 'any' }, permissions: [],
+  };
+  const runRoot = path.join(repositoryRoot, '.private-contended-transaction');
+  const installRoot = path.join(runRoot, 'repository', 'kits', 'one');
+  let renameCalls = 0;
+  let failure;
+  try {
+    await prepareDesktopRuntime({
+      repositoryRoot, outputRoot, descriptors: [descriptor],
+      ensureInstall: async () => { await mkdir(installRoot, { recursive: true }); return { installRoot, runRoot }; },
+      runCommand: async () => {}, loadKit: async () => ({ ...descriptor, directory: installRoot }),
+      buildFramework: async ({ outputRoot: root }) => { await write(root, 'framework.txt', 'new'); },
+      stageKit: async ({ outputRoot: root }) => { await write(root, 'kits/one/package.json', '{}'); },
+      renamePath: async (source, destination) => {
+        renameCalls += 1;
+        if (renameCalls === 2) {
+          await write(destination, 'intruder.txt', 'intruder');
+          throw new Error('publish collided');
+        }
+        await rename(source, destination);
+      },
+    });
+  } catch (error) {
+    failure = error;
+  }
+  assert.ok(failure instanceof AggregateError);
+  assert.equal(failure.errors.length, 2);
+  assert.match(failure.errors[0].message, /publish collided/u);
+  assert.match(failure.errors[1].message, /exist|empty/iu);
+  const backupRoot = /preserved at (.+)$/u.exec(failure.message)?.[1];
+  assert.ok(backupRoot && path.isAbsolute(backupRoot));
+  assert.equal(await readFile(path.join(backupRoot, 'sentinel.txt'), 'utf8'), 'old');
+  assert.equal(await readFile(path.join(outputRoot, 'intruder.txt'), 'utf8'), 'intruder');
+  assert.equal((await readdir(path.dirname(outputRoot))).some((name) => name.startsWith('.desktop-runtime-')), false);
+});
+
+test('builtin staging rejects market inputs and duplicate descriptor identities', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'descriptor-stage');
+  await assert.rejects(stageDesktopFiles({
+    repositoryRoot,
+    outputRoot,
+    descriptors: [fixtureDescriptor('default', 'market', '@itharbors/kit-default', 'default')],
+    entries: [{ source: 'kits/default/package.json', destination: 'kits/default/package.json' }],
+  }), /market.*builtin staging|builtin staging.*market/iu);
+
+  for (const descriptors of [
+    [fixtureDescriptor('default', 'builtin', '@fixture/shared', 'one'), fixtureDescriptor('other', 'builtin', '@fixture/shared', 'two')],
+    [fixtureDescriptor('default', 'builtin', '@fixture/one', 'shared'), fixtureDescriptor('other', 'builtin', '@fixture/two', 'shared')],
+  ]) {
+    await assert.rejects(stageDesktopFiles({
+      repositoryRoot,
+      outputRoot,
+      descriptors,
+      entries: [],
+    }), /duplicate (?:Desktop|builtin) Kit (?:id|menu root)/iu);
+  }
+});
+
+test('production prepare validates the complete descriptor policy before installing', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  let installs = 0;
+  const valid = fixtureDescriptor('one', 'builtin', '@fixture/one', 'one');
+  for (const descriptors of [
+    [fixtureDescriptor('market', 'market')],
+    [{ ...fixtureDescriptor('market', 'market'), isDefault: true }],
+    [{ ...valid, isDefault: false }],
+    [{ ...valid, isDefault: 'yes' }],
+    [valid, { ...fixtureDescriptor('two', 'builtin', '@fixture/one', 'two'), isDefault: false }],
+    [valid, { ...fixtureDescriptor('two', 'builtin', '@fixture/two', 'one'), isDefault: false }],
+  ]) {
+    await assert.rejects(prepareDesktopRuntime({
+      repositoryRoot,
+      outputRoot: path.join(repositoryRoot, 'dist', 'invalid-policy'),
+      descriptors,
+      ensureInstall: async () => { installs += 1; },
+    }), /builtin|default|duplicate|malformed/iu);
+  }
+  assert.equal(installs, 0);
+});
+
+test('builtin staging rejects a market descriptor directly', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const { stageBuiltinKit } = await import('./desktop-build.mjs');
+  await assert.rejects(stageBuiltinKit({
+    repositoryRoot,
+    outputRoot: path.join(repositoryRoot, 'dist', 'market-direct'),
+    descriptor: fixtureDescriptor('default', 'market', '@itharbors/kit-default', 'default'),
+  }), /rejects market/iu);
+});
 
 test('stages a deterministic minimum runtime and excludes product Kits', async (t) => {
   const repositoryRoot = await createRepositoryFixture(t);

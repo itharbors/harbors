@@ -1,4 +1,4 @@
-import { lstat, readdir, readFile, realpath, stat } from 'node:fs/promises';
+import { lstat, readdir, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseKitPackageManifest, parseRepositoryKitPackage } from '@itharbors/kit-core';
@@ -59,7 +59,7 @@ async function validateResource(kitDirectory, resource, index) {
   }
 }
 
-function extractLabel(packageJson) {
+function extractMenuRoot(packageJson) {
   const ceEditor = packageJson['ce-editor'];
   if (ceEditor === null || typeof ceEditor !== 'object') {
     throw new Error('package.json is missing ce-editor configuration');
@@ -73,10 +73,14 @@ function extractLabel(packageJson) {
     throw new Error('package.json ce-editor.kit is missing menuRoot');
   }
   const label = menuRoot.label;
+  const id = menuRoot.id;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new Error('package.json ce-editor.kit.menuRoot.id must be a non-empty string');
+  }
   if (typeof label !== 'string' || label.length === 0) {
     throw new Error('package.json ce-editor.kit.menuRoot.label must be a non-empty string');
   }
-  return label;
+  return Object.freeze({ id, label });
 }
 
 async function loadKitDescriptor(repositoryRoot, slug) {
@@ -85,13 +89,16 @@ async function loadKitDescriptor(repositoryRoot, slug) {
   const kitsRoot = path.join(repositoryRoot, 'kits');
   const directory = path.join(kitsRoot, slug);
 
-  const directoryStat = await stat(directory);
-  if (!directoryStat.isDirectory()) {
+  const directoryStat = await lstat(directory);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
     throw new Error(`Kit directory is not a real directory: ${slug}`);
   }
 
   const realDirectory = await realpath(directory);
   const realKitsRoot = await realpath(kitsRoot);
+  if (realDirectory !== path.join(realKitsRoot, slug)) {
+    throw new Error(`Kit directory is not the canonical physical directory for slug: ${slug}`);
+  }
   const relative = path.relative(realKitsRoot, realDirectory);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     throw new Error(`Kit directory escapes the kits root: ${slug}`);
@@ -120,7 +127,7 @@ async function loadKitDescriptor(repositoryRoot, slug) {
     await validateResource(realDirectory, metadata.resources[i], i);
   }
 
-  const label = extractLabel(packageJson);
+  const menuRoot = extractMenuRoot(packageJson);
 
   const frozenManifest = deepFreeze(JSON.parse(JSON.stringify(manifest)));
   const frozenPackageJson = deepFreeze(JSON.parse(JSON.stringify(packageJson)));
@@ -130,8 +137,10 @@ async function loadKitDescriptor(repositoryRoot, slug) {
     directory: realDirectory,
     id: manifest.id,
     version: manifest.version,
-    label,
+    label: menuRoot.label,
+    menuRoot,
     distribution: metadata.distribution,
+    isDefault: metadata.isDefault,
     target: Object.freeze({ ...manifest.target }),
     permissions: Object.freeze([...manifest.permissions]),
     ciRunner: metadata.ciRunner,
@@ -144,27 +153,71 @@ async function loadKitDescriptor(repositoryRoot, slug) {
   });
 }
 
-export async function discoverRepositoryKits({ repositoryRoot }) {
+async function listRepositoryKitSlugs(repositoryRoot) {
   const kitsRoot = path.join(repositoryRoot, 'kits');
   const entries = await readdir(kitsRoot, { withFileTypes: true });
-
-  const slugs = entries
+  return entries
     .filter((entry) => entry.isDirectory() || entry.isSymbolicLink())
     .map((entry) => entry.name)
     .filter((name) => SLUG_PATTERN.test(name))
     .sort();
+}
 
-  const descriptors = [];
+function assertUniqueDescriptors(descriptors) {
   const seenIds = new Set();
-  for (const slug of slugs) {
-    const descriptor = await loadKitDescriptor(repositoryRoot, slug);
+  const seenMenuRootIds = new Set();
+  for (const descriptor of descriptors) {
     if (seenIds.has(descriptor.id)) {
       throw new Error(`duplicate Kit id discovered: ${descriptor.id}`);
     }
     seenIds.add(descriptor.id);
-    descriptors.push(descriptor);
+    if (seenMenuRootIds.has(descriptor.menuRoot.id)) {
+      throw new Error(`duplicate Kit menu root id discovered: ${descriptor.menuRoot.id}`);
+    }
+    seenMenuRootIds.add(descriptor.menuRoot.id);
+  }
+}
+
+function assertExactlyOneDefaultBuiltin(descriptors, { allowNoBuiltin = false } = {}) {
+  const builtin = descriptors.filter((descriptor) => descriptor.distribution === 'builtin');
+  if ((builtin.length > 0 || !allowNoBuiltin)
+    && builtin.filter((descriptor) => descriptor.isDefault).length !== 1) {
+    throw new Error('builtin Kits must declare exactly one default');
+  }
+}
+
+export async function discoverRepositoryKits({ repositoryRoot }) {
+  const slugs = await listRepositoryKitSlugs(repositoryRoot);
+  const descriptors = [];
+  for (const slug of slugs) {
+    descriptors.push(await loadKitDescriptor(repositoryRoot, slug));
   }
 
+  assertUniqueDescriptors(descriptors);
+  assertExactlyOneDefaultBuiltin(descriptors, { allowNoBuiltin: true });
+
+  return Object.freeze(descriptors);
+}
+
+export async function discoverRepositoryBuiltinKits({ repositoryRoot }) {
+  const descriptors = [];
+  for (const slug of await listRepositoryKitSlugs(repositoryRoot)) {
+    let packageJson;
+    try {
+      packageJson = JSON.parse(await readFile(
+        path.join(repositoryRoot, 'kits', slug, 'package.json'),
+        'utf8',
+      ));
+    } catch {
+      // Unknown or malformed non-builtin candidates belong to Catalog diagnostics.
+      continue;
+    }
+    if (packageJson?.harbors?.distribution !== 'builtin') continue;
+    descriptors.push(await loadKitDescriptor(repositoryRoot, slug));
+  }
+
+  assertUniqueDescriptors(descriptors);
+  assertExactlyOneDefaultBuiltin(descriptors);
   return Object.freeze(descriptors);
 }
 

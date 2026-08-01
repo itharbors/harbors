@@ -3,7 +3,11 @@ import { cleanDir } from './fs.js';
 import type { PluginProject } from './types.js';
 import { compileMainScript, compilePanelScripts } from './scripts.js';
 import { copyPanelStyles } from './styles.js';
-import { validateBuiltOutputs, validatePluginManifest } from './validate.js';
+import {
+  validateBuiltOutputs,
+  validatePluginManifest,
+  validateRuntimePluginManifest,
+} from './validate.js';
 
 export * from './assets.js';
 export * from './discover.js';
@@ -29,5 +33,10 @@ export function buildPlugin(plugin: PluginProject): void {
 
 export function checkPlugin(plugin: PluginProject): void {
   validatePluginManifest(plugin);
+  validateBuiltOutputs(plugin);
+}
+
+export function checkRuntimePlugin(plugin: PluginProject): void {
+  validateRuntimePluginManifest(plugin);
   validateBuiltOutputs(plugin);
 }

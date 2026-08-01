@@ -23,15 +23,17 @@ function validPort(value) {
   return Number.isInteger(value) && value >= 1 && value <= 65535;
 }
 
-export function createPackagedFrameworkSpec({ executable, frameworkEntry, env }) {
+export function createPackagedFrameworkSpec({ executable, frameworkEntry, cwd, env }) {
   const command = requireAbsolute(executable, 'executable');
   const entry = requireAbsolute(frameworkEntry, 'frameworkEntry');
+  const workingDirectory = requireAbsolute(cwd, 'cwd');
   if (!env || typeof env !== 'object' || Array.isArray(env)) {
     throw new TypeError('env must be an object');
   }
   return Object.freeze({
     command,
     args: Object.freeze([entry]),
+    cwd: workingDirectory,
     env: Object.freeze({ ...env, ELECTRON_RUN_AS_NODE: '1' }),
     stdio: Object.freeze(['ignore', 'inherit', 'inherit', 'ipc']),
   });
@@ -45,6 +47,7 @@ export function startDesktopFrameworkProcess(spec, {
   stopTimeoutMs = STOP_TIMEOUT_MS,
 } = {}) {
   const child = spawn(spec.command, spec.args, {
+    cwd: spec.cwd,
     env: spec.env,
     stdio: spec.stdio,
   });

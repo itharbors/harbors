@@ -2,12 +2,15 @@
 import {
   buildPlugin,
   checkPlugin,
+  checkRuntimePlugin,
   discoverAllPlugins,
   discoverPlugin,
   discoverRuntimePlugins,
 } from '@itharbors/kit-cli';
 
-import { BUILTIN_KITS } from './lib/builtin-kits.mjs';
+import { assertStableRuntimeReady, resolveSourceRuntimeRoot } from './lib/desktop-paths.mjs';
+import { resolveRuntimeProfile } from './lib/runtime-ports.mjs';
+import { discoverRepositoryBuiltinKits } from './lib/repository-kits.mjs';
 
 function parseArgs(argv) {
   const [command, target] = argv;
@@ -21,30 +24,45 @@ function ensureTarget(target) {
   return target;
 }
 
-function discoverTargets(target) {
+async function discoverTargets(command, target) {
   const resolvedTarget = ensureTarget(target);
   if (resolvedTarget !== '--all' && resolvedTarget !== '--runtime') {
     return [target];
   }
 
-  const plugins = resolvedTarget === '--runtime'
-    ? discoverRuntimePlugins(process.cwd(), BUILTIN_KITS.map((kit) => kit.slug))
-    : discoverAllPlugins(process.cwd());
+  let plugins;
+  if (resolvedTarget === '--runtime') {
+    const repositoryRoot = process.cwd();
+    const runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
+    if (command === 'build' && runtimeProfile === 'stable') {
+      throw new Error('Stable runtime artifacts cannot be rebuilt in place; run npm run desktop:prepare');
+    }
+    const runtimeRoot = resolveSourceRuntimeRoot({ repositoryRoot, runtimeProfile });
+    if (runtimeProfile === 'stable') await assertStableRuntimeReady(runtimeRoot);
+    plugins = discoverRuntimePlugins(
+      runtimeRoot,
+      await discoverRepositoryBuiltinKits({ repositoryRoot: runtimeRoot }),
+    );
+  } else {
+    plugins = discoverAllPlugins(process.cwd());
+  }
   if (plugins.length === 0) {
     throw new Error('No plugins found');
   }
   return plugins;
 }
 
-function run(command, target) {
+async function run(command, target) {
   switch (command) {
     case 'check':
-      for (const pluginDir of discoverTargets(target)) {
-        checkPlugin(discoverPlugin(pluginDir));
+      for (const pluginDir of await discoverTargets(command, target)) {
+        const runtimeArtifact = target === '--runtime'
+          && resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable') === 'stable';
+        (runtimeArtifact ? checkRuntimePlugin : checkPlugin)(discoverPlugin(pluginDir));
       }
       return;
     case 'build':
-      for (const pluginDir of discoverTargets(target)) {
+      for (const pluginDir of await discoverTargets(command, target)) {
         buildPlugin(discoverPlugin(pluginDir));
       }
       return;
@@ -55,7 +73,7 @@ function run(command, target) {
 
 try {
   const { command, target } = parseArgs(process.argv.slice(2));
-  run(command, target);
+  await run(command, target);
 } catch (error) {
   console.error(error instanceof Error ? error.message : String(error));
   process.exitCode = 1;

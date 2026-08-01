@@ -10,6 +10,37 @@ function objectValue(value: unknown): Record<string, unknown> | null {
     : null;
 }
 
+export interface RuntimeKitDescriptor {
+  slug: string;
+  directory: string;
+  id: string;
+  distribution: 'builtin' | 'market';
+  isDefault: boolean;
+  menuRoot: Readonly<{ id: string; label: string }>;
+  packageJson: Record<string, unknown>;
+}
+
+function builtinDescriptors(descriptors: readonly RuntimeKitDescriptor[]): RuntimeKitDescriptor[] {
+  if (!Array.isArray(descriptors)) throw new TypeError('Kit descriptors must be an array');
+  const builtin = descriptors.filter((descriptor) => descriptor?.distribution === 'builtin');
+  const ids = new Set<string>();
+  const menuRoots = new Set<string>();
+  for (const descriptor of builtin) {
+    if (typeof descriptor.slug !== 'string' || typeof descriptor.id !== 'string') {
+      throw new Error('Builtin Kit descriptor must contain slug and id');
+    }
+    const menuRootId = descriptor.menuRoot?.id;
+    if (typeof menuRootId !== 'string' || menuRootId.length === 0) {
+      throw new Error(`Builtin Kit descriptor ${descriptor.slug} must contain a menu root id`);
+    }
+    if (ids.has(descriptor.id)) throw new Error(`Duplicate builtin Kit id: ${descriptor.id}`);
+    if (menuRoots.has(menuRootId)) throw new Error(`Duplicate builtin Kit menu root: ${menuRootId}`);
+    ids.add(descriptor.id);
+    menuRoots.add(menuRootId);
+  }
+  return [...builtin].sort((left, right) => left.slug.localeCompare(right.slug));
+}
+
 function appendPluginDirs(results: string[], pluginsRoot: string): void {
   let entries: fs.Dirent[];
   try {
@@ -38,7 +69,8 @@ function requirePluginNames(value: unknown, label: string): string[] {
   return [...value];
 }
 
-function discoverDeclaredKitPluginDirs(rootDir: string, kitSlug: string): string[] {
+function discoverDeclaredKitPluginDirs(rootDir: string, descriptor: RuntimeKitDescriptor): string[] {
+  const { slug: kitSlug, directory: kitRoot } = descriptor;
   if (typeof kitSlug !== 'string'
     || kitSlug.trim().length === 0
     || kitSlug === '.'
@@ -47,7 +79,28 @@ function discoverDeclaredKitPluginDirs(rootDir: string, kitSlug: string): string
     || path.basename(kitSlug) !== kitSlug) {
     throw new Error('Builtin Kit slug must be a non-empty directory name');
   }
-  const kitRoot = path.join(rootDir, 'kits', kitSlug);
+  if (typeof kitRoot !== 'string' || !path.isAbsolute(kitRoot)) {
+    throw new Error(`Builtin Kit descriptor ${kitSlug} must contain an absolute directory`);
+  }
+  const expectedDirectory = path.join(rootDir, 'kits', kitSlug);
+  let expectedInfo: fs.Stats;
+  let providedInfo: fs.Stats;
+  let expectedCanonical: string;
+  let providedCanonical: string;
+  try {
+    expectedInfo = fs.lstatSync(expectedDirectory);
+    providedInfo = fs.lstatSync(kitRoot);
+    expectedCanonical = fs.realpathSync(expectedDirectory);
+    providedCanonical = fs.realpathSync(kitRoot);
+  } catch (error) {
+    throw new Error(`Builtin Kit descriptor ${kitSlug} directory is invalid: ${(error as Error).message}`);
+  }
+  if (path.resolve(kitRoot) !== expectedDirectory
+    || expectedInfo.isSymbolicLink() || !expectedInfo.isDirectory()
+    || providedInfo.isSymbolicLink() || !providedInfo.isDirectory()
+    || providedCanonical !== expectedCanonical) {
+    throw new Error(`Builtin Kit descriptor ${kitSlug} directory must equal its canonical repository directory`);
+  }
   const manifestPath = path.join(kitRoot, 'package.json');
   let manifest: Record<string, unknown>;
   try {
@@ -179,15 +232,15 @@ export function discoverAllPlugins(repoRoot: string): string[] {
   return results.sort();
 }
 
-export function discoverRuntimePlugins(repoRoot: string, builtinKitSlugs: readonly string[] = []): string[] {
+export function discoverRuntimePlugins(
+  repoRoot: string,
+  descriptors: readonly RuntimeKitDescriptor[] = [],
+): string[] {
   const rootDir = path.resolve(repoRoot);
-  if (new Set(builtinKitSlugs).size !== builtinKitSlugs.length) {
-    throw new Error('Builtin Kit slugs must not contain duplicates');
-  }
   const results: string[] = [];
   appendPluginDirs(results, path.join(rootDir, 'plugins'));
-  for (const kitSlug of builtinKitSlugs) {
-    results.push(...discoverDeclaredKitPluginDirs(rootDir, kitSlug));
+  for (const descriptor of builtinDescriptors(descriptors)) {
+    results.push(...discoverDeclaredKitPluginDirs(rootDir, descriptor));
   }
   return results.sort();
 }

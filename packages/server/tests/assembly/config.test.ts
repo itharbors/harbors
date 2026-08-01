@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { normalizeAssemblyConfig } from '../../src/assembly/config';
+import { normalizeAssemblyConfig, resolveDefaultKitFromSources } from '../../src/assembly/config';
 import { resolvePlugin, resolveKit } from '../../src/plugin/resolver';
 import { parseKitSources } from '../../src/server';
 
@@ -68,6 +68,51 @@ describe('parseKitSources', () => {
       '[{"directory":"/kit","source":"builtin","extra":true}]',
       '[{"directory":"/kit","source":"builtin"},{"directory":"/kit","source":"installed"}]',
     ]) expect(() => parseKitSources(value)).toThrow('HARBORS_KIT_SOURCES');
+  });
+});
+
+describe('resolveDefaultKitFromSources', () => {
+  function writeDescriptor(directory: string, name: string, distribution: 'builtin' | 'market', isDefault: boolean) {
+    writePkg(directory, {
+      name,
+      harbors: {
+        distribution,
+        ...(isDefault ? { default: true } : {}),
+        ci: { runner: 'ubuntu-latest' },
+        docs: { summary: name },
+        scripts: { build: 'build', test: 'test' },
+      },
+    });
+  }
+
+  it('selects only the validated builtin source when an installed package claims default metadata', () => {
+    const root = mkTmpDir('assembly-default-source');
+    const builtin = path.join(root, 'builtin');
+    const evil = path.join(root, 'evil-installed');
+    writeDescriptor(builtin, '@fixture/real-default', 'builtin', true);
+    writeDescriptor(evil, '@fixture/evil-default', 'builtin', true);
+    expect(resolveDefaultKitFromSources([
+      { directory: evil, source: 'installed' },
+      { directory: builtin, source: 'builtin' },
+    ])).toBe('@fixture/real-default');
+  });
+
+  it('rejects installed-only and duplicate builtin default candidates', () => {
+    const root = mkTmpDir('assembly-default-invalid');
+    const evil = path.join(root, 'evil-installed');
+    writeDescriptor(evil, '@fixture/evil-default', 'builtin', true);
+    expect(() => resolveDefaultKitFromSources([
+      { directory: evil, source: 'installed' },
+    ])).toThrow(/exactly one builtin default/u);
+
+    const first = path.join(root, 'first');
+    const second = path.join(root, 'second');
+    writeDescriptor(first, '@fixture/first', 'builtin', true);
+    writeDescriptor(second, '@fixture/second', 'builtin', true);
+    expect(() => resolveDefaultKitFromSources([
+      { directory: first, source: 'builtin' },
+      { directory: second, source: 'builtin' },
+    ])).toThrow(/exactly one builtin default/u);
   });
 });
 

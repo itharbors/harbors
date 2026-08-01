@@ -10,6 +10,7 @@ import { createApp } from './app';
 import {
   createDefaultAssemblyConfig,
   normalizeAssemblyConfig,
+  resolveDefaultKitFromSources,
   type AssemblyConfig,
   type AssemblyKitSource,
   type KitSourceKind,
@@ -92,7 +93,7 @@ export function createServer(options: ServerOptions) {
   const channel = new SSEChannel();
   const broker = new BrowserRequestBroker();
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
-  const assembly = freezeAssemblySnapshot(options.assembly
+  const configuredAssembly = options.assembly
     ? normalizeAssemblyConfig(options.assembly)
     : createDefaultAssemblyConfig(
         path.resolve(serverDir, '../../..'),
@@ -100,7 +101,11 @@ export function createServer(options: ServerOptions) {
           defaultKit: options.defaultKit,
           kitSources: options.kitSources,
         },
-      ));
+      );
+  if (!configuredAssembly.defaultKit) {
+    configuredAssembly.defaultKit = resolveDefaultKitFromSources(configuredAssembly.kitSources);
+  }
+  const assembly = freezeAssemblySnapshot(configuredAssembly);
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
