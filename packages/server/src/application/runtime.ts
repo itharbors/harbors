@@ -3,6 +3,7 @@ import { MenuModule } from '../framework/menu';
 import { MessageModule } from '../framework/message';
 import { PluginModule } from '../framework/plugin';
 import type { ContributeData } from '../framework/plugin/types';
+import type { PluginPathRoots } from '../framework/plugin/paths';
 import { ApplicationServiceRegistry } from './service-registry';
 import type {
   ApplicationBootstrap,
@@ -21,6 +22,7 @@ export interface ApplicationRuntimeOptions {
     plugins: ApplicationPluginSpec[];
     diagnostics: ApplicationDiagnostic[];
   }>;
+  pluginPathRoots: PluginPathRoots;
 }
 
 export class ApplicationRuntime {
@@ -114,6 +116,10 @@ export class ApplicationRuntime {
         await this.plugin.load(spec.path, {
           scope: 'application',
           host: this.createRuntimeHost(),
+          paths: {
+            roots: this.options.pluginPathRoots,
+            legacyDataDirectories: spec.legacyDataDirectories ?? [],
+          },
         });
         this.attachContributions(spec.name, contribute);
         this.loaded.push(spec);
@@ -266,7 +272,8 @@ export class ApplicationRuntime {
   private resetPluginStates(): void {
     this.pluginStates.length = 0;
     this.pluginStates.push(...this.pluginSpecs.map((spec) => ({
-      ...spec,
+      name: spec.name,
+      path: spec.path,
       kits: [...spec.kits],
       status: 'pending' as const,
     })));

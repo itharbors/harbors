@@ -28,12 +28,14 @@ import { createApplicationEventsRouter } from './routes/application-events';
 import { createApplicationMenuTriggerRouter } from './routes/application-menu-trigger';
 import { createKitCatalogRouter } from './routes/kit-catalog';
 import { createClientAssetRouter } from './routes/client-asset';
+import type { PluginPathRoots } from './framework/plugin/paths';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
   applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe'>;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
+  pluginPathRoots: PluginPathRoots;
 }
 
 export function createApp(
@@ -50,6 +52,7 @@ export function createApp(
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
     const editor = createEditor(session.sessionId, {
         assembly,
+        pluginPathRoots: appOptions.pluginPathRoots,
         applicationRequest: (plugin, name, ...args) => (
           appOptions.applicationRuntime.request(plugin, name, ...args)
         ),

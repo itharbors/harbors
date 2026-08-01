@@ -17,6 +17,7 @@ import {
 import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
+import type { PluginPathRoots } from './framework/plugin/paths';
 
 export interface ServerOptions {
   port?: number;
@@ -27,6 +28,7 @@ export interface ServerOptions {
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
   agentGuardDataDir?: string;
+  pluginPathRoots: PluginPathRoots;
   clientAssetsRoot?: string;
   host?: string;
   applicationRuntime?: Pick<
@@ -76,7 +78,7 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
   });
 }
 
-export function createServer(options: ServerOptions = {}) {
+export function createServer(options: ServerOptions) {
   if (options.agentGuardDataDir !== undefined && !path.isAbsolute(options.agentGuardDataDir)) {
     throw new Error('agentGuardDataDir must be an absolute path');
   }
@@ -86,6 +88,7 @@ export function createServer(options: ServerOptions = {}) {
   if (options.assembly && options.assembly.kitSources.length === 0) {
     throw new Error('Server requires at least one Kit source');
   }
+  const pluginPathRoots = requirePluginPathRoots(options.pluginPathRoots);
   const dbPath = options.dbPath || ':memory:';
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
@@ -104,12 +107,14 @@ export function createServer(options: ServerOptions = {}) {
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
+    pluginPathRoots,
   });
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,
     applicationRuntime,
     applicationControlToken: options.applicationControlToken,
     clientAssetsRoot: options.clientAssetsRoot,
+    pluginPathRoots,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -221,6 +226,26 @@ export function createServer(options: ServerOptions = {}) {
     editorMap,
     applicationRuntime,
   };
+}
+
+function requirePluginPathRoots(roots: PluginPathRoots): PluginPathRoots {
+  if (!roots || typeof roots !== 'object') {
+    throw new Error('pluginPathRoots is required');
+  }
+  for (const [name, value] of Object.entries(roots)) {
+    if (typeof value !== 'string' || !path.isAbsolute(value)) {
+      throw new Error(`pluginPathRoots.${name} must be an absolute path`);
+    }
+  }
+  for (const name of ['applicationData', 'data', 'cache', 'temp'] as const) {
+    if (!Object.hasOwn(roots, name)) throw new Error(`pluginPathRoots.${name} is required`);
+  }
+  return Object.freeze({
+    applicationData: path.resolve(roots.applicationData),
+    data: path.resolve(roots.data),
+    cache: path.resolve(roots.cache),
+    temp: path.resolve(roots.temp),
+  });
 }
 
 function freezeAssemblySnapshot(assembly: AssemblyConfig): AssemblyConfig {

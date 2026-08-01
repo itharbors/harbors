@@ -4,6 +4,7 @@ export interface ApplicationPluginSpec {
   name: string;
   path: string;
   kits: string[];
+  legacyDataDirectories?: string[];
 }
 
 export type ApplicationDiagnosticCode =

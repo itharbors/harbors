@@ -44,6 +44,12 @@ describe('CSV kit memory boundary', () => {
               { directory: path.join(projectRoot, 'kits/csv'), source: 'development' },
             ],
           }),
+          pluginPathRoots: {
+            applicationData: tempDir,
+            data: path.join(tempDir, 'plugins', 'data'),
+            cache: path.join(tempDir, 'plugins', 'cache'),
+            temp: path.join(tempDir, 'plugins', 'temp'),
+          },
         });
         await editor.kit.load(path.join(projectRoot, 'kits/csv'));
         globalThis.gc?.();

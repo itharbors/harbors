@@ -1,11 +1,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { Editor } from '../../src/editor/types';
 import type { LayoutNode } from '../../src/framework/window/types';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 const CONFIG_TYPES = [
   { name: 'default', priority: 0, scope: 'shared' },

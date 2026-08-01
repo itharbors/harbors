@@ -2,8 +2,14 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
@@ -69,6 +75,17 @@ function createKit(name: string, plugins: TestPlugin[]): string {
   }
 
   return kitDir;
+}
+
+function validHarbors() {
+  return {
+    distribution: 'builtin',
+    ci: { runner: 'ubuntu-latest' },
+    docs: { summary: 'test kit' },
+    resources: [],
+    storage: { legacyDataDirectories: [] },
+    scripts: { build: 'build', test: 'test' },
+  };
 }
 
 function createDefaultKitFixture(): string {
@@ -238,6 +255,29 @@ function assemblyForKits(...kitDirectories: string[]) {
 }
 
 describe('kit lifecycle', () => {
+  it('rejects malformed repository metadata through the shared Kit parser', async () => {
+    const invalidMetadata = [
+      null,
+      { ...validHarbors(), storage: { legacyDataDirectories: [], unknown: true } },
+      { ...validHarbors(), unknown: true },
+    ];
+    for (const [index, harbors] of invalidMetadata.entries()) {
+      const kitDir = createKit(`@itharbors/kit-invalid-metadata-${index}`, []);
+      const manifestPath = path.join(kitDir, 'package.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.harbors = harbors;
+      writeJson(manifestPath, manifest);
+      const editor = createEditor(`kit-invalid-metadata-${index}`, { assembly: assemblyForKits(kitDir) });
+
+      try {
+        await expect(editor.kit.load(kitDir)).rejects.toThrow(/harbors/iu);
+      } finally {
+        await editor.dispose();
+        removeKits(kitDir);
+      }
+    }
+  });
+
   it('keeps builtin plugins loaded and unloads external kit plugins on switch', async () => {
     const defaultKit = createDefaultKitFixture();
     const alternateKit = createAlternateKitFixture();

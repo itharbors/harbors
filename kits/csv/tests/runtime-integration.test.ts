@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
 import { createEditor } from '../../../packages/server/src/editor/index';
 import { createCsvFixture } from './fixtures/create-csv-fixture';
+import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const kitSources = [
@@ -31,6 +32,7 @@ describe('CSV kit runtime integration', () => {
     const outputPath = path.join(tempDir, 'filtered.csv');
     const editor = createEditor('csv-kit-runtime', {
       assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
     try {

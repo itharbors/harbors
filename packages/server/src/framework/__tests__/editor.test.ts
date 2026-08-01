@@ -1,16 +1,31 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { createEditor } from '../../editor';
+import { createEditor as createEditorWithOptions } from '../../editor';
 import { createDefaultAssemblyConfig } from '../../assembly/config';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { PluginPathRoots } from '../plugin/paths';
 
 const projectRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+const tempDirs: string[] = [];
+function createTestPluginPathRoots(): PluginPathRoots {
+  const applicationData = mkdtempSync(path.join(os.tmpdir(), 'harbors-editor-test-paths-'));
+  tempDirs.push(applicationData);
+  return {
+    applicationData,
+    data: path.join(applicationData, 'plugins', 'data'),
+    cache: path.join(applicationData, 'plugins', 'cache'),
+    temp: path.join(applicationData, 'plugins', 'temp'),
+  };
+}
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('panel plugin contributions', () => {
-  const tempDirs: string[] = [];
-
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });

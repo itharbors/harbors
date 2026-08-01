@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import { BrowserRequestBroker } from '../../src/framework/browser-request-broker';
 import { createBootstrapRouter } from '../../src/routes/bootstrap';
 import { createMessageBroadcastRouter } from '../../src/routes/message-broadcast';
@@ -19,6 +19,12 @@ import path from 'node:path';
 import { testAssembly } from '../helpers/assembly';
 import { HttpError } from '../../src/http/errors';
 import { sendHttpError } from '../../src/http/json';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 function mockReq(method: string, url: string, body?: object | string): IncomingMessage {
   const readable = new Readable({

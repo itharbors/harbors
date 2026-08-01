@@ -12,6 +12,9 @@ function validEnvironment(application = '/Applications/ITHARBORS.app') {
     HARBORS_RUNTIME_ROOT: `${application}/Contents/Resources/runtime`,
     HARBORS_CLIENT_ASSETS_ROOT: `${application}/Contents/Resources/runtime/client`,
     HARBORS_DB_PATH: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
+    HARBORS_PLUGIN_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
+    HARBORS_PLUGIN_CACHE_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
+    HARBORS_PLUGIN_TEMP_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
     HARBORS_AGENT_GUARD_DATA_DIR: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
     HARBORS_KIT_SOURCES: JSON.stringify([
       {
@@ -36,6 +39,9 @@ test('requires absolute packaged paths and loopback configuration', () => {
     runtimeRoot: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
     clientAssetsRoot: '/Applications/ITHARBORS.app/Contents/Resources/runtime/client',
     dbPath: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
+    pluginDataRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
+    pluginCacheRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
+    pluginTempRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
     agentGuardDataDir: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
     kitSources: [
       {
@@ -60,6 +66,9 @@ test('requires absolute packaged paths and loopback configuration', () => {
     ['HARBORS_RUNTIME_ROOT', '../runtime'],
     ['HARBORS_CLIENT_ASSETS_ROOT', 'client'],
     ['HARBORS_DB_PATH', './framework.db'],
+    ['HARBORS_PLUGIN_DATA_ROOT', './plugins/data'],
+    ['HARBORS_PLUGIN_CACHE_ROOT', './plugins/cache'],
+    ['HARBORS_PLUGIN_TEMP_ROOT', './plugins/temp'],
     ['HARBORS_AGENT_GUARD_DATA_DIR', './agent-guard'],
   ]) {
     assert.throws(
@@ -87,6 +96,15 @@ test('forwards the Agent Guard data directory to the desktop server', async () =
   assert.equal(
     serverOptions.agentGuardDataDir,
     '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
+  );
+  assert.deepEqual(
+    serverOptions.pluginPathRoots,
+    {
+      applicationData: '/Users/me/Library/Application Support/ITHARBORS',
+      data: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
+      cache: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
+      temp: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
+    },
   );
 });
 

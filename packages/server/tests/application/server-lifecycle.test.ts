@@ -2,10 +2,30 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
 import path from 'node:path';
 import { ApplicationRuntime } from '../../src/application/runtime';
-import { createServer } from '../../src/server';
+import { createServer as createServerWithOptions } from '../../src/server';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createServer = (
+  options: Omit<Parameters<typeof createServerWithOptions>[0], 'pluginPathRoots'>,
+) => createServerWithOptions({ ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('application server lifecycle', () => {
+  it('requires one complete set of absolute generic plugin storage roots', () => {
+    expect(() => createServerWithOptions({
+      assembly: testAssembly,
+    } as Parameters<typeof createServerWithOptions>[0])).toThrow(/pluginPathRoots.*required/iu);
+    expect(() => createServerWithOptions({
+      assembly: testAssembly,
+      pluginPathRoots: {
+        applicationData: '/tmp/harbors',
+        data: '/tmp/harbors/plugins/data',
+        cache: 'relative/cache',
+        temp: '/tmp/harbors/plugins/temp',
+      },
+    })).toThrow(/pluginPathRoots\.cache.*absolute/iu);
+  });
+
   it('keeps application plugins and sessions on one snapshot after caller assembly mutation', async () => {
     const callerAssembly = {
       ...testAssembly,
@@ -111,7 +131,9 @@ describe('application server lifecycle', () => {
       assembly: testAssembly,
       host: '127.0.0.1',
       applicationControlToken: 'launch-secret',
-      applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'desktop' }),
+      applicationRuntime: new ApplicationRuntime({
+        plugins: [], hostMode: 'desktop', pluginPathRoots: createTestPluginPathRoots(),
+      }),
     });
 
     const port = await server.start(0);
@@ -139,7 +161,9 @@ describe('application server lifecycle', () => {
   it('finishes graceful shutdown while an application event stream is connected', async () => {
     const server = createServer({
       assembly: testAssembly,
-      applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'desktop' }),
+      applicationRuntime: new ApplicationRuntime({
+        plugins: [], hostMode: 'desktop', pluginPathRoots: createTestPluginPathRoots(),
+      }),
     });
     const port = await server.start(0);
     const response = await fetch(`http://127.0.0.1:${port}/sse/application`);

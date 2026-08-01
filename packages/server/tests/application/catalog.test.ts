@@ -47,6 +47,17 @@ describe('discoverApplicationPlugins', () => {
     return fs.realpathSync(pluginDir);
   }
 
+  function validHarbors(legacyDataDirectories: string[] = []) {
+    return {
+      distribution: 'builtin',
+      ci: { runner: 'ubuntu-latest' },
+      docs: { summary: 'test kit' },
+      resources: [],
+      storage: { legacyDataDirectories },
+      scripts: { build: 'build', test: 'test' },
+    };
+  }
+
   function createKit(
     dirName: string,
     name: string,
@@ -84,6 +95,62 @@ describe('discoverApplicationPlugins', () => {
       kits: ['@scope/kit-a', '@scope/kit-b'],
     }]);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it('binds descriptor legacy storage names to startup plugin owners', async () => {
+    const pluginPath = createPlugin(assembly.pluginsDir, 'storage-owner', '@scope/storage-owner');
+    const kitPath = createKit('a', '@scope/kit-a', ['@scope/storage-owner']);
+    const manifestPath = path.join(kitPath, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.harbors = validHarbors(['legacy-a']);
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([{
+      name: '@scope/storage-owner',
+      path: pluginPath,
+      kits: ['@scope/kit-a'],
+      legacyDataDirectories: ['legacy-a'],
+    }]);
+  });
+
+  it('rejects malformed repository metadata through the shared Kit parser', async () => {
+    const cases = [
+      { directory: 'a', kit: '@scope/kit-a', plugin: '@scope/invalid-harbors', harbors: null },
+      {
+        directory: 'b',
+        kit: '@scope/kit-b',
+        plugin: '@scope/invalid-storage',
+        harbors: { ...validHarbors(), storage: { legacyDataDirectories: [], unknown: true } },
+      },
+      {
+        directory: 'c',
+        kit: '@scope/kit-c',
+        plugin: '@scope/unknown-metadata',
+        harbors: { ...validHarbors(), unknown: true },
+      },
+    ];
+    for (const item of cases) {
+      createPlugin(assembly.pluginsDir, item.plugin.slice('@scope/'.length), item.plugin);
+      const kitPath = createKit(item.directory, item.kit, [item.plugin]);
+      const manifestPath = path.join(kitPath, 'package.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.harbors = item.harbors;
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+    }
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([]);
+    expect(result.diagnostics).toHaveLength(3);
+    expect(result.diagnostics).toEqual(expect.arrayContaining(cases.map((item) => (
+      expect.objectContaining({
+        code: 'INVALID_KIT_MANIFEST',
+        kit: item.kit,
+        message: expect.stringMatching(/harbors/iu),
+      })
+    ))));
   });
 
   it('rejects same-name different-path conflicts without blocking other plugins', async () => {

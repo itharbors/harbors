@@ -5,10 +5,12 @@ import type { MessageBroadcastRoute, MessageLocation, MessageRequestRoute } from
 import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '../framework/menu/types';
 import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistration } from '../framework/panel/types';
 import type { PluginDefinition, PluginInfo } from '../framework/plugin/types';
+import type { PluginPathRoots, PluginPaths } from '../framework/plugin/paths';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
 
 export interface PluginRuntime {
   readonly sessionId: string;
+  readonly paths: PluginPaths;
   application: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   };
@@ -66,6 +68,7 @@ export interface PluginRuntime {
 export type ApplicationHostMode = 'desktop' | 'web';
 
 export interface ApplicationPluginRuntime {
+  readonly paths: PluginPaths;
   plugin: PluginRuntime['plugin'];
   menu: Pick<PluginRuntime['menu'], 'attach' | 'detach' | 'getState'>;
   message: PluginRuntime['message'];
@@ -185,8 +188,13 @@ export type PluginRuntimeHost = Omit<Editor, 'menu'> & {
 };
 
 export type PluginLoadOptions =
-  | { scope: 'session'; host: PluginRuntimeHost }
-  | { scope: 'application'; host: ApplicationPluginRuntimeHost };
+  | { scope: 'session'; host: PluginRuntimeHost; paths: PluginPathLoadConfiguration }
+  | { scope: 'application'; host: ApplicationPluginRuntimeHost; paths: PluginPathLoadConfiguration };
+
+export interface PluginPathLoadConfiguration {
+  readonly roots: PluginPathRoots;
+  readonly legacyDataDirectories: readonly string[];
+}
 
 export interface BrowserEditor {
   readonly sessionId: string;

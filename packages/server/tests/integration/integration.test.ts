@@ -1,9 +1,14 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createServer } from '../../src/server';
+import { createServer as createServerWithOptions } from '../../src/server';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createServer = (
+  options: Omit<Parameters<typeof createServerWithOptions>[0], 'pluginPathRoots'>,
+) => createServerWithOptions({ ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('Framework Integration', () => {
   let port: number;

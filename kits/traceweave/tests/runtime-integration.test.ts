@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
 import { createEditor } from '../../../packages/server/src/editor/index';
 import { createTestCodexHome, type TestCodexHome } from '../plugins/traceweave-core/tests/helpers/codex-home';
+import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const kitSources = [
@@ -21,6 +22,7 @@ describe('TraceWeave Kit runtime integration', () => {
     vi.stubEnv('CODEX_HOME', home.root);
     const editor = createEditor('traceweave-runtime', {
       assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      pluginPathRoots: createPluginPathRoots(home.root),
     });
     try {
       await editor.kit.load(path.join(projectRoot, 'kits/traceweave'));

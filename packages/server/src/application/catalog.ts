@@ -1,5 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { parseRepositoryKitPackage } from '@itharbors/kit-core';
 
 import type { AssemblyConfig } from '../assembly/config';
 import { listAssemblyKitSources } from '../assembly/kit-catalog';
@@ -14,6 +15,7 @@ interface KitStartupDeclaration {
   name: string;
   path: string;
   startupPlugins: string[];
+  legacyDataDirectories: string[];
 }
 
 export async function discoverApplicationPlugins(
@@ -62,13 +64,26 @@ export async function discoverApplicationPlugins(
       }
       const existing = byName.get(pluginName);
       if (!existing) {
-        const spec = { name: pluginName, path: pluginPath, kits: [declaration.name] };
+        const spec = {
+          name: pluginName,
+          path: pluginPath,
+          kits: [declaration.name],
+          ...(declaration.legacyDataDirectories.length > 0
+            ? { legacyDataDirectories: [...declaration.legacyDataDirectories] }
+            : {}),
+        };
         byName.set(pluginName, spec);
         plugins.push(spec);
         continue;
       }
       if (existing.path === pluginPath) {
         if (!existing.kits.includes(declaration.name)) existing.kits.push(declaration.name);
+        for (const directory of declaration.legacyDataDirectories) {
+          existing.legacyDataDirectories ??= [];
+          if (!existing.legacyDataDirectories.includes(directory)) {
+            existing.legacyDataDirectories.push(directory);
+          }
+        }
         continue;
       }
 
@@ -166,8 +181,14 @@ async function readKitDeclaration(
     return undefined;
   }
   const startupPlugins = isRecord(startup) ? startup.plugins : undefined;
+  const legacyDataDirectories = readLegacyDataDirectories(
+    manifest as Record<string, unknown>,
+    name,
+    diagnostics,
+  );
+  if (!legacyDataDirectories) return undefined;
   if (startupPlugins === undefined) {
-    return { name, path: kitPath, startupPlugins: [] };
+    return { name, path: kitPath, startupPlugins: [], legacyDataDirectories };
   }
   if (!isStringArray(startupPlugins) || new Set(startupPlugins).size !== startupPlugins.length) {
     diagnostics.push({
@@ -188,7 +209,26 @@ async function readKitDeclaration(
     });
     return undefined;
   }
-  return { name, path: kitPath, startupPlugins };
+  return { name, path: kitPath, startupPlugins, legacyDataDirectories };
+}
+
+function readLegacyDataDirectories(
+  manifest: Record<string, unknown>,
+  kitName: string,
+  diagnostics: ApplicationDiagnostic[],
+): string[] | undefined {
+  const harbors = manifest.harbors;
+  if (harbors === undefined) return [];
+  try {
+    return [...parseRepositoryKitPackage(harbors).legacyDataDirectories];
+  } catch (error) {
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: kitName,
+      message: `Kit "${kitName}" ${errorMessage(error)}`,
+    });
+    return undefined;
+  }
 }
 
 function validateKitShell(kit: Record<string, unknown>): string | undefined {

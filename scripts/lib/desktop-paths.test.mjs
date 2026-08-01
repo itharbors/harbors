@@ -20,6 +20,9 @@ test('keeps packaged desktop paths under Resources and userData', () => {
     dataRoot: '/Users/me/Library/Application Support/ITHARBORS',
     dbPath: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
     kitStoreRoot: '/Users/me/Library/Application Support/ITHARBORS/kit-store',
+    pluginDataRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
+    pluginCacheRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
+    pluginTempRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
     agentGuardDataDir: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
   });
 });
@@ -42,6 +45,9 @@ test('keeps development paths rooted in the repository', () => {
     '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
   );
   assert.equal(result.dataRoot, '/Users/me/Library/Application Support/ITHARBORS');
+  assert.equal(result.pluginDataRoot, '/Users/me/Library/Application Support/ITHARBORS/plugins/data');
+  assert.equal(result.pluginCacheRoot, '/Users/me/Library/Application Support/ITHARBORS/plugins/cache');
+  assert.equal(result.pluginTempRoot, '/Users/me/Library/Application Support/ITHARBORS/plugins/temp');
 });
 
 test('rejects relative packaged roots', () => {

@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
 import { createEditor } from '../../../packages/server/src/editor/index';
+import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 import { createRuntimeDatabase } from './fixtures/create-runtime-database';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -29,6 +30,7 @@ describe('SQLite kit runtime integration', () => {
     const databasePath = path.join(tempDir, 'smoke.sqlite');
     const editor = createEditor('sqlite-kit-smoke', {
       assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
     try {
@@ -115,6 +117,7 @@ describe('SQLite kit runtime integration', () => {
     }
     const editor = createEditor('sqlite-kit-runtime-relationships', {
       assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
     try {
@@ -149,6 +152,7 @@ describe('SQLite kit runtime integration', () => {
     createRuntimeDatabase(databasePath);
     const editor = createEditor('sqlite-kit-runtime-policy', {
       assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
     try {

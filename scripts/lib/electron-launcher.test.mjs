@@ -828,6 +828,16 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
   assert.match(source, /HARBORS_AGENT_GUARD_DATA_DIR:\s*desktopPaths\.agentGuardDataDir/);
+  for (const [environmentName, propertyName] of [
+    ['HARBORS_PLUGIN_DATA_ROOT', 'pluginDataRoot'],
+    ['HARBORS_PLUGIN_CACHE_ROOT', 'pluginCacheRoot'],
+    ['HARBORS_PLUGIN_TEMP_ROOT', 'pluginTempRoot'],
+  ]) {
+    assert.equal(
+      [...source.matchAll(new RegExp(`${environmentName}:\\s*desktopPaths\\.${propertyName}`, 'g'))].length,
+      2,
+    );
+  }
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
   assert.equal(
     [...source.matchAll(/HARBORS_DATA_ROOT:\s*desktopPaths\.dataRoot/g)].length,
