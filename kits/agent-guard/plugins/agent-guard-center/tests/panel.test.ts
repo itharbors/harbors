@@ -253,6 +253,24 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
+  it('renders no-record cache labels instead of epoch dates for an empty history', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return { ...historyStatus(), earliestAt: null, latestAt: null };
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel .cache-status')?.textContent).toContain('最早记录 暂无记录'));
+    const cacheStatus = document.querySelector('#settings-panel .cache-status')?.textContent;
+    expect(cacheStatus).toContain('最新记录 暂无记录');
+    expect(cacheStatus).not.toContain('1970');
+    panel.unmount();
+  });
+
   it('reloads history when the domain or range changes while keeping both Agents', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();

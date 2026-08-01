@@ -860,7 +860,8 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-function formatLocalTimestamp(timestamp: number): string {
+function formatLocalTimestamp(timestamp: number | null): string {
+  if (timestamp === null) return '暂无记录';
   return new Intl.DateTimeFormat('zh-CN', {
     dateStyle: 'short',
     timeStyle: 'medium',
