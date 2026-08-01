@@ -43,6 +43,8 @@ h2 { margin-bottom: 0; font-size: 19px; font-weight: 650; letter-spacing: -.01em
 .dashboard-tab-badge { margin-left: 6px; font: 700 10px/1 "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
 .dashboard-tab-badge[data-state="nonzero"] { color: var(--breaker-copper); }
 .dashboard-tab-badge[data-state="zero"] { display: none; }
+.operation-error { margin: 14px 0 0; padding: 10px 12px; border: 1px solid rgba(255, 138, 61, .55); color: var(--breaker-copper); font-size: 11px; overflow-wrap: anywhere; }
+.operation-error strong { font-weight: 700; }
 #overview-panel,
 .dashboard-panel { display: grid; min-width: 0; }
 

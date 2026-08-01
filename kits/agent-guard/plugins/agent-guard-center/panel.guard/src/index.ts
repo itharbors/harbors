@@ -29,9 +29,11 @@ let version = 0;
 let requestGeneration = 0;
 let refreshPromise: Promise<void> | null = null;
 let mutation: Promise<void> | null = null;
+let mutationError: string | null = null;
 let signature = '';
 let latestSnapshot: AgentGuardSnapshot | null = null;
 let historyResult: TrafficHistoryResult | null = null;
+let historyResultQueryKey: string | null = null;
 let historyStatus: HistoryStatus | null = null;
 let historyError: string | null = null;
 let historyVersion = 0;
@@ -44,6 +46,7 @@ let policyDraft: { warning: string; trip: string } | null = null;
 
 type RenderState = {
   focusAction: string | null;
+  focusIncidentId: string | null;
   selection: [number, number] | null;
   scrollX: number;
   scrollY: number;
@@ -59,6 +62,7 @@ const panel = {
     signature = '';
     activeTab = 'overview';
     policyDraft = null;
+    mutationError = null;
     renderState('正在启动本机流量监控…', 'loading');
     await refresh();
     if (mounted) void refreshHistory();
@@ -80,6 +84,7 @@ const panel = {
     latestSnapshot = null;
     activeTab = 'overview';
     policyDraft = null;
+    mutationError = null;
   },
 };
 
@@ -124,23 +129,28 @@ function runCommand(command: AgentGuardCommand): void {
 function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuardCommand | PolicyV1): void {
   if (!context || mutation) return;
   const activeContext = context;
+  const renderState = captureRenderState();
+  mutationError = null;
   mutation = (async () => {
     setButtonsDisabled(true);
     try {
       await activeContext.message.request(PLUGIN, method, input);
-    signature = '';
-    latestSnapshot = null;
-    historyResult = null;
-    historyStatus = null;
-    historyError = null;
-    historyVersion += 1;
-    historyRange = '24h';
-    historyDomain = 'network';
-    clearConfirmation = false;
+      signature = '';
+      latestSnapshot = null;
+      historyResult = null;
+      historyResultQueryKey = null;
+      historyStatus = null;
+      historyError = null;
+      historyVersion += 1;
+      historyRange = '24h';
+      historyDomain = 'network';
+      clearConfirmation = false;
       mutation = null;
       await refresh();
     } catch (error) {
-      renderState('操作失败', 'unavailable', errorDetail(error));
+      mutationError = errorDetail(error) ?? '操作暂不可用';
+      if (latestSnapshot) renderSnapshotWithState(latestSnapshot, renderState);
+      else renderState('操作失败', 'unavailable', mutationError);
     } finally {
       mutation = null;
       setButtonsDisabled(false);
@@ -249,6 +259,7 @@ function captureRenderState(): RenderState {
   if (warning && trip) policyDraft = { warning: warning.value, trip: trip.value };
   return {
     focusAction: focusedElement?.dataset.action ?? null,
+    focusIncidentId: focusedElement?.closest<HTMLElement>('[data-incident-id]')?.dataset.incidentId ?? null,
     selection: input && input.selectionStart !== null && input.selectionEnd !== null
       ? [input.selectionStart, input.selectionEnd]
       : null,
@@ -263,6 +274,7 @@ function renderSnapshotWithState(snapshot: AgentGuardSnapshot, renderState: Rend
   const workspace = document.createElement('div');
   workspace.className = 'guard-workspace';
   workspace.append(createHeader(snapshot), createDashboardTabs(snapshot));
+  if (mutationError) workspace.append(createOperationError(mutationError));
   const content = activeTab === 'overview'
     ? createOverviewPanel(snapshot)
     : createIncidentsPanel(snapshot);
@@ -274,7 +286,12 @@ function renderSnapshotWithState(snapshot: AgentGuardSnapshot, renderState: Rend
 function restoreRenderState(renderState: RenderState): void {
   if (!root) return;
   if (renderState.focusAction) {
-    const focusTarget = root.querySelector<HTMLElement>(`[data-action="${renderState.focusAction}"]`);
+    const candidates = root.querySelectorAll<HTMLElement>(`[data-action="${renderState.focusAction}"]`);
+    const focusTarget = renderState.focusIncidentId
+      ? [...candidates].find((candidate) => (
+        candidate.closest<HTMLElement>('[data-incident-id]')?.dataset.incidentId === renderState.focusIncidentId
+      )) ?? null
+      : candidates[0] ?? null;
     focusTarget?.focus();
     if (focusTarget instanceof HTMLInputElement && renderState.selection) {
       focusTarget.setSelectionRange(...renderState.selection);
@@ -288,6 +305,7 @@ async function refreshHistory(): Promise<void> {
   const activeContext = context;
   const activeVersion = version;
   const requestVersion = ++historyVersion;
+  const queryKey = historyQueryKey(historyDomain, historyRange);
   const to = Date.now();
   const input = {
     from: to - historyRangeMs(historyRange),
@@ -298,6 +316,7 @@ async function refreshHistory(): Promise<void> {
     preferredBucket: historyBucket(historyRange),
   } as const;
   historyError = null;
+  if (historyResultQueryKey !== queryKey && latestSnapshot) renderSnapshot(latestSnapshot);
   try {
     const [result, status] = await Promise.all([
       activeContext.message.request(PLUGIN, 'getTrafficHistory', input),
@@ -305,6 +324,7 @@ async function refreshHistory(): Promise<void> {
     ]);
     if (!mounted || version !== activeVersion || historyVersion !== requestVersion) return;
     historyResult = normalizeTrafficHistoryResult(result);
+    historyResultQueryKey = queryKey;
     historyStatus = normalizeHistoryStatus(status);
     if (latestSnapshot) renderSnapshot(latestSnapshot);
   } catch (error) {
@@ -327,7 +347,7 @@ function createHistorySection(): HTMLElement {
     section.append(textElement('p', 'history-message', `历史数据暂不可用：${historyError}`));
     return section;
   }
-  if (!historyResult) {
+  if (!historyResult || historyResultQueryKey !== historyQueryKey(historyDomain, historyRange)) {
     section.append(textElement('p', 'history-message', '正在读取历史数据…'));
     return section;
   }
@@ -371,21 +391,21 @@ export function visibleHistoryMetrics(domain: TrafficHistoryResult['domain']): H
 }
 
 export function mergeHistorySeriesByMetric(result: TrafficHistoryResult): DisplayHistorySeries[] {
-  return visibleHistoryMetrics(result.domain).flatMap((metric) => {
+  return visibleHistoryMetrics(result.domain).map((metric) => {
     const inputs = result.series.filter((series) => series.metric === metric);
-    if (inputs.length === 0) return [];
+    if (inputs.length === 0) return { metric, unit: historyMetricUnit(metric), points: [] };
     const buckets = new Map<string, HistoryPoint[]>();
     for (const series of inputs) for (const point of series.points) {
       const key = `${point.start}\u0000${point.end}`;
       buckets.set(key, [...(buckets.get(key) ?? []), point]);
     }
-    return [{
+    return {
       metric: inputs[0].metric,
       unit: inputs[0].unit,
       points: [...buckets.values()]
         .sort((left, right) => left[0].start - right[0].start)
         .map((points) => mergeHistoryPoints(points)),
-    }];
+    };
   });
 }
 
@@ -421,22 +441,27 @@ function createHistorySummary(result: TrafficHistoryResult): HTMLElement {
     if (result.domain === 'model-usage') row.dataset.summaryRow = rowName;
     for (const metric of metrics) {
       const item = result.summary.find((summary) => summary.metric === metric);
-      if (item) row.append(createHistorySummaryCard(item));
+      row.append(createHistorySummaryCard(metric, item ?? null));
     }
     wrapper.append(row);
   }
-  const missing = result.series.flatMap((item) => item.points).some((point) => point.coverage === 'missing');
+  const expectedSummaryMetrics = rows.flatMap(([, metrics]) => [...metrics]);
+  const missing = expectedSummaryMetrics.some((metric) => !result.summary.some((item) => item.metric === metric))
+    || result.series.flatMap((item) => item.points).some((point) => point.coverage === 'missing');
   if (missing) wrapper.append(textElement('span', 'history-warning', '未采集区间不会按零流量计算'));
   return wrapper;
 }
 
-function createHistorySummaryCard(item: TrafficHistoryResult['summary'][number]): HTMLElement {
+function createHistorySummaryCard(
+  metric: HistorySeries['metric'],
+  item: TrafficHistoryResult['summary'][number] | null,
+): HTMLElement {
   const card = document.createElement('div');
   card.className = 'history-stat';
   card.append(
-    textElement('span', '', historyMetricLabel(item.metric)),
-    textElement('b', '', formatHistoryValue(item.value, item.unit)),
-    textElement('small', '', `覆盖 ${(item.coverageRatio * 100).toFixed(0)}%`),
+    textElement('span', '', historyMetricLabel(metric)),
+    textElement('b', '', item ? formatHistoryValue(item.value, item.unit) : '未采集'),
+    textElement('small', '', `覆盖 ${item ? (item.coverageRatio * 100).toFixed(0) : '0'}%`),
   );
   return card;
 }
@@ -453,14 +478,19 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   const maximum = Math.max(1, ...values);
   for (const [seriesIndex, item] of series.entries()) {
     let pathData = '';
-    for (const [index, point] of item.points.entries()) {
-      if (point.value === null) continue;
-      const x = item.points.length <= 1 ? 0 : index / (item.points.length - 1) * 700 + 10;
+    let previousPoint: HistoryPoint | null = null;
+    for (const point of item.points) {
+      if (point.value === null) {
+        previousPoint = point;
+        continue;
+      }
+      const position = (point.start - result.from) / (result.to - result.from);
+      const x = Math.min(1, Math.max(0, position)) * 700 + 10;
       const y = 165 - point.value / maximum * 145;
-      const previousMissing = index === 0 || item.points[index - 1]?.value === null;
-      pathData += `${previousMissing ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+      const contiguous = previousPoint?.value !== null && previousPoint?.end === point.start;
+      pathData += `${contiguous ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `;
+      previousPoint = point;
     }
-    if (!pathData) continue;
     const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     pathElement.setAttribute('d', pathData.trim());
     pathElement.dataset.metric = item.metric;
@@ -623,7 +653,7 @@ function createIncidentLedger(incidents: IncidentSummary[]): HTMLElement {
   heading.append(textElement('h2', '', '事件记录'), textElement('span', 'section-note', `当前视图保留 ${incidents.length} 条记录`));
   section.append(heading);
   if (incidents.length === 0) {
-    section.append(textElement('p', 'ledger-empty', '尚未记录到异常智能体流量。'));
+    section.append(textElement('p', 'ledger-empty', '尚未记录到异常智能体流量，后台监控仍在继续。'));
     return section;
   }
   for (const incident of [...incidents].reverse()) section.append(createIncident(incident));
@@ -732,14 +762,20 @@ function renderState(message: string, state: string, detail?: string): void {
   root.replaceChildren(container);
 }
 
+function createOperationError(detail: string): HTMLElement {
+  const message = document.createElement('p');
+  message.className = 'operation-error';
+  message.setAttribute('role', 'alert');
+  message.append(textElement('strong', '', '操作失败：'), document.createTextNode(detail));
+  return message;
+}
+
 function metric(label: string, value: string, name?: string): HTMLElement {
   const wrapper = document.createElement('div');
   const term = textElement('dt', '', label);
   const description = textElement('dd', '', value);
   if (name) {
     description.dataset.metric = name;
-    const series = historyResult && mergeHistorySeriesByMetric(historyResult).find((item) => item.metric === name);
-    if (series) description.dataset.values = series.points.map((point) => String(point.value)).join(',');
   }
   wrapper.append(term, description);
   return wrapper;
@@ -804,6 +840,16 @@ function historyBucket(value: typeof historyRange): 'minute' | 'hour' | 'day' {
   if (value === '1h' || value === '24h') return 'minute';
   if (value === '7d' || value === '30d') return 'hour';
   return 'day';
+}
+
+function historyQueryKey(domain: typeof historyDomain, range: typeof historyRange): string {
+  return `${domain}:${range}`;
+}
+
+function historyMetricUnit(metric: HistorySeries['metric']): HistorySeries['unit'] {
+  if (metric === 'bytes-in' || metric === 'bytes-out') return 'bytes';
+  if (metric === 'input-tokens' || metric === 'output-tokens' || metric === 'cache-tokens') return 'tokens';
+  return metric;
 }
 
 function confidenceLabel(value: AgentEndpointSnapshot['confidence']): string {

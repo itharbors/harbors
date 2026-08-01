@@ -148,18 +148,39 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
-  it('localizes mutation failures and disables irrelevant autocomplete', async () => {
+  it('keeps a failed policy mutation inline and retryable without losing incident workspace state', async () => {
+    let updateAttempts = 0;
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
-      throw new Error('Policy bridge rejected the update');
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      if (method === 'updatePolicy') {
+        updateAttempts += 1;
+        if (updateAttempts === 1) throw new Error('Policy bridge rejected the update');
+        return undefined;
+      }
+      throw new Error(`Unexpected ${method}`);
     });
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
     document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!.click();
-    expect(document.querySelector('input[name="warning-outbound"]')?.getAttribute('autocomplete')).toBe('off');
+    const warning = document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!;
+    expect(warning.getAttribute('autocomplete')).toBe('off');
+    warning.value = '256';
+    warning.focus();
     document.querySelector<HTMLButtonElement>('[data-action="save-policy"]')!.click();
-    await vi.waitFor(() => expect(document.querySelector('h1')?.textContent).toBe('操作失败'));
-    expect(document.querySelector('.state-detail')?.textContent).toBe('Policy bridge rejected the update');
+
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('Policy bridge rejected the update'));
+    expect(document.querySelector('h1')?.textContent).toBe('本机智能体流量');
+    expect(document.querySelector('[role="tab"][data-tab="incidents"]')?.getAttribute('aria-selected')).toBe('true');
+    const restoredWarning = document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!;
+    expect(restoredWarning.value).toBe('256');
+    expect(document.activeElement).toBe(restoredWarning);
+
+    document.querySelector<HTMLButtonElement>('[data-action="save-policy"]')!.click();
+    await vi.waitFor(() => expect(updateAttempts).toBe(2));
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
+    expect(document.querySelector('[role="tab"][data-tab="incidents"]')?.getAttribute('aria-selected')).toBe('true');
     panel.unmount();
   });
 
@@ -190,8 +211,13 @@ describe('Agent Guard panel', () => {
     expect(document.querySelector('[data-action="history-agent-claude"]')).toBeNull();
     expect(document.querySelector('[data-action="history-agent-codex"]')).toBeNull();
     expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
-    expect(document.querySelector('[data-metric="bytes-in"]')?.getAttribute('data-values')).toBe('3072,null');
-    expect(document.querySelector('[data-metric="bytes-out"]')?.getAttribute('data-values')).toBe('1536,0');
+    expect(document.querySelector('.route-metrics [data-metric="bytes-out"]')?.getAttribute('data-values')).toBeNull();
+    expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')?.getAttribute('data-values')).toBe('3072,null');
+    expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')?.getAttribute('data-values')).toBe('1536,0');
+    const measuredZero = [...document.querySelectorAll('.history-stat')]
+      .find((item) => item.textContent?.includes('上行'));
+    expect(measuredZero?.textContent).toContain('0 B');
+    expect(measuredZero?.textContent).not.toContain('未采集');
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(1);
@@ -249,6 +275,72 @@ describe('Agent Guard panel', () => {
     ))).toBe(true));
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory').every((call) => (
       JSON.stringify((call[2] as { agents?: string[] }).agents) === '["claude","codex"]'
+    ))).toBe(true);
+    panel.unmount();
+  });
+
+  it('does not render a previous history query while a new domain request is pending and snapshots keep polling', async () => {
+    vi.useFakeTimers();
+    let snapshotRequests = 0;
+    let releaseModelHistory: ((value: unknown) => void) | undefined;
+    const request = vi.fn(async (_plugin: string, method: string, input?: { domain?: string }) => {
+      if (method === 'getSnapshot') {
+        snapshotRequests += 1;
+        return { ...snapshot(), observedAt: snapshot().observedAt + snapshotRequests };
+      }
+      if (method === 'getTrafficHistory') {
+        if (input?.domain === 'model-usage') {
+          return new Promise((resolve) => { releaseModelHistory = resolve; });
+        }
+        return historyResult();
+      }
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')).not.toBeNull());
+    document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
+    await vi.waitFor(() => expect(releaseModelHistory).toBeTypeOf('function'));
+
+    try {
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(document.querySelector('[data-action="history-domain-model-usage"]')?.getAttribute('aria-pressed')).toBe('true');
+      const loading = document.querySelector('.history-message');
+      expect(loading).not.toBeNull();
+      expect(loading!.textContent).toContain('正在读取历史数据');
+      expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')).toBeNull();
+    } finally {
+      releaseModelHistory?.(modelHistoryResult());
+      await Promise.resolve();
+      panel.unmount();
+    }
+  });
+
+  it('renders every fixed history metric as uncollected when the response omits all series and summaries', async () => {
+    const request = vi.fn(async (_plugin: string, method: string, input?: { domain?: 'network' | 'model-usage' }) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return emptyHistoryResult(input?.domain ?? 'network');
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelectorAll('.history-chart path[data-metric]')).toHaveLength(2));
+    expect([...document.querySelectorAll('.history-chart path[data-metric]')].map((item) => item.getAttribute('data-values')))
+      .toEqual(['', '']);
+    expect(document.querySelectorAll('.history-stat')).toHaveLength(2);
+    expect([...document.querySelectorAll('.history-stat')].every((item) => (
+      item.textContent?.includes('未采集') && item.textContent.includes('覆盖 0%')
+    ))).toBe(true);
+
+    document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
+    await vi.waitFor(() => expect(document.querySelectorAll('.history-stat')).toHaveLength(5));
+    expect(document.querySelectorAll('.history-chart path[data-metric]')).toHaveLength(2);
+    expect([...document.querySelectorAll('.history-stat')].every((item) => (
+      item.textContent?.includes('未采集') && item.textContent.includes('覆盖 0%')
     ))).toBe(true);
     panel.unmount();
   });
@@ -421,6 +513,91 @@ describe('Agent Guard panel', () => {
     expect(scrollTo).toHaveBeenCalledWith(18, 240);
     panel.unmount();
   });
+
+  it('restores focus to the same incident action when multiple incidents rerender during polling', async () => {
+    vi.useFakeTimers();
+    const value = snapshot();
+    value.incidents.push({
+      ...value.incidents[0],
+      id: 'incident-2',
+      openedAt: value.incidents[0].openedAt + 1,
+      updatedAt: value.incidents[0].updatedAt + 1,
+    });
+    let snapshotRequests = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') {
+        snapshotRequests += 1;
+        return { ...value, observedAt: value.observedAt + snapshotRequests };
+      }
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    await vi.waitFor(() => expect(request.mock.calls.some((call) => call[1] === 'getTrafficHistory')).toBe(true));
+    await Promise.resolve();
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!.click();
+    const firstIncidentIgnore = document.querySelector<HTMLButtonElement>('[data-incident-id="incident-1"] [data-action="ignore"]')!;
+    firstIncidentIgnore.focus();
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(document.activeElement?.closest<HTMLElement>('[data-incident-id]')?.dataset.incidentId).toBe('incident-1');
+    expect((document.activeElement as HTMLElement).dataset.action).toBe('ignore');
+    panel.unmount();
+  });
+
+  it('positions unequal history coverage by timestamp against the shared query range', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return positionedHistoryResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')).not.toBeNull());
+    expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')?.getAttribute('d'))
+      .toBe('M10.0,92.5 L360.0,20.0');
+    expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')?.getAttribute('d'))
+      .toBe('M360.0,128.8');
+    panel.unmount();
+  });
+
+  it('breaks a history line when an entire bucket object is missing', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyWithMissingBucketObject();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')).not.toBeNull());
+    expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')?.getAttribute('d')?.match(/M/gu))
+      .toHaveLength(2);
+    panel.unmount();
+  });
+
+  it('states that background monitoring continues when there are no incidents', async () => {
+    const value = snapshot();
+    value.incidents = [];
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return value;
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!.click();
+
+    expect(document.querySelector('.ledger-empty')?.textContent).toContain('后台监控仍在继续');
+    panel.unmount();
+  });
 });
 
 function snapshot() {
@@ -531,6 +708,64 @@ function modelHistorySeries(metric: string, unit: string, claude: number, codex:
       provenance: 'local-session', quality: 'derived',
     }],
   }];
+}
+
+function emptyHistoryResult(domain: 'network' | 'model-usage') {
+  return {
+    ...historyResult(),
+    domain,
+    series: [],
+    summary: [],
+    sources: [],
+    warnings: [],
+  };
+}
+
+function positionedHistoryResult() {
+  const from = NOW - 240_000;
+  return {
+    ...historyResult(),
+    from,
+    series: [{
+      metric: 'bytes-in', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: from, end: from + 120_000, value: 10, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }, {
+        start: from + 120_000, end: NOW, value: 20, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }],
+    }, {
+      metric: 'bytes-out', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: from + 120_000, end: NOW, value: 5, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }],
+    }],
+    summary: [
+      { metric: 'bytes-in', unit: 'bytes', value: 30, coverageRatio: 1, derivedRatio: 0 },
+      { metric: 'bytes-out', unit: 'bytes', value: 5, coverageRatio: 1, derivedRatio: 0 },
+    ],
+  };
+}
+
+function historyWithMissingBucketObject() {
+  const from = NOW - 180_000;
+  return {
+    ...historyResult(),
+    from,
+    series: [{
+      metric: 'bytes-in', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: from, end: from + 60_000, value: 10, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }, {
+        start: from + 120_000, end: NOW, value: 10, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }],
+    }],
+    summary: [{ metric: 'bytes-in', unit: 'bytes', value: 20, coverageRatio: 2 / 3, derivedRatio: 0 }],
+  };
 }
 
 function historyStatus() {
