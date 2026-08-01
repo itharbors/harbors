@@ -362,18 +362,6 @@ const DESKTOP_ASSETS = Object.freeze([
 async function runtimeEntries(repositoryRoot) {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
-    {
-      source: '.agents/skills/notify-user/SKILL.md',
-      destination: 'resources/notify-user/SKILL.md',
-    },
-    {
-      source: '.agents/skills/notify-user/agents/openai.yaml',
-      destination: 'resources/notify-user/agents/openai.yaml',
-    },
-    {
-      source: '.agents/skills/notify-user/scripts/notify.mjs',
-      destination: 'resources/notify-user/scripts/notify.mjs',
-    },
   ];
   for (const plugin of FRAMEWORK_PLUGINS) {
     entries.push(

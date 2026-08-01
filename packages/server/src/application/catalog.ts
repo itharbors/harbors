@@ -1,6 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
-import { parseRepositoryKitPackage } from '@itharbors/kit-core';
+import { parseKitPackageManifest, parseRepositoryKitPackage, type KitPermission } from '@itharbors/kit-core';
 
 import type { AssemblyConfig } from '../assembly/config';
 import { listAssemblyKitSources } from '../assembly/kit-catalog';
@@ -16,6 +16,7 @@ interface KitStartupDeclaration {
   path: string;
   startupPlugins: string[];
   legacyDataDirectories: string[];
+  permissions: KitPermission[];
 }
 
 export async function discoverApplicationPlugins(
@@ -68,6 +69,9 @@ export async function discoverApplicationPlugins(
           name: pluginName,
           path: pluginPath,
           kits: [declaration.name],
+          ...(declaration.permissions.length > 0
+            ? { permissions: [...declaration.permissions] }
+            : {}),
           ...(declaration.legacyDataDirectories.length > 0
             ? { legacyDataDirectories: [...declaration.legacyDataDirectories] }
             : {}),
@@ -83,6 +87,10 @@ export async function discoverApplicationPlugins(
           if (!existing.legacyDataDirectories.includes(directory)) {
             existing.legacyDataDirectories.push(directory);
           }
+        }
+        if (existing.permissions || declaration.permissions.length > 0) {
+          existing.permissions = (existing.permissions ?? [])
+            .filter((permission) => declaration.permissions.includes(permission));
         }
         continue;
       }
@@ -187,8 +195,10 @@ async function readKitDeclaration(
     diagnostics,
   );
   if (!legacyDataDirectories) return undefined;
+  const permissions = await readKitPermissions(kitPath, name, diagnostics);
+  if (!permissions) return undefined;
   if (startupPlugins === undefined) {
-    return { name, path: kitPath, startupPlugins: [], legacyDataDirectories };
+    return { name, path: kitPath, startupPlugins: [], legacyDataDirectories, permissions };
   }
   if (!isStringArray(startupPlugins) || new Set(startupPlugins).size !== startupPlugins.length) {
     diagnostics.push({
@@ -209,7 +219,29 @@ async function readKitDeclaration(
     });
     return undefined;
   }
-  return { name, path: kitPath, startupPlugins, legacyDataDirectories };
+  return { name, path: kitPath, startupPlugins, legacyDataDirectories, permissions };
+}
+
+async function readKitPermissions(
+  kitPath: string,
+  kitName: string,
+  diagnostics: ApplicationDiagnostic[],
+): Promise<KitPermission[] | undefined> {
+  try {
+    const publication = parseKitPackageManifest(JSON.parse(
+      await readFile(path.join(kitPath, 'kit.json'), 'utf8'),
+    ));
+    if (publication.id !== kitName) throw new Error('kit.json id does not match package name');
+    return [...publication.permissions];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: kitName,
+      message: `Kit "${kitName}" permissions are invalid: ${errorMessage(error)}`,
+    });
+    return undefined;
+  }
 }
 
 function readLegacyDataDirectories(

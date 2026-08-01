@@ -19,7 +19,7 @@ describe('Agent Guard Kit manifest', () => {
     expect(manifest).toMatchObject({
       id: '@itharbors/kit-agent-guard',
       target: { platform: 'darwin', arch: 'arm64' },
-      permissions: ['network', 'filesystem', 'process-control', 'application-startup'],
+      permissions: ['network', 'filesystem', 'process-control', 'application-startup', 'notifications'],
     });
     expect(pkg['ce-editor'].kit.startup.plugins).toEqual([
       '@itharbors/agent-guard-background',

@@ -27,6 +27,7 @@ export interface ServerOptions {
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
+  notificationPort?: number;
   pluginPathRoots: PluginPathRoots;
   clientAssetsRoot?: string;
   host?: string;
@@ -104,6 +105,8 @@ export function createServer(options: ServerOptions) {
     hostMode: options.applicationHostMode ?? 'web',
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
     pluginPathRoots,
+    notificationPort: options.notificationPort,
+    notificationOwnerAuthToken: options.applicationControlToken,
   });
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,

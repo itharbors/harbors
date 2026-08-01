@@ -13,6 +13,7 @@ import type {
   ApplicationPluginSpec,
   ApplicationPluginState,
 } from './types';
+import { createNotificationCapability } from './notification-capability';
 
 export interface ApplicationRuntimeOptions {
   plugins?: ApplicationPluginSpec[];
@@ -23,6 +24,8 @@ export interface ApplicationRuntimeOptions {
     diagnostics: ApplicationDiagnostic[];
   }>;
   pluginPathRoots: PluginPathRoots;
+  notificationPort?: number;
+  notificationOwnerAuthToken?: string;
 }
 
 export class ApplicationRuntime {
@@ -115,7 +118,7 @@ export class ApplicationRuntime {
         assertApplicationContributions(spec.name, contribute);
         await this.plugin.load(spec.path, {
           scope: 'application',
-          host: this.createRuntimeHost(),
+          host: this.createRuntimeHost(spec),
           paths: {
             roots: this.options.pluginPathRoots,
             legacyDataDirectories: spec.legacyDataDirectories ?? [],
@@ -139,7 +142,19 @@ export class ApplicationRuntime {
     return this.getBootstrap();
   }
 
-  private createRuntimeHost(): ApplicationPluginRuntimeHost {
+  private createRuntimeHost(spec: ApplicationPluginSpec): ApplicationPluginRuntimeHost {
+    const host = { mode: this.options.hostMode } as ApplicationPluginRuntimeHost['host'];
+    Object.defineProperty(host, 'notifications', {
+      enumerable: true,
+      get: () => createNotificationCapability({
+        hostMode: this.options.hostMode,
+        permissions: spec.permissions ?? [],
+        owner: spec.name,
+        ownerAuthToken: this.options.notificationOwnerAuthToken,
+        port: this.options.notificationPort,
+      }),
+    });
+    Object.freeze(host);
     return {
       plugin: {
         define: () => {
@@ -170,7 +185,7 @@ export class ApplicationRuntime {
         unregister: (owner, name) => this.service.unregister(owner, name),
         get: (name) => this.service.get(name),
       },
-      host: { mode: this.options.hostMode },
+      host,
     };
   }
 

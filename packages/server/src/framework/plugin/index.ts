@@ -446,7 +446,7 @@ function createApplicationPluginRuntime(
       unregister: (name) => application.service.unregister(ownerName, name),
       get: (name) => application.service.get(name),
     },
-    host: Object.freeze({ ...application.host }),
+    host: application.host,
   };
   return { ...runtime, paths };
 }

@@ -9,6 +9,7 @@ interface AgentGuardRuntime {
   };
   readonly host: {
     readonly mode: 'desktop' | 'web';
+    readonly notifications: { create(input: Record<string, unknown>): Promise<unknown> };
   };
 }
 
@@ -21,7 +22,9 @@ editor.plugin.define({
         dataDir: runtime.paths.data,
         legacyDataDirs: runtime.paths.legacyData,
         hostMode: runtime.host.mode,
-        notificationPort: process.env.HARBORS_NOTIFICATION_PORT,
+        createNotification: runtime.host.mode === 'desktop'
+          ? (input) => runtime.host.notifications.create(input)
+          : undefined,
       });
       await service.start();
     },

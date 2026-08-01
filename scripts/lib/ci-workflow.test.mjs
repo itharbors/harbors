@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -183,6 +183,14 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
 test('root test registers live Kit deactivation coverage', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
   assert.match(packageJson.scripts['test:framework'], /scripts\/lib\/kit-live-deactivation\.test\.mjs/u);
+});
+
+test('root Framework test command references only existing test files', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  const testFiles = packageJson.scripts['test:framework'].match(/scripts\/[^ ]+\.test\.mjs/gu) ?? [];
+  assert.ok(testFiles.length > 0);
+  assert.equal(testFiles.includes('scripts/lib/codex-skill-resource.test.mjs'), false);
+  await Promise.all(testFiles.map((file) => access(new URL(file, rootUrl))));
 });
 
 function workflowJob(workflow, name) {

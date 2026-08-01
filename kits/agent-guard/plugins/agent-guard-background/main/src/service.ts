@@ -163,7 +163,7 @@ interface DefaultAgentGuardServiceOptions {
   dataDir: string;
   legacyDataDirs: readonly string[];
   hostMode: 'desktop' | 'web';
-  notificationPort?: string;
+  createNotification?: (input: Record<string, unknown>) => Promise<unknown>;
 }
 
 export async function createDefaultAgentGuardService(options: DefaultAgentGuardServiceOptions) {
@@ -343,8 +343,9 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
     processMap.clear();
     for (const process of processes) processMap.set(process.pid, process);
   };
-  const notificationPort = parseNotificationPort(options.notificationPort);
-  const notifier = notificationPort ? createIncidentNotifier({ port: notificationPort }) : undefined;
+  const notifier = options.createNotification
+    ? createIncidentNotifier({ create: options.createNotification })
+    : undefined;
   const refreshConfigurations = async () => {
     const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));
     configurations = configurations.map((current, index) => (
@@ -553,12 +554,6 @@ function applyPolicyOverrides(policy: PolicyV1, overrides: Record<string, unknow
       outboundMiB: typeof trip === 'number' ? trip : policy.fixedTrip.outboundMiB,
     },
   });
-}
-
-function parseNotificationPort(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
 }
 
 function collectDescendants(pid: number, processes: Map<number, ProcessSnapshot>): ProcessSnapshot[] {

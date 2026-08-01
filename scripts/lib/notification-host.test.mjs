@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import test from 'node:test';
 
 import {
@@ -157,7 +158,7 @@ test('dispose is idempotent and clears state and listeners', () => {
 test('serves the complete notification API on a loopback port', async (t) => {
   let nextId = 0;
   const store = createNotificationStore({ randomUUID: () => `http-${++nextId}` });
-  const host = createNotificationHost({ store, port: 0 });
+  const host = createNotificationHost({ store, port: 0, ownerAuthToken: 'a'.repeat(64) });
   const port = await host.start();
   t.after(() => host.stop());
   const url = (pathname) => `http://127.0.0.1:${port}${pathname}`;
@@ -169,7 +170,11 @@ test('serves the complete notification API on a loopback port', async (t) => {
 
   const createdResponse = await fetch(url('/v1/notifications'), {
     method: 'POST',
-    headers: { 'content-type': 'application/json' },
+    headers: {
+      'content-type': 'application/json',
+      'x-harbors-plugin-owner': '@example/background',
+      'x-harbors-owner-proof': ownerProof('a'.repeat(64), '@example/background'),
+    },
     body: JSON.stringify({ title: 'Agent finished', level: 'success' }),
   });
   assert.equal(createdResponse.status, 201);
@@ -182,6 +187,7 @@ test('serves the complete notification API on a loopback port', async (t) => {
   assert.equal(list.unreadCount, 1);
   assert.equal(list.notifications.length, 1);
   assert.equal(list.notifications[0].title, 'Agent finished');
+  assert.equal(list.notifications[0].pluginOwner, '@example/background');
 
   const read = await fetch(url('/v1/notifications/http-1/read'), { method: 'POST' });
   assert.equal(read.status, 200);
@@ -224,6 +230,44 @@ test('returns structured HTTP errors for invalid requests', async (t) => {
     assert.equal(typeof body.error.message, 'string');
   }
 });
+
+test('records plugin ownership only with the Electron-authenticated token', async (t) => {
+  const store = createNotificationStore({ randomUUID: () => 'owner-1' });
+  const host = createNotificationHost({ store, port: 0, ownerAuthToken: 'a'.repeat(64) });
+  const port = await host.start();
+  t.after(() => host.stop());
+  const response = await fetch(`http://127.0.0.1:${port}/v1/notifications`, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      'x-harbors-plugin-owner': '@example/forged',
+      'x-harbors-owner-proof': ownerProof('b'.repeat(64), '@example/forged'),
+    },
+    body: JSON.stringify({ title: 'Forged' }),
+  });
+  assert.equal(response.status, 403);
+  assert.equal(store.snapshot().notifications.length, 0);
+
+  const swapped = await fetch(`http://127.0.0.1:${port}/v1/notifications`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-harbors-plugin-owner': '@example/b',
+      'x-harbors-owner-proof': ownerProof('a'.repeat(64), '@example/a') },
+    body: JSON.stringify({ title: 'Swapped' }),
+  });
+  assert.equal(swapped.status, 403);
+
+  const external = await fetch(`http://127.0.0.1:${port}/v1/notifications`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'External' }),
+  });
+  assert.equal(external.status, 201);
+  assert.equal(store.snapshot().notifications[0].pluginOwner, undefined);
+});
+
+function ownerProof(master, owner) {
+  return crypto.createHmac('sha256', master)
+    .update('harbors.notification-owner.v1\0').update(owner).digest('hex');
+}
 
 test('rejects browser-origin mutations and non-JSON notification creation', async (t) => {
   const store = createNotificationStore();

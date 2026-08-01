@@ -177,7 +177,6 @@ test('selects every descriptor for shared framework and workflow surfaces', () =
     ['packages/mysql-contracts/src/index.ts', allKits],
     ['packages/sqlite-contracts/src/index.ts', allKits],
     ['packages/relationship-graph/src/index.ts', allKits],
-    ['scripts/lib/codex-skill-resource.mjs', allKits],
     ['.agents/skills/notify-user/SKILL.md', []],
     ['scripts/ce-plugin.mjs', allKits],
     ['scripts/lib/plugin-build/validate.mjs', allKits],

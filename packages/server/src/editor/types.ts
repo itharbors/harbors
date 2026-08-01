@@ -67,6 +67,41 @@ export interface PluginRuntime {
 
 export type ApplicationHostMode = 'desktop' | 'web';
 
+export interface NotificationInput {
+  title: string;
+  body?: string;
+  level?: 'info' | 'success' | 'warning' | 'error';
+  source?: string;
+  durationMs?: number;
+  persistent?: boolean;
+}
+
+export interface NotificationRecord {
+  id: string;
+  pluginOwner?: string;
+  title: string;
+  body: string;
+  level: 'info' | 'success' | 'warning' | 'error';
+  source: string | null;
+  durationMs: number | null;
+  persistent: boolean;
+  createdAt: string;
+  read: boolean;
+}
+
+export interface NotificationSnapshot {
+  notifications: NotificationRecord[];
+  unreadCount: number;
+}
+
+export interface NotificationHostCapability {
+  create(input: NotificationInput): Promise<NotificationRecord>;
+  list(): Promise<NotificationSnapshot>;
+  markRead(id: string): Promise<NotificationRecord>;
+  markAllRead(): Promise<{ unreadCount: number }>;
+  remove(id: string): Promise<void>;
+}
+
 export interface ApplicationPluginRuntime {
   readonly paths: PluginPaths;
   plugin: PluginRuntime['plugin'];
@@ -79,6 +114,7 @@ export interface ApplicationPluginRuntime {
   };
   host: Readonly<{
     mode: ApplicationHostMode;
+    readonly notifications: NotificationHostCapability;
   }>;
 }
 

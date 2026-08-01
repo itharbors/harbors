@@ -77,6 +77,13 @@ function applicationRuntimeHost(): ApplicationPluginRuntimeHost {
     },
     host: {
       mode: 'desktop',
+      notifications: Object.freeze({
+        create: vi.fn(),
+        list: vi.fn(),
+        markRead: vi.fn(),
+        markAllRead: vi.fn(),
+        remove: vi.fn(),
+      }),
     },
   };
 }

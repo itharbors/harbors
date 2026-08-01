@@ -117,10 +117,6 @@ export const main = true;
   await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.html', '<main></main>');
   await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/dist/index.js', 'export {};\n');
   await write(root, 'kits/default/plugins/fixture-plugin/panel.fixture/src/index.html', '<main>source</main>');
-  await write(root, '.agents/skills/notify-user/SKILL.md', 'name: notify-user\n');
-  await write(root, '.agents/skills/notify-user/agents/openai.yaml', 'name: Notify User\n');
-  await write(root, '.agents/skills/notify-user/scripts/notify.mjs', 'export {};\n');
-  await write(root, '.agents/skills/notify-user/tests/forbidden.test.mjs', 'throw new Error();\n');
   return root;
 }
 
@@ -139,8 +135,6 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   assert.deepEqual(await topLevel(path.join(outputRoot, 'kits')), ['default']);
   assert.equal(existsSync(path.join(outputRoot, 'client', 'assets', 'index.js')), true);
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'package.json')), true);
-  assert.equal(existsSync(path.join(outputRoot, 'resources', 'notify-user', 'SKILL.md')), true);
-  assert.equal(existsSync(path.join(outputRoot, 'resources', 'notify-user', 'tests')), false);
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'log', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'package.json')), true);

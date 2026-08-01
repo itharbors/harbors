@@ -1,5 +1,7 @@
 import os from 'node:os';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import {
   CodexSkillInstallError,
@@ -9,18 +11,23 @@ import {
 
 declare const editor: any;
 
-const DEFAULT_NOTIFICATION_PORT = 48383;
 let skillInstaller: ReturnType<typeof createCodexSkillInstaller> | null = null;
 let applicationHostMode: 'desktop' | 'web' = 'web';
+let notifications: any;
 
 editor.plugin.define({
   lifecycle: {
-    load(runtime: { host: { mode: 'desktop' | 'web' } }) {
+    load(runtime: { host: { mode: 'desktop' | 'web'; notifications: any } }) {
       skillInstaller = null;
       applicationHostMode = runtime.host.mode;
+      notifications = runtime.host.mode === 'desktop' ? runtime.host.notifications : null;
     },
   },
   methods: {
+    getSnapshot: () => requireNotifications().list(),
+    markRead: (id: string) => requireNotifications().markRead(id),
+    markAllRead: () => requireNotifications().markAllRead(),
+    removeNotification: (id: string) => requireNotifications().remove(id),
     async installCodexSkill() {
       let result: CodexSkillInstallResult | SkillInstallFailure;
       try {
@@ -50,8 +57,8 @@ function getSkillInstaller() {
       'Codex Skill installation is available only in Harbors Electron desktop mode',
     );
   }
-  const sourceDir = process.env.HARBORS_NOTIFY_SKILL_SOURCE;
-  if (!sourceDir || !path.isAbsolute(sourceDir)) {
+  const sourceDir = resolveBundledSkillSource();
+  if (!existsSync(path.join(sourceDir, 'SKILL.md'))) {
     throw new CodexSkillInstallError(
       'SKILL_SOURCE_INVALID',
       'Codex Skill installation is available only in Harbors Electron desktop mode',
@@ -65,14 +72,14 @@ function getSkillInstaller() {
   return skillInstaller;
 }
 
+function resolveBundledSkillSource(): string {
+  return fileURLToPath(new URL('./resources/notify-user', import.meta.url));
+}
+
 async function sendInstallResultNotification(
   result: CodexSkillInstallResult | SkillInstallFailure,
 ) {
-  await hostRequest('/v1/notifications', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(installResultNotification(result)),
-  });
+  await requireNotifications().create(installResultNotification(result));
 }
 
 function installResultNotification(result: CodexSkillInstallResult | SkillInstallFailure) {
@@ -113,44 +120,7 @@ function normalizeInstallFailure(error: unknown): SkillInstallFailure {
   };
 }
 
-async function hostRequest(pathname: string, init?: RequestInit): Promise<unknown> {
-  let response: Response;
-  try {
-    response = await fetch(`${hostBaseUrl()}${pathname}`, init);
-  } catch {
-    throw new Error('Desktop notification service is unavailable');
-  }
-  if (response.status === 204) return undefined;
-  const payload = await readJsonResponse(response);
-  if (!response.ok) {
-    throw new Error(getErrorMessage(payload) ?? `Notification Host returned HTTP ${response.status}`);
-  }
-  return payload;
-}
-
-function hostBaseUrl(): string {
-  const rawPort = process.env.HARBORS_NOTIFICATION_PORT;
-  const port = rawPort === undefined || rawPort === '' ? DEFAULT_NOTIFICATION_PORT : Number(rawPort);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error('HARBORS_NOTIFICATION_PORT must be an integer between 1 and 65535');
-  }
-  return `http://127.0.0.1:${port}`;
-}
-
-async function readJsonResponse(response: Response): Promise<unknown> {
-  const text = await response.text();
-  if (!text) return null;
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new Error('Notification Host returned invalid JSON');
-  }
-}
-
-function getErrorMessage(payload: unknown): string | undefined {
-  if (!payload || typeof payload !== 'object') return undefined;
-  const error = (payload as { error?: unknown }).error;
-  if (!error || typeof error !== 'object') return undefined;
-  const message = (error as { message?: unknown }).message;
-  return typeof message === 'string' && message.length > 0 ? message : undefined;
+function requireNotifications() {
+  if (!notifications) throw new Error('Desktop notification service is unavailable');
+  return notifications;
 }

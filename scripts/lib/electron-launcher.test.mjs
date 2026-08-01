@@ -865,6 +865,12 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
 });
 
+test('derives notification navigation from plugin ownership without a Kit identity constant', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /NOTIFICATION_KIT_NAME|@itharbors\/kit-notifications/u);
+  assert.match(source, /resolveOwnerKit\(notification\.pluginOwner, kitCatalog\)/u);
+});
+
 test('uses only Electron run-as-node and IPC for packaged Framework startup', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const packagedStart = source.slice(

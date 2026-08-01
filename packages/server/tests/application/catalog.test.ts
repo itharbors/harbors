@@ -82,6 +82,14 @@ describe('discoverApplicationPlugins', () => {
     return kitDir;
   }
 
+  function writePublication(kitDir: string, id: string, permissions: string[]) {
+    fs.writeFileSync(path.join(kitDir, 'kit.json'), JSON.stringify({
+      schemaVersion: 1, id, version: '1.0.0', channel: 'stable', publisher: 'scope',
+      requires: { harbors: '>=0.0.1 <1.0.0', kitApi: '^1.0.0', protocolVersion: 1 },
+      target: { platform: 'any', arch: 'any' }, permissions, entry: 'package.json',
+    }));
+  }
+
   it('deduplicates the same real plugin path while preserving Kit origin order', async () => {
     const pluginPath = createPlugin(assembly.pluginsDir, 'background', '@scope/background');
     createKit('a', '@scope/kit-a', ['@scope/background']);
@@ -95,6 +103,19 @@ describe('discoverApplicationPlugins', () => {
       kits: ['@scope/kit-a', '@scope/kit-b'],
     }]);
     expect(result.diagnostics).toEqual([]);
+  });
+
+  it('intersects permissions when one startup plugin path is shared by multiple Kits', async () => {
+    createPlugin(assembly.pluginsDir, 'background', '@scope/background');
+    const permitted = createKit('a', '@scope/kit-permitted', ['@scope/background']);
+    const denied = createKit('b', '@scope/kit-denied', ['@scope/background']);
+    writePublication(permitted, '@scope/kit-permitted', ['notifications']);
+    writePublication(denied, '@scope/kit-denied', []);
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plugins[0].permissions).toEqual([]);
   });
 
   it('binds descriptor legacy storage names to startup plugin owners', async () => {
