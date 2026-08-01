@@ -49,6 +49,7 @@
 - Create: `kits/default/kit.json`
 - Modify: `kits/default/package.json`
 - Modify: `kits/{agent-guard,csv,mysql,notifications,scheduler,skill-manager,sqlite,traceweave}/package.json`
+- Modify: root `package-lock.json`
 
 **Interfaces:**
 - Produces: `SUPPORTED_KIT_RUNNERS = ['macos-14', 'ubuntu-latest']`.
@@ -119,6 +120,8 @@ Kit Core performs shape and canonical-string validation without filesystem acces
 
 Use `distribution: "builtin"` and `ci.runner: "ubuntu-latest"` for Default. Preserve the current policy runner and summary for every market Kit. Add Default `kit.json` with id `@itharbors/kit-default`, version `0.0.1`, stable channel, publisher `itharbors`, current Kit API requirements, any/any target, empty permissions, and `entry: "package.json"`; add matching package version.
 
+Refresh the root lockfile with `npm install --package-lock-only --ignore-scripts` so Default's newly explicit version and every workspace snapshot remain in sync. This is transitional Framework metadata; Task 11 removes Kit package records from the root lock.
+
 - [ ] **Step 5: Run descriptor and manifest tests**
 
 Run: `npm run test -w @itharbors/kit-core -- tests/repository.test.ts && node --test scripts/lib/repository-kits.test.mjs`
@@ -128,7 +131,7 @@ Expected: PASS. Do not weaken descriptor validation to preserve a static list; T
 - [ ] **Step 6: Commit the descriptor contract**
 
 ```bash
-git add packages/kit-core/src/repository.ts packages/kit-core/src/index.ts packages/kit-core/tests/repository.test.ts scripts/lib/repository-kits.mjs scripts/lib/repository-kits.test.mjs kits/*/package.json kits/default/kit.json
+git add packages/kit-core/src/repository.ts packages/kit-core/src/index.ts packages/kit-core/tests/repository.test.ts scripts/lib/repository-kits.mjs scripts/lib/repository-kits.test.mjs kits/*/package.json kits/default/kit.json package-lock.json
 git commit -m "[Refactor] 建立自描述 Kit 目录契约"
 ```
 
@@ -569,7 +572,7 @@ git commit -m "[Refactor] 收回 Agent Guard 专属实现"
 **Files:**
 - Move: `scripts/prepare-notification-skill-resource.mjs` to `kits/notifications/scripts/prepare-skill-resource.mjs`
 - Move: `scripts/lib/codex-skill-resource.mjs` to `kits/notifications/scripts/lib/codex-skill-resource.mjs`
-- Move: `.agents/skills/notify-user/**` runtime resource source to `kits/notifications/resources/notify-user/**` while preserving the repository skill wrapper only if it is still used by agents
+- Create: `kits/notifications/resources/notify-user/**` from the current user-installable notification payload; keep `.agents/skills/notify-user/**` unchanged as the repository's generic agent workflow, not as a Notifications Kit build input
 - Modify: `kits/notifications/package.json`
 - Modify: `kits/notifications/plugins/notification-background/package.json`
 - Modify: `scripts/lib/build-tasks.mjs`
@@ -622,7 +625,7 @@ Expected: FAIL on root resource steps and desktop Kit constant.
 
 - [ ] **Step 3: Move resource preparation under the Kit**
 
-Preserve byte-for-byte resource output and safety limits. The local script accepts no arbitrary source/output arguments; it resolves both beneath the Kit root. Configure `build:prepare` and `harbors.resources` locally.
+Preserve byte-for-byte resource output and safety limits. The local script accepts no arbitrary source/output arguments; it resolves both beneath the Kit root. Configure `build:prepare` and `harbors.resources` locally. The Kit-local payload is the only source consumed by the Notifications build; `.agents/skills/notify-user/**` remains a Framework/developer workflow and must not be read by Kit build code.
 
 - [ ] **Step 4: Resolve notification navigation by plugin ownership**
 
@@ -653,7 +656,7 @@ Expected: PASS.
 - [ ] **Step 7: Commit Notifications localization**
 
 ```bash
-git add kits/notifications .agents/skills/notify-user packages/kit-core packages/server/src/application packages/server/src/editor/types.ts packages/server/src/framework/plugin/index.ts packages/server/tests/application packages/server/tests/framework/plugin-runtime.test.ts scripts/prepare-notification-skill-resource.mjs scripts/lib/codex-skill-resource.mjs scripts/lib/build-tasks.mjs scripts/lib/build-tasks.test.mjs scripts/lib/kit-ci-selection.mjs scripts/lib/kit-ci-selection.test.mjs scripts/electron.mjs scripts/lib/electron-launcher.test.mjs scripts/lib/notification-desktop.mjs scripts/lib/notification-desktop.test.mjs
+git add kits/notifications packages/kit-core packages/server/src/application packages/server/src/editor/types.ts packages/server/src/framework/plugin/index.ts packages/server/tests/application packages/server/tests/framework/plugin-runtime.test.ts scripts/prepare-notification-skill-resource.mjs scripts/lib/codex-skill-resource.mjs scripts/lib/build-tasks.mjs scripts/lib/build-tasks.test.mjs scripts/lib/kit-ci-selection.mjs scripts/lib/kit-ci-selection.test.mjs scripts/electron.mjs scripts/lib/electron-launcher.test.mjs scripts/lib/notification-desktop.mjs scripts/lib/notification-desktop.test.mjs
 git commit -m "[Refactor] 收回通知资源与桌面身份"
 ```
 
@@ -833,7 +836,7 @@ git commit -m "[Refactor] 隔离 Kit 依赖锁文件"
 
 **Files:**
 - Delete: `scripts/lib/builtin-kits.mjs`
-- Modify: `scripts/lib/plugin-build/discover.mjs` or its Task 4 replacement
+- Modify: `packages/kit-cli/src/plugin-build/discover.ts` (the Task 4 replacement)
 - Modify: `scripts/lib/desktop-build.mjs`
 - Modify: `scripts/lib/desktop-build.test.mjs`
 - Modify: `scripts/build-desktop.mjs`
