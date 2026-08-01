@@ -129,7 +129,7 @@ function runCommand(command: AgentGuardCommand): void {
 function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuardCommand | PolicyV1): void {
   if (!context || mutation) return;
   const activeContext = context;
-  const renderState = captureRenderState();
+  const capturedState = captureRenderState();
   mutationError = null;
   mutation = (async () => {
     setButtonsDisabled(true);
@@ -149,7 +149,7 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
       await refresh();
     } catch (error) {
       mutationError = errorDetail(error) ?? '操作暂不可用';
-      if (latestSnapshot) renderSnapshotWithState(latestSnapshot, renderState);
+      if (latestSnapshot) renderSnapshotWithState(latestSnapshot, capturedState);
       else renderState('操作失败', 'unavailable', mutationError);
     } finally {
       mutation = null;
@@ -288,7 +288,7 @@ function restoreRenderState(renderState: RenderState): void {
   if (renderState.focusAction) {
     const candidates = root.querySelectorAll<HTMLElement>(`[data-action="${renderState.focusAction}"]`);
     const focusTarget = renderState.focusIncidentId
-      ? [...candidates].find((candidate) => (
+      ? Array.from(candidates).find((candidate) => (
         candidate.closest<HTMLElement>('[data-incident-id]')?.dataset.incidentId === renderState.focusIncidentId
       )) ?? null
       : candidates[0] ?? null;
