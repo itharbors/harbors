@@ -191,47 +191,58 @@ export class PluginModule {
 
     let definition: LoadedPluginModule['definition'];
     const runtimeOptions = normalizeLoadOptions(runtimeInput);
-    const credentialLease = runtimeOptions?.scope === 'session'
-      && registeredPlugin.info.capabilities?.includes('credentials')
-      && runtimeOptions.credentials
-      ? createRevocableCredentialVault(runtimeOptions.credentials)
-      : undefined;
-    const definitionBridge = runtimeOptions
-      ? createPluginDefinitionBridge((nextDefinition) => {
-        if (definition) {
-          throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
-        }
-        definition = nextDefinition;
-      })
-      : undefined;
-    const lifecycleRuntime = runtimeOptions?.scope === 'application'
-      ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
-      : runtimeOptions?.scope === 'session'
-        ? createPluginRuntime(
-            runtimeOptions.host,
-            registeredPlugin.name,
-            credentialLease?.facade,
-          )
-        : undefined;
+    let credentialLease: ReturnType<typeof createRevocableCredentialVault> | undefined;
+    let lifecycleRuntime: PluginRuntime | ApplicationPluginRuntime | undefined;
 
     try {
       await withPluginDefinitionLock(async () => {
         const globalScope = globalThis as typeof globalThis & {
-          editor?: PluginDefinitionBridge | PluginRuntime | ApplicationPluginRuntime;
+          editor?: PluginDefinitionBridge;
         };
-        const previousEditor = globalScope.editor;
-        if (definitionBridge) {
-          globalScope.editor = definitionBridge;
+        const previousEditorDescriptor = Object.getOwnPropertyDescriptor(globalScope, 'editor');
+        if (runtimeOptions && previousEditorDescriptor && !previousEditorDescriptor.configurable) {
+          throw new Error(
+            'Cannot safely install plugin definition bridge: globalThis.editor is non-configurable',
+          );
+        }
+
+        if (runtimeOptions) {
+          credentialLease = runtimeOptions.scope === 'session'
+            && registeredPlugin.info.capabilities?.includes('credentials')
+            && runtimeOptions.credentials
+            ? createRevocableCredentialVault(runtimeOptions.credentials)
+            : undefined;
+          lifecycleRuntime = runtimeOptions.scope === 'application'
+            ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
+            : createPluginRuntime(
+                runtimeOptions.host,
+                registeredPlugin.name,
+                credentialLease?.facade,
+              );
+          const definitionBridge = createPluginDefinitionBridge((nextDefinition) => {
+            if (definition) {
+              throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
+            }
+            definition = nextDefinition;
+          });
+          Object.defineProperty(globalScope, 'editor', {
+            value: definitionBridge,
+            writable: false,
+            configurable: true,
+            enumerable: previousEditorDescriptor?.enumerable ?? false,
+          });
         }
 
         try {
           importNonce += 1;
           await import(pathToFileURL(entryPath).href + `?t=${Date.now()}-${importNonce}`);
         } finally {
-          if (previousEditor === undefined) {
-            delete globalScope.editor;
-          } else {
-            globalScope.editor = previousEditor;
+          if (runtimeOptions) {
+            if (previousEditorDescriptor) {
+              Object.defineProperty(globalScope, 'editor', previousEditorDescriptor);
+            } else {
+              Reflect.deleteProperty(globalScope, 'editor');
+            }
           }
         }
       });

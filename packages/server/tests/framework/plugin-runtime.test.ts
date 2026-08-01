@@ -89,12 +89,13 @@ function credentialFacadeDouble() {
 describe('PluginModule', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete (globalThis as typeof globalThis & { editor?: unknown }).editor;
+    Reflect.deleteProperty(globalThis, 'editor');
     delete (globalThis as typeof globalThis & { __retainedCredentials?: unknown }).__retainedCredentials;
     delete (globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials;
     delete (globalThis as typeof globalThis & { __defineMutationSucceeded?: unknown }).__defineMutationSucceeded;
     delete (globalThis as typeof globalThis & { __bridgeMutationSucceeded?: unknown }).__bridgeMutationSucceeded;
     delete (globalThis as typeof globalThis & { __callableMutationSucceeded?: unknown }).__callableMutationSucceeded;
+    delete (globalThis as typeof globalThis & { __hostilePluginExecuted?: unknown }).__hostilePluginExecuted;
   });
 
   it('keeps registration state instance-scoped', async () => {
@@ -231,9 +232,29 @@ describe('PluginModule', () => {
         lifecycle: {
           load() {
             let current;
+            globalThis.__bridgeMutationSucceeded = false;
+            globalThis.__defineMutationSucceeded = false;
+            globalThis.__callableMutationSucceeded = false;
             Object.defineProperty(globalThis, 'editor', {
               configurable: true,
-              get() { return current; },
+              get() {
+                const originalDefine = current?.plugin?.define;
+                if (!originalDefine) return current;
+                return {
+                  plugin: {
+                    define(definition) {
+                      const originalLoad = definition.lifecycle?.load;
+                      if (originalLoad) {
+                        definition.lifecycle.load = (runtime) => {
+                          globalThis.__interceptedCredentials = runtime.credentials;
+                          return originalLoad(runtime);
+                        };
+                      }
+                      return originalDefine(definition);
+                    },
+                  },
+                };
+              },
               set(value) {
                 current = value;
                 const originalDefine = value?.plugin?.define;
@@ -295,9 +316,29 @@ describe('PluginModule', () => {
         lifecycle: {
           load() {
             let current;
+            globalThis.__bridgeMutationSucceeded = false;
+            globalThis.__defineMutationSucceeded = false;
+            globalThis.__callableMutationSucceeded = false;
             Object.defineProperty(globalThis, 'editor', {
               configurable: true,
-              get() { return current; },
+              get() {
+                const originalDefine = current?.plugin?.define;
+                if (!originalDefine) return current;
+                return {
+                  plugin: {
+                    define(definition) {
+                      const originalLoad = definition.lifecycle?.load;
+                      if (originalLoad) {
+                        definition.lifecycle.load = (runtime) => {
+                          globalThis.__interceptedCredentials = runtime.credentials;
+                          return originalLoad(runtime);
+                        };
+                      }
+                      return originalDefine(definition);
+                    },
+                  },
+                };
+              },
               set(value) {
                 current = value;
                 const originalDefine = value?.plugin?.define;
@@ -350,6 +391,33 @@ describe('PluginModule', () => {
       .toBe(false);
     expect((globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials)
       .toBeUndefined();
+  });
+
+  it('restores the exact editor property descriptor without invoking its accessor', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-editor-descriptor-restore-'));
+    const pluginDir = mkPlugin(root, 'owner', 'owner');
+    const plugin = new PluginModule();
+    const getter = vi.fn(() => ({ attacker: true }));
+    const setter = vi.fn();
+    const originalDescriptor: PropertyDescriptor = {
+      configurable: true,
+      enumerable: false,
+      get: getter,
+      set: setter,
+    };
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    Object.defineProperty(globalThis, 'editor', originalDescriptor);
+
+    await plugin.load(pluginDir, {
+      scope: 'session',
+      host: withRuntimeMenu(createEditor('descriptor-editor', { assembly })),
+    });
+
+    expect(Object.getOwnPropertyDescriptor(globalThis, 'editor')).toEqual(originalDescriptor);
+    expect(getter).not.toHaveBeenCalled();
+    expect(setter).not.toHaveBeenCalled();
+    expect(plugin.listLoaded()).toContain('owner');
   });
 
   it('lets session plugin main entries request application plugin methods', async () => {
@@ -708,5 +776,60 @@ describe('PluginModule', () => {
 
     await expect(editor.plugin.load(pluginDir)).rejects.toThrow(/cannot register as "victim"/);
     expect(editor.panel.getRegistration('victim.main')).toBeUndefined();
+  });
+
+  it('restores the exact editor property descriptor when plugin import throws', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-editor-descriptor-error-'));
+    const pluginDir = mkPlugin(root, 'owner', 'owner', `throw new Error('plugin import failed');`);
+    const plugin = new PluginModule();
+    const getter = vi.fn(() => ({ attacker: true }));
+    const setter = vi.fn();
+    const originalDescriptor: PropertyDescriptor = {
+      configurable: true,
+      enumerable: true,
+      get: getter,
+      set: setter,
+    };
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    Object.defineProperty(globalThis, 'editor', originalDescriptor);
+
+    await expect(plugin.load(pluginDir, {
+      scope: 'application',
+      host: applicationRuntimeHost(),
+    })).rejects.toThrow('plugin import failed');
+
+    expect(Object.getOwnPropertyDescriptor(globalThis, 'editor')).toEqual(originalDescriptor);
+    expect(getter).not.toHaveBeenCalled();
+    expect(setter).not.toHaveBeenCalled();
+    expect(plugin.listLoaded()).not.toContain('owner');
+  });
+
+  it('fails closed before import when editor is a non-configurable accessor', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-editor-non-configurable-'));
+    const pluginDir = mkPlugin(root, 'owner', 'owner', `
+      globalThis.__hostilePluginExecuted = true;
+      editor.plugin.define({ methods: {} });
+    `, ['credentials']);
+    const plugin = new PluginModule();
+    const credentials = credentialFacadeDouble();
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    Object.defineProperty(globalThis, 'editor', {
+      configurable: false,
+      enumerable: true,
+      get() { throw new Error('secret accessor content'); },
+      set() { throw new Error('secret accessor content'); },
+    });
+
+    await expect(plugin.load(pluginDir, {
+      scope: 'session',
+      host: withRuntimeMenu(createEditor('non-configurable-editor', { assembly })),
+      credentials,
+    })).rejects.toThrow('Cannot safely install plugin definition bridge: globalThis.editor is non-configurable');
+    expect((globalThis as typeof globalThis & { __hostilePluginExecuted?: unknown }).__hostilePluginExecuted)
+      .toBeUndefined();
+    expect(credentials.available).not.toHaveBeenCalled();
+    expect(plugin.listLoaded()).not.toContain('owner');
   });
 });
