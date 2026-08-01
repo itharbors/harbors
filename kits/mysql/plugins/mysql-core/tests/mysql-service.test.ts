@@ -12,6 +12,92 @@ const connectionInput = {
 };
 
 describe('MysqlService connection and schema', () => {
+  it('stages a probed pool until commit and discards candidates without changing active state', async () => {
+    type Prepared = { readonly state: { endpoint: string | null } };
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const discardedPool = driver.queuePool();
+    discardedPool.queueRows([['8.4.2', 'next']], fields('version', 'database'));
+    const committedPool = driver.queuePool();
+    committedPool.queueRows([['8.4.3', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver) as MysqlService & {
+      prepareConnection?: (input: unknown) => Promise<Prepared>;
+      commitPreparedConnection?: (prepared: Prepared) => Promise<ReturnType<MysqlService['getConnectionState']>>;
+      discardPreparedConnection?: (prepared: Prepared) => Promise<void>;
+    };
+    expect(service.prepareConnection).toBeTypeOf('function');
+    expect(service.commitPreparedConnection).toBeTypeOf('function');
+    expect(service.discardPreparedConnection).toBeTypeOf('function');
+
+    await service.connect(connectionInput);
+    const replacement = { ...connectionInput, host: 'next.local', database: 'next', password: 'next-secret' };
+    const discarded = await service.prepareConnection!(replacement);
+    expect(discarded.state).toMatchObject({ endpoint: 'next.local:3306' });
+    expect(service.getConnectionState()).toMatchObject({ endpoint: 'db.local:3306', database: 'app' });
+    expect(activePool.endCalls).toBe(0);
+    expect(discardedPool.endCalls).toBe(0);
+    await service.discardPreparedConnection!(discarded);
+    expect(discardedPool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toMatchObject({ endpoint: 'db.local:3306', database: 'app' });
+
+    const committed = await service.prepareConnection!(replacement);
+    await expect(service.commitPreparedConnection!(committed)).resolves.toMatchObject({
+      endpoint: 'next.local:3306',
+      database: 'next',
+    });
+    expect(activePool.endCalls).toBe(1);
+    expect(committedPool.endCalls).toBe(0);
+    expect(service.getActiveConnectionInput()).toEqual(replacement);
+  });
+
+  it('rejects a prepared pool when active connection state changed before commit', async () => {
+    type Prepared = { readonly state: { endpoint: string | null } };
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const candidatePool = driver.queuePool();
+    candidatePool.queueRows([['8.4.2', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver) as MysqlService & {
+      prepareConnection?: (input: unknown) => Promise<Prepared>;
+      commitPreparedConnection?: (prepared: Prepared) => Promise<ReturnType<MysqlService['getConnectionState']>>;
+    };
+
+    await service.connect(connectionInput);
+    const prepared = await service.prepareConnection!({
+      ...connectionInput,
+      host: 'next.local',
+      database: 'next',
+    });
+    await service.disconnect();
+    await expect(service.commitPreparedConnection!(prepared)).rejects.toMatchObject({
+      code: 'STALE_CONNECTION',
+    });
+    expect(activePool.endCalls).toBe(1);
+    expect(candidatePool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toMatchObject({ connected: false, endpoint: null });
+  });
+
+  it('disposes active and staged pools together', async () => {
+    type Prepared = { readonly state: { endpoint: string | null } };
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const candidatePool = driver.queuePool();
+    candidatePool.queueRows([['8.4.2', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver) as MysqlService & {
+      prepareConnection?: (input: unknown) => Promise<Prepared>;
+    };
+
+    await service.connect(connectionInput);
+    await service.prepareConnection!({ ...connectionInput, host: 'next.local', database: 'next' });
+    await service.dispose();
+
+    expect(activePool.endCalls).toBe(1);
+    expect(candidatePool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toMatchObject({ connected: false });
+  });
+
   it('connects without exposing secrets and disconnects idempotently', async () => {
     const driver = new FakeMysqlDriver();
     const pool = driver.queuePool();

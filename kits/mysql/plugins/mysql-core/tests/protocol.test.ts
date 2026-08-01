@@ -40,6 +40,56 @@ describe('MySQL protocol', () => {
     })).toThrow(/unexpected/);
   });
 
+  it('requires plain records with own exact fields for credential-bearing inputs', () => {
+    const profileId = '00112233-4455-4677-8899-aabbccddeeff';
+    const nullPrototypeProfile = Object.assign(Object.create(null), { profileId });
+    expect(parseProfileIdInput(nullPrototypeProfile)).toEqual({ profileId });
+
+    class ProfileInput {
+      profileId = profileId;
+    }
+    expect(() => parseProfileIdInput(new ProfileInput())).toThrow(/object/);
+
+    const inheritedSecret = Object.assign(Object.create({ secret: 'inherited-secret' }), {
+      profileId,
+    });
+    expect(() => parseProfileIdInput(inheritedSecret)).toThrow(/object/);
+
+    const hiddenSecret = { profileId };
+    Object.defineProperty(hiddenSecret, 'secret', { value: 'hidden-secret' });
+    expect(() => parseProfileIdInput(hiddenSecret)).toThrow(/unexpected/);
+    expect(() => parseProfileIdInput(Object.assign(
+      { profileId },
+      { [Symbol('secret')]: 'symbol-secret' },
+    ))).toThrow(/unexpected/);
+
+    Object.defineProperty(Object.prototype, 'profileId', {
+      configurable: true,
+      value: profileId,
+    });
+    try {
+      expect(() => parseProfileIdInput({})).toThrow(/own field/);
+    } finally {
+      Reflect.deleteProperty(Object.prototype, 'profileId');
+    }
+
+    Object.defineProperty(Object.prototype, 'host', {
+      configurable: true,
+      value: 'polluted.local',
+    });
+    try {
+      expect(() => parseConnectionInput({
+        port: 3306,
+        user: 'reader',
+        password: 'test-password',
+        database: 'app',
+        tls: true,
+      })).toThrow(/own field/);
+    } finally {
+      Reflect.deleteProperty(Object.prototype, 'host');
+    }
+  });
+
   it('validates and normalizes connection input', () => {
     expect(parseConnectionInput({
       host: ' db.local ',

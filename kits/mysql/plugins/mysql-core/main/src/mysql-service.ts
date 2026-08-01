@@ -26,6 +26,17 @@ export type ConnectionState = {
   tls: boolean;
 };
 
+export type PreparedConnection = {
+  readonly state: ConnectionState;
+};
+
+type PreparedConnectionRecord = {
+  pool: MysqlPool;
+  input: ConnectionInput;
+  state: ConnectionState;
+  baseGeneration: number;
+};
+
 export type SchemaObject = {
   name: string;
   type: 'table' | 'view';
@@ -129,6 +140,8 @@ export class MysqlService {
   private mysqlVersion: string | null = null;
   private tls = false;
   private connectionInput: ConnectionInput | null = null;
+  private connectionGeneration = 0;
+  private readonly preparedConnections = new Map<PreparedConnection, PreparedConnectionRecord>();
 
   constructor(private readonly driver: MysqlDriver = new Mysql2Driver()) {}
 
@@ -147,6 +160,11 @@ export class MysqlService {
   }
 
   async connect(input: unknown): Promise<ConnectionState> {
+    const prepared = await this.prepareConnection(input);
+    return this.commitPreparedConnection(prepared);
+  }
+
+  async prepareConnection(input: unknown): Promise<PreparedConnection> {
     let parsed;
     try {
       parsed = parseConnectionInput(input);
@@ -165,20 +183,56 @@ export class MysqlService {
         throw new MysqlWorkbenchError('DATABASE_NOT_FOUND', 'MySQL did not select the requested database');
       }
 
-      const previous = this.pool;
-      this.pool = candidate;
-      this.endpoint = `${parsed.host}:${parsed.port}`;
-      this.database = database;
-      this.mysqlVersion = version;
-      this.tls = parsed.tls;
-      this.connectionInput = { ...parsed };
+      const state: ConnectionState = {
+        connected: true,
+        endpoint: `${parsed.host}:${parsed.port}`,
+        database,
+        mysqlVersion: version,
+        tls: parsed.tls,
+      };
+      const prepared = Object.freeze({ state: Object.freeze({ ...state }) });
+      this.preparedConnections.set(prepared, {
+        pool: candidate,
+        input: { ...parsed },
+        state,
+        baseGeneration: this.connectionGeneration,
+      });
       candidate = null;
-      if (previous) await endQuietly(previous);
-      return this.getConnectionState();
+      return prepared;
     } catch (error) {
       if (candidate) await endQuietly(candidate);
       throw normalizeMysqlError(error);
     }
+  }
+
+  async commitPreparedConnection(prepared: PreparedConnection): Promise<ConnectionState> {
+    const record = this.preparedConnections.get(prepared);
+    if (!record) {
+      throw new MysqlWorkbenchError('STALE_CONNECTION', 'Prepared MySQL connection is no longer active');
+    }
+    this.preparedConnections.delete(prepared);
+    if (record.baseGeneration !== this.connectionGeneration) {
+      await endQuietly(record.pool);
+      throw new MysqlWorkbenchError('STALE_CONNECTION', 'MySQL connection changed before commit');
+    }
+
+    const previous = this.pool;
+    this.pool = record.pool;
+    this.endpoint = record.state.endpoint;
+    this.database = record.state.database;
+    this.mysqlVersion = record.state.mysqlVersion;
+    this.tls = record.state.tls;
+    this.connectionInput = { ...record.input };
+    this.connectionGeneration += 1;
+    if (previous) await endQuietly(previous);
+    return this.getConnectionState();
+  }
+
+  async discardPreparedConnection(prepared: PreparedConnection): Promise<void> {
+    const record = this.preparedConnections.get(prepared);
+    if (!record) return;
+    this.preparedConnections.delete(prepared);
+    await endQuietly(record.pool);
   }
 
   async disconnect(): Promise<ConnectionState> {
@@ -189,6 +243,7 @@ export class MysqlService {
     this.mysqlVersion = null;
     this.tls = false;
     this.connectionInput = null;
+    this.connectionGeneration += 1;
     if (previous) {
       try {
         await previous.end();
@@ -200,6 +255,10 @@ export class MysqlService {
   }
 
   async dispose(): Promise<void> {
+    await Promise.all(
+      [...this.preparedConnections.keys()].map((prepared) =>
+        this.discardPreparedConnection(prepared)),
+    );
     await this.disconnect();
   }
 
@@ -242,6 +301,7 @@ export class MysqlService {
       this.database = selectedDatabase;
       this.mysqlVersion = version;
       this.connectionInput = nextInput;
+      this.connectionGeneration += 1;
       candidate = null;
       if (previous) await endQuietly(previous);
       return this.getConnectionState();
@@ -857,7 +917,11 @@ function optionalCellString(value: unknown): string {
 
 function normalizeMysqlError(error: unknown): MysqlWorkbenchError {
   if (error instanceof MysqlWorkbenchError) return error;
-  const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
+  const code = typeof error === 'object'
+    && error !== null
+    && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : '';
   if (code === 'ER_ACCESS_DENIED_ERROR') {
     return new MysqlWorkbenchError('AUTH_FAILED', 'MySQL authentication failed');
   }

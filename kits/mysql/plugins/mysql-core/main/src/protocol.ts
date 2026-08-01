@@ -248,7 +248,9 @@ export function deserializeEditableValue(value: unknown): DatabaseValue {
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function requireBoundedTrimmedString(value: unknown, name: string, maximumLength: number): string {
@@ -290,9 +292,15 @@ function requireExactKeys(
   name: string,
 ): void {
   const expected = new Set(expectedKeys);
-  const unexpected = Object.keys(value).filter((key) => !expected.has(key));
+  const missing = expectedKeys.filter((key) => !Object.prototype.hasOwnProperty.call(value, key));
+  if (missing.length > 0) {
+    throw new Error(`${name} must contain own fields: ${missing.join(', ')}`);
+  }
+  const unexpected = Reflect.ownKeys(value).filter(
+    (key) => typeof key !== 'string' || !expected.has(key),
+  );
   if (unexpected.length > 0) {
-    throw new Error(`${name} contains unexpected fields: ${unexpected.join(', ')}`);
+    throw new Error(`${name} contains unexpected fields: ${unexpected.map(String).join(', ')}`);
   }
 }
 

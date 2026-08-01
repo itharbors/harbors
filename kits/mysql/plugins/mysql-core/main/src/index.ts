@@ -8,7 +8,11 @@ import {
   type MysqlPublicError,
   type RevisionSnapshot,
 } from '@itharbors/mysql-contracts';
-import { MysqlService, MysqlWorkbenchError } from './mysql-service.js';
+import {
+  MysqlService,
+  MysqlWorkbenchError,
+  type PreparedConnection,
+} from './mysql-service.js';
 import {
   parseConnectionInput,
   parseConnectionMetadata,
@@ -58,6 +62,7 @@ let schemaRevision = 0;
 let dataRevision = 0;
 let disposed = false;
 let activeProfileId: string | null = null;
+let connectionProvenance: 'none' | 'manual' | 'saved' = 'none';
 
 function revisions(): RevisionSnapshot {
   return { connectionRevision, schemaRevision, dataRevision };
@@ -72,23 +77,30 @@ function toPublicError(error: unknown): MysqlPublicError {
     return { code: error.code, message: error.message };
   }
   const code = errorCode(error);
-  if (code !== null && code in CREDENTIAL_ERROR_MESSAGES) {
+  if (code !== null && Object.prototype.hasOwnProperty.call(CREDENTIAL_ERROR_MESSAGES, code)) {
+    const message = CREDENTIAL_ERROR_MESSAGES[code];
+    if (typeof message !== 'string') {
+      return { code: 'MYSQL_ERROR', message: 'MySQL operation failed' };
+    }
     return {
       code,
-      message: CREDENTIAL_ERROR_MESSAGES[code as keyof typeof CREDENTIAL_ERROR_MESSAGES],
+      message,
     };
   }
   return { code: 'MYSQL_ERROR', message: 'MySQL operation failed' };
 }
 
-const CREDENTIAL_ERROR_MESSAGES = {
-  CREDENTIALS_DISABLED: '当前宿主未启用本机凭据。',
-  CREDENTIALS_UNAVAILABLE: '本机凭据库当前不可用。',
-  CREDENTIALS_LOCKED: '请先解锁本机凭据库。',
-  CREDENTIAL_PROFILE_NOT_FOUND: '保存的连接不存在或密码已丢失。',
-  CREDENTIAL_PROFILE_CONFLICT: '保存的连接已被其他操作修改。',
-  CREDENTIAL_OPERATION_FAILED: '无法完成本机凭据操作。',
-} as const;
+const CREDENTIAL_ERROR_MESSAGES: Readonly<Record<string, string>> = Object.freeze(Object.assign(
+  Object.create(null) as Record<string, string>,
+  {
+    CREDENTIALS_DISABLED: '当前宿主未启用本机凭据。',
+    CREDENTIALS_UNAVAILABLE: '本机凭据库当前不可用。',
+    CREDENTIALS_LOCKED: '请先解锁本机凭据库。',
+    CREDENTIAL_PROFILE_NOT_FOUND: '保存的连接不存在或密码已丢失。',
+    CREDENTIAL_PROFILE_CONFLICT: '保存的连接已被其他操作修改。',
+    CREDENTIAL_OPERATION_FAILED: '无法完成本机凭据操作。',
+  },
+));
 
 function errorCode(error: unknown): string | null {
   if (typeof error !== 'object' || error === null) return null;
@@ -132,6 +144,7 @@ function publishSuccessfulConnection(
   profileId: string | null,
 ): ConnectionSnapshot {
   activeProfileId = profileId;
+  connectionProvenance = profileId === null ? 'manual' : 'saved';
   connectionRevision += 1;
   schemaRevision += 1;
   dataRevision += 1;
@@ -141,19 +154,23 @@ function publishSuccessfulConnection(
 }
 
 async function disconnect(): Promise<unknown> {
-  const wasConnected = service.getConnectionState().connected;
+  const before = service.getConnectionState();
   const result = await callService('disconnect');
-  if (isErrorEnvelope(result)) return result;
-  activeProfileId = null;
-  if (wasConnected) {
+  const after = service.getConnectionState() as ConnectionState;
+  let snapshot: ConnectionSnapshot | null = null;
+  if (!after.connected) {
+    activeProfileId = null;
+    connectionProvenance = 'none';
+  }
+  if (before.connected && !after.connected) {
     connectionRevision += 1;
     schemaRevision += 1;
     dataRevision += 1;
-    const snapshot = { ...withRevisions(result as ConnectionState), profileId: activeProfileId };
+    snapshot = { ...withRevisions(after), profileId: null };
     runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
-    return snapshot;
   }
-  return { ...withRevisions(result as ConnectionState), profileId: activeProfileId };
+  if (isErrorEnvelope(result)) return result;
+  return snapshot ?? { ...withRevisions(after), profileId: activeProfileId };
 }
 
 async function getCredentialCapability(): Promise<unknown> {
@@ -203,7 +220,7 @@ async function saveCurrentConnection(input: unknown): Promise<unknown> {
   try {
     const { label } = parseProfileLabelInput(input);
     const activeInput = service.getActiveConnectionInput();
-    if (!activeInput || activeProfileId !== null) {
+    if (!activeInput || connectionProvenance !== 'manual') {
       throw new MysqlWorkbenchError(
         'NOT_CONNECTED',
         '请先成功建立手工连接，再保存连接。',
@@ -215,6 +232,9 @@ async function saveCurrentConnection(input: unknown): Promise<unknown> {
       secret: activeInput.password,
     }));
     activeProfileId = profile.id;
+    connectionProvenance = 'saved';
+    connectionRevision += 1;
+    runtime?.message.broadcast(CORE_TOPICS.connectionChanged, connectionSnapshot());
     return profile;
   } catch (error) {
     return errorEnvelope(error);
@@ -222,6 +242,7 @@ async function saveCurrentConnection(input: unknown): Promise<unknown> {
 }
 
 async function updateConnectionProfile(input: unknown): Promise<unknown> {
+  let prepared: PreparedConnection | null = null;
   try {
     const { profileId, password } = parseConnectionProfileUpdateInput(input);
     const vault = requireVault();
@@ -229,25 +250,21 @@ async function updateConnectionProfile(input: unknown): Promise<unknown> {
     const profile = requireMatchingProfile(saved.profile, profileId);
     saved.secret = '';
     const connectionInput = connectionInputFromProfile(profile, password);
-    const result = await callService('connect', connectionInput);
-    if (isErrorEnvelope(result)) return result;
-
-    let updated: MysqlConnectionProfile;
-    try {
-      updated = toMysqlConnectionProfile(await vault.put({
-        id: profileId,
-        label: profile.label,
-        metadata: metadataFromConnectionInput(connectionInput),
-        secret: password,
-      }));
-    } catch (error) {
-      publishSuccessfulConnection(result as ConnectionState, null);
-      return errorEnvelope(error);
-    }
+    prepared = await service.prepareConnection(connectionInput);
+    const updated = toMysqlConnectionProfile(await vault.put({
+      id: profileId,
+      label: profile.label,
+      metadata: metadataFromConnectionInput(connectionInput),
+      secret: password,
+    }));
+    const result = await service.commitPreparedConnection(prepared);
+    prepared = null;
     publishSuccessfulConnection(result as ConnectionState, profileId);
     return updated;
   } catch (error) {
     return errorEnvelope(error);
+  } finally {
+    if (prepared) await service.discardPreparedConnection(prepared);
   }
 }
 
