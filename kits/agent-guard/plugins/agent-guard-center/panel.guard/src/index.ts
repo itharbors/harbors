@@ -37,6 +37,16 @@ let historyRange: '1h' | '24h' | '7d' | '30d' | '90d' | '1y' = '24h';
 let historyDomain: 'network' | 'model-usage' = 'network';
 let historyAgents: Array<'claude' | 'codex'> = ['claude', 'codex'];
 let clearConfirmation = false;
+export type DashboardTab = 'overview' | 'incidents';
+let activeTab: DashboardTab = 'overview';
+let policyDraft: { warning: string; trip: string } | null = null;
+
+type RenderState = {
+  focusAction: string | null;
+  selection: [number, number] | null;
+  scrollX: number;
+  scrollY: number;
+};
 
 const panel = {
   async mount(nextContext: PanelContext) {
@@ -46,6 +56,8 @@ const panel = {
     if (!root) throw new Error('Agent Guard root is missing');
     mounted = true;
     signature = '';
+    activeTab = 'overview';
+    policyDraft = null;
     renderState('正在启动本机流量监控…', 'loading');
     await refresh();
     if (mounted) void refreshHistory();
@@ -64,6 +76,9 @@ const panel = {
     mutation = null;
     context = null;
     root = null;
+    latestSnapshot = null;
+    activeTab = 'overview';
+    policyDraft = null;
   },
 };
 
@@ -135,23 +150,130 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
 
 function renderSnapshot(snapshot: AgentGuardSnapshot): void {
   if (!root) return;
-  latestSnapshot = snapshot;
-  const workspace = document.createElement('div');
-  workspace.className = 'guard-workspace';
-  workspace.append(createHeader(snapshot), createTrafficSection(snapshot.endpoints), createHistorySection());
+  renderSnapshotWithState(snapshot, captureRenderState());
+}
 
+export function createDashboardTabs(snapshot: AgentGuardSnapshot): HTMLElement {
+  const tabs = document.createElement('div');
+  tabs.className = 'dashboard-tabs';
+  tabs.setAttribute('role', 'tablist');
+  tabs.setAttribute('aria-label', 'Agent Guard 工作区');
+  tabs.append(
+    createDashboardTab('overview', '总览', snapshot.incidents.length),
+    createDashboardTab('incidents', `事件记录 (${snapshot.incidents.length})`, snapshot.incidents.length),
+  );
+  return tabs;
+}
+
+function createDashboardTab(tab: DashboardTab, label: string, incidentCount: number): HTMLButtonElement {
+  const value = button(label, `dashboard-tab-${tab}`, () => activateDashboardTab(tab, true));
+  value.id = `${tab}-tab`;
+  value.dataset.tab = tab;
+  value.setAttribute('role', 'tab');
+  value.setAttribute('aria-controls', `${tab}-panel`);
+  value.setAttribute('aria-selected', String(activeTab === tab));
+  value.tabIndex = activeTab === tab ? 0 : -1;
+  if (tab === 'incidents') value.setAttribute('aria-label', `事件记录，${incidentCount} 条`);
+  value.addEventListener('keydown', (event) => {
+    const target = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
+      ? activeTab === 'overview' ? 'incidents' : 'overview'
+      : event.key === 'Home' ? 'overview'
+      : event.key === 'End' ? 'incidents'
+      : event.key === 'Enter' || event.key === ' ' ? tab
+      : null;
+    if (!target) return;
+    event.preventDefault();
+    activateDashboardTab(target, true);
+  });
+  return value;
+}
+
+export function activateDashboardTab(tab: DashboardTab, focusTab: boolean): void {
+  if (!latestSnapshot) return;
+  activeTab = tab;
+  root?.querySelectorAll<HTMLButtonElement>('[role="tab"]').forEach((value) => {
+    const selected = value.dataset.tab === tab;
+    value.setAttribute('aria-selected', String(selected));
+    value.tabIndex = selected ? 0 : -1;
+  });
+  const state = captureRenderState();
+  if (focusTab) state.focusAction = `dashboard-tab-${tab}`;
+  renderSnapshotWithState(latestSnapshot, state);
+}
+
+function createOverviewPanel(snapshot: AgentGuardSnapshot): HTMLElement {
+  const panel = document.createElement('section');
+  panel.id = 'overview-panel';
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', 'overview-tab');
+  panel.append(createTrafficSection(snapshot.endpoints), createHistorySection());
+  return panel;
+}
+
+function createIncidentsPanel(snapshot: AgentGuardSnapshot): HTMLElement {
+  const panel = document.createElement('section');
+  panel.id = 'incidents-panel';
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', 'incidents-tab');
   const lower = document.createElement('div');
   lower.className = 'lower-deck';
   lower.append(createIncidentLedger(snapshot.incidents), createPolicyPanel());
-  workspace.append(lower, createPrivacyNote());
+  panel.append(lower);
+  return panel;
+}
 
+function createLiveStatus(snapshot: AgentGuardSnapshot): HTMLElement {
   const status = document.createElement('p');
   status.className = 'sr-only';
   status.setAttribute('role', 'status');
   status.setAttribute('aria-live', 'polite');
   status.textContent = `已观测 ${snapshot.endpoints.length} 个端点，保护状态：${stateLabel(snapshot.state)}`;
-  workspace.append(status);
+  return status;
+}
+
+function captureRenderState(): RenderState {
+  const activeElement = document.activeElement;
+  const focusedElement = activeElement instanceof HTMLElement && root?.contains(activeElement)
+    ? activeElement
+    : null;
+  const input = focusedElement instanceof HTMLInputElement ? focusedElement : null;
+  const warning = root?.querySelector<HTMLInputElement>('input[name="warning-outbound"]');
+  const trip = root?.querySelector<HTMLInputElement>('input[name="trip-outbound"]');
+  if (warning && trip) policyDraft = { warning: warning.value, trip: trip.value };
+  return {
+    focusAction: focusedElement?.dataset.action ?? null,
+    selection: input && input.selectionStart !== null && input.selectionEnd !== null
+      ? [input.selectionStart, input.selectionEnd]
+      : null,
+    scrollX: window.scrollX,
+    scrollY: window.scrollY,
+  };
+}
+
+function renderSnapshotWithState(snapshot: AgentGuardSnapshot, renderState: RenderState): void {
+  if (!root) return;
+  latestSnapshot = snapshot;
+  const workspace = document.createElement('div');
+  workspace.className = 'guard-workspace';
+  workspace.append(createHeader(snapshot), createDashboardTabs(snapshot));
+  const content = activeTab === 'overview'
+    ? createOverviewPanel(snapshot)
+    : createIncidentsPanel(snapshot);
+  workspace.append(content, createPrivacyNote(), createLiveStatus(snapshot));
   root.replaceChildren(workspace);
+  restoreRenderState(renderState);
+}
+
+function restoreRenderState(renderState: RenderState): void {
+  if (!root) return;
+  if (renderState.focusAction) {
+    const focusTarget = root.querySelector<HTMLElement>(`[data-action="${renderState.focusAction}"]`);
+    focusTarget?.focus();
+    if (focusTarget instanceof HTMLInputElement && renderState.selection) {
+      focusTarget.setSelectionRange(...renderState.selection);
+    }
+  }
+  if (renderState.scrollX || renderState.scrollY) window.scrollTo(renderState.scrollX, renderState.scrollY);
 }
 
 async function refreshHistory(): Promise<void> {
@@ -493,15 +615,15 @@ function createPolicyPanel(): HTMLElement {
     ));
   });
   form.append(
-    numberField('警告阈值', 'warning-outbound', DEFAULT_POLICY.fixedWarning.outboundMiB, 'MiB / 10 分钟'),
-    numberField('暂停阈值', 'trip-outbound', DEFAULT_POLICY.fixedTrip.outboundMiB, 'MiB / 10 分钟'),
+    numberField('警告阈值', 'warning-outbound', policyDraft?.warning ?? String(DEFAULT_POLICY.fixedWarning.outboundMiB), 'MiB / 10 分钟'),
+    numberField('暂停阈值', 'trip-outbound', policyDraft?.trip ?? String(DEFAULT_POLICY.fixedTrip.outboundMiB), 'MiB / 10 分钟'),
     button('保存策略', 'save-policy', () => form.requestSubmit()),
   );
   aside.append(form);
   return aside;
 }
 
-function numberField(label: string, name: string, value: number, unit: string): HTMLElement {
+function numberField(label: string, name: string, value: string, unit: string): HTMLElement {
   const wrapper = document.createElement('label');
   wrapper.className = 'policy-field';
   wrapper.append(textElement('span', '', label));
@@ -509,12 +631,13 @@ function numberField(label: string, name: string, value: number, unit: string): 
   line.className = 'policy-input';
   const input = document.createElement('input');
   input.type = 'number';
+  input.dataset.action = name;
   input.name = name;
   input.min = '1';
   input.step = '1';
   input.required = true;
   input.autocomplete = 'off';
-  input.value = String(value);
+  input.value = value;
   line.append(input, textElement('small', '', unit));
   wrapper.append(line);
   return wrapper;
