@@ -20,11 +20,22 @@ describe('Agent Guard panel accessibility', () => {
 
   it('sizes the host, contains horizontal overflow, and exposes accessible Tab styling', () => {
     const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
-    expect(css).toMatch(/html,\s*body,\s*#guard-root\s*\{[^}]*min-height:\s*100%/su);
-    expect(css).toMatch(/body\s*\{[^}]*overflow-x:\s*hidden/su);
+    expect(css).toMatch(/html,\s*body,\s*#guard-root\s*\{[^}]*height:\s*100%/su);
+    expect(css).toMatch(/body\s*\{[^}]*overflow:\s*hidden/su);
     expect(css).toMatch(/\.dashboard-tab\[role="tab"\]\[aria-selected="true"\]/u);
     expect(css).toMatch(/\.dashboard-tab\[role="tab"\]:focus-visible/u);
     expect(css).toMatch(/@media\s*\(max-width:\s*640px\)/u);
+  });
+
+  it('locks page scrolling while each active workspace panel owns its overflow', () => {
+    const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
+    expect(css).toMatch(/html,\s*body,\s*#guard-root\s*\{[^}]*height:\s*100%/su);
+    expect(css).toMatch(/body\s*\{[^}]*overflow:\s*hidden/su);
+    expect(css).toMatch(/\.guard-workspace\s*\{[^}]*height:\s*100dvh[^}]*grid-template-rows:\s*auto auto minmax\(0,\s*1fr\)/su);
+    expect(css).toMatch(/\.dashboard-content\s*\{[^}]*min-height:\s*0[^}]*overflow:\s*hidden/su);
+    expect(css).toMatch(/#incidents-panel[^}]*overflow-y:\s*auto/su);
+    expect(css).toMatch(/#settings-panel[^}]*overflow-y:\s*auto/su);
+    expect(css).toMatch(/@media\s*\(max-height:\s*679px\)/u);
   });
 
   it('allows the Harbors host to run its injected panel bridge', () => {
