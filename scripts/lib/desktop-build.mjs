@@ -823,7 +823,7 @@ export async function buildDesktop({ repositoryRoot, outputRoot }) {
     platform: 'node',
     format: 'esm',
     target: 'node20',
-    external: ['better-sqlite3'],
+    external: ['@napi-rs/keyring', 'better-sqlite3'],
   });
   await copyPlan(desktopDist, desktopFiles);
   const inventory = await copyPlan(output, runtimeFiles);

@@ -1,8 +1,17 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { access, readFile } from 'node:fs/promises';
+import {
+  access,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import path from 'node:path';
+import { createPackageWithOptions } from '@electron/asar';
 import {
   DESKTOP_ELECTRON_VERSION,
   createDesktopPackageSteps,
@@ -21,6 +30,73 @@ function commandRunner({ fail = {} } = {}) {
   };
 }
 
+async function write(root, relative, contents = relative) {
+  const filename = path.join(root, relative);
+  await mkdir(path.dirname(filename), { recursive: true });
+  await writeFile(filename, contents);
+}
+
+async function createPackagedKeyringFixture(
+  t,
+  { foreignPlatform = false, forbiddenArtifact = false } = {},
+) {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), 'harbors-desktop-package-'));
+  t.after(() => rm(cwd, { recursive: true, force: true }));
+  const source = path.join(cwd, 'fixture-app');
+  const resources = path.join(
+    cwd,
+    'dist',
+    'desktop-release',
+    'mac-arm64',
+    'ITHARBORS.app',
+    'Contents',
+    'Resources',
+  );
+  await write(source, 'dist/framework.mjs', `
+export async function loadKeyring() {
+  return import('@napi-rs/keyring');
+}
+`);
+  await write(source, 'node_modules/@napi-rs/keyring/package.json', JSON.stringify({
+    name: '@napi-rs/keyring',
+    version: '1.3.0',
+    main: 'index.js',
+  }));
+  await write(source, 'node_modules/@napi-rs/keyring/index.js', 'module.exports = { Entry: class {} };\n');
+  await write(source, 'node_modules/@napi-rs/keyring-darwin-arm64/package.json', JSON.stringify({
+    name: '@napi-rs/keyring-darwin-arm64',
+    version: '1.3.0',
+    os: ['darwin'],
+    cpu: ['arm64'],
+  }));
+  await write(
+    source,
+    'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node',
+    'fixture native binary',
+  );
+  if (foreignPlatform) {
+    await write(source, 'node_modules/@napi-rs/keyring-linux-x64-gnu/package.json', JSON.stringify({
+      name: '@napi-rs/keyring-linux-x64-gnu',
+      version: '1.3.0',
+      os: ['linux'],
+      cpu: ['x64'],
+    }));
+    await write(
+      source,
+      'node_modules/@napi-rs/keyring-linux-x64-gnu/keyring.linux-x64-gnu.node',
+      'foreign native binary',
+    );
+  }
+  if (forbiddenArtifact) {
+    await write(source, 'dist/plaintext-store.json', '{"password":"fixture"}');
+  }
+  await mkdir(resources, { recursive: true });
+  await createPackageWithOptions(source, path.join(resources, 'app.asar'), {
+    unpack: '**/*.node',
+  });
+  return cwd;
+}
+
 test('rebuilds the packaged native addon before builder and restores the Node ABI afterwards', async () => {
   const runner = commandRunner();
 
@@ -28,6 +104,7 @@ test('rebuilds the packaged native addon before builder and restores the Node AB
     cwd: '/workspace/harbors',
     mode: 'dir',
     run: runner.run,
+    verify: async () => undefined,
     electronRebuildCli: '/workspace/harbors/node_modules/@electron/rebuild/bin/cli.js',
   });
 
@@ -47,6 +124,40 @@ test('rebuilds the packaged native addon before builder and restores the Node AB
     '--arch',
     'arm64',
   ]);
+});
+
+test('accepts a fixture package with only the externalized unpacked Darwin ARM64 keyring', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t);
+  const runner = commandRunner();
+
+  const evidence = await runDesktopPackage({ cwd, mode: 'dir', run: runner.run });
+
+  assert.deepEqual(evidence, {
+    external: '@napi-rs/keyring',
+    nativePackage: '@napi-rs/keyring-darwin-arm64',
+    nativeFile: 'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node',
+  });
+});
+
+test('rejects a fixture package containing a foreign native keyring platform', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, { foreignPlatform: true });
+  const runner = commandRunner();
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: runner.run }),
+    /unexpected platform dependency closure/u,
+  );
+  assert.equal(runner.calls.at(-1).name, 'restore-node-addon');
+});
+
+test('rejects a fixture package containing a plaintext credential helper artifact', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, { forbiddenArtifact: true });
+  const runner = commandRunner();
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: runner.run }),
+    /forbidden credential helper artifact/u,
+  );
 });
 
 test('restores the Node ABI when electron-builder fails and preserves its failure', async () => {
@@ -85,7 +196,12 @@ test('surfaces a Node ABI restoration failure after a successful package build',
   const runner = commandRunner({ fail: { 'restore-node-addon': restoreFailure } });
 
   await assert.rejects(
-    runDesktopPackage({ cwd: '/workspace/harbors', mode: 'dist', run: runner.run }),
+    runDesktopPackage({
+      cwd: '/workspace/harbors',
+      mode: 'dist',
+      run: runner.run,
+      verify: async () => undefined,
+    }),
     (error) => error === restoreFailure,
   );
   assert.equal(runner.calls[2].name, 'electron-builder');
@@ -128,6 +244,7 @@ test('unsigned config preserves packaging inputs while disabling signing and not
   assert.deepEqual(unsigned.directories, signed.directories);
   assert.deepEqual(unsigned.files, signed.files);
   assert.deepEqual(unsigned.extraResources, signed.extraResources);
+  assert.deepEqual(unsigned.asarUnpack, signed.asarUnpack);
   assert.deepEqual(unsigned.mac.target, signed.mac.target);
 });
 
@@ -142,6 +259,10 @@ test('desktop package owns version, updater, and native runtime dependencies', a
   assert.equal(pkg.main, 'dist/main.mjs');
   assert.equal(pkg.dependencies['electron-updater'], '6.8.9');
   assert.equal(pkg.dependencies['better-sqlite3'], '12.10.1');
+  assert.equal(pkg.dependencies['@napi-rs/keyring'], '1.3.0');
+  assert.equal(rootLock.packages['packages/desktop'].dependencies['@napi-rs/keyring'], '1.3.0');
+  assert.equal(rootLock.packages['node_modules/@napi-rs/keyring'].version, '1.3.0');
+  assert.equal(rootLock.packages['node_modules/@napi-rs/keyring-darwin-arm64'].version, '1.3.0');
   assert.equal(rootPackage.engines.node, '>=22.12.0');
   assert.equal(rootPackage.devDependencies['@electron/rebuild'], '4.2.0');
   assert.equal(rootPackage.devDependencies.electron, DESKTOP_ELECTRON_VERSION);
@@ -175,7 +296,8 @@ test('builder ships only the staged runtime and unpacks native modules', async (
   assert.equal(config.artifactName, '${productName}-${version}-${arch}-mac.${ext}');
   assert.equal(config.dmg.artifactName, '${productName}-${version}-${arch}.${ext}');
   assert.match(JSON.stringify(config.extraResources), /dist\/desktop-runtime/);
-  assert.match(JSON.stringify(config.asarUnpack), /\.node/);
+  assert.ok(config.asarUnpack.includes('node_modules/@napi-rs/**/*.node'));
+  assert.ok(config.asarUnpack.includes('node_modules/better-sqlite3/**/*.node'));
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlements), entitlementsPath);
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlementsInherit), entitlementsPath);
   await access(entitlementsPath);

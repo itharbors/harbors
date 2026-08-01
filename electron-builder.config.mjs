@@ -6,7 +6,10 @@ export default {
   files: ['package.json', 'dist/**/*'],
   extraResources: [{ from: 'dist/desktop-runtime', to: 'runtime' }],
   asar: true,
-  asarUnpack: ['node_modules/better-sqlite3/**/*.node'],
+  asarUnpack: [
+    'node_modules/@napi-rs/**/*.node',
+    'node_modules/better-sqlite3/**/*.node',
+  ],
   npmRebuild: true,
   electronUpdaterCompatibility: '>=2.16',
   generateUpdatesFilesForAllChannels: true,
