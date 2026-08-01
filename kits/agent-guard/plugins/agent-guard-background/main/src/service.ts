@@ -6,9 +6,12 @@ import { resolve4, resolve6 } from 'node:dns/promises';
 import { fileURLToPath } from 'node:url';
 
 import {
+  normalizeClearHistory,
   normalizeCommand,
+  normalizeHistorySettings,
   normalizePolicy,
   normalizeSnapshot,
+  normalizeTrafficHistoryQuery,
   type AgentEndpointSnapshot,
   type AgentGuardSnapshot,
   type IncidentSummary,
@@ -31,6 +34,7 @@ import { createProcessController, type VerifiedControlTarget } from './process-c
 import { PolicyEngine } from './policy.js';
 import { createIncidentNotifier } from './notifications.js';
 import { createAgentGuardStore, type PersistedIncidentV1, type PersistedMetricV1 } from './storage.js';
+import { createUsageBackfiller } from './usage-backfill.js';
 import { createWatchdogClient } from './watchdog.js';
 import type { AgentProcessRole, ProcessSnapshot } from './types.js';
 
@@ -60,6 +64,12 @@ interface AgentGuardServiceOptions {
   onDispose?: () => Promise<void> | void;
   onPolicyChanged?: (policy: PolicyV1) => Promise<void> | void;
   isLearning?: () => boolean;
+  history?: {
+    query(input: unknown): Promise<unknown>;
+    status(): Promise<unknown>;
+    updateSettings(input: { localSessionBackfill: boolean }): Promise<unknown>;
+    clearHistory(): Promise<void>;
+  };
 }
 
 export function createAgentGuardService(options: AgentGuardServiceOptions) {
@@ -127,6 +137,24 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
       const limit = (input as { limit?: unknown }).limit ?? 100;
       if (!Number.isSafeInteger(limit) || (limit as number) < 1 || (limit as number) > 1000) throw new TypeError('Incident limit is invalid');
       return incidents.slice(-(limit as number));
+    },
+    async getTrafficHistory(input: unknown) {
+      if (!options.history) throw new Error('Agent Guard history is unavailable');
+      return options.history.query(normalizeTrafficHistoryQuery(input));
+    },
+    async getHistoryStatus() {
+      if (!options.history) throw new Error('Agent Guard history is unavailable');
+      return options.history.status();
+    },
+    async updateHistorySettings(input: unknown) {
+      if (!options.history) throw new Error('Agent Guard history is unavailable');
+      return options.history.updateSettings(normalizeHistorySettings(input));
+    },
+    async clearHistory(input: unknown) {
+      if (!options.history) throw new Error('Agent Guard history is unavailable');
+      normalizeClearHistory(input);
+      await options.history.clearHistory();
+      return options.history.status();
     },
     registerIncident(id: string, target?: VerifiedControlTarget | null, summary?: IncidentSummary) {
       if (target) incidentTargets.set(id, { ...target });
@@ -227,6 +255,8 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
   let observerTimer: ReturnType<typeof setInterval> | undefined;
   let configurationTimer: ReturnType<typeof setInterval> | undefined;
   let dnsTimer: ReturnType<typeof setInterval> | undefined;
+  let backfillTimer: ReturnType<typeof setInterval> | undefined;
+  let compactionTimer: ReturnType<typeof setInterval> | undefined;
   let service: ReturnType<typeof createAgentGuardService>;
 
   const classify = (process: ProcessSnapshot): { role: AgentProcessRole; index: number } | undefined => {
@@ -346,6 +376,18 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
   const notifier = options.createNotification
     ? createIncidentNotifier({ create: options.createNotification })
     : undefined;
+  const usageBackfiller = createUsageBackfiller({
+    store: store.history,
+    roots: {
+      claude: path.join(os.homedir(), '.claude', 'projects'),
+      codex: path.join(os.homedir(), '.codex', 'sessions'),
+    },
+    endpoints: {
+      claude: endpointIdentity(configurations[0]),
+      codex: endpointIdentity(configurations[1]),
+    },
+    salt,
+  });
   const refreshConfigurations = async () => {
     const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));
     configurations = configurations.map((current, index) => (
@@ -476,6 +518,36 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
       runtime.processIds.clear();
       runtime.complete = true;
     }
+    const collectorState = collector.snapshot();
+    const coverageComplete = collectorState.running && !collectorState.incomplete;
+    await Promise.all([
+      store.history.appendCoverage([{
+        schemaVersion: 1,
+        start: lastEvaluationAt,
+        end: now,
+        collectorEpoch: collectorState.epoch,
+        status: coverageComplete ? 'complete' : 'partial',
+        reason: coverageComplete ? null : collectorState.running ? 'collector-degraded' : 'collector-stopped',
+        endpoints: configurations.map((configuration) => ({
+          agent: configuration.agent,
+          provider: configuration.provider,
+          hostname: new URL(configuration.endpoint).hostname,
+          enabled: true,
+        })),
+      }]),
+      store.history.appendNetworkSamples(persistedMetrics.map((metric) => ({
+        schemaVersion: 2 as const,
+        intervalStart: lastEvaluationAt,
+        intervalEnd: now,
+        collectorEpoch: collectorState.epoch,
+        agent: metric.agent,
+        provider: metric.provider,
+        hostname: metric.hostname,
+        remoteDigest: metric.remoteDigest,
+        bytesIn: metric.bytesIn,
+        bytesOut: metric.bytesOut,
+      }))),
+    ]).catch(() => undefined);
     if (store.status === 'ready') {
       await store.appendMetrics(persistedMetrics);
       await store.appendIncidents(persistedIncidents);
@@ -495,6 +567,7 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
     flushMetrics: async () => undefined,
     evaluate,
     endpoints: () => [...endpointTotals.values()],
+    history: store.history,
     onStart: async () => {
       await refreshProcesses();
       await refreshConfigurations();
@@ -502,11 +575,17 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
       observerTimer = setInterval(() => { void refreshProcesses().catch(() => undefined); }, 5_000);
       configurationTimer = setInterval(() => { void refreshConfigurations(); }, 60_000);
       dnsTimer = setInterval(() => { void refreshDns(); }, 4 * 60_000);
+      void usageBackfiller.runOnce().catch(() => undefined);
+      backfillTimer = setInterval(() => { void usageBackfiller.runOnce().catch(() => undefined); }, 5 * 60_000);
+      compactionTimer = setInterval(() => { void store.history.compact(new Date()).catch(() => undefined); }, 60 * 60_000);
     },
     onDispose: async () => {
       if (observerTimer) clearInterval(observerTimer);
       if (configurationTimer) clearInterval(configurationTimer);
       if (dnsTimer) clearInterval(dnsTimer);
+      if (backfillTimer) clearInterval(backfillTimer);
+      if (compactionTimer) clearInterval(compactionTimer);
+      usageBackfiller.dispose();
       await watchdog.shutdown();
     },
     onPolicyChanged: async (policy) => {
@@ -556,6 +635,9 @@ function applyPolicyOverrides(policy: PolicyV1, overrides: Record<string, unknow
   });
 }
 
+function endpointIdentity(configuration: { provider: string; endpoint: string }) {
+  return { provider: configuration.provider, hostname: new URL(configuration.endpoint).hostname };
+}
 function collectDescendants(pid: number, processes: Map<number, ProcessSnapshot>): ProcessSnapshot[] {
   const found: ProcessSnapshot[] = [];
   const pending = [pid];

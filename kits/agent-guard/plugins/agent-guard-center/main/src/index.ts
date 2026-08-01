@@ -14,6 +14,10 @@ editor.plugin.define({
     updatePolicy: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'updatePolicy', input),
     executeCommand: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'executeCommand', input),
     getIncidents: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'getIncidents', input),
+    getTrafficHistory: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'getTrafficHistory', input),
+    getHistoryStatus: () => requireRuntime().application.request(BACKGROUND, 'getHistoryStatus'),
+    updateHistorySettings: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'updateHistorySettings', input),
+    clearHistory: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'clearHistory', input),
     openGuardPanel: () => requireRuntime().window.openPanel(PANEL),
   },
 });

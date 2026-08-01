@@ -38,6 +38,10 @@ editor.plugin.define({
     updatePolicy: (input: unknown) => requireService().updatePolicy(input),
     executeCommand: (input: unknown) => requireService().executeCommand(input),
     getIncidents: (input: unknown) => requireService().getIncidents(input),
+    getTrafficHistory: (input: unknown) => requireService().getTrafficHistory(input),
+    getHistoryStatus: () => requireService().getHistoryStatus(),
+    updateHistorySettings: (input: unknown) => requireService().updateHistorySettings(input),
+    clearHistory: (input: unknown) => requireService().clearHistory(input),
   },
 });
 

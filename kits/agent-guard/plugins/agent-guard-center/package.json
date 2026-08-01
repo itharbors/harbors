@@ -23,6 +23,10 @@
           "updatePolicy": ["updatePolicy"],
           "executeCommand": ["executeCommand"],
           "getIncidents": ["getIncidents"],
+          "getTrafficHistory": ["getTrafficHistory"],
+          "getHistoryStatus": ["getHistoryStatus"],
+          "updateHistorySettings": ["updateHistorySettings"],
+          "clearHistory": ["clearHistory"],
           "openGuardPanel": ["openGuardPanel"]
         }
       },
