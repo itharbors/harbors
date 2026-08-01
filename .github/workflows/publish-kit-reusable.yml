@@ -139,18 +139,32 @@ jobs:
         shell: bash
         run: npm run kit:check -- "$KIT_NAME" --output-directory "$RUNNER_TEMP/kit-check"
 
-      - name: Inspect targeted check artifact
+      - name: Resolve targeted check artifact
+        id: artifact
         shell: bash
         run: |
           set -euo pipefail
-          shopt -s nullglob
-          check_files=("$RUNNER_TEMP/kit-check"/*)
-          check_artifacts=("$RUNNER_TEMP/kit-check"/*.hkit)
-          if [[ "${#check_files[@]}" -ne 1 || "${#check_artifacts[@]}" -ne 1 ]]; then
-            echo 'Targeted Kit check must produce exactly one .hkit' >&2
-            exit 1
-          fi
-          node packages/kit-cli/dist/cli.js inspect "${check_artifacts[0]}" --json \
+          node --input-type=module <<'NODE'
+          import { appendFileSync, readdirSync } from 'node:fs';
+          import path from 'node:path';
+
+          const directory = `${process.env.RUNNER_TEMP}/kit-check`;
+          const artifacts = readdirSync(directory, { withFileTypes: true })
+            .filter((entry) => entry.isFile() && entry.name.endsWith('.hkit'));
+          if (artifacts.length !== 1) {
+            throw new Error('Targeted Kit check must produce exactly one .hkit');
+          }
+          const artifact = path.join(directory, artifacts[0].name);
+          appendFileSync(process.env.GITHUB_OUTPUT, `kit-artifact=${artifact}\n`, 'utf8');
+          NODE
+
+      - name: Inspect targeted check artifact
+        shell: bash
+        env:
+          KIT_ARTIFACT: ${{ steps.artifact.outputs.kit-artifact }}
+        run: |
+          set -euo pipefail
+          node packages/kit-cli/dist/cli.js inspect "$KIT_ARTIFACT" --json \
             > "$RUNNER_TEMP/check-inspection.json"
 
       - name: Prepare publication quartet
@@ -159,11 +173,15 @@ jobs:
         env:
           KIT_LABEL: ${{ needs.context.outputs.label }}
           KIT_SUMMARY: ${{ needs.context.outputs.summary }}
+          KIT_ARTIFACT: ${{ steps.artifact.outputs.kit-artifact }}
         run: |
           set -euo pipefail
           node scripts/kit-publish.mjs prepare \
-            --kit-directory "kits/$KIT_NAME" \
+            --kit-artifact "$KIT_ARTIFACT" \
             --output-directory "$RUNNER_TEMP/kit-release" \
+            --kit-id "$KIT_ID" \
+            --kit-version "$EXPECTED_VERSION" \
+            --kit-channel "$EXPECTED_CHANNEL" \
             --repository "$GITHUB_REPOSITORY" \
             --commit "$GITHUB_SHA" \
             --workflow "$GITHUB_WORKFLOW_REF" \
@@ -233,6 +251,7 @@ jobs:
             || prepared.manifest.id !== process.env.KIT_ID
             || prepared.manifest.version !== process.env.EXPECTED_VERSION
             || prepared.manifest.channel !== process.env.EXPECTED_CHANNEL
+            || check.sha256 !== prepared.sha256
             || release.id !== process.env.KIT_ID
             || release.version !== process.env.EXPECTED_VERSION
             || release.channel !== process.env.EXPECTED_CHANNEL

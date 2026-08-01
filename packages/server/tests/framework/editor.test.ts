@@ -5,7 +5,7 @@ import type { LayoutNode } from '../../src/framework/window/types';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { testAssembly } from '../helpers/assembly';
+import { testAssembly, testKitFixture } from '../helpers/assembly';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
 const createEditor = (
@@ -74,35 +74,30 @@ describe('createEditor', () => {
   });
 
   it('kit.switchKit reloads the requested kit and updates getCurrent', async () => {
-    await editor.kit.load('@itharbors/kit-default');
+    await editor.kit.load(testKitFixture.name);
 
-    await editor.kit.switchKit('@itharbors/kit-default');
+    await editor.kit.switchKit(testKitFixture.name);
 
-    expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
-    expect(editor.kit.getCurrent()?.menuRoot).toEqual({ id: 'default', label: 'Default Kit' });
+    expect(editor.kit.getCurrent()?.name).toBe(testKitFixture.name);
+    expect(editor.kit.getCurrent()?.menuRoot).toEqual({ id: 'kit-alpha', label: 'Alpha Fixture' });
   });
 
   it('loads the default kit when no kit is specified', async () => {
     await editor.kit.load();
 
-    expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+    expect(editor.kit.getCurrent()?.name).toBe(testKitFixture.name);
     expect(editor.kit.getCurrent()?.layouts.default.windows[0]).toMatchObject({
-      id: 'default-main',
+      id: 'fixture-main',
       kind: 'main',
       type: 'panel-area',
       entry: 'main.html',
       state: 'open',
       panelInstanceIds: [],
     });
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/status-bar');
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/plugin-list');
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/message-debug');
-    expect(editor.panel.getInfo('@itharbors/status-bar.status')).toMatchObject({
-      name: '@itharbors/status-bar.status',
-    });
-    expect(editor.panel.getInfo('@itharbors/log.log')).toMatchObject({
-      name: '@itharbors/log.log',
+    expect(editor.plugin.listLoaded()).toContain(testKitFixture.primaryPlugin);
+    expect(editor.plugin.listLoaded()).toContain(testKitFixture.observerPlugin);
+    expect(editor.panel.getInfo(testKitFixture.primaryPanel)).toMatchObject({
+      name: testKitFixture.primaryPanel,
     });
   });
 
@@ -434,7 +429,7 @@ describe('createEditor', () => {
     await expect(editor.message.request('calc', 'double', 21)).resolves.toBe(42);
     editor.message.broadcast('@demo.assets.changed', { id: 1 });
 
-    const snapshot = await editor.message.request('@itharbors/message-debug', 'getSnapshot') as {
+    const snapshot = await editor.message.request(testKitFixture.observerPlugin, 'getSnapshot') as {
       messages?: Array<{ type: string; payload: unknown }>;
     };
 
@@ -451,7 +446,7 @@ describe('createEditor', () => {
 
     await expect(editor.message.request('calc', 'ping')).resolves.toBe('pong');
 
-    const snapshot = await editor.message.request('@itharbors/message-debug', 'getSnapshot') as {
+    const snapshot = await editor.message.request(testKitFixture.observerPlugin, 'getSnapshot') as {
       messages?: Array<{ type: string; payload: unknown }>;
     };
 
@@ -461,7 +456,7 @@ describe('createEditor', () => {
   });
 
   it('exposes available layout names via editor.kit.layouts', async () => {
-    await editor.kit.load('@itharbors/kit-default');
+    await editor.kit.load(testKitFixture.name);
 
     const names = editor.kit.layouts;
     expect(names).toContain('default');
@@ -469,17 +464,17 @@ describe('createEditor', () => {
   });
 
   it('applyLayout with a LayoutNode rearranges the main window', async () => {
-    await editor.kit.load('@itharbors/kit-default');
+    await editor.kit.load(testKitFixture.name);
 
     const snapshotBefore = editor.window.getSnapshot();
     const mainBefore = snapshotBefore.windows.find((w) => w.kind === 'main');
     expect(mainBefore).toBeDefined();
 
-    editor.kit.applyLayout({ type: 'leaf', panel: '@itharbors/status-bar.status' } as LayoutNode);
+    editor.kit.applyLayout({ type: 'leaf', panel: testKitFixture.primaryPanel } as LayoutNode);
 
     const snapshotAfter = editor.window.getSnapshot();
     const mainAfter = snapshotAfter.windows.find((w) => w.kind === 'main');
-    expect(mainAfter?.layout).toEqual({ type: 'leaf', panel: '@itharbors/status-bar.status' });
+    expect(mainAfter?.layout).toEqual({ type: 'leaf', panel: testKitFixture.primaryPanel });
   });
 
   it('applyLayout throws when there is no active kit', () => {
@@ -487,20 +482,20 @@ describe('createEditor', () => {
   });
 
   it('applyLayout throws for unknown layout name', async () => {
-    await editor.kit.load('@itharbors/kit-default');
+    await editor.kit.load(testKitFixture.name);
 
     expect(() => editor.kit.applyLayout('nonexistent-layout')).toThrow(/not found/);
   });
 
   it('applyLayout fires onLayoutChanged callback', async () => {
-    await editor.kit.load('@itharbors/kit-default');
+    await editor.kit.load(testKitFixture.name);
 
     const snapshotBefore = editor.window.getSnapshot();
     const mainBefore = snapshotBefore.windows.find((w) => w.kind === 'main');
     expect(mainBefore).toBeDefined();
 
     // applyLayout should not throw
-    expect(() => editor.kit.applyLayout({ type: 'leaf', panel: '@itharbors/status-bar.status' } as LayoutNode)).not.toThrow();
+    expect(() => editor.kit.applyLayout({ type: 'leaf', panel: testKitFixture.primaryPanel } as LayoutNode)).not.toThrow();
   });
 
   it('disposes plugins exactly once and rejects later mutations', async () => {
@@ -524,7 +519,7 @@ describe('createEditor', () => {
     expect(editor.plugin.listLoaded()).toEqual([]);
     expect(editor.panel.list()).toEqual([]);
     expect(editor.isUsable()).toBe(false);
-    await expect(editor.kit.load('@itharbors/kit-default')).rejects.toThrow('Editor is unavailable');
+    await expect(editor.kit.load(testKitFixture.name)).rejects.toThrow('Editor is unavailable');
   });
 
   function createPlugin(name: string, contribute: object, code = 'editor.plugin.define({ methods: {} });'): string {

@@ -183,14 +183,15 @@ test('rejects a Kit whose descriptor identity drifts from the trusted policy id'
   }
 });
 
-test('rejects a Kit whose root lock identity differs from its descriptor', async () => {
+test('rejects a Kit whose local lock identity differs from its descriptor', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-lock-'));
   try {
     await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
     await cp(path.join(repositoryRoot, 'kits', 'sqlite'), path.join(root, 'kits', 'sqlite'), { recursive: true });
-    const lock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
-    lock.packages['kits/sqlite'].version = '9.9.9';
-    await writeFile(path.join(root, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
+    const lockFile = path.join(root, 'kits', 'sqlite', 'package-lock.json');
+    const lock = JSON.parse(await readFile(lockFile, 'utf8'));
+    lock.packages[''].version = '9.9.9';
+    await writeFile(lockFile, `${JSON.stringify(lock, null, 2)}\n`);
 
     await assert.rejects(
       loadTrustedMarketKit({ repositoryRoot: root, slug: 'sqlite' }),
@@ -203,9 +204,9 @@ test('rejects a Kit whose root lock identity differs from its descriptor', async
 
 test('each Kit root owns every external runtime dependency used by its plugins', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
-  const packageLock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
   for (const slug of Object.keys(policy.kits).sort()) {
     const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
+    const packageLock = JSON.parse(await readFile(path.join(kit.directory, 'package-lock.json'), 'utf8'));
     const pluginNames = [
       ...(kit.packageJson['ce-editor'].kit.plugin ?? []),
       ...(kit.packageJson['ce-editor'].kit.startup?.plugins ?? []),
@@ -221,7 +222,7 @@ test('each Kit root owns every external runtime dependency used by its plugins',
         if (dependency.startsWith('@itharbors/')) continue;
         assert.equal(kit.packageJson.dependencies?.[dependency], range, `${slug} does not own ${dependency}`);
         assert.equal(
-          packageLock.packages[`kits/${slug}`]?.dependencies?.[dependency],
+          packageLock.packages['']?.dependencies?.[dependency],
           range,
           `${slug} does not lock ${dependency}`,
         );

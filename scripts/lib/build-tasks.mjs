@@ -17,34 +17,21 @@ export async function createBuildPlan(rootDir, graphName, options = {}) {
   const rootPath = path.resolve(rootDir);
   const pluginDiscovery = await import('./plugin-build/discover.mjs');
   const workspaceUniverse = discoverWorkspaceTasks(rootPath);
-  const descriptors = options.descriptors ?? await discoverDescriptors(rootPath);
   const rootPluginTasks = discoverRootPluginTasks(rootPath, workspaceUniverse, pluginDiscovery);
-  const selectedDescriptors = selection.kits === 'builtin'
-    ? descriptors.filter((descriptor) => descriptor.distribution === 'builtin')
-    : descriptors;
-  const kitTasks = selectedDescriptors.map((descriptor) => (
-    createKitTask(rootPath, descriptor, workspaceUniverse, pluginDiscovery)
-  ));
   const workspaceTasks = selection.workspaces
     ? workspaceUniverse
-    : workspaceDependencyClosure(workspaceUniverse, [...rootPluginTasks, ...kitTasks]);
+    : workspaceDependencyClosure(workspaceUniverse, rootPluginTasks);
   const selectedTaskNames = new Set([
     ...workspaceTasks.map((task) => task.name),
     ...rootPluginTasks.map((task) => task.name),
-    ...kitTasks.map((task) => task.name),
   ]);
-  const tasks = [...workspaceTasks, ...rootPluginTasks, ...kitTasks].map((task) => ({
+  const tasks = [...workspaceTasks, ...rootPluginTasks].map((task) => ({
     ...task,
     dependencies: task.dependencies.filter((dependency) => selectedTaskNames.has(dependency)),
   }));
 
   validateBuildTasks(tasks);
   return { cacheDir: path.join(rootPath, BUILD_CACHE_RELATIVE_DIR), tasks };
-}
-
-async function discoverDescriptors(repositoryRoot) {
-  const { discoverRepositoryKits } = await import('./repository-kits.mjs');
-  return discoverRepositoryKits({ repositoryRoot });
 }
 
 function workspaceDependencyClosure(workspaceUniverse, dependentTasks) {
@@ -248,50 +235,6 @@ function createPluginTask(rootDir, pluginDir, workspaceByPackage, workspaceTasks
   };
 }
 
-function createKitTask(rootDir, descriptor, workspaceTasks, pluginDiscovery) {
-  const directory = descriptor.directory;
-  const pluginDirectories = pluginDiscovery.discoverAllPlugins(directory).filter((pluginDir) => (
-    isPathWithin(pluginDir, path.join(directory, 'plugins'))
-  ));
-  const plugins = pluginDirectories.map(pluginDiscovery.discoverPlugin);
-  const workspaceByPackage = workspacePackageTaskMap(rootDir, workspaceTasks);
-  const dependencyNames = new Set([
-    '@itharbors/kit-cli',
-    ...packageDependencyNames(descriptor.packageJson),
-    ...plugins.flatMap((plugin) => packageDependencyNames(plugin.pkg)),
-  ]);
-  const dependencies = [...dependencyNames]
-    .map((dependency) => workspaceByPackage.get(dependency))
-    .filter(Boolean)
-    .sort();
-  const relativeDirectory = toRepositoryPath(rootDir, directory);
-  const localWorkspaceOutputs = discoverLocalWorkspaceOutputs(rootDir, directory);
-  const outputs = uniqueSorted([
-    ...localWorkspaceOutputs,
-    ...plugins.flatMap((plugin) => pluginOutputs(rootDir, plugin)),
-  ]);
-  if (outputs.length === 0) {
-    throw new Error(`Kit ${descriptor.slug} declares no build output`);
-  }
-  return {
-    name: `kit:${descriptor.slug}`,
-    kind: 'kit',
-    kitSlug: descriptor.slug,
-    kitDir: relativeDirectory,
-    command: {
-      file: 'node',
-      args: ['packages/kit-cli/dist/cli.js', 'build', relativeDirectory],
-    },
-    inputs: uniqueSorted([
-      ...existingRepositoryPaths(rootDir, ['package-lock.json', 'tsconfig.json', 'packages/kit-cli/dist']),
-      ...collectKitSourceInputs(rootDir, directory),
-      ...dependencies.flatMap((dependency) => workspaceTaskOutput(workspaceTasks, dependency)),
-    ]),
-    outputs,
-    dependencies,
-  };
-}
-
 function workspacePackageTaskMap(rootDir, workspaceTasks) {
   return new Map(workspaceTasks.map((task) => {
     const packageJson = readPackageJson(path.join(rootDir, task.outputs[0], '..', 'package.json'));
@@ -329,41 +272,6 @@ function pluginOutputs(rootDir, plugin) {
     ...(plugin.main ? [toRepositoryPath(rootDir, plugin.main.distDir)] : []),
     ...plugin.panels.map((panel) => toRepositoryPath(rootDir, panel.distDir)),
   ];
-}
-
-function discoverLocalWorkspaceOutputs(rootDir, kitDirectory) {
-  const packageJson = readPackageJson(path.join(kitDirectory, 'package.json'));
-  const patterns = Array.isArray(packageJson.workspaces) ? packageJson.workspaces : [];
-  const outputs = [];
-  for (const pattern of patterns) {
-    if (typeof pattern !== 'string' || !pattern.endsWith('/*')) continue;
-    const workspaceRoot = path.join(kitDirectory, pattern.slice(0, -2));
-    for (const entry of readDirectories(workspaceRoot)) {
-      const workspaceDirectory = path.join(workspaceRoot, entry.name);
-      const manifestPath = path.join(workspaceDirectory, 'package.json');
-      if (!fs.existsSync(manifestPath)) continue;
-      const manifest = readPackageJson(manifestPath);
-      if (typeof manifest.scripts?.build === 'string') {
-        outputs.push(toRepositoryPath(rootDir, path.join(workspaceDirectory, 'dist')));
-      }
-    }
-  }
-  return outputs;
-}
-
-function collectKitSourceInputs(rootDir, kitDirectory) {
-  const inputs = [];
-  const visit = (directory) => {
-    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-      if (entry.isSymbolicLink()) continue;
-      if (entry.isDirectory() && ['dist', 'node_modules', 'coverage', '.vite', '.vitest'].includes(entry.name)) continue;
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) visit(entryPath);
-      else if (entry.isFile()) inputs.push(toRepositoryPath(rootDir, entryPath));
-    }
-  };
-  visit(kitDirectory);
-  return inputs;
 }
 
 function packageDependencyNames(pkg) {

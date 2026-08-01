@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import { createServer as createServerWithOptions } from '../src/server';
-import { testAssembly } from './helpers/assembly';
+import { testAssembly, testKitFixture } from './helpers/assembly';
 import type { ServerResponse } from 'node:http';
 import { Writable } from 'node:stream';
 import { createTestPluginPathRoots } from './helpers/plugin-paths';

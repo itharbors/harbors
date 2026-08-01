@@ -1,7 +1,13 @@
 {
   "name": "@itharbors/kit-default",
   "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "scripts": {
+    "build": "node ../../packages/kit-cli/dist/cli.js build .",
     "test:kit": "node ../../packages/kit-cli/dist/cli.js validate ."
   },
   "ce-editor": {

@@ -2,6 +2,10 @@
   "name": "@itharbors/kit-skill-manager",
   "version": "0.1.0-preview.1",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "type": "module",
   "scripts": {
     "build": "node ../../scripts/ce-plugin.mjs build plugins/skill-manager",

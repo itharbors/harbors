@@ -2,6 +2,10 @@
   "name": "@itharbors/kit-scheduler",
   "version": "0.1.0-preview.1",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "type": "module",
   "scripts": {
     "build": "node ../../scripts/ce-plugin.mjs build plugins/scheduler-service && node ../../scripts/ce-plugin.mjs build plugins/scheduler-panel",

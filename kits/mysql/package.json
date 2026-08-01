@@ -8,7 +8,7 @@
     "plugins/*"
   ],
   "scripts": {
-    "build": "npm run build --prefix packages/contracts && npm run build --prefix packages/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/mysql-core && node ../../scripts/ce-plugin.mjs build plugins/mysql-data && node ../../scripts/ce-plugin.mjs build plugins/mysql-explorer && node ../../scripts/ce-plugin.mjs build plugins/mysql-relationships && node ../../scripts/ce-plugin.mjs build plugins/mysql-schema && node ../../scripts/ce-plugin.mjs build plugins/mysql-sql",
+    "build": "npm run build --prefix packages/contracts && npm run build --prefix packages/relationship-graph && node ../../scripts/ce-plugin.mjs build plugins/mysql-core && node ../../scripts/ce-plugin.mjs build plugins/mysql-data && node ../../scripts/ce-plugin.mjs build plugins/mysql-explorer && node ../../scripts/ce-plugin.mjs build plugins/mysql-relationships && node ../../scripts/ce-plugin.mjs build plugins/mysql-schema && node ../../scripts/ce-plugin.mjs build plugins/mysql-sql",
     "test:prepare": "node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
     "test": "npm run test:prepare && npm test --prefix packages/relationship-graph && vitest run --config vitest.config.ts"
   },

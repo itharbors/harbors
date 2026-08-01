@@ -64,8 +64,8 @@ export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
   if (descriptor.id !== policyEntry.id) {
     throw new Error(`Kit identity drift for ${slug}: descriptor ${descriptor.id} does not match policy ${policyEntry.id}`);
   }
-  const packageLock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
-  const lockedPackage = packageLock.packages?.[`kits/${slug}`];
+  const packageLock = JSON.parse(await readFile(path.join(descriptor.directory, 'package-lock.json'), 'utf8'));
+  const lockedPackage = packageLock.packages?.[''];
   if (lockedPackage?.name !== descriptor.id || lockedPackage.version !== descriptor.version) {
     throw new Error(`package-lock identity mismatch: ${slug}`);
   }

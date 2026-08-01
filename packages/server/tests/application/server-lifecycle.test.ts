@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { AddressInfo } from 'node:net';
-import path from 'node:path';
 import { ApplicationRuntime } from '../../src/application/runtime';
 import { createServer as createServerWithOptions } from '../../src/server';
 import { testAssembly } from '../helpers/assembly';
+import { createKitFixture } from '../../src/framework/__tests__/kit-fixture';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
 const createServer = (
@@ -32,26 +32,31 @@ describe('application server lifecycle', () => {
       kitSources: testAssembly.kitSources.map((source) => ({ ...source })),
     };
     const server = createServer({ assembly: callerAssembly });
+    const replacement = createKitFixture({ name: '@example/kit-replacement', label: 'Replacement' });
     callerAssembly.kitSources = [{
-      directory: path.join(path.dirname(testAssembly.kitSources[0].directory), 'notifications'),
+      directory: replacement.directory,
       source: 'development',
     }];
-    callerAssembly.defaultKit = '@itharbors/kit-notifications';
+    callerAssembly.defaultKit = replacement.name;
 
-    const port = await server.start(0);
-    const [catalogResponse, bootstrapResponse] = await Promise.all([
-      fetch(`http://127.0.0.1:${port}/api/kits`),
-      fetch(`http://127.0.0.1:${port}/api/application/bootstrap`),
-    ]);
-    const catalog = await catalogResponse.json();
-    const bootstrap = await bootstrapResponse.json();
-    await server.stop();
+    try {
+      const port = await server.start(0);
+      const [catalogResponse, bootstrapResponse] = await Promise.all([
+        fetch(`http://127.0.0.1:${port}/api/kits`),
+        fetch(`http://127.0.0.1:${port}/api/application/bootstrap`),
+      ]);
+      const catalog = await catalogResponse.json();
+      const bootstrap = await bootstrapResponse.json();
+      await server.stop();
 
-    expect(catalog.kits.map((kit: { name: string }) => kit.name)).toEqual([
-      '@itharbors/kit-default',
-    ]);
-    expect(bootstrap.plugins).toEqual([]);
-    expect(bootstrap.diagnostics).toEqual([]);
+      expect(catalog.kits.map((kit: { name: string }) => kit.name)).toEqual([
+        '@example/kit-alpha',
+      ]);
+      expect(bootstrap.plugins).toEqual([]);
+      expect(bootstrap.diagnostics).toEqual([]);
+    } finally {
+      await replacement.dispose();
+    }
   });
 
   it('starts the application runtime before accepting connections and disposes it after sessions', async () => {

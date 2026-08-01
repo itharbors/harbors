@@ -2,6 +2,10 @@
   "name": "@itharbors/kit-notifications",
   "version": "0.1.0-preview.1",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "type": "module",
   "scripts": {
     "build:prepare": "node scripts/prepare-skill-resource.mjs",

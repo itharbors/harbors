@@ -85,8 +85,15 @@ test('prepare uses the selected runner and one pinned check-prepare-inspect pipe
   );
   assert.match(
     prepare,
-    /node scripts\/kit-publish\.mjs prepare[\s\S]*--kit-directory "kits\/\$KIT_NAME"/u,
+    /readdirSync\(directory, \{ withFileTypes: true \}\)[\s\S]*name\.endsWith\('\.hkit'\)[\s\S]*artifacts\.length !== 1/u,
   );
+  assert.match(prepare, /appendFileSync\(process\.env\.GITHUB_OUTPUT, `kit-artifact=\$\{artifact\}\\n`/u);
+  assert.match(
+    prepare,
+    /node scripts\/kit-publish\.mjs prepare[\s\S]*--kit-artifact "\$KIT_ARTIFACT"[\s\S]*--kit-id "\$KIT_ID"[\s\S]*--kit-version "\$EXPECTED_VERSION"[\s\S]*--kit-channel "\$EXPECTED_CHANNEL"/u,
+  );
+  assert.doesNotMatch(prepare, /--kit-directory|kit-check\/\*|\.hkit\)/u);
+  assert.equal((prepare.match(/KIT_ARTIFACT:\s*\$\{\{ steps\.artifact\.outputs\.kit-artifact \}\}/gu) ?? []).length, 2);
   assert.match(prepare, /packages\/kit-cli\/dist\/cli\.js inspect/u);
   assert.match(prepare, /Tag, Kit manifest, package, and artifact versions must match/u);
   assert.match(prepare, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-publication[\s\S]*retention-days:\s*1/u);

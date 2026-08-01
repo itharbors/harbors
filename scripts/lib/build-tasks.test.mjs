@@ -8,7 +8,6 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { discoverAllPlugins } from './plugin-build/discover.mjs';
-import { discoverRepositoryKits } from './repository-kits.mjs';
 import {
   createBuildPlan,
   discoverWorkspaceBuildOutputs,
@@ -82,9 +81,8 @@ test('rejects dynamic Framework workspace dependency cycles', async (t) => {
   );
 });
 
-test('derives the complete repository build from packages, root plugins, and Kit descriptors', async () => {
-  const descriptors = await discoverRepositoryKits({ repositoryRoot: rootDir });
-  const plan = await createBuildPlan(rootDir, 'all', { descriptors });
+test('keeps the complete Framework build graph free of product Kit tasks', async () => {
+  const plan = await createBuildPlan(rootDir, 'all');
   const buildablePackages = await discoverBuildablePackageDirectories(rootDir);
   const rootPlugins = discoverAllPlugins(rootDir)
     .filter((directory) => path.dirname(directory) === path.join(rootDir, 'plugins'))
@@ -99,50 +97,30 @@ test('derives the complete repository build from packages, root plugins, and Kit
     plan.tasks.filter((task) => task.kind === 'plugin').map((task) => task.pluginDir),
     rootPlugins,
   );
-  assert.deepEqual(
-    plan.tasks.filter((task) => task.kind === 'kit').map((task) => task.kitSlug),
-    descriptors.map((descriptor) => descriptor.slug),
-  );
-  for (const descriptor of descriptors) {
-    const task = plan.tasks.find((candidate) => candidate.kitSlug === descriptor.slug);
-    assert.deepEqual(task.command, {
-      file: 'node',
-      args: ['packages/kit-cli/dist/cli.js', 'build', path.relative(rootDir, descriptor.directory)],
-    });
-    for (const output of await discoverKitWorkspaceOutputs(descriptor.directory)) {
-      assert.ok(task.outputs.includes(path.relative(rootDir, output).split(path.sep).join('/')));
-    }
-  }
+  assert.equal(plan.tasks.some((task) => task.kind === 'kit'), false);
+  assert.ok(plan.tasks.every((task) => !task.inputs.some((input) => input.startsWith('kits/'))));
 });
 
-test('runtime graphs derive Kit selection and preserve the plugin toolchain dependency closure', async () => {
-  const descriptors = await discoverRepositoryKits({ repositoryRoot: rootDir });
-  const expected = descriptors
-    .filter((descriptor) => descriptor.distribution === 'builtin')
-    .map((descriptor) => descriptor.slug);
-  const runtime = await createBuildPlan(rootDir, 'runtime', { descriptors });
-  const pluginsRuntime = await createBuildPlan(rootDir, 'plugins-runtime', { descriptors });
+test('runtime graphs preserve the plugin toolchain dependency closure without product Kits', async () => {
+  const runtime = await createBuildPlan(rootDir, 'runtime');
+  const pluginsRuntime = await createBuildPlan(rootDir, 'plugins-runtime');
 
   assert.ok(runtime.tasks.some((task) => task.kind === 'workspace'));
   assert.ok(pluginsRuntime.tasks.some((task) => task.name === 'workspace:kit-core'));
   assert.ok(pluginsRuntime.tasks.some((task) => task.name === 'workspace:kit-cli'));
-  assert.deepEqual(runtime.tasks.filter((task) => task.kind === 'kit').map((task) => task.kitSlug), expected);
-  assert.deepEqual(pluginsRuntime.tasks.filter((task) => task.kind === 'kit').map((task) => task.kitSlug), expected);
+  assert.equal(runtime.tasks.some((task) => task.kind === 'kit'), false);
+  assert.equal(pluginsRuntime.tasks.some((task) => task.kind === 'kit'), false);
 });
 
-test('plugin-only graph includes only required Framework dependency closure and descriptor lifecycle tasks', async () => {
-  const descriptors = await discoverRepositoryKits({ repositoryRoot: rootDir });
-  const plan = await createBuildPlan(rootDir, 'plugins', { descriptors });
+test('plugin-only graph includes only the required Framework dependency closure', async () => {
+  const plan = await createBuildPlan(rootDir, 'plugins');
 
   const workspaceNames = new Set(
     plan.tasks.filter((task) => task.kind === 'workspace').map((task) => task.name),
   );
   assert.ok(workspaceNames.has('workspace:kit-core'));
   assert.ok(workspaceNames.has('workspace:kit-cli'));
-  assert.deepEqual(
-    plan.tasks.filter((task) => task.kind === 'kit').map((task) => task.kitSlug),
-    descriptors.map((descriptor) => descriptor.slug),
-  );
+  assert.equal(plan.tasks.some((task) => task.kind === 'kit'), false);
   for (const task of plan.tasks.filter((candidate) => candidate.kind !== 'workspace')) {
     for (const dependency of task.dependencies) assert.ok(workspaceNames.has(dependency));
   }
@@ -235,26 +213,6 @@ async function discoverBuildablePackageDirectories(repositoryRoot) {
     if (typeof manifest.scripts?.build === 'string') values.push(`packages/${entry.name}`);
   }
   return values.sort();
-}
-
-async function discoverKitWorkspaceOutputs(kitDirectory) {
-  const manifest = JSON.parse(await readFile(path.join(kitDirectory, 'package.json'), 'utf8'));
-  const outputs = [];
-  for (const pattern of manifest.workspaces ?? []) {
-    if (typeof pattern !== 'string' || !pattern.endsWith('/*')) continue;
-    const workspaceRoot = path.join(kitDirectory, pattern.slice(0, -2));
-    const { readdir } = await import('node:fs/promises');
-    const entries = await readdir(workspaceRoot, { withFileTypes: true }).catch(() => []);
-    for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
-      const directory = path.join(workspaceRoot, entry.name);
-      const manifestPath = path.join(directory, 'package.json');
-      if (!await pathExists(manifestPath)) continue;
-      const workspace = JSON.parse(await readFile(manifestPath, 'utf8'));
-      if (typeof workspace.scripts?.build === 'string') outputs.push(path.join(directory, 'dist'));
-    }
-  }
-  return outputs;
 }
 
 async function pathExists(candidate) {

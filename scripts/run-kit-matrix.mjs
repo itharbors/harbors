@@ -65,15 +65,38 @@ export function createKitMatrixPlan({ action, slugs = [], descriptors }) {
       throw new Error(`descriptors contains duplicate directory: ${directory}`);
     }
     directories.add(directory);
-    bySlug.set(slug, { slug, directory });
+    bySlug.set(slug, { ...descriptor, slug, directory });
   }
 
   const selected = requested.length === 0 ? [...bySlug.keys()] : requested;
   return selected.sort().map((slug) => {
     const descriptor = bySlug.get(slug);
     if (!descriptor) throw new Error(`Unknown Kit slug: ${slug}`);
-    return { slug, command: action, directory: descriptor.directory };
+    return { ...descriptor, command: action };
   });
+}
+
+async function runWithCleanup(operation, cleanup) {
+  let value;
+  let operationError;
+  try {
+    value = await operation();
+  } catch (error) {
+    operationError = error;
+  }
+  try {
+    await cleanup();
+  } catch (cleanupError) {
+    if (operationError) {
+      throw new AggregateError(
+        [operationError, cleanupError],
+        `${sanitizeErrorMessage(operationError)}; cleanup failed: ${sanitizeErrorMessage(cleanupError)}`,
+      );
+    }
+    throw new Error(`cleanup failed: ${sanitizeErrorMessage(cleanupError)}`, { cause: cleanupError });
+  }
+  if (operationError) throw operationError;
+  return value;
 }
 
 export async function runKitMatrix({
@@ -81,6 +104,8 @@ export async function runKitMatrix({
   slugs = [],
   repositoryRoot = process.cwd(),
   descriptors,
+  cacheRoot = path.join(repositoryRoot, '.cache', 'harbors-kit-installs'),
+  ensureInstall = ensureInstallForDescriptor,
   run = execFileAsync,
   makeTempDirectory = (prefix) => mkdtemp(prefix),
   removeDirectory = (directory) => rm(directory, { recursive: true, force: true }),
@@ -98,18 +123,26 @@ export async function runKitMatrix({
   const plan = createKitMatrixPlan({ action, slugs, descriptors: loaded });
   const results = [];
   for (const entry of plan) {
+    let install;
     try {
-      if (action !== 'check') {
-        await runKitCli(run, repositoryRoot, [action, entry.directory]);
-      } else {
-        await checkKitEntry({
-          entry,
-          repositoryRoot,
-          run,
-          makeTempDirectory,
-          removeDirectory,
-        });
-      }
+      install = await ensureInstall({ descriptor: entry, cacheRoot });
+      await runWithCleanup(async () => {
+        const installedEntry = { ...entry, directory: install.installRoot };
+        if (action === 'test') {
+          await runKitCli(run, repositoryRoot, ['build', installedEntry.directory]);
+          await runKitCli(run, repositoryRoot, ['test', installedEntry.directory]);
+        } else if (action !== 'check') {
+          await runKitCli(run, repositoryRoot, [action, installedEntry.directory]);
+        } else {
+          await checkKitEntry({
+            entry: installedEntry,
+            repositoryRoot,
+            run,
+            makeTempDirectory,
+            removeDirectory,
+          });
+        }
+      }, () => removeDirectory(install.runRoot));
       results.push(Object.freeze({ slug: entry.slug, status: 'passed' }));
     } catch (error) {
       results.push(Object.freeze({
@@ -127,6 +160,11 @@ export async function runKitMatrix({
   return frozenResults;
 }
 
+async function ensureInstallForDescriptor(options) {
+  const { ensureKitInstall } = await import('./lib/kit-install.mjs');
+  return ensureKitInstall(options);
+}
+
 async function discoverDescriptors(repositoryRoot) {
   const { discoverRepositoryKits } = await import('./lib/repository-kits.mjs');
   return discoverRepositoryKits({ repositoryRoot });
@@ -142,16 +180,14 @@ async function checkKitEntry({
   const temporaryDirectory = await makeTempDirectory(
     path.join(tmpdir(), `harbors-kit-check-${entry.slug}-`),
   );
-  try {
+  await runWithCleanup(async () => {
     const artifact = path.join(temporaryDirectory, `${entry.slug}.hkit`);
     await runKitCli(run, repositoryRoot, ['build', entry.directory]);
     await runKitCli(run, repositoryRoot, ['test', entry.directory]);
     await runKitCli(run, repositoryRoot, ['validate', entry.directory]);
     await runKitCli(run, repositoryRoot, ['pack', entry.directory, '--output', artifact]);
     await runKitCli(run, repositoryRoot, ['inspect', artifact, '--json']);
-  } finally {
-    await removeDirectory(temporaryDirectory);
-  }
+  }, () => removeDirectory(temporaryDirectory));
 }
 
 class KitMatrixError extends Error {
@@ -185,6 +221,8 @@ export async function runKitMatrixCli(args, io = process, dependencies = {}) {
       slugs,
       repositoryRoot: dependencies.repositoryRoot ?? process.cwd(),
       descriptors: dependencies.descriptors,
+      cacheRoot: dependencies.cacheRoot,
+      ensureInstall: dependencies.ensureInstall,
       run: dependencies.run,
       makeTempDirectory: dependencies.makeTempDirectory,
       removeDirectory: dependencies.removeDirectory,

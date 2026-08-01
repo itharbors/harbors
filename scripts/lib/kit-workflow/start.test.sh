@@ -78,14 +78,14 @@ NODE
 
   new_fixture
   install_mocks
-  node - "$REPO/package-lock.json" <<'NODE'
+  node - "$REPO/kits/sqlite/package-lock.json" <<'NODE'
 const fs = require('node:fs');
 const file = process.argv[2];
 const value = JSON.parse(fs.readFileSync(file, 'utf8'));
-value.packages['kits/sqlite'].version = '0.1.0-preview.2';
+value.packages[''].version = '0.1.0-preview.2';
 fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 NODE
-  git -C "$REPO" add package-lock.json
+  git -C "$REPO" add kits/sqlite/package-lock.json
   git -C "$REPO" commit -m '[Bug] 制造锁文件错误' >/dev/null
   git -C "$REPO" push origin main >/dev/null 2>&1
   if output=$("$START" sqlite bug bad-lock 2>&1); then fail 'lock mismatch succeeded'; fi
