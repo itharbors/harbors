@@ -43,7 +43,7 @@ npm run dev
 ```
 
 开发入口使用同一套来源解析，但额外加载仓库 `kits/*` 中所有合法 Kit，因此可以直接联合调试
-Default、CSV、SQLite、MySQL、Notifications 和 Skill Manager，不需要先从市场安装。开发源码与 active 商城 Kit
+Default、Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 和 TraceWeave，不需要先从市场安装。开发源码与 active 商城 Kit
 同 ID 时只在当前开发进程中临时使用源码，不修改 `installed.json`。
 
 两种 Electron 入口分别启动以下 Web 开发服务：
@@ -242,8 +242,9 @@ Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill
 | Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 | 单个 Kit | `origin/main` / `main` | `kit-change/<name>/<type>/<slug>` | `kit-workflow` |
 
-CSV、SQLite、MySQL、Notifications 和 Skill Manager 分别保存在 `kits/csv`、`kits/sqlite`、`kits/mysql`、
-`kits/notifications`、`kits/skill-manager`。
+Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 和 TraceWeave 分别保存在
+`kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、
+`kits/skill-manager`、`kits/traceweave`。
 Kit 合并只改变 `main` 上的目录内容，不发布 Release，也不修改或发布 Framework 版本。完整生命周期是：
 
 ```text

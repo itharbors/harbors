@@ -3,7 +3,7 @@ import {
   validateRegistryRelease,
 } from './registry.mjs';
 
-const RELEASE_TAG = /^kit\/(csv|mysql|notifications|skill-manager|sqlite)\/v(.+)$/u;
+const RELEASE_TAG = /^kit\/(agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite)\/v(.+)$/u;
 const API_VERSION = '2026-03-10';
 const API_ORIGIN = 'https://api.github.com';
 const GITHUB_ORIGIN = 'https://github.com';

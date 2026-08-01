@@ -9,13 +9,16 @@ import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
-const allKits = ['csv', 'mysql', 'notifications', 'skill-manager', 'sqlite'];
+const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'skill-manager', 'sqlite', 'traceweave'];
 const runners = Object.freeze({
+  'agent-guard': 'macos-14',
   csv: 'macos-14',
   mysql: 'ubuntu-latest',
   notifications: 'ubuntu-latest',
   'skill-manager': 'ubuntu-latest',
+  scheduler: 'ubuntu-latest',
   sqlite: 'macos-14',
+  traceweave: 'ubuntu-latest',
 });
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -71,8 +74,10 @@ function expectedCliOutput(slugs) {
 }
 
 test('selects only changed official Kits in deterministic order', () => {
+  assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json']), ['agent-guard']);
   assert.deepEqual(selectKitSlugs(['kits/csv/package.json']), ['csv']);
   assert.deepEqual(selectKitSlugs(['kits/mysql/package.json']), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json']), ['scheduler']);
   assert.deepEqual(
     selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json']),
     ['notifications', 'sqlite'],
@@ -113,6 +118,7 @@ test('selects all official Kits for shared build, validation, Registry, and work
 
 test('maps direct Kit-check dependency surfaces to only their affected Kits', () => {
   const cases = [
+    ['packages/agent-guard-contracts/src/index.ts', ['agent-guard']],
     ['packages/csv-contracts/src/index.ts', ['csv']],
     ['packages/mysql-contracts/src/index.ts', ['mysql']],
     ['packages/sqlite-contracts/src/index.ts', ['sqlite']],

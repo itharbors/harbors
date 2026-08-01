@@ -90,6 +90,15 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(preview)).toEqual(preview);
   });
 
+  it('rejects permissions outside the Registry v1 contract', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['filesystem', 'process-execution'],
+    };
+
+    expect(() => parseKitPackageManifest(manifest)).toThrow(/permission/i);
+  });
+
   it.each([
     'kit-demo',
     '@example',
@@ -120,10 +129,19 @@ describe('parseKitPackageManifest', () => {
     })).toThrow(/preview/i);
   });
 
+  it('accepts the process-control permission', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['network', 'process-control'],
+    } as const;
+
+    expect(parseKitPackageManifest(manifest)).toEqual(manifest);
+  });
+
   it('rejects unknown and duplicate permissions', () => {
     expect(() => parseKitPackageManifest({
       ...kitManifest,
-      permissions: ['network', 'process-control'],
+      permissions: ['network', 'system-proxy'],
     })).toThrow(/permission/i);
     expect(() => parseKitPackageManifest({
       ...kitManifest,

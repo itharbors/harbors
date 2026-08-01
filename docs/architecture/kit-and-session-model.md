@@ -97,6 +97,10 @@ Attestation 绑定 signer workflow、caller Tag 和精确 Commit。
 entry；策略和撤回文件只是低频治理输入。客户端和聚合器只跟随 GitHub Release 到官方内容 CDN，
 不会接受任意重定向。
 
+当前官方市场 Kit 是 CSV、SQLite、MySQL、Notifications 与 TraceWeave。TraceWeave 展示了
+Session 插件边界的一个完整例子：Node main 只读解析本机 Codex 会话，Panel 不能访问文件系统，
+只通过 message request 获取不透明 id、归一化 trace 与按需脱敏证据。它不建立第二个 HTTP 服务。
+
 `KitRegistryManager.list/refresh` 将远程市场和已安装状态合并为公开投影，但移除 Release URL、
 本地目录、digest、Commit 和 source。相同 Kit 的 install 操作串行化，不同 Kit 可以并行下载；
 刷新和安装写入不接受任意详情字段的 `audit.ndjson`。Electron main process 通过独立本地 Kit
@@ -234,6 +238,7 @@ BrowserRequestBroker 和数据库。
 - [Kit 类型](../../packages/server/src/framework/kit/types.ts)
 - [Kit 标准化](../../packages/server/src/framework/kit/index.ts)
 - [Kit/plugin resolver](../../packages/server/src/plugin/resolver.ts)
+- [TraceWeave Kit](../../kits/traceweave/README.md)
 - [默认 Kit manifest](../../kits/default/package.json)
 - [默认布局](../../kits/default/layout.json)
 - [Skill Manager Kit](../../kits/skill-manager/package.json)

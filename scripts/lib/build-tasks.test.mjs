@@ -31,9 +31,11 @@ test('selects every full build task before all plugins and notification resource
   const all = createBuildPlan(rootDir, 'all');
   const workspaceNames = [
     'workspace:plugin-types',
+    'workspace:agent-guard-contracts',
     'workspace:csv-contracts',
     'workspace:sqlite-contracts',
     'workspace:mysql-contracts',
+    'workspace:traceweave-contracts',
     'workspace:relationship-graph',
     'workspace:kit-core',
     'workspace:kit-cli',
@@ -63,6 +65,17 @@ test('selects every full build task before all plugins and notification resource
     all.tasks.find((task) => task.name === 'plugin:kits/notifications/plugins/notification-background').outputExcludes,
     ['kits/notifications/plugins/notification-background/main/dist/resources/notify-user'],
   );
+});
+
+test('builds TraceWeave contracts before both TraceWeave plugins', () => {
+  const tasks = createBuildPlan(rootDir, 'all').tasks;
+  const core = tasks.find((task) => task.pluginDir === 'kits/traceweave/plugins/traceweave-core');
+  const view = tasks.find((task) => task.pluginDir === 'kits/traceweave/plugins/traceweave-view');
+
+  assert.deepEqual(core.dependencies, ['workspace:traceweave-contracts']);
+  assert.deepEqual(view.dependencies, ['workspace:traceweave-contracts']);
+  assert.ok(core.inputs.includes('packages/traceweave-contracts/dist'));
+  assert.ok(view.inputs.includes('packages/traceweave-contracts/dist'));
 });
 
 test('omits workspace tasks from plugin-only plans while retaining selected task ordering', () => {
@@ -119,6 +132,18 @@ test('tracks workspace dependency outputs as plugin inputs and retains their tas
     ...pluginOutputRoots(pluginDir),
   ]);
   assert.ok(allPlugin.outputs.every((output) => !allPlugin.inputs.includes(output)));
+});
+
+test('builds Agent Guard contracts before both Agent Guard plugins', () => {
+  const plan = createBuildPlan(rootDir, 'all');
+  for (const pluginDir of [
+    'kits/agent-guard/plugins/agent-guard-background',
+    'kits/agent-guard/plugins/agent-guard-center',
+  ]) {
+    const plugin = plan.tasks.find((task) => task.pluginDir === pluginDir);
+    assert.ok(plugin.dependencies.includes('workspace:agent-guard-contracts'));
+    assert.ok(plugin.inputs.includes('packages/agent-guard-contracts/dist'));
+  }
 });
 
 test('rejects unknown build graphs', () => {

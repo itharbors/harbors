@@ -2,6 +2,7 @@ const PERMISSION_LABELS = Object.freeze({
   network: '网络访问',
   filesystem: '文件访问',
   'native-code': '原生代码 — 高风险',
+  'process-control': '进程控制 — 高风险',
   'application-startup': '随 ITHARBORS 启动',
 });
 
@@ -70,6 +71,21 @@ function entryStatus({ kit, reference }) {
 function isUpdate({ kit, reference }) {
   return Boolean(kit.installed)
     && !(kit.installed.versions?.includes(reference.version) ?? false);
+}
+
+function isElevatedRiskPermission(permission) {
+  return permission === 'native-code' || permission === 'process-control';
+}
+
+function elevatedRiskNotice(permissions) {
+  const notices = [];
+  if (permissions.includes('native-code')) {
+    notices.push('此版本包含原生代码，拥有较高的本机访问权限。');
+  }
+  if (permissions.includes('process-control')) {
+    notices.push('此版本请求进程控制权限，能够暂停或结束本机进程。');
+  }
+  return notices.join('');
 }
 
 function channelState(kit, channel, reference) {
@@ -184,11 +200,9 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
   function install(selection, detailNode) {
     return queue(async () => {
       const permissions = selection.reference.permissions ?? [];
-      const nativeRisk = permissions.includes('native-code')
-        ? '此版本包含原生代码，拥有较高的本机访问权限。'
-        : '';
+      const elevatedRisk = elevatedRiskNotice(permissions);
       const accepted = await confirmInstall(
-        `${selection.kit.label ?? selection.kit.id} ${selection.reference.version}：${nativeRisk}应用版本时会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
+        `${selection.kit.label ?? selection.kit.id} ${selection.reference.version}：${elevatedRisk}应用版本时会重新加载所有 Kit 窗口，未保存的页面状态可能丢失。是否继续？`,
       );
       if (!accepted) return;
       const updating = Boolean(selection.kit.installed);
@@ -452,7 +466,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
             PERMISSION_LABELS[permission] ?? permission,
           );
           item.dataset.permission = permission;
-          if (permission === 'native-code') item.dataset.risk = 'high';
+          if (isElevatedRiskPermission(permission)) item.dataset.risk = 'high';
           list.append(item);
         }
         panel.append(list);

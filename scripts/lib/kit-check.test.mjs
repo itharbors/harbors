@@ -64,6 +64,13 @@ test('checks MySQL with its exact affected build, test, pack, and inspect sequen
   });
 });
 
+test('checks Agent Guard with its macOS-only build, test, pack, and inspect sequence', async () => {
+  await checkCommandSequence({
+    slug: 'agent-guard',
+    artifactName: 'kit-agent-guard-0.1.0-preview.1-darwin-arm64.hkit',
+  });
+});
+
 test('checks Notifications through its Kit-local build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'notifications',
@@ -78,6 +85,13 @@ test('checks Skill Manager through its Kit-local build, test, pack, and inspect 
   });
 });
 
+test('checks Scheduler through its Kit-local build, test, pack, and inspect sequence', async () => {
+  await checkCommandSequence({
+    slug: 'scheduler',
+    artifactName: 'kit-scheduler-0.1.0-preview.1-any-any.hkit',
+  });
+});
+
 test('checks SQLite with its exact affected build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'sqlite',
@@ -89,6 +103,13 @@ test('checks CSV with its exact affected build, test, pack, and inspect sequence
   await checkCommandSequence({
     slug: 'csv',
     artifactName: 'kit-csv-0.1.0-preview.1-darwin-arm64-abi127.hkit',
+  });
+});
+
+test('checks TraceWeave through its portable Kit pipeline', async () => {
+  await checkCommandSequence({
+    slug: 'traceweave',
+    artifactName: 'kit-traceweave-0.1.0-preview.1-any-any.hkit',
   });
 });
 
@@ -186,7 +207,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <csv|mysql|notifications|skill-manager|sqlite> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave> --output-directory <absolute-directory>\n');
   }
 });
 

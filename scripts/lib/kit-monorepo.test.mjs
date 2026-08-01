@@ -23,11 +23,14 @@ const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 test('loads the exact official Kit set from one strict policy', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
   assert.deepEqual(OFFICIAL_KIT_SLUGS, [
+    'agent-guard',
     'csv',
     'mysql',
     'notifications',
+    'scheduler',
     'skill-manager',
     'sqlite',
+    'traceweave',
   ]);
   assert.equal(policy.repository, 'itharbors/harbors');
   assert.deepEqual(policy.signerWorkflows, [
@@ -43,7 +46,7 @@ test('rejects unknown Kit slugs before resolving a path', async () => {
   );
 });
 
-test('loads five directory-local manifests with matching runtime identity', async () => {
+test('loads every directory-local manifest with matching runtime identity', async () => {
   for (const slug of OFFICIAL_KIT_SLUGS) {
     const kit = await loadOfficialKit({ repositoryRoot, slug });
     assert.equal(kit.directory, path.join(repositoryRoot, 'kits', slug));
@@ -55,6 +58,15 @@ test('loads five directory-local manifests with matching runtime identity', asyn
     assert.equal(typeof kit.packageJson.scripts?.build, 'string');
     assert.notEqual(kit.packageJson.scripts.build.trim(), '');
   }
+});
+
+test('publishes TraceWeave as a portable filesystem-only Preview Kit', async () => {
+  const kit = await loadOfficialKit({ repositoryRoot, slug: 'traceweave' });
+
+  assert.equal(kit.runner, 'ubuntu-latest');
+  assert.equal(kit.manifest.target.platform, 'any');
+  assert.equal(kit.manifest.target.arch, 'any');
+  assert.deepEqual(kit.manifest.permissions, ['filesystem']);
 });
 
 test('database Kit tests build the real Framework runtime plugins before Vitest', async () => {

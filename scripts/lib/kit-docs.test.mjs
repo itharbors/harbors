@@ -47,6 +47,7 @@ test('artifact and authoring guides document monorepo Kits and trusted Release d
   const authoring = compact(await read('docs/guides/developing-plugins-and-kits.md'));
   const combined = `${artifacts} ${authoring}`;
   for (const expected of [
+    'kits/agent-guard',
     'kits/csv',
     'kits/sqlite',
     'kits/mysql',
@@ -85,6 +86,7 @@ test('root README and architecture describe Release Assets and automatic market 
   const readme = compact(await read('readme.md'));
   const architecture = compact(await read('docs/architecture/kit-and-session-model.md'));
   for (const expected of [
+    'kits/agent-guard',
     'kits/csv',
     'kits/sqlite',
     'kits/mysql',

@@ -337,6 +337,10 @@ function createPluginRuntime(
   const menu = editor.menu;
   return {
     ...editor,
+    application: {
+      request: (pluginName, name, ...args) =>
+        editor.application.request(pluginName, name, ...args),
+    },
     plugin: {
       define: editor.plugin.define,
       getInfo: editor.plugin.getInfo,

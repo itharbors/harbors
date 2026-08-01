@@ -7,11 +7,14 @@ const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
 const ALLOWED_RUNNERS = new Set(['ubuntu-latest', 'macos-14']);
 
 export const OFFICIAL_KIT_SLUGS = Object.freeze([
+  'agent-guard',
   'csv',
   'mysql',
   'notifications',
+  'scheduler',
   'skill-manager',
   'sqlite',
+  'traceweave',
 ]);
 
 export async function loadKitPolicy({

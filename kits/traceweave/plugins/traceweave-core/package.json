@@ -1,0 +1,22 @@
+{
+  "name": "@itharbors/traceweave-core",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "dependencies": {
+    "@itharbors/traceweave-contracts": "0.0.1"
+  },
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "listRuns": ["listRuns"],
+          "loadRun": ["loadRun"],
+          "loadRawEvidence": ["loadRawEvidence"],
+          "refresh": ["refresh"],
+          "openTracePanel": ["openTracePanel"]
+        }
+      }
+    }
+  }
+}
