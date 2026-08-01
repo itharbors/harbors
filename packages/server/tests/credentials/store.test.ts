@@ -62,6 +62,7 @@ describe('CredentialStore', () => {
       secretVersion: oldVersion,
     });
     expect(store.activatePending(scope, profileId, oldVersion)).toBe(true);
+    store.queueCleanup(credentialAccount(scope, profileId, newVersion));
 
     expect(
       store.updateActive({
@@ -89,6 +90,43 @@ describe('CredentialStore', () => {
       secretReference: credentialAccount(scope, profileId, newVersion),
       secretVersion: newVersion,
     });
+    expect(store.listCleanupAccounts()).toEqual([
+      credentialAccount(scope, profileId, oldVersion),
+    ]);
+  });
+
+  it('rejects a pointer swap that reuses the active secret version', () => {
+    store.createPending({
+      scope,
+      id: profileId,
+      label: '旧标签',
+      metadata: { host: 'old.internal' },
+      secretVersion: oldVersion,
+    });
+    store.activatePending(scope, profileId, oldVersion);
+    const account = credentialAccount(scope, profileId, oldVersion);
+    store.queueCleanup(account);
+
+    expect(() =>
+      store.updateActive({
+        scope,
+        id: profileId,
+        expectedSecretVersion: oldVersion,
+        secretVersion: oldVersion,
+        label: '不应覆盖',
+        metadata: { host: 'new.internal' },
+      })
+    ).toThrowError(
+      expect.objectContaining({
+        code: 'CREDENTIAL_OPERATION_FAILED',
+        message: '凭据操作失败',
+      })
+    );
+    expect(store.getActiveRecord(scope, profileId)).toMatchObject({
+      label: '旧标签',
+      secretVersion: oldVersion,
+    });
+    expect(store.listCleanupAccounts()).toEqual([account]);
   });
 
   it('hides a deleting profile before removing its metadata', () => {

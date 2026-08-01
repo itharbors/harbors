@@ -245,6 +245,7 @@ export class CredentialStore {
   updateActive(input: UpdateActiveInput): boolean {
     const metadataJson = this.validateInput(input);
     validateUuid(input.expectedSecretVersion);
+    if (input.secretVersion === input.expectedSecretVersion) operationFailed();
     const update = this.database.prepare(
       `UPDATE credential_profiles
        SET label = ?, metadata_json = ?, secret_reference = ?, updated_at = ?
@@ -253,22 +254,33 @@ export class CredentialStore {
     const queueOldReference = this.database.prepare(
       'INSERT INTO credential_secret_cleanup (account) VALUES (?) ON CONFLICT(account) DO NOTHING'
     );
+    const hasStagedReference = this.database.prepare(
+      'SELECT 1 FROM credential_secret_cleanup WHERE account = ?'
+    );
+    const removeStagedReference = this.database.prepare(
+      'DELETE FROM credential_secret_cleanup WHERE account = ?'
+    );
     const expectedReference = credentialAccount(
       input.scope,
       input.id,
       input.expectedSecretVersion
     );
+    const newReference = credentialAccount(input.scope, input.id, input.secretVersion);
     const updateReference = this.database.transaction(() => {
+      if (!hasStagedReference.get(newReference)) return false;
       const result = update.run(
         input.label,
         metadataJson,
-        credentialAccount(input.scope, input.id, input.secretVersion),
+        newReference,
         new Date().toISOString(),
         input.scope,
         input.id,
         expectedReference
       );
-      if (result.changes === 1) queueOldReference.run(expectedReference);
+      if (result.changes === 1) {
+        removeStagedReference.run(newReference);
+        queueOldReference.run(expectedReference);
+      }
       return result.changes === 1;
     });
     return updateReference();

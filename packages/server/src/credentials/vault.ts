@@ -20,6 +20,9 @@ import { credentialScopeDigest } from './scope';
 import { CredentialStore, type CredentialRecord } from './store';
 
 type UnavailableReason = 'CREDENTIALS_DISABLED' | 'CREDENTIALS_UNAVAILABLE' | 'CREDENTIALS_LOCKED';
+type RecordObservation =
+  | { status: 'known'; record: CredentialRecord | undefined }
+  | { status: 'unknown' };
 
 export interface CredentialVaultOptions {
   mode: CredentialMode;
@@ -40,6 +43,7 @@ export interface CreateCredentialVaultOptions {
 }
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MAX_SECRET_VERSION_ATTEMPTS = 4;
 
 function asProfile(record: CredentialRecord): CredentialProfile {
   return {
@@ -66,7 +70,8 @@ export class CredentialVault {
   private readonly randomUuid: () => string;
   private unavailableReason?: UnavailableReason;
   private readonly locks = new Map<string, Promise<void>>();
-  private closed = false;
+  private lifecycle: 'open' | 'closing' | 'closed' = 'open';
+  private activeOperations = 0;
 
   constructor(options: CredentialVaultOptions) {
     this.mode = options.mode;
@@ -86,10 +91,10 @@ export class CredentialVault {
     const scope = credentialScopeDigest(kitId, pluginName);
     return {
       available: async () => this.capability().status === 'available',
-      list: async () => this.list(scope),
-      get: async (id) => this.get(scope, id),
-      put: async (input) => this.put(scope, input),
-      delete: async (id) => this.delete(scope, id),
+      list: async () => this.runOperation(() => this.list(scope)),
+      get: async (id) => this.runOperation(() => this.get(scope, id)),
+      put: async (input) => this.runOperation(() => this.put(scope, input)),
+      delete: async (id) => this.runOperation(() => this.delete(scope, id)),
     };
   }
 
@@ -101,68 +106,74 @@ export class CredentialVault {
   }
 
   async recover(): Promise<void> {
-    const backend = this.backendOrUndefined();
-    if (!backend) return;
+    return this.runOperation(async () => {
+      const backend = this.backendOrUndefined();
+      if (!backend) return;
 
-    let pending: CredentialRecord[] = [];
-    let deleting: CredentialRecord[] = [];
-    let cleanupAccounts: string[] = [];
-    try {
-      pending = backend.store.listPending();
-      deleting = backend.store.listDeleting();
-      cleanupAccounts = backend.store.listCleanupAccounts();
-    } catch {
-      return;
-    }
+      let pending: CredentialRecord[] = [];
+      let deleting: CredentialRecord[] = [];
+      let cleanupAccounts: string[] = [];
+      try {
+        pending = backend.store.listPending();
+        deleting = backend.store.listDeleting();
+        cleanupAccounts = backend.store.listCleanupAccounts();
+      } catch {
+        return;
+      }
 
-    for (const record of pending) {
-      await this.withLock(record.scope, record.id, async () => {
-        try {
-          const current = backend.store.getRecord(record.scope, record.id);
-          if (current?.state !== 'pending' || current.secretReference !== record.secretReference) return;
-          await backend.keyring.delete(record.secretReference);
-          backend.store.removePending(record.scope, record.id, record.secretVersion);
-        } catch (error) {
-          this.observeBackendError(error);
-        }
-      });
-    }
-
-    for (const record of deleting) {
-      await this.withLock(record.scope, record.id, async () => {
-        try {
-          const current = backend.store.getRecord(record.scope, record.id);
-          if (current?.state !== 'deleting' || current.secretReference !== record.secretReference) return;
-          await backend.keyring.delete(record.secretReference);
-          backend.store.removeDeleting(record.scope, record.id, record.secretVersion);
-        } catch (error) {
-          this.observeBackendError(error);
-        }
-      });
-    }
-
-    for (const account of cleanupAccounts) {
-      const [accountScope, id] = account.split(':');
-      if (!accountScope || !id) continue;
-      await this.withLock(accountScope, id, async () => {
-        try {
-          if (backend.store.isSecretReferenceActive(account)) {
-            backend.store.removeCleanup(account);
-            return;
+      for (const record of pending) {
+        await this.withLock(record.scope, record.id, async () => {
+          try {
+            const current = backend.store.getRecord(record.scope, record.id);
+            if (current?.state !== 'pending' || current.secretReference !== record.secretReference) {
+              return;
+            }
+            await backend.keyring.delete(record.secretReference);
+            backend.store.removePending(record.scope, record.id, record.secretVersion);
+          } catch (error) {
+            this.observeBackendError(error);
           }
-          await backend.keyring.delete(account);
-          backend.store.removeCleanup(account);
-        } catch (error) {
-          this.observeBackendError(error);
-        }
-      });
-    }
+        });
+      }
+
+      for (const record of deleting) {
+        await this.withLock(record.scope, record.id, async () => {
+          try {
+            const current = backend.store.getRecord(record.scope, record.id);
+            if (current?.state !== 'deleting' || current.secretReference !== record.secretReference) {
+              return;
+            }
+            await backend.keyring.delete(record.secretReference);
+            backend.store.removeDeleting(record.scope, record.id, record.secretVersion);
+          } catch (error) {
+            this.observeBackendError(error);
+          }
+        });
+      }
+
+      for (const account of cleanupAccounts) {
+        const [accountScope, id] = account.split(':');
+        if (!accountScope || !id) continue;
+        await this.withLock(accountScope, id, async () => {
+          try {
+            if (backend.store.isSecretReferenceActive(account)) {
+              backend.store.removeCleanup(account);
+              return;
+            }
+            await backend.keyring.delete(account);
+            backend.store.removeCleanup(account);
+          } catch (error) {
+            this.observeBackendError(error);
+          }
+        });
+      }
+    });
   }
 
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.store?.close();
+    if (this.lifecycle !== 'open') return;
+    this.lifecycle = 'closing';
+    if (this.activeOperations === 0) this.finishClose();
   }
 
   private async list(scope: string): Promise<CredentialProfile[]> {
@@ -246,11 +257,15 @@ export class CredentialVault {
     try {
       activated = store.activatePending(scope, id, secretVersion);
     } catch (error) {
-      const current = this.tryGetRecord(scope, id);
-      if (current?.state === 'active' && current.secretReference === pending.secretReference) {
-        return asProfile(current);
+      const observation = this.observeRecord(scope, id);
+      if (
+        observation.status === 'known' &&
+        observation.record?.state === 'active' &&
+        observation.record.secretReference === pending.secretReference
+      ) {
+        return asProfile(observation.record);
       }
-      await this.compensatePending(pending);
+      if (observation.status === 'known') await this.compensatePending(pending);
       throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
     }
     if (!activated) {
@@ -281,8 +296,7 @@ export class CredentialVault {
     }
     if (!current) throw credentialError('CREDENTIAL_PROFILE_NOT_FOUND');
 
-    const secretVersion = this.randomUuid();
-    assertProfileId(secretVersion);
+    const secretVersion = this.nextSecretVersion(current.secretVersion);
     const newReference = `${scope}:${id}:${secretVersion}`;
     try {
       store.validateInput({
@@ -292,6 +306,11 @@ export class CredentialVault {
         metadata: input.metadata,
         secretVersion,
       });
+    } catch (error) {
+      throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+    }
+    try {
+      store.queueCleanup(newReference);
     } catch (error) {
       throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
     }
@@ -314,12 +333,13 @@ export class CredentialVault {
         metadata: input.metadata,
       });
     } catch (error) {
-      const observed = this.tryGetRecord(scope, id);
+      const observation = this.observeRecord(scope, id);
+      const observed = observation.status === 'known' ? observation.record : undefined;
       if (observed?.state === 'active' && observed.secretReference === newReference) {
         await this.finishQueuedCleanup(current.secretReference);
         return asProfile(observed);
       }
-      await this.cleanupUnreferenced(newReference);
+      if (observation.status === 'known') await this.cleanupUnreferenced(newReference);
       throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
     }
     if (!swapped) {
@@ -353,7 +373,8 @@ export class CredentialVault {
       try {
         marked = store.markDeleting(scope, id, current.secretVersion);
       } catch (error) {
-        const observed = this.tryGetRecord(scope, id);
+        const observation = this.observeRecord(scope, id);
+        const observed = observation.status === 'known' ? observation.record : undefined;
         if (observed?.state !== 'deleting' || observed.secretReference !== current.secretReference) {
           throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
         }
@@ -395,6 +416,11 @@ export class CredentialVault {
     if (!backend) return false;
     try {
       await backend.keyring.delete(account);
+      try {
+        backend.store.removeCleanup(account);
+      } catch {
+        // A durable cleanup entry safely survives for the next recovery.
+      }
       return true;
     } catch (error) {
       this.observeBackendError(error);
@@ -423,11 +449,11 @@ export class CredentialVault {
     }
   }
 
-  private tryGetRecord(scope: string, id: string): CredentialRecord | undefined {
+  private observeRecord(scope: string, id: string): RecordObservation {
     try {
-      return this.store?.getRecord(scope, id);
+      return { status: 'known', record: this.store?.getRecord(scope, id) };
     } catch {
-      return undefined;
+      return { status: 'unknown' };
     }
   }
 
@@ -438,16 +464,46 @@ export class CredentialVault {
     }
   }
 
+  private nextSecretVersion(currentVersion: string): string {
+    for (let attempt = 0; attempt < MAX_SECRET_VERSION_ATTEMPTS; attempt += 1) {
+      const candidate = this.randomUuid();
+      assertProfileId(candidate);
+      if (candidate !== currentVersion) return candidate;
+    }
+    throw credentialError('CREDENTIAL_OPERATION_FAILED');
+  }
+
   private requireBackend(): { store: CredentialStore; keyring: KeyringAdapter } {
-    if (this.closed) throw credentialError('CREDENTIAL_OPERATION_FAILED');
+    if (this.lifecycle === 'closed') throw credentialError('CREDENTIAL_OPERATION_FAILED');
     if (this.unavailableReason) throw credentialError(this.unavailableReason);
     if (!this.store || !this.keyring) throw credentialError('CREDENTIALS_UNAVAILABLE');
     return { store: this.store, keyring: this.keyring };
   }
 
   private backendOrUndefined(): { store: CredentialStore; keyring: KeyringAdapter } | undefined {
-    if (this.closed || !this.store || !this.keyring) return undefined;
+    if (this.lifecycle === 'closed' || !this.store || !this.keyring) return undefined;
     return { store: this.store, keyring: this.keyring };
+  }
+
+  private async runOperation<T>(operation: () => Promise<T>): Promise<T> {
+    if (this.lifecycle !== 'open') throw credentialError('CREDENTIAL_OPERATION_FAILED');
+    this.activeOperations += 1;
+    try {
+      return await operation();
+    } finally {
+      this.activeOperations -= 1;
+      this.finishCloseIfDrained();
+    }
+  }
+
+  private finishCloseIfDrained(): void {
+    if (this.lifecycle === 'closing' && this.activeOperations === 0) this.finishClose();
+  }
+
+  private finishClose(): void {
+    if (this.lifecycle === 'closed') return;
+    this.lifecycle = 'closed';
+    this.store?.close();
   }
 
   private async withLock<T>(scope: string, id: string, operation: () => Promise<T>): Promise<T> {

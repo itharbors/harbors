@@ -205,6 +205,41 @@ describe('CredentialVault', () => {
     await expect(bound.get(profile.id)).resolves.toEqual({ profile, secret: 'committed-value' });
   });
 
+  it('preserves an active create secret when post-commit confirmation also fails', async () => {
+    const activate = store.activatePending.bind(store);
+    vi.spyOn(store, 'activatePending').mockImplementationOnce((...args) => {
+      activate(...args);
+      throw new Error('SQLite response failed after create commit');
+    });
+    vi.spyOn(store, 'getRecord').mockImplementationOnce(() => {
+      throw new Error('SQLite confirmation read failed');
+    });
+    const bound = vault.bind(kitId, pluginName);
+
+    await expect(
+      bound.put({
+        label: '生产库',
+        metadata: { host: 'db.internal' },
+        secret: 'committed-value',
+      })
+    ).rejects.toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+    const account = credentialAccount(scope, profileId, oldVersion);
+    expect(keyring.secrets.get(account)).toBe('committed-value');
+
+    vault.close();
+    store = new CredentialStore(databasePath);
+    vault = new CredentialVault({ mode: 'local', store, keyring });
+    await vault.recover();
+
+    await expect(vault.bind(kitId, pluginName).get(profileId)).resolves.toMatchObject({
+      profile: { id: profileId, label: '生产库' },
+      secret: 'committed-value',
+    });
+  });
+
   it('keeps the old active secret when the version pointer swap conflicts', async () => {
     const bound = vault.bind(kitId, pluginName);
     const profile = await bound.put({
@@ -254,6 +289,72 @@ describe('CredentialVault', () => {
     await expect(bound.get(profile.id)).resolves.toMatchObject({ secret: 'old-value' });
   });
 
+  it('does not write a new secret when durable staging confirmation fails', async () => {
+    const bound = vault.bind(kitId, pluginName);
+    const profile = await bound.put({
+      label: '旧配置',
+      metadata: { host: 'old.internal' },
+      secret: 'old-value',
+    });
+    const queueCleanup = store.queueCleanup.bind(store);
+    vi.spyOn(store, 'queueCleanup').mockImplementationOnce((account) => {
+      queueCleanup(account);
+      throw new Error('SQLite staging response failed after commit');
+    });
+    keyring.operations.length = 0;
+
+    await expect(
+      bound.put({
+        id: profile.id,
+        label: '新配置',
+        metadata: { host: 'new.internal' },
+        secret: 'new-value',
+      })
+    ).rejects.toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+    expect(keyring.operations.some((operation) => operation.startsWith('set:'))).toBe(false);
+    expect(store.listCleanupAccounts()).toEqual([
+      credentialAccount(scope, profile.id, newVersion),
+    ]);
+
+    await vault.recover();
+    expect(store.listCleanupAccounts()).toEqual([]);
+    await expect(bound.get(profile.id)).resolves.toMatchObject({ secret: 'old-value' });
+  });
+
+  it('never overwrites the active account when secret-version generation collides', async () => {
+    const bound = vault.bind(kitId, pluginName);
+    const profile = await bound.put({
+      label: '旧配置',
+      metadata: { host: 'old.internal' },
+      secret: 'old-value',
+    });
+    uuids = [oldVersion, oldVersion, oldVersion, oldVersion];
+    keyring.operations.length = 0;
+
+    await expect(
+      bound.put({
+        id: profile.id,
+        label: '新配置',
+        metadata: { host: 'new.internal' },
+        secret: 'new-value',
+      })
+    ).rejects.toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+
+    expect(keyring.operations.some((operation) => operation.startsWith('set:'))).toBe(false);
+    expect(keyring.operations.some((operation) => operation.startsWith('delete:'))).toBe(false);
+    await expect(bound.get(profile.id)).resolves.toMatchObject({
+      profile: { id: profile.id, label: '旧配置' },
+      secret: 'old-value',
+    });
+    expect(store.listCleanupAccounts()).toEqual([]);
+  });
+
   it('atomically queues an old account when post-swap keyring cleanup fails', async () => {
     const bound = vault.bind(kitId, pluginName);
     const profile = await bound.put({
@@ -279,6 +380,51 @@ describe('CredentialVault', () => {
     await vault.recover();
     expect(store.listCleanupAccounts()).toEqual([]);
     expect(keyring.secrets.has(oldAccount)).toBe(false);
+  });
+
+  it('recovers a committed update when its confirmation read also fails', async () => {
+    const bound = vault.bind(kitId, pluginName);
+    const profile = await bound.put({
+      label: '旧配置',
+      metadata: { host: 'old.internal' },
+      secret: 'old-value',
+    });
+    const updateActive = store.updateActive.bind(store);
+    vi.spyOn(store, 'updateActive').mockImplementationOnce((input) => {
+      updateActive(input);
+      throw new Error('SQLite response failed after update commit');
+    });
+    vi.spyOn(store, 'getRecord').mockImplementationOnce(() => {
+      throw new Error('SQLite confirmation read failed');
+    });
+
+    await expect(
+      bound.put({
+        id: profile.id,
+        label: '新配置',
+        metadata: { host: 'new.internal' },
+        secret: 'new-value',
+      })
+    ).rejects.toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+    const oldAccount = credentialAccount(scope, profile.id, oldVersion);
+    const newAccount = credentialAccount(scope, profile.id, newVersion);
+    expect(keyring.secrets.get(newAccount)).toBe('new-value');
+
+    vault.close();
+    store = new CredentialStore(databasePath);
+    vault = new CredentialVault({ mode: 'local', store, keyring });
+    await vault.recover();
+    await vault.recover();
+
+    await expect(vault.bind(kitId, pluginName).get(profile.id)).resolves.toMatchObject({
+      profile: { id: profile.id, label: '新配置' },
+      secret: 'new-value',
+    });
+    expect(keyring.secrets.has(oldAccount)).toBe(false);
+    expect(store.listCleanupAccounts()).toEqual([]);
   });
 
   it('leaves failed deletion hidden and lets recovery finish it idempotently', async () => {
@@ -405,6 +551,112 @@ describe('CredentialVault', () => {
       profile: { label: '第二次更新' },
       secret: 'third-value',
     });
+  });
+
+  it('defers backend close until an entered update makes its new secret recoverable', async () => {
+    const bound = vault.bind(kitId, pluginName);
+    const profile = await bound.put({
+      label: '初始',
+      metadata: { host: 'db.internal' },
+      secret: 'first-value',
+    });
+    const originalSet = keyring.set.bind(keyring);
+    let releaseSet!: () => void;
+    const setGate = new Promise<void>((resolve) => {
+      releaseSet = resolve;
+    });
+    let signalSetWritten!: () => void;
+    const setWritten = new Promise<void>((resolve) => {
+      signalSetWritten = resolve;
+    });
+    vi.spyOn(keyring, 'set').mockImplementation(async (account, secret) => {
+      await originalSet(account, secret);
+      signalSetWritten();
+      await setGate;
+    });
+
+    const update = bound
+      .put({
+        id: profile.id,
+        label: '更新后',
+        metadata: { host: 'new.internal' },
+        secret: 'second-value',
+      })
+      .then(
+        (value) => ({ status: 'fulfilled' as const, value }),
+        (reason: unknown) => ({ status: 'rejected' as const, reason })
+      );
+    await setWritten;
+    const closeStore = vi.spyOn(store, 'close');
+
+    vault.close();
+    const closedBeforeMutationSettled = closeStore.mock.calls.length;
+    const newOperationError = await bound.list().catch((reason: unknown) => reason);
+    releaseSet();
+    const updateResult = await update;
+    await vi.waitFor(() => expect(closeStore).toHaveBeenCalledTimes(1));
+
+    expect(closedBeforeMutationSettled).toBe(0);
+    expect(newOperationError).toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+    expect(updateResult).toMatchObject({
+      status: 'fulfilled',
+      value: { id: profile.id, label: '更新后' },
+    });
+    const account = credentialAccount(scope, profile.id, newVersion);
+    expect(keyring.secrets.get(account)).toBe('second-value');
+    const inspector = new Database(databasePath, { readonly: true });
+    const active = inspector
+      .prepare('SELECT secret_reference, state FROM credential_profiles WHERE scope = ? AND id = ?')
+      .get(scope, profile.id);
+    inspector.close();
+    expect(active).toEqual({ secret_reference: account, state: 'active' });
+  });
+
+  it('defers backend close until an entered recovery finishes its durable row', async () => {
+    store.createPending({
+      scope,
+      id: profileId,
+      label: 'pending',
+      metadata: { host: 'pending.internal' },
+      secretVersion: oldVersion,
+    });
+    const account = credentialAccount(scope, profileId, oldVersion);
+    keyring.secrets.set(account, 'pending-value');
+    const originalDelete = keyring.delete.bind(keyring);
+    let releaseDelete!: () => void;
+    const deleteGate = new Promise<void>((resolve) => {
+      releaseDelete = resolve;
+    });
+    let signalDeleteStarted!: () => void;
+    const deleteStarted = new Promise<void>((resolve) => {
+      signalDeleteStarted = resolve;
+    });
+    vi.spyOn(keyring, 'delete').mockImplementation(async (target) => {
+      signalDeleteStarted();
+      await deleteGate;
+      await originalDelete(target);
+    });
+
+    const recovery = vault.recover();
+    await deleteStarted;
+    const closeStore = vi.spyOn(store, 'close');
+    vault.close();
+    const closedBeforeRecoverySettled = closeStore.mock.calls.length;
+    releaseDelete();
+    await recovery;
+    await vi.waitFor(() => expect(closeStore).toHaveBeenCalledTimes(1));
+
+    expect(closedBeforeRecoverySettled).toBe(0);
+    expect(keyring.secrets.has(account)).toBe(false);
+    const inspector = new Database(databasePath, { readonly: true });
+    const pending = inspector
+      .prepare("SELECT COUNT(*) AS count FROM credential_profiles WHERE state = 'pending'")
+      .get() as { count: number };
+    inspector.close();
+    expect(pending.count).toBe(0);
   });
 
   it('maps SQLite boundary text to a fixed operation error', async () => {
