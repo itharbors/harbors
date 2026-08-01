@@ -94,6 +94,10 @@ test('Kit CI builds Kit Core before loading the selector in a clean checkout', a
         await readFile(new URL('scripts/lib/kit-monorepo.mjs', rootUrl)),
       ),
       writeFile(
+        path.join(fixture, 'scripts/lib/repository-kits.mjs'),
+        await readFile(new URL('scripts/lib/repository-kits.mjs', rootUrl)),
+      ),
+      writeFile(
         path.join(fixture, 'packages/kit-core/package.json'),
         await readFile(new URL('packages/kit-core/package.json', rootUrl)),
       ),

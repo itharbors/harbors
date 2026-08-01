@@ -122,7 +122,7 @@ test('rejects an unknown slug before running a command', async () => {
       outputDirectory: path.join(tmpdir(), 'kit-check-unknown'),
       runCommand: async (...args) => calls.push(args),
     }),
-    /unknown official Kit slug/i,
+    /not trusted for market publication/u,
   );
   assert.deepEqual(calls, []);
 });
@@ -207,7 +207,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <kit-slug> --output-directory <absolute-directory>\n');
   }
 });
 

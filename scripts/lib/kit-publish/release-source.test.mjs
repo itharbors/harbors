@@ -15,10 +15,10 @@ const policy = Object.freeze({
   repository,
   signerWorkflows: [signerWorkflow],
   kits: {
-    csv: { id: '@itharbors/kit-csv', label: 'CSV', summary: 'CSV/TSV 文件浏览、筛选、排序与导出工作台' },
-    mysql: { id: '@itharbors/kit-mysql', label: 'MySQL', summary: 'MySQL database workbench' },
-    notifications: { id: '@itharbors/kit-notifications', label: 'Notifications', summary: 'Notification kit' },
-    sqlite: { id: '@itharbors/kit-sqlite', label: 'SQLite', summary: 'SQLite database workbench' },
+    csv: { id: '@itharbors/kit-csv' },
+    mysql: { id: '@itharbors/kit-mysql' },
+    notifications: { id: '@itharbors/kit-notifications' },
+    sqlite: { id: '@itharbors/kit-sqlite' },
   },
 });
 
@@ -322,15 +322,26 @@ test('accepts terminal GitHub Link headers that contain only first and previous 
   }), /Link|trusted/i);
 });
 
-test('requires policy display identity and rejects duplicate trusted Release identities', async () => {
+test('requires non-empty display metadata and rejects duplicate trusted Release identities', async () => {
   const value = values();
-  await assert.rejects(discover({
-    pages: new Map([['1', [releaseRecord(value)]]]),
-    metadata: new Map([
-      [browserAssetUrl(value.tag, 'release.json'), value.release],
-      [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, label: 'Drift' }],
-    ]),
-  }), /policy|identity/i);
+  for (const label of ['', '   ', '\t', '\n']) {
+    await assert.rejects(discover({
+      pages: new Map([['1', [releaseRecord(value)]]]),
+      metadata: new Map([
+        [browserAssetUrl(value.tag, 'release.json'), value.release],
+        [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, label }],
+      ]),
+    }), /label|non-empty/i);
+  }
+  for (const summary of ['', '   ', '\t', '\n']) {
+    await assert.rejects(discover({
+      pages: new Map([['1', [releaseRecord(value)]]]),
+      metadata: new Map([
+        [browserAssetUrl(value.tag, 'release.json'), value.release],
+        [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, summary }],
+      ]),
+    }), /summary|non-empty/i);
+  }
   await assert.rejects(discover({
     pages: new Map([['1', [releaseRecord(value), releaseRecord(value)]]]),
     metadata: metadataFor(value),

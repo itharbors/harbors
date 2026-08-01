@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,6 +8,7 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
+import { loadKitPolicy } from './kit-monorepo.mjs';
 
 const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'skill-manager', 'sqlite', 'traceweave'];
 const runners = Object.freeze({
@@ -42,6 +43,26 @@ async function initializeRepository({ seedRoot = true } = {}) {
     path.join(repository, 'registry/policy.json'),
     await readFile(path.join(repositoryRoot, 'registry/policy.json')),
   );
+  // Copy the root package-lock so loadTrustedMarketKit can verify the Kit
+  // lock identity against the descriptor. The lockfile is not committed in
+  // root-commit tests but is still readable from the working tree.
+  await cp(
+    path.join(repositoryRoot, 'package-lock.json'),
+    path.join(repository, 'package-lock.json'),
+  );
+  // Copy the minimum real Task 1 descriptor inputs (kit.json and package.json)
+  // for every trusted Kit so loadTrustedMarketKit can resolve ciRunner.
+  for (const slug of allKits) {
+    await mkdir(path.join(repository, 'kits', slug), { recursive: true });
+    await cp(
+      path.join(repositoryRoot, 'kits', slug, 'kit.json'),
+      path.join(repository, 'kits', slug, 'kit.json'),
+    );
+    await cp(
+      path.join(repositoryRoot, 'kits', slug, 'package.json'),
+      path.join(repository, 'kits', slug, 'package.json'),
+    );
+  }
   return repository;
 }
 
@@ -168,7 +189,7 @@ test('rejects non-canonical repository paths instead of ambiguously classifying 
   assert.throws(() => selectKitSlugs([null]), /canonical repository path/i);
 });
 
-test('CLI selects policy-owned runners from a real NUL-delimited Git diff', async () => {
+test('CLI selects descriptor-derived runners from a real NUL-delimited Git diff', async () => {
   const repository = await initializeRepository();
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
@@ -192,9 +213,9 @@ test('CLI selects policy-owned runners from a real NUL-delimited Git diff', asyn
 test('CLI includes current root-commit paths when the comparison base is the root', async () => {
   const repository = await initializeRepository({ seedRoot: false });
   try {
-    await mkdir(path.join(repository, 'kits/mysql'), { recursive: true });
-    await writeFile(path.join(repository, 'kits/mysql/package.json'), '{}\n');
-    await git(repository, 'add', 'kits/mysql/package.json');
+    // initializeRepository copied every trusted Kit descriptor; stage only the
+    // mysql descriptor paths so the root diff selects mysql alone.
+    await git(repository, 'add', 'kits/mysql/kit.json', 'kits/mysql/package.json');
     await git(repository, 'commit', '-qm', 'root Kit');
     const rootCommit = await git(repository, 'rev-parse', 'HEAD');
 
@@ -309,7 +330,7 @@ test('CLI rejects control-bearing Git paths without newline-based misclassificat
   }
 });
 
-test('CLI loads runner metadata through the strict Kit policy loader', async () => {
+test('CLI rejects policy files that contain unexpected fields', async () => {
   const repository = await initializeRepository();
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
@@ -327,6 +348,18 @@ test('CLI loads runner metadata through the strict Kit policy loader', async () 
     assert.match(result.stderr, /^ERROR=Kit policy contains unexpected fields\n$/u);
   } finally {
     await rm(repository, { recursive: true, force: true });
+  }
+});
+
+test('policy entries carry only the trusted identity and no product metadata fields', async () => {
+  const policy = await loadKitPolicy({ repositoryRoot });
+  for (const slug of Object.keys(policy.kits)) {
+    const entry = policy.kits[slug];
+    assert.deepEqual(Object.keys(entry), ['id'], slug);
+    assert.equal(entry.id, `@itharbors/kit-${slug}`, slug);
+    assert.equal(entry.runner, undefined, `${slug} must not expose runner`);
+    assert.equal(entry.label, undefined, `${slug} must not expose label`);
+    assert.equal(entry.summary, undefined, `${slug} must not expose summary`);
   }
 });
 

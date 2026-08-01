@@ -1,21 +1,24 @@
-import { readFile, realpath } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
-import { parseKitPackageManifest } from '@itharbors/kit-core';
+import { fileURLToPath } from 'node:url';
+
+import { loadRepositoryKit } from './repository-kits.mjs';
 
 const POLICY_FILE = 'registry/policy.json';
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
-const ALLOWED_RUNNERS = new Set(['ubuntu-latest', 'macos-14']);
 
-export const OFFICIAL_KIT_SLUGS = Object.freeze([
-  'agent-guard',
-  'csv',
-  'mysql',
-  'notifications',
-  'scheduler',
-  'skill-manager',
-  'sqlite',
-  'traceweave',
-]);
+function readPolicySlugs(repositoryRoot) {
+  const policyPath = path.join(repositoryRoot, POLICY_FILE);
+  const raw = JSON.parse(readFileSync(policyPath, 'utf8'));
+  return Object.keys(raw.kits ?? {}).sort();
+}
+
+// Derived from the central trust policy at runtime so the slug set is never
+// hard-coded outside the governance file.
+export const OFFICIAL_KIT_SLUGS = Object.freeze(
+  readPolicySlugs(fileURLToPath(new URL('../../', import.meta.url))),
+);
 
 export async function loadKitPolicy({
   repositoryRoot,
@@ -40,50 +43,45 @@ export async function loadKitPolicy({
     throw new Error('Kit policy signer workflows are invalid');
   }
   const slugs = Object.keys(raw.kits ?? {}).sort();
-  if (JSON.stringify(slugs) !== JSON.stringify(OFFICIAL_KIT_SLUGS)) {
-    throw new Error('Kit policy official slug set is invalid');
-  }
   const ids = new Set();
+  const kits = {};
   for (const slug of slugs) {
     const entry = raw.kits[slug];
     if (!SLUG_PATTERN.test(slug) || !entry || typeof entry !== 'object') {
       throw new Error(`Kit policy entry is invalid: ${slug}`);
     }
-    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(['id', 'label', 'runner', 'summary'])) {
+    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(['id'])) {
       throw new Error(`Kit policy entry contains unexpected fields: ${slug}`);
     }
     if (entry.id !== `@itharbors/kit-${slug}` || ids.has(entry.id)) {
       throw new Error(`Kit policy id is invalid: ${slug}`);
     }
-    if (!ALLOWED_RUNNERS.has(entry.runner) || !entry.label || !entry.summary) {
-      throw new Error(`Kit policy metadata is invalid: ${slug}`);
-    }
     ids.add(entry.id);
+    kits[slug] = Object.freeze({ id: entry.id });
   }
-  return Object.freeze(raw);
+  return Object.freeze({ ...raw, kits: Object.freeze(kits) });
 }
 
-export async function loadOfficialKit({ repositoryRoot, slug }) {
-  if (!OFFICIAL_KIT_SLUGS.includes(slug)) {
+export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
+  if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {
     throw new Error(`Unknown official Kit slug: ${String(slug)}`);
   }
   const policy = await loadKitPolicy({ repositoryRoot });
-  const directory = await realpath(path.join(repositoryRoot, 'kits', slug));
-  const manifest = parseKitPackageManifest(JSON.parse(
-    await readFile(path.join(directory, 'kit.json'), 'utf8'),
-  ));
-  const packageJson = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+  const policyEntry = policy.kits[slug];
+  if (!policyEntry) {
+    throw new Error(`Kit is not trusted for market publication: ${slug}`);
+  }
+  const descriptor = await loadRepositoryKit({ repositoryRoot, slug });
+  if (descriptor.distribution !== 'market') {
+    throw new Error(`Kit is not a market distribution: ${slug}`);
+  }
+  if (descriptor.id !== policyEntry.id) {
+    throw new Error(`Kit identity drift for ${slug}: descriptor ${descriptor.id} does not match policy ${policyEntry.id}`);
+  }
   const packageLock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
-  const metadata = policy.kits[slug];
-  if (manifest.id !== metadata.id || packageJson.name !== metadata.id) {
-    throw new Error(`Kit identity mismatch: ${slug}`);
-  }
-  if (manifest.version !== packageJson.version) {
-    throw new Error(`Kit version mismatch: ${slug}`);
-  }
   const lockedPackage = packageLock.packages?.[`kits/${slug}`];
-  if (lockedPackage?.name !== packageJson.name || lockedPackage.version !== packageJson.version) {
+  if (lockedPackage?.name !== descriptor.id || lockedPackage.version !== descriptor.version) {
     throw new Error(`package-lock identity mismatch: ${slug}`);
   }
-  return Object.freeze({ slug, directory, ...metadata, manifest, packageJson });
+  return descriptor;
 }

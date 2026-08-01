@@ -60,7 +60,7 @@ jobs:
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
           import semver from 'semver';
-          import { loadOfficialKit } from './scripts/lib/kit-monorepo.mjs';
+          import { loadTrustedMarketKit } from './scripts/lib/kit-monorepo.mjs';
 
           const match = /^refs\/tags\/kit\/([a-z0-9][a-z0-9-]*)\/v(.+)$/u.exec(process.env.GITHUB_REF);
           if (!match) throw new Error('Publication requires exact refs/tags/kit/{slug}/v{version}');
@@ -68,7 +68,7 @@ jobs:
           if (semver.valid(version) !== version || version.includes('+')) {
             throw new Error('Publication Tag version must be canonical SemVer without build metadata');
           }
-          const kit = await loadOfficialKit({ repositoryRoot: process.env.GITHUB_WORKSPACE, slug });
+          const kit = await loadTrustedMarketKit({ repositoryRoot: process.env.GITHUB_WORKSPACE, slug });
           if (kit.id !== `@itharbors/kit-${slug}` || kit.manifest.version !== version) {
             throw new Error('Tag, Kit manifest, package, and policy identities must match');
           }
@@ -82,7 +82,7 @@ jobs:
             slug,
             version,
             channel: kit.manifest.channel,
-            runner: kit.runner,
+            runner: kit.ciRunner,
             'kit-id': kit.id,
             label: kit.label,
             summary: kit.summary,

@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadOfficialKit } from './kit-monorepo.mjs';
+import { loadTrustedMarketKit } from './kit-monorepo.mjs';
 import { deriveArtifactName } from './kit-publish/metadata.mjs';
 
 function normalizeOutputDirectory(outputDirectory) {
@@ -36,7 +36,7 @@ export async function checkOfficialKit({
   runCommand = runCheckedCommand,
 }) {
   const normalizedOutputDirectory = normalizeOutputDirectory(outputDirectory);
-  const kit = await loadOfficialKit({ repositoryRoot, slug });
+  const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
   await runCommand('npm', ['run', 'build', '-w', kit.id], { cwd: repositoryRoot });
 
   await runCommand('npm', ['test', '-w', kit.id], { cwd: repositoryRoot });

@@ -60,7 +60,7 @@ test('publisher context validates exact Tag identity and trusted mainline policy
   assert.match(context, /git fetch --no-tags origin main/u);
   assert.match(context, /git merge-base --is-ancestor "\$GITHUB_SHA" origin\/main/u);
   assert.ok(context.includes('^refs\\/tags\\/kit\\/'));
-  assert.match(context, /loadOfficialKit/u);
+  assert.match(context, /loadTrustedMarketKit/u);
   assert.match(context, /semver\.valid/u);
   for (const value of ['slug', 'version', 'channel', 'runner', 'kit-id', 'label', 'summary', 'tag']) {
     assert.match(context, new RegExp(`${value}:\\s*\\$\\{\\{ steps\\.policy\\.outputs\\.${value} \\}\\}`, 'u'));
