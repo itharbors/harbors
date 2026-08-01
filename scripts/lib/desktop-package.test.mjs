@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  rename,
   rm,
   symlink,
   writeFile,
@@ -50,6 +51,8 @@ async function createPackagedKeyringFixture(
     expectedNativeSymlink = false,
     escapingExpectedNativeSymlink = false,
     escapingNativeParentSymlink = false,
+    unpackedRootSymlink = false,
+    unpackedNapiParentSymlink = false,
     unpackedNativeDirectory = false,
     omitWrapperMain = false,
     credentialModuleContent = 'export const credentialBackend = "os-keyring";\n',
@@ -209,6 +212,18 @@ module.exports = { Entry: class {}, isMuslFromChildProcess };
     await rm(unpackedNativeDirectoryPath, { recursive: true });
     await symlink(escapedPackage, unpackedNativeDirectoryPath);
   }
+  const unpackedArchivePath = path.join(resources, 'app.asar.unpacked');
+  if (unpackedNapiParentSymlink) {
+    const napiParent = path.join(unpackedArchivePath, 'node_modules', '@napi-rs');
+    const linkedNapiParent = path.join(unpackedArchivePath, 'node_modules', 'linked-napi-rs');
+    await rename(napiParent, linkedNapiParent);
+    await symlink('linked-napi-rs', napiParent);
+  }
+  if (unpackedRootSymlink) {
+    const escapedUnpacked = path.join(cwd, 'escaped-app.asar.unpacked');
+    await rename(unpackedArchivePath, escapedUnpacked);
+    await symlink(escapedUnpacked, unpackedArchivePath);
+  }
   return cwd;
 }
 
@@ -317,6 +332,24 @@ test('rejects an expected native whose parent symlink escapes the unpacked archi
   await assert.rejects(
     runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
     /escapes archive root/u,
+  );
+});
+
+test('rejects app.asar.unpacked when the root itself is a symlink outside the package', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, { unpackedRootSymlink: true });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /unpacked archive root/u,
+  );
+});
+
+test('rejects a symlinked node_modules/@napi-rs parent even when its target stays inside unpacked', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, { unpackedNapiParentSymlink: true });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /unpacked native parent/u,
   );
 });
 
@@ -469,8 +502,30 @@ spawn(process.execPath, ['worker.mjs']);
   await runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run });
 });
 
-test('does not interpret NUL-containing app and keyring binaries as fallback source text', async (t) => {
-  const binary = Buffer.concat([Buffer.from([0]), Buffer.from('secret-tool plaintext-store')]);
+test('rejects an app-owned JavaScript marker before a NUL byte', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, {
+    appTextEntries: { 'dist/nul-bypass.js': Buffer.from('secret-tool\0ignored') },
+  });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /forbidden credential fallback content/u,
+  );
+});
+
+test('rejects an extensionless keyring marker after a NUL byte', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, {
+    keyringExtensionlessContent: Buffer.from('\0ignored plaintext-store'),
+  });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /forbidden credential fallback content/u,
+  );
+});
+
+test('accepts NUL-containing app and keyring binary data without fallback markers', async (t) => {
+  const binary = Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from('harbors asset')]);
   const cwd = await createPackagedKeyringFixture(t, {
     appTextEntries: { 'dist/runtime-data': binary },
     keyringExtensionlessContent: binary,

@@ -149,13 +149,21 @@ function isWithin(root, candidate) {
   );
 }
 
-function readArchiveText(archive, entry) {
+function readArchiveScanContent(archive, entry) {
   const metadata = statFile(archive, entry);
   if (!metadata || !Number.isInteger(metadata.size) || typeof metadata.link === 'string') return null;
   if (/\.node$/iu.test(entry)) return null;
   const content = extractFile(archive, entry);
-  if (content.includes(0)) return null;
-  return content.toString('utf8');
+  return content.toString('latin1');
+}
+
+async function assertUnpackedDirectory(directory, label) {
+  const metadata = await lstat(directory);
+  if (!metadata.isDirectory() || metadata.isSymbolicLink()) {
+    throw new Error(
+      `Packaged keyring verification failed: unpacked ${label} is a symlink or escapes archive root`,
+    );
+  }
 }
 
 function assertNoCredentialFallback(
@@ -185,22 +193,21 @@ function assertNoCredentialFallback(
 }
 
 export async function verifyPackagedKeyring({ cwd }) {
-  const resources = path.join(
+  const appPackage = path.join(
     cwd,
     'dist',
     'desktop-release',
     'mac-arm64',
     'ITHARBORS.app',
-    'Contents',
-    'Resources',
   );
+  const resources = path.join(appPackage, 'Contents', 'Resources');
   const archive = path.join(resources, 'app.asar');
   const entries = listPackage(archive).map((entry) => entry.replace(/^\//u, ''));
   const frameworkEntry = 'dist/framework.mjs';
   if (!entries.includes(frameworkEntry)) {
     throw new Error('Packaged keyring verification failed: Framework bundle is missing');
   }
-  const frameworkBundle = readArchiveText(archive, frameworkEntry);
+  const frameworkBundle = readArchiveScanContent(archive, frameworkEntry);
   if (frameworkBundle === null) {
     throw new Error('Packaged keyring verification failed: Framework bundle is not regular text');
   }
@@ -266,7 +273,7 @@ export async function verifyPackagedKeyring({ cwd }) {
   }
   const appOwnedEntries = entries.filter((entry) => APP_OWNED_ENTRY.test(entry));
   for (const entry of appOwnedEntries) {
-    const content = readArchiveText(archive, entry);
+    const content = readArchiveScanContent(archive, entry);
     if (content === null) continue;
     assertNoCredentialFallback(entry, content, {
       strictProcessSource: STRICT_CREDENTIAL_ENTRY.test(entry),
@@ -274,7 +281,7 @@ export async function verifyPackagedKeyring({ cwd }) {
   }
   const selectedKeyringEntries = entries.filter((entry) => SELECTED_KEYRING_ENTRY.test(entry));
   for (const entry of selectedKeyringEntries) {
-    const content = readArchiveText(archive, entry);
+    const content = readArchiveScanContent(archive, entry);
     if (content === null) continue;
     assertNoCredentialFallback(entry, content, {
       allowKeyringMuslProbe: entry === DESKTOP_KEYRING_WRAPPER_MAIN,
@@ -291,19 +298,45 @@ export async function verifyPackagedKeyring({ cwd }) {
     throw new Error('Packaged keyring verification failed: Darwin ARM64 native file is not unpacked');
   }
   const unpackedArchiveRoot = `${archive}.unpacked`;
+  const expectedUnpackedArchiveRoot = path.join(resources, 'app.asar.unpacked');
+  if (unpackedArchiveRoot !== expectedUnpackedArchiveRoot) {
+    throw new Error('Packaged keyring verification failed: unpacked archive root is not the direct asar sibling');
+  }
   const unpackedRoot = path.join(unpackedArchiveRoot, 'node_modules', '@napi-rs');
+  const unpackedNativePackage = path.join(unpackedRoot, 'keyring-darwin-arm64');
   const expectedNative = path.join(unpackedArchiveRoot, DESKTOP_KEYRING_NATIVE_FILE);
+  await assertUnpackedDirectory(unpackedArchiveRoot, 'archive root');
+  for (const parent of [
+    path.join(unpackedArchiveRoot, 'node_modules'),
+    unpackedRoot,
+    unpackedNativePackage,
+  ]) {
+    await assertUnpackedDirectory(parent, 'native parent');
+  }
   const expectedNativeStat = await lstat(expectedNative);
   if (!expectedNativeStat.isFile() || expectedNativeStat.isSymbolicLink()) {
     throw new Error('Packaged keyring verification failed: expected native file is not regular');
   }
-  const [unpackedArchiveRealRoot, unpackedRealRoot, expectedNativeReal] = await Promise.all([
+  const [
+    appPackageReal,
+    resourcesReal,
+    unpackedArchiveRealRoot,
+    unpackedRealRoot,
+    expectedNativeReal,
+  ] = await Promise.all([
+    realpath(appPackage),
+    realpath(resources),
     realpath(unpackedArchiveRoot),
     realpath(unpackedRoot),
     realpath(expectedNative),
   ]);
   if (
-    !isWithin(unpackedArchiveRealRoot, unpackedRealRoot)
+    !isWithin(appPackageReal, resourcesReal)
+    || unpackedArchiveRealRoot !== path.join(resourcesReal, 'app.asar.unpacked')
+    || !isWithin(appPackageReal, unpackedArchiveRealRoot)
+    || !isWithin(appPackageReal, unpackedRealRoot)
+    || !isWithin(appPackageReal, expectedNativeReal)
+    || !isWithin(unpackedArchiveRealRoot, unpackedRealRoot)
     || !isWithin(unpackedArchiveRealRoot, expectedNativeReal)
   ) {
     throw new Error('Packaged keyring verification failed: unpacked native file escapes archive root');
