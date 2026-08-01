@@ -183,6 +183,14 @@ test('rejects malformed, duplicate, unmerged, symlink, and gitlink index entries
     () => parseLsFilesStageOutput(nulRecords([duplicate, duplicate])),
     /duplicate index entry/u,
   );
+  assert.throws(
+    () => parseLsFilesStageOutput(Buffer.from([0x00])),
+    /empty entry/u,
+  );
+  assert.throws(
+    () => parseLsFilesStageOutput(Buffer.concat([nulRecords([duplicate]), Buffer.from([0x00])])),
+    /empty entry/u,
+  );
 });
 
 async function git(repositoryRoot, ...args) {
@@ -278,6 +286,29 @@ test('rejects real symlink and gitlink modes inside a Kit', async () => {
     await assert.rejects(
       validateKitChange({ repositoryRoot, slug: 'sqlite', base, head }),
       /disallowed file mode.*160000/u,
+    );
+  });
+});
+
+test('rejects a requested unsafe head when the checkout and index remain at a safe commit', async () => {
+  await withRepository(async ({ base, repositoryRoot }) => {
+    await symlink('package.json', path.join(repositoryRoot, 'kits', 'sqlite', 'link'));
+    const unsafeHead = await commitAll(repositoryRoot, 'unsafe head');
+    await git(repositoryRoot, 'reset', '--hard', base);
+    await assert.rejects(
+      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head: unsafeHead }),
+      /head revision must resolve to the checked-out HEAD/u,
+    );
+  });
+});
+
+test('rejects an index that does not match the checked-out head', async () => {
+  await withRepository(async ({ base, repositoryRoot }) => {
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'staged.ts'), 'staged\n');
+    await git(repositoryRoot, 'add', 'kits/sqlite/staged.ts');
+    await assert.rejects(
+      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head: 'HEAD' }),
+      /index must match the checked-out HEAD/u,
     );
   });
 });

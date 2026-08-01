@@ -150,7 +150,9 @@ export function parseLsFilesStageOutput(buffer) {
   }
   const modes = new Map();
   for (const entry of entries) {
-    if (entry === '') continue;
+    if (entry === '') {
+      throw new Error('malformed ls-files output: empty entry');
+    }
     const tabIndex = entry.indexOf('\t');
     if (tabIndex === -1) {
       throw new Error('malformed ls-files entry: missing path separator');
@@ -227,6 +229,19 @@ async function resolveRevision({ repositoryRoot, revision }) {
   return commitId;
 }
 
+async function assertHeadAndIndexMatch({ repositoryRoot, head }) {
+  const requestedHead = await resolveRevision({ repositoryRoot, revision: head });
+  const checkedOutHead = await resolveRevision({ repositoryRoot, revision: 'HEAD' });
+  if (requestedHead !== checkedOutHead) {
+    throw new Error('head revision must resolve to the checked-out HEAD');
+  }
+  try {
+    await runGit(['diff', '--cached', '--quiet', requestedHead, '--'], repositoryRoot);
+  } catch {
+    throw new Error('index must match the checked-out HEAD');
+  }
+}
+
 export async function readChangedPathRecords({ repositoryRoot, base, head }) {
   const baseCommit = await resolveRevision({ repositoryRoot, revision: base });
   const headCommit = await resolveRevision({ repositoryRoot, revision: head });
@@ -252,16 +267,20 @@ export async function validateKitChange({ repositoryRoot, slug, base, head }) {
   if (!isValidKitSlug(slug)) {
     throw new Error(`invalid Kit slug: ${String(slug)}`);
   }
+  await assertHeadAndIndexMatch({ repositoryRoot, head });
   const records = await readChangedPathRecords({ repositoryRoot, base, head });
   const { paths } = validateKitChangePaths({ slug, records });
   const modes = await readIndexModes({ repositoryRoot, paths });
-  for (const changedPath of paths) {
-    const mode = modes.get(changedPath);
-    if (mode === undefined) {
-      continue;
-    }
-    if (!ALLOWED_FILE_MODES.has(mode)) {
-      throw new Error(`disallowed file mode for ${changedPath}: ${mode}`);
+  for (const record of records) {
+    const requiredPaths = record.status === 'D'
+      ? []
+      : record.status.startsWith('R')
+        ? [record.paths[1]]
+        : record.paths;
+    for (const requiredPath of requiredPaths) {
+      if (!modes.has(requiredPath)) {
+        throw new Error(`changed path is missing from the HEAD index: ${requiredPath}`);
+      }
     }
   }
   return Object.freeze({ paths: Object.freeze([...paths]) });
