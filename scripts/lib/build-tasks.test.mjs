@@ -18,8 +18,9 @@ test('selects the runtime workspace builds and runtime plugins in root build ord
     runtime.tasks.filter((task) => task.kind === 'plugin').map((task) => task.pluginDir),
     discoverRuntimePlugins(rootDir).map((value) => path.relative(rootDir, value)),
   );
-  assert.deepEqual(runtime.tasks.slice(0, 5).map(({ name }) => name), [
+  assert.deepEqual(runtime.tasks.slice(0, 6).map(({ name }) => name), [
     'workspace:plugin-types',
+    'workspace:host-security',
     'workspace:kit-core',
     'workspace:kit-cli',
     'workspace:client',
@@ -31,6 +32,7 @@ test('selects every full build task before all plugins and notification resource
   const all = createBuildPlan(rootDir, 'all');
   const workspaceNames = [
     'workspace:plugin-types',
+    'workspace:host-security',
     'workspace:agent-guard-contracts',
     'workspace:csv-contracts',
     'workspace:sqlite-contracts',
@@ -244,6 +246,10 @@ test('tracks compiler configs extended by the client and server build configs', 
 
   assert.ok(client.inputs.includes('packages/client/tsconfig.json'));
   assert.ok(server.inputs.includes('packages/server/tsconfig.json'));
+  assert.deepEqual(server.dependencies, [
+    'workspace:plugin-types',
+    'workspace:host-security',
+  ]);
 });
 
 function pluginOutputRoots(pluginDir) {

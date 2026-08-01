@@ -136,6 +136,28 @@ describe('application server lifecycle', () => {
     expect(authorized.status).toBe(404);
   });
 
+  it('rejects local credentials before listening when the bind is not explicit loopback', () => {
+    expect(() => createServer({
+      assembly: testAssembly,
+      applicationHostMode: 'web',
+      credentialMode: 'local',
+    })).toThrow(/loopback/i);
+  });
+
+  it('resolves and exposes one immutable local credential mode for desktop startup', async () => {
+    const server = createServer({
+      assembly: testAssembly,
+      applicationHostMode: 'desktop',
+      host: '::1',
+    });
+
+    expect(server.credentialMode).toBe('local');
+    expect(() => {
+      (server as unknown as { credentialMode: string }).credentialMode = 'off';
+    }).toThrow(TypeError);
+    await server.stop();
+  });
+
   it('finishes graceful shutdown while an application event stream is connected', async () => {
     const server = createServer({
       assembly: testAssembly,

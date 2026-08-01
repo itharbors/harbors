@@ -14,6 +14,7 @@ const { start, stop } = createServer({
   defaultKit: DEFAULT_KIT,
   kitSources: parseKitSources(process.env.HARBORS_KIT_SOURCES),
   applicationHostMode: APPLICATION_HOST_MODE,
+  credentialMode: process.env.HARBORS_CREDENTIAL_MODE,
   applicationControlToken: process.env.HARBORS_APPLICATION_TOKEN,
   agentGuardDataDir: process.env.HARBORS_AGENT_GUARD_DATA_DIR,
   host: HOST,

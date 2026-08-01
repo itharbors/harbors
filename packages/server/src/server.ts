@@ -1,6 +1,10 @@
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  resolveCredentialMode,
+  type CredentialMode,
+} from '@itharbors/host-security';
 import { SessionStore } from './session/store';
 import { SessionManager } from './session/manager';
 import { SSEChannel } from './sse/channel';
@@ -25,6 +29,7 @@ export interface ServerOptions {
   kitSources?: AssemblyKitSource[];
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
+  credentialMode?: string;
   applicationControlToken?: string;
   agentGuardDataDir?: string;
   clientAssetsRoot?: string;
@@ -77,6 +82,12 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
 }
 
 export function createServer(options: ServerOptions = {}) {
+  const applicationHostMode = options.applicationHostMode ?? 'web';
+  const credentialMode: CredentialMode = resolveCredentialMode({
+    hostMode: applicationHostMode,
+    requested: options.credentialMode,
+    bindHost: options.host,
+  });
   if (options.agentGuardDataDir !== undefined && !path.isAbsolute(options.agentGuardDataDir)) {
     throw new Error('agentGuardDataDir must be an absolute path');
   }
@@ -102,7 +113,7 @@ export function createServer(options: ServerOptions = {}) {
         },
       ));
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
-    hostMode: options.applicationHostMode ?? 'web',
+    hostMode: applicationHostMode,
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
   });
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
@@ -211,6 +222,9 @@ export function createServer(options: ServerOptions = {}) {
   };
 
   return {
+    get credentialMode(): CredentialMode {
+      return credentialMode;
+    },
     server,
     start,
     stop,

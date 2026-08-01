@@ -8,6 +8,7 @@ const NOTIFY_USER_RESOURCE_OUTPUT = `${NOTIFICATION_BACKGROUND_PLUGIN}/main/dist
 
 const WORKSPACE_TASKS = [
   workspaceTask('plugin-types', '@itharbors/plugin-types', 'packages/plugin-types'),
+  workspaceTask('host-security', '@itharbors/host-security', 'packages/host-security'),
   workspaceTask(
     'agent-guard-contracts',
     '@itharbors/agent-guard-contracts',
@@ -32,9 +33,15 @@ const WORKSPACE_TASKS = [
       'packages/client/index.html',
     ],
   }),
-  workspaceTask('server', 'packages/server', 'packages/server', ['workspace:plugin-types'], {
-    config: ['packages/server/tsconfig.build.json', 'packages/server/tsconfig.json'],
-  }),
+  workspaceTask(
+    'server',
+    'packages/server',
+    'packages/server',
+    ['workspace:plugin-types', 'workspace:host-security'],
+    {
+      config: ['packages/server/tsconfig.build.json', 'packages/server/tsconfig.json'],
+    },
+  ),
 ];
 export const WORKSPACE_BUILD_OUTPUTS = Object.freeze(
   WORKSPACE_TASKS.flatMap((task) => task.outputs),
@@ -178,6 +185,7 @@ function selectWorkspaceTasks(selection) {
   if (selection === 'runtime') {
     return WORKSPACE_TASKS.filter((task) => [
       'workspace:plugin-types',
+      'workspace:host-security',
       'workspace:kit-core',
       'workspace:kit-cli',
       'workspace:client',

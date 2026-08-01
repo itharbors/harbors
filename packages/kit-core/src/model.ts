@@ -6,6 +6,7 @@ export const KIT_PERMISSIONS = [
   'native-code',
   'process-control',
   'application-startup',
+  'credentials',
 ] as const;
 
 export type KitChannel = 'stable' | 'preview';

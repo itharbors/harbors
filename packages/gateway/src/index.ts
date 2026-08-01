@@ -1,11 +1,14 @@
 import http from 'node:http';
 import { selectGatewayTarget } from './routing';
+import { resolveGatewayCredentialMode } from './security';
 
 const PORT = parseInt(process.env.PORT || '48380', 10);
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '48381', 10);
 const CLIENT_PORT = parseInt(process.env.CLIENT_PORT || '48382', 10);
 const IS_PROD = process.env.NODE_ENV === 'production';
 const HOST = process.env.HARBORS_BIND_HOST;
+
+resolveGatewayCredentialMode(process.env);
 
 const SERVER_HOST = 'localhost';
 
