@@ -2,21 +2,54 @@ import {
   CORE_TOPICS,
   type ConnectionSnapshot,
   type DataChangedEvent,
+  type MysqlConnectionProfile,
+  type MysqlCredentialCapability,
   type MysqlErrorEnvelope,
   type MysqlPublicError,
   type RevisionSnapshot,
 } from '@itharbors/mysql-contracts';
-import { MysqlService } from './mysql-service.js';
+import { MysqlService, MysqlWorkbenchError } from './mysql-service.js';
+import {
+  parseConnectionInput,
+  parseConnectionMetadata,
+  parseConnectionProfileUpdateInput,
+  parseProfileId,
+  parseProfileIdInput,
+  parseProfileLabelInput,
+  type ConnectionInput,
+} from './protocol.js';
 
 declare const editor: any;
+
+type CredentialProfile = {
+  id: string;
+  label: string;
+  metadata: Record<string, string | number | boolean | null>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type PluginCredentialVault = {
+  available(): Promise<boolean>;
+  list(): Promise<CredentialProfile[]>;
+  get(id: string): Promise<{ profile: CredentialProfile; secret: string }>;
+  put(input: {
+    id?: string;
+    label: string;
+    metadata: CredentialProfile['metadata'];
+    secret: string;
+  }): Promise<CredentialProfile>;
+  delete(id: string): Promise<void>;
+};
 
 type Runtime = {
   message: {
     broadcast(topic: string, payload: unknown): void;
   };
+  credentials?: PluginCredentialVault;
 };
 
-type ConnectionState = Omit<ConnectionSnapshot, keyof RevisionSnapshot>;
+type ConnectionState = Omit<ConnectionSnapshot, keyof RevisionSnapshot | 'profileId'>;
 
 const service = new MysqlService();
 let runtime: Runtime | undefined;
@@ -24,6 +57,7 @@ let connectionRevision = 0;
 let schemaRevision = 0;
 let dataRevision = 0;
 let disposed = false;
+let activeProfileId: string | null = null;
 
 function revisions(): RevisionSnapshot {
   return { connectionRevision, schemaRevision, dataRevision };
@@ -34,13 +68,33 @@ function withRevisions<T extends object>(value: T): T & RevisionSnapshot {
 }
 
 function toPublicError(error: unknown): MysqlPublicError {
-  if (error instanceof Error) {
-    const code = typeof (error as Error & { code?: unknown }).code === 'string'
-      ? (error as Error & { code: string }).code
-      : 'MYSQL_ERROR';
-    return { code, message: error.message };
+  if (error instanceof MysqlWorkbenchError) {
+    return { code: error.code, message: error.message };
+  }
+  const code = errorCode(error);
+  if (code !== null && code in CREDENTIAL_ERROR_MESSAGES) {
+    return {
+      code,
+      message: CREDENTIAL_ERROR_MESSAGES[code as keyof typeof CREDENTIAL_ERROR_MESSAGES],
+    };
   }
   return { code: 'MYSQL_ERROR', message: 'MySQL operation failed' };
+}
+
+const CREDENTIAL_ERROR_MESSAGES = {
+  CREDENTIALS_DISABLED: '当前宿主未启用本机凭据。',
+  CREDENTIALS_UNAVAILABLE: '本机凭据库当前不可用。',
+  CREDENTIALS_LOCKED: '请先解锁本机凭据库。',
+  CREDENTIAL_PROFILE_NOT_FOUND: '保存的连接不存在或密码已丢失。',
+  CREDENTIAL_PROFILE_CONFLICT: '保存的连接已被其他操作修改。',
+  CREDENTIAL_OPERATION_FAILED: '无法完成本机凭据操作。',
+} as const;
+
+function errorCode(error: unknown): string | null {
+  if (typeof error !== 'object' || error === null) return null;
+  return typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : null;
 }
 
 function errorEnvelope(error: unknown): MysqlErrorEnvelope {
@@ -64,16 +118,24 @@ function isErrorEnvelope(value: unknown): value is MysqlErrorEnvelope {
 }
 
 function connectionSnapshot(): ConnectionSnapshot {
-  return withRevisions(service.getConnectionState() as ConnectionState);
+  return { ...withRevisions(service.getConnectionState() as ConnectionState), profileId: activeProfileId };
 }
 
 async function connect(input: unknown): Promise<unknown> {
   const result = await callService('connect', input);
   if (isErrorEnvelope(result)) return result;
+  return publishSuccessfulConnection(result as ConnectionState, null);
+}
+
+function publishSuccessfulConnection(
+  result: ConnectionState,
+  profileId: string | null,
+): ConnectionSnapshot {
+  activeProfileId = profileId;
   connectionRevision += 1;
   schemaRevision += 1;
   dataRevision += 1;
-  const snapshot = withRevisions(result as ConnectionState);
+  const snapshot = { ...withRevisions(result), profileId };
   runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
   return snapshot;
 }
@@ -82,15 +144,180 @@ async function disconnect(): Promise<unknown> {
   const wasConnected = service.getConnectionState().connected;
   const result = await callService('disconnect');
   if (isErrorEnvelope(result)) return result;
+  activeProfileId = null;
   if (wasConnected) {
     connectionRevision += 1;
     schemaRevision += 1;
     dataRevision += 1;
-    const snapshot = withRevisions(result as ConnectionState);
+    const snapshot = { ...withRevisions(result as ConnectionState), profileId: activeProfileId };
     runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
     return snapshot;
   }
-  return withRevisions(result as ConnectionState);
+  return { ...withRevisions(result as ConnectionState), profileId: activeProfileId };
+}
+
+async function getCredentialCapability(): Promise<unknown> {
+  const vault = runtime?.credentials;
+  if (!vault) {
+    return { available: false, reason: 'CREDENTIALS_DISABLED' } satisfies MysqlCredentialCapability;
+  }
+  try {
+    return await vault.available()
+      ? { available: true } satisfies MysqlCredentialCapability
+      : { available: false, reason: 'CREDENTIALS_UNAVAILABLE' } satisfies MysqlCredentialCapability;
+  } catch (error) {
+    return {
+      available: false,
+      reason: errorCode(error) === 'CREDENTIALS_LOCKED'
+        ? 'CREDENTIALS_LOCKED'
+        : 'CREDENTIALS_UNAVAILABLE',
+    } satisfies MysqlCredentialCapability;
+  }
+}
+
+async function listConnectionProfiles(): Promise<unknown> {
+  try {
+    return (await requireVault().list()).map(toMysqlConnectionProfile);
+  } catch (error) {
+    return errorEnvelope(error);
+  }
+}
+
+async function connectSaved(input: unknown): Promise<unknown> {
+  try {
+    const { profileId } = parseProfileIdInput(input);
+    const saved = await requireVault().get(profileId);
+    const profile = requireMatchingProfile(saved.profile, profileId);
+    const result = await callService(
+      'connect',
+      connectionInputFromProfile(profile, saved.secret),
+    );
+    if (isErrorEnvelope(result)) return result;
+    return publishSuccessfulConnection(result as ConnectionState, profileId);
+  } catch (error) {
+    return errorEnvelope(error);
+  }
+}
+
+async function saveCurrentConnection(input: unknown): Promise<unknown> {
+  try {
+    const { label } = parseProfileLabelInput(input);
+    const activeInput = service.getActiveConnectionInput();
+    if (!activeInput || activeProfileId !== null) {
+      throw new MysqlWorkbenchError(
+        'NOT_CONNECTED',
+        '请先成功建立手工连接，再保存连接。',
+      );
+    }
+    const profile = toMysqlConnectionProfile(await requireVault().put({
+      label,
+      metadata: metadataFromConnectionInput(activeInput),
+      secret: activeInput.password,
+    }));
+    activeProfileId = profile.id;
+    return profile;
+  } catch (error) {
+    return errorEnvelope(error);
+  }
+}
+
+async function updateConnectionProfile(input: unknown): Promise<unknown> {
+  try {
+    const { profileId, password } = parseConnectionProfileUpdateInput(input);
+    const vault = requireVault();
+    const saved = await vault.get(profileId);
+    const profile = requireMatchingProfile(saved.profile, profileId);
+    saved.secret = '';
+    const connectionInput = connectionInputFromProfile(profile, password);
+    const result = await callService('connect', connectionInput);
+    if (isErrorEnvelope(result)) return result;
+
+    let updated: MysqlConnectionProfile;
+    try {
+      updated = toMysqlConnectionProfile(await vault.put({
+        id: profileId,
+        label: profile.label,
+        metadata: metadataFromConnectionInput(connectionInput),
+        secret: password,
+      }));
+    } catch (error) {
+      publishSuccessfulConnection(result as ConnectionState, null);
+      return errorEnvelope(error);
+    }
+    publishSuccessfulConnection(result as ConnectionState, profileId);
+    return updated;
+  } catch (error) {
+    return errorEnvelope(error);
+  }
+}
+
+async function deleteConnectionProfile(input: unknown): Promise<unknown> {
+  try {
+    const { profileId } = parseProfileIdInput(input);
+    const vault = requireVault();
+    if (activeProfileId === profileId) {
+      const disconnected = await disconnect();
+      if (isErrorEnvelope(disconnected)) return disconnected;
+    }
+    await vault.delete(profileId);
+    return { deleted: true, profileId };
+  } catch (error) {
+    return errorEnvelope(error);
+  }
+}
+
+function connectionInputFromProfile(profile: CredentialProfile, secret: string): ConnectionInput {
+  return parseConnectionInput({ ...parseConnectionMetadata(profile.metadata), password: secret });
+}
+
+function requireVault(): PluginCredentialVault {
+  const vault = runtime?.credentials;
+  if (!vault) {
+    throw Object.assign(new Error('Credentials disabled'), { code: 'CREDENTIALS_DISABLED' });
+  }
+  return vault;
+}
+
+function requireMatchingProfile(profile: CredentialProfile, expectedId: string): CredentialProfile {
+  if (parseProfileId(profile.id) !== expectedId) {
+    throw Object.assign(new Error('Credential profile mismatch'), {
+      code: 'CREDENTIAL_PROFILE_NOT_FOUND',
+    });
+  }
+  return profile;
+}
+
+function toMysqlConnectionProfile(profile: CredentialProfile): MysqlConnectionProfile {
+  const metadata = parseConnectionMetadata(profile.metadata);
+  return {
+    id: parseProfileId(profile.id),
+    label: parseProfileLabelInput({ label: profile.label }).label,
+    ...metadata,
+    createdAt: parseTimestamp(profile.createdAt, 'createdAt'),
+    updatedAt: parseTimestamp(profile.updatedAt, 'updatedAt'),
+  };
+}
+
+function metadataFromConnectionInput(input: ConnectionInput): CredentialProfile['metadata'] {
+  return {
+    host: input.host,
+    port: input.port,
+    user: input.user,
+    database: input.database,
+    tls: input.tls,
+  };
+}
+
+function parseTimestamp(value: unknown, name: string): string {
+  if (
+    typeof value !== 'string'
+    || value.length === 0
+    || value.length > 64
+    || Number.isNaN(Date.parse(value))
+  ) {
+    throw Object.assign(new Error(`${name} is invalid`), { code: 'CREDENTIAL_OPERATION_FAILED' });
+  }
+  return value;
 }
 
 async function schemaSnapshot(): Promise<unknown> {
@@ -109,12 +336,12 @@ async function selectDatabase(input: unknown): Promise<unknown> {
   if (isErrorEnvelope(result)) return result;
   const next = result as ConnectionState;
   if (before.database === next.database && before.endpoint === next.endpoint) {
-    return withRevisions(next);
+    return { ...withRevisions(next), profileId: activeProfileId };
   }
   connectionRevision += 1;
   schemaRevision += 1;
   dataRevision += 1;
-  const snapshot = withRevisions(next);
+  const snapshot = { ...withRevisions(next), profileId: activeProfileId };
   runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
   return snapshot;
 }
@@ -210,6 +437,12 @@ editor.plugin.define({
   methods: {
     getConnectionState: () => connectionSnapshot(),
     connect,
+    getCredentialCapability,
+    listConnectionProfiles,
+    connectSaved,
+    saveCurrentConnection,
+    updateConnectionProfile,
+    deleteConnectionProfile,
     disconnect,
     getDatabases: () => databasesSnapshot(),
     selectDatabase,

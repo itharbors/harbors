@@ -27,11 +27,16 @@ describe('MysqlService connection and schema', () => {
     });
     expect(service.getConnectionState()).not.toHaveProperty('password');
     expect(JSON.stringify(service.getConnectionState())).not.toContain('secret');
+    const activeInput = service.getActiveConnectionInput();
+    expect(activeInput).toEqual(connectionInput);
+    activeInput!.password = 'mutated-copy';
+    expect(service.getActiveConnectionInput()).toEqual(connectionInput);
     expect(pool.queries[0]?.sql).toBe(
       'SELECT VERSION() AS version, DATABASE() AS database_name',
     );
 
     await service.disconnect();
+    expect(service.getActiveConnectionInput()).toBeNull();
     await service.disconnect();
 
     expect(pool.endCalls).toBe(1);

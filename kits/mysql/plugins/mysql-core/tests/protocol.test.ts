@@ -1,13 +1,45 @@
 import { describe, expect, it } from 'vitest';
 import {
   deserializeEditableValue,
+  parseConnectionMetadata,
   parseConnectionInput,
+  parseConnectionProfileUpdateInput,
   parsePageInput,
+  parseProfileIdInput,
+  parseProfileLabelInput,
   quoteIdentifier,
   serializeMysqlValue,
 } from '../main/src/protocol';
 
 describe('MySQL protocol', () => {
+  it('validates exact saved-profile identifiers, labels, metadata, and update inputs', () => {
+    const profileId = '00112233-4455-4677-8899-aabbccddeeff';
+    expect(parseProfileIdInput({ profileId })).toEqual({ profileId });
+    expect(() => parseProfileIdInput({ profileId, secret: 'nope' })).toThrow(/unexpected/);
+    expect(() => parseProfileIdInput({ profileId: 'stale' })).toThrow(/profileId/);
+    expect(parseProfileLabelInput({ label: ' 本机开发库 ' })).toEqual({ label: '本机开发库' });
+    expect(() => parseProfileLabelInput({ label: 'x'.repeat(81) })).toThrow(/label/);
+
+    expect(parseConnectionMetadata({
+      host: ' db.local ', port: 3306, user: ' reader ', database: ' app ', tls: true,
+    })).toEqual({
+      host: 'db.local', port: 3306, user: 'reader', database: 'app', tls: true,
+    });
+    expect(() => parseConnectionMetadata({
+      host: 'db.local', port: 3306, user: 'reader', database: null, tls: true, password: 'nope',
+    })).toThrow(/unexpected/);
+    expect(() => parseConnectionMetadata({
+      host: 'x'.repeat(256), port: 3306, user: 'reader', database: null, tls: true,
+    })).toThrow(/host/);
+
+    expect(parseConnectionProfileUpdateInput({
+      profileId, password: 'new-password',
+    })).toEqual({ profileId, password: 'new-password' });
+    expect(() => parseConnectionProfileUpdateInput({
+      profileId, password: 'new-password', label: 'not-accepted',
+    })).toThrow(/unexpected/);
+  });
+
   it('validates and normalizes connection input', () => {
     expect(parseConnectionInput({
       host: ' db.local ',

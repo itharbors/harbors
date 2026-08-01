@@ -142,6 +142,10 @@ export class MysqlService {
     };
   }
 
+  getActiveConnectionInput(): ConnectionInput | null {
+    return this.connectionInput ? { ...this.connectionInput } : null;
+  }
+
   async connect(input: unknown): Promise<ConnectionState> {
     let parsed;
     try {

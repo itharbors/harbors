@@ -22,6 +22,8 @@ describe('MySQL kit manifest', () => {
     const secondaryEntry = fs.readFileSync(path.join(kitRoot, 'secondary.html'), 'utf8');
 
     expect(pkg.name).toBe('@itharbors/kit-mysql');
+    const kit = readJson(path.join(kitRoot, 'kit.json'));
+    expect(kit.permissions).toEqual(['network', 'credentials']);
     expect(pkg['ce-editor'].kit.menuRoot).toEqual({ id: 'mysql', label: 'MySQL' });
     expect(pkg.dependencies.mysql2).toBe('^3.23.0');
     expect(pkg['ce-editor'].kit.plugin).toEqual(pluginNames);
@@ -65,13 +67,24 @@ describe('MySQL kit manifest', () => {
       const slug = name.replace('@itharbors/', '');
       const plugin = readJson(path.join(kitRoot, `plugins/${slug}/package.json`));
       expect(plugin.name).toBe(name);
-      if (name === '@itharbors/mysql-core') expect(plugin.dependencies.mysql2).toBe('^3.23.0');
-      else expect(plugin.dependencies?.mysql2).toBeUndefined();
+      if (name === '@itharbors/mysql-core') {
+        expect(plugin.dependencies.mysql2).toBe('^3.23.0');
+        expect(plugin['ce-editor'].capabilities).toEqual(['credentials']);
+      } else {
+        expect(plugin.dependencies?.mysql2).toBeUndefined();
+        expect(plugin['ce-editor'].capabilities).toBeUndefined();
+      }
     }
 
     const explorer = readJson(path.join(kitRoot, 'plugins/mysql-explorer/package.json'));
     const core = readJson(path.join(kitRoot, 'plugins/mysql-core/package.json'));
     expect(core['ce-editor'].contribute.message.request).toMatchObject({
+      getCredentialCapability: ['getCredentialCapability'],
+      listConnectionProfiles: ['listConnectionProfiles'],
+      connectSaved: ['connectSaved'],
+      saveCurrentConnection: ['saveCurrentConnection'],
+      updateConnectionProfile: ['updateConnectionProfile'],
+      deleteConnectionProfile: ['deleteConnectionProfile'],
       getDatabases: ['getDatabases'],
       selectDatabase: ['selectDatabase'],
     });

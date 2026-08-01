@@ -10,6 +10,6 @@
     "protocolVersion": 1
   },
   "target": {"platform": "any", "arch": "any"},
-  "permissions": ["network"],
+  "permissions": ["network", "credentials"],
   "entry": "package.json"
 }
