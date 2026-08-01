@@ -15,7 +15,6 @@ function validEnvironment(application = '/Applications/ITHARBORS.app') {
     HARBORS_PLUGIN_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
     HARBORS_PLUGIN_CACHE_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
     HARBORS_PLUGIN_TEMP_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
-    HARBORS_AGENT_GUARD_DATA_DIR: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
     HARBORS_KIT_SOURCES: JSON.stringify([
       {
         directory: '/Applications/ITHARBORS.app/Contents/Resources/runtime/kits/default',
@@ -42,7 +41,6 @@ test('requires absolute packaged paths and loopback configuration', () => {
     pluginDataRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
     pluginCacheRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
     pluginTempRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
-    agentGuardDataDir: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
     kitSources: [
       {
         directory: '/Applications/ITHARBORS.app/Contents/Resources/runtime/kits/default',
@@ -69,7 +67,6 @@ test('requires absolute packaged paths and loopback configuration', () => {
     ['HARBORS_PLUGIN_DATA_ROOT', './plugins/data'],
     ['HARBORS_PLUGIN_CACHE_ROOT', './plugins/cache'],
     ['HARBORS_PLUGIN_TEMP_ROOT', './plugins/temp'],
-    ['HARBORS_AGENT_GUARD_DATA_DIR', './agent-guard'],
   ]) {
     assert.throws(
       () => parseDesktopFrameworkEnvironment({ ...valid, [field]: value }),
@@ -78,7 +75,7 @@ test('requires absolute packaged paths and loopback configuration', () => {
   }
 });
 
-test('forwards the Agent Guard data directory to the desktop server', async () => {
+test('forwards only generic plugin storage roots to the desktop server', async () => {
   let serverOptions;
   const port = await runDesktopFrameworkProcess({
     env: validEnvironment(),
@@ -93,10 +90,7 @@ test('forwards the Agent Guard data directory to the desktop server', async () =
   });
 
   assert.equal(port, 43123);
-  assert.equal(
-    serverOptions.agentGuardDataDir,
-    '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
-  );
+  assert.equal('agentGuardDataDir' in serverOptions, false);
   assert.deepEqual(
     serverOptions.pluginPathRoots,
     {

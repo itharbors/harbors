@@ -40,15 +40,15 @@ if (process.platform !== 'darwin' || process.arch !== 'arm64') {
   throw new Error('Agent Guard smoke testing requires macOS arm64');
 }
 
-const repositoryRoot = path.resolve(import.meta.dirname, '..');
+const kitRoot = path.resolve(import.meta.dirname, '..');
 const backgroundDist = path.join(
-  repositoryRoot, 'kits/agent-guard/plugins/agent-guard-background/main/dist',
+  kitRoot, 'plugins/agent-guard-background/main/dist',
 );
 const temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'harbors-agent-guard-smoke-'));
 const fixtureExecutable = path.join(temporaryRoot, 'codex');
 const fixtureSource = path.join(temporaryRoot, 'fixture.mjs');
 const sinkSource = path.join(temporaryRoot, 'sink.mjs');
-const reportPath = path.resolve(repositoryRoot, options.report);
+const reportPath = path.resolve(kitRoot, options.report);
 let child;
 let sink;
 let collector;
@@ -255,7 +255,7 @@ try {
 
 function parseArguments(args) {
   let durationSeconds = 30;
-  let report = 'docs/superpowers/reports/2026-07-30-agent-traffic-guard-performance.md';
+  let report = 'reports/agent-traffic-guard-performance.md';
   for (let index = 0; index < args.length; index += 2) {
     const flag = args[index];
     const value = args[index + 1];
@@ -267,7 +267,7 @@ function parseArguments(args) {
     throw new Error('Smoke duration must be an integer from 10 to 3600 seconds');
   }
   if (typeof report !== 'string' || !report.endsWith('.md') || path.isAbsolute(report) || report.includes('..')) {
-    throw new Error('Smoke report must be a repository-relative Markdown path');
+    throw new Error('Smoke report must be a Kit-relative Markdown path');
   }
   return { durationSeconds, report };
 }

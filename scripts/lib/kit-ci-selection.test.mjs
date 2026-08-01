@@ -126,6 +126,10 @@ function expectedCliOutput(slugs) {
 
 test('selects only changed official Kits in deterministic order', () => {
   assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json'], allDescriptors), ['agent-guard']);
+  assert.deepEqual(
+    selectKitSlugs(['kits/agent-guard/packages/contracts/src/index.ts'], allDescriptors),
+    ['agent-guard'],
+  );
   assert.deepEqual(selectKitSlugs(['kits/csv/package.json'], allDescriptors), ['csv']);
   assert.deepEqual(selectKitSlugs(['kits/mysql/package.json'], allDescriptors), ['mysql']);
   assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json'], allDescriptors), ['scheduler']);
@@ -169,7 +173,6 @@ test('selects all official Kits for shared build, validation, Registry, and work
 
 test('selects every descriptor for shared framework and workflow surfaces', () => {
   const cases = [
-    ['packages/agent-guard-contracts/src/index.ts', allKits],
     ['packages/csv-contracts/src/index.ts', allKits],
     ['packages/mysql-contracts/src/index.ts', allKits],
     ['packages/sqlite-contracts/src/index.ts', allKits],

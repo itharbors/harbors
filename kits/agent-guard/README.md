@@ -26,7 +26,9 @@ Agent Guard 是面向 macOS arm64 的 Claude Code 与 Codex 本机流量守卫�
 
 只保存域名、Provider、带盐远端地址摘要、字节、连接/任务数量、证据代码和控制结果。Prompt、
 Response、凭据、完整 Header、环境变量、命令行参数和精确请求总数不会收集。数据位于
-`userData/agent-guard`，普通指标最多 20 MiB/天，保留 7 天；事件保留 30 天。
+Framework 分配给插件的 owner data 目录，普通指标最多 20 MiB/天，保留 7 天；事件保留 30 天。
+旧版 `userData/agent-guard` 仅提供一个版本周期的只读兼容：只在 owner 文件不存在时读取，
+Agent Guard 不会在该旧目录中创建、修改或删除任何内容。
 
 开发运行：
 
@@ -34,13 +36,14 @@ Response、凭据、完整 Header、环境变量、命令行参数和精确请�
 npm run dev -- --kit ./kits/agent-guard
 ```
 
-定向验证：
+在 Kit 目录中定向验证：
 
 ```bash
-npm run test:agent-guard
-npm run build -w @itharbors/kit-agent-guard
-node scripts/agent-guard-smoke.mjs --duration-seconds 900 \
-  --report docs/superpowers/reports/2026-07-30-agent-traffic-guard-performance.md
+cd kits/agent-guard
+npm run test:kit
+npm run build
+npm run smoke -- --duration-seconds 900 \
+  --report reports/agent-traffic-guard-performance.md
 ```
 
 烟测脚本不接受 PID，只创建和控制自己的隔离子进程，并在 `finally` 中恢复、结束和清理夹具。

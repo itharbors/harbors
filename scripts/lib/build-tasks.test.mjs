@@ -75,6 +75,9 @@ test('derives the complete repository build from packages, root plugins, and Kit
       file: 'node',
       args: ['packages/kit-cli/dist/cli.js', 'build', path.relative(rootDir, descriptor.directory)],
     });
+    for (const output of await discoverKitWorkspaceOutputs(descriptor.directory)) {
+      assert.ok(task.outputs.includes(path.relative(rootDir, output).split(path.sep).join('/')));
+    }
   }
 });
 
@@ -116,6 +119,21 @@ test('Framework source contains no product Kit, contract, or resource build regi
 
   assert.doesNotMatch(source, /NOTIFICATION|notify-user|agent-guard-contracts|csv-contracts|mysql-contracts|sqlite-contracts|traceweave-contracts|relationship-graph/u);
   assert.doesNotMatch(source, /kits\/[a-z0-9-]+\/plugins/u);
+});
+
+test('Framework hosts contain no Agent Guard storage identity or dedicated environment plumbing', async () => {
+  const sources = await Promise.all([
+    'packages/server/src/server.ts',
+    'packages/server/src/index.ts',
+    'scripts/lib/desktop-paths.mjs',
+    'scripts/lib/desktop-framework.mjs',
+    'scripts/electron.mjs',
+  ].map((relativePath) => readFile(path.join(rootDir, relativePath), 'utf8')));
+
+  assert.doesNotMatch(
+    sources.join('\n'),
+    /agentGuardDataDir|HARBORS_AGENT_GUARD_DATA_DIR|agent-guard-contracts/u,
+  );
 });
 
 test('rejects unknown build graphs', async () => {
@@ -177,8 +195,35 @@ async function discoverBuildablePackageDirectories(repositoryRoot) {
   const values = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
-    const manifest = JSON.parse(await readFile(path.join(repositoryRoot, 'packages', entry.name, 'package.json'), 'utf8'));
+    const manifestPath = path.join(repositoryRoot, 'packages', entry.name, 'package.json');
+    if (!await pathExists(manifestPath)) continue;
+    const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
     if (typeof manifest.scripts?.build === 'string') values.push(`packages/${entry.name}`);
   }
   return values.sort();
+}
+
+async function discoverKitWorkspaceOutputs(kitDirectory) {
+  const manifest = JSON.parse(await readFile(path.join(kitDirectory, 'package.json'), 'utf8'));
+  const outputs = [];
+  for (const pattern of manifest.workspaces ?? []) {
+    if (typeof pattern !== 'string' || !pattern.endsWith('/*')) continue;
+    const workspaceRoot = path.join(kitDirectory, pattern.slice(0, -2));
+    const { readdir } = await import('node:fs/promises');
+    const entries = await readdir(workspaceRoot, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const directory = path.join(workspaceRoot, entry.name);
+      const manifestPath = path.join(directory, 'package.json');
+      if (!await pathExists(manifestPath)) continue;
+      const workspace = JSON.parse(await readFile(manifestPath, 'utf8'));
+      if (typeof workspace.scripts?.build === 'string') outputs.push(path.join(directory, 'dist'));
+    }
+  }
+  return outputs;
+}
+
+async function pathExists(candidate) {
+  const { access } = await import('node:fs/promises');
+  return access(candidate).then(() => true, () => false);
 }

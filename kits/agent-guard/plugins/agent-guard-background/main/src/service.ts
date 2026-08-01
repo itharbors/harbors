@@ -159,7 +159,14 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
   };
 }
 
-export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
+interface DefaultAgentGuardServiceOptions {
+  dataDir: string;
+  legacyDataDirs: readonly string[];
+  hostMode: 'desktop' | 'web';
+  notificationPort?: string;
+}
+
+export async function createDefaultAgentGuardService(options: DefaultAgentGuardServiceOptions) {
   const policyPath = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)), '../../resources/policy-v1.json',
   );
@@ -180,8 +187,9 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     catch { return fallbackAdapters[index].discoverConfiguration(); }
   }));
   const store = await createAgentGuardStore({
-    dataDir: env.HARBORS_AGENT_GUARD_DATA_DIR,
-    hostMode: env.HARBORS_HOST_MODE === 'desktop' ? 'desktop' : 'web',
+    dataDir: options.dataDir,
+    legacyDataDirs: options.legacyDataDirs,
+    hostMode: options.hostMode,
   });
   const persistedState = await store.loadState();
   const salt = persistedState ? Buffer.from(persistedState.saltHex, 'hex') : randomBytes(32);
@@ -335,7 +343,7 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     processMap.clear();
     for (const process of processes) processMap.set(process.pid, process);
   };
-  const notificationPort = parseNotificationPort(env.HARBORS_NOTIFICATION_PORT);
+  const notificationPort = parseNotificationPort(options.notificationPort);
   const notifier = notificationPort ? createIncidentNotifier({ port: notificationPort }) : undefined;
   const refreshConfigurations = async () => {
     const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));

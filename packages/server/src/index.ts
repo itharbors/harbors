@@ -18,7 +18,6 @@ const { start, stop } = createServer({
   kitSources: parseKitSources(process.env.HARBORS_KIT_SOURCES),
   applicationHostMode: APPLICATION_HOST_MODE,
   applicationControlToken: process.env.HARBORS_APPLICATION_TOKEN,
-  agentGuardDataDir: process.env.HARBORS_AGENT_GUARD_DATA_DIR,
   pluginPathRoots: {
     applicationData: APPLICATION_DATA_ROOT,
     data: process.env.HARBORS_PLUGIN_DATA_ROOT

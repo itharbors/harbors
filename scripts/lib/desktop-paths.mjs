@@ -40,6 +40,5 @@ export function resolveDesktopPaths({
     pluginDataRoot: path.join(dataRoot, 'plugins', 'data'),
     pluginCacheRoot: path.join(dataRoot, 'plugins', 'cache'),
     pluginTempRoot: path.join(dataRoot, 'plugins', 'temp'),
-    agentGuardDataDir: path.join(dataRoot, 'agent-guard'),
   });
 }

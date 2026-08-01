@@ -23,7 +23,6 @@ test('keeps packaged desktop paths under Resources and userData', () => {
     pluginDataRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
     pluginCacheRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
     pluginTempRoot: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
-    agentGuardDataDir: '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
   });
 });
 
@@ -40,10 +39,6 @@ test('keeps development paths rooted in the repository', () => {
   assert.equal(result.runtimeRoot, '/workspace/harbors');
   assert.equal(result.clientAssetsRoot, '/workspace/harbors/packages/client/dist');
   assert.equal(result.frameworkEntry, '/workspace/harbors/scripts/framework.mjs');
-  assert.equal(
-    result.agentGuardDataDir,
-    '/Users/me/Library/Application Support/ITHARBORS/agent-guard',
-  );
   assert.equal(result.dataRoot, '/Users/me/Library/Application Support/ITHARBORS');
   assert.equal(result.pluginDataRoot, '/Users/me/Library/Application Support/ITHARBORS/plugins/data');
   assert.equal(result.pluginCacheRoot, '/Users/me/Library/Application Support/ITHARBORS/plugins/cache');

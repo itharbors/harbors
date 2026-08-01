@@ -27,7 +27,6 @@ export interface ServerOptions {
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
-  agentGuardDataDir?: string;
   pluginPathRoots: PluginPathRoots;
   clientAssetsRoot?: string;
   host?: string;
@@ -79,9 +78,6 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
 }
 
 export function createServer(options: ServerOptions) {
-  if (options.agentGuardDataDir !== undefined && !path.isAbsolute(options.agentGuardDataDir)) {
-    throw new Error('agentGuardDataDir must be an absolute path');
-  }
   if (!options.assembly && (!options.kitSources || options.kitSources.length === 0)) {
     throw new Error('Server requires at least one Kit source');
   }
