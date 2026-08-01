@@ -108,7 +108,7 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
   await chmod(dataDir, 0o700);
   const metricCap = options.metricDailyCapBytes ?? DEFAULT_METRIC_CAP;
   if (!Number.isSafeInteger(metricCap) || metricCap <= 0) throw new TypeError('metricDailyCapBytes is invalid');
-  const history = await createHistoryStore({ hostMode: 'desktop', dataDir });
+  const history = await createHistoryStore({ hostMode: 'desktop', dataDir, rawDailyCapBytes: metricCap });
 
   const atomicJson = async (filename: string, value: unknown) => {
     const target = path.join(dataDir, filename);

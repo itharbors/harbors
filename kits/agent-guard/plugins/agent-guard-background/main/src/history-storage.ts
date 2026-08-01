@@ -23,7 +23,8 @@ import {
 } from './history-aggregation.js';
 
 const MEMORY_LIMIT = 10_000;
-const HISTORY_FILE = /^(?:coverage-raw|metrics-v2-raw|usage-raw)-\d{4}-\d{2}-\d{2}\.ndjson$|^history-(?:hour|day)-.*\.ndjson$|^history-(?:manifest|settings|cursors)\.json$/u;
+const DEFAULT_RAW_DAILY_CAP = 20 * 1024 * 1024;
+const HISTORY_FILE = /^(?:coverage-raw|metrics-v2-raw|usage-raw|metrics)-\d{4}-\d{2}-\d{2}\.ndjson$|^history-(?:hour|day)-.*\.ndjson$|^history-(?:manifest|settings|cursors|cap)\.json$/u;
 
 export interface BackfillCursorV1 {
   identityDigest: string;
@@ -51,6 +52,7 @@ export interface HistoryStoreOptions {
   hostMode: 'desktop' | 'web';
   dataDir?: string;
   failAfter?: 'segments-published' | 'manifest-published';
+  rawDailyCapBytes?: number;
 }
 
 interface HistoryManifestV1 {
@@ -59,9 +61,23 @@ interface HistoryManifestV1 {
   lastCompactedAt: number | null;
 }
 
+interface LegacyMetricV1 {
+  schemaVersion: 1;
+  at: number;
+  agent: 'claude' | 'codex';
+  provider: string;
+  hostname: string;
+  remoteDigest: string;
+  bytesIn: number;
+  bytesOut: number;
+  complete: boolean;
+}
+
 export async function createHistoryStore(options: HistoryStoreOptions): Promise<HistoryStore> {
   if (options.hostMode !== 'desktop' || !options.dataDir) return createMemoryHistoryStore();
-  return createFileHistoryStore(path.resolve(options.dataDir), options.failAfter);
+  return createFileHistoryStore(
+    path.resolve(options.dataDir), options.failAfter, options.rawDailyCapBytes ?? DEFAULT_RAW_DAILY_CAP,
+  );
 }
 
 function createMemoryHistoryStore(): HistoryStore {
@@ -98,12 +114,16 @@ function createMemoryHistoryStore(): HistoryStore {
 async function createFileHistoryStore(
   dataDir: string,
   failAfter?: HistoryStoreOptions['failAfter'],
+  rawDailyCapBytes = DEFAULT_RAW_DAILY_CAP,
 ): Promise<HistoryStore> {
   let manifest = await loadJson<HistoryManifestV1>(path.join(dataDir, 'history-manifest.json'))
     ?? { schemaVersion: 1, generation: 0, lastCompactedAt: null };
   let settings = normalizeHistorySettings(
     await loadJson<HistorySettings>(path.join(dataDir, 'history-settings.json'))
       ?? { localSessionBackfill: true },
+  );
+  const cappedDays = new Set(
+    (await loadJson<{ days: string[] }>(path.join(dataDir, 'history-cap.json')))?.days ?? [],
   );
   let compacting: Promise<void> | null = null;
 
@@ -112,6 +132,41 @@ async function createFileHistoryStore(
     const network = await readMany<NetworkHistorySampleV2>(dataDir, names.filter((name) => name.startsWith('metrics-v2-raw-')));
     const coverage = await readMany<CoverageIntervalV1>(dataDir, names.filter((name) => name.startsWith('coverage-raw-')));
     const usage = await readMany<UsageEventV1>(dataDir, names.filter((name) => name.startsWith('usage-raw-')));
+    const legacy = await readMany<LegacyMetricV1>(dataDir, names.filter((name) => /^metrics-\d{4}-\d{2}-\d{2}\.ndjson$/u.test(name)));
+    const v2Ends = new Set(network.map((item) => (
+      `${item.agent}\u0000${item.provider}\u0000${item.hostname}\u0000${item.remoteDigest}\u0000${item.intervalEnd}`
+    )));
+    for (const metric of legacy) {
+      const key = `${metric.agent}\u0000${metric.provider}\u0000${metric.hostname}\u0000${metric.remoteDigest}\u0000${metric.at}`;
+      if (v2Ends.has(key)) continue;
+      const start = Math.max(0, metric.at - 60_000);
+      network.push({
+        schemaVersion: 2,
+        intervalStart: start,
+        intervalEnd: metric.at,
+        collectorEpoch: 0,
+        agent: metric.agent,
+        provider: metric.provider,
+        hostname: metric.hostname,
+        remoteDigest: metric.remoteDigest,
+        bytesIn: metric.bytesIn,
+        bytesOut: metric.bytesOut,
+      });
+      coverage.push({
+        schemaVersion: 1,
+        start,
+        end: metric.at,
+        collectorEpoch: 0,
+        status: metric.complete ? 'complete' : 'partial',
+        reason: metric.complete ? null : 'collector-degraded',
+        endpoints: [{
+          agent: metric.agent,
+          provider: metric.provider,
+          hostname: metric.hostname,
+          enabled: true,
+        }],
+      });
+    }
     return { network, coverage, usage };
   };
 
@@ -119,7 +174,10 @@ async function createFileHistoryStore(
     persistent: true,
     async appendNetworkSamples(values) {
       const normalized = values.map(normalizeNetworkSample);
-      await appendGrouped(dataDir, 'metrics-v2-raw', normalized, (item) => item.intervalEnd);
+      const dropped = await appendGrouped(
+        dataDir, 'metrics-v2-raw', normalized, (item) => item.intervalEnd, rawDailyCapBytes,
+      );
+      await markCappedDays(dataDir, cappedDays, dropped);
     },
     async appendCoverage(values) {
       const normalized = values.map(normalizeCoverage);
@@ -127,19 +185,26 @@ async function createFileHistoryStore(
     },
     async appendUsageEvents(values) {
       const normalized = values.map(normalizeUsageEvent);
-      await appendGrouped(dataDir, 'usage-raw', normalized, (item) => item.at);
+      const dropped = await appendGrouped(dataDir, 'usage-raw', normalized, (item) => item.at, rawDailyCapBytes);
+      await markCappedDays(dataDir, cappedDays, dropped);
     },
     async query(input) {
       const raw = await readRaw();
       const query = normalizeTrafficHistoryQuery(input);
       const bucket = chooseBucket(query);
       const segments = bucket === 'minute' ? [] : await readSegmentSeries(dataDir, manifest.generation, bucket);
-      return buildResult(query, raw.network, raw.coverage, raw.usage, manifest.generation, true, segments);
+      return buildResult(
+        query, raw.network, raw.coverage, raw.usage, manifest.generation, true, segments,
+        cappedDays.size > 0 ? ['raw-cap-reached'] : [],
+      );
     },
     async status() {
       const raw = await readRaw();
       const bytes = await historyStorageBytes(dataDir);
-      return buildStatus(true, manifest, settings, raw.network, raw.coverage, raw.usage, bytes);
+      return buildStatus(
+        true, manifest, settings, raw.network, raw.coverage, raw.usage, bytes,
+        cappedDays.size > 0 ? ['raw-cap-reached'] : [],
+      );
     },
     async compact(now) {
       if (compacting) return compacting;
@@ -175,6 +240,7 @@ async function createFileHistoryStore(
       const nextManifest = { schemaVersion: 1 as const, generation: manifest.generation + 1, lastCompactedAt: null };
       await atomicJson(dataDir, 'history-manifest.json', nextManifest);
       manifest = nextManifest;
+      cappedDays.clear();
       const names = await readdir(dataDir);
       for (const name of names) {
         if (!HISTORY_FILE.test(name) || name === 'history-manifest.json' || name === 'history-settings.json') continue;
@@ -195,12 +261,22 @@ async function buildResult(
   generation: number,
   persistent: boolean,
   segmentSeries: readonly HistorySeries[] = [],
+  warnings: string[] = [],
 ): Promise<TrafficHistoryResult> {
   const query = normalizeTrafficHistoryQuery(input);
-  const rawSeries = query.domain === 'network'
-    ? (network.length === 0 && coverage.length === 0 ? [] : aggregateNetworkHistory(network, coverage, query))
-    : (usage.length === 0 ? [] : aggregateUsageHistory(usage, query));
-  const series = mergeSeries(segmentSeries, rawSeries, query);
+  let effectiveQuery = query;
+  let rawSeries = aggregateRawSeries(effectiveQuery, network, coverage, usage);
+  let series = mergeSeries(segmentSeries, rawSeries, effectiveQuery);
+  while (series.reduce((sum, item) => sum + item.points.length, 0) > 2_000) {
+    const current = chooseBucket(effectiveQuery);
+    const promoted = current === 'minute' ? 'hour' : current === 'hour' ? 'day' : null;
+    if (!promoted) throw new TypeError('history query exceeds the 2000 point response budget');
+    effectiveQuery = { ...query, preferredBucket: promoted };
+    rawSeries = aggregateRawSeries(effectiveQuery, network, coverage, usage);
+    series = mergeSeries(segmentSeries.filter((item) => item.points.every((point) => (
+      point.end - point.start >= (promoted === 'hour' ? 3_600_000 : 86_400_000)
+    ))), rawSeries, effectiveQuery);
+  }
   const summary = [...new Set(series.map((item) => `${item.metric}\u0000${item.unit}`))].map((key) => {
     const [metric, unit] = key.split('\u0000') as [TrafficHistoryResult['series'][number]['metric'], TrafficHistoryResult['series'][number]['unit']];
     const points = series.filter((item) => item.metric === metric && item.unit === unit).flatMap((item) => item.points);
@@ -221,14 +297,25 @@ async function buildResult(
     domain: query.domain,
     from: query.from,
     to: query.to,
-    actualBucket: chooseBucket(query),
+    actualBucket: chooseBucket(effectiveQuery),
     generation,
     persistent,
     series,
     summary,
     sources: series.length === 0 ? [] : sources,
-    warnings: [],
+    warnings,
   });
+}
+
+function aggregateRawSeries(
+  query: TrafficHistoryQuery,
+  network: readonly NetworkHistorySampleV2[],
+  coverage: readonly CoverageIntervalV1[],
+  usage: readonly UsageEventV1[],
+): HistorySeries[] {
+  return query.domain === 'network'
+    ? (network.length === 0 && coverage.length === 0 ? [] : aggregateNetworkHistory(network, coverage, query))
+    : (usage.length === 0 ? [] : aggregateUsageHistory(usage, query));
 }
 
 function buildStatus(
@@ -239,6 +326,7 @@ function buildStatus(
   coverage: readonly CoverageIntervalV1[],
   usage: readonly UsageEventV1[],
   storageBytes: number,
+  warnings: string[] = [],
 ): HistoryStatus {
   const timestamps = [
     ...network.flatMap((item) => [item.intervalStart, item.intervalEnd]),
@@ -255,7 +343,7 @@ function buildStatus(
     lastCompactedAt: manifest.lastCompactedAt,
     lastBackfilledAt: usage.length === 0 ? null : Math.max(...usage.map((item) => item.at)),
     settings,
-    warnings: [],
+    warnings,
   };
 }
 
@@ -264,17 +352,40 @@ async function appendGrouped<T>(
   prefix: string,
   values: readonly T[],
   timestamp: (value: T) => number,
-): Promise<void> {
+  cap?: number,
+): Promise<string[]> {
   const grouped = new Map<string, T[]>();
   for (const value of values) {
     const day = new Date(timestamp(value)).toISOString().slice(0, 10);
     grouped.set(day, [...(grouped.get(day) ?? []), value]);
   }
+  const dropped: string[] = [];
   for (const [day, records] of grouped) {
     const file = path.join(dataDir, `${prefix}-${day}.ndjson`);
-    await appendFile(file, records.map((item) => `${JSON.stringify(item)}\n`).join(''), { encoding: 'utf8', mode: 0o600 });
+    const currentSize = await stat(file).then((item) => item.size).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return 0;
+      throw error;
+    });
+    let payload = '';
+    for (const record of records) {
+      const line = `${JSON.stringify(record)}\n`;
+      if (cap !== undefined && currentSize + Buffer.byteLength(payload) + Buffer.byteLength(line) > cap) {
+        dropped.push(day);
+        break;
+      }
+      payload += line;
+    }
+    if (!payload) continue;
+    await appendFile(file, payload, { encoding: 'utf8', mode: 0o600 });
     await chmod(file, 0o600);
   }
+  return dropped;
+}
+
+async function markCappedDays(dataDir: string, state: Set<string>, days: string[]): Promise<void> {
+  if (days.length === 0) return;
+  for (const day of days) state.add(day);
+  await atomicJson(dataDir, 'history-cap.json', { days: [...state].sort() });
 }
 
 async function readMany<T>(dataDir: string, names: string[]): Promise<T[]> {

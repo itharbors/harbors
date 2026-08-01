@@ -57,10 +57,16 @@ describe('Agent Guard history storage', () => {
     }]);
     await store.history.appendCoverage([coverage()]);
     await store.history.appendNetworkSamples([sample()]);
+    await store.appendMetrics([{
+      schemaVersion: 1, at: START + 60_000, agent: 'claude', provider: 'custom',
+      hostname: 'legacy.example.test', remoteDigest: 'fedcba9876543210', bytesIn: 1, bytesOut: 2,
+      connections: 1, activeTasks: 1, confidence: 'confirmed', complete: true,
+    }]);
 
     await store.history.clearHistory();
 
     expect((await store.history.query(query())).series).toEqual([]);
+    expect(fs.readdirSync(dataDir).some((name) => /^metrics-\d{4}-\d{2}-\d{2}\.ndjson$/u.test(name))).toBe(false);
     expect(await store.loadState()).toMatchObject({ createdAt: START });
     expect(await store.readIncidents(new Date(START))).toHaveLength(1);
     expect(await store.loadControlLedger()).toHaveLength(1);
@@ -129,6 +135,36 @@ describe('Agent Guard history storage', () => {
     expect((await newGeneration.history.query(query())).generation).toBe(1);
     expect((await newGeneration.history.query(query())).summary.find((item) => item.metric === 'bytes-out')?.value).toBe(2048);
   });
+
+  it('migrates existing v1 minute metrics without turning incomplete zeroes into valid zeroes', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const store = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
+    await store.appendMetrics([{
+      schemaVersion: 1, at: START + 60_000, agent: 'claude', provider: 'custom',
+      hostname: 'relay.example.test', remoteDigest: '0123456789abcdef', bytesIn: 0, bytesOut: 0,
+      connections: 0, activeTasks: 0, confidence: 'confirmed', complete: false,
+    }]);
+
+    const result = await store.history.query(query());
+
+    expect(result.series.find((item) => item.metric === 'bytes-out')?.points[0]).toEqual(expect.objectContaining({
+      value: 0,
+      coverage: 'partial',
+      coverageReason: 'collector-degraded',
+    }));
+  });
+
+  it('caps raw history per day and reports dropped samples', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const store = await createAgentGuardStore({
+      dataDir, hostMode: 'desktop', metricDailyCapBytes: 1024,
+    });
+    await store.history.appendNetworkSamples(Array.from({ length: 100 }, (_, index) => sampleWithOffset(index)));
+
+    const file = path.join(dataDir, 'metrics-v2-raw-2026-08-01.ndjson');
+    expect(fs.statSync(file).size).toBeLessThanOrEqual(1024);
+    expect((await store.history.status()).warnings).toContain('raw-cap-reached');
+  });
 });
 
 function temporaryRoot() {
@@ -161,6 +197,15 @@ function sample(): NetworkHistorySampleV2 {
     schemaVersion: 2, intervalStart: START, intervalEnd: START + 60_000, collectorEpoch: 3,
     agent: 'claude', provider: 'custom', hostname: 'relay.example.test', remoteDigest: 'remote-1',
     bytesIn: 1024, bytesOut: 2048,
+  };
+}
+
+function sampleWithOffset(index: number): NetworkHistorySampleV2 {
+  return {
+    ...sample(),
+    intervalStart: START + index * 1_000,
+    intervalEnd: START + (index + 1) * 1_000,
+    remoteDigest: `remote-${index}`,
   };
 }
 
