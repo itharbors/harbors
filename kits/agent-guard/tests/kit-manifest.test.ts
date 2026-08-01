@@ -1,5 +1,8 @@
 import fs from 'node:fs';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
+import { inspectKit, packKit } from '@itharbors/kit-cli';
 import { describe, expect, it } from 'vitest';
 
 const kitRoot = path.resolve(__dirname, '..');
@@ -25,7 +28,10 @@ describe('Agent Guard Kit manifest', () => {
   });
 
   it('ships the exact versioned v1 guard thresholds without proxy dependencies', () => {
-    const policy = readJson(path.join(kitRoot, 'resources/policy-v1.json'));
+    const policy = readJson(path.join(
+      kitRoot,
+      'plugins/agent-guard-background/resources/policy-v1.json',
+    ));
     const pkg = readJson(path.join(kitRoot, 'package.json'));
 
     expect(policy).toMatchObject({
@@ -51,6 +57,21 @@ describe('Agent Guard Kit manifest', () => {
       },
     });
     expect(JSON.stringify(pkg)).not.toMatch(/proxy|sqlite|database/iu);
+  });
+
+  it('packs the background policy into the immutable Kit artifact', async () => {
+    const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'agent-guard-hkit-'));
+    const archive = path.join(temporaryDirectory, 'agent-guard.hkit');
+    try {
+      await packKit({ directory: kitRoot, output: archive });
+      const inspected = await inspectKit({ archive });
+
+      expect(inspected.checksums.map((entry) => entry.path)).toContain(
+        'plugins/agent-guard-background/resources/policy-v1.json',
+      );
+    } finally {
+      await rm(temporaryDirectory, { recursive: true, force: true });
+    }
   });
 });
 

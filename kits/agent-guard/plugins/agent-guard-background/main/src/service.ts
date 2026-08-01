@@ -161,7 +161,7 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
 
 export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
   const policyPath = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)), '../../../../resources/policy-v1.json',
+    path.dirname(fileURLToPath(import.meta.url)), '../../resources/policy-v1.json',
   );
   const basePolicy = normalizePolicy(JSON.parse(fs.readFileSync(policyPath, 'utf8')));
   const processMap = new Map<number, ProcessSnapshot>();
