@@ -1,6 +1,9 @@
 {
   "name": "@itharbors/kit-default",
   "version": "0.0.1",
+  "scripts": {
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate ."
+  },
   "ce-editor": {
     "kit": {
       "menuRoot": {

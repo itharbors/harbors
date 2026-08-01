@@ -105,10 +105,6 @@ describe('MySQL kit manifest', () => {
     });
   });
 
-  it('runs the MySQL kit tests from the repository test gate', () => {
-    const rootPackage = readJson(path.join(projectRoot, 'package.json'));
-    expect(rootPackage.scripts.test).toContain('npm run test -w @itharbors/kit-mysql');
-  });
 });
 
 function readJson(file: string): any {

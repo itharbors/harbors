@@ -111,9 +111,11 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Build Kit lifecycle dependencies
+        run: npm run build -w @itharbors/kit-core -w @itharbors/kit-cli
+
       - name: Validate selected Kit
         shell: bash
         run: |
           set -euo pipefail
-          output_directory="$RUNNER_TEMP/kit-${{ matrix.kit }}"
-          npm run kit:check -- "${{ matrix.kit }}" --output-directory "$output_directory"
+          node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"

@@ -103,10 +103,12 @@ test('rejects a non-canonical slug before resolving a path', async () => {
   try {
     await writeKit(root, 'zeta', { kit: baseKit, packageJson: basePackageJson });
 
-    await assert.rejects(
-      loadRepositoryKit({ repositoryRoot: root, slug: '../zeta' }),
-      /canonical Kit slug/u,
-    );
+    for (const slug of ['../zeta', 'zeta-', 'zeta--next']) {
+      await assert.rejects(
+        loadRepositoryKit({ repositoryRoot: root, slug }),
+        /canonical Kit slug/u,
+      );
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

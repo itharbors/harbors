@@ -1,4 +1,4 @@
-import { copyPanelAssets } from './assets.js';
+import { copyPanelAssets, copyPreparedMainAssets } from './assets.js';
 import { cleanDir } from './fs.js';
 import type { PluginProject } from './types.js';
 import { compileMainScript, compilePanelScripts } from './scripts.js';
@@ -18,6 +18,7 @@ export function buildPlugin(plugin: PluginProject): void {
   if (plugin.main) {
     cleanDir(plugin.main.distDir);
     compileMainScript(plugin);
+    copyPreparedMainAssets(plugin);
   }
   for (const panel of plugin.panels) cleanDir(panel.distDir);
   compilePanelScripts(plugin);

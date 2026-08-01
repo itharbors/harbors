@@ -53,11 +53,6 @@ describe('CSV kit manifest', () => {
     });
   });
 
-  it('runs the CSV kit tests from the repository test gate', () => {
-    const rootPackage = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'));
-    expect(rootPackage.scripts.test).toContain('npm run test -w @itharbors/kit-csv');
-  });
-
   it('gives every declared plugin a local package owner', () => {
     const pluginPackages = {
       core: JSON.parse(fs.readFileSync(path.join(kitRoot, 'plugins/csv-core/package.json'), 'utf8')),

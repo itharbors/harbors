@@ -4,7 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/notification-background && node ../../scripts/ce-plugin.mjs build plugins/notification-center && node ../../scripts/prepare-notification-skill-resource.mjs",
+    "build:prepare": "node scripts/prepare-skill-resource.mjs",
+    "build": "node ../../packages/kit-cli/dist/cli.js build .",
     "test": "vitest run --config vitest.config.ts"
   },
   "ce-editor": {
@@ -37,7 +38,7 @@
     "distribution": "market",
     "ci": { "runner": "ubuntu-latest" },
     "docs": { "summary": "桌面通知中心与 Codex notify-user Skill 安装能力" },
-    "resources": [],
+    "resources": ["resources/notify-user"],
     "storage": { "legacyDataDirectories": [] },
     "scripts": {
       "build": "build",

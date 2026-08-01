@@ -3,18 +3,19 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { BUILD_CACHE_ROOT } from './lib/build-cache-contract.mjs';
-import { WORKSPACE_BUILD_OUTPUTS } from './lib/build-tasks.mjs';
+import { discoverWorkspaceBuildOutputs } from './lib/build-tasks.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 
 export function cleanBuildArtifacts(root) {
   const targets = new Set([
     BUILD_CACHE_ROOT,
-    ...WORKSPACE_BUILD_OUTPUTS,
+    ...discoverWorkspaceBuildOutputs(root),
   ]);
 
   collectPluginDistDirs(root, targets, 'plugins');
   collectKitPluginDistDirs(root, targets, 'kits');
+  collectKitWorkspaceDistDirs(root, targets);
   collectTransientFiles(root, targets, root);
 
   for (const relativePath of [...targets].sort()) {
@@ -22,6 +23,33 @@ export function cleanBuildArtifacts(root) {
     if (!fs.existsSync(targetPath)) continue;
     fs.rmSync(targetPath, { recursive: true, force: true });
     console.log(`removed ${relativePath}`);
+  }
+}
+
+function collectKitWorkspaceDistDirs(root, targets) {
+  const kitsRoot = path.join(root, 'kits');
+  if (!fs.existsSync(kitsRoot)) return;
+  for (const kit of fs.readdirSync(kitsRoot, { withFileTypes: true })) {
+    if (!kit.isDirectory() || kit.isSymbolicLink()) continue;
+    const kitDirectory = path.join(kitsRoot, kit.name);
+    const packageJsonPath = path.join(kitDirectory, 'package.json');
+    if (!fs.existsSync(packageJsonPath)) continue;
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    const workspaces = Array.isArray(packageJson.workspaces) ? packageJson.workspaces : [];
+    for (const workspacePattern of workspaces) {
+      if (typeof workspacePattern !== 'string' || !workspacePattern.endsWith('/*')) continue;
+      const workspaceRoot = path.join(kitDirectory, workspacePattern.slice(0, -2));
+      if (!fs.existsSync(workspaceRoot)) continue;
+      for (const workspace of fs.readdirSync(workspaceRoot, { withFileTypes: true })) {
+        if (!workspace.isDirectory() || workspace.isSymbolicLink()) continue;
+        const workspaceDirectory = path.join(workspaceRoot, workspace.name);
+        const manifestPath = path.join(workspaceDirectory, 'package.json');
+        if (!fs.existsSync(manifestPath)) continue;
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        if (typeof manifest.scripts?.build !== 'string') continue;
+        targets.add(path.relative(root, path.join(workspaceDirectory, 'dist')));
+      }
+    }
   }
 }
 
@@ -71,7 +99,7 @@ function collectTransientFiles(root, targets, directory) {
     const relativePath = path.relative(root, entryPath);
 
     if (entry.isDirectory()) {
-      if (entry.name === 'coverage' || entry.name === '.vite' || entry.name === '.vitest') {
+      if (entry.name === 'coverage' || entry.name === '.vite' || entry.name === '.vitest' || entry.name === '.build') {
         targets.add(relativePath);
       } else {
         collectTransientFiles(root, targets, entryPath);

@@ -26,8 +26,23 @@ test('removes build-cache records and existing build outputs', async (t) => {
   await writeFile(cacheRecord, '{}');
   for (const outputRoot of workspaceOutputRoots) {
     await mkdir(join(rootDir, outputRoot), { recursive: true });
+    await writeFile(join(rootDir, outputRoot, '..', 'package.json'), JSON.stringify({
+      name: `@fixture/${outputRoot.split('/')[1]}`,
+      scripts: { build: 'fixture-build' },
+    }));
     await writeFile(join(rootDir, outputRoot, 'output.js'), 'export {};');
   }
+  const kitWorkspace = join(rootDir, 'kits', 'fixture', 'packages', 'contracts');
+  await mkdir(join(kitWorkspace, 'dist'), { recursive: true });
+  await writeFile(join(rootDir, 'kits', 'fixture', 'package.json'), JSON.stringify({
+    name: '@fixture/kit',
+    workspaces: ['packages/*'],
+  }));
+  await writeFile(join(kitWorkspace, 'package.json'), JSON.stringify({
+    name: '@fixture/contracts',
+    scripts: { build: 'fixture-build' },
+  }));
+  await writeFile(join(kitWorkspace, 'dist', 'output.js'), 'export {};');
 
   cleanBuildArtifacts(rootDir);
 
@@ -35,4 +50,5 @@ test('removes build-cache records and existing build outputs', async (t) => {
   for (const outputRoot of workspaceOutputRoots) {
     await assert.rejects(access(join(rootDir, outputRoot)), { code: 'ENOENT' });
   }
+  await assert.rejects(access(join(kitWorkspace, 'dist')), { code: 'ENOENT' });
 });

@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import path from 'node:path';
 
 import { copyDirectoryContents, copyFileIfExists } from './fs.js';
@@ -16,4 +17,11 @@ export function copyPanelAssets(plugin: Pick<PluginProject, 'panels'>): void {
       new Set(['.ts', '.tsx']),
     );
   }
+}
+
+export function copyPreparedMainAssets(plugin: Pick<PluginProject, 'rootDir' | 'main'>): void {
+  if (!plugin.main) return;
+  const preparedAssets = path.join(plugin.rootDir, 'main', '.build');
+  if (!fs.existsSync(preparedAssets)) return;
+  copyDirectoryContents(preparedAssets, plugin.main.distDir);
 }

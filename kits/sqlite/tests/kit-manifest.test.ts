@@ -75,11 +75,4 @@ describe('SQLite kit manifest', () => {
     expect(secondaryEntry).toContain('<title>SQLite 工作台窗口</title>');
   });
 
-  it('runs the SQLite kit tests from the repository test gate', () => {
-    const rootPackage = JSON.parse(
-      fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'),
-    );
-
-    expect(rootPackage.scripts.test).toContain('npm run test -w @itharbors/kit-sqlite');
-  });
 });

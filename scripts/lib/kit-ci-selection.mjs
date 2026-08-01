@@ -1,45 +1,12 @@
 const SHARED_PREFIXES = Object.freeze([
-  'packages/kit-core/',
-  'packages/kit-cli/',
-  'scripts/lib/kit-check.',
-  'scripts/lib/kit-monorepo.',
-  'scripts/lib/kit-publish/',
-  'scripts/lib/kit-registry/',
-  'scripts/lib/plugin-build/',
+  'packages/',
+  'scripts/',
+  '.github/workflows/',
+  'registry/',
 ]);
 
-const SHARED_FILES = new Set([
-  'package.json',
-  'package-lock.json',
-  'tsconfig.json',
-  'registry/policy.json',
-  'registry/revocations.json',
-  'scripts/check-kit.mjs',
-  'scripts/ce-plugin.mjs',
-  'scripts/kit-publish.mjs',
-  'scripts/select-kit-ci.mjs',
-  'scripts/lib/kit-ci-selection.mjs',
-  '.github/workflows/kit-ci.yml',
-  '.github/workflows/publish-kit.yml',
-  '.github/workflows/publish-kit-reusable.yml',
-  '.github/workflows/publish-kit-registry.yml',
-]);
-
-const TARGETED_PREFIXES = Object.freeze([
-  ['packages/agent-guard-contracts/', ['agent-guard']],
-  ['packages/csv-contracts/', ['csv']],
-  ['packages/mysql-contracts/', ['mysql']],
-  ['packages/sqlite-contracts/', ['sqlite']],
-  ['packages/relationship-graph/', ['mysql', 'sqlite']],
-  ['.agents/skills/notify-user/', ['notifications']],
-]);
-
-const TARGETED_FILES = new Map([
-  ['scripts/prepare-notification-skill-resource.mjs', ['notifications']],
-  ['scripts/lib/codex-skill-resource.mjs', ['notifications']],
-]);
-
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
+const SHARED_FILES = new Set(['package.json', 'package-lock.json', 'tsconfig.json']);
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
 const UNSAFE_PATH_CHARACTERS = /[\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:\//u;
 
@@ -60,48 +27,33 @@ function assertCanonicalRepositoryPath(value) {
   return parts;
 }
 
-function assertTrustedSlugs(trustedSlugs) {
-  if (!Array.isArray(trustedSlugs)) {
-    throw new TypeError('trustedSlugs must be an array');
-  }
-  const seen = new Set();
-  for (const slug of trustedSlugs) {
-    if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {
-      throw new Error('trustedSlugs must contain canonical Kit slugs');
+function normalizeDescriptors(descriptors) {
+  if (!Array.isArray(descriptors)) throw new TypeError('descriptors must be an array');
+  const bySlug = new Map();
+  for (const descriptor of descriptors) {
+    if (!descriptor || typeof descriptor !== 'object' || typeof descriptor.slug !== 'string' || !SLUG_PATTERN.test(descriptor.slug)) {
+      throw new Error('descriptors must contain canonical Kit descriptors');
     }
-    if (seen.has(slug)) {
-      throw new Error(`trustedSlugs contains duplicate slug: ${slug}`);
-    }
-    seen.add(slug);
+    if (bySlug.has(descriptor.slug)) throw new Error(`descriptors contains duplicate slug: ${descriptor.slug}`);
+    bySlug.set(descriptor.slug, descriptor);
   }
-  return Object.freeze([...trustedSlugs].sort());
+  return [...bySlug.values()].sort((left, right) => left.slug.localeCompare(right.slug));
 }
 
-export function selectKitSlugs(paths, trustedSlugs) {
+export function selectKitSlugs(paths, descriptors) {
   if (!Array.isArray(paths)) throw new TypeError('paths must be an array');
-  const trusted = assertTrustedSlugs(trustedSlugs);
-  const trustedSet = new Set(trusted);
+  const allDescriptors = normalizeDescriptors(descriptors);
+  const bySlug = new Map(allDescriptors.map((descriptor) => [descriptor.slug, descriptor]));
   const selected = new Set();
   for (const value of paths) {
     const parts = assertCanonicalRepositoryPath(value);
     if (SHARED_FILES.has(value) || SHARED_PREFIXES.some((prefix) => value.startsWith(prefix))) {
-      for (const slug of trusted) selected.add(slug);
-      continue;
-    }
-    const targeted = TARGETED_FILES.get(value)
-      ?? TARGETED_PREFIXES.find(([prefix]) => value.startsWith(prefix))?.[1];
-    if (targeted) {
-      for (const slug of targeted) {
-        if (trustedSet.has(slug)) selected.add(slug);
-      }
+      for (const descriptor of allDescriptors) selected.add(descriptor.slug);
       continue;
     }
     if (parts[0] !== 'kits' || parts.length === 1) continue;
     const slug = parts[1];
-    if (!trustedSet.has(slug)) {
-      if (slug !== 'default') throw new Error(`Unknown Kit directory: ${slug}`);
-      continue;
-    }
+    if (!bySlug.has(slug)) throw new Error(`Unknown Kit directory: ${slug}`);
     selected.add(slug);
   }
   return [...selected].sort();

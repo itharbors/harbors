@@ -3,7 +3,7 @@ import path from 'node:path';
 
 import { parseKitPackageManifest, parseRepositoryKitPackage } from '@itharbors/kit-core';
 
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
 
 function assertCanonicalSlug(slug) {
   if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {

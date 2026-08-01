@@ -4,7 +4,7 @@ import path from 'node:path';
 import { loadRepositoryKit } from './repository-kits.mjs';
 
 const POLICY_FILE = 'registry/policy.json';
-const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]*$/u;
+const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
 
 export async function loadKitPolicy({
   repositoryRoot,

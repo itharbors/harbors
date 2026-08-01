@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 
 import {
   prepareCodexSkillResource,
@@ -14,6 +16,7 @@ import { createBuildPlan } from './build-tasks.mjs';
 
 const scriptsDir = fileURLToPath(new URL('..', import.meta.url));
 const electronSource = fs.readFileSync(path.join(scriptsDir, 'electron.mjs'), 'utf8');
+const execFileAsync = promisify(execFile);
 
 test('resolves the repository Skill in development and application resources when packaged', () => {
   assert.equal(resolveCodexSkillSource({
@@ -64,12 +67,37 @@ test('copies the canonical Skill into the packaged plugin resources', async (t) 
   assert.equal(await readFile(path.join(destinationDir, 'scripts', 'notify.mjs'), 'utf8'), '// bundled\n');
 });
 
-test('places the notification Skill resource after its owning plugin build', () => {
-  const tasks = createBuildPlan(path.join(scriptsDir, '..'), 'plugins').tasks;
-  const plugin = 'plugin:kits/notifications/plugins/notification-background';
-  const resourceIndex = tasks.findIndex((task) => task.name === 'resource:notify-user');
-  const pluginIndex = tasks.findIndex((task) => task.name === plugin);
+test('lets the owning Kit lifecycle produce the notification Skill resource', async () => {
+  const tasks = (await createBuildPlan(path.join(scriptsDir, '..'), 'plugins')).tasks;
+  const resource = 'kits/notifications/plugins/notification-background/main/dist/resources/notify-user';
+  const owner = tasks.find((task) => task.outputs.some((output) => resource.startsWith(`${output}/`)));
 
-  assert.ok(resourceIndex > pluginIndex);
-  assert.deepEqual(tasks[resourceIndex].dependencies, [plugin]);
+  assert.equal(owner?.kind, 'kit');
+  assert.deepEqual(owner.command, {
+    file: 'node',
+    args: ['packages/kit-cli/dist/cli.js', 'build', owner.kitDir],
+  });
+  assert.equal(tasks.some((task) => task.kind === 'resource'), false);
+  assert.ok(owner.inputs.includes('kits/notifications/scripts/prepare-skill-resource.mjs'));
+  assert.ok(owner.inputs.includes('kits/notifications/resources/notify-user/SKILL.md'));
+  assert.equal(owner.inputs.some((input) => input.startsWith('.agents/')), false);
+});
+
+test('produces the notification Skill resource from a clean direct workspace build', async () => {
+  const repositoryRoot = path.join(scriptsDir, '..');
+  const resource = path.join(
+    repositoryRoot,
+    'kits/notifications/plugins/notification-background/main/dist/resources/notify-user',
+  );
+  await rm(resource, { recursive: true, force: true });
+
+  await execFileAsync('npm', ['run', 'build', '-w', '@itharbors/kit-notifications'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+  });
+
+  assert.equal(
+    await readFile(path.join(resource, 'SKILL.md'), 'utf8'),
+    await readFile(path.join(repositoryRoot, 'kits/notifications/resources/notify-user/SKILL.md'), 'utf8'),
+  );
 });

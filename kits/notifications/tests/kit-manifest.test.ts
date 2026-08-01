@@ -64,12 +64,6 @@ describe('Notification Kit manifest', () => {
     expect(secondaryEntry).toContain('<title>Notification Window</title>');
   });
 
-  it('runs Notification Kit tests from the repository test gate', () => {
-    const rootPackage = readJson(path.join(projectRoot, 'package.json'));
-    expect(rootPackage.scripts.test).toContain(
-      'npm run test -w @itharbors/kit-notifications',
-    );
-  });
 });
 
 function readJson(file: string) {

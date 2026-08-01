@@ -145,35 +145,44 @@ test('Kit CI exposes safe selector outputs and skips the matrix when no Kit appl
   assert.match(checkKit, /include:\s*\$\{\{ fromJSON\(needs\.select\.outputs\.matrix-json\)\.include \}\}/u);
 });
 
-test('Kit CI runs each policy-owned matrix entry after installing dependencies and never publishes', async () => {
+test('Kit CI runs each descriptor-owned matrix entry after installing lifecycle dependencies and never publishes', async () => {
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const checkKit = workflowJob(workflow, 'check-kit');
   const installIndex = checkKit.indexOf('run: npm ci');
-  const checkIndex = checkKit.indexOf('npm run kit:check');
+  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli');
+  const checkIndex = checkKit.indexOf('node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"');
 
   assert.match(checkKit, /needs:\s*select/u);
   assert.match(checkKit, /runs-on:\s*\$\{\{ matrix\.runner \}\}/u);
   assert.match(checkKit, /fail-fast:\s*false/u);
   assert.notEqual(installIndex, -1);
   assert.notEqual(checkIndex, -1);
-  assert.ok(installIndex < checkIndex);
-  assert.match(checkKit, /output_directory="\$RUNNER_TEMP\/kit-\$\{\{ matrix\.kit \}\}"/u);
-  assert.match(checkKit, /npm run kit:check -- "\$\{\{ matrix\.kit \}\}" --output-directory "\$output_directory"/u);
+  assert.notEqual(lifecycleBuildIndex, -1);
+  assert.ok(installIndex < lifecycleBuildIndex && lifecycleBuildIndex < checkIndex);
+  assert.doesNotMatch(checkKit, /output_directory|kit:check/u);
+  assert.match(checkKit, /node scripts\/run-kit-matrix\.mjs check "\$\{\{ matrix\.kit \}\}"/u);
   assert.doesNotMatch(workflow, /publish-kit|kit-publish|gh release|actions\/attest/u);
 });
 
-test('root test registers the focused Kit CI selector suite', async () => {
+test('root test delegates Kit work to descriptor-driven lifecycle scripts', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
   assert.equal(
     packageJson.scripts['test:kit-ci-selection'],
     'node --test scripts/lib/kit-ci-selection.test.mjs',
   );
-  assert.match(packageJson.scripts.test, /npm run test:kit-ci-selection/u);
+  assert.equal(packageJson.scripts['kits:build'], 'node scripts/run-kit-matrix.mjs build');
+  assert.equal(packageJson.scripts['kits:test'], 'node scripts/run-kit-matrix.mjs test');
+  assert.equal(packageJson.scripts['kits:check'], 'node scripts/run-kit-matrix.mjs check');
+  assert.equal(packageJson.scripts.test, 'npm run test:framework && npm run kits:test && npm run test:workflows');
+  assert.match(packageJson.scripts['test:workflows'], /npm run test:kit-ci-selection/u);
+  const scriptText = JSON.stringify(packageJson.scripts);
+  assert.doesNotMatch(scriptText, /@itharbors\/kit-(?:agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u);
+  assert.equal(Object.hasOwn(packageJson.scripts, 'test:agent-guard'), false);
 });
 
 test('root test registers live Kit deactivation coverage', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
-  assert.match(packageJson.scripts.test, /scripts\/lib\/kit-live-deactivation\.test\.mjs/u);
+  assert.match(packageJson.scripts['test:framework'], /scripts\/lib\/kit-live-deactivation\.test\.mjs/u);
 });
 
 function workflowJob(workflow, name) {
