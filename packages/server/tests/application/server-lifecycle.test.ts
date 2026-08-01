@@ -136,6 +136,23 @@ describe('application server lifecycle', () => {
     ]);
   });
 
+  it('closes the Session runtime creation gate synchronously when stop begins', async () => {
+    const server = createServer({
+      assembly: testAssembly,
+      applicationRuntime: new ApplicationRuntime({ plugins: [], hostMode: 'web' }),
+    });
+    await server.start(0);
+
+    const stopping = server.stop();
+    const lateRuntime = server.registry.getOrCreate('late-after-stop', {});
+
+    await expect(lateRuntime).rejects.toMatchObject({
+      code: 'SESSION_RUNTIME_REGISTRY_CLOSED',
+    });
+    await expect(stopping).resolves.toBeUndefined();
+    expect(server.registry.editors.size).toBe(0);
+  });
+
   it('allows degraded application startup to listen', async () => {
     const server = createServer({
       assembly: testAssembly,

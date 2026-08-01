@@ -99,6 +99,14 @@ export class CredentialVault {
   }
 
   capability(): CredentialCapabilitySnapshot {
+    if (this.lifecycle !== 'open') {
+      return {
+        mode: this.mode,
+        status: 'unavailable',
+        reason: this.unavailableReason
+          ?? (this.mode === 'off' ? 'CREDENTIALS_DISABLED' : 'CREDENTIALS_UNAVAILABLE'),
+      };
+    }
     if (this.unavailableReason) {
       return { mode: this.mode, status: 'unavailable', reason: this.unavailableReason };
     }

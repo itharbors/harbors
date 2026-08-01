@@ -324,19 +324,27 @@ function unavailableCredentialStatus(mode: CredentialMode): CredentialCapability
 
 function sanitizeCredentialStatus(
   value: CredentialCapabilitySnapshot,
-  fallbackMode: CredentialMode,
+  configuredMode: CredentialMode,
 ): CredentialCapabilitySnapshot {
-  if (!value || !['off', 'local', 'multi-user'].includes(value.mode)) {
-    return unavailableCredentialStatus(fallbackMode);
+  if (!value || value.mode !== configuredMode) {
+    return unavailableCredentialStatus(configuredMode);
   }
-  if (value.status === 'available') {
-    return { mode: value.mode, status: 'available' };
+  if (configuredMode === 'local' && value.status === 'available') {
+    return { mode: configuredMode, status: 'available' };
   }
-  if (
-    value.status === 'unavailable'
-    && ['CREDENTIALS_DISABLED', 'CREDENTIALS_UNAVAILABLE', 'CREDENTIALS_LOCKED'].includes(value.reason)
-  ) {
-    return { mode: value.mode, status: 'unavailable', reason: value.reason };
+  if (value.status === 'unavailable') {
+    if (configuredMode === 'off' && value.reason === 'CREDENTIALS_DISABLED') {
+      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
+    }
+    if (
+      configuredMode === 'local'
+      && ['CREDENTIALS_UNAVAILABLE', 'CREDENTIALS_LOCKED'].includes(value.reason)
+    ) {
+      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
+    }
+    if (configuredMode === 'multi-user' && value.reason === 'CREDENTIALS_UNAVAILABLE') {
+      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
+    }
   }
-  return unavailableCredentialStatus(fallbackMode);
+  return unavailableCredentialStatus(configuredMode);
 }

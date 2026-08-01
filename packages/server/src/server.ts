@@ -188,11 +188,12 @@ export function createServer(options: ServerOptions = {}) {
   const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopping = true;
-    stopPromise = stopInternal();
+    const disposeSessionsPromise = registry.disposeAll();
+    stopPromise = stopInternal(disposeSessionsPromise);
     return stopPromise;
   };
 
-  const stopInternal = async (): Promise<void> => {
+  const stopInternal = async (disposeSessionsPromise: Promise<void>): Promise<void> => {
     const errors: unknown[] = [];
     if (startPromise) {
       try {
@@ -210,7 +211,7 @@ export function createServer(options: ServerOptions = {}) {
         })
       : Promise.resolve();
     try {
-      await registry.disposeAll();
+      await disposeSessionsPromise;
     } catch (error) {
       errors.push(error);
     }

@@ -76,11 +76,22 @@ function applicationRuntimeHost(): ApplicationPluginRuntimeHost {
   };
 }
 
+function credentialFacadeDouble() {
+  return {
+    available: vi.fn(async () => true),
+    list: vi.fn(async () => []),
+    get: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  };
+}
+
 describe('PluginModule', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete (globalThis as typeof globalThis & { editor?: unknown }).editor;
     delete (globalThis as typeof globalThis & { __retainedCredentials?: unknown }).__retainedCredentials;
+    delete (globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials;
   });
 
   it('keeps registration state instance-scoped', async () => {
@@ -208,6 +219,88 @@ describe('PluginModule', () => {
     expect(credentials.list).toHaveBeenCalledOnce();
     await expect(retained.available()).resolves.toBe(false);
     await expect(retained.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+  });
+
+  it('keeps credentials out of the shared import global observed by an incapable Session plugin', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-session-interceptor-'));
+    const interceptorDir = mkPlugin(root, 'interceptor', 'interceptor', `
+      editor.plugin.define({
+        lifecycle: {
+          load() {
+            let current;
+            Object.defineProperty(globalThis, 'editor', {
+              configurable: true,
+              get() { return current; },
+              set(value) {
+                current = value;
+                if (value?.credentials) globalThis.__interceptedCredentials = value.credentials;
+              },
+            });
+          },
+        },
+        methods: {},
+      });
+    `);
+    const ownerDir = mkPlugin(root, 'owner', 'owner', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: { hasCredentials() { return credentials !== undefined; } },
+      });
+    `, ['credentials']);
+    const plugin = new PluginModule();
+    const host = withRuntimeMenu(createEditor('session-interceptor-editor', { assembly }));
+    const credentials = credentialFacadeDouble();
+
+    await plugin.register(interceptorDir, { kind: 'external' });
+    await plugin.register(ownerDir, { kind: 'external' });
+    await plugin.load(interceptorDir, { scope: 'session', host });
+    await plugin.load(ownerDir, { scope: 'session', host, credentials });
+
+    expect(plugin.callPlugin('owner', 'hasCredentials')).toBe(true);
+    expect((globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials)
+      .toBeUndefined();
+  });
+
+  it('keeps Session credentials out of the shared import global observed by an Application plugin', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-application-interceptor-'));
+    const interceptorDir = mkPlugin(root, 'interceptor', 'application-interceptor', `
+      editor.plugin.define({
+        lifecycle: {
+          load() {
+            let current;
+            Object.defineProperty(globalThis, 'editor', {
+              configurable: true,
+              get() { return current; },
+              set(value) {
+                current = value;
+                if (value?.credentials) globalThis.__interceptedCredentials = value.credentials;
+              },
+            });
+          },
+        },
+        methods: {},
+      });
+    `, ['credentials']);
+    const ownerDir = mkPlugin(root, 'owner', 'owner', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: { hasCredentials() { return credentials !== undefined; } },
+      });
+    `, ['credentials']);
+    const applicationPlugin = new PluginModule();
+    const sessionPlugin = new PluginModule();
+    const host = withRuntimeMenu(createEditor('application-interceptor-editor', { assembly }));
+
+    await applicationPlugin.register(interceptorDir, { kind: 'external' });
+    await applicationPlugin.load(interceptorDir, { scope: 'application', host: applicationRuntimeHost() });
+    await sessionPlugin.register(ownerDir, { kind: 'external' });
+    await sessionPlugin.load(ownerDir, { scope: 'session', host, credentials: credentialFacadeDouble() });
+
+    expect(sessionPlugin.callPlugin('owner', 'hasCredentials')).toBe(true);
+    expect((globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials)
+      .toBeUndefined();
   });
 
   it('lets session plugin main entries request application plugin methods', async () => {

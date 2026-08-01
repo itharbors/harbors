@@ -233,4 +233,54 @@ describe('ApplicationRuntime', () => {
     expect(JSON.stringify(bootstrap)).not.toContain('private-account');
     await runtime.dispose();
   });
+
+  it.each([
+    [
+      'a mismatched off mode',
+      'local',
+      { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
+      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+    ],
+    [
+      'a mismatched multi-user mode',
+      'local',
+      { mode: 'multi-user', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+    ],
+    [
+      'off mode reported available',
+      'off',
+      { mode: 'off', status: 'available' },
+      { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
+    ],
+    [
+      'multi-user mode reported available',
+      'multi-user',
+      { mode: 'multi-user', status: 'available' },
+      { mode: 'multi-user', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+    ],
+    [
+      'local mode with a disabled reason',
+      'local',
+      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
+      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+    ],
+  ] as const)('normalizes %s against immutable configured mode', async (
+    _label,
+    credentialMode,
+    loaded,
+    expected,
+  ) => {
+    const runtime = new ApplicationRuntime({
+      plugins: [],
+      hostMode: 'desktop',
+      credentialMode,
+      credentialStatusLoader: async () => loaded as never,
+    });
+
+    const bootstrap = await runtime.start();
+
+    expect(bootstrap.credentials).toEqual(expected);
+    await runtime.dispose();
+  });
 });

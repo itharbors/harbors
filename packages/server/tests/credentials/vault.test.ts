@@ -82,6 +82,19 @@ describe('CredentialVault', () => {
     fs.rmSync(directory, { recursive: true, force: true });
   });
 
+  it('reports a stable unavailable capability after close begins', async () => {
+    const bound = vault.bind(kitId, pluginName);
+
+    vault.close();
+
+    expect(vault.capability()).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
+    await expect(bound.available()).resolves.toBe(false);
+  });
+
   it('creates, reads, updates, and deletes a profile without persisting its secret', async () => {
     const bound = vault.bind(kitId, pluginName);
 

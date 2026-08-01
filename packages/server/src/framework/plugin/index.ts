@@ -190,18 +190,24 @@ export class PluginModule {
       && runtimeOptions.credentials
       ? createRevocableCredentialVault(runtimeOptions.credentials)
       : undefined;
-    const runtimeEditor = runtimeOptions?.scope === 'application'
+    const definitionRuntime = runtimeOptions?.scope === 'application'
       ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
       : runtimeOptions?.scope === 'session'
         ? createPluginRuntime(
             runtimeOptions.host,
             registeredPlugin.name,
-            credentialLease?.facade,
           )
         : undefined;
+    const lifecycleRuntime = runtimeOptions?.scope === 'session'
+      ? createPluginRuntime(
+          runtimeOptions.host,
+          registeredPlugin.name,
+          credentialLease?.facade,
+        )
+      : definitionRuntime;
 
-    if (runtimeEditor) {
-      runtimeEditor.plugin.define = (nextDefinition) => {
+    if (definitionRuntime) {
+      definitionRuntime.plugin.define = (nextDefinition) => {
         if (definition) {
           throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
         }
@@ -215,8 +221,8 @@ export class PluginModule {
           editor?: PluginRuntime | ApplicationPluginRuntime;
         };
         const previousEditor = globalScope.editor;
-        if (runtimeEditor) {
-          globalScope.editor = runtimeEditor;
+        if (definitionRuntime) {
+          globalScope.editor = definitionRuntime;
         }
 
         try {
@@ -252,7 +258,7 @@ export class PluginModule {
 
     try {
       if (definition.lifecycle?.load) {
-        await definition.lifecycle.load(runtimeEditor as PluginRuntime | ApplicationPluginRuntime);
+        await definition.lifecycle.load(lifecycleRuntime as PluginRuntime | ApplicationPluginRuntime);
       }
 
       for (const otherPlugin of this.nameMap.values()) {
