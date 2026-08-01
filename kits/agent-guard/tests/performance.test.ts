@@ -30,7 +30,7 @@ describe('Agent Guard bounded synthetic pipeline', () => {
     const dns = new DnsHistory();
     dns.update('relay.example.test', ['203.0.113.8'], now, 60 * 60_000);
     const policy = normalizePolicy(JSON.parse(fs.readFileSync(
-      path.resolve(__dirname, '../resources/policy-v1.json'), 'utf8',
+      path.resolve(__dirname, '../plugins/agent-guard-background/resources/policy-v1.json'), 'utf8',
     )));
     const engine = new PolicyEngine(policy);
     const configuration = {

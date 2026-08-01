@@ -53,7 +53,10 @@ test('loads every directory-local manifest with matching runtime identity', asyn
     assert.equal(kit.manifest.id, kit.id);
     assert.equal(kit.manifest.version, kit.packageJson.version);
     assert.equal(kit.packageJson.name, kit.id);
-    assert.equal(kit.manifest.version, '0.1.0-preview.1');
+    assert.equal(
+      kit.manifest.version,
+      slug === 'agent-guard' ? '0.1.0-preview.2' : '0.1.0-preview.1',
+    );
     assert.equal(kit.manifest.channel, 'preview');
     assert.equal(typeof kit.packageJson.scripts?.build, 'string');
     assert.notEqual(kit.packageJson.scripts.build.trim(), '');

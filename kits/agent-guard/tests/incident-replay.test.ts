@@ -6,7 +6,7 @@ import { normalizePolicy } from '@itharbors/agent-guard-contracts';
 import { PolicyEngine, type PolicySample } from '../plugins/agent-guard-background/main/src/policy.js';
 
 const policy = normalizePolicy(JSON.parse(fs.readFileSync(
-  path.resolve(__dirname, '../resources/policy-v1.json'), 'utf8',
+  path.resolve(__dirname, '../plugins/agent-guard-background/resources/policy-v1.json'), 'utf8',
 )));
 
 describe('incident replay', () => {

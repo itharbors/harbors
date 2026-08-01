@@ -7,6 +7,9 @@
   },
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "assets": {
+      "public": ["resources"]
+    },
     "contribute": {
       "message": {
         "request": {
