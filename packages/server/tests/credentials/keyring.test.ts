@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  CREDENTIAL_HEALTH_ACCOUNT,
   createNativeKeyringAdapter,
+  probeKeyringAdapter,
   type KeyringModule,
 } from '../../src/credentials/keyring';
 import { CREDENTIAL_SERVICE } from '../../src/credentials/scope';
@@ -32,6 +34,26 @@ function moduleWithEntry(entry: {
 }
 
 describe('native keyring adapter', () => {
+  it('probes the fixed service with a read-only reserved non-profile account', async () => {
+    const nativeEntry = {
+      getPassword: vi.fn(() => null),
+      setPassword: vi.fn((_secret: string) => undefined),
+      deletePassword: vi.fn(() => false),
+    };
+    const { module, constructions } = moduleWithEntry(nativeEntry);
+    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
+
+    await probeKeyringAdapter(adapter);
+
+    expect(constructions).toEqual([[CREDENTIAL_SERVICE, CREDENTIAL_HEALTH_ACCOUNT]]);
+    expect(CREDENTIAL_HEALTH_ACCOUNT).not.toMatch(
+      /^[a-f0-9]{64}:[0-9a-f-]{36}:[0-9a-f-]{36}$/iu,
+    );
+    expect(nativeEntry.getPassword).toHaveBeenCalledOnce();
+    expect(nativeEntry.setPassword).not.toHaveBeenCalled();
+    expect(nativeEntry.deletePassword).not.toHaveBeenCalled();
+  });
+
   it('wraps each opaque account with the fixed Harbors service', async () => {
     const nativeEntry = {
       getPassword: vi.fn(() => 'stored-value'),
@@ -148,6 +170,25 @@ describe('native keyring adapter', () => {
       code: 'CREDENTIAL_OPERATION_FAILED',
       message: '凭据操作失败',
     });
+  });
+
+  it('does not infer a locked or unavailable reason from uncontrolled native message text', async () => {
+    const { module } = moduleWithEntry({
+      getPassword() {
+        throw new Error('keyring locked and secret service unavailable at /private/native/path');
+      },
+      setPassword: () => undefined,
+      deletePassword: () => false,
+    });
+    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
+
+    const error = await adapter.get('opaque-account').catch((reason: unknown) => reason);
+
+    expect(error).toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+    expect(String(error)).not.toContain('/private/native/path');
   });
 
   it('treats a missing native entry as an absent secret and idempotent deletion', async () => {

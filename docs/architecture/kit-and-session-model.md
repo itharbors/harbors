@@ -53,6 +53,11 @@ cleanup ledger 恢复进程中断的创建、更新和删除，应用停止时�
 OS 后端缺失、锁定、丢失条目或拒绝访问时能力变为 unavailable/locked；保存连接失败关闭，手工
 连接路径仍保持可用，且不会用明文文件、shell helper 或固定密钥替代。
 
+Vault 的 backend health probe 只读取固定保留的非 profile account，不写入 health secret。probe/import
+失败不会永久丢弃 adapter 或 loader；Panel 可显式“重新检测”，在 OS 凭据库解锁或服务恢复后于同一
+进程恢复 capability 与非秘密 profile 列表。并发 probe 共享结果，关闭开始后不会再次 probe/reopen；
+重新检测不读取 profile secret，也不触发自动连接。
+
 连接资料不会自动连接、导出或恢复密码到 Panel。更新由 mysql-core 先探测完整新密码，再写入新
 版本并原子发布新的连接身份；删除活动 profile 先断开。OS 条目丢失时用户只能回到手工连接，删除
 失效 profile 后重新保存，不能从 SQLite 或 UI 恢复密码。

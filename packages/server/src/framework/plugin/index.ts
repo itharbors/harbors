@@ -475,6 +475,13 @@ function createRevocableCredentialVault(credentials: PluginCredentialVault): {
   );
   return {
     facade: {
+      capability: async () => active
+        ? credentials.capability()
+        : {
+            mode: 'local',
+            status: 'unavailable',
+            reason: 'CREDENTIALS_UNAVAILABLE',
+          },
       available: async () => active && credentials.available(),
       list: () => run(() => credentials.list()),
       get: (id) => run(() => credentials.get(id)),

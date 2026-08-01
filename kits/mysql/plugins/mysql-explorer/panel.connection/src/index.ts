@@ -37,6 +37,7 @@ type ConnectionActivity =
   | 'save'
   | 'update-password'
   | 'delete-profile'
+  | 'retry-credentials'
   | 'disconnect'
   | 'refresh'
   | null;
@@ -81,6 +82,8 @@ const DISCONNECTED: ConnectionSnapshot = {
 };
 
 const CREDENTIALS_UNAVAILABLE: MysqlCredentialCapability = {
+  mode: 'local',
+  status: 'unavailable',
   available: false,
   reason: 'CREDENTIALS_UNAVAILABLE',
 };
@@ -452,6 +455,18 @@ async function refreshObjects(): Promise<void> {
   });
 }
 
+async function retryCredentials(): Promise<void> {
+  await runAction('retry-credentials', async (token) => {
+    const profileError = await refreshCredentialState(token.mountGeneration);
+    if (!isActionResultCurrent(token)) return;
+    if (profileError) throw new Error(profileError.message);
+    if (saved.capability?.available) {
+      feedbackGeneration += 1;
+      notice = '本机凭据库已恢复。';
+    }
+  });
+}
+
 async function runAction(
   kind: Exclude<ConnectionActivity, 'hydrate' | null>,
   action: (token: ActionToken) => Promise<void>,
@@ -476,6 +491,11 @@ async function runAction(
     await action(token);
   } catch (caught) {
     if (isActionResultCurrent(token)) {
+      if (kind !== 'retry-credentials' && isCredentialCapabilityError(caught)) {
+        await refreshCredentialState(token.mountGeneration);
+      }
+    }
+    if (isActionResultCurrent(token)) {
       feedbackGeneration += 1;
       error = panelError(caught);
     }
@@ -485,6 +505,62 @@ async function runAction(
     activity = null;
     render();
   }
+}
+
+async function refreshCredentialState(expectedMountGeneration: number): Promise<PanelError | null> {
+  let capability: MysqlCredentialCapability;
+  try {
+    capability = sanitizeCapability(await requestCore<unknown>('getCredentialCapability'));
+  } catch {
+    capability = CREDENTIALS_UNAVAILABLE;
+  }
+  if (!isCredentialRefreshCurrent(expectedMountGeneration)) return null;
+
+  let profiles: MysqlConnectionProfile[] = [];
+  let profileError: PanelError | null = null;
+  if (capability.available) {
+    const profileListToken = beginProfileList();
+    try {
+      const sanitized = sanitizeProfiles(await requestCore<unknown>('listConnectionProfiles'));
+      profiles = sanitized.profiles;
+      if (sanitized.droppedInvalid) {
+        profileError = { message: '部分保存的连接资料无效，已忽略。' };
+      }
+    } catch (caught) {
+      profileError = panelError(caught);
+    }
+    if (!isCredentialRefreshCurrent(expectedMountGeneration)
+      || !isCurrentProfileList(profileListToken)) return null;
+  } else {
+    profileListGeneration += 1;
+  }
+
+  const preferredProfileId = saved.selectedProfileId ?? connection.profileId;
+  saved = {
+    capability,
+    profiles,
+    selectedProfileId: selectAvailableProfile(preferredProfileId, profiles),
+  };
+  if (!capability.available) {
+    mode = 'manual';
+    passwordUpdateVisible = false;
+    replacementPassword = '';
+  }
+  render();
+  return profileError;
+}
+
+function isCredentialRefreshCurrent(expectedMountGeneration: number): boolean {
+  return expectedMountGeneration === mountGeneration
+    && context !== undefined
+    && root?.isConnected === true;
+}
+
+function isCredentialCapabilityError(caught: unknown): boolean {
+  if (!isRecord(caught)) return false;
+  return caught.code === 'CREDENTIALS_DISABLED'
+    || caught.code === 'CREDENTIALS_UNAVAILABLE'
+    || caught.code === 'CREDENTIALS_LOCKED';
 }
 
 function isProfileActivity(kind: ConnectionActivity): boolean {
@@ -770,6 +846,7 @@ function bindEvents(): void {
   root?.querySelector('[data-action="delete-profile"]')?.addEventListener('click', () => void deleteProfile());
   root?.querySelector('[data-action="disconnect"]')?.addEventListener('click', () => void disconnect());
   root?.querySelector('[data-action="refresh"]')?.addEventListener('click', () => void refreshObjects());
+  root?.querySelector('[data-action="retry-credentials"]')?.addEventListener('click', () => void retryCredentials());
   root?.querySelector<HTMLFormElement>('[data-connection-form]')?.addEventListener('submit', (event) => {
     event.preventDefault();
     if (!connection.connected && activity === null) void connect();
@@ -881,7 +958,10 @@ function renderCredentialStatus(): string {
     : capability.reason === 'CREDENTIALS_LOCKED'
       ? '请先解锁本机凭据库；仍可使用手工连接。'
       : '本机凭据库当前不可用；仍可使用手工连接。';
-  return `<span class="credential-status">${message}</span>`;
+  const retry = capability.mode === 'local' && capability.reason !== 'CREDENTIALS_DISABLED'
+    ? `<button class="credential-retry" data-action="retry-credentials" type="button"${activity !== null ? ' disabled' : ''}>${activity === 'retry-credentials' ? `${spinner()}重新检测中…` : '重新检测'}</button>`
+    : '';
+  return `<span class="credential-status">${message}</span>${retry}`;
 }
 
 function field(
@@ -945,11 +1025,14 @@ function selectReconciledProfile(
 
 function sanitizeCapability(value: unknown): MysqlCredentialCapability {
   if (!isRecord(value) || typeof value.available !== 'boolean') return CREDENTIALS_UNAVAILABLE;
-  if (value.available) return { available: true };
+  const mode = value.mode === 'off' || value.mode === 'local' || value.mode === 'multi-user'
+    ? value.mode
+    : value.available || value.reason !== 'CREDENTIALS_DISABLED' ? 'local' : 'off';
+  if (value.available) return { mode, status: 'available', available: true };
   return value.reason === 'CREDENTIALS_DISABLED'
     || value.reason === 'CREDENTIALS_UNAVAILABLE'
     || value.reason === 'CREDENTIALS_LOCKED'
-    ? { available: false, reason: value.reason }
+    ? { mode, status: 'unavailable', available: false, reason: value.reason }
     : CREDENTIALS_UNAVAILABLE;
 }
 

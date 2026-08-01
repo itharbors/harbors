@@ -13,6 +13,7 @@ import {
 } from './errors';
 import {
   createNativeKeyringAdapter,
+  probeKeyringAdapter,
   type KeyringAdapter,
   type KeyringModuleLoader,
 } from './keyring';
@@ -28,6 +29,7 @@ export interface CredentialVaultOptions {
   mode: CredentialMode;
   store?: CredentialStore;
   keyring?: KeyringAdapter;
+  keyringFactory?: () => Promise<KeyringAdapter>;
   unavailableReason?: UnavailableReason;
   randomUuid?: () => string;
 }
@@ -66,9 +68,11 @@ function assertProfileId(id: string): void {
 export class CredentialVault {
   private readonly mode: CredentialMode;
   private readonly store?: CredentialStore;
-  private readonly keyring?: KeyringAdapter;
+  private keyring?: KeyringAdapter;
+  private readonly keyringFactory?: () => Promise<KeyringAdapter>;
   private readonly randomUuid: () => string;
   private unavailableReason?: UnavailableReason;
+  private probePromise?: Promise<CredentialCapabilitySnapshot>;
   private readonly locks = new Map<string, Promise<void>>();
   private lifecycle: 'open' | 'closing' | 'closed' = 'open';
   private activeOperations = 0;
@@ -77,6 +81,7 @@ export class CredentialVault {
     this.mode = options.mode;
     this.store = options.store;
     this.keyring = options.keyring;
+    this.keyringFactory = options.keyringFactory;
     this.randomUuid = options.randomUuid ?? randomUUID;
     this.unavailableReason =
       options.unavailableReason ??
@@ -90,11 +95,24 @@ export class CredentialVault {
   bind(kitId: string, pluginName: string): PluginCredentialVault {
     const scope = credentialScopeDigest(kitId, pluginName);
     return {
-      available: async () => this.capability().status === 'available',
-      list: async () => this.runOperation(() => this.list(scope)),
-      get: async (id) => this.runOperation(() => this.get(scope, id)),
-      put: async (input) => this.runOperation(() => this.put(scope, input)),
-      delete: async (id) => this.runOperation(() => this.delete(scope, id)),
+      capability: () => this.refreshCapability(),
+      available: async () => (await this.refreshCapability()).status === 'available',
+      list: async () => this.runOperation(async () => {
+        await this.ensureBackendAvailable();
+        return this.list(scope);
+      }),
+      get: async (id) => this.runOperation(async () => {
+        await this.ensureBackendAvailable();
+        return this.get(scope, id);
+      }),
+      put: async (input) => this.runOperation(async () => {
+        await this.ensureBackendAvailable();
+        return this.put(scope, input);
+      }),
+      delete: async (id) => this.runOperation(async () => {
+        await this.ensureBackendAvailable();
+        return this.delete(scope, id);
+      }),
     };
   }
 
@@ -113,8 +131,17 @@ export class CredentialVault {
     return { mode: this.mode, status: 'available' };
   }
 
+  async refreshCapability(): Promise<CredentialCapabilitySnapshot> {
+    if (this.lifecycle !== 'open') return this.capability();
+    return this.runOperation(() => this.probeBackend());
+  }
+
   async recover(): Promise<void> {
     return this.runOperation(async () => {
+      if (this.unavailableReason) {
+        const capability = await this.probeBackend();
+        if (capability.status !== 'available') return;
+      }
       const backend = this.backendOrUndefined();
       if (!backend) return;
 
@@ -472,6 +499,64 @@ export class CredentialVault {
     }
   }
 
+  private async ensureBackendAvailable(): Promise<void> {
+    if (this.unavailableReason) await this.probeBackend();
+    if (this.lifecycle !== 'open') throw credentialError('CREDENTIAL_OPERATION_FAILED');
+    if (this.unavailableReason) throw credentialError(this.unavailableReason);
+    if (!this.store || !this.keyring) throw credentialError('CREDENTIALS_UNAVAILABLE');
+  }
+
+  private probeBackend(): Promise<CredentialCapabilitySnapshot> {
+    if (this.lifecycle !== 'open') return Promise.resolve(this.capability());
+    if (this.probePromise) return this.probePromise;
+    const probe = this.performBackendProbe();
+    this.probePromise = probe;
+    void probe.finally(() => {
+      if (this.probePromise === probe) this.probePromise = undefined;
+    });
+    return probe;
+  }
+
+  private async performBackendProbe(): Promise<CredentialCapabilitySnapshot> {
+    if (this.mode === 'off') {
+      this.unavailableReason = 'CREDENTIALS_DISABLED';
+      return this.capability();
+    }
+    if (this.mode !== 'local' || !this.store) {
+      this.unavailableReason = 'CREDENTIALS_UNAVAILABLE';
+      return this.capability();
+    }
+
+    let adapter = this.keyring;
+    if (!adapter && this.keyringFactory) {
+      try {
+        const loaded = await this.keyringFactory();
+        if (this.lifecycle !== 'open') return this.capability();
+        this.keyring = loaded;
+        adapter = loaded;
+      } catch {
+        if (this.lifecycle === 'open') this.unavailableReason = 'CREDENTIALS_UNAVAILABLE';
+        return this.capability();
+      }
+    }
+    if (!adapter) {
+      this.unavailableReason = 'CREDENTIALS_UNAVAILABLE';
+      return this.capability();
+    }
+
+    try {
+      await probeKeyringAdapter(adapter);
+      if (this.lifecycle === 'open') this.unavailableReason = undefined;
+    } catch (error) {
+      if (this.lifecycle === 'open') {
+        this.unavailableReason = isCredentialError(error) && error.code === 'CREDENTIALS_LOCKED'
+          ? 'CREDENTIALS_LOCKED'
+          : 'CREDENTIALS_UNAVAILABLE';
+      }
+    }
+    return this.capability();
+  }
+
   private nextSecretVersion(currentVersion: string): string {
     for (let attempt = 0; attempt < MAX_SECRET_VERSION_ATTEMPTS; attempt += 1) {
       const candidate = this.randomUuid();
@@ -483,7 +568,6 @@ export class CredentialVault {
 
   private requireBackend(): { store: CredentialStore; keyring: KeyringAdapter } {
     if (this.lifecycle === 'closed') throw credentialError('CREDENTIAL_OPERATION_FAILED');
-    if (this.unavailableReason) throw credentialError(this.unavailableReason);
     if (!this.store || !this.keyring) throw credentialError('CREDENTIALS_UNAVAILABLE');
     return { store: this.store, keyring: this.keyring };
   }
@@ -553,30 +637,18 @@ export async function createCredentialVault(
   } catch {
     return new CredentialVault({ mode: 'local', unavailableReason: 'CREDENTIALS_UNAVAILABLE' });
   }
-  if (options.keyring) {
-    return new CredentialVault({
-      mode: 'local',
-      store,
-      keyring: options.keyring,
-      randomUuid: options.randomUuid,
-    });
-  }
-
-  try {
-    const keyring = await createNativeKeyringAdapter({ mode: 'local', load: options.loadKeyring });
-    return new CredentialVault({
-      mode: 'local',
-      store,
-      keyring,
-      randomUuid: options.randomUuid,
-    });
-  } catch (error) {
-    const reason: UnavailableReason =
-      isCredentialError(error) && error.code === 'CREDENTIALS_LOCKED'
-        ? 'CREDENTIALS_LOCKED'
-        : 'CREDENTIALS_UNAVAILABLE';
-    return new CredentialVault({ mode: 'local', store, unavailableReason: reason });
-  }
+  const vault = new CredentialVault({
+    mode: 'local',
+    store,
+    keyring: options.keyring,
+    keyringFactory: options.keyring
+      ? undefined
+      : () => createNativeKeyringAdapter({ mode: 'local', load: options.loadKeyring }),
+    unavailableReason: options.keyring ? undefined : 'CREDENTIALS_UNAVAILABLE',
+    randomUuid: options.randomUuid,
+  });
+  await vault.refreshCapability();
+  return vault;
 }
 
 export async function createLocalCredentialVault(

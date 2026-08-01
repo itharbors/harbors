@@ -5,7 +5,12 @@ import Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { credentialAccount, credentialScopeDigest } from '../../src/credentials/scope';
 import { CredentialStore } from '../../src/credentials/store';
-import type { KeyringAdapter, KeyringModule } from '../../src/credentials/keyring';
+import {
+  CREDENTIAL_HEALTH_ACCOUNT,
+  type KeyringAdapter,
+  type KeyringModule,
+} from '../../src/credentials/keyring';
+import { credentialError } from '../../src/credentials/errors';
 import {
   CredentialVault,
   createCredentialVault,
@@ -93,6 +98,36 @@ describe('CredentialVault', () => {
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
     await expect(bound.available()).resolves.toBe(false);
+  });
+
+  it('recovers a latched locked operation after the backend is unlocked', async () => {
+    const bound = vault.bind(kitId, pluginName);
+    const profile = await bound.put({
+      label: '生产库',
+      metadata: { host: 'db.internal' },
+      secret: 'saved-value',
+    });
+    const originalGet = keyring.get.bind(keyring);
+    let locked = true;
+    vi.spyOn(keyring, 'get').mockImplementation(async (account) => {
+      if (locked) throw credentialError('CREDENTIALS_LOCKED');
+      return originalGet(account);
+    });
+
+    await expect(bound.get(profile.id)).rejects.toMatchObject({ code: 'CREDENTIALS_LOCKED' });
+    expect(vault.capability()).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
+
+    locked = false;
+
+    await expect(bound.get(profile.id)).resolves.toMatchObject({
+      profile: { id: profile.id },
+      secret: 'saved-value',
+    });
+    await expect(bound.capability()).resolves.toEqual({ mode: 'local', status: 'available' });
   });
 
   it('creates, reads, updates, and deletes a profile without persisting its secret', async () => {
@@ -718,6 +753,145 @@ describe('CredentialVault', () => {
     });
     expect(offLoad).not.toHaveBeenCalled();
     expect(fs.existsSync(databasePath)).toBe(false);
+  });
+
+  it.each([
+    ['CREDENTIALS_LOCKED', 'KEYRING_LOCKED'],
+    ['CREDENTIALS_UNAVAILABLE', 'NO_SECRET_SERVICE'],
+  ] as const)(
+    'reports an initial %s snapshot after probing the native backend',
+    async (reason, nativeCode) => {
+      vault.close();
+      store = new CredentialStore(databasePath);
+      const constructions: Array<[string, string]> = [];
+      const load = vi.fn<() => Promise<KeyringModule>>(async () => ({
+        Entry: class {
+          constructor(service: string, account: string) {
+            constructions.push([service, account]);
+          }
+
+          getPassword(): string | null {
+            throw Object.assign(new Error('private native health details'), { code: nativeCode });
+          }
+
+          setPassword(): void {}
+          deletePassword(): boolean { return false; }
+        },
+      }));
+
+      vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
+
+      expect(vault.capability()).toEqual({ mode: 'local', status: 'unavailable', reason });
+      expect(constructions).toEqual([['com.itharbors.credentials.v1', CREDENTIAL_HEALTH_ACCOUNT]]);
+      expect(load).toHaveBeenCalledOnce();
+    },
+  );
+
+  it('retries a retained native adapter after the credential service is restored', async () => {
+    vault.close();
+    store = new CredentialStore(databasePath);
+    let backendAvailable = false;
+    const load = vi.fn<() => Promise<KeyringModule>>(async () => ({
+      Entry: class {
+        constructor(_service: string, private readonly account: string) {}
+
+        getPassword(): string | null {
+          if (this.account === CREDENTIAL_HEALTH_ACCOUNT && !backendAvailable) {
+            throw Object.assign(new Error('private service details'), { code: 'NO_SECRET_SERVICE' });
+          }
+          return null;
+        }
+
+        setPassword(): void {}
+        deletePassword(): boolean { return false; }
+      },
+    }));
+    vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
+    const bound = vault.bind(kitId, pluginName);
+
+    expect(vault.capability()).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
+    backendAvailable = true;
+
+    await expect(bound.capability()).resolves.toEqual({ mode: 'local', status: 'available' });
+    await expect(bound.list()).resolves.toEqual([]);
+    expect(load).toHaveBeenCalledOnce();
+  });
+
+  it('retries native module loading after an import failure without restarting', async () => {
+    vault.close();
+    store = new CredentialStore(databasePath);
+    let loadAttempt = 0;
+    const load = vi.fn<() => Promise<KeyringModule>>(async () => {
+      loadAttempt += 1;
+      if (loadAttempt === 1) throw new Error('missing native module details');
+      return {
+        Entry: class {
+          getPassword(): string | null { return null; }
+          setPassword(): void {}
+          deletePassword(): boolean { return false; }
+        },
+      };
+    });
+    vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
+    const bound = vault.bind(kitId, pluginName);
+
+    expect(vault.capability()).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
+
+    await expect(bound.capability()).resolves.toEqual({ mode: 'local', status: 'available' });
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('shares a concurrent retry probe and never reopens while close is draining it', async () => {
+    vault.close();
+    store = new CredentialStore(databasePath);
+    let probeCount = 0;
+    let releaseRetry!: () => void;
+    const retryGate = new Promise<void>((resolve) => { releaseRetry = resolve; });
+    let signalRetryStarted!: () => void;
+    const retryStarted = new Promise<void>((resolve) => { signalRetryStarted = resolve; });
+    const retainedKeyring: KeyringAdapter = {
+      async get(account) {
+        if (account !== CREDENTIAL_HEALTH_ACCOUNT) return null;
+        probeCount += 1;
+        if (probeCount === 1) throw credentialError('CREDENTIALS_LOCKED');
+        signalRetryStarted();
+        await retryGate;
+        return null;
+      },
+      async set() {},
+      async delete() {},
+    };
+    vault = await createCredentialVault({ mode: 'local', store, keyring: retainedKeyring });
+    const bound = vault.bind(kitId, pluginName);
+    const closeStore = vi.spyOn(store, 'close');
+
+    const capability = bound.capability();
+    await retryStarted;
+    const listing = bound.list();
+    vault.close();
+    releaseRetry();
+
+    await expect(capability).resolves.toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
+    await expect(listing).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+    await vi.waitFor(() => expect(closeStore).toHaveBeenCalledOnce());
+    await expect(bound.capability()).resolves.toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
+    expect(probeCount).toBe(2);
   });
 
   it('returns a stable unavailable vault when SQLite cannot be opened', async () => {

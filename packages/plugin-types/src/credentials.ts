@@ -20,6 +20,7 @@ export interface CredentialProfile {
 }
 
 export interface PluginCredentialVault {
+  capability(): Promise<CredentialCapabilitySnapshot>;
   available(): Promise<boolean>;
   list(): Promise<CredentialProfile[]>;
   get(id: string): Promise<{ profile: CredentialProfile; secret: string }>;

@@ -78,6 +78,7 @@ function applicationRuntimeHost(): ApplicationPluginRuntimeHost {
 
 function credentialFacadeDouble() {
   return {
+    capability: vi.fn(async () => ({ mode: 'local' as const, status: 'available' as const })),
     available: vi.fn(async () => true),
     list: vi.fn(async () => []),
     get: vi.fn(),
@@ -152,6 +153,7 @@ describe('PluginModule', () => {
         lifecycle: { load(runtime) { credentials = runtime.credentials; } },
         methods: {
           hasCredentials() { return credentials !== undefined; },
+          capability() { return credentials.capability(); },
           list() { return credentials.list(); },
         },
       });
@@ -166,6 +168,11 @@ describe('PluginModule', () => {
     const plugin = new PluginModule();
     const host = withRuntimeMenu(createEditor('credential-facade-editor', { assembly }));
     const credentials = {
+      capability: vi.fn(async () => ({
+        mode: 'local' as const,
+        status: 'unavailable' as const,
+        reason: 'CREDENTIALS_LOCKED' as const,
+      })),
       available: vi.fn(async () => true),
       list: vi.fn(async () => [{
         id: 'owner-profile',
@@ -185,6 +192,11 @@ describe('PluginModule', () => {
     await plugin.load(incapableDir, { scope: 'session', host, credentials });
 
     expect(plugin.callPlugin('capable', 'hasCredentials')).toBe(true);
+    await expect(plugin.callPlugin('capable', 'capability')).resolves.toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
     await expect(plugin.callPlugin('capable', 'list')).resolves.toEqual([
       expect.objectContaining({ id: 'owner-profile', label: 'Owner profile' }),
     ]);
@@ -205,6 +217,7 @@ describe('PluginModule', () => {
     const plugin = new PluginModule();
     const host = withRuntimeMenu(createEditor('credential-revoke-editor', { assembly }));
     const credentials = {
+      capability: vi.fn(async () => ({ mode: 'local' as const, status: 'available' as const })),
       available: vi.fn(async () => true),
       list: vi.fn(async () => []),
       get: vi.fn(),
@@ -222,6 +235,11 @@ describe('PluginModule', () => {
 
     expect(credentials.list).toHaveBeenCalledOnce();
     await expect(retained.available()).resolves.toBe(false);
+    await expect(retained.capability()).resolves.toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
     await expect(retained.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
   });
 

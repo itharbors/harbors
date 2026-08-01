@@ -10,6 +10,7 @@ import { createDefaultAssemblyConfig } from '../../src/assembly/config';
 import { credentialScopeDigest } from '../../src/credentials/scope';
 import { CredentialStore } from '../../src/credentials/store';
 import {
+  CREDENTIAL_HEALTH_ACCOUNT,
   createNativeKeyringAdapter,
   type KeyringAdapter,
   type KeyringModule,
@@ -225,8 +226,14 @@ describe('credential leak regression', () => {
       expect(nativeEntries.constructions).toEqual(
         nativeEntries.operations.map(({ service, account }) => ({ service, account })),
       );
+      const healthOperations = nativeEntries.operations.filter(
+        ({ account }) => account === CREDENTIAL_HEALTH_ACCOUNT,
+      );
+      expect(healthOperations.length).toBeGreaterThan(0);
+      expect(healthOperations.every(({ operation }) => operation === 'get')).toBe(true);
       for (const { service, account } of nativeEntries.operations) {
         expect(service).toBe('com.itharbors.credentials.v1');
+        if (account === CREDENTIAL_HEALTH_ACCOUNT) continue;
         expect(account).toMatch(new RegExp(
           '^c9ae63325590735060748c1ce66911e4c0b1aaa7acbf610362d7d3e56d26c209:'
             + '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:'
@@ -265,7 +272,12 @@ describe('credential leak regression', () => {
       const connection = await requestMysql(baseUrl, 'connect', connectionInput(secret));
       const save = await requestMysql(baseUrl, 'saveCurrentConnection', { label: '不可用后端' });
 
-      expect(capability).toEqual({ available: false, reason: 'CREDENTIALS_UNAVAILABLE' });
+      expect(capability).toEqual({
+        mode: 'local',
+        status: 'unavailable',
+        available: false,
+        reason: 'CREDENTIALS_UNAVAILABLE',
+      });
       expect(connection).toMatchObject({ connected: true, profileId: null });
       expect(save).toEqual({
         $mysqlError: {

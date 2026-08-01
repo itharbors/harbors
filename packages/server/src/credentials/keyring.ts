@@ -25,34 +25,65 @@ export interface NativeKeyringOptions {
   load?: KeyringModuleLoader;
 }
 
+// This reserved account cannot be produced by credentialAccount(). Health checks
+// only attempt a read and never create or mutate a persistent keyring entry.
+export const CREDENTIAL_HEALTH_ACCOUNT = '__harbors_credential_health_v1__';
+
+const NATIVE_NOT_FOUND_CODES = new Set([
+  'NO_ENTRY',
+  'NOENTRY',
+  'NOT_FOUND',
+  'NOTFOUND',
+]);
+const NATIVE_LOCKED_CODES = new Set([
+  'ACCESS_DENIED',
+  'INTERACTION_NOT_ALLOWED',
+  'KEYRING_LOCKED',
+  'LOCKED',
+  'USER_CANCELED',
+  'USER_CANCELLED',
+]);
+const NATIVE_UNAVAILABLE_CODES = new Set([
+  'BINDING_NOT_FOUND',
+  'DBUS_ERROR',
+  'MODULE_NOT_FOUND',
+  'NO_SECRET_SERVICE',
+  'NOT_AVAILABLE',
+  'PLATFORM_UNSUPPORTED',
+  'SERVICE_UNAVAILABLE',
+  'UNAVAILABLE',
+  'UNSUPPORTED_PLATFORM',
+]);
+
 async function loadNativeKeyring(): Promise<KeyringModule> {
   return import('@napi-rs/keyring');
 }
 
-function nativeErrorSignature(error: unknown): string {
-  if (typeof error !== 'object' || error === null) return '';
+function nativeErrorClassifications(error: unknown): string[] {
+  if (typeof error !== 'object' || error === null) return [];
   const record = error as Record<string, unknown>;
-  return [record.code, record.name, record.message]
+  return [record.code, record.name]
     .filter((value): value is string => typeof value === 'string')
-    .join(' ')
-    .toLowerCase();
+    .map((value) => value.toUpperCase().replaceAll(/[ -]/gu, '_'));
 }
 
 function classifyNativeError(error: unknown): CredentialErrorCode {
   if (isCredentialError(error)) return error.code;
-  const signature = nativeErrorSignature(error);
-  if (/no[_ -]?entry|not[_ -]?found/u.test(signature)) return 'CREDENTIAL_PROFILE_NOT_FOUND';
-  if (/lock|denied|interaction[_ -]?not[_ -]?allowed|user[_ -]?cancel/u.test(signature)) {
+  const classifications = nativeErrorClassifications(error);
+  if (classifications.some((value) => NATIVE_NOT_FOUND_CODES.has(value))) {
+    return 'CREDENTIAL_PROFILE_NOT_FOUND';
+  }
+  if (classifications.some((value) => NATIVE_LOCKED_CODES.has(value))) {
     return 'CREDENTIALS_LOCKED';
   }
-  if (
-    /unavailable|not[_ -]?available|no[_ -]?secret[_ -]?service|dbus|unsupported|platform|binding|module/u.test(
-      signature
-    )
-  ) {
+  if (classifications.some((value) => NATIVE_UNAVAILABLE_CODES.has(value))) {
     return 'CREDENTIALS_UNAVAILABLE';
   }
   return 'CREDENTIAL_OPERATION_FAILED';
+}
+
+export async function probeKeyringAdapter(adapter: KeyringAdapter): Promise<void> {
+  await adapter.get(CREDENTIAL_HEALTH_ACCOUNT);
 }
 
 function mappedNativeError(error: unknown): ReturnType<typeof credentialError> {

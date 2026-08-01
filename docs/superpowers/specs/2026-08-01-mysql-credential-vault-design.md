@@ -103,6 +103,7 @@ type CredentialProfile = {
 };
 
 type PluginCredentialVault = {
+  capability(): Promise<CredentialCapabilitySnapshot>;
   available(): Promise<boolean>;
   list(): Promise<CredentialProfile[]>;
   get(id: string): Promise<{ profile: CredentialProfile; secret: string }>;
@@ -146,6 +147,11 @@ Kit、owner plugin 和本机 principal 派生内部 scope。首版只向同时�
 `unavailable`。读取、写入和删除返回稳定的通用错误，不把原生错误文本、secret、系统账户或路径
 发送给 Panel。
 
+原生模块加载成功不等于后端可用。Vault 使用一个不符合 profile account 格式的固定保留 account 做
+只读 `get` 健康探测，不创建或写入持久条目。探测失败时保留已加载 adapter，并保留模块 loader 以
+恢复 import 失败；后续 capability 检测和操作可以安全重试。并发重试共享同一探测，关闭开始后不再
+启动探测或把 Vault 重新标记为 available。`off` 模式不加载原生模块，也不执行探测。
+
 系统 service 名固定为 `com.itharbors.credentials.v1`。scope 摘要是 canonical
 `kitId + NUL + pluginName + NUL + local` 的完整 SHA-256 十六进制值；系统 account 固定为
 `<scopeDigest>:<profileId>:<secretVersion>`。普通数据文件只保存 account 的不透明引用，不能从中
@@ -181,7 +187,7 @@ MySQL metadata 固定为 `host`、`port`、`user`、`database` 和 `tls`，不�
 
 `mysql-core` 仍是连接和数据库访问的唯一权威所有者。它新增以下公开方法：
 
-- `getCredentialCapability()`：只返回 `available` 和稳定原因代码；
+- `getCredentialCapability()`：返回真实 `mode/status/reason`，并保留 `available` 兼容字段；
 - `listConnectionProfiles()`：返回清理后的 MySQL profile；
 - `connectSaved({ profileId })`：Server 内部读取 profile 与密码并连接；
 - `saveCurrentConnection({ label })`：把最近一次成功手工连接的配置和密码保存为新 profile；
@@ -210,6 +216,8 @@ Kit unload 或 Session 销毁。密码不得进入 connection snapshot、broadca
 - 更新密码要求重新输入完整密码并重新连接验证；不支持显示、复制或恢复旧密码；
 - 删除必须确认，并说明会删除本机保存的密码；删除当前连接使用的 profile 时先断开；
 - vault 不可用时，保留现有手工连接表单并显示简短原因，不显示无效的保存控件。
+- locked/unavailable 时提供显式“重新检测”；解锁或恢复系统服务后无需重启进程即可恢复 profile
+  列表和保存控件。重新检测只读取 capability 与 profile 元数据，不自动连接或读取保存的密码。
 
 Panel 发出保存、更新或删除请求后立即清空本地密码字段。异步结果继续使用当前
 mount generation、action sequence 和 request sequence 规则拒绝过期结果。

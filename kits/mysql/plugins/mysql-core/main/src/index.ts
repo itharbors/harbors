@@ -34,6 +34,14 @@ type CredentialProfile = {
 };
 
 type PluginCredentialVault = {
+  capability(): Promise<
+    | { mode: 'off' | 'local' | 'multi-user'; status: 'available' }
+    | {
+        mode: 'off' | 'local' | 'multi-user';
+        status: 'unavailable';
+        reason: 'CREDENTIALS_DISABLED' | 'CREDENTIALS_UNAVAILABLE' | 'CREDENTIALS_LOCKED';
+      }
+  >;
   available(): Promise<boolean>;
   list(): Promise<CredentialProfile[]>;
   get(id: string): Promise<{ profile: CredentialProfile; secret: string }>;
@@ -256,14 +264,32 @@ function disconnect(): unknown {
 async function getCredentialCapability(): Promise<unknown> {
   const vault = runtime?.credentials;
   if (!vault) {
-    return { available: false, reason: 'CREDENTIALS_DISABLED' } satisfies MysqlCredentialCapability;
+    return {
+      mode: 'off',
+      status: 'unavailable',
+      available: false,
+      reason: 'CREDENTIALS_DISABLED',
+    } satisfies MysqlCredentialCapability;
   }
   try {
-    return await vault.available()
-      ? { available: true } satisfies MysqlCredentialCapability
-      : { available: false, reason: 'CREDENTIALS_UNAVAILABLE' } satisfies MysqlCredentialCapability;
+    const capability = await vault.capability();
+    if (capability.status === 'available') {
+      return {
+        mode: capability.mode,
+        status: 'available',
+        available: true,
+      } satisfies MysqlCredentialCapability;
+    }
+    return {
+      mode: capability.mode,
+      status: 'unavailable',
+      available: false,
+      reason: capability.reason,
+    } satisfies MysqlCredentialCapability;
   } catch (error) {
     return {
+      mode: 'local',
+      status: 'unavailable',
       available: false,
       reason: errorCode(error) === 'CREDENTIALS_LOCKED'
         ? 'CREDENTIALS_LOCKED'

@@ -442,6 +442,12 @@ input[aria-invalid="true"] {
   color: #d8bd78;
 }
 
+.credential-retry {
+  min-height: 22px;
+  padding: 2px 8px;
+  font-size: 10px;
+}
+
 .connection-error {
   max-width: 220px;
   overflow: hidden;

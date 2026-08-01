@@ -26,8 +26,14 @@ export type ConnectionSnapshot = RevisionSnapshot & {
 };
 
 export type MysqlCredentialCapability =
-  | { available: true }
   | {
+      mode: 'off' | 'local' | 'multi-user';
+      status: 'available';
+      available: true;
+    }
+  | {
+      mode: 'off' | 'local' | 'multi-user';
+      status: 'unavailable';
       available: false;
       reason: 'CREDENTIALS_DISABLED' | 'CREDENTIALS_UNAVAILABLE' | 'CREDENTIALS_LOCKED';
     };

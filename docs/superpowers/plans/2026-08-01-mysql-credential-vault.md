@@ -86,7 +86,7 @@ export function resolveCredentialMode(input: { hostMode: 'desktop' | 'web'; requ
 }
 ```
 
-Define `CredentialProfile`, `PluginCredentialVault`, and a capability snapshot exposing only mode/status/stable reason. Gateway and Server call the resolver before listening. Electron passes `HARBORS_CREDENTIAL_MODE: 'local'` beside its explicit loopback binding.
+Define `CredentialProfile`, `PluginCredentialVault` (including a reason-bearing `capability()` snapshot and compatible `available()` helper), and a capability snapshot exposing only mode/status/stable reason. Gateway and Server call the resolver before listening. Electron passes `HARBORS_CREDENTIAL_MODE: 'local'` beside its explicit loopback binding.
 Add `npm run test -w @itharbors/host-security` to the root `test` script so `npm run check` cannot omit this invariant.
 
 ```ts
@@ -163,6 +163,8 @@ export interface KeyringAdapter {
 ```
 
 `createNativeKeyringAdapter()` lazily imports `@napi-rs/keyring` only in local mode, then wraps `new Entry(CREDENTIAL_SERVICE, account)`. Import/backend failure returns an unavailable vault so manual MySQL remains usable; mode `off` never imports the native module. Map failures only to `CREDENTIALS_DISABLED`, `CREDENTIALS_UNAVAILABLE`, `CREDENTIALS_LOCKED`, `CREDENTIAL_PROFILE_NOT_FOUND`, `CREDENTIAL_PROFILE_CONFLICT`, or `CREDENTIAL_OPERATION_FAILED`, with fixed Chinese messages and no native text. Do not invoke shell commands or add fallback adapters. Test Linux/no-service and missing-module behavior through injected loaders.
+
+Probe backend health with a read-only `get` on a fixed reserved non-profile account. Never persist a health secret. Keep a loaded adapter after probe failure and retain the loader after import failure so capability checks can retry without restart; serialize concurrent probes and never probe/reopen after close begins.
 
 - [ ] **Step 4: Test and implement transaction compensation/recovery**
 

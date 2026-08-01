@@ -653,6 +653,84 @@ describe('MySQL connection panel', () => {
     expect(document.querySelector('[data-action="save-connection"]')).toBeNull();
     expect(document.body.textContent).toContain(message);
     expect(request.mock.calls.filter((call) => call[1] === 'listConnectionProfiles')).toHaveLength(0);
+    if (reason === 'CREDENTIALS_DISABLED') {
+      expect(document.querySelector('[data-action="retry-credentials"]')).toBeNull();
+    } else {
+      expect(document.querySelector('[data-action="retry-credentials"]')).not.toBeNull();
+    }
+  });
+
+  it('refreshes capability after a locked action and retries profiles without connecting or reading secrets', async () => {
+    let capabilityCalls = 0;
+    let listCalls = 0;
+    let secretReads = 0;
+    const retriedProfile = { ...profile } as Record<string, unknown>;
+    Object.defineProperty(retriedProfile, 'password', {
+      enumerable: true,
+      get() {
+        secretReads += 1;
+        return 'retry-must-not-read-this';
+      },
+    });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') {
+        capabilityCalls += 1;
+        if (capabilityCalls === 1) {
+          return { mode: 'local', status: 'available', available: true };
+        }
+        if (capabilityCalls === 2) {
+          return {
+            mode: 'local',
+            status: 'unavailable',
+            available: false,
+            reason: 'CREDENTIALS_LOCKED',
+          };
+        }
+        return { mode: 'local', status: 'available', available: true };
+      }
+      if (method === 'listConnectionProfiles') {
+        listCalls += 1;
+        return [retriedProfile];
+      }
+      if (method === 'connectSaved') {
+        return {
+          $mysqlError: {
+            code: 'CREDENTIALS_LOCKED',
+            message: '请先解锁本机凭据库。',
+          },
+        };
+      }
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const setLocal = vi.spyOn(Storage.prototype, 'setItem');
+    const getLocal = vi.spyOn(Storage.prototype, 'getItem');
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+
+    (document.querySelector('[data-action="connect-saved"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(capabilityCalls).toBe(2));
+    expect(document.body.textContent).toContain('请先解锁本机凭据库');
+    expect(document.querySelector('[data-connection-mode="saved"]')).toBeNull();
+    expect(document.querySelector('[data-action="connect-saved"]')).toBeNull();
+    expect(document.querySelector('[data-action="retry-credentials"]')).not.toBeNull();
+
+    (document.querySelector('[data-action="retry-credentials"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(document.querySelector('[data-connection-mode="saved"]')).not.toBeNull());
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
+    expect(capabilityCalls).toBe(3);
+    expect(listCalls).toBe(2);
+    expect(request.mock.calls.filter((call) => call[1] === 'connectSaved')).toHaveLength(1);
+    expect(request.mock.calls.filter((call) => call[1] === 'connect')).toHaveLength(0);
+    expect(request.mock.calls.filter((call) => call[1] === 'get')).toHaveLength(0);
+    expect(secretReads).toBe(0);
+    expect(document.body.innerHTML).not.toContain('retry-must-not-read-this');
+    expect(setLocal).not.toHaveBeenCalled();
+    expect(getLocal).not.toHaveBeenCalled();
   });
 
   it('ignores a late saved-connect result after a newer broadcast', async () => {

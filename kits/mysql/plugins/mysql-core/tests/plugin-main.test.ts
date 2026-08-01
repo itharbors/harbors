@@ -397,6 +397,8 @@ describe('MySQL core plugin main', () => {
     definition.lifecycle?.load?.({ message: { broadcast } });
 
     await expect(definition.methods.getCredentialCapability()).resolves.toEqual({
+      mode: 'off',
+      status: 'unavailable',
       available: false,
       reason: 'CREDENTIALS_DISABLED',
     });
@@ -410,9 +412,13 @@ describe('MySQL core plugin main', () => {
     expect(JSON.stringify(broadcast.mock.calls)).not.toContain(manualInput.password);
   });
 
-  it('reports an unavailable vault without affecting manual mode', async () => {
+  it('preserves the vault mode, status, and locked reason without using the boolean fallback', async () => {
     const vault = fakeVault();
-    vault.available.mockResolvedValue(false);
+    vault.capability.mockResolvedValue({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
     mockAtomicConnection(FreshMysqlService);
@@ -421,9 +427,13 @@ describe('MySQL core plugin main', () => {
     definition.lifecycle?.load?.({ message: { broadcast: vi.fn() }, credentials: vault });
 
     await expect(definition.methods.getCredentialCapability()).resolves.toEqual({
+      mode: 'local',
+      status: 'unavailable',
       available: false,
-      reason: 'CREDENTIALS_UNAVAILABLE',
+      reason: 'CREDENTIALS_LOCKED',
     });
+    expect(vault.capability).toHaveBeenCalledOnce();
+    expect(vault.available).not.toHaveBeenCalled();
     expect(vault.list).not.toHaveBeenCalled();
     expect(vault.get).not.toHaveBeenCalled();
     await expect(definition.methods.connect(manualInput)).resolves.toMatchObject({
@@ -1160,6 +1170,14 @@ async function loadPlugin(): Promise<PluginDefinition> {
 
 function fakeVault() {
   return {
+    capability: vi.fn<() => Promise<
+      | { mode: 'local'; status: 'available' }
+      | {
+          mode: 'local';
+          status: 'unavailable';
+          reason: 'CREDENTIALS_LOCKED' | 'CREDENTIALS_UNAVAILABLE';
+        }
+    >>().mockResolvedValue({ mode: 'local', status: 'available' }),
     available: vi.fn<() => Promise<boolean>>().mockResolvedValue(true),
     list: vi.fn<() => Promise<Array<typeof credentialProfile>>>().mockResolvedValue([]),
     get: vi.fn<(id: string) => Promise<{ profile: typeof credentialProfile; secret: string }>>(),
