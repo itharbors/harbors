@@ -498,6 +498,7 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   figure.className = 'history-chart';
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   svg.setAttribute('viewBox', '0 0 720 220');
+  svg.setAttribute('preserveAspectRatio', 'none');
   svg.setAttribute('role', 'img');
   const series = mergeHistorySeriesByMetric(result);
   svg.setAttribute('aria-label', `${result.domain === 'network' ? '网络流量' : '模型用量'} ${historyRange} 历史趋势：${series
