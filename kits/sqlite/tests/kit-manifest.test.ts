@@ -32,6 +32,26 @@ describe('SQLite kit manifest', () => {
     }
   });
 
+  it('resolves an independently owned Relationship Graph inside the SQLite Kit', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
+    const relationshipRoot = resolvePackageRoot('@itharbors/relationship-graph');
+    const relativeOwner = path.relative(fs.realpathSync(kitRoot), relationshipRoot);
+    const relationshipPlugin = JSON.parse(fs.readFileSync(path.join(
+      kitRoot,
+      'plugins/sqlite-relationships/package.json',
+    ), 'utf8'));
+
+    expect(relativeOwner).not.toBe('');
+    expect(relativeOwner.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeOwner)).toBe(false);
+    expect(pkg.dependencies['@itharbors/relationship-graph']).toBe(
+      'file:packages/relationship-graph',
+    );
+    expect(relationshipPlugin.dependencies['@itharbors/relationship-graph']).toBe(
+      'file:../../packages/relationship-graph',
+    );
+  });
+
   it('declares six focused plugins with a connection bar above Explorer and four workspace tabs', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
     const layout = JSON.parse(fs.readFileSync(path.join(kitRoot, 'layout.json'), 'utf8'));

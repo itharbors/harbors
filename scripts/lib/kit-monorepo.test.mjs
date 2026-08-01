@@ -139,7 +139,7 @@ test('publishes TraceWeave as a portable filesystem-only Preview Kit', async () 
   assert.deepEqual(kit.manifest.permissions, ['filesystem']);
 });
 
-test('database Kit tests build the real Framework runtime plugins before Vitest', async () => {
+test('database Kit tests prepare runtime, test local Relationship Graph, then run Vitest', async () => {
   const prepareRuntime = [
     'node ../../scripts/ce-plugin.mjs build ../../plugins/panel',
     'node ../../scripts/ce-plugin.mjs build ../../plugins/message',
@@ -149,9 +149,13 @@ test('database Kit tests build the real Framework runtime plugins before Vitest'
   for (const slug of ['mysql', 'sqlite']) {
     const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
     assert.equal(kit.packageJson.scripts?.['test:prepare'], prepareRuntime, slug);
-    assert.equal(
-      kit.packageJson.scripts?.test,
-      'npm run test:prepare && vitest run --config vitest.config.ts',
+    assert.deepEqual(
+      kit.packageJson.scripts?.test.split(' && '),
+      [
+        'npm run test:prepare',
+        'npm test --prefix packages/relationship-graph',
+        'vitest run --config vitest.config.ts',
+      ],
       slug,
     );
   }

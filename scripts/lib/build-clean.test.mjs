@@ -13,7 +13,6 @@ test('removes build-cache records and existing build outputs', async (t) => {
   const cacheRecord = join(rootDir, '.cache', 'harbors-build', 'v1', 'runtime.json');
   const workspaceOutputRoots = [
     'packages/plugin-types/dist',
-    'packages/relationship-graph/dist',
     'packages/kit-core/dist',
     'packages/kit-cli/dist',
     'packages/client/dist',
@@ -29,17 +28,23 @@ test('removes build-cache records and existing build outputs', async (t) => {
     }));
     await writeFile(join(rootDir, outputRoot, 'output.js'), 'export {};');
   }
-  const kitWorkspaces = ['alpha', 'zeta'].map((slug) => (
-    join(rootDir, 'kits', slug, 'packages', 'contracts')
+  const kitSlugs = ['alpha', 'zeta'];
+  const kitWorkspaces = kitSlugs.flatMap((slug) => (
+    ['contracts', 'relationship-graph'].map((workspace) => (
+      join(rootDir, 'kits', slug, 'packages', workspace)
+    ))
   ));
-  for (const [index, kitWorkspace] of kitWorkspaces.entries()) {
-    await mkdir(join(kitWorkspace, 'dist'), { recursive: true });
-    await writeFile(join(rootDir, 'kits', ['alpha', 'zeta'][index], 'package.json'), JSON.stringify({
+  for (const [index, slug] of kitSlugs.entries()) {
+    await mkdir(join(rootDir, 'kits', slug), { recursive: true });
+    await writeFile(join(rootDir, 'kits', slug, 'package.json'), JSON.stringify({
       name: `@fixture/kit-${index}`,
       workspaces: ['packages/*'],
     }));
+  }
+  for (const [index, kitWorkspace] of kitWorkspaces.entries()) {
+    await mkdir(join(kitWorkspace, 'dist'), { recursive: true });
     await writeFile(join(kitWorkspace, 'package.json'), JSON.stringify({
-      name: `@fixture/contracts-${index}`,
+      name: `@fixture/workspace-${index}`,
       scripts: { build: 'fixture-build' },
     }));
     await writeFile(join(kitWorkspace, 'dist', 'output.js'), 'export {};');

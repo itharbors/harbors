@@ -40,6 +40,26 @@ describe('MySQL kit manifest', () => {
     }
   });
 
+  it('resolves an independently owned Relationship Graph inside the MySQL Kit', () => {
+    const pkg = readJson(path.join(kitRoot, 'package.json'));
+    const relationshipRoot = resolvePackageRoot('@itharbors/relationship-graph');
+    const relativeOwner = path.relative(fs.realpathSync(kitRoot), relationshipRoot);
+    const relationshipPlugin = readJson(path.join(
+      kitRoot,
+      'plugins/mysql-relationships/package.json',
+    ));
+
+    expect(relativeOwner).not.toBe('');
+    expect(relativeOwner.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeOwner)).toBe(false);
+    expect(pkg.dependencies['@itharbors/relationship-graph']).toBe(
+      'file:packages/relationship-graph',
+    );
+    expect(relationshipPlugin.dependencies['@itharbors/relationship-graph']).toBe(
+      'file:../../packages/relationship-graph',
+    );
+  });
+
   it('declares six independent plugins in the native split layout', () => {
     const pkg = readJson(path.join(kitRoot, 'package.json'));
     const layout = readJson(path.join(kitRoot, 'layout.json'));

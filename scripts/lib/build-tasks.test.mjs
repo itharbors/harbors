@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -25,6 +26,27 @@ test('private contracts exist only beneath their owning Kits', () => {
       name,
     );
   }
+});
+
+test('database Kits resolve distinct Relationship Graph package owners', () => {
+  const owners = ['sqlite', 'mysql'].map((kit) => {
+    const kitRoot = path.join(rootDir, 'kits', kit);
+    const requireFromKit = createRequire(path.join(kitRoot, 'package.json'));
+    const packageJson = requireFromKit.resolve.paths('@itharbors/relationship-graph')
+      ?.map((directory) => path.join(
+        directory,
+        '@itharbors/relationship-graph/package.json',
+      ))
+      .find((candidate) => existsSync(candidate));
+    assert.ok(packageJson, `Relationship Graph resolves from ${kit}`);
+    const owner = realpathSync(path.dirname(packageJson));
+    const relativeOwner = path.relative(realpathSync(kitRoot), owner);
+    assert.ok(relativeOwner !== '' && !relativeOwner.startsWith(`..${path.sep}`), kit);
+    return owner;
+  });
+
+  assert.notEqual(owners[0], owners[1]);
+  assert.equal(existsSync(path.join(rootDir, 'packages/relationship-graph')), false);
 });
 
 test('discovers buildable Framework workspaces and orders their package dependencies first', async (t) => {
