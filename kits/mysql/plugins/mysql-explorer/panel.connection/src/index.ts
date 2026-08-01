@@ -46,7 +46,21 @@ type ConnectionValidation = { field: InvalidField; message: string };
 type ActionToken = {
   mountGeneration: number;
   actionSequence: number;
-  requestSequence: number;
+  interactionGeneration: number;
+  kind: Exclude<ConnectionActivity, 'hydrate' | null>;
+  startConnection: ConnectionSnapshot;
+  broadcasts: ConnectionSnapshot[];
+};
+
+type HydrationToken = {
+  mountGeneration: number;
+  hydrationGeneration: number;
+  connectionGeneration: number;
+};
+
+type SanitizedProfiles = {
+  profiles: MysqlConnectionProfile[];
+  droppedInvalid: boolean;
 };
 
 const DISCONNECTED: ConnectionSnapshot = {
@@ -68,7 +82,7 @@ const CREDENTIALS_UNAVAILABLE: MysqlCredentialCapability = {
 
 let context: PanelContext | undefined;
 let root: HTMLElement | null = null;
-let connection: ConnectionSnapshot = { ...DISCONNECTED };
+let connection: ConnectionSnapshot = disconnectedSnapshot();
 let form = defaultForm();
 let saved = defaultSavedState();
 let mode: ConnectionMode = 'manual';
@@ -80,8 +94,10 @@ let manualConnectEligible = false;
 let profileLabel = '';
 let replacementPassword = '';
 let passwordUpdateVisible = false;
-let requestSequence = 0;
 let mountGeneration = 0;
+let hydrationGeneration = 0;
+let connectionGeneration = 0;
+let interactionGeneration = 0;
 let actionSequence = 0;
 let activeAction: ActionToken | null = null;
 
@@ -94,20 +110,16 @@ const definition = {
     resetState();
     activity = 'hydrate';
     render();
-    const sequence = ++requestSequence;
+    const hydration: HydrationToken = {
+      mountGeneration,
+      hydrationGeneration: ++hydrationGeneration,
+      connectionGeneration,
+    };
     const [connectionResult, capabilityResult] = await Promise.allSettled([
-      requestCore<ConnectionSnapshot>('getConnectionState'),
+      requestCore<unknown>('getConnectionState'),
       requestCore<unknown>('getCredentialCapability'),
     ]);
-    if (!isCurrentHydration(sequence)) return;
-    if (connectionResult.status === 'rejected') {
-      finishHydrationError(sequence, connectionResult.reason);
-      return;
-    }
-    if (!isConnectionSnapshot(connectionResult.value) || isStale(connectionResult.value)) {
-      finishHydrationError(sequence, new Error('MySQL 返回了无效的连接状态。'));
-      return;
-    }
+    if (!isCurrentHydration(hydration)) return;
 
     const capability = capabilityResult.status === 'fulfilled'
       ? sanitizeCapability(capabilityResult.value)
@@ -116,32 +128,48 @@ const definition = {
     let profileError: PanelError | null = null;
     if (capability.available) {
       try {
-        profiles = sanitizeProfiles(await requestCore<unknown>('listConnectionProfiles'));
+        const sanitized = sanitizeProfiles(await requestCore<unknown>('listConnectionProfiles'));
+        profiles = sanitized.profiles;
+        if (sanitized.droppedInvalid) {
+          profileError = { message: '部分保存的连接资料无效，已忽略。' };
+        }
       } catch (caught) {
         profileError = panelError(caught);
       }
-      if (!isCurrentHydration(sequence)) return;
+      if (!isCurrentHydration(hydration)) return;
     }
 
-    connection = { ...connectionResult.value };
     saved = {
       capability,
       profiles,
-      selectedProfileId: selectAvailableProfile(connectionResult.value.profileId, profiles),
+      selectedProfileId: selectAvailableProfile(connection.profileId, profiles),
     };
-    activity = null;
-    error = profileError;
+    let connectionError: PanelError | null = null;
+    if (connectionGeneration === hydration.connectionGeneration) {
+      if (connectionResult.status === 'fulfilled') {
+        const hydratedConnection = sanitizeConnectionSnapshot(connectionResult.value);
+        if (hydratedConnection) {
+          acceptConnection(hydratedConnection);
+        } else {
+          connectionError = { message: 'MySQL 返回了无效的连接状态。' };
+        }
+      } else {
+        connectionError = panelError(connectionResult.reason);
+      }
+    }
+    if (activity === 'hydrate') activity = null;
+    error = profileError ?? connectionError;
     render();
   },
 
   unmount() {
     mountGeneration += 1;
-    requestSequence += 1;
+    hydrationGeneration += 1;
     activeAction = null;
     root?.replaceChildren();
     root = null;
     context = undefined;
-    connection = { ...DISCONNECTED };
+    connection = disconnectedSnapshot();
     form = defaultForm();
     saved = defaultSavedState();
     mode = 'manual';
@@ -153,13 +181,17 @@ const definition = {
     profileLabel = '';
     replacementPassword = '';
     passwordUpdateVisible = false;
+    connectionGeneration = 0;
+    interactionGeneration = 0;
   },
 
   methods: {
     onConnectionChanged(payload: unknown) {
-      if (!isConnectionSnapshot(payload) || isStale(payload)) return;
-      manualConnectEligible = activity === 'connect' && payload.connected && payload.profileId === null;
-      acceptConnection(payload);
+      const next = sanitizeConnectionSnapshot(payload);
+      if (!next || isStale(next)) return;
+      if (activeAction && isActiveAction(activeAction)) activeAction.broadcasts.push(next);
+      manualConnectEligible = false;
+      acceptConnection(next);
     },
   },
 };
@@ -177,12 +209,26 @@ function defaultForm(): ConnectionForm {
   };
 }
 
+function disconnectedSnapshot(): ConnectionSnapshot {
+  return {
+    connected: DISCONNECTED.connected,
+    endpoint: DISCONNECTED.endpoint,
+    database: DISCONNECTED.database,
+    mysqlVersion: DISCONNECTED.mysqlVersion,
+    tls: DISCONNECTED.tls,
+    profileId: DISCONNECTED.profileId,
+    connectionRevision: DISCONNECTED.connectionRevision,
+    schemaRevision: DISCONNECTED.schemaRevision,
+    dataRevision: DISCONNECTED.dataRevision,
+  };
+}
+
 function defaultSavedState(): SavedState {
   return { capability: null, profiles: [], selectedProfileId: null };
 }
 
 function resetState(): void {
-  connection = { ...DISCONNECTED };
+  connection = disconnectedSnapshot();
   form = defaultForm();
   saved = defaultSavedState();
   mode = 'manual';
@@ -195,27 +241,22 @@ function resetState(): void {
   replacementPassword = '';
   passwordUpdateVisible = false;
   activeAction = null;
-  requestSequence += 1;
+  hydrationGeneration += 1;
+  connectionGeneration = 0;
+  interactionGeneration = 0;
 }
 
-function isCurrentHydration(sequence: number): boolean {
-  return sequence === requestSequence
+function isCurrentHydration(token: HydrationToken): boolean {
+  return token.mountGeneration === mountGeneration
+    && token.hydrationGeneration === hydrationGeneration
     && context !== undefined
     && root?.isConnected === true;
 }
 
-function finishHydrationError(sequence: number, caught: unknown): void {
-  if (!isCurrentHydration(sequence)) return;
-  activity = null;
-  error = panelError(caught);
-  saved.capability = CREDENTIALS_UNAVAILABLE;
-  render();
-}
-
 function acceptConnection(next: ConnectionSnapshot): void {
-  requestSequence += 1;
+  connectionGeneration += 1;
   if (activity === 'hydrate') activity = null;
-  connection = { ...next };
+  connection = next;
   if (next.profileId && saved.profiles.some((profile) => profile.id === next.profileId)) {
     saved.selectedProfileId = next.profileId;
   }
@@ -249,11 +290,11 @@ async function connect(): Promise<void> {
     tls: form.tls,
   };
   await runAction('connect', async (token) => {
-    const pendingConnection = requestCore<ConnectionSnapshot>('connect', input);
+    const pendingConnection = requestCore<unknown>('connect', input);
     form.password = '';
     render();
-    const next = await pendingConnection;
-    if (!isCurrentActionResult(token) || !isConnectionSnapshot(next) || isStale(next)) return;
+    const next = sanitizeConnectionSnapshot(await pendingConnection);
+    if (!isActionResultCurrent(token) || !next || isStale(next)) return;
     manualConnectEligible = next.connected && next.profileId === null;
     acceptConnection(next);
   });
@@ -283,8 +324,10 @@ async function connectSaved(): Promise<void> {
   const profileId = selectedProfile()?.id;
   if (!profileId) return;
   await runAction('connect-saved', async (token) => {
-    const next = await requestCore<ConnectionSnapshot>('connectSaved', { profileId });
-    if (!isCurrentActionResult(token) || !isConnectionSnapshot(next) || isStale(next)) return;
+    const next = sanitizeConnectionSnapshot(
+      await requestCore<unknown>('connectSaved', { profileId }),
+    );
+    if (!isActionResultCurrent(token) || !next || isStale(next)) return;
     manualConnectEligible = false;
     acceptConnection(next);
   });
@@ -301,10 +344,11 @@ async function saveCurrentConnection(): Promise<void> {
   }
   await runAction('save', async (token) => {
     const next = sanitizeProfile(await requestCore<unknown>('saveCurrentConnection', { label }));
-    if (!isCurrentAction(token) || !next) {
-      if (isCurrentAction(token)) throw new Error('MySQL 返回了无效的连接资料。');
+    if (!next) {
+      if (isActionResultCurrent(token)) throw new Error('MySQL 返回了无效的连接资料。');
       return;
     }
+    if (!isProfileResultCurrent(token, next)) return;
     upsertProfile(next);
     saved.selectedProfileId = next.id;
     manualConnectEligible = false;
@@ -329,10 +373,11 @@ async function updatePassword(): Promise<void> {
     replacementPassword = '';
     render();
     const next = sanitizeProfile(await pendingUpdate);
-    if (!isCurrentAction(token) || !next) {
-      if (isCurrentAction(token)) throw new Error('MySQL 返回了无效的连接资料。');
+    if (!next) {
+      if (isActionResultCurrent(token)) throw new Error('MySQL 返回了无效的连接资料。');
       return;
     }
+    if (!isProfileResultCurrent(token, next)) return;
     upsertProfile(next);
     passwordUpdateVisible = false;
     manualConnectEligible = false;
@@ -344,8 +389,12 @@ async function deleteProfile(): Promise<void> {
   const profileId = selectedProfile()?.id;
   if (!profileId || !window.confirm('将删除本机保存的连接和密码，是否继续？')) return;
   await runAction('delete-profile', async (token) => {
-    await requestCore<unknown>('deleteConnectionProfile', { profileId });
-    if (!isCurrentAction(token)) return;
+    const response = await requestCore<unknown>('deleteConnectionProfile', { profileId });
+    if (!isDeleteResponse(response, profileId)) {
+      if (isActionResultCurrent(token)) throw new Error('MySQL 返回了无效的删除结果。');
+      return;
+    }
+    if (!isDeleteResultCurrent(token, profileId)) return;
     saved.profiles = saved.profiles.filter((profile) => profile.id !== profileId);
     saved.selectedProfileId = selectAvailableProfile(null, saved.profiles);
     replacementPassword = '';
@@ -357,8 +406,8 @@ async function deleteProfile(): Promise<void> {
 
 async function disconnect(): Promise<void> {
   await runAction('disconnect', async (token) => {
-    const next = await requestCore<ConnectionSnapshot>('disconnect');
-    if (!isCurrentActionResult(token) || !isConnectionSnapshot(next) || isStale(next)) return;
+    const next = sanitizeConnectionSnapshot(await requestCore<unknown>('disconnect'));
+    if (!isActionResultCurrent(token) || !next || isStale(next)) return;
     manualConnectEligible = false;
     acceptConnection(next);
   });
@@ -367,7 +416,7 @@ async function disconnect(): Promise<void> {
 async function refreshObjects(): Promise<void> {
   await runAction('refresh', async (token) => {
     await requestExplorer('refreshObjects');
-    if (!isCurrentActionResult(token)) return;
+    if (!isActionResultCurrent(token)) return;
     error = null;
   });
 }
@@ -384,18 +433,19 @@ async function runAction(
   const token: ActionToken = {
     mountGeneration,
     actionSequence: ++actionSequence,
-    requestSequence: ++requestSequence,
+    interactionGeneration,
+    kind,
+    startConnection: connection,
+    broadcasts: [],
   };
   activeAction = token;
   render();
   try {
     await action(token);
   } catch (caught) {
-    if (isCurrentActionResult(token) || (isProfileActivity(kind) && isCurrentAction(token))) {
-      error = panelError(caught);
-    }
+    if (isActionResultCurrent(token)) error = panelError(caught);
   } finally {
-    if (!isCurrentAction(token)) return;
+    if (!isActiveAction(token)) return;
     activeAction = null;
     activity = null;
     render();
@@ -406,15 +456,78 @@ function isProfileActivity(kind: ConnectionActivity): boolean {
   return kind === 'save' || kind === 'update-password' || kind === 'delete-profile';
 }
 
-function isCurrentAction(token: ActionToken): boolean {
+function isActiveAction(token: ActionToken): boolean {
   return activeAction === token
     && token.mountGeneration === mountGeneration
     && context !== undefined
     && root?.isConnected === true;
 }
 
-function isCurrentActionResult(token: ActionToken): boolean {
-  return isCurrentAction(token) && token.requestSequence === requestSequence;
+function isActionResultCurrent(token: ActionToken): boolean {
+  return isActiveAction(token) && token.interactionGeneration === interactionGeneration;
+}
+
+function isProfileResultCurrent(token: ActionToken, profile: MysqlConnectionProfile): boolean {
+  if (!isActionResultCurrent(token)) return false;
+  if (token.broadcasts.length === 0) return sameRevisions(connection, token.startConnection);
+  if (token.broadcasts.length !== 1) return false;
+  const [broadcast] = token.broadcasts;
+  if (!broadcast || !sameConnectionSnapshot(connection, broadcast)) return false;
+  if (broadcast.connectionRevision !== token.startConnection.connectionRevision + 1) return false;
+  if (token.kind === 'save') {
+    return token.startConnection.connected
+      && token.startConnection.profileId === null
+      && broadcast.connected
+      && broadcast.profileId === profile.id
+      && sameConnectionIdentity(broadcast, token.startConnection);
+  }
+  if (token.kind === 'update-password') {
+    return broadcast.connected
+      && broadcast.profileId === profile.id
+      && broadcast.endpoint === `${profile.host}:${profile.port}`
+      && broadcast.database === profile.database
+      && broadcast.tls === profile.tls;
+  }
+  return false;
+}
+
+function isDeleteResultCurrent(token: ActionToken, profileId: string): boolean {
+  if (!isActionResultCurrent(token)) return false;
+  if (token.broadcasts.length === 0) {
+    return token.startConnection.profileId !== profileId
+      && sameRevisions(connection, token.startConnection);
+  }
+  if (token.broadcasts.length !== 1 || token.startConnection.profileId !== profileId) return false;
+  const [broadcast] = token.broadcasts;
+  return broadcast !== undefined
+    && sameConnectionSnapshot(connection, broadcast)
+    && broadcast.connectionRevision === token.startConnection.connectionRevision + 1
+    && !broadcast.connected
+    && broadcast.profileId === null;
+}
+
+function sameConnectionIdentity(left: ConnectionSnapshot, right: ConnectionSnapshot): boolean {
+  return left.connected === right.connected
+    && left.endpoint === right.endpoint
+    && left.database === right.database
+    && left.mysqlVersion === right.mysqlVersion
+    && left.tls === right.tls;
+}
+
+function sameRevisions(left: ConnectionSnapshot, right: ConnectionSnapshot): boolean {
+  return left.connectionRevision === right.connectionRevision
+    && left.schemaRevision === right.schemaRevision
+    && left.dataRevision === right.dataRevision;
+}
+
+function sameConnectionSnapshot(left: ConnectionSnapshot, right: ConnectionSnapshot): boolean {
+  return sameConnectionIdentity(left, right)
+    && left.profileId === right.profileId
+    && sameRevisions(left, right);
+}
+
+function isDeleteResponse(value: unknown, profileId: string): boolean {
+  return isRecord(value) && value.deleted === true && value.profileId === profileId;
 }
 
 async function requestCore<T>(method: string, input?: unknown): Promise<T> {
@@ -458,9 +571,10 @@ function render(): void {
 function renderModeSelector(): string {
   const manualSelected = mode === 'manual';
   const savedAvailable = saved.capability?.available === true;
+  const disabled = activity !== null && !isProfileActivity(activity);
   return `<div class="connection-mode" role="tablist" aria-label="连接方式">
-    <button data-connection-mode="manual" role="tab" type="button" aria-selected="${manualSelected}" tabindex="${manualSelected ? '0' : '-1'}"${activity !== null ? ' disabled' : ''}>手工连接</button>
-    ${savedAvailable ? `<button data-connection-mode="saved" role="tab" type="button" aria-selected="${!manualSelected}" tabindex="${manualSelected ? '-1' : '0'}"${activity !== null ? ' disabled' : ''}>已保存连接</button>` : ''}
+    <button data-connection-mode="manual" role="tab" type="button" aria-selected="${manualSelected}" tabindex="${manualSelected ? '0' : '-1'}"${disabled ? ' disabled' : ''}>手工连接</button>
+    ${savedAvailable ? `<button data-connection-mode="saved" role="tab" type="button" aria-selected="${!manualSelected}" tabindex="${manualSelected ? '-1' : '0'}"${disabled ? ' disabled' : ''}>已保存连接</button>` : ''}
   </div>`;
 }
 
@@ -497,9 +611,10 @@ function renderSavedConnection(): string {
   }
   const selected = selectedProfile() ?? profiles[0];
   const disabled = activity !== null;
+  const navigationDisabled = disabled && !isProfileActivity(activity);
   const connectedToSelected = connection.connected && connection.profileId === selected.id;
   return `<section class="saved-connection" aria-busy="${activity !== null}">
-    <label class="profile-select">已保存连接<select data-field="profile" name="profile"${disabled ? ' disabled' : ''}>
+    <label class="profile-select">已保存连接<select data-field="profile" name="profile"${navigationDisabled ? ' disabled' : ''}>
       ${profiles.map((profile) => `<option value="${escapeHtml(profile.id)}"${profile.id === selected.id ? ' selected' : ''}>${escapeHtml(profile.label)}</option>`).join('')}
     </select></label>
     <div class="profile-summary" data-selected-profile>
@@ -537,8 +652,11 @@ function renderConnectedActions(): string {
 }
 
 function bindEvents(): void {
-  root?.querySelector('[data-connection-mode="manual"]')?.addEventListener('click', () => switchMode('manual'));
-  root?.querySelector('[data-connection-mode="saved"]')?.addEventListener('click', () => switchMode('saved'));
+  for (const nextMode of ['manual', 'saved'] as const) {
+    const tab = root?.querySelector<HTMLButtonElement>(`[data-connection-mode="${nextMode}"]`);
+    tab?.addEventListener('click', () => switchMode(nextMode, true));
+    tab?.addEventListener('keydown', (event) => handleModeKeydown(event));
+  }
   root?.querySelector('[data-action="connect"]')?.addEventListener('click', () => void connect());
   root?.querySelector('[data-action="connect-saved"]')?.addEventListener('click', () => void connectSaved());
   root?.querySelector('[data-action="save-connection"]')?.addEventListener('click', () => void saveCurrentConnection());
@@ -584,6 +702,8 @@ function bindEvents(): void {
   });
   root?.querySelector<HTMLSelectElement>('[data-field="profile"]')?.addEventListener('change', (event) => {
     const profileId = (event.currentTarget as HTMLSelectElement).value;
+    if (profileId === saved.selectedProfileId) return;
+    interactionGeneration += 1;
     saved.selectedProfileId = saved.profiles.some((profile) => profile.id === profileId) ? profileId : null;
     passwordUpdateVisible = false;
     replacementPassword = '';
@@ -594,15 +714,36 @@ function bindEvents(): void {
   });
 }
 
-function switchMode(next: ConnectionMode): void {
-  if (activity !== null || (next === 'saved' && !saved.capability?.available)) return;
-  mode = next;
+function switchMode(next: ConnectionMode, focusTab = false): void {
+  if ((activity !== null && !isProfileActivity(activity))
+    || (next === 'saved' && !saved.capability?.available)) return;
+  if (mode !== next) {
+    interactionGeneration += 1;
+    mode = next;
+  }
   replacementPassword = '';
   passwordUpdateVisible = false;
   invalidField = null;
   error = null;
   notice = null;
   render();
+  if (focusTab) {
+    root?.querySelector<HTMLButtonElement>(
+      `[data-connection-mode="${next}"]`,
+    )?.focus();
+  }
+}
+
+function handleModeKeydown(event: KeyboardEvent): void {
+  if (!saved.capability?.available) return;
+  let next: ConnectionMode | null = null;
+  if (event.key === 'Home') next = 'manual';
+  if (event.key === 'End') next = 'saved';
+  if (event.key === 'ArrowRight') next = mode === 'manual' ? 'saved' : 'manual';
+  if (event.key === 'ArrowLeft') next = mode === 'saved' ? 'manual' : 'saved';
+  if (!next) return;
+  event.preventDefault();
+  switchMode(next, true);
 }
 
 function clearFieldError(field: InvalidField | 'password' | 'database'): void {
@@ -709,40 +850,82 @@ function sanitizeCapability(value: unknown): MysqlCredentialCapability {
     : CREDENTIALS_UNAVAILABLE;
 }
 
-function sanitizeProfiles(value: unknown): MysqlConnectionProfile[] {
-  if (!Array.isArray(value)) throw new Error('MySQL 返回了无效的连接资料列表。');
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const MAX_LABEL_LENGTH = 80;
+const MAX_HOST_LENGTH = 255;
+const MAX_USER_LENGTH = 128;
+const MAX_DATABASE_LENGTH = 64;
+const MAX_TIMESTAMP_LENGTH = 64;
+
+function sanitizeProfiles(value: unknown): SanitizedProfiles {
+  if (!Array.isArray(value)) return { profiles: [], droppedInvalid: true };
   const profiles: MysqlConnectionProfile[] = [];
+  const profileIds = new Set<string>();
+  let droppedInvalid = false;
   for (const candidate of value) {
     const profile = sanitizeProfile(candidate);
-    if (!profile) throw new Error('MySQL 返回了无效的连接资料。');
+    if (!profile || profileIds.has(profile.id)) {
+      droppedInvalid = true;
+      continue;
+    }
+    profileIds.add(profile.id);
     profiles.push(profile);
   }
-  return profiles;
+  return { profiles, droppedInvalid };
 }
 
 function sanitizeProfile(value: unknown): MysqlConnectionProfile | null {
-  const database = isRecord(value) ? value.database : undefined;
-  if (!isRecord(value)
-    || typeof value.id !== 'string'
-    || typeof value.label !== 'string'
-    || typeof value.host !== 'string'
+  if (!isRecord(value)) return null;
+  const id = sanitizeProfileId(value.id);
+  const label = boundedTrimmedString(value.label, MAX_LABEL_LENGTH);
+  const host = boundedTrimmedString(value.host, MAX_HOST_LENGTH);
+  const user = boundedTrimmedString(value.user, MAX_USER_LENGTH);
+  const database = value.database === null
+    ? null
+    : boundedTrimmedString(value.database, MAX_DATABASE_LENGTH);
+  const createdAt = sanitizeTimestamp(value.createdAt);
+  const updatedAt = sanitizeTimestamp(value.updatedAt);
+  if (!id
+    || !label
+    || !host
     || !Number.isInteger(value.port)
-    || typeof value.user !== 'string'
-    || !(database === null || typeof database === 'string')
+    || Number(value.port) < 1
+    || Number(value.port) > 65_535
+    || !user
+    || database === undefined
     || typeof value.tls !== 'boolean'
-    || typeof value.createdAt !== 'string'
-    || typeof value.updatedAt !== 'string') return null;
+    || !createdAt
+    || !updatedAt) return null;
   return {
-    id: value.id,
-    label: value.label,
-    host: value.host,
+    id,
+    label,
+    host,
     port: value.port as number,
-    user: value.user,
-    database: database as string | null,
+    user,
+    database,
     tls: value.tls,
-    createdAt: value.createdAt,
-    updatedAt: value.updatedAt,
+    createdAt,
+    updatedAt,
   };
+}
+
+function sanitizeProfileId(value: unknown): string | null {
+  return typeof value === 'string' && UUID_PATTERN.test(value) ? value.toLowerCase() : null;
+}
+
+function boundedTrimmedString(value: unknown, maxLength: number): string | null | undefined {
+  if (typeof value !== 'string') return undefined;
+  const normalized = value.trim();
+  return normalized.length > 0 && [...normalized].length <= maxLength ? normalized : null;
+}
+
+function sanitizeTimestamp(value: unknown): string | null {
+  return typeof value === 'string'
+    && value.length > 0
+    && value.length <= MAX_TIMESTAMP_LENGTH
+    && !Number.isNaN(Date.parse(value))
+    ? value
+    : null;
 }
 
 function panelError(caught: unknown): PanelError {
@@ -754,17 +937,42 @@ function panelError(caught: unknown): PanelError {
     : { message: String(caught) };
 }
 
-function isConnectionSnapshot(value: unknown): value is ConnectionSnapshot {
-  return isRecord(value)
-    && typeof value.connected === 'boolean'
-    && (value.endpoint === null || typeof value.endpoint === 'string')
-    && (value.database === null || typeof value.database === 'string')
-    && (value.mysqlVersion === null || typeof value.mysqlVersion === 'string')
-    && typeof value.tls === 'boolean'
-    && (value.profileId === null || typeof value.profileId === 'string')
-    && isRevision(value.connectionRevision)
-    && isRevision(value.schemaRevision)
-    && isRevision(value.dataRevision);
+function sanitizeConnectionSnapshot(value: unknown): ConnectionSnapshot | null {
+  if (!isRecord(value)) return null;
+  const connected = value.connected;
+  const endpoint = value.endpoint;
+  const database = value.database;
+  const mysqlVersion = value.mysqlVersion;
+  const tls = value.tls;
+  const rawProfileId = value.profileId;
+  const profileId = rawProfileId === null ? null : sanitizeProfileId(rawProfileId);
+  const connectionRevision = value.connectionRevision;
+  const schemaRevision = value.schemaRevision;
+  const dataRevision = value.dataRevision;
+  if (typeof connected !== 'boolean'
+    || !isNullableString(endpoint)
+    || !isNullableString(database)
+    || !isNullableString(mysqlVersion)
+    || typeof tls !== 'boolean'
+    || !(rawProfileId === null || profileId !== null)
+    || !isRevision(connectionRevision)
+    || !isRevision(schemaRevision)
+    || !isRevision(dataRevision)) return null;
+  return {
+    connected,
+    endpoint,
+    database,
+    mysqlVersion,
+    tls,
+    profileId,
+    connectionRevision,
+    schemaRevision,
+    dataRevision,
+  };
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === 'string';
 }
 
 function isRevision(value: unknown): value is number {

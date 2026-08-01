@@ -22,6 +22,7 @@ const connection = {
 };
 
 const profileId = '00112233-4455-4677-8899-aabbccddeeff';
+const secondProfileId = '11111111-2222-4333-8444-555555555555';
 const profile = {
   id: profileId,
   label: '本机开发库',
@@ -737,7 +738,7 @@ describe('MySQL connection panel', () => {
       '@itharbors/mysql-core', 'updateConnectionProfile', { profileId, password: 'next-secret' },
     ));
 
-    await definition.methods.onConnectionChanged({ ...connection, profileId, connectionRevision: 2 });
+    await definition.methods.onConnectionChanged({ ...connection, profileId, connectionRevision: 1 });
     resolveUpdate?.({ ...profile, updatedAt: '2026-08-01T10:00:00.000Z' });
 
     await vi.waitFor(() => expect(document.body.textContent).toContain('密码已更新并重新连接。'));
@@ -769,6 +770,256 @@ describe('MySQL connection panel', () => {
 
     await vi.waitFor(() => expect(document.querySelector('[data-empty-profiles]')).not.toBeNull());
     expect(document.body.textContent).toContain('已删除本机保存的连接和密码。');
+  });
+
+  it('does not make another panel manual connection saveable when this panel connect fails', async () => {
+    let resolveConnect: ((value: unknown) => void) | undefined;
+    const pendingConnect = new Promise<unknown>((resolve) => { resolveConnect = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return [];
+      if (method === 'connect') return pendingConnect;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    setValue('password', 'this-panel-secret');
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+
+    await definition.methods.onConnectionChanged({
+      ...connection,
+      endpoint: 'other-panel.local:3306',
+      connectionRevision: 1,
+      profileId: null,
+    });
+    resolveConnect?.({ $mysqlError: { code: 'AUTH_FAILED', message: '本次手工连接失败。' } });
+
+    await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).not.toBeNull());
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('本次手工连接失败。');
+    expect(document.querySelector('[data-current-endpoint]')?.textContent).toBe('other-panel.local:3306');
+    expect(document.querySelector('[data-action="save-connection"]')).toBeNull();
+    expect(document.body.innerHTML).not.toContain('this-panel-secret');
+  });
+
+  it('reconstructs connection snapshots without reading or retaining extra secret fields', async () => {
+    let secretReads = 0;
+    const maliciousDisconnected = { ...disconnected } as Record<string, unknown>;
+    Object.defineProperty(maliciousDisconnected, 'password', {
+      enumerable: true,
+      get() {
+        secretReads += 1;
+        return 'mount-snapshot-secret';
+      },
+    });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return maliciousDisconnected;
+      if (method === 'getCredentialCapability') return credentialsDisabled;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const maliciousBroadcast = { ...connection } as Record<string, unknown>;
+    Object.defineProperty(maliciousBroadcast, 'secret', {
+      enumerable: true,
+      get() {
+        secretReads += 1;
+        return 'broadcast-snapshot-secret';
+      },
+    });
+    await definition.methods.onConnectionChanged(maliciousBroadcast);
+
+    expect(secretReads).toBe(0);
+    expect(document.body.innerHTML).not.toContain('mount-snapshot-secret');
+    expect(document.body.innerHTML).not.toContain('broadcast-snapshot-secret');
+    expect(JSON.stringify(request.mock.calls)).not.toContain('snapshot-secret');
+  });
+
+  it('keeps profile hydration when a newer connection broadcast arrives during a deferred list', async () => {
+    let resolveProfiles: ((value: unknown) => void) | undefined;
+    const pendingProfiles = new Promise<unknown>((resolve) => { resolveProfiles = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return pendingProfiles;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    const mounting = definition.mount({ message: { request } });
+    await vi.waitFor(() => expect(request.mock.calls.some((call) => call[1] === 'listConnectionProfiles')).toBe(true));
+
+    await definition.methods.onConnectionChanged({
+      ...connection,
+      endpoint: 'broadcast.local:3306',
+      connectionRevision: 2,
+    });
+    resolveProfiles?.([profile]);
+    await mounting;
+
+    expect(document.querySelector('[data-current-endpoint]')?.textContent).toBe('broadcast.local:3306');
+    expect(document.querySelector('[data-connection-mode="saved"]')).not.toBeNull();
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
+  });
+
+  it('does not apply an old save result after an unrelated connection broadcast', async () => {
+    let resolveSave: ((value: unknown) => void) | undefined;
+    const pendingSave = new Promise<unknown>((resolve) => { resolveSave = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return [];
+      if (method === 'connect') return connection;
+      if (method === 'saveCurrentConnection') return pendingSave;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-action="connect"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(document.querySelector('[data-action="save-connection"]')).not.toBeNull());
+    setValue('profile-label', '本机开发库');
+    (document.querySelector('[data-action="save-connection"]') as HTMLButtonElement).click();
+
+    await definition.methods.onConnectionChanged({
+      ...connection,
+      endpoint: 'unrelated.local:3306',
+      connectionRevision: 2,
+      profileId: null,
+    });
+    resolveSave?.(profile);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.body.textContent).not.toContain('连接已保存到本机凭据库。');
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    expect(document.querySelector('[data-empty-profiles]')).not.toBeNull();
+  });
+
+  it('does not apply an old update result after the selected profile changes', async () => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return [profile, secondProfile];
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    resolveUpdate?.({ ...profile, label: '不应采用的旧资料' });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.body.textContent).not.toContain('密码已更新并重新连接。');
+    expect(document.body.textContent).not.toContain('不应采用的旧资料');
+    expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
+    expect(document.body.innerHTML).not.toContain('next-secret');
+  });
+
+  it('does not apply an old delete result after an unrelated connection broadcast', async () => {
+    let resolveDelete: ((value: unknown) => void) | undefined;
+    const pendingDelete = new Promise<unknown>((resolve) => { resolveDelete = resolve; });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return [profile];
+      if (method === 'deleteConnectionProfile') return pendingDelete;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="delete-profile"]') as HTMLButtonElement).click();
+
+    await definition.methods.onConnectionChanged({
+      ...connection,
+      endpoint: 'unrelated.local:3306',
+      connectionRevision: 1,
+      profileId: null,
+    });
+    resolveDelete?.({ deleted: true, profileId });
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+    expect(document.body.textContent).not.toContain('已删除本机保存的连接和密码。');
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
+  });
+
+  it('implements arrow, Home, and End keyboard activation for the connection tabs', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return [profile];
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+
+    const manual = document.querySelector<HTMLButtonElement>('[data-connection-mode="manual"]')!;
+    manual.focus();
+    manual.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    let savedTab = document.querySelector<HTMLButtonElement>('[data-connection-mode="saved"]')!;
+    expect(savedTab.getAttribute('aria-selected')).toBe('true');
+    expect(savedTab.tabIndex).toBe(0);
+    expect(document.activeElement).toBe(savedTab);
+    expect(document.querySelector('[data-field="profile"]')).not.toBeNull();
+
+    savedTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
+    let manualTab = document.querySelector<HTMLButtonElement>('[data-connection-mode="manual"]')!;
+    expect(manualTab.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(manualTab);
+
+    manualTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
+    savedTab = document.querySelector<HTMLButtonElement>('[data-connection-mode="saved"]')!;
+    expect(savedTab.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(savedTab);
+
+    savedTab.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    manualTab = document.querySelector<HTMLButtonElement>('[data-connection-mode="manual"]')!;
+    expect(manualTab.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(manualTab);
+  });
+
+  it('drops invalid and duplicate profiles with a stable explanation and never targets them', async () => {
+    const invalidProfiles = [
+      profile,
+      { ...profile, id: 'not-a-uuid', label: '无效 ID' },
+      { ...profile, id: profile.id.toUpperCase(), label: '重复 ID' },
+      { ...profile, id: secondProfileId, host: 'x'.repeat(256), label: '主机过长' },
+      { ...profile, id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', updatedAt: 'not-a-date', label: '时间无效' },
+    ];
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return invalidProfiles;
+      if (method === 'connectSaved') return { ...connection, profileId };
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    expect(document.querySelector('[role="alert"]')).not.toBeNull();
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('部分保存的连接资料无效，已忽略。');
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1);
+    expect(document.body.textContent).not.toContain('无效 ID');
+    expect(document.body.textContent).not.toContain('重复 ID');
+    expect(document.body.textContent).not.toContain('主机过长');
+    expect(document.body.textContent).not.toContain('时间无效');
+    (document.querySelector('[data-action="connect-saved"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core', 'connectSaved', { profileId },
+    ));
+    expect(request.mock.calls.filter((call) => call[1] === 'connectSaved')).toHaveLength(1);
   });
 });
 
