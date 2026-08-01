@@ -20,18 +20,16 @@ import { discoverRepositoryKits } from './repository-kits.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
-test('loads the exact official Kit set from one strict policy', async () => {
+test('loads the trusted market Kit set from one strict policy', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
-  assert.deepEqual(Object.keys(policy.kits).sort(), [
-    'agent-guard',
-    'csv',
-    'mysql',
-    'notifications',
-    'scheduler',
-    'skill-manager',
-    'sqlite',
-    'traceweave',
-  ]);
+  const descriptors = await discoverRepositoryKits({ repositoryRoot });
+  const trustedMarketSlugs = descriptors
+    .filter((descriptor) => (
+      descriptor.distribution === 'market'
+      && policy.kits[descriptor.slug]?.id === descriptor.id
+    ))
+    .map((descriptor) => descriptor.slug);
+  assert.deepEqual(Object.keys(policy.kits).sort(), trustedMarketSlugs);
   assert.equal(policy.repository, 'itharbors/harbors');
   assert.deepEqual(policy.signerWorkflows, [
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
