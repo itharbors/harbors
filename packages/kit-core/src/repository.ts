@@ -108,6 +108,7 @@ function parseLegacyDataDirectories(value: unknown): readonly string[] {
     if (
       parsed.includes('/')
       || parsed.includes('\\')
+      || parsed.includes('\0')
       || parsed === '.'
       || parsed === '..'
       || parsed.startsWith('/')

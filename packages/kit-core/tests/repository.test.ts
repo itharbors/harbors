@@ -155,6 +155,13 @@ describe('parseRepositoryKitPackage', () => {
     })).toThrow(/harbors.storage.legacyDataDirectories\[0\] must be a single canonical directory name/u);
   });
 
+  it('rejects a legacy data directory containing a NUL byte', () => {
+    expect(() => parseRepositoryKitPackage({
+      ...validHarbors,
+      storage: { legacyDataDirectories: ['a\0b'] },
+    })).toThrow(/harbors.storage.legacyDataDirectories\[0\] must be a single canonical directory name/u);
+  });
+
   it('rejects duplicate legacy data directories', () => {
     expect(() => parseRepositoryKitPackage({
       ...validHarbors,
