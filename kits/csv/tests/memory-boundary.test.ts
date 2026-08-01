@@ -16,13 +16,11 @@ describe('CSV kit memory boundary', () => {
       import os from 'node:os';
       import path from 'node:path';
       import { once } from 'node:events';
-      import { pathToFileURL } from 'node:url';
 
       const projectRoot = ${JSON.stringify(projectRoot)};
       const rowCount = ${ROW_COUNT};
       const rssBudgetBytes = ${RSS_BUDGET_BYTES};
-      const { createDefaultAssemblyConfig } = await import(pathToFileURL(path.join(projectRoot, 'packages/server/src/assembly/config.ts')).href);
-      const { createEditor } = await import(pathToFileURL(path.join(projectRoot, 'packages/server/src/editor/index.ts')).href);
+      const { createDefaultAssemblyConfig, createEditor } = await import('@itharbors/server/testing');
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'csv-kit-memory-'));
       const sourcePath = path.join(tempDir, 'large.csv');
       let editor;
@@ -40,9 +38,9 @@ describe('CSV kit memory boundary', () => {
         editor = createEditor('csv-kit-memory-boundary', {
           assembly: createDefaultAssemblyConfig(projectRoot, {
             kitSources: [
-              { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
               { directory: path.join(projectRoot, 'kits/csv'), source: 'development' },
             ],
+            defaultKit: '@itharbors/kit-csv',
           }),
           pluginPathRoots: {
             applicationData: tempDir,

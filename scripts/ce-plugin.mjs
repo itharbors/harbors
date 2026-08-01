@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import path from 'node:path';
+
 import {
   buildPlugin,
   checkPlugin,
@@ -19,14 +21,14 @@ function parseArgs(argv) {
 
 function ensureTarget(target) {
   if (!target) {
-    throw new Error('Expected <plugin-dir|--all|--runtime>');
+    throw new Error('Expected <plugin-dir|--all|--framework|--runtime>');
   }
   return target;
 }
 
 async function discoverTargets(command, target) {
   const resolvedTarget = ensureTarget(target);
-  if (resolvedTarget !== '--all' && resolvedTarget !== '--runtime') {
+  if (resolvedTarget !== '--all' && resolvedTarget !== '--framework' && resolvedTarget !== '--runtime') {
     return [target];
   }
 
@@ -43,6 +45,10 @@ async function discoverTargets(command, target) {
       runtimeRoot,
       await discoverRepositoryBuiltinKits({ repositoryRoot: runtimeRoot }),
     );
+  } else if (resolvedTarget === '--framework') {
+    const frameworkPluginRoot = `${path.resolve(process.cwd(), 'plugins')}${path.sep}`;
+    plugins = discoverAllPlugins(process.cwd()).filter((plugin) =>
+      `${path.resolve(plugin)}${path.sep}`.startsWith(frameworkPluginRoot));
   } else {
     plugins = discoverAllPlugins(process.cwd());
   }

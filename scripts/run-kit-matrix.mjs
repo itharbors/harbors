@@ -104,6 +104,7 @@ export async function runKitMatrix({
   slugs = [],
   repositoryRoot = process.cwd(),
   descriptors,
+  discover = discoverDescriptors,
   cacheRoot = path.join(repositoryRoot, '.cache', 'harbors-kit-installs'),
   ensureInstall = ensureInstallForDescriptor,
   run = execFileAsync,
@@ -118,8 +119,10 @@ export async function runKitMatrix({
     '@itharbors/kit-core',
     '-w',
     '@itharbors/kit-cli',
+    '-w',
+    '@itharbors/server',
   ], { cwd: repositoryRoot, encoding: 'utf8' });
-  const loaded = descriptors ?? await discoverDescriptors(repositoryRoot);
+  const loaded = descriptors ?? await discover(repositoryRoot, slugs);
   const plan = createKitMatrixPlan({ action, slugs, descriptors: loaded });
   const results = [];
   for (const entry of plan) {
@@ -165,8 +168,11 @@ async function ensureInstallForDescriptor(options) {
   return ensureKitInstall(options);
 }
 
-async function discoverDescriptors(repositoryRoot) {
-  const { discoverRepositoryKits } = await import('./lib/repository-kits.mjs');
+async function discoverDescriptors(repositoryRoot, slugs) {
+  const { discoverRepositoryKits, loadRepositoryKit } = await import('./lib/repository-kits.mjs');
+  if (slugs.length > 0) {
+    return Promise.all(slugs.map((slug) => loadRepositoryKit({ repositoryRoot, slug })));
+  }
   return discoverRepositoryKits({ repositoryRoot });
 }
 
@@ -185,8 +191,10 @@ async function checkKitEntry({
     await runKitCli(run, repositoryRoot, ['build', entry.directory]);
     await runKitCli(run, repositoryRoot, ['test', entry.directory]);
     await runKitCli(run, repositoryRoot, ['validate', entry.directory]);
-    await runKitCli(run, repositoryRoot, ['pack', entry.directory, '--output', artifact]);
-    await runKitCli(run, repositoryRoot, ['inspect', artifact, '--json']);
+    if (entry.distribution === 'market') {
+      await runKitCli(run, repositoryRoot, ['pack', entry.directory, '--output', artifact]);
+      await runKitCli(run, repositoryRoot, ['inspect', artifact, '--json']);
+    }
   }, () => removeDirectory(temporaryDirectory));
 }
 

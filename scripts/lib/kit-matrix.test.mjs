@@ -84,7 +84,7 @@ test('rejects non-canonical, duplicate, and ambiguous matrix inputs', () => {
   }
 });
 
-test('prepares the fixed Kit runner and executes the exact full check lifecycle for builtin and market Kits', async () => {
+test('validates builtin Kits without market artifacts and packs exactly one inspectable artifact for market Kits', async () => {
   const calls = [];
   const removed = [];
   const temporaryDirectories = ['/tmp/check-alpha', '/tmp/check-zeta'];
@@ -104,7 +104,7 @@ test('prepares the fixed Kit runner and executes the exact full check lifecycle 
   ]);
   assert.deepEqual(calls[0], {
     file: 'npm',
-    args: ['run', 'build', '-w', '@itharbors/kit-core', '-w', '@itharbors/kit-cli'],
+    args: ['run', 'build', '-w', '@itharbors/kit-core', '-w', '@itharbors/kit-cli', '-w', '@itharbors/server'],
     options: { cwd: repositoryRoot, encoding: 'utf8' },
   });
   assert.deepEqual(
@@ -113,8 +113,6 @@ test('prepares the fixed Kit runner and executes the exact full check lifecycle 
       ['build', '/runs/alpha/repository/kits/alpha'],
       ['test', '/runs/alpha/repository/kits/alpha'],
       ['validate', '/runs/alpha/repository/kits/alpha'],
-      ['pack', '/runs/alpha/repository/kits/alpha', '--output', '/tmp/check-alpha/alpha.hkit'],
-      ['inspect', '/tmp/check-alpha/alpha.hkit', '--json'],
       ['build', '/runs/zeta/repository/kits/zeta'],
       ['test', '/runs/zeta/repository/kits/zeta'],
       ['validate', '/runs/zeta/repository/kits/zeta'],
@@ -154,6 +152,23 @@ test('builds an isolated Kit before testing it in the same working root', async 
     ['test', '/runs/alpha/repository/kits/alpha'],
   ]);
   assert.deepEqual(removed, ['/runs/alpha']);
+});
+
+test('targeted matrix discovery receives only the requested Kit slugs', async () => {
+  const discovered = [];
+  await runKitMatrix({
+    action: 'build',
+    slugs: ['zeta'],
+    repositoryRoot,
+    discover: async (_root, slugs) => {
+      discovered.push(...slugs);
+      return [descriptors[0]];
+    },
+    ensureInstall: installFixture,
+    run: async () => {},
+    removeDirectory: async () => {},
+  });
+  assert.deepEqual(discovered, ['zeta']);
 });
 
 test('does not test after an isolated build failure and always removes the working root', async () => {

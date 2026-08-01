@@ -1,5 +1,5 @@
 import path from 'node:path';
-import type { PluginPathRoots } from '../../../../packages/server/src/framework/plugin/paths';
+import type { PluginPathRoots } from '@itharbors/server/testing';
 
 export function createPluginPathRoots(applicationData: string): PluginPathRoots {
   return {

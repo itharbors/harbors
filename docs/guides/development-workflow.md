@@ -145,7 +145,14 @@ npm run plugins:build
 npm run plugins:check
 ```
 
-`build` 会重建目标 `dist/`；`check` 要求产物已经存在，只做 manifest 与文件校验。
+`build` 会重建目标 `dist/`；单目录 `check` 要求产物已经存在，只做 manifest 与文件校验。
+根 `plugins:check` 先检查 Framework 插件，再在隔离副本中构建每个发现到的 Kit，既保留全量语义，
+也不会要求源码树预先保存市场 Kit 的 `dist/`。Framework CI 使用更窄的
+`npm run plugins:check:framework`。
+
+Kit 的运行时测试如果需要创建真实 Editor，只能从 `@itharbors/server/testing` 使用稳定的窄测试入口；
+隔离 runner 会提供对应 Framework toolchain。不要相对导入 `packages/server/src/**`，也不要借用
+其他 Kit 目录作为测试夹具。
 
 ## 测试
 
@@ -267,7 +274,7 @@ bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
   <name> "添加数据导入" /absolute/path/to/pr-body.md
 ```
 
-finish 只运行目标 Kit 的 `npm run kit:check -- sqlite`，普通 push 后创建并核验 base 为 `main`
+finish 只运行目标 Kit 的 `npm run kit:check -- <name>`，普通 push 后创建并核验 base 为 `main`
 的 PR。路径级 CI 至少检查被修改的 Kit；`kit-core`、Kit CLI、发布/Registry 工具或其他共享
 构建面变化会触发所有官方 Kit CI。
 
@@ -326,10 +333,14 @@ Tag。获得用户对这次发布的明确确认后，按输出设置 `HARBORS_K
 npm run check
 ```
 
-它依次构建共享协议包、运行 Server/Client 全量测试并校验所有插件产物。按变更范围快速
+它依次构建共享协议包、运行 Server/Client 全量测试并校验所有插件产物。`npm run kits:boundary`
+会独立审计完整源码树；`npm run kits:boundary -- <slug>` 只审计目标 Kit，不会被无关 Kit 的临时损坏拖累。
+审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失 lockfile、Framework 产品特判和静态产品清单。
+按变更范围快速
 迭代时可拆分执行，但提交前不要少于：
 
 ```bash
+npm run kits:boundary
 npm run test -w packages/server
 npm run test -w packages/client
 npm run plugins:check

@@ -4,14 +4,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import Database from 'better-sqlite3';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
-import { createEditor } from '../../../packages/server/src/editor/index';
+import { createDefaultAssemblyConfig, createEditor } from '@itharbors/server/testing';
 import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 import { createRuntimeDatabase } from './fixtures/create-runtime-database';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const kitSources = [
-  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
   { directory: path.join(projectRoot, 'kits/sqlite'), source: 'development' },
 ];
 
@@ -29,7 +27,10 @@ describe('SQLite kit runtime integration', () => {
     tempDirs.push(tempDir);
     const databasePath = path.join(tempDir, 'smoke.sqlite');
     const editor = createEditor('sqlite-kit-smoke', {
-      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources,
+        defaultKit: '@itharbors/kit-sqlite',
+      }),
       pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
@@ -116,7 +117,10 @@ describe('SQLite kit runtime integration', () => {
       fixtureDatabase.close();
     }
     const editor = createEditor('sqlite-kit-runtime-relationships', {
-      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources,
+        defaultKit: '@itharbors/kit-sqlite',
+      }),
       pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
@@ -151,7 +155,10 @@ describe('SQLite kit runtime integration', () => {
     const databasePath = path.join(tempDir, 'fixture.sqlite');
     createRuntimeDatabase(databasePath);
     const editor = createEditor('sqlite-kit-runtime-policy', {
-      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources,
+        defaultKit: '@itharbors/kit-sqlite',
+      }),
       pluginPathRoots: createPluginPathRoots(tempDir),
     });
 

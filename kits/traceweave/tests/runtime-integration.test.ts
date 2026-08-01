@@ -2,14 +2,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
-import { createEditor } from '../../../packages/server/src/editor/index';
+import { createDefaultAssemblyConfig, createEditor } from '@itharbors/server/testing';
 import { createTestCodexHome, type TestCodexHome } from '../plugins/traceweave-core/tests/helpers/codex-home';
 import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const kitSources = [
-  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' as const },
   { directory: path.join(projectRoot, 'kits/traceweave'), source: 'development' as const },
 ];
 let home: TestCodexHome | undefined;
@@ -21,7 +19,10 @@ describe('TraceWeave Kit runtime integration', () => {
     home = await createTestCodexHome();
     vi.stubEnv('CODEX_HOME', home.root);
     const editor = createEditor('traceweave-runtime', {
-      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources,
+        defaultKit: '@itharbors/kit-traceweave',
+      }),
       pluginPathRoots: createPluginPathRoots(home.root),
     });
     try {

@@ -135,6 +135,10 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Audit targeted Kit architecture
+        shell: bash
+        run: npm run kits:boundary -- "$KIT_NAME"
+
       - name: Run the targeted Kit check
         shell: bash
         run: npm run kit:check -- "$KIT_NAME" --output-directory "$RUNNER_TEMP/kit-check"

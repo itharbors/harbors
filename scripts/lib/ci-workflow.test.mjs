@@ -11,14 +11,16 @@ const kitWorkflowUrl = new URL('.github/workflows/kit-ci.yml', rootUrl);
 const packageUrl = new URL('package.json', rootUrl);
 const packageLockUrl = new URL('package-lock.json', rootUrl);
 
-test('CI installs locked dependencies before running the repository check', async () => {
+test('Framework CI installs once then audits architecture, tests Framework, and checks only Framework plugins', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
   const installIndex = workflow.indexOf('run: npm ci');
-  const checkIndex = workflow.indexOf('run: npm run check');
+  const boundaryIndex = workflow.indexOf('run: npm run kits:boundary');
+  const testIndex = workflow.indexOf('run: npm run test:framework');
+  const pluginsIndex = workflow.indexOf('run: npm run plugins:check:framework');
 
   assert.notEqual(installIndex, -1, 'CI must install dependencies with npm ci');
-  assert.notEqual(checkIndex, -1, 'CI must run the repository check script');
-  assert.ok(installIndex < checkIndex, 'CI must install dependencies before checking');
+  assert.ok(installIndex < boundaryIndex && boundaryIndex < testIndex && testIndex < pluginsIndex);
+  assert.doesNotMatch(workflow, /npm run (?:check|kits:check)\s*$/mu);
 });
 
 test('CI only invokes npm scripts declared by the root package', async () => {
@@ -78,6 +80,19 @@ test('Kit CI selects event-specific full-history Git comparisons without path tr
   assert.match(workflow, /0\{40\}/u);
   assert.match(workflow, /git rev-list --max-parents=0 --max-count=1/u);
   assert.match(workflow, /node scripts\/select-kit-ci\.mjs/u);
+});
+
+test('Kit change PRs enforce the branch-declared Kit boundary independently from the selected matrix', async () => {
+  const workflow = await readFile(kitWorkflowUrl, 'utf8');
+  const boundary = workflowJob(workflow, 'kit-change-boundary');
+
+  assert.match(boundary, /if:\s*github\.event_name == 'pull_request' && startsWith\(github\.head_ref, 'kit-change\/'\)/u);
+  assert.match(boundary, /fetch-depth:\s*0/u);
+  assert.match(boundary, /\^kit-change\/\(\[a-z0-9\]\+\(-\[a-z0-9\]\+\)\*\)\//u);
+  assert.match(boundary, /declared_kit="\$\{BASH_REMATCH\[1\]\}"/u);
+  assert.match(boundary, /test -f "kits\/\$declared_kit\/kit\.json"/u);
+  assert.match(boundary, /npm run kit:boundary -- "\$declared_kit" --base "\$BASE_SHA" --head "\$HEAD_SHA"/u);
+  assert.doesNotMatch(boundary, /matrix\.kit/u);
 });
 
 test('Kit CI builds Kit Core before loading the selector in a clean checkout', async () => {
@@ -141,6 +156,8 @@ test('Kit CI exposes safe selector outputs and skips the matrix when no Kit appl
   assert.match(select, /HAS_KITS/u);
   assert.match(select, /matrix-json:\s*\$\{\{ steps\.selection\.outputs\.matrix-json \}\}/u);
   assert.match(select, /has-kits:\s*\$\{\{ steps\.selection\.outputs\.has-kits \}\}/u);
+  assert.match(select, /base-sha:\s*\$\{\{ steps\.selection\.outputs\.base-sha \}\}/u);
+  assert.match(select, /head-sha:\s*\$\{\{ steps\.selection\.outputs\.head-sha \}\}/u);
   assert.match(checkKit, /if:\s*needs\.select\.outputs\.has-kits == 'true'/u);
   assert.match(checkKit, /include:\s*\$\{\{ fromJSON\(needs\.select\.outputs\.matrix-json\)\.include \}\}/u);
 });
@@ -149,7 +166,8 @@ test('Kit CI runs each descriptor-owned matrix entry after installing lifecycle 
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const checkKit = workflowJob(workflow, 'check-kit');
   const installIndex = checkKit.indexOf('run: npm ci');
-  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli');
+  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/server');
+  const staticIndex = checkKit.indexOf('npm run kits:boundary -- "${{ matrix.kit }}"');
   const checkIndex = checkKit.indexOf('node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"');
 
   assert.match(checkKit, /needs:\s*select/u);
@@ -158,7 +176,9 @@ test('Kit CI runs each descriptor-owned matrix entry after installing lifecycle 
   assert.notEqual(installIndex, -1);
   assert.notEqual(checkIndex, -1);
   assert.notEqual(lifecycleBuildIndex, -1);
-  assert.ok(installIndex < lifecycleBuildIndex && lifecycleBuildIndex < checkIndex);
+  assert.match(checkKit, /fetch-depth:\s*0/u);
+  assert.ok(installIndex < lifecycleBuildIndex && lifecycleBuildIndex < staticIndex
+    && staticIndex < checkIndex);
   assert.doesNotMatch(checkKit, /output_directory|kit:check/u);
   assert.match(checkKit, /node scripts\/run-kit-matrix\.mjs check "\$\{\{ matrix\.kit \}\}"/u);
   assert.doesNotMatch(workflow, /publish-kit|kit-publish|gh release|actions\/attest/u);
@@ -173,6 +193,9 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
   assert.equal(packageJson.scripts['kits:build'], 'node scripts/run-kit-matrix.mjs build');
   assert.equal(packageJson.scripts['kits:test'], 'node scripts/run-kit-matrix.mjs test');
   assert.equal(packageJson.scripts['kits:check'], 'node scripts/run-kit-matrix.mjs check');
+  assert.equal(packageJson.scripts['kits:boundary'], 'node scripts/check-kit-architecture.mjs');
+  assert.equal(packageJson.scripts['plugins:check:framework'], 'node scripts/ce-plugin.mjs check --framework');
+  assert.equal(packageJson.scripts['plugins:check'], 'npm run plugins:check:framework && npm run kits:build');
   assert.equal(packageJson.scripts.test, 'npm run test:framework && npm run kits:test && npm run test:workflows');
   assert.match(packageJson.scripts['test:workflows'], /npm run test:kit-ci-selection/u);
   const scriptText = JSON.stringify(packageJson.scripts);

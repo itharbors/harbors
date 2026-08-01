@@ -28,6 +28,15 @@ test('mainline caller publishes only exact Kit version Tags through immutable v2
     /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@kit-publish-v2/u,
   );
   assert.match(workflow, /secrets:\s*inherit/u);
+  const context = jobBlock(workflow, 'context');
+  const preflight = jobBlock(workflow, 'preflight');
+  const publish = jobBlock(workflow, 'publish');
+  assert.match(context, /loadTrustedMarketKit/u);
+  assert.match(context, /runner=.*kit\.ciRunner/u);
+  assert.match(preflight, /runs-on:\s*\$\{\{ needs\.context\.outputs\.runner \}\}/u);
+  assert.match(preflight, /npm run kits:boundary -- "\$KIT_NAME"/u);
+  assert.match(preflight, /node scripts\/run-kit-matrix\.mjs check "\$KIT_NAME"/u);
+  assert.match(publish, /needs:\s*preflight/u);
   for (const permission of ['contents: write', 'id-token: write', 'attestations: write', 'pages: write']) {
     assert.match(workflow, new RegExp(permission, 'u'));
   }
@@ -83,6 +92,7 @@ test('prepare uses the selected runner and one pinned check-prepare-inspect pipe
     prepare,
     /npm run kit:check -- "\$KIT_NAME" --output-directory "\$RUNNER_TEMP\/kit-check"/u,
   );
+  assert.match(prepare, /npm run kits:boundary -- "\$KIT_NAME"/u);
   assert.match(
     prepare,
     /readdirSync\(directory, \{ withFileTypes: true \}\)[\s\S]*name\.endsWith\('\.hkit'\)[\s\S]*artifacts\.length !== 1/u,
