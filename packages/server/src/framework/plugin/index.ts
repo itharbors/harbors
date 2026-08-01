@@ -3,6 +3,7 @@ import type {
   PluginAssetsManifest,
   PluginInfo,
   PluginKind,
+  PluginCapability,
   PluginModule as LoadedPluginModule,
 } from './types';
 import type {
@@ -19,14 +20,36 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withPluginDefinitionLock } from './load-lock';
+import type { PluginCredentialVault } from '@itharbors/plugin-types';
+import { credentialError } from '../../credentials/errors';
 
 interface PackageJson {
   name?: string;
   main?: string;
   'ce-editor'?: {
     assets?: PluginAssetsManifest;
+    capabilities?: unknown;
     contribute?: ContributeData;
   };
+}
+
+const PLUGIN_CAPABILITIES = new Set<PluginCapability>(['credentials']);
+
+function parsePluginCapabilities(value: unknown, pluginName: string): PluginCapability[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`Plugin "${pluginName}" ce-editor.capabilities must be an array`);
+  }
+  const capabilities = value.map((capability, index) => {
+    if (typeof capability !== 'string' || !PLUGIN_CAPABILITIES.has(capability as PluginCapability)) {
+      throw new Error(`Plugin "${pluginName}" ce-editor.capabilities[${index}] is unknown`);
+    }
+    return capability as PluginCapability;
+  });
+  if (new Set(capabilities).size !== capabilities.length) {
+    throw new Error(`Plugin "${pluginName}" ce-editor.capabilities contains duplicate values`);
+  }
+  return capabilities;
 }
 
 function isDistJavaScriptEntry(value: string): boolean {
@@ -96,6 +119,7 @@ function resolveLoadEntryPath(pluginRoot: string, entry: string): string {
 export class PluginModule {
   private pathMap = new Map<string, Plugin>();
   private nameMap = new Map<string, Plugin>();
+  private credentialRevokers = new Map<string, () => void>();
 
   async register(pluginPath: string, options: { kind: PluginKind } = { kind: 'external' }): Promise<void> {
     const absPath = path.resolve(pluginPath);
@@ -120,11 +144,13 @@ export class PluginModule {
     const contribute = pkg['ce-editor'].contribute;
     assertPanelContributions(absPath, contribute, pkg.name);
     const assets = pkg['ce-editor'].assets;
+    const capabilities = parsePluginCapabilities(pkg['ce-editor'].capabilities, pkg.name);
     const info: PluginInfo = {
       name: pkg.name,
       path: absPath,
       kind: options.kind,
       entry: pkg.main!,
+      capabilities,
       assets,
       contribute,
     };
@@ -159,10 +185,19 @@ export class PluginModule {
 
     let definition: LoadedPluginModule['definition'];
     const runtimeOptions = normalizeLoadOptions(runtimeInput);
+    const credentialLease = runtimeOptions?.scope === 'session'
+      && registeredPlugin.info.capabilities?.includes('credentials')
+      && runtimeOptions.credentials
+      ? createRevocableCredentialVault(runtimeOptions.credentials)
+      : undefined;
     const runtimeEditor = runtimeOptions?.scope === 'application'
       ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
       : runtimeOptions?.scope === 'session'
-        ? createPluginRuntime(runtimeOptions.host, registeredPlugin.name)
+        ? createPluginRuntime(
+            runtimeOptions.host,
+            registeredPlugin.name,
+            credentialLease?.facade,
+          )
         : undefined;
 
     if (runtimeEditor) {
@@ -196,11 +231,13 @@ export class PluginModule {
         }
       });
     } catch (error) {
+      credentialLease?.revoke();
       plugin.status = PluginStatus.Idle;
       throw error;
     }
 
     if (!definition) {
+      credentialLease?.revoke();
       plugin.status = PluginStatus.Idle;
       throw new Error(`Plugin "${registeredPlugin.name}" did not call editor.plugin.define()`);
     }
@@ -211,6 +248,7 @@ export class PluginModule {
     };
     plugin.status = PluginStatus.Running;
     this.nameMap.set(plugin.name, plugin);
+    if (credentialLease) this.credentialRevokers.set(plugin.path, credentialLease.revoke);
 
     try {
       if (definition.lifecycle?.load) {
@@ -254,6 +292,9 @@ export class PluginModule {
     } catch (error) {
       errors.push(error);
     }
+
+    this.credentialRevokers.get(plugin.path)?.();
+    this.credentialRevokers.delete(plugin.path);
 
     for (const otherPlugin of this.nameMap.values()) {
       if (otherPlugin.name !== plugin.name && otherPlugin.instance?.definition?.lifecycle?.detach) {
@@ -333,10 +374,12 @@ function normalizeLoadOptions(
 function createPluginRuntime(
   editor: PluginRuntimeHost,
   ownerName: string,
+  credentials?: PluginCredentialVault,
 ): PluginRuntime {
   const menu = editor.menu;
   return {
     ...editor,
+    ...(credentials ? { credentials } : {}),
     application: {
       request: (pluginName, name, ...args) =>
         editor.application.request(pluginName, name, ...args),
@@ -395,6 +438,26 @@ function createPluginRuntime(
       broadcast: (topic, ...args) =>
         editor.message.broadcast(topic, ...args),
     },
+  };
+}
+
+function createRevocableCredentialVault(credentials: PluginCredentialVault): {
+  facade: PluginCredentialVault;
+  revoke(): void;
+} {
+  let active = true;
+  const run = <T>(operation: () => Promise<T>): Promise<T> => (
+    active ? operation() : Promise.reject(credentialError('CREDENTIAL_OPERATION_FAILED'))
+  );
+  return {
+    facade: {
+      available: async () => active && credentials.available(),
+      list: () => run(() => credentials.list()),
+      get: (id) => run(() => credentials.get(id)),
+      put: (input) => run(() => credentials.put(input)),
+      delete: (id) => run(() => credentials.delete(id)),
+    },
+    revoke: () => { active = false; },
   };
 }
 

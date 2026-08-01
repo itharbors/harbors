@@ -3,6 +3,10 @@ import { MenuModule } from '../framework/menu';
 import { MessageModule } from '../framework/message';
 import { PluginModule } from '../framework/plugin';
 import type { ContributeData } from '../framework/plugin/types';
+import type {
+  CredentialCapabilitySnapshot,
+  CredentialMode,
+} from '@itharbors/plugin-types';
 import { ApplicationServiceRegistry } from './service-registry';
 import type {
   ApplicationBootstrap,
@@ -21,6 +25,8 @@ export interface ApplicationRuntimeOptions {
     plugins: ApplicationPluginSpec[];
     diagnostics: ApplicationDiagnostic[];
   }>;
+  credentialMode?: CredentialMode;
+  credentialStatusLoader?: () => Promise<CredentialCapabilitySnapshot>;
 }
 
 export class ApplicationRuntime {
@@ -36,12 +42,14 @@ export class ApplicationRuntime {
   private readonly loaded: ApplicationPluginSpec[] = [];
   private startPromise: Promise<ApplicationBootstrap> | undefined;
   private disposePromise: Promise<void> | undefined;
+  private credentialStatus: CredentialCapabilitySnapshot;
 
   constructor(private readonly options: ApplicationRuntimeOptions) {
     this.pluginSpecs = [...(options.plugins ?? [])];
     this.diagnostics = [...(options.diagnostics ?? [])];
     this.resetPluginStates();
     this.menu = new MenuModule({ onChange: () => this.emit() });
+    this.credentialStatus = unavailableCredentialStatus(options.credentialMode ?? 'off');
   }
 
   start(): Promise<ApplicationBootstrap> {
@@ -55,6 +63,7 @@ export class ApplicationRuntime {
       plugins: this.pluginStates.map((state) => ({ ...state, kits: [...state.kits] })),
       diagnostics: this.diagnostics.map((item) => ({ ...item })),
       menu: structuredClone(this.menu.getState()),
+      credentials: sanitizeCredentialStatus(this.credentialStatus, this.options.credentialMode ?? 'off'),
     };
   }
 
@@ -90,6 +99,17 @@ export class ApplicationRuntime {
   private async startInternal(): Promise<ApplicationBootstrap> {
     this.phase = 'starting';
     this.emit();
+    if (this.options.credentialStatusLoader) {
+      try {
+        this.credentialStatus = sanitizeCredentialStatus(
+          await this.options.credentialStatusLoader(),
+          this.options.credentialMode ?? 'off',
+        );
+      } catch {
+        this.credentialStatus = unavailableCredentialStatus(this.options.credentialMode ?? 'off');
+      }
+      this.emit();
+    }
     if (this.options.catalogLoader) {
       try {
         const catalog = await this.options.catalogLoader();
@@ -294,4 +314,29 @@ function assertApplicationContributions(pluginName: string, contribute: Contribu
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function unavailableCredentialStatus(mode: CredentialMode): CredentialCapabilitySnapshot {
+  return mode === 'off'
+    ? { mode, status: 'unavailable', reason: 'CREDENTIALS_DISABLED' }
+    : { mode, status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' };
+}
+
+function sanitizeCredentialStatus(
+  value: CredentialCapabilitySnapshot,
+  fallbackMode: CredentialMode,
+): CredentialCapabilitySnapshot {
+  if (!value || !['off', 'local', 'multi-user'].includes(value.mode)) {
+    return unavailableCredentialStatus(fallbackMode);
+  }
+  if (value.status === 'available') {
+    return { mode: value.mode, status: 'available' };
+  }
+  if (
+    value.status === 'unavailable'
+    && ['CREDENTIALS_DISABLED', 'CREDENTIALS_UNAVAILABLE', 'CREDENTIALS_LOCKED'].includes(value.reason)
+  ) {
+    return { mode: value.mode, status: 'unavailable', reason: value.reason };
+  }
+  return unavailableCredentialStatus(fallbackMode);
 }

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -177,6 +177,60 @@ describe('ApplicationRuntime', () => {
     expect(bootstrap.phase).toBe('degraded');
     expect(bootstrap.plugins[0]).toEqual(expect.objectContaining({ status: 'failed' }));
     expect((globalThis as typeof globalThis & { __applicationEvents: string[] }).__applicationEvents).toEqual([]);
+    await runtime.dispose();
+  });
+
+  it('publishes only a stable credential capability snapshot in bootstrap events', async () => {
+    const credentialStatusLoader = vi.fn(async () => ({
+      mode: 'local' as const,
+      status: 'unavailable' as const,
+      reason: 'CREDENTIALS_LOCKED' as const,
+    }));
+    const runtime = new ApplicationRuntime({
+      plugins: [],
+      hostMode: 'desktop',
+      credentialMode: 'local',
+      credentialStatusLoader,
+    });
+    const snapshots: unknown[] = [];
+    runtime.subscribe((event) => snapshots.push(event.bootstrap.credentials));
+
+    expect(runtime.getBootstrap().credentials).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
+    const bootstrap = await runtime.start();
+
+    expect(bootstrap.credentials).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
+    expect(snapshots).toContainEqual(bootstrap.credentials);
+    expect(Object.keys(bootstrap.credentials!)).toEqual(['mode', 'status', 'reason']);
+    expect(JSON.stringify(bootstrap)).not.toMatch(/backend|database|account|native|\/tmp\//i);
+    await runtime.dispose();
+  });
+
+  it('converts credential status loader failures into a stable unavailable snapshot', async () => {
+    const runtime = new ApplicationRuntime({
+      plugins: [],
+      hostMode: 'desktop',
+      credentialMode: 'local',
+      credentialStatusLoader: async () => {
+        throw new Error('native keyring /tmp/private-account failed');
+      },
+    });
+
+    const bootstrap = await runtime.start();
+
+    expect(bootstrap.credentials).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
+    expect(JSON.stringify(bootstrap)).not.toContain('private-account');
     await runtime.dispose();
   });
 });

@@ -21,6 +21,9 @@ import {
 import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
+import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
+
+type CredentialVaultRuntime = Pick<CredentialVault, 'bind' | 'capability' | 'recover' | 'close'>;
 
 export interface ServerOptions {
   port?: number;
@@ -30,6 +33,7 @@ export interface ServerOptions {
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   credentialMode?: string;
+  credentialVault?: CredentialVaultRuntime;
   applicationControlToken?: string;
   agentGuardDataDir?: string;
   clientAssetsRoot?: string;
@@ -98,6 +102,11 @@ export function createServer(options: ServerOptions = {}) {
     throw new Error('Server requires at least one Kit source');
   }
   const dbPath = options.dbPath || ':memory:';
+  const credentialVaultPromise: Promise<CredentialVaultRuntime | undefined> = options.credentialVault
+    ? Promise.resolve(options.credentialVault)
+    : credentialMode === 'local'
+      ? createLocalCredentialVault({ dbPath })
+      : Promise.resolve(undefined);
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
   const channel = new SSEChannel();
@@ -112,15 +121,22 @@ export function createServer(options: ServerOptions = {}) {
           kitSources: options.kitSources,
         },
       ));
+  let recoveredCredentialVault: CredentialVaultRuntime | undefined;
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: applicationHostMode,
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
+    credentialMode,
+    credentialStatusLoader: async () => (
+      (await credentialVaultPromise)?.capability()
+      ?? { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' }
+    ),
   });
   const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
     assembly,
     applicationRuntime,
     applicationControlToken: options.applicationControlToken,
     clientAssetsRoot: options.clientAssetsRoot,
+    credentialVault: () => recoveredCredentialVault,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -145,6 +161,11 @@ export function createServer(options: ServerOptions = {}) {
   };
 
   const startInternal = async (port?: number): Promise<number> => {
+    if (credentialMode === 'local') {
+      const credentialVault = await credentialVaultPromise;
+      await credentialVault?.recover();
+      recoveredCredentialVault = credentialVault;
+    }
     await applicationRuntime.start();
     if (stopping) throw new ServerStoppingError();
     const listeningPort = await new Promise<number>((resolve, reject) => {
@@ -195,6 +216,12 @@ export function createServer(options: ServerOptions = {}) {
     }
     try {
       await applicationRuntime.dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      (await credentialVaultPromise)?.close();
+      recoveredCredentialVault = undefined;
     } catch (error) {
       errors.push(error);
     }

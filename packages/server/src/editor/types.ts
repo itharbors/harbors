@@ -6,9 +6,11 @@ import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '.
 import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistration } from '../framework/panel/types';
 import type { PluginDefinition, PluginInfo } from '../framework/plugin/types';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
+import type { PluginCredentialVault } from '@itharbors/plugin-types';
 
 export interface PluginRuntime {
   readonly sessionId: string;
+  credentials?: PluginCredentialVault;
   application: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   };
@@ -185,7 +187,7 @@ export type PluginRuntimeHost = Omit<Editor, 'menu'> & {
 };
 
 export type PluginLoadOptions =
-  | { scope: 'session'; host: PluginRuntimeHost }
+  | { scope: 'session'; host: PluginRuntimeHost; credentials?: PluginCredentialVault }
   | { scope: 'application'; host: ApplicationPluginRuntimeHost };
 
 export interface BrowserEditor {

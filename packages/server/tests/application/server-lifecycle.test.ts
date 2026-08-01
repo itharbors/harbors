@@ -75,6 +75,67 @@ describe('application server lifecycle', () => {
     ]);
   });
 
+  it('recovers credentials before application startup and closes them after Sessions and Application', async () => {
+    const events: string[] = [];
+    let releaseRecovery: (() => void) | undefined;
+    const credentialVault = {
+      recover: vi.fn(() => new Promise<void>((resolve) => {
+        events.push('credentials:recover');
+        releaseRecovery = resolve;
+      })),
+      capability: vi.fn(() => ({ mode: 'local' as const, status: 'available' as const })),
+      bind: vi.fn(),
+      close: vi.fn(() => { events.push('credentials:close'); }),
+    };
+    const applicationRuntime = {
+      start: vi.fn(async () => {
+        events.push('application:start');
+        return {
+          phase: 'ready' as const,
+          plugins: [],
+          diagnostics: [],
+          menu: { tree: [], warnings: [] },
+        };
+      }),
+      getBootstrap: vi.fn(() => ({
+        phase: 'ready' as const,
+        plugins: [],
+        diagnostics: [],
+        menu: { tree: [], warnings: [] },
+      })),
+      request: vi.fn(),
+      triggerMenu: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+      dispose: vi.fn(async () => { events.push('application:dispose'); }),
+    };
+    const server = createServer({
+      assembly: testAssembly,
+      applicationHostMode: 'desktop',
+      host: '127.0.0.1',
+      credentialVault,
+      applicationRuntime,
+    });
+    vi.spyOn(server.registry, 'disposeAll').mockImplementation(async () => {
+      events.push('sessions:dispose');
+    });
+
+    const starting = server.start(0);
+    await vi.waitFor(() => expect(credentialVault.recover).toHaveBeenCalledOnce());
+    expect(server.server.listening).toBe(false);
+    expect(applicationRuntime.start).not.toHaveBeenCalled();
+    releaseRecovery?.();
+    await starting;
+    await server.stop();
+
+    expect(events).toEqual([
+      'credentials:recover',
+      'application:start',
+      'sessions:dispose',
+      'application:dispose',
+      'credentials:close',
+    ]);
+  });
+
   it('allows degraded application startup to listen', async () => {
     const server = createServer({
       assembly: testAssembly,

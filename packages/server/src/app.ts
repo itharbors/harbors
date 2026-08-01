@@ -28,12 +28,16 @@ import { createApplicationEventsRouter } from './routes/application-events';
 import { createApplicationMenuTriggerRouter } from './routes/application-menu-trigger';
 import { createKitCatalogRouter } from './routes/kit-catalog';
 import { createClientAssetRouter } from './routes/client-asset';
+import type { CredentialVault } from './credentials/vault';
+
+type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
 export interface AppOptions {
   assembly: AssemblyConfig;
   applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe'>;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
+  credentialVault?: () => CredentialVaultBindingSource | undefined;
 }
 
 export function createApp(
@@ -48,8 +52,10 @@ export function createApp(
   const assembly = appOptions.assembly;
   const kitCatalogPromise = discoverKitCatalog(assembly);
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
+    const credentialVault = appOptions.credentialVault?.();
     const editor = createEditor(session.sessionId, {
         assembly,
+        credentialVault,
         applicationRequest: (plugin, name, ...args) => (
           appOptions.applicationRuntime.request(plugin, name, ...args)
         ),

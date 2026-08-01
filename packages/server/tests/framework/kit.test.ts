@@ -1,9 +1,93 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { KitModule, normalizeKitLayoutConfig } from '../../src/framework/kit/index';
 import type { KitDescriptor } from '../../src/framework/kit/types';
+import { createEditor } from '../../src/editor/index';
+import { CredentialStore } from '../../src/credentials/store';
+import { CredentialVault } from '../../src/credentials/vault';
+import { testAssembly } from '../helpers/assembly';
+
+function writeJson(filePath: string, value: unknown): void {
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function createCredentialKit(
+  root: string,
+  directory: string,
+  id: string,
+  permissions: unknown,
+  options: { manifestId?: string; manifestVersion?: string } = {},
+): string {
+  const kitDir = path.join(root, directory);
+  const pluginsDir = path.join(kitDir, 'plugins');
+  fs.mkdirSync(pluginsDir, { recursive: true });
+  writeJson(path.join(kitDir, 'package.json'), {
+    name: id,
+    version: '1.0.0',
+    'ce-editor': {
+      kit: {
+        layouts: { default: 'layout.json' },
+        plugin: ['@scope/mysql-core', '@scope/mysql-explorer'],
+        windowEntries: { main: 'main.html', secondary: 'secondary.html' },
+      },
+    },
+  });
+  writeJson(path.join(kitDir, 'kit.json'), {
+    schemaVersion: 1,
+    id: options.manifestId ?? id,
+    version: options.manifestVersion ?? '1.0.0',
+    channel: 'stable',
+    publisher: 'scope',
+    requires: { harbors: '*', kitApi: '*', protocolVersion: 1 },
+    target: { platform: 'any', arch: 'any' },
+    permissions,
+    entry: 'package.json',
+  });
+  writeJson(path.join(kitDir, 'layout.json'), { windows: [] });
+  fs.writeFileSync(path.join(kitDir, 'main.html'), '<html></html>');
+  fs.writeFileSync(path.join(kitDir, 'secondary.html'), '<html></html>');
+
+  for (const [dirName, name, capabilities] of [
+    ['mysql-core', '@scope/mysql-core', ['credentials']],
+    ['mysql-explorer', '@scope/mysql-explorer', undefined],
+  ] as const) {
+    const pluginDir = path.join(pluginsDir, dirName);
+    fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
+    writeJson(path.join(pluginDir, 'package.json'), {
+      name,
+      type: 'module',
+      main: './main/dist/index.js',
+      'ce-editor': capabilities ? { capabilities } : {},
+    });
+    fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: {
+          hasCredentials() { return credentials !== undefined; },
+          put(input) { return credentials.put(input); },
+          get(id) { return credentials.get(id); },
+        },
+      });
+    `);
+  }
+
+  return kitDir;
+}
+
+function assemblyFor(kitDir: string) {
+  return {
+    ...testAssembly,
+    defaultKit: JSON.parse(fs.readFileSync(path.join(kitDir, 'package.json'), 'utf8')).name as string,
+    kitSources: [{ directory: kitDir, source: 'explicit' as const }],
+  };
+}
 
 describe('KitModule', () => {
   let kitModule: KitModule;
+  const temporaryRoots: string[] = [];
   const kit: KitDescriptor = {
     name: 'default-kit',
     label: 'Default',
@@ -20,6 +104,12 @@ describe('KitModule', () => {
 
   beforeEach(() => {
     kitModule = new KitModule();
+  });
+
+  afterEach(() => {
+    for (const root of temporaryRoots.splice(0)) {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it('register stores and returns a kit', () => {
@@ -125,5 +215,98 @@ describe('KitModule', () => {
 
   it('listLayouts returns empty array when no kit is active', () => {
     expect(kitModule.listLayouts()).toEqual([]);
+  });
+
+  it('copies adjacent Kit permissions and requires package identity to match kit.json', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-credential-manifest-'));
+    temporaryRoots.push(root);
+    const validKit = createCredentialKit(root, 'valid', '@scope/kit-valid', ['network', 'credentials']);
+    const idMismatch = createCredentialKit(root, 'id-mismatch', '@scope/kit-id', ['credentials'], {
+      manifestId: '@scope/kit-other',
+    });
+    const versionMismatch = createCredentialKit(root, 'version-mismatch', '@scope/kit-version', ['credentials'], {
+      manifestVersion: '2.0.0',
+    });
+
+    const validEditor = createEditor('valid-manifest', { assembly: assemblyFor(validKit) });
+    const idEditor = createEditor('id-mismatch', { assembly: assemblyFor(idMismatch) });
+    const versionEditor = createEditor('version-mismatch', { assembly: assemblyFor(versionMismatch) });
+
+    await expect(validEditor.kit.load()).resolves.toMatchObject({
+      name: '@scope/kit-valid',
+      permissions: ['network', 'credentials'],
+    });
+    await expect(idEditor.kit.load()).rejects.toThrow(/kit\.json.*id|identity/i);
+    await expect(versionEditor.kit.load()).rejects.toThrow(/kit\.json.*version|identity/i);
+    await Promise.all([validEditor.dispose(), idEditor.dispose(), versionEditor.dispose()]);
+  });
+
+  it.each([
+    ['unknown', ['secrets']],
+    ['duplicate', ['credentials', 'credentials']],
+    ['non-array', 'credentials'],
+  ])('rejects %s Kit permissions before loading external plugins', async (_label, permissions) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-invalid-permissions-'));
+    temporaryRoots.push(root);
+    const kitDir = createCredentialKit(root, 'invalid', '@scope/kit-invalid', permissions);
+    const editor = createEditor('invalid-permissions', { assembly: assemblyFor(kitDir) });
+
+    await expect(editor.kit.load()).rejects.toThrow(/permission/i);
+    expect(editor.plugin.listLoaded()).not.toContain('@scope/mysql-core');
+    await editor.dispose();
+  });
+
+  it('injects credentials only when mode, Kit permission, plugin capability, and owner scope all pass', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-credential-gates-'));
+    temporaryRoots.push(root);
+    const ownerKit = createCredentialKit(root, 'owner', '@scope/kit-owner', ['credentials']);
+    const noPermissionKit = createCredentialKit(root, 'no-permission', '@scope/kit-no-permission', []);
+    const otherKit = createCredentialKit(root, 'other', '@scope/kit-other', ['credentials']);
+    const databasePath = path.join(root, 'credentials.sqlite');
+    const secrets = new Map<string, string>();
+    const vault = new CredentialVault({
+      mode: 'local',
+      store: new CredentialStore(databasePath),
+      keyring: {
+        get: async (account) => secrets.get(account) ?? null,
+        set: async (account, secret) => { secrets.set(account, secret); },
+        delete: async (account) => { secrets.delete(account); },
+      },
+    });
+    const offVault = new CredentialVault({ mode: 'off' });
+    const createVaultEditor = (sessionId: string, kitDir: string, credentialVault: CredentialVault) => (
+      createEditor(sessionId, {
+        assembly: assemblyFor(kitDir),
+        credentialVault,
+      })
+    );
+    const owner = createVaultEditor('owner', ownerKit, vault);
+    const noPermission = createVaultEditor('no-permission', noPermissionKit, vault);
+    const otherOwner = createVaultEditor('other-owner', otherKit, vault);
+    const offMode = createVaultEditor('off-mode', ownerKit, offVault);
+
+    await Promise.all([
+      owner.kit.load(),
+      noPermission.kit.load(),
+      otherOwner.kit.load(),
+      offMode.kit.load(),
+    ]);
+    const ownerProfile = await owner.plugin.callPlugin('@scope/mysql-core', 'put', {
+      label: 'Owner database',
+      metadata: { host: 'localhost' },
+      secret: 'owner-secret',
+    }) as { id: string };
+
+    expect(owner.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(true);
+    expect(owner.plugin.callPlugin('@scope/mysql-explorer', 'hasCredentials')).toBe(false);
+    expect((owner as unknown as { credentials?: unknown }).credentials).toBeUndefined();
+    expect(noPermission.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
+    expect(offMode.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
+    await expect(otherOwner.plugin.callPlugin('@scope/mysql-core', 'get', ownerProfile.id))
+      .rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
+
+    await Promise.all([owner.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose()]);
+    vault.close();
+    offVault.close();
   });
 });

@@ -15,6 +15,7 @@ function mkPlugin(
   dirName: string,
   pkgName: string,
   code = 'editor.plugin.define({ methods: {} });',
+  capabilities?: unknown,
 ) {
   const pluginDir = path.join(root, dirName);
   fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
@@ -22,7 +23,7 @@ function mkPlugin(
     name: pkgName,
     type: 'module',
     main: './main/dist/index.js',
-    'ce-editor': {},
+    'ce-editor': capabilities === undefined ? {} : { capabilities },
   }, null, 2));
   fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), code);
   return pluginDir;
@@ -79,6 +80,7 @@ describe('PluginModule', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     delete (globalThis as typeof globalThis & { editor?: unknown }).editor;
+    delete (globalThis as typeof globalThis & { __retainedCredentials?: unknown }).__retainedCredentials;
   });
 
   it('keeps registration state instance-scoped', async () => {
@@ -101,6 +103,111 @@ describe('PluginModule', () => {
     await plugin.register(pluginDir, { kind: 'external' });
 
     expect(plugin.getInfo('log')).toMatchObject({ kind: 'external' });
+  });
+
+  it('parses the unique credentials capability into public plugin info', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-capability-'));
+    const pluginDir = mkPlugin(root, 'vault-client', 'vault-client', undefined, ['credentials']);
+    const plugin = new PluginModule();
+
+    await plugin.register(pluginDir, { kind: 'external' });
+
+    expect(plugin.getInfo('vault-client')).toMatchObject({ capabilities: ['credentials'] });
+  });
+
+  it.each([
+    ['unknown', ['secrets']],
+    ['duplicate', ['credentials', 'credentials']],
+    ['non-array', 'credentials'],
+  ])('rejects %s plugin capabilities before importing plugin code', async (_label, capabilities) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-invalid-capability-'));
+    const pluginDir = mkPlugin(root, 'vault-client', 'vault-client', undefined, capabilities);
+    const plugin = new PluginModule();
+
+    await expect(plugin.register(pluginDir, { kind: 'external' }))
+      .rejects.toThrow(/capabilit/i);
+    expect(plugin.listRegistered()).toEqual([]);
+  });
+
+  it('injects a pre-bound credential facade only into an explicitly capable Session plugin', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-credential-facade-'));
+    const capableDir = mkPlugin(root, 'capable', 'capable', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: {
+          hasCredentials() { return credentials !== undefined; },
+          list() { return credentials.list(); },
+        },
+      });
+    `, ['credentials']);
+    const incapableDir = mkPlugin(root, 'incapable', 'incapable', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: { hasCredentials() { return credentials !== undefined; } },
+      });
+    `);
+    const plugin = new PluginModule();
+    const host = withRuntimeMenu(createEditor('credential-facade-editor', { assembly }));
+    const credentials = {
+      available: vi.fn(async () => true),
+      list: vi.fn(async () => [{
+        id: 'owner-profile',
+        label: 'Owner profile',
+        metadata: {},
+        createdAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-01T00:00:00.000Z',
+      }]),
+      get: vi.fn(),
+      put: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    await plugin.register(capableDir, { kind: 'external' });
+    await plugin.register(incapableDir, { kind: 'external' });
+    await plugin.load(capableDir, { scope: 'session', host, credentials });
+    await plugin.load(incapableDir, { scope: 'session', host, credentials });
+
+    expect(plugin.callPlugin('capable', 'hasCredentials')).toBe(true);
+    await expect(plugin.callPlugin('capable', 'list')).resolves.toEqual([
+      expect.objectContaining({ id: 'owner-profile', label: 'Owner profile' }),
+    ]);
+    expect(plugin.callPlugin('incapable', 'hasCredentials')).toBe(false);
+  });
+
+  it('revokes a credential facade retained by plugin code after unload', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-credential-revoke-'));
+    const pluginDir = mkPlugin(root, 'capable', 'capable', `
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) { globalThis.__retainedCredentials = runtime.credentials; },
+          async unload() { await globalThis.__retainedCredentials.list(); },
+        },
+        methods: {},
+      });
+    `, ['credentials']);
+    const plugin = new PluginModule();
+    const host = withRuntimeMenu(createEditor('credential-revoke-editor', { assembly }));
+    const credentials = {
+      available: vi.fn(async () => true),
+      list: vi.fn(async () => []),
+      get: vi.fn(),
+      put: vi.fn(),
+      delete: vi.fn(),
+    };
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    await plugin.load(pluginDir, { scope: 'session', host, credentials });
+    const retained = (globalThis as typeof globalThis & {
+      __retainedCredentials: typeof credentials;
+    }).__retainedCredentials;
+
+    await plugin.unload(pluginDir);
+
+    expect(credentials.list).toHaveBeenCalledOnce();
+    await expect(retained.available()).resolves.toBe(false);
+    await expect(retained.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
   });
 
   it('lets session plugin main entries request application plugin methods', async () => {
@@ -280,7 +387,7 @@ describe('PluginModule', () => {
           },
         },
       });
-    `);
+    `, ['credentials']);
     const plugin = new PluginModule();
     const host = applicationRuntimeHost();
 

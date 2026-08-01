@@ -3,7 +3,7 @@ import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '.
 import { ConfigModule } from '../framework/config';
 import type { ConfigLayerStore } from '../framework/config';
 import { I18nModule } from '../framework/i18n/index';
-import type { KitDescriptor, KitLayoutConfig, KitLayoutInputConfig } from '../framework/kit/types';
+import type { KitDescriptor, KitLayoutConfig, KitLayoutInputConfig, KitPermission } from '../framework/kit/types';
 import type { PanelConstraints } from '../framework/panel/types';
 import { KitModule, normalizeKitLayoutConfig } from '../framework/kit/index';
 import { normalizeKitTheme } from '../framework/kit/theme';
@@ -17,6 +17,9 @@ import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
 import path from 'node:path';
 import fs from 'node:fs';
+import type { CredentialVault } from '../credentials/vault';
+
+type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
 const BUILTIN_PLUGINS = [
   '@itharbors/panel',
@@ -27,6 +30,7 @@ const BUILTIN_PLUGINS = [
 
 interface KitPackageJson {
   name?: string;
+  version?: string;
   label?: string;
   icon?: string;
   'ce-editor'?: {
@@ -49,6 +53,7 @@ interface KitPackageJson {
 interface ActiveExternalPlugin {
   path: string;
   name: string;
+  credentials?: import('@itharbors/plugin-types').PluginCredentialVault;
 }
 
 interface CreateEditorOptions {
@@ -65,6 +70,51 @@ interface CreateEditorOptions {
   ) => void;
   initialLocale?: string;
   platform?: MenuPlatform;
+  credentialVault?: CredentialVaultBindingSource;
+}
+
+const KIT_PERMISSIONS = new Set<KitPermission>([
+  'network',
+  'filesystem',
+  'native-code',
+  'process-control',
+  'application-startup',
+  'credentials',
+]);
+
+function readKitPermissions(kitPath: string, pkg: KitPackageJson): KitPermission[] {
+  const manifestPath = path.join(kitPath, 'kit.json');
+  if (!fs.existsSync(manifestPath)) return [];
+
+  let manifest: unknown;
+  try {
+    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+  } catch {
+    throw new Error(`Invalid Kit at ${kitPath}: kit.json must contain valid JSON`);
+  }
+  if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
+    throw new Error(`Invalid Kit at ${kitPath}: kit.json must be an object`);
+  }
+  const record = manifest as Record<string, unknown>;
+  if (record.id !== pkg.name) {
+    throw new Error(`Invalid Kit at ${kitPath}: kit.json id must match package name`);
+  }
+  if (typeof pkg.version !== 'string' || record.version !== pkg.version) {
+    throw new Error(`Invalid Kit at ${kitPath}: kit.json version must match package version`);
+  }
+  if (!Array.isArray(record.permissions)) {
+    throw new Error(`Invalid Kit at ${kitPath}: kit.json permissions must be an array`);
+  }
+  const permissions = record.permissions.map((permission, index) => {
+    if (typeof permission !== 'string' || !KIT_PERMISSIONS.has(permission as KitPermission)) {
+      throw new Error(`Invalid Kit at ${kitPath}: kit.json permissions[${index}] is unknown`);
+    }
+    return permission as KitPermission;
+  });
+  if (new Set(permissions).size !== permissions.length) {
+    throw new Error(`Invalid Kit at ${kitPath}: kit.json permissions contains duplicate values`);
+  }
+  return permissions;
 }
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
@@ -257,6 +307,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     }
 
     const plugins = pkg['ce-editor'].kit.plugin ?? [];
+    const permissions = readKitPermissions(kitPath, pkg);
 
     const descriptor: KitDescriptor = {
       name: pkg.name,
@@ -264,6 +315,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       icon: pkg.icon,
       menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
       theme: normalizeKitTheme(pkg['ce-editor'].kit.theme, pkg.name),
+      permissions,
       plugins,
       layouts,
       windowEntries: normalizedWindowEntries,
@@ -305,12 +357,15 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
 
   const cleanupLoadedExternalPlugins = unloadExternalPlugins;
 
-  async function loadExternalPlugin(pluginPath: string, pluginName: string): Promise<ActiveExternalPlugin> {
-    const externalPlugin = { path: pluginPath, name: pluginName };
+  async function loadExternalPlugin(externalPlugin: ActiveExternalPlugin): Promise<ActiveExternalPlugin> {
     try {
-      await plugin.load(pluginPath, {
-        ...editor,
-        menu: runtimeMenu,
+      await plugin.load(externalPlugin.path, {
+        scope: 'session',
+        host: {
+          ...editor,
+          menu: runtimeMenu,
+        },
+        credentials: externalPlugin.credentials,
       });
       return externalPlugin;
     } catch (loadError) {
@@ -319,7 +374,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       } catch (cleanupError) {
         throw new AggregateError(
           [loadError, cleanupError],
-          `Plugin "${pluginName}" load and owner cleanup failed`,
+          `Plugin "${externalPlugin.name}" load and owner cleanup failed`,
         );
       }
       throw loadError;
@@ -330,7 +385,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const restoredPlugins: ActiveExternalPlugin[] = [];
     try {
       for (const previousPlugin of previousPlugins) {
-        restoredPlugins.push(await loadExternalPlugin(previousPlugin.path, previousPlugin.name));
+        restoredPlugins.push(await loadExternalPlugin(previousPlugin));
       }
       activeExternalPlugins = restoredPlugins;
     } catch (restoreError) {
@@ -357,7 +412,15 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     for (const pluginName of descriptor.plugins) {
       const pluginPath = await resolvePlugin(pluginName, pluginResolveContext(path.join(kitPath, 'plugins')));
       await plugin.register(pluginPath, { kind: 'external' });
-      preparedPlugins.push({ path: pluginPath, name: pluginName });
+      const info = plugin.getInfo(pluginPath);
+      if (!info) throw new Error(`Plugin "${pluginName}" registration did not produce plugin info`);
+      const credentials = options.credentialVault
+        && options.credentialVault.capability().mode !== 'off'
+        && descriptor.permissions?.includes('credentials')
+        && info.capabilities?.includes('credentials')
+        ? options.credentialVault.bind(descriptor.name, info.name)
+        : undefined;
+      preparedPlugins.push({ path: pluginPath, name: info.name, credentials });
     }
     const previousExternalPlugins = [...activeExternalPlugins];
     const loadedPlugins: ActiveExternalPlugin[] = [];
@@ -369,7 +432,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     try {
       await unloadActiveExternalPlugins();
       for (const preparedPlugin of preparedPlugins) {
-        loadedPlugins.push(await loadExternalPlugin(preparedPlugin.path, preparedPlugin.name));
+        loadedPlugins.push(await loadExternalPlugin(preparedPlugin));
       }
     } catch (switchError) {
       const rollbackErrors: unknown[] = [];
