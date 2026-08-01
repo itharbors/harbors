@@ -33,6 +33,12 @@ interface PackageJson {
   };
 }
 
+interface PluginDefinitionBridge {
+  readonly plugin: Readonly<{
+    define(definition: import('./types').PluginDefinition): void;
+  }>;
+}
+
 const PLUGIN_CAPABILITIES = new Set<PluginCapability>(['credentials']);
 
 function parsePluginCapabilities(value: unknown, pluginName: string): PluginCapability[] {
@@ -190,39 +196,32 @@ export class PluginModule {
       && runtimeOptions.credentials
       ? createRevocableCredentialVault(runtimeOptions.credentials)
       : undefined;
-    const definitionRuntime = runtimeOptions?.scope === 'application'
+    const definitionBridge = runtimeOptions
+      ? createPluginDefinitionBridge((nextDefinition) => {
+        if (definition) {
+          throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
+        }
+        definition = nextDefinition;
+      })
+      : undefined;
+    const lifecycleRuntime = runtimeOptions?.scope === 'application'
       ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
       : runtimeOptions?.scope === 'session'
         ? createPluginRuntime(
             runtimeOptions.host,
             registeredPlugin.name,
+            credentialLease?.facade,
           )
         : undefined;
-    const lifecycleRuntime = runtimeOptions?.scope === 'session'
-      ? createPluginRuntime(
-          runtimeOptions.host,
-          registeredPlugin.name,
-          credentialLease?.facade,
-        )
-      : definitionRuntime;
-
-    if (definitionRuntime) {
-      definitionRuntime.plugin.define = (nextDefinition) => {
-        if (definition) {
-          throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
-        }
-        definition = nextDefinition;
-      };
-    }
 
     try {
       await withPluginDefinitionLock(async () => {
         const globalScope = globalThis as typeof globalThis & {
-          editor?: PluginRuntime | ApplicationPluginRuntime;
+          editor?: PluginDefinitionBridge | PluginRuntime | ApplicationPluginRuntime;
         };
         const previousEditor = globalScope.editor;
-        if (definitionRuntime) {
-          globalScope.editor = definitionRuntime;
+        if (definitionBridge) {
+          globalScope.editor = definitionBridge;
         }
 
         try {
@@ -375,6 +374,14 @@ function normalizeLoadOptions(
   if (!input) return undefined;
   if ('scope' in input && 'host' in input) return input;
   return { scope: 'session', host: input };
+}
+
+function createPluginDefinitionBridge(
+  capture: (definition: import('./types').PluginDefinition) => void,
+): PluginDefinitionBridge {
+  const define = Object.freeze(capture.bind(undefined));
+  const plugin = Object.freeze({ define });
+  return Object.freeze({ plugin });
 }
 
 function createPluginRuntime(

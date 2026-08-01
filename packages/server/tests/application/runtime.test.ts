@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { ApplicationRuntime } from '../../src/application/runtime';
+import { ApplicationRuntime, type ApplicationRuntimeOptions } from '../../src/application/runtime';
 import type { ApplicationPluginSpec } from '../../src/application/types';
 
 describe('ApplicationRuntime', () => {
@@ -281,6 +281,55 @@ describe('ApplicationRuntime', () => {
     const bootstrap = await runtime.start();
 
     expect(bootstrap.credentials).toEqual(expected);
+    await runtime.dispose();
+  });
+
+  it('keeps configured mode immutable when the status loader mutates caller options across await', async () => {
+    const options: ApplicationRuntimeOptions = {
+      plugins: [],
+      hostMode: 'desktop',
+      credentialMode: 'local',
+      credentialStatusLoader: async () => {
+        await Promise.resolve();
+        options.credentialMode = 'off';
+        return { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' };
+      },
+    };
+    const runtime = new ApplicationRuntime(options);
+
+    const bootstrap = await runtime.start();
+
+    expect(bootstrap.credentials).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_UNAVAILABLE',
+    });
+    await runtime.dispose();
+  });
+
+  it('copies the credential status loader reference during construction', async () => {
+    const originalLoader = vi.fn(async () => ({
+      mode: 'local' as const,
+      status: 'unavailable' as const,
+      reason: 'CREDENTIALS_LOCKED' as const,
+    }));
+    const options: ApplicationRuntimeOptions = {
+      plugins: [],
+      hostMode: 'desktop',
+      credentialMode: 'local',
+      credentialStatusLoader: originalLoader,
+    };
+    const runtime = new ApplicationRuntime(options);
+    options.credentialStatusLoader = async () => ({ mode: 'local', status: 'available' });
+
+    const bootstrap = await runtime.start();
+
+    expect(originalLoader).toHaveBeenCalledOnce();
+    expect(bootstrap.credentials).toEqual({
+      mode: 'local',
+      status: 'unavailable',
+      reason: 'CREDENTIALS_LOCKED',
+    });
     await runtime.dispose();
   });
 });

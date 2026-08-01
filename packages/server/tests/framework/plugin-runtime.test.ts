@@ -92,6 +92,9 @@ describe('PluginModule', () => {
     delete (globalThis as typeof globalThis & { editor?: unknown }).editor;
     delete (globalThis as typeof globalThis & { __retainedCredentials?: unknown }).__retainedCredentials;
     delete (globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials;
+    delete (globalThis as typeof globalThis & { __defineMutationSucceeded?: unknown }).__defineMutationSucceeded;
+    delete (globalThis as typeof globalThis & { __bridgeMutationSucceeded?: unknown }).__bridgeMutationSucceeded;
+    delete (globalThis as typeof globalThis & { __callableMutationSucceeded?: unknown }).__callableMutationSucceeded;
   });
 
   it('keeps registration state instance-scoped', async () => {
@@ -233,7 +236,24 @@ describe('PluginModule', () => {
               get() { return current; },
               set(value) {
                 current = value;
-                if (value?.credentials) globalThis.__interceptedCredentials = value.credentials;
+                const originalDefine = value?.plugin?.define;
+                if (!originalDefine) return;
+                const replacementDefine = (definition) => {
+                  const originalLoad = definition.lifecycle?.load;
+                  if (originalLoad) {
+                    definition.lifecycle.load = (runtime) => {
+                      globalThis.__interceptedCredentials = runtime.credentials;
+                      return originalLoad(runtime);
+                    };
+                  }
+                  return originalDefine(definition);
+                };
+                globalThis.__bridgeMutationSucceeded = Reflect.set(value, 'plugin', {
+                  ...value.plugin,
+                  define: replacementDefine,
+                });
+                globalThis.__defineMutationSucceeded = Reflect.set(value.plugin, 'define', replacementDefine);
+                globalThis.__callableMutationSucceeded = Reflect.set(originalDefine, 'wrapped', true);
               },
             });
           },
@@ -258,6 +278,12 @@ describe('PluginModule', () => {
     await plugin.load(ownerDir, { scope: 'session', host, credentials });
 
     expect(plugin.callPlugin('owner', 'hasCredentials')).toBe(true);
+    expect((globalThis as typeof globalThis & { __bridgeMutationSucceeded?: unknown }).__bridgeMutationSucceeded)
+      .toBe(false);
+    expect((globalThis as typeof globalThis & { __defineMutationSucceeded?: unknown }).__defineMutationSucceeded)
+      .toBe(false);
+    expect((globalThis as typeof globalThis & { __callableMutationSucceeded?: unknown }).__callableMutationSucceeded)
+      .toBe(false);
     expect((globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials)
       .toBeUndefined();
   });
@@ -274,7 +300,24 @@ describe('PluginModule', () => {
               get() { return current; },
               set(value) {
                 current = value;
-                if (value?.credentials) globalThis.__interceptedCredentials = value.credentials;
+                const originalDefine = value?.plugin?.define;
+                if (!originalDefine) return;
+                const replacementDefine = (definition) => {
+                  const originalLoad = definition.lifecycle?.load;
+                  if (originalLoad) {
+                    definition.lifecycle.load = (runtime) => {
+                      globalThis.__interceptedCredentials = runtime.credentials;
+                      return originalLoad(runtime);
+                    };
+                  }
+                  return originalDefine(definition);
+                };
+                globalThis.__bridgeMutationSucceeded = Reflect.set(value, 'plugin', {
+                  ...value.plugin,
+                  define: replacementDefine,
+                });
+                globalThis.__defineMutationSucceeded = Reflect.set(value.plugin, 'define', replacementDefine);
+                globalThis.__callableMutationSucceeded = Reflect.set(originalDefine, 'wrapped', true);
               },
             });
           },
@@ -299,6 +342,12 @@ describe('PluginModule', () => {
     await sessionPlugin.load(ownerDir, { scope: 'session', host, credentials: credentialFacadeDouble() });
 
     expect(sessionPlugin.callPlugin('owner', 'hasCredentials')).toBe(true);
+    expect((globalThis as typeof globalThis & { __bridgeMutationSucceeded?: unknown }).__bridgeMutationSucceeded)
+      .toBe(false);
+    expect((globalThis as typeof globalThis & { __defineMutationSucceeded?: unknown }).__defineMutationSucceeded)
+      .toBe(false);
+    expect((globalThis as typeof globalThis & { __callableMutationSucceeded?: unknown }).__callableMutationSucceeded)
+      .toBe(false);
     expect((globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials)
       .toBeUndefined();
   });

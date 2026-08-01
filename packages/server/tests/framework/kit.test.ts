@@ -8,6 +8,7 @@ import { createEditor } from '../../src/editor/index';
 import { CredentialStore } from '../../src/credentials/store';
 import { CredentialVault } from '../../src/credentials/vault';
 import { testAssembly } from '../helpers/assembly';
+import type { PluginCredentialVault } from '@itharbors/plugin-types';
 
 function writeJson(filePath: string, value: unknown): void {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
@@ -85,6 +86,32 @@ function assemblyFor(kitDir: string) {
   };
 }
 
+function assemblyForKits(...kitDirs: string[]) {
+  return {
+    ...assemblyFor(kitDirs[0]),
+    kitSources: kitDirs.map((directory) => ({ directory, source: 'explicit' as const })),
+  };
+}
+
+function instrumentCredentialPlugin(kitDir: string, marker: string, failLoad = false): void {
+  fs.writeFileSync(path.join(kitDir, 'plugins', 'mysql-core', 'main', 'dist', 'index.js'), `
+    let credentials;
+    editor.plugin.define({
+      lifecycle: {
+        load(runtime) {
+          credentials = runtime.credentials;
+          globalThis.__credentialLeaseEvents.push({ marker: ${JSON.stringify(marker)}, credentials });
+          ${failLoad ? "throw new Error('credential plugin load failed');" : ''}
+        },
+      },
+      methods: {
+        put(input) { return credentials.put(input); },
+        get(id) { return credentials.get(id); },
+      },
+    });
+  `);
+}
+
 describe('KitModule', () => {
   let kitModule: KitModule;
   const temporaryRoots: string[] = [];
@@ -110,6 +137,7 @@ describe('KitModule', () => {
     for (const root of temporaryRoots.splice(0)) {
       fs.rmSync(root, { recursive: true, force: true });
     }
+    delete (globalThis as typeof globalThis & { __credentialLeaseEvents?: unknown }).__credentialLeaseEvents;
   });
 
   it('register stores and returns a kit', () => {
@@ -308,5 +336,96 @@ describe('KitModule', () => {
     await Promise.all([owner.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose()]);
     vault.close();
     offVault.close();
+  });
+
+  it('revokes the old credential lease and binds a new owner on successful Kit switch', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-credential-switch-'));
+    temporaryRoots.push(root);
+    const ownerKit = createCredentialKit(root, 'owner', '@scope/kit-owner', ['credentials']);
+    const otherKit = createCredentialKit(root, 'other', '@scope/kit-other', ['credentials']);
+    instrumentCredentialPlugin(ownerKit, 'owner');
+    instrumentCredentialPlugin(otherKit, 'other');
+    const secrets = new Map<string, string>();
+    const vault = new CredentialVault({
+      mode: 'local',
+      store: new CredentialStore(path.join(root, 'credentials.sqlite')),
+      keyring: {
+        get: async (account) => secrets.get(account) ?? null,
+        set: async (account, secret) => { secrets.set(account, secret); },
+        delete: async (account) => { secrets.delete(account); },
+      },
+    });
+    const events: Array<{ marker: string; credentials: PluginCredentialVault }> = [];
+    (globalThis as typeof globalThis & { __credentialLeaseEvents: typeof events }).__credentialLeaseEvents = events;
+    const editor = createEditor('credential-switch', {
+      assembly: assemblyForKits(ownerKit, otherKit),
+      credentialVault: vault,
+    });
+
+    await editor.kit.load(ownerKit);
+    const ownerLease = events[0].credentials;
+    const profile = await ownerLease.put({
+      label: 'Owner profile',
+      metadata: { host: 'owner.internal' },
+      secret: 'owner-secret',
+    });
+    await editor.kit.load(otherKit);
+    const otherLease = events[1].credentials;
+
+    expect(events.map((event) => event.marker)).toEqual(['owner', 'other']);
+    await expect(ownerLease.available()).resolves.toBe(false);
+    await expect(otherLease.available()).resolves.toBe(true);
+    await expect(otherLease.get(profile.id)).rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
+    await editor.dispose();
+    vault.close();
+  });
+
+  it('revokes failed-switch leases and restores the original owner with a new valid lease', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-credential-rollback-'));
+    temporaryRoots.push(root);
+    const ownerKit = createCredentialKit(root, 'owner', '@scope/kit-owner', ['credentials']);
+    const failingKit = createCredentialKit(root, 'failing', '@scope/kit-failing', ['credentials']);
+    instrumentCredentialPlugin(ownerKit, 'owner');
+    instrumentCredentialPlugin(failingKit, 'failing', true);
+    const secrets = new Map<string, string>();
+    const vault = new CredentialVault({
+      mode: 'local',
+      store: new CredentialStore(path.join(root, 'credentials.sqlite')),
+      keyring: {
+        get: async (account) => secrets.get(account) ?? null,
+        set: async (account, secret) => { secrets.set(account, secret); },
+        delete: async (account) => { secrets.delete(account); },
+      },
+    });
+    const events: Array<{ marker: string; credentials: PluginCredentialVault }> = [];
+    (globalThis as typeof globalThis & { __credentialLeaseEvents: typeof events }).__credentialLeaseEvents = events;
+    const editor = createEditor('credential-rollback', {
+      assembly: assemblyForKits(ownerKit, failingKit),
+      credentialVault: vault,
+    });
+
+    await editor.kit.load(ownerKit);
+    const originalLease = events[0].credentials;
+    const profile = await originalLease.put({
+      label: 'Rollback profile',
+      metadata: { host: 'rollback.internal' },
+      secret: 'rollback-secret',
+    });
+    await expect(editor.kit.load(failingKit)).rejects.toThrow('credential plugin load failed');
+    const failedLease = events[1].credentials;
+    const restoredLease = events[2].credentials;
+
+    expect(events.map((event) => event.marker)).toEqual(['owner', 'failing', 'owner']);
+    expect(restoredLease).not.toBe(originalLease);
+    await expect(originalLease.available()).resolves.toBe(false);
+    await expect(failedLease.available()).resolves.toBe(false);
+    await expect(restoredLease.available()).resolves.toBe(true);
+    await expect(restoredLease.get(profile.id)).resolves.toMatchObject({
+      profile: { id: profile.id, label: 'Rollback profile' },
+      secret: 'rollback-secret',
+    });
+    expect(editor.kit.getCurrent()?.name).toBe('@scope/kit-owner');
+    await editor.dispose();
+    vault.close();
   });
 });

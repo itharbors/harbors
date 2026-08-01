@@ -43,13 +43,21 @@ export class ApplicationRuntime {
   private startPromise: Promise<ApplicationBootstrap> | undefined;
   private disposePromise: Promise<void> | undefined;
   private credentialStatus: CredentialCapabilitySnapshot;
+  private readonly hostMode: ApplicationHostMode;
+  private readonly catalogLoader: ApplicationRuntimeOptions['catalogLoader'];
+  private readonly credentialMode: CredentialMode;
+  private readonly credentialStatusLoader: ApplicationRuntimeOptions['credentialStatusLoader'];
 
-  constructor(private readonly options: ApplicationRuntimeOptions) {
+  constructor(options: ApplicationRuntimeOptions) {
     this.pluginSpecs = [...(options.plugins ?? [])];
     this.diagnostics = [...(options.diagnostics ?? [])];
+    this.hostMode = options.hostMode;
+    this.catalogLoader = options.catalogLoader;
+    this.credentialMode = options.credentialMode ?? 'off';
+    this.credentialStatusLoader = options.credentialStatusLoader;
     this.resetPluginStates();
     this.menu = new MenuModule({ onChange: () => this.emit() });
-    this.credentialStatus = unavailableCredentialStatus(options.credentialMode ?? 'off');
+    this.credentialStatus = unavailableCredentialStatus(this.credentialMode);
   }
 
   start(): Promise<ApplicationBootstrap> {
@@ -63,7 +71,7 @@ export class ApplicationRuntime {
       plugins: this.pluginStates.map((state) => ({ ...state, kits: [...state.kits] })),
       diagnostics: this.diagnostics.map((item) => ({ ...item })),
       menu: structuredClone(this.menu.getState()),
-      credentials: sanitizeCredentialStatus(this.credentialStatus, this.options.credentialMode ?? 'off'),
+      credentials: sanitizeCredentialStatus(this.credentialStatus, this.credentialMode),
     };
   }
 
@@ -99,20 +107,20 @@ export class ApplicationRuntime {
   private async startInternal(): Promise<ApplicationBootstrap> {
     this.phase = 'starting';
     this.emit();
-    if (this.options.credentialStatusLoader) {
+    if (this.credentialStatusLoader) {
       try {
         this.credentialStatus = sanitizeCredentialStatus(
-          await this.options.credentialStatusLoader(),
-          this.options.credentialMode ?? 'off',
+          await this.credentialStatusLoader(),
+          this.credentialMode,
         );
       } catch {
-        this.credentialStatus = unavailableCredentialStatus(this.options.credentialMode ?? 'off');
+        this.credentialStatus = unavailableCredentialStatus(this.credentialMode);
       }
       this.emit();
     }
-    if (this.options.catalogLoader) {
+    if (this.catalogLoader) {
       try {
-        const catalog = await this.options.catalogLoader();
+        const catalog = await this.catalogLoader();
         this.pluginSpecs = [...catalog.plugins];
         this.diagnostics = [...this.diagnostics, ...catalog.diagnostics];
         this.resetPluginStates();
@@ -184,7 +192,7 @@ export class ApplicationRuntime {
         unregister: (owner, name) => this.service.unregister(owner, name),
         get: (name) => this.service.get(name),
       },
-      host: { mode: this.options.hostMode },
+      host: { mode: this.hostMode },
     };
   }
 
