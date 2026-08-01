@@ -60,9 +60,9 @@ let runtime: Runtime | undefined;
 let connectionRevision = 0;
 let schemaRevision = 0;
 let dataRevision = 0;
-let disposed = false;
 let activeProfileId: string | null = null;
 let connectionProvenance: 'none' | 'manual' | 'saved' = 'none';
+let unloadPromise: Promise<void> | null = null;
 
 class AsyncMutationLock {
   private tail: Promise<void> = Promise.resolve();
@@ -77,15 +77,54 @@ class AsyncMutationLock {
   }
 }
 
+class RuntimeOperationGate {
+  private accepting = true;
+  private readonly active = new Set<Promise<unknown>>();
+
+  run<T>(operation: () => T | Promise<T>, rejected: () => T): Promise<T> {
+    if (!this.accepting) return Promise.resolve(rejected());
+    const result = Promise.resolve().then(operation);
+    this.active.add(result);
+    void result.then(
+      () => this.active.delete(result),
+      () => this.active.delete(result),
+    );
+    return result;
+  }
+
+  runSync<T>(operation: () => T, rejected: () => T): T {
+    return this.accepting ? operation() : rejected();
+  }
+
+  closeAndDrain(): Promise<void> {
+    this.accepting = false;
+    return this.drain();
+  }
+
+  private async drain(): Promise<void> {
+    while (this.active.size > 0) {
+      await Promise.allSettled([...this.active]);
+    }
+  }
+}
+
 const connectionMutationLock = new AsyncMutationLock();
+const runtimeOperationGate = new RuntimeOperationGate();
+
+function unloadedError(): MysqlErrorEnvelope {
+  return errorEnvelope(new MysqlWorkbenchError('SERVICE_DISPOSED', 'MySQL plugin is unloaded'));
+}
+
+function runOperation<T>(operation: () => T | Promise<T>): Promise<T | MysqlErrorEnvelope> {
+  return runtimeOperationGate.run<T | MysqlErrorEnvelope>(operation, unloadedError);
+}
+
+function runSynchronousOperation<T>(operation: () => T): T | MysqlErrorEnvelope {
+  return runtimeOperationGate.runSync<T | MysqlErrorEnvelope>(operation, unloadedError);
+}
 
 function mutateConnection<T>(operation: () => T | Promise<T>): Promise<T | MysqlErrorEnvelope> {
-  return connectionMutationLock.runExclusive(() => {
-    if (disposed) {
-      return errorEnvelope(new MysqlWorkbenchError('SERVICE_DISPOSED', 'MySQL plugin is unloaded'));
-    }
-    return operation();
-  });
+  return runOperation(() => connectionMutationLock.runExclusive(operation));
 }
 
 function revisions(): RevisionSnapshot {
@@ -158,9 +197,24 @@ function connectionSnapshot(): ConnectionSnapshot {
 }
 
 async function connect(input: unknown): Promise<unknown> {
-  const result = await callService('connect', input);
-  if (isErrorEnvelope(result)) return result;
-  return publishSuccessfulConnection(result as ConnectionState, null);
+  return connectWithIdentity(input, null);
+}
+
+async function connectWithIdentity(
+  input: unknown,
+  profileId: string | null,
+): Promise<unknown> {
+  let prepared: PreparedConnection | null = null;
+  try {
+    prepared = await service.prepareConnection(input);
+    const result = service.commitPreparedConnection(prepared);
+    prepared = null;
+    return publishSuccessfulConnection(result, profileId);
+  } catch (error) {
+    return errorEnvelope(error);
+  } finally {
+    if (prepared) await service.discardPreparedConnection(prepared);
+  }
 }
 
 function publishSuccessfulConnection(
@@ -177,24 +231,26 @@ function publishSuccessfulConnection(
   return snapshot;
 }
 
-async function disconnect(): Promise<unknown> {
-  const before = service.getConnectionState();
-  const result = await callService('disconnect');
-  const after = service.getConnectionState() as ConnectionState;
-  let snapshot: ConnectionSnapshot | null = null;
-  if (!after.connected) {
-    activeProfileId = null;
-    connectionProvenance = 'none';
+function disconnect(): unknown {
+  try {
+    const before = service.getConnectionState();
+    const after = service.disconnect() as ConnectionState;
+    let snapshot: ConnectionSnapshot | null = null;
+    if (!after.connected) {
+      activeProfileId = null;
+      connectionProvenance = 'none';
+    }
+    if (before.connected && !after.connected) {
+      connectionRevision += 1;
+      schemaRevision += 1;
+      dataRevision += 1;
+      snapshot = { ...withRevisions(after), profileId: null };
+      runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
+    }
+    return snapshot ?? { ...withRevisions(after), profileId: activeProfileId };
+  } catch (error) {
+    return errorEnvelope(error);
   }
-  if (before.connected && !after.connected) {
-    connectionRevision += 1;
-    schemaRevision += 1;
-    dataRevision += 1;
-    snapshot = { ...withRevisions(after), profileId: null };
-    runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
-  }
-  if (isErrorEnvelope(result)) return result;
-  return snapshot ?? { ...withRevisions(after), profileId: activeProfileId };
 }
 
 async function getCredentialCapability(): Promise<unknown> {
@@ -229,12 +285,9 @@ async function connectSaved(input: unknown): Promise<unknown> {
     const { profileId } = parseProfileIdInput(input);
     const saved = await requireVault().get(profileId);
     const profile = requireMatchingProfile(saved.profile, profileId);
-    const result = await callService(
-      'connect',
-      connectionInputFromProfile(profile, saved.secret),
-    );
-    if (isErrorEnvelope(result)) return result;
-    return publishSuccessfulConnection(result as ConnectionState, profileId);
+    const connectionInput = connectionInputFromProfile(profile, saved.secret);
+    saved.secret = '';
+    return connectWithIdentity(connectionInput, profileId);
   } catch (error) {
     return errorEnvelope(error);
   }
@@ -392,18 +445,28 @@ async function databasesSnapshot(): Promise<unknown> {
 
 async function selectDatabase(input: unknown): Promise<unknown> {
   const before = service.getConnectionState();
-  const result = await callService('selectDatabase', input);
-  if (isErrorEnvelope(result)) return result;
-  const next = result as ConnectionState;
-  if (before.database === next.database && before.endpoint === next.endpoint) {
-    return { ...withRevisions(next), profileId: activeProfileId };
+  let prepared: PreparedConnection | null = null;
+  try {
+    prepared = await service.prepareDatabaseSelection(input);
+    if (prepared === null) {
+      return { ...withRevisions(service.getConnectionState() as ConnectionState), profileId: activeProfileId };
+    }
+    const next = service.commitPreparedConnection(prepared);
+    prepared = null;
+    if (before.database === next.database && before.endpoint === next.endpoint) {
+      return { ...withRevisions(next), profileId: activeProfileId };
+    }
+    connectionRevision += 1;
+    schemaRevision += 1;
+    dataRevision += 1;
+    const snapshot = { ...withRevisions(next), profileId: activeProfileId };
+    runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
+    return snapshot;
+  } catch (error) {
+    return errorEnvelope(error);
+  } finally {
+    if (prepared) await service.discardPreparedConnection(prepared);
   }
-  connectionRevision += 1;
-  schemaRevision += 1;
-  dataRevision += 1;
-  const snapshot = { ...withRevisions(next), profileId: activeProfileId };
-  runtime?.message.broadcast(CORE_TOPICS.connectionChanged, snapshot);
-  return snapshot;
 }
 
 async function mutateData(method: string, input: unknown): Promise<unknown> {
@@ -482,42 +545,46 @@ function sqlOf(input: unknown): string {
   return '';
 }
 
+function unloadPlugin(): Promise<void> {
+  if (unloadPromise) return unloadPromise;
+  const drained = runtimeOperationGate.closeAndDrain();
+  unloadPromise = (async () => {
+    await drained;
+    try {
+      await service.dispose();
+    } finally {
+      runtime = undefined;
+    }
+  })();
+  return unloadPromise;
+}
+
 editor.plugin.define({
   lifecycle: {
     load(ctx: Runtime) {
       runtime = ctx;
     },
-    async unload() {
-      await connectionMutationLock.runExclusive(async () => {
-        if (disposed) return;
-        disposed = true;
-        try {
-          await service.dispose();
-        } finally {
-          runtime = undefined;
-        }
-      });
-    },
+    unload: unloadPlugin,
   },
   methods: {
-    getConnectionState: () => connectionSnapshot(),
+    getConnectionState: () => runSynchronousOperation(connectionSnapshot),
     connect: (input: unknown) => mutateConnection(() => connect(input)),
-    getCredentialCapability,
-    listConnectionProfiles,
+    getCredentialCapability: () => runOperation(() => getCredentialCapability()),
+    listConnectionProfiles: () => runOperation(() => listConnectionProfiles()),
     connectSaved: (input: unknown) => mutateConnection(() => connectSaved(input)),
     saveCurrentConnection: (input: unknown) => mutateConnection(() => saveCurrentConnection(input)),
     updateConnectionProfile: (input: unknown) => mutateConnection(() => updateConnectionProfile(input)),
     deleteConnectionProfile: (input: unknown) => mutateConnection(() => deleteConnectionProfile(input)),
     disconnect: () => mutateConnection(() => disconnect()),
-    getDatabases: () => databasesSnapshot(),
+    getDatabases: () => runOperation(() => databasesSnapshot()),
     selectDatabase: (input: unknown) => mutateConnection(() => selectDatabase(input)),
-    getSchema: () => schemaSnapshot(),
-    getObjectSchema: (input: unknown) => callService('getObjectSchema', input),
-    getRelationshipGraph: () => callService('getRelationshipGraph'),
-    getRows: (input: unknown) => callService('getRows', input),
-    insertRow: (input: unknown) => mutateData('insertRow', input),
-    updateRow: (input: unknown) => mutateData('updateRow', input),
-    deleteRow: (input: unknown) => mutateData('deleteRow', input),
-    executeSql,
+    getSchema: () => runOperation(() => schemaSnapshot()),
+    getObjectSchema: (input: unknown) => runOperation(() => callService('getObjectSchema', input)),
+    getRelationshipGraph: () => runOperation(() => callService('getRelationshipGraph')),
+    getRows: (input: unknown) => runOperation(() => callService('getRows', input)),
+    insertRow: (input: unknown) => runOperation(() => mutateData('insertRow', input)),
+    updateRow: (input: unknown) => runOperation(() => mutateData('updateRow', input)),
+    deleteRow: (input: unknown) => runOperation(() => mutateData('deleteRow', input)),
+    executeSql: (input: unknown) => runOperation(() => executeSql(input)),
   },
 });

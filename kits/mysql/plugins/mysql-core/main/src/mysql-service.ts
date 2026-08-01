@@ -266,7 +266,7 @@ export class MysqlService {
     return this.retirePool(record.pool);
   }
 
-  async disconnect(): Promise<ConnectionState> {
+  disconnect(): ConnectionState {
     const previous = this.pool;
     this.pool = null;
     this.endpoint = null;
@@ -275,13 +275,7 @@ export class MysqlService {
     this.tls = false;
     this.connectionInput = null;
     this.connectionGeneration += 1;
-    if (previous) {
-      try {
-        await previous.end();
-      } catch (error) {
-        throw normalizeMysqlError(error);
-      }
-    }
+    if (previous) void this.retirePool(previous);
     return this.getConnectionState();
   }
 
@@ -346,6 +340,13 @@ export class MysqlService {
   }
 
   async selectDatabase(input: unknown): Promise<ConnectionState> {
+    const prepared = await this.prepareDatabaseSelection(input);
+    return prepared === null
+      ? this.getConnectionState()
+      : this.commitPreparedConnection(prepared);
+  }
+
+  prepareDatabaseSelection(input: unknown): Promise<PreparedConnection | null> {
     if (!isRecord(input) || typeof input.database !== 'string' || input.database.trim() === '') {
       throw new MysqlWorkbenchError('INVALID_INPUT', 'database must be a non-empty string');
     }
@@ -353,10 +354,9 @@ export class MysqlService {
     const activeInput = this.connectionInput;
     if (!activeInput) throw new MysqlWorkbenchError('NOT_CONNECTED', 'Connect to a MySQL server first');
     const database = input.database.trim();
-    if (database === this.database) return this.getConnectionState();
+    if (database === this.database) return Promise.resolve(null);
 
-    const prepared = await this.prepareConnection({ ...activeInput, database });
-    return this.commitPreparedConnection(prepared);
+    return this.prepareConnection({ ...activeInput, database });
   }
 
   async getSchema(): Promise<{ objects: SchemaObject[] }> {

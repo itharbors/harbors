@@ -58,7 +58,8 @@ describe('MySQL core plugin main', () => {
 
   it('exposes revisioned snapshots and broadcasts only successful changes', async () => {
     const dispose = vi.spyOn(MysqlService.prototype, 'dispose').mockResolvedValue();
-    vi.spyOn(MysqlService.prototype, 'connect').mockResolvedValue(connected);
+    vi.spyOn(MysqlService.prototype, 'prepareConnection').mockResolvedValue({ state: connected });
+    vi.spyOn(MysqlService.prototype, 'commitPreparedConnection').mockReturnValue(connected);
     vi.spyOn(MysqlService.prototype, 'getConnectionState').mockReturnValue({
       connected: false,
       endpoint: null,
@@ -190,12 +191,14 @@ describe('MySQL core plugin main', () => {
     };
     let current = { ...disconnected };
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockImplementation(() => current);
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockImplementation(() =>
-      connecting.promise.then((state) => {
+    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockImplementation(() =>
+      connecting.promise.then((state) => ({ state })));
+    vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection').mockImplementation((prepared) => {
+      const state = prepared.state;
         current = state;
         return state;
-      }));
-    const disconnect = vi.spyOn(FreshMysqlService.prototype, 'disconnect').mockImplementation(async () => {
+    });
+    const disconnect = vi.spyOn(FreshMysqlService.prototype, 'disconnect').mockImplementation(() => {
       current = { ...disconnected };
       return current;
     });
@@ -225,6 +228,115 @@ describe('MySQL core plugin main', () => {
     expect(unloaded).toBe(true);
   });
 
+  it('drains an entered row mutation before unload and rejects later pool operations', async () => {
+    const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
+    const pendingInsert = deferred<{ changes: number; insertId: string; warningStatus: number }>();
+    const events: string[] = [];
+    const insertRow = vi.spyOn(FreshMysqlService.prototype, 'insertRow')
+      .mockImplementation(() => pendingInsert.promise);
+    const dispose = vi.spyOn(FreshMysqlService.prototype, 'dispose').mockImplementation(async () => {
+      events.push('dispose');
+    });
+    vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue({
+      connected: true,
+      endpoint: 'db.local:3306',
+      database: 'app',
+      mysqlVersion: '8.4.1',
+      tls: true,
+    });
+    const definition = await loadPlugin();
+    const broadcast = vi.fn((topic: string) => {
+      if (topic === CORE_TOPICS.dataChanged) events.push('broadcast');
+    });
+    definition.lifecycle?.load?.({ message: { broadcast } });
+
+    const inserting = definition.methods.insertRow({ name: 'users', values: { name: 'Ada' } });
+    await vi.waitFor(() => expect(insertRow).toHaveBeenCalledOnce());
+    const unloading = definition.lifecycle!.unload!();
+    await Promise.resolve();
+
+    expect(dispose).not.toHaveBeenCalled();
+    pendingInsert.resolve({ changes: 1, insertId: '9', warningStatus: 0 });
+    await expect(inserting).resolves.toEqual({ changes: 1, insertId: '9', warningStatus: 0 });
+    await unloading;
+    expect(events).toEqual(['broadcast', 'dispose']);
+
+    await expect(definition.methods.insertRow({ name: 'users', values: {} })).resolves.toEqual({
+      $mysqlError: {
+        code: 'SERVICE_DISPOSED',
+        message: 'MySQL plugin is unloaded',
+      },
+    });
+    expect(definition.methods.getConnectionState()).toEqual({
+      $mysqlError: {
+        code: 'SERVICE_DISPOSED',
+        message: 'MySQL plugin is unloaded',
+      },
+    });
+    await expect(definition.methods.getCredentialCapability()).resolves.toEqual({
+      $mysqlError: {
+        code: 'SERVICE_DISPOSED',
+        message: 'MySQL plugin is unloaded',
+      },
+    });
+    await expect(definition.methods.listConnectionProfiles()).resolves.toEqual({
+      $mysqlError: {
+        code: 'SERVICE_DISPOSED',
+        message: 'MySQL plugin is unloaded',
+      },
+    });
+    expect(insertRow).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledOnce();
+  });
+
+  it('drains an entered SQL revision before unload and rejects later SQL', async () => {
+    const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
+    const pendingSql = deferred<{
+      kind: 'mutation';
+      affectedRows: number;
+      insertId: string;
+      warningStatus: number;
+      elapsedMs: number;
+    }>();
+    const events: string[] = [];
+    const executeSql = vi.spyOn(FreshMysqlService.prototype, 'executeSql')
+      .mockImplementation(() => pendingSql.promise);
+    const dispose = vi.spyOn(FreshMysqlService.prototype, 'dispose').mockImplementation(async () => {
+      events.push('dispose');
+    });
+    const definition = await loadPlugin();
+    const broadcast = vi.fn((topic: string) => {
+      if (topic === CORE_TOPICS.dataChanged) events.push('broadcast');
+    });
+    definition.lifecycle?.load?.({ message: { broadcast } });
+
+    const executing = definition.methods.executeSql({ sql: 'UPDATE users SET active = 1' });
+    await vi.waitFor(() => expect(executeSql).toHaveBeenCalledOnce());
+    const unloading = definition.lifecycle!.unload!();
+    await Promise.resolve();
+
+    expect(dispose).not.toHaveBeenCalled();
+    pendingSql.resolve({
+      kind: 'mutation',
+      affectedRows: 1,
+      insertId: '0',
+      warningStatus: 0,
+      elapsedMs: 1,
+    });
+    await expect(executing).resolves.toMatchObject({ kind: 'mutation', affectedRows: 1 });
+    await unloading;
+    expect(events).toEqual(['broadcast', 'dispose']);
+
+    await expect(definition.methods.executeSql({ sql: 'DELETE FROM users' })).resolves.toEqual({
+      $mysqlError: {
+        code: 'SERVICE_DISPOSED',
+        message: 'MySQL plugin is unloaded',
+      },
+    });
+    expect(executeSql).toHaveBeenCalledOnce();
+    expect(broadcast).toHaveBeenCalledOnce();
+  });
+
   it('revision-wraps database lists and broadcasts successful database switches', async () => {
     const serverConnection = {
       connected: true,
@@ -236,11 +348,14 @@ describe('MySQL core plugin main', () => {
     const selectedConnection = { ...serverConnection, database: 'app' };
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(serverConnection);
+    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockResolvedValue({ state: serverConnection });
+    vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection')
+      .mockReturnValueOnce(serverConnection)
+      .mockReturnValueOnce(selectedConnection);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(serverConnection);
     vi.spyOn(FreshMysqlService.prototype, 'getDatabases').mockResolvedValue({ databases: ['app', 'mysql'] });
-    const selectDatabase = vi.spyOn(FreshMysqlService.prototype, 'selectDatabase')
-      .mockResolvedValue(selectedConnection);
+    const selectDatabase = vi.spyOn(FreshMysqlService.prototype, 'prepareDatabaseSelection')
+      .mockResolvedValue({ state: selectedConnection });
 
     let definition: PluginDefinition | undefined;
     (globalThis as typeof globalThis & { editor?: unknown }).editor = {
@@ -274,7 +389,7 @@ describe('MySQL core plugin main', () => {
   it('keeps manual connections working without a vault and never auto-connects', async () => {
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    const connect = vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(connected);
+    const { prepare: connect } = mockAtomicConnection(FreshMysqlService);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(connected);
 
     const definition = await loadPlugin();
@@ -300,7 +415,7 @@ describe('MySQL core plugin main', () => {
     vault.available.mockResolvedValue(false);
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(connected);
+    mockAtomicConnection(FreshMysqlService);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(connected);
     const definition = await loadPlugin();
     definition.lifecycle?.load?.({ message: { broadcast: vi.fn() }, credentials: vault });
@@ -322,7 +437,7 @@ describe('MySQL core plugin main', () => {
     vault.put.mockResolvedValue(credentialProfile);
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(connected);
+    mockAtomicConnection(FreshMysqlService);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(connected);
     vi.spyOn(FreshMysqlService.prototype, 'getActiveConnectionInput').mockReturnValue({ ...manualInput });
     const definition = await loadPlugin();
@@ -364,7 +479,7 @@ describe('MySQL core plugin main', () => {
       connected: false, endpoint: null, database: null, mysqlVersion: null, tls: false,
     });
     vi.spyOn(FreshMysqlService.prototype, 'getActiveConnectionInput').mockReturnValue(null);
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockRejectedValue(
+    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockRejectedValue(
       new FreshMysqlWorkbenchError('AUTH_FAILED', 'MySQL 身份验证失败'),
     );
     const definition = await loadPlugin();
@@ -387,7 +502,7 @@ describe('MySQL core plugin main', () => {
     ));
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(connected);
+    mockAtomicConnection(FreshMysqlService);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(connected);
     vi.spyOn(FreshMysqlService.prototype, 'getActiveConnectionInput').mockReturnValue({ ...manualInput });
     const disconnect = vi.spyOn(FreshMysqlService.prototype, 'disconnect');
@@ -408,7 +523,7 @@ describe('MySQL core plugin main', () => {
     vault.get.mockResolvedValue({ profile: credentialProfile, secret: 'saved-secret' });
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    const connect = vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(connected);
+    const { prepare: connect } = mockAtomicConnection(FreshMysqlService);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(connected);
     const definition = await loadPlugin();
     const broadcast = vi.fn();
@@ -434,7 +549,7 @@ describe('MySQL core plugin main', () => {
     ));
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    const connect = vi.spyOn(FreshMysqlService.prototype, 'connect');
+    const connect = vi.spyOn(FreshMysqlService.prototype, 'prepareConnection');
     const definition = await loadPlugin();
     const broadcast = vi.fn();
     definition.lifecycle?.load?.({ message: { broadcast }, credentials: vault });
@@ -496,13 +611,15 @@ describe('MySQL core plugin main', () => {
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
     let current = { ...connected };
     const candidate = { ...connected, mysqlVersion: '9.0.0' };
+    const activePrepared = { state: current };
     const prepared = { state: candidate };
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockImplementation(() => current);
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValueOnce(current);
-    const prepare = vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockResolvedValue(prepared);
+    const prepare = vi.spyOn(FreshMysqlService.prototype, 'prepareConnection')
+      .mockResolvedValueOnce(activePrepared)
+      .mockResolvedValueOnce(prepared);
     const commit = vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection')
-      .mockImplementation(() => {
-        current = candidate;
+      .mockImplementation((connection) => {
+        current = connection.state;
         return current;
       });
     const discard = vi.spyOn(FreshMysqlService.prototype, 'discardPreparedConnection').mockResolvedValue();
@@ -511,6 +628,9 @@ describe('MySQL core plugin main', () => {
     definition.lifecycle?.load?.({ message: { broadcast }, credentials: vault });
     await definition.methods.connectSaved({ profileId });
     broadcast.mockClear();
+    prepare.mockClear();
+    commit.mockClear();
+    discard.mockClear();
 
     const update = definition.methods.updateConnectionProfile({
       profileId,
@@ -597,6 +717,182 @@ describe('MySQL core plugin main', () => {
     expect(JSON.stringify(response)).not.toContain('replacement-secret');
   });
 
+  it('publishes a manual reconnect before the previous pool retirement starts', async () => {
+    const { Mysql2Driver } = await import('../main/src/mysql-driver');
+    const activePool = new FakeMysqlPool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const replacementPool = new FakeMysqlPool();
+    replacementPool.queueRows([['9.0.0', 'next']], fields('version', 'database'));
+    vi.spyOn(Mysql2Driver.prototype, 'createPool')
+      .mockReturnValueOnce(activePool)
+      .mockReturnValueOnce(replacementPool);
+    const retirement = deferred<void>();
+    const retirementStarted = deferred<void>();
+    let observed: unknown;
+    let definition!: PluginDefinition;
+    vi.spyOn(activePool, 'end').mockImplementation(() => {
+      observed = definition.methods.getConnectionState();
+      retirementStarted.resolve();
+      return retirement.promise;
+    });
+    definition = await loadPlugin();
+    const broadcast = vi.fn();
+    definition.lifecycle?.load?.({ message: { broadcast } });
+    await definition.methods.connect(manualInput);
+    broadcast.mockClear();
+
+    const reconnecting = definition.methods.connect({
+      ...manualInput,
+      host: 'next.local',
+      database: 'next',
+      password: 'next-secret',
+    });
+    await retirementStarted.promise;
+
+    expect(observed).toMatchObject({
+      connected: true,
+      endpoint: 'next.local:3306',
+      database: 'next',
+      mysqlVersion: '9.0.0',
+      profileId: null,
+      connectionRevision: 2,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      CORE_TOPICS.connectionChanged,
+      expect.objectContaining({ endpoint: 'next.local:3306', connectionRevision: 2 }),
+    );
+    retirement.reject(new Error('retirement leaked next-secret'));
+    const response = await reconnecting;
+    expect(JSON.stringify(response)).not.toMatch(/test-password|next-secret/);
+  });
+
+  it('publishes saved identity before the manual pool retirement starts', async () => {
+    const vault = fakeVault();
+    vault.get.mockResolvedValue({ profile: credentialProfile, secret: 'saved-secret' });
+    const { Mysql2Driver } = await import('../main/src/mysql-driver');
+    const activePool = new FakeMysqlPool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const savedPool = new FakeMysqlPool();
+    savedPool.queueRows([['9.0.0', 'app']], fields('version', 'database'));
+    vi.spyOn(Mysql2Driver.prototype, 'createPool')
+      .mockReturnValueOnce(activePool)
+      .mockReturnValueOnce(savedPool);
+    const retirement = deferred<void>();
+    const retirementStarted = deferred<void>();
+    let observed: unknown;
+    let definition!: PluginDefinition;
+    vi.spyOn(activePool, 'end').mockImplementation(() => {
+      observed = definition.methods.getConnectionState();
+      retirementStarted.resolve();
+      return retirement.promise;
+    });
+    definition = await loadPlugin();
+    const broadcast = vi.fn();
+    definition.lifecycle?.load?.({ message: { broadcast }, credentials: vault });
+    await definition.methods.connect(manualInput);
+    broadcast.mockClear();
+
+    const reconnecting = definition.methods.connectSaved({ profileId });
+    await retirementStarted.promise;
+
+    expect(observed).toMatchObject({
+      connected: true,
+      mysqlVersion: '9.0.0',
+      profileId,
+      connectionRevision: 2,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      CORE_TOPICS.connectionChanged,
+      expect.objectContaining({ profileId, connectionRevision: 2 }),
+    );
+    retirement.reject(new Error('retirement leaked saved-secret'));
+    const response = await reconnecting;
+    expect(JSON.stringify(response)).not.toContain('saved-secret');
+  });
+
+  it('publishes a selected database before the server pool retirement starts', async () => {
+    const { Mysql2Driver } = await import('../main/src/mysql-driver');
+    const serverPool = new FakeMysqlPool();
+    serverPool.queueRows([['8.4.1', null]], fields('version', 'database'));
+    const databasePool = new FakeMysqlPool();
+    databasePool.queueRows([['9.0.0', 'app']], fields('version', 'database'));
+    vi.spyOn(Mysql2Driver.prototype, 'createPool')
+      .mockReturnValueOnce(serverPool)
+      .mockReturnValueOnce(databasePool);
+    const retirement = deferred<void>();
+    const retirementStarted = deferred<void>();
+    let observed: unknown;
+    let definition!: PluginDefinition;
+    vi.spyOn(serverPool, 'end').mockImplementation(() => {
+      observed = definition.methods.getConnectionState();
+      retirementStarted.resolve();
+      return retirement.promise;
+    });
+    definition = await loadPlugin();
+    const broadcast = vi.fn();
+    definition.lifecycle?.load?.({ message: { broadcast } });
+    await definition.methods.connect({ ...manualInput, database: null });
+    broadcast.mockClear();
+
+    const selecting = definition.methods.selectDatabase({ database: 'app' });
+    await retirementStarted.promise;
+
+    expect(observed).toMatchObject({
+      connected: true,
+      database: 'app',
+      mysqlVersion: '9.0.0',
+      profileId: null,
+      connectionRevision: 2,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      CORE_TOPICS.connectionChanged,
+      expect.objectContaining({ database: 'app', connectionRevision: 2 }),
+    );
+    retirement.reject(new Error('retirement leaked test-password'));
+    const response = await selecting;
+    expect(JSON.stringify(response)).not.toContain('test-password');
+  });
+
+  it('publishes disconnected identity before the active pool retirement starts', async () => {
+    const vault = fakeVault();
+    vault.get.mockResolvedValue({ profile: credentialProfile, secret: 'saved-secret' });
+    const { Mysql2Driver } = await import('../main/src/mysql-driver');
+    const activePool = new FakeMysqlPool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    vi.spyOn(Mysql2Driver.prototype, 'createPool').mockReturnValueOnce(activePool);
+    const retirement = deferred<void>();
+    const retirementStarted = deferred<void>();
+    let observed: unknown;
+    let definition!: PluginDefinition;
+    vi.spyOn(activePool, 'end').mockImplementation(() => {
+      observed = definition.methods.getConnectionState();
+      retirementStarted.resolve();
+      return retirement.promise;
+    });
+    definition = await loadPlugin();
+    const broadcast = vi.fn();
+    definition.lifecycle?.load?.({ message: { broadcast }, credentials: vault });
+    await definition.methods.connectSaved({ profileId });
+    broadcast.mockClear();
+
+    const disconnecting = definition.methods.disconnect();
+    await retirementStarted.promise;
+
+    expect(observed).toMatchObject({
+      connected: false,
+      profileId: null,
+      connectionRevision: 2,
+    });
+    expect(broadcast).toHaveBeenCalledWith(
+      CORE_TOPICS.connectionChanged,
+      expect.objectContaining({ connected: false, profileId: null, connectionRevision: 2 }),
+    );
+    retirement.reject(new Error('retirement leaked saved-secret'));
+    const response = await disconnecting;
+    expect(response).toMatchObject({ connected: false, profileId: null });
+    expect(JSON.stringify(response)).not.toContain('saved-secret');
+  });
+
   it('discards staged replacements on vault failure and preserves saved provenance', async () => {
     const vault = fakeVault();
     vault.get.mockResolvedValue({ profile: credentialProfile, secret: 'old-secret' });
@@ -607,18 +903,23 @@ describe('MySQL core plugin main', () => {
     const { MysqlService: FreshMysqlService } = await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
     const current = { ...connected };
+    const activePrepared = { state: current };
     const prepared = { state: { ...connected, mysqlVersion: '9.0.0' } };
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(current);
     vi.spyOn(FreshMysqlService.prototype, 'getActiveConnectionInput').mockReturnValue({ ...manualInput });
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValueOnce(current);
-    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockResolvedValue(prepared);
-    const commit = vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection');
+    const prepare = vi.spyOn(FreshMysqlService.prototype, 'prepareConnection')
+      .mockResolvedValueOnce(activePrepared)
+      .mockResolvedValueOnce(prepared);
+    const commit = vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection').mockReturnValue(current);
     const discard = vi.spyOn(FreshMysqlService.prototype, 'discardPreparedConnection').mockResolvedValue();
     const definition = await loadPlugin();
     const broadcast = vi.fn();
     definition.lifecycle?.load?.({ message: { broadcast }, credentials: vault });
     await definition.methods.connectSaved({ profileId });
     broadcast.mockClear();
+    prepare.mockClear();
+    commit.mockClear();
+    discard.mockClear();
 
     const response = await definition.methods.updateConnectionProfile({
       profileId,
@@ -639,7 +940,7 @@ describe('MySQL core plugin main', () => {
 
   it('keeps the active pool and identity when staged commit fails after vault update', async () => {
     const vault = fakeVault();
-    vault.get.mockResolvedValue({ profile: credentialProfile, secret: 'old-secret' });
+    vault.get.mockImplementation(async () => ({ profile: credentialProfile, secret: 'old-secret' }));
     vault.put
       .mockResolvedValueOnce({ ...credentialProfile, updatedAt: '2026-08-01T01:00:00.000Z' })
       .mockResolvedValueOnce(credentialProfile);
@@ -647,13 +948,17 @@ describe('MySQL core plugin main', () => {
       await import('../main/src/mysql-service');
     vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
     const current = { ...connected };
+    const activePrepared = { state: current };
     const prepared = { state: { ...connected, mysqlVersion: '9.0.0' } };
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockReturnValue(current);
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValueOnce(current);
-    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockResolvedValue(prepared);
-    vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection').mockImplementation(() => {
-      throw new FreshError('STALE_CONNECTION', 'MySQL connection changed before commit');
-    });
+    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection')
+      .mockResolvedValueOnce(activePrepared)
+      .mockResolvedValueOnce(prepared);
+    vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection')
+      .mockReturnValueOnce(current)
+      .mockImplementationOnce(() => {
+        throw new FreshError('STALE_CONNECTION', 'MySQL connection changed before commit');
+      });
     const discard = vi.spyOn(FreshMysqlService.prototype, 'discardPreparedConnection').mockResolvedValue();
     const definition = await loadPlugin();
     const broadcast = vi.fn();
@@ -771,9 +1076,10 @@ describe('MySQL core plugin main', () => {
     const disconnected = {
       connected: false, endpoint: null, database: null, mysqlVersion: null, tls: false,
     };
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockImplementation(async () => current);
+    vi.spyOn(FreshMysqlService.prototype, 'prepareConnection').mockResolvedValue({ state: current });
+    vi.spyOn(FreshMysqlService.prototype, 'commitPreparedConnection').mockReturnValue(current);
     vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockImplementation(() => current);
-    const disconnect = vi.spyOn(FreshMysqlService.prototype, 'disconnect').mockImplementation(async () => {
+    const disconnect = vi.spyOn(FreshMysqlService.prototype, 'disconnect').mockImplementation(() => {
       current = disconnected;
       return disconnected;
     });
@@ -799,19 +1105,14 @@ describe('MySQL core plugin main', () => {
     expect(JSON.stringify(response)).not.toContain('account data');
   });
 
-  it('clears identity and broadcasts post-state when disconnect cleanup fails before delete', async () => {
+  it('keeps detached state successful when pool retirement fails during active profile deletion', async () => {
     const vault = fakeVault();
     vault.get.mockResolvedValue({ profile: credentialProfile, secret: 'saved-secret' });
-    const { MysqlService: FreshMysqlService, MysqlWorkbenchError: FreshError } =
-      await import('../main/src/mysql-service');
-    vi.spyOn(FreshMysqlService.prototype, 'dispose').mockResolvedValue();
-    let current = { ...connected };
-    vi.spyOn(FreshMysqlService.prototype, 'getConnectionState').mockImplementation(() => current);
-    vi.spyOn(FreshMysqlService.prototype, 'connect').mockResolvedValue(current);
-    vi.spyOn(FreshMysqlService.prototype, 'disconnect').mockImplementation(async () => {
-      current = { connected: false, endpoint: null, database: null, mysqlVersion: null, tls: false };
-      throw new FreshError('MYSQL_ERROR', 'MySQL operation failed');
-    });
+    const { Mysql2Driver } = await import('../main/src/mysql-driver');
+    const activePool = new FakeMysqlPool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    activePool.endError = new Error('retirement leaked saved-secret');
+    vi.spyOn(Mysql2Driver.prototype, 'createPool').mockReturnValueOnce(activePool);
     const definition = await loadPlugin();
     const broadcast = vi.fn();
     definition.lifecycle?.load?.({ message: { broadcast }, credentials: vault });
@@ -819,14 +1120,17 @@ describe('MySQL core plugin main', () => {
     broadcast.mockClear();
 
     const response = await definition.methods.deleteConnectionProfile({ profileId });
-    expect(response).toMatchObject({ $mysqlError: { code: 'MYSQL_ERROR' } });
-    expect(vault.delete).not.toHaveBeenCalled();
+    expect(response).toEqual({ deleted: true, profileId });
+    expect(vault.delete).toHaveBeenCalledWith(profileId);
     expect(definition.methods.getConnectionState()).toMatchObject({ connected: false, profileId: null });
     expect(broadcast).toHaveBeenCalledOnce();
     expect(broadcast).toHaveBeenCalledWith(
       CORE_TOPICS.connectionChanged,
       expect.objectContaining({ connected: false, profileId: null, connectionRevision: 2 }),
     );
+    await Promise.resolve();
+    expect(activePool.endCalls).toBe(1);
+    expect(JSON.stringify(response)).not.toContain('saved-secret');
     expect(JSON.stringify(broadcast.mock.calls)).not.toContain('saved-secret');
   });
 
@@ -880,4 +1184,14 @@ function deferred<T>() {
 
 function fields(...names: string[]) {
   return names.map((name) => ({ name, mysqlType: 'VAR_STRING' }));
+}
+
+function mockAtomicConnection(
+  serviceClass: typeof MysqlService,
+  state = connected,
+) {
+  const prepared = { state };
+  const prepare = vi.spyOn(serviceClass.prototype, 'prepareConnection').mockResolvedValue(prepared);
+  const commit = vi.spyOn(serviceClass.prototype, 'commitPreparedConnection').mockReturnValue(state);
+  return { prepared, prepare, commit };
 }
