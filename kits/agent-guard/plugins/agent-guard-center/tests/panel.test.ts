@@ -292,7 +292,10 @@ describe('Agent Guard panel', () => {
     const incidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
     expect(overview.getAttribute('aria-selected')).toBe('true');
     expect(overview.getAttribute('aria-controls')).toBe('overview-panel');
-    expect(document.querySelector('#overview-panel')).not.toBeNull();
+    const overviewPanel = document.querySelector('#overview-panel');
+    expect(overviewPanel).not.toBeNull();
+    expect(overviewPanel?.hasAttribute('hidden')).toBe(false);
+    expect(document.querySelector('#incidents-panel')).toBeNull();
     expect(document.querySelector('[data-incident-id]')).toBeNull();
     expect(document.querySelector('.policy-panel')).toBeNull();
     expect(incidents.textContent).toContain('1');
@@ -300,8 +303,11 @@ describe('Agent Guard panel', () => {
 
     incidents.click();
     expect(incidents.getAttribute('aria-selected')).toBe('true');
-    expect(document.querySelector('#incidents-panel [data-incident-id="incident-1"]')).not.toBeNull();
-    expect(document.querySelector('#incidents-panel .policy-panel')).not.toBeNull();
+    const incidentsPanel = document.querySelector('#incidents-panel');
+    expect(incidentsPanel?.hasAttribute('hidden')).toBe(false);
+    expect(document.querySelector('#overview-panel')).toBeNull();
+    expect(incidentsPanel?.querySelector('[data-incident-id="incident-1"]')).not.toBeNull();
+    expect(incidentsPanel?.querySelector('.policy-panel')).not.toBeNull();
     panel.unmount();
   });
 
