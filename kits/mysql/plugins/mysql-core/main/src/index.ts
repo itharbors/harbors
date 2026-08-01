@@ -64,6 +64,30 @@ let disposed = false;
 let activeProfileId: string | null = null;
 let connectionProvenance: 'none' | 'manual' | 'saved' = 'none';
 
+class AsyncMutationLock {
+  private tail: Promise<void> = Promise.resolve();
+
+  runExclusive<T>(operation: () => T | Promise<T>): Promise<T> {
+    const result = this.tail.then(operation);
+    this.tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+}
+
+const connectionMutationLock = new AsyncMutationLock();
+
+function mutateConnection<T>(operation: () => T | Promise<T>): Promise<T | MysqlErrorEnvelope> {
+  return connectionMutationLock.runExclusive(() => {
+    if (disposed) {
+      return errorEnvelope(new MysqlWorkbenchError('SERVICE_DISPOSED', 'MySQL plugin is unloaded'));
+    }
+    return operation();
+  });
+}
+
 function revisions(): RevisionSnapshot {
   return { connectionRevision, schemaRevision, dataRevision };
 }
@@ -248,18 +272,37 @@ async function updateConnectionProfile(input: unknown): Promise<unknown> {
     const vault = requireVault();
     const saved = await vault.get(profileId);
     const profile = requireMatchingProfile(saved.profile, profileId);
-    saved.secret = '';
+    const previousMetadata = { ...parseConnectionMetadata(profile.metadata) };
     const connectionInput = connectionInputFromProfile(profile, password);
     prepared = await service.prepareConnection(connectionInput);
+    const previousCredential = {
+      id: profileId,
+      label: profile.label,
+      metadata: previousMetadata,
+      secret: saved.secret,
+    };
+    saved.secret = '';
     const updated = toMysqlConnectionProfile(await vault.put({
       id: profileId,
       label: profile.label,
       metadata: metadataFromConnectionInput(connectionInput),
       secret: password,
     }));
-    const result = await service.commitPreparedConnection(prepared);
+    let result: ConnectionState;
+    try {
+      result = service.commitPreparedConnection(prepared);
+    } catch (commitError) {
+      try {
+        await vault.put(previousCredential);
+      } catch {
+        throw Object.assign(new Error('Credential compensation failed'), {
+          code: 'CREDENTIAL_OPERATION_FAILED',
+        });
+      }
+      throw commitError;
+    }
     prepared = null;
-    publishSuccessfulConnection(result as ConnectionState, profileId);
+    publishSuccessfulConnection(result, profileId);
     return updated;
   } catch (error) {
     return errorEnvelope(error);
@@ -445,24 +488,29 @@ editor.plugin.define({
       runtime = ctx;
     },
     async unload() {
-      runtime = undefined;
-      if (disposed) return;
-      disposed = true;
-      await service.dispose();
+      await connectionMutationLock.runExclusive(async () => {
+        if (disposed) return;
+        disposed = true;
+        try {
+          await service.dispose();
+        } finally {
+          runtime = undefined;
+        }
+      });
     },
   },
   methods: {
     getConnectionState: () => connectionSnapshot(),
-    connect,
+    connect: (input: unknown) => mutateConnection(() => connect(input)),
     getCredentialCapability,
     listConnectionProfiles,
-    connectSaved,
-    saveCurrentConnection,
-    updateConnectionProfile,
-    deleteConnectionProfile,
-    disconnect,
+    connectSaved: (input: unknown) => mutateConnection(() => connectSaved(input)),
+    saveCurrentConnection: (input: unknown) => mutateConnection(() => saveCurrentConnection(input)),
+    updateConnectionProfile: (input: unknown) => mutateConnection(() => updateConnectionProfile(input)),
+    deleteConnectionProfile: (input: unknown) => mutateConnection(() => deleteConnectionProfile(input)),
+    disconnect: () => mutateConnection(() => disconnect()),
     getDatabases: () => databasesSnapshot(),
-    selectDatabase,
+    selectDatabase: (input: unknown) => mutateConnection(() => selectDatabase(input)),
     getSchema: () => schemaSnapshot(),
     getObjectSchema: (input: unknown) => callService('getObjectSchema', input),
     getRelationshipGraph: () => callService('getRelationshipGraph'),
