@@ -311,6 +311,41 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
+  it('marks both Tabs generically and gives the incident badge an explicit count state', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    const overview = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!;
+    const incidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
+    expect(overview.classList.contains('dashboard-tab')).toBe(true);
+    expect(incidents.classList.contains('dashboard-tab')).toBe(true);
+    const badge = incidents.querySelector<HTMLElement>('.dashboard-tab-badge');
+    expect(badge?.textContent).toBe('1');
+    expect(badge?.dataset.state).toBe('nonzero');
+    panel.unmount();
+
+    const empty = snapshot();
+    empty.incidents = [];
+    const emptyRequest = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return empty;
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    await panel.mount({ message: { request: emptyRequest } });
+
+    const emptyBadge = document.querySelector<HTMLElement>('[role="tab"][data-tab="incidents"] .dashboard-tab-badge');
+    expect(emptyBadge?.textContent).toBe('0');
+    expect(emptyBadge?.dataset.state).toBe('zero');
+    panel.unmount();
+  });
+
   it('uses wrapped ARIA Tabs keyboard navigation', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => method === 'getSnapshot' ? snapshot() : historyResult());
     const panel = (await import('../panel.guard/src/index')).default;

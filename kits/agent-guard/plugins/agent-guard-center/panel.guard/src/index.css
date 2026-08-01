@@ -36,15 +36,13 @@ h2 { margin-bottom: 0; font-size: 19px; font-weight: 650; letter-spacing: -.01em
 .protection-seal strong { display: block; margin: 4px 0; font-size: 18px; font-weight: 700; }
 
 .dashboard-tabs { display: flex; gap: 4px; flex-wrap: wrap; align-items: end; margin: 18px 0 0; border-bottom: 1px solid var(--line); }
-.dashboard-tab,
-.dashboard-tabs [role="tab"] { position: relative; min-width: 0; padding: 10px 12px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--frost-300); }
-.dashboard-tab:hover,
-.dashboard-tabs [role="tab"]:hover { border-color: var(--harbor-700); background: transparent; }
-.dashboard-tab[aria-selected="true"],
-.dashboard-tabs [role="tab"][aria-selected="true"] { border-bottom-color: var(--signal-cyan); color: var(--signal-cyan); }
-.dashboard-tab:focus-visible,
-.dashboard-tabs [role="tab"]:focus-visible { outline-offset: -2px; }
-.dashboard-tab[data-tab="incidents"] .dashboard-tab-badge:not([data-count="0"]) { color: var(--breaker-copper); }
+.dashboard-tab[role="tab"] { position: relative; min-width: 0; padding: 10px 12px 12px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: var(--frost-300); }
+.dashboard-tab[role="tab"]:hover { border-color: var(--harbor-700); background: transparent; }
+.dashboard-tab[role="tab"][aria-selected="true"] { border-bottom-color: var(--signal-cyan); color: var(--signal-cyan); }
+.dashboard-tab[role="tab"]:focus-visible { outline-offset: -2px; }
+.dashboard-tab-badge { margin-left: 6px; font: 700 10px/1 "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+.dashboard-tab-badge[data-state="nonzero"] { color: var(--breaker-copper); }
+.dashboard-tab-badge[data-state="zero"] { display: none; }
 #overview-panel,
 .dashboard-panel { display: grid; min-width: 0; }
 
@@ -158,8 +156,7 @@ button:disabled { opacity: .45; cursor: wait; }
   .privacy-note { align-items: flex-start; flex-direction: column; gap: 8px; }
   .history-controls { align-items: flex-start; flex-direction: column; }
   .dashboard-tabs { gap: 0; }
-  .dashboard-tab,
-  .dashboard-tabs [role="tab"] { flex: 1 1 auto; }
+  .dashboard-tab[role="tab"] { flex: 1 1 auto; }
   .history-summary-row,
   .history-summary-row[data-summary-row="primary"],
   .history-summary-row[data-summary-row="secondary"] { grid-template-columns: 1fr; }

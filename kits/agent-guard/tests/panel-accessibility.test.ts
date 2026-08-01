@@ -22,8 +22,8 @@ describe('Agent Guard panel accessibility', () => {
     const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
     expect(css).toMatch(/html,\s*body,\s*#guard-root\s*\{[^}]*min-height:\s*100%/su);
     expect(css).toMatch(/body\s*\{[^}]*overflow-x:\s*hidden/su);
-    expect(css).toMatch(/\.dashboard-tab\[aria-selected="true"\]/u);
-    expect(css).toMatch(/\.dashboard-tab:focus-visible/u);
+    expect(css).toMatch(/\.dashboard-tab\[role="tab"\]\[aria-selected="true"\]/u);
+    expect(css).toMatch(/\.dashboard-tab\[role="tab"\]:focus-visible/u);
     expect(css).toMatch(/@media\s*\(max-width:\s*640px\)/u);
   });
 

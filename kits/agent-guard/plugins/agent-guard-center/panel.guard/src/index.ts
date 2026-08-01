@@ -160,20 +160,27 @@ export function createDashboardTabs(snapshot: AgentGuardSnapshot): HTMLElement {
   tabs.setAttribute('aria-label', 'Agent Guard 工作区');
   tabs.append(
     createDashboardTab('overview', '总览', snapshot.incidents.length),
-    createDashboardTab('incidents', `事件记录 (${snapshot.incidents.length})`, snapshot.incidents.length),
+    createDashboardTab('incidents', '事件记录', snapshot.incidents.length),
   );
   return tabs;
 }
 
 function createDashboardTab(tab: DashboardTab, label: string, incidentCount: number): HTMLButtonElement {
   const value = button(label, `dashboard-tab-${tab}`, () => activateDashboardTab(tab, true));
+  value.classList.add('dashboard-tab');
   value.id = `${tab}-tab`;
   value.dataset.tab = tab;
   value.setAttribute('role', 'tab');
   value.setAttribute('aria-controls', `${tab}-panel`);
   value.setAttribute('aria-selected', String(activeTab === tab));
   value.tabIndex = activeTab === tab ? 0 : -1;
-  if (tab === 'incidents') value.setAttribute('aria-label', `事件记录，${incidentCount} 条`);
+  if (tab === 'incidents') {
+    value.setAttribute('aria-label', `事件记录，${incidentCount} 条`);
+    const badge = textElement('span', 'dashboard-tab-badge', String(incidentCount));
+    badge.dataset.state = incidentCount > 0 ? 'nonzero' : 'zero';
+    badge.setAttribute('aria-hidden', 'true');
+    value.append(badge);
+  }
   value.addEventListener('keydown', (event) => {
     const target = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
       ? tab === 'overview' ? 'incidents' : 'overview'
