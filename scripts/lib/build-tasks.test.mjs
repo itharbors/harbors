@@ -246,6 +246,10 @@ test('tracks compiler configs extended by the client and server build configs', 
 
   assert.ok(client.inputs.includes('packages/client/tsconfig.json'));
   assert.ok(server.inputs.includes('packages/server/tsconfig.json'));
+  assert.deepEqual(client.dependencies, [
+    'workspace:plugin-types',
+    'workspace:host-security',
+  ]);
   assert.deepEqual(server.dependencies, [
     'workspace:plugin-types',
     'workspace:host-security',

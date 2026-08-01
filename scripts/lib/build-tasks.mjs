@@ -25,14 +25,20 @@ const WORKSPACE_TASKS = [
   workspaceTask('relationship-graph', '@itharbors/relationship-graph', 'packages/relationship-graph'),
   workspaceTask('kit-core', '@itharbors/kit-core', 'packages/kit-core'),
   workspaceTask('kit-cli', '@itharbors/kit-cli', 'packages/kit-cli', ['workspace:kit-core']),
-  workspaceTask('client', 'packages/client', 'packages/client', ['workspace:plugin-types'], {
-    config: [
-      'packages/client/tsconfig.build.json',
-      'packages/client/tsconfig.json',
-      'packages/client/vite.config.ts',
-      'packages/client/index.html',
-    ],
-  }),
+  workspaceTask(
+    'client',
+    'packages/client',
+    'packages/client',
+    ['workspace:plugin-types', 'workspace:host-security'],
+    {
+      config: [
+        'packages/client/tsconfig.build.json',
+        'packages/client/tsconfig.json',
+        'packages/client/vite.config.ts',
+        'packages/client/index.html',
+      ],
+    },
+  ),
   workspaceTask(
     'server',
     'packages/server',
