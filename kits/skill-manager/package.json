@@ -1,0 +1,34 @@
+{
+  "name": "@itharbors/kit-skill-manager",
+  "version": "0.1.0-preview.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/ce-plugin.mjs build plugins/skill-manager",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "yaml": "2.9.0"
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": {
+        "id": "skill-manager",
+        "label": "Skill 管理器"
+      },
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "@itharbors/skill-manager"
+      ],
+      "theme": {
+        "--ce-accent": "#b8f36b"
+      }
+    }
+  }
+}

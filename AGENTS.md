@@ -2,9 +2,9 @@
 
 ## Development validation
 
-- Prefer `npm run dev:web` and browser-based testing during routine development when the behavior is shared by the Web and Electron hosts.
-- Use Electron during development when the change depends on desktop-only behavior such as the Tray, BrowserWindow lifecycle, native dialogs, desktop IPC, notifications, updates, packaging, or operating-system integration.
-- Always complete final acceptance in Electron; passing Web tests does not replace the Electron acceptance gate.
+- For ordinary Kit changes whose behavior is shared by the Web and Electron hosts, use `npm run dev:web` and browser-based testing by default to develop, debug, and complete final acceptance.
+- Use Electron when a change depends on or alters desktop-only behavior such as the Tray, BrowserWindow lifecycle, native dialogs, desktop IPC, notifications, updates, packaging, operating-system integration, or an explicit Web/Electron difference.
+- When a change spans shared Kit behavior and desktop-only behavior, validate the shared path in the browser and the desktop-specific path in Electron. An Electron smoke check remains optional for ordinary Kit changes, not a universal gate.
 
 ## Commit messages
 

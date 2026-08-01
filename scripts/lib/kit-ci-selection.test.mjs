@@ -9,12 +9,13 @@ import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
 
-const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'sqlite', 'traceweave'];
+const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'skill-manager', 'sqlite', 'traceweave'];
 const runners = Object.freeze({
   'agent-guard': 'macos-14',
   csv: 'macos-14',
   mysql: 'ubuntu-latest',
   notifications: 'ubuntu-latest',
+  'skill-manager': 'ubuntu-latest',
   scheduler: 'ubuntu-latest',
   sqlite: 'macos-14',
   traceweave: 'ubuntu-latest',

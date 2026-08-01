@@ -235,8 +235,8 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-Default 是唯一的 builtin Kit。Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler 与 TraceWeave 是官方市场 Kit；其实现固定保存在
-主分支的 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、`kits/traceweave`，这些仓库目录只会由
+Default 是唯一的 builtin Kit。Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 与 TraceWeave 是官方市场 Kit；其实现固定保存在
+主分支的 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、`kits/skill-manager`、`kits/traceweave`，这些仓库目录只会由
 `npm run dev` 自动加载。每个目录独立维护
 `kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
@@ -460,6 +460,26 @@ node "<skill-directory>/scripts/notify.mjs" \
 因此浏览器 Panel 必须经 server-side plugin 调用，不能直接 fetch Host。通知是桌面应用生命周期
 内的内存状态，不承诺跨重启保存。
 
+## Skill Manager Kit
+
+官方市场 Kit `@itharbors/kit-skill-manager` 提供本地 Codex Skill 工作台。它默认扫描
+`$CODEX_HOME/skills`，未设置 `CODEX_HOME` 时使用 `~/.codex/skills`；也可以选择一个来源目录，
+在当前 Session 中对照可安装或可更新内容。来源选择不会跨 Server 重启保存，清除或切换来源会取消
+旧扫描并开始新的 generation。
+
+```bash
+npm run dev -- --kit ./kits/skill-manager
+```
+
+列表区分 `source-only`、`current`、`update-available`、`global-only`、`disabled`、`trashed`、
+`protected`、`conflict` 和 `invalid`。安装与更新会在同一目标父目录暂存、校验后再发布；停用与卸载
+只会把原目录移动到 `$CODEX_HOME/skill-manager-store/v1`，可通过恢复操作放回，不提供永久删除。
+`.system` 下的系统 Skill 始终为 `protected`，不能修改。
+
+Panel 的 request 只提交快照 revision、digest 和不透明 Skill/目录 ID；Renderer 不接收或提交原始
+文件系统路径。当前版本只管理本机目录，不访问网络或 GitHub，也不提供远程仓库安装。完整状态与
+恢复规则见 [Skill Manager README](../../kits/skill-manager/README.md)。
+
 ## 参考实现
 
 - [默认 Kit](../../kits/default/package.json)
@@ -469,4 +489,5 @@ node "<skill-directory>/scripts/notify.mjs" \
 - [Log Panel](../../kits/default/plugins/log/panel.log/src/index.ts)
 - [共享插件协议](../../packages/plugin-types/src/index.ts)
 - [Notification Kit](../../kits/notifications/package.json)
+- [Skill Manager Kit](../../kits/skill-manager/package.json)
 - [notify-user Skill](../../.agents/skills/notify-user/SKILL.md)
