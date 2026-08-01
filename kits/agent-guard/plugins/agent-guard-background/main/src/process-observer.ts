@@ -12,6 +12,16 @@ import type {
 const execFile = promisify(execFileCallback);
 const MAX_PS_OUTPUT_BYTES = 4 * 1024 * 1024;
 
+type ExecFileLike = (
+  file: string,
+  args: readonly string[],
+  options: { maxBuffer: number; env: NodeJS.ProcessEnv },
+) => Promise<{ stdout: string }>;
+
+interface ObserveProcessesOptions {
+  execFile?: ExecFileLike;
+}
+
 export interface BuildProcessTreeOptions {
   maxNodes: number;
   classify: (process: ProcessSnapshot) => AgentProcessRole | null;
@@ -95,7 +105,7 @@ export function parsePsRows(output: string): ProcessSnapshot[] {
     if (!line) continue;
     const tabFields = line.split('\t');
     const macFields = line.match(
-      /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(\/.*)$/u,
+      /^\s*(\d+)\s+(\d+)\s+(\d+)\s+([A-Z][a-z]{2}\s+[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/u,
     );
     let fields: string[];
     if (tabFields.length === 5) {
@@ -108,7 +118,9 @@ export function parsePsRows(output: string): ProcessSnapshot[] {
       continue;
     }
     const [pid, ppid, processGroupId, processStartTime, executable] = fields;
-    if (!path.isAbsolute(executable)) continue;
+    const isBareAgentExecutable = path.basename(executable) === executable
+      && isAgentExecutable(executable);
+    if (!path.isAbsolute(executable) && !isBareAgentExecutable) continue;
     snapshots.push({
       pid: positiveInteger(pid, 'pid'),
       ppid: positiveInteger(ppid, 'ppid'),
@@ -129,10 +141,14 @@ export function parsePsRows(output: string): ProcessSnapshot[] {
   });
 }
 
-export async function observeProcesses(): Promise<ProcessSnapshot[]> {
-  const { stdout } = await execFile('/bin/ps', [
+export async function observeProcesses(options: ObserveProcessesOptions = {}): Promise<ProcessSnapshot[]> {
+  const runExecFile = options.execFile ?? (execFile as unknown as ExecFileLike);
+  const { stdout } = await runExecFile('/bin/ps', [
     '-axo', 'pid=,ppid=,pgid=,lstart=,comm=',
-  ], { maxBuffer: MAX_PS_OUTPUT_BYTES });
+  ], {
+    maxBuffer: MAX_PS_OUTPUT_BYTES,
+    env: { PATH: '/usr/bin:/bin', LANG: 'C', LC_ALL: 'C' },
+  });
   // Production callers may replace this command adapter with a tab-delimited native snapshot.
   // Never return raw ps text; an unsupported layout becomes an empty, incomplete observation.
   return parsePsRows(stdout);

@@ -17,9 +17,11 @@ type PanelContext = {
 
 const PLUGIN = '@itharbors/agent-guard-center';
 const POLL_MS = 2_000;
+const HISTORY_POLL_MS = 30_000;
 let context: PanelContext | null = null;
 let root: HTMLElement | null = null;
 let timer: number | null = null;
+let historyTimer: number | null = null;
 let mounted = false;
 let version = 0;
 let requestGeneration = 0;
@@ -48,13 +50,16 @@ const panel = {
     await refresh();
     if (mounted) void refreshHistory();
     if (mounted) timer = window.setInterval(() => { void refresh(); }, POLL_MS);
+    if (mounted) historyTimer = window.setInterval(() => { void refreshHistory(); }, HISTORY_POLL_MS);
   },
   unmount() {
     mounted = false;
     version += 1;
     requestGeneration += 1;
     if (timer !== null) window.clearInterval(timer);
+    if (historyTimer !== null) window.clearInterval(historyTimer);
     timer = null;
+    historyTimer = null;
     refreshPromise = null;
     mutation = null;
     context = null;

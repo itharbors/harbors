@@ -88,6 +88,20 @@ describe('history aggregation', () => {
     expect(series(result, 'requests').unit).toBe('requests');
   });
 
+  it('treats an empty hostname list as all endpoints', () => {
+    const network = aggregateNetworkHistory([sample()], [coverage()], {
+      ...query(),
+      hostnames: [],
+    });
+    const modelUsage = aggregateUsageHistory([usage()], {
+      ...query('model-usage'),
+      hostnames: [],
+    });
+
+    expect(series(network, 'bytes-out').points[0].value).toBe(1024);
+    expect(series(modelUsage, 'input-tokens').points[0].value).toBe(10);
+  });
+
   it('uses UTC bucket arithmetic and promotes over-budget ranges', () => {
     expect(bucketSizeMs('minute')).toBe(60_000);
     expect(bucketSizeMs('hour')).toBe(3_600_000);

@@ -91,7 +91,9 @@ function createMemoryHistoryStore(): HistoryStore {
     persistent: false,
     async appendNetworkSamples(values) { network = bounded([...network, ...values.map(normalizeNetworkSample)]); },
     async appendCoverage(values) { coverage = bounded([...coverage, ...values.map(normalizeCoverage)]); },
-    async appendUsageEvents(values) { usage = bounded([...usage, ...values.map(normalizeUsageEvent)]); },
+    async appendUsageEvents(values) {
+      usage = bounded([...usage, ...values.map(normalizeUsageEvent)].sort((left, right) => left.at - right.at));
+    },
     async query(input) { return buildResult(input, network, coverage, usage, manifest.generation, false); },
     async status() { return buildStatus(false, manifest, settings, network, coverage, usage, 0); },
     async compact(now) { manifest = { schemaVersion: 1, generation: manifest.generation + 1, lastCompactedAt: now.getTime() }; },
@@ -488,8 +490,8 @@ function mergeSeries(
   const result = new Map<string, HistorySeries>();
   for (const candidate of [...segments, ...raw]) {
     if (!domainMetrics.has(candidate.metric)) continue;
-    if (query.agents && !query.agents.includes(candidate.agent)) continue;
-    if (query.hostnames && !query.hostnames.includes(candidate.hostname)) continue;
+    if (query.agents && query.agents.length > 0 && !query.agents.includes(candidate.agent)) continue;
+    if (query.hostnames && query.hostnames.length > 0 && !query.hostnames.includes(candidate.hostname)) continue;
     const key = `${candidate.metric}\u0000${candidate.unit}\u0000${candidate.agent}\u0000${candidate.provider}\u0000${candidate.hostname}`;
     const existing = result.get(key);
     const points = new Map<string, HistorySeries['points'][number]>();

@@ -271,8 +271,8 @@ function unionLength(intervals: Array<{ start: number; end: number }>): number {
 }
 
 function matchesQuery(value: Dimension, query: HistoryQueryInput): boolean {
-  return (!query.agents || query.agents.includes(value.agent))
-    && (!query.hostnames || query.hostnames.includes(value.hostname));
+  return (!query.agents || query.agents.length === 0 || query.agents.includes(value.agent))
+    && (!query.hostnames || query.hostnames.length === 0 || query.hostnames.includes(value.hostname));
 }
 
 function sameDimension(left: Dimension, right: Dimension): boolean {

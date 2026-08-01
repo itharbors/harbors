@@ -44,6 +44,36 @@ describe('Agent Guard history storage', () => {
     expect((await store.history.status()).persistent).toBe(false);
   });
 
+  it('queries every endpoint when the hostname filter is empty', async () => {
+    const store = await createAgentGuardStore({ hostMode: 'web' });
+    await store.history.appendCoverage([coverage()]);
+    await store.history.appendNetworkSamples([sample()]);
+    await store.history.appendUsageEvents([usage()]);
+
+    const network = await store.history.query({ ...query(), hostnames: [] });
+    const modelUsage = await store.history.query({
+      ...query(),
+      domain: 'model-usage',
+      hostnames: [],
+    });
+
+    expect(network.summary.find((item) => item.metric === 'bytes-out')?.value).toBe(2048);
+    expect(modelUsage.summary.find((item) => item.metric === 'input-tokens')?.value).toBe(10);
+  });
+
+  it('retains the newest usage events at the web memory cap regardless of append order', async () => {
+    const store = await createAgentGuardStore({ hostMode: 'web' });
+    const newest = usage({ at: START + 60_000, eventDigest: 'newest' });
+    const older = Array.from({ length: 10_000 }, (_, index) => usage({
+      at: START,
+      eventDigest: `older-${index}`,
+    }));
+
+    await store.history.appendUsageEvents([newest, ...older]);
+
+    expect((await store.history.status()).latestAt).toBe(START + 60_000);
+  });
+
   it('clears only history and preserves state, incidents, and the control ledger', async () => {
     const dataDir = path.join(temporaryRoot(), 'agent-guard');
     const store = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
@@ -209,11 +239,12 @@ function sampleWithOffset(index: number): NetworkHistorySampleV2 {
   };
 }
 
-function usage(): UsageEventV1 {
+function usage(overrides: Partial<UsageEventV1> = {}): UsageEventV1 {
   return {
     schemaVersion: 1, at: START + 1_000, agent: 'claude', provider: 'custom',
     hostname: 'relay.example.test', eventDigest: 'event-1', inputTokens: 10,
     outputTokens: 5, cacheTokens: null, requests: 1, sessions: null, parserVersion: 1,
+    ...overrides,
   };
 }
 

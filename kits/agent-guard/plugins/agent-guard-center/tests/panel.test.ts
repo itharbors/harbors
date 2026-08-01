@@ -188,6 +188,8 @@ describe('Agent Guard panel', () => {
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(26_000);
+    expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(2);
     panel.unmount();
   });
 
