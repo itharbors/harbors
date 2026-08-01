@@ -1048,7 +1048,7 @@ describe('MySQL connection panel', () => {
     expect(document.body.innerHTML).not.toContain('next-secret');
   });
 
-  it('discards a pending reconciliation after unmount and credential-unavailable remount', async () => {
+  it('discards a pending malformed reconciliation after unmount and credential-unavailable remount', async () => {
     let resolveSave: ((value: unknown) => void) | undefined;
     let resolveReconcile: ((value: unknown) => void) | undefined;
     const pendingSave = new Promise<unknown>((resolve) => { resolveSave = resolve; });
@@ -1079,7 +1079,7 @@ describe('MySQL connection panel', () => {
       throw new Error(`Unexpected request ${method}`);
     });
     await definition.mount({ message: { request: newRequest } });
-    resolveReconcile?.([profile]);
+    resolveReconcile?.({});
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(document.querySelector('[data-connection-mode="saved"]')).toBeNull();
@@ -1087,7 +1087,7 @@ describe('MySQL connection panel', () => {
     expect(newRequest.mock.calls.filter((call) => call[1] === 'listConnectionProfiles')).toHaveLength(0);
   });
 
-  it('lets a newer reconciliation win when an older profile list resolves last', async () => {
+  it('lets a newer reconciliation win when an older malformed list resolves last', async () => {
     let resolveUpdate: ((value: unknown) => void) | undefined;
     let resolveDelete: ((value: unknown) => void) | undefined;
     let resolveOlderList: ((value: unknown) => void) | undefined;
@@ -1097,7 +1097,6 @@ describe('MySQL connection panel', () => {
     const olderList = new Promise<unknown>((resolve) => { resolveOlderList = resolve; });
     const newerList = new Promise<unknown>((resolve) => { resolveNewerList = resolve; });
     const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
-    const olderProfile = { ...profile, label: '较旧的列表' };
     let listCalls = 0;
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getConnectionState') return disconnected;
@@ -1135,12 +1134,11 @@ describe('MySQL connection panel', () => {
 
     resolveNewerList?.([profile]);
     await vi.waitFor(() => expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1));
-    resolveOlderList?.([olderProfile, secondProfile]);
+    resolveOlderList?.({ profiles: [secondProfile] });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
 
     expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(1);
     expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
-    expect(document.querySelector('[data-field="profile"]')?.textContent).not.toContain('较旧的列表');
     expect(document.querySelector('[data-field="profile"]')?.textContent).not.toContain('另一个连接');
   });
 
@@ -1221,6 +1219,76 @@ describe('MySQL connection panel', () => {
     expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(2);
     expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
     expect(document.body.textContent).not.toContain('底层错误不应直接显示');
+  });
+
+  it.each([
+    ['object', {}],
+    ['null', null],
+    ['malformed success envelope', { profiles: [profile] }],
+  ] as const)('treats a non-array %s reconciliation as a failed refresh', async (_kind, malformedList) => {
+    let resolveUpdate: ((value: unknown) => void) | undefined;
+    const pendingUpdate = new Promise<unknown>((resolve) => { resolveUpdate = resolve; });
+    const secondProfile = { ...profile, id: secondProfileId, label: '另一个连接' };
+    let listCalls = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return ++listCalls === 1
+        ? [profile, secondProfile]
+        : malformedList;
+      if (method === 'updateConnectionProfile') return pendingUpdate;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'next-secret');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+    const select = document.querySelector<HTMLSelectElement>('[data-field="profile"]')!;
+    select.value = secondProfileId;
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    resolveUpdate?.({ ...profile, updatedAt: '2026-08-02T00:00:00.000Z' });
+
+    await vi.waitFor(() => expect(document.body.textContent).toContain('保存的连接列表刷新失败，请重试。'));
+    expect(listCalls).toBe(2);
+    expect(document.querySelectorAll('[data-field="profile"] option')).toHaveLength(2);
+    expect(document.querySelector<HTMLSelectElement>('[data-field="profile"]')?.value).toBe(secondProfileId);
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('本机开发库');
+    expect(document.querySelector('[data-field="profile"]')?.textContent).toContain('另一个连接');
+    expect(request.mock.calls.filter((call) => call[1] === 'connectSaved')).toHaveLength(0);
+    expect(request.mock.calls.filter((call) => call[1] === 'connect')).toHaveLength(0);
+    expect(document.body.innerHTML).not.toContain('next-secret');
+  });
+
+  it('reports a malformed initial profile list while keeping manual connection usable', async () => {
+    let secretReads = 0;
+    const malformedList: Record<string, unknown> = { profiles: [] };
+    Object.defineProperty(malformedList, 'password', {
+      enumerable: true,
+      get() {
+        secretReads += 1;
+        return 'malformed-list-secret';
+      },
+    });
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return malformedList;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+
+    await definition.mount({ message: { request } });
+
+    expect(document.querySelector('[role="alert"]')?.textContent).toContain('MySQL 返回了无效的连接资料列表。');
+    expect(document.querySelector('[data-connection-mode="manual"]')).not.toBeNull();
+    expect(document.querySelector('[data-action="connect"]')).not.toBeNull();
+    expect(document.body.textContent).not.toContain('还没有保存的连接');
+    expect(secretReads).toBe(0);
+    expect(document.body.innerHTML).not.toContain('malformed-list-secret');
+    expect(request.mock.calls.filter((call) => call[1] === 'connectSaved')).toHaveLength(0);
+    expect(request.mock.calls.filter((call) => call[1] === 'connect')).toHaveLength(0);
   });
 
   it('does not reconcile a stale mutation response that reports an error', async () => {

@@ -961,7 +961,7 @@ const MAX_DATABASE_LENGTH = 64;
 const MAX_TIMESTAMP_LENGTH = 64;
 
 function sanitizeProfiles(value: unknown): SanitizedProfiles {
-  if (!Array.isArray(value)) return { profiles: [], droppedInvalid: true };
+  if (!Array.isArray(value)) throw new Error('MySQL 返回了无效的连接资料列表。');
   const profiles: MysqlConnectionProfile[] = [];
   const profileIds = new Set<string>();
   let droppedInvalid = false;
