@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   access,
+  cp,
   mkdir,
   mkdtemp,
   readFile,
@@ -18,6 +19,7 @@ import {
   DESKTOP_ELECTRON_VERSION,
   createDesktopPackageSteps,
   runDesktopPackage,
+  verifyPackagedKeyring,
 } from './desktop-package-build.mjs';
 
 function commandRunner({ fail = {} } = {}) {
@@ -36,6 +38,17 @@ async function write(root, relative, contents = relative) {
   const filename = path.join(root, relative);
   await mkdir(path.dirname(filename), { recursive: true });
   await writeFile(filename, contents);
+}
+
+function packagedArtifactPaths(cwd) {
+  const outputDirectory = path.join(cwd, 'dist', 'desktop-release', 'mac-arm64');
+  const appPackage = path.join(outputDirectory, 'ITHARBORS.app');
+  return {
+    outputDirectory,
+    appPackage,
+    contents: path.join(appPackage, 'Contents'),
+    resources: path.join(appPackage, 'Contents', 'Resources'),
+  };
 }
 
 async function createPackagedKeyringFixture(
@@ -267,6 +280,75 @@ test('accepts a fixture package with only the externalized unpacked Darwin ARM64
     nativePackage: '@napi-rs/keyring-darwin-arm64',
     nativeFile: 'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node',
   });
+});
+
+test('rejects a complete ITHARBORS.app symlink outside the trusted output directory', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t);
+  const { appPackage } = packagedArtifactPaths(cwd);
+  const externalApp = path.join(cwd, 'external-complete-tree.app');
+  await rename(appPackage, externalApp);
+  await symlink(externalApp, appPackage);
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /ITHARBORS\.app.*direct child|ITHARBORS\.app.*symlink/iu,
+  );
+});
+
+for (const component of ['Contents', 'Resources']) {
+  test(`rejects a symlinked ${component} directory before reading the archive`, async (t) => {
+    const cwd = await createPackagedKeyringFixture(t);
+    const paths = packagedArtifactPaths(cwd);
+    const directory = component === 'Contents' ? paths.contents : paths.resources;
+    const externalDirectory = path.join(cwd, `external-${component.toLowerCase()}`);
+    await rename(directory, externalDirectory);
+    await symlink(externalDirectory, directory);
+    await writeFile(
+      path.join(externalDirectory, component === 'Contents' ? 'Resources/app.asar' : 'app.asar'),
+      'must not be read',
+    );
+
+    await assert.rejects(
+      runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+      new RegExp(`${component}.*direct child|${component}.*symlink`, 'iu'),
+    );
+  });
+}
+
+test('rejects a symlinked desktop output root', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t);
+  const { outputDirectory } = packagedArtifactPaths(cwd);
+  const externalOutput = path.join(cwd, 'external-mac-arm64-output');
+  await rename(outputDirectory, externalOutput);
+  await symlink(externalOutput, outputDirectory);
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /output directory.*symlink/iu,
+  );
+});
+
+test('rejects a same-named app nested below the trusted output directory', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t);
+  const { outputDirectory, appPackage } = packagedArtifactPaths(cwd);
+  const nestedApp = path.join(outputDirectory, 'nested', 'ITHARBORS.app');
+  await cp(appPackage, nestedApp, { recursive: true });
+
+  await assert.rejects(
+    verifyPackagedKeyring({ outputDirectory, appPackage: nestedApp }),
+    /ITHARBORS\.app.*direct child/iu,
+  );
+});
+
+test('rejects traversal spelling even when it resolves to the expected app', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t);
+  const { outputDirectory } = packagedArtifactPaths(cwd);
+  const traversalApp = `${outputDirectory}${path.sep}nested${path.sep}..${path.sep}ITHARBORS.app`;
+
+  await assert.rejects(
+    verifyPackagedKeyring({ outputDirectory, appPackage: traversalApp }),
+    /ITHARBORS\.app.*direct child/iu,
+  );
 });
 
 for (const fixture of [
