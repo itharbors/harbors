@@ -30,6 +30,7 @@ export interface BackfillCursorV1 {
   size: number;
   mtimeMs: number;
   offset: number;
+  sessionCounted?: boolean;
 }
 
 export interface HistoryStore {

@@ -1,0 +1,2 @@
+{"type":"assistant","timestamp":"2026-08-01T08:00:01.000Z","uuid":"claude-event-1","message":{"id":"msg-1","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":2},"content":"sensitive response must never persist"},"prompt":"sensitive prompt must never persist","apiKey":"sk-test-secret"}
+{"type":"assistant","timestamp":"2026-08-01T08:00:01.000Z","uuid":"claude-event-1","message":{"id":"msg-1","usage":{"input_tokens":10,"output_tokens":4,"cache_read_input_tokens":2},"content":"duplicate sensitive response"}}
