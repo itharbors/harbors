@@ -38,7 +38,17 @@ async function write(root, relative, contents = relative) {
 
 async function createPackagedKeyringFixture(
   t,
-  { foreignPlatform = false, forbiddenArtifact = false } = {},
+  {
+    foreignPlatform = false,
+    forbiddenArtifact = false,
+    wrapperManifest: wrapperManifestOverride = {},
+    nativeManifest: nativeManifestOverride = {},
+    extraNativeFile = false,
+    extraUnpackedNativeFile = false,
+    omitWrapperMain = false,
+    credentialModuleContent = 'export const credentialBackend = "os-keyring";\n',
+    keyringTextContent = 'module.exports = {};\n',
+  } = {},
 ) {
   const cwd = await mkdtemp(path.join(os.tmpdir(), 'harbors-desktop-package-'));
   t.after(() => rm(cwd, { recursive: true, force: true }));
@@ -56,24 +66,67 @@ async function createPackagedKeyringFixture(
 export async function loadKeyring() {
   return import('@napi-rs/keyring');
 }
+export function migrateDatabase(database) {
+  database.exec('CREATE TABLE credential_profiles (id TEXT)');
+}
 `);
-  await write(source, 'node_modules/@napi-rs/keyring/package.json', JSON.stringify({
+  const wrapperManifest = {
     name: '@napi-rs/keyring',
     version: '1.3.0',
     main: 'index.js',
-  }));
-  await write(source, 'node_modules/@napi-rs/keyring/index.js', 'module.exports = { Entry: class {} };\n');
-  await write(source, 'node_modules/@napi-rs/keyring-darwin-arm64/package.json', JSON.stringify({
+    files: ['index.d.ts', 'index.js', 'keytar.js', 'keytar.d.ts'],
+    optionalDependencies: {
+      '@napi-rs/keyring-darwin-arm64': '1.3.0',
+      '@napi-rs/keyring-darwin-x64': '1.3.0',
+      '@napi-rs/keyring-freebsd-x64': '1.3.0',
+      '@napi-rs/keyring-linux-arm-gnueabihf': '1.3.0',
+      '@napi-rs/keyring-linux-arm64-gnu': '1.3.0',
+      '@napi-rs/keyring-linux-arm64-musl': '1.3.0',
+      '@napi-rs/keyring-linux-riscv64-gnu': '1.3.0',
+      '@napi-rs/keyring-linux-x64-gnu': '1.3.0',
+      '@napi-rs/keyring-linux-x64-musl': '1.3.0',
+      '@napi-rs/keyring-win32-arm64-msvc': '1.3.0',
+      '@napi-rs/keyring-win32-ia32-msvc': '1.3.0',
+      '@napi-rs/keyring-win32-x64-msvc': '1.3.0',
+    },
+    ...wrapperManifestOverride,
+  };
+  const nativeManifest = {
     name: '@napi-rs/keyring-darwin-arm64',
     version: '1.3.0',
+    main: 'keyring.darwin-arm64.node',
+    files: ['keyring.darwin-arm64.node'],
     os: ['darwin'],
     cpu: ['arm64'],
-  }));
+    ...nativeManifestOverride,
+  };
+  await write(source, 'node_modules/@napi-rs/keyring/package.json', JSON.stringify(wrapperManifest));
+  if (!omitWrapperMain) await write(source, 'node_modules/@napi-rs/keyring/index.js', `
+function isMuslFromChildProcess() {
+  return require('child_process').execSync('ldd --version', { encoding: 'utf8' }).includes('musl');
+}
+module.exports = { Entry: class {}, isMuslFromChildProcess };
+`);
+  await write(source, 'node_modules/@napi-rs/keyring/index.d.ts', 'export declare class Entry {}\n');
+  await write(source, 'node_modules/@napi-rs/keyring/keytar.js', keyringTextContent);
+  await write(source, 'node_modules/@napi-rs/keyring/keytar.d.ts', 'export {};\n');
+  await write(
+    source,
+    'node_modules/@napi-rs/keyring-darwin-arm64/package.json',
+    JSON.stringify(nativeManifest),
+  );
   await write(
     source,
     'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node',
     'fixture native binary',
   );
+  if (extraNativeFile) {
+    await write(
+      source,
+      'node_modules/@napi-rs/keyring-darwin-arm64/extra.node',
+      'unexpected native binary',
+    );
+  }
   if (foreignPlatform) {
     await write(source, 'node_modules/@napi-rs/keyring-linux-x64-gnu/package.json', JSON.stringify({
       name: '@napi-rs/keyring-linux-x64-gnu',
@@ -90,10 +143,18 @@ export async function loadKeyring() {
   if (forbiddenArtifact) {
     await write(source, 'dist/plaintext-store.json', '{"password":"fixture"}');
   }
+  await write(source, 'dist/credentials.js', credentialModuleContent);
   await mkdir(resources, { recursive: true });
   await createPackageWithOptions(source, path.join(resources, 'app.asar'), {
     unpack: '**/*.node',
   });
+  if (extraUnpackedNativeFile) {
+    await write(
+      path.join(resources, 'app.asar.unpacked'),
+      'node_modules/@napi-rs/keyring-darwin-arm64/stray.node',
+      'stray unpacked native binary',
+    );
+  }
   return cwd;
 }
 
@@ -139,6 +200,77 @@ test('accepts a fixture package with only the externalized unpacked Darwin ARM64
   });
 });
 
+for (const fixture of [
+  {
+    name: 'wrapper name',
+    options: { wrapperManifest: { name: '@example/keyring' } },
+  },
+  {
+    name: 'wrapper version',
+    options: { wrapperManifest: { version: '9.9.9' } },
+  },
+  {
+    name: 'wrapper main',
+    options: { wrapperManifest: { main: 'keytar.js' } },
+  },
+  {
+    name: 'missing wrapper main',
+    options: { omitWrapperMain: true },
+  },
+  {
+    name: 'wrapper native dependency relation',
+    options: { wrapperManifest: { optionalDependencies: {} } },
+  },
+  {
+    name: 'native name',
+    options: { nativeManifest: { name: '@example/keyring-darwin-arm64' } },
+  },
+  {
+    name: 'native version',
+    options: { nativeManifest: { version: '9.9.9' } },
+  },
+  {
+    name: 'native operating system',
+    options: { nativeManifest: { os: ['linux'] } },
+  },
+  {
+    name: 'native architecture',
+    options: { nativeManifest: { cpu: ['x64'] } },
+  },
+  {
+    name: 'native main',
+    options: { nativeManifest: { main: 'extra.node' } },
+  },
+  {
+    name: 'native files',
+    options: { nativeManifest: { files: ['extra.node'] } },
+  },
+]) {
+  test(`rejects a packaged keyring with an invalid ${fixture.name}`, async (t) => {
+    const cwd = await createPackagedKeyringFixture(t, fixture.options);
+    const runner = commandRunner();
+
+    await assert.rejects(
+      runDesktopPackage({ cwd, mode: 'dir', run: runner.run }),
+      /invalid .* manifest|native dependency/iu,
+    );
+  });
+}
+
+for (const fixture of [
+  { name: 'archive', options: { extraNativeFile: true } },
+  { name: 'unpacked directory', options: { extraUnpackedNativeFile: true } },
+]) {
+  test(`rejects an extra keyring native file in the ${fixture.name}`, async (t) => {
+    const cwd = await createPackagedKeyringFixture(t, fixture.options);
+
+    await assert.rejects(
+      runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+      /native file closure/u,
+    );
+  });
+}
+
 test('rejects a fixture package containing a foreign native keyring platform', async (t) => {
   const cwd = await createPackagedKeyringFixture(t, { foreignPlatform: true });
   const runner = commandRunner();
@@ -157,6 +289,40 @@ test('rejects a fixture package containing a plaintext credential helper artifac
   await assert.rejects(
     runDesktopPackage({ cwd, mode: 'dir', run: runner.run }),
     /forbidden credential helper artifact/u,
+  );
+});
+
+for (const fixture of [
+  { name: 'child process import', content: "import 'node:child_process';\n" },
+  { name: 'exec call', content: "exec('credential-helper');\n" },
+  { name: 'spawn call', content: "spawn('credential-helper');\n" },
+  { name: 'Linux secret-tool helper', content: "const helper = 'secret-tool';\n" },
+  { name: 'macOS security helper', content: "const helper = '/usr/bin/security add-generic-password';\n" },
+  { name: 'Windows cmdkey helper', content: "const helper = 'cmdkey.exe';\n" },
+  { name: 'basic text backend', content: "const backend = 'basic_text';\n" },
+  { name: 'plaintext store', content: "const backend = 'plaintext store';\n" },
+  { name: 'fixed key', content: "const strategy = 'fixed-key';\n" },
+]) {
+  test(`rejects ${fixture.name} content from an ordinary credential module path`, async (t) => {
+    const cwd = await createPackagedKeyringFixture(t, {
+      credentialModuleContent: fixture.content,
+    });
+
+    await assert.rejects(
+      runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+      /forbidden credential fallback content/u,
+    );
+  });
+}
+
+test('rejects forbidden fallback content from a packaged keyring text entry', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, {
+    keyringTextContent: "module.exports = 'secret-tool';\n",
+  });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /forbidden credential fallback content/u,
   );
 });
 
