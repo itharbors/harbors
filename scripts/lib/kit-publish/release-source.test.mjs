@@ -19,6 +19,7 @@ const policy = Object.freeze({
     mysql: { id: '@itharbors/kit-mysql', label: 'MySQL', summary: 'MySQL database workbench' },
     notifications: { id: '@itharbors/kit-notifications', label: 'Notifications', summary: 'Notification kit' },
     sqlite: { id: '@itharbors/kit-sqlite', label: 'SQLite', summary: 'SQLite database workbench' },
+    traceweave: { id: '@itharbors/kit-traceweave', label: 'TraceWeave', summary: 'Codex trace workbench' },
   },
 });
 
@@ -30,12 +31,13 @@ function browserAssetUrl(tag, name) {
   return `https://github.com/${repository}/releases/download/${tag}/${encodeURIComponent(name)}`;
 }
 
-function values({ version = '1.2.3', channel = 'stable', overrides = {} } = {}) {
-  const tag = `kit/mysql/v${version}`;
-  const artifactName = `kit-mysql-${version}-any-any.hkit`;
+function values({ slug = 'mysql', version = '1.2.3', channel = 'stable', overrides = {} } = {}) {
+  const policyKit = policy.kits[slug];
+  const tag = `kit/${slug}/v${version}`;
+  const artifactName = `kit-${slug}-${version}-any-any.hkit`;
   const manifest = {
     schemaVersion: 1,
-    id: '@itharbors/kit-mysql',
+    id: policyKit.id,
     version,
     channel,
     publisher: 'itharbors',
@@ -51,9 +53,9 @@ function values({ version = '1.2.3', channel = 'stable', overrides = {} } = {}) 
   const entry = {
     schemaVersion: 1,
     id: manifest.id,
-    label: 'MySQL',
+    label: policyKit.label,
     publisher: 'itharbors',
-    summary: 'MySQL database workbench',
+    summary: policyKit.summary,
     channel,
     version,
     releaseManifestUrl: assetUrl(tag, 'release.json'),
@@ -685,6 +687,16 @@ test('ignores drafts, unrelated Tags, and unknown Kit slugs', async () => {
     metadata: metadataFor(value),
   });
   assert.deepEqual(result.entries.map((entry) => entry.id), ['@itharbors/kit-mysql']);
+});
+
+test('discovers a policy-approved TraceWeave Release', async () => {
+  const value = values({ slug: 'traceweave', version: '0.1.0-preview.1', channel: 'preview' });
+  const result = await discover({
+    pages: new Map([['1', [releaseRecord(value)]]]),
+    metadata: metadataFor(value),
+  });
+
+  assert.deepEqual(result.entries.map((entry) => entry.id), ['@itharbors/kit-traceweave']);
 });
 
 test('rejects a trusted Release missing metadata or containing a non-unique Kit archive', async () => {
