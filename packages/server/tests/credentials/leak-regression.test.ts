@@ -7,9 +7,14 @@ import { Writable } from 'node:stream';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createDefaultAssemblyConfig } from '../../src/assembly/config';
-import { CREDENTIAL_SERVICE, credentialScopeDigest } from '../../src/credentials/scope';
+import { credentialScopeDigest } from '../../src/credentials/scope';
 import { CredentialStore } from '../../src/credentials/store';
-import type { KeyringAdapter } from '../../src/credentials/keyring';
+import {
+  createNativeKeyringAdapter,
+  type KeyringAdapter,
+  type KeyringModule,
+  type NativeKeyringEntry,
+} from '../../src/credentials/keyring';
 import { CredentialVault } from '../../src/credentials/vault';
 import { createServer } from '../../src/server';
 
@@ -25,8 +30,15 @@ type CredentialScenarioSurfaces = {
   sessionBootstrap: unknown[];
   broadcasts: unknown[];
   panelResponses: unknown[];
-  sqliteRows: unknown[];
+  sqliteRows: SqliteSurface[];
   capturedLogs: unknown[];
+};
+
+type SqliteSurface = {
+  stage: string;
+  journalMode: string;
+  tables: unknown[];
+  files: Array<{ name: string; bytes: string }>;
 };
 
 type ConnectionInput = {
@@ -48,8 +60,7 @@ type DriverPool = {
   end(): Promise<void>;
 };
 
-class FakeKeyring implements KeyringAdapter {
-  readonly service = CREDENTIAL_SERVICE;
+class InMemoryKeyring implements KeyringAdapter {
   readonly secrets = new Map<string, string>();
   readonly operations: Array<{ operation: 'get' | 'set' | 'delete'; account: string }> = [];
 
@@ -66,6 +77,66 @@ class FakeKeyring implements KeyringAdapter {
   async delete(account: string): Promise<void> {
     this.operations.push({ operation: 'delete', account });
     this.secrets.delete(account);
+  }
+}
+
+type NativeEntryOperation = 'get' | 'set' | 'delete';
+
+class NativeEntryHarness {
+  readonly secrets = new Map<string, string>();
+  readonly constructions: Array<{ service: string; account: string }> = [];
+  readonly operations: Array<{
+    operation: NativeEntryOperation;
+    service: string;
+    account: string;
+  }> = [];
+  private readonly failures = new Map<NativeEntryOperation, unknown[]>();
+
+  createModule(): KeyringModule {
+    const harness = this;
+    class Entry implements NativeKeyringEntry {
+      constructor(
+        private readonly service: string,
+        private readonly account: string,
+      ) {
+        harness.constructions.push({ service, account });
+      }
+
+      getPassword(): string | null {
+        harness.record('get', this.service, this.account);
+        return harness.secrets.get(harness.key(this.service, this.account)) ?? null;
+      }
+
+      setPassword(secretValue: string): void {
+        harness.record('set', this.service, this.account);
+        harness.secrets.set(harness.key(this.service, this.account), secretValue);
+      }
+
+      deletePassword(): boolean {
+        harness.record('delete', this.service, this.account);
+        return harness.secrets.delete(harness.key(this.service, this.account));
+      }
+    }
+    return { Entry };
+  }
+
+  failNext(operation: NativeEntryOperation, error: unknown): void {
+    const queued = this.failures.get(operation) ?? [];
+    queued.push(error);
+    this.failures.set(operation, queued);
+  }
+
+  private key(service: string, account: string): string {
+    return `${service}\0${account}`;
+  }
+
+  private record(operation: NativeEntryOperation, service: string, account: string): void {
+    this.operations.push({ operation, service, account });
+    const queued = this.failures.get(operation);
+    if (!queued || queued.length === 0) return;
+    const error = queued.shift();
+    if (queued.length === 0) this.failures.delete(operation);
+    throw error;
   }
 }
 
@@ -110,15 +181,37 @@ describe('credential leak regression', () => {
   it('keeps a saved MySQL secret out of every serializable host and browser surface', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-leak-regression-'));
     const databasePath = path.join(directory, 'harbors.sqlite');
-    const keyring = new FakeKeyring();
+    const nativeEntries = new NativeEntryHarness();
+    const keyring = await createNativeKeyringAdapter({
+      mode: 'local',
+      load: async () => nativeEntries.createModule(),
+    });
     const driver = new FakeMysqlDriver();
 
     try {
       const surfaces = await runCredentialScenario({ secret, databasePath, keyring, driver });
 
       expect(JSON.stringify(surfaces)).not.toContain(secret);
-      expect(keyring.service).toBe('com.itharbors.credentials.v1');
-      expect(keyring.secrets.size).toBe(0);
+      for (const stage of ['saved', 'updated']) {
+        const sqliteSurface = surfaces.sqliteRows.find((surface) => surface.stage === stage);
+        expect(sqliteSurface?.journalMode).toBe('wal');
+        expect(sqliteSurface?.files.map(({ name }) => name)).toEqual([
+          'harbors.sqlite',
+          'harbors.sqlite-wal',
+          'harbors.sqlite-shm',
+        ]);
+      }
+      expect(surfaces.capturedLogs).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          level: 'error',
+          args: [expect.objectContaining({
+            name: 'Error',
+            message: 'credential leak log instrumentation probe',
+            cause: expect.objectContaining({ message: 'controlled secret-free cause' }),
+          })],
+        }),
+      ]));
+      expect(nativeEntries.secrets.size).toBe(0);
       expect(driver.inputs.map((input) => input.password)).toEqual([
         secret,
         secret,
@@ -126,11 +219,18 @@ describe('credential leak regression', () => {
       ]);
       expect(driver.pools.every((pool) => pool.endCalls === 1)).toBe(true);
 
-      const ownerScope = credentialScopeDigest('@itharbors/kit-mysql', mysqlCore);
-      expect(keyring.operations.length).toBeGreaterThan(0);
-      for (const { account } of keyring.operations) {
+      expect(new Set(nativeEntries.operations.map(({ operation }) => operation))).toEqual(
+        new Set<NativeEntryOperation>(['get', 'set', 'delete']),
+      );
+      expect(nativeEntries.constructions).toEqual(
+        nativeEntries.operations.map(({ service, account }) => ({ service, account })),
+      );
+      for (const { service, account } of nativeEntries.operations) {
+        expect(service).toBe('com.itharbors.credentials.v1');
         expect(account).toMatch(new RegExp(
-          `^${ownerScope}:[0-9a-f-]{36}:[0-9a-f-]{36}$`,
+          '^c9ae63325590735060748c1ce66911e4c0b1aaa7acbf610362d7d3e56d26c209:'
+            + '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}:'
+            + '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',
           'u',
         ));
       }
@@ -185,7 +285,7 @@ describe('credential leak regression', () => {
   it('denies a credential profile to a capable plugin owned by another Kit', async () => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-cross-kit-'));
     const databasePath = path.join(directory, 'harbors.sqlite');
-    const keyring = new FakeKeyring();
+    const keyring = new InMemoryKeyring();
     const store = new CredentialStore(databasePath);
     const vault = new CredentialVault({ mode: 'local', store, keyring });
     const owner = vault.bind('@itharbors/kit-mysql', mysqlCore);
@@ -247,7 +347,7 @@ describe('credential leak regression', () => {
 async function runCredentialScenario(input: {
   secret: string;
   databasePath: string;
-  keyring: FakeKeyring;
+  keyring: KeyringAdapter;
   driver: FakeMysqlDriver;
 }): Promise<CredentialScenarioSurfaces> {
   const surfaces: CredentialScenarioSurfaces = {
@@ -259,7 +359,10 @@ async function runCredentialScenario(input: {
     capturedLogs: [],
   };
   const restoreLogs = captureConsole(surfaces.capturedLogs);
-  const restoreDriver = await installFakeDriver(input.driver);
+  console.error(Object.assign(new Error('credential leak log instrumentation probe'), {
+    cause: new Error('controlled secret-free cause'),
+  }));
+  let restoreDriver: (() => void) | undefined;
   let server: ReturnType<typeof createServer> | undefined;
 
   const start = async (): Promise<{ baseUrl: string; server: ReturnType<typeof createServer> }> => {
@@ -281,6 +384,7 @@ async function runCredentialScenario(input: {
   };
 
   try {
+    restoreDriver = await installFakeDriver(input.driver);
     let running = await start();
     server = running.server;
     surfaces.applicationBootstrap.push(await getJson(running.baseUrl, '/api/application/bootstrap'));
@@ -348,7 +452,7 @@ async function runCredentialScenario(input: {
     return surfaces;
   } finally {
     if (server) await server.stop().catch(() => undefined);
-    restoreDriver();
+    restoreDriver?.();
     restoreLogs();
   }
 }
@@ -468,9 +572,10 @@ function attachBroadcastCapture(
   server.channel.addClient(sessionId, response);
 }
 
-function readSqliteSurface(databasePath: string, stage: string): unknown {
+function readSqliteSurface(databasePath: string, stage: string): SqliteSurface {
   const database = new Database(databasePath, { readonly: true, fileMustExist: true });
   try {
+    const journalMode = database.pragma('journal_mode', { simple: true }) as string;
     const tableNames = database
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
       .all() as Array<{ name: string }>;
@@ -484,7 +589,7 @@ function readSqliteSurface(databasePath: string, stage: string): unknown {
         name: path.basename(filename),
         bytes: fs.readFileSync(filename).toString('latin1'),
       }));
-    return { stage, tables, files };
+    return { stage, journalMode, tables, files };
   } finally {
     database.close();
   }
