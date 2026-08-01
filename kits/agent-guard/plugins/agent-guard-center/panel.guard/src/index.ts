@@ -12,6 +12,11 @@ import {
   type PolicyV1,
   type TrafficHistoryResult,
 } from '@itharbors/agent-guard-contracts';
+import {
+  createHistoryAxisTicks,
+  summarizeHistoryByAgent,
+  type HistoryRange,
+} from './history-view-model';
 
 type PanelContext = {
   message: { request(plugin: string, name: string, ...args: unknown[]): Promise<unknown> };
@@ -37,7 +42,7 @@ let historyResultQueryKey: string | null = null;
 let historyStatus: HistoryStatus | null = null;
 let historyError: string | null = null;
 let historyVersion = 0;
-let historyRange: '1h' | '24h' | '7d' | '30d' | '90d' | '1y' = '24h';
+let historyRange: HistoryRange = '24h';
 let historyDomain: 'network' | 'model-usage' = 'network';
 let clearConfirmation = false;
 export type DashboardTab = 'overview' | 'incidents' | 'settings';
@@ -459,39 +464,31 @@ function mergeHistoryPoints(points: HistoryPoint[]): HistoryPoint {
 
 function createHistorySummary(result: TrafficHistoryResult): HTMLElement {
   const wrapper = document.createElement('div');
-  wrapper.className = 'history-summary';
-  const title = result.domain === 'network' ? '实测网络流量' : '本地日志回填';
-  wrapper.append(textElement('strong', '', title));
-  const rows = result.domain === 'model-usage'
-    ? [['primary', ['input-tokens', 'output-tokens', 'cache-tokens']], ['secondary', ['requests', 'sessions']]] as const
-    : [['primary', ['bytes-in', 'bytes-out']]] as const;
-  for (const [rowName, metrics] of rows) {
+  wrapper.className = 'agent-history-list';
+  const summaries = summarizeHistoryByAgent(result);
+  for (const summary of summaries) {
     const row = document.createElement('div');
-    row.className = 'history-summary-row';
-    if (result.domain === 'model-usage') row.dataset.summaryRow = rowName;
-    for (const metric of metrics) {
-      const item = result.summary.find((summary) => summary.metric === metric);
-      row.append(createHistorySummaryCard(metric, item ?? null));
+    row.className = 'agent-history-row';
+    row.dataset.historyAgent = summary.agent;
+    row.append(textElement('strong', 'agent-history-identity', summary.agent === 'claude' ? 'Claude' : 'Codex'));
+    for (const metric of summary.metrics) {
+      row.append(createHistorySummaryCard(metric));
     }
     wrapper.append(row);
   }
-  const expectedSummaryMetrics = rows.flatMap(([, metrics]) => [...metrics]);
-  const missing = expectedSummaryMetrics.some((metric) => !result.summary.some((item) => item.metric === metric))
-    || result.series.flatMap((item) => item.points).some((point) => point.coverage === 'missing');
+  const missing = summaries.some((summary) => summary.metrics.some((metric) => metric.coverageRatio < 1));
   if (missing) wrapper.append(textElement('span', 'history-warning', '未采集区间不会按零流量计算'));
   return wrapper;
 }
 
-function createHistorySummaryCard(
-  metric: HistorySeries['metric'],
-  item: TrafficHistoryResult['summary'][number] | null,
-): HTMLElement {
+function createHistorySummaryCard(metric: ReturnType<typeof summarizeHistoryByAgent>[number]['metrics'][number]): HTMLElement {
   const card = document.createElement('div');
   card.className = 'history-stat';
+  card.dataset.metric = metric.metric;
   card.append(
-    textElement('span', '', historyMetricLabel(metric)),
-    textElement('b', '', item ? formatHistoryValue(item.value, item.unit) : '未采集'),
-    textElement('small', '', `覆盖 ${item ? (item.coverageRatio * 100).toFixed(0) : '0'}%`),
+    textElement('span', '', historyMetricLabel(metric.metric)),
+    textElement('b', '', metric.value === null ? '未采集' : formatHistoryValue(metric.value, metric.unit)),
+    textElement('small', '', `覆盖 ${(metric.coverageRatio * 100).toFixed(0)}%`),
   );
   return card;
 }
@@ -500,10 +497,11 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   const figure = document.createElement('figure');
   figure.className = 'history-chart';
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 720 180');
+  svg.setAttribute('viewBox', '0 0 720 220');
   svg.setAttribute('role', 'img');
-  svg.setAttribute('aria-label', result.domain === 'network' ? '网络流量历史趋势' : '模型用量历史趋势');
   const series = mergeHistorySeriesByMetric(result);
+  svg.setAttribute('aria-label', `${result.domain === 'network' ? '网络流量' : '模型用量'} ${historyRange} 历史趋势：${series
+    .map((item) => `${historyMetricLabel(item.metric)} ${formatSeriesValue(item)}`).join('，')}`);
   const values = series.flatMap((item) => item.points).flatMap((point) => point.value === null ? [] : [point.value]);
   const maximum = Math.max(1, ...values);
   for (const [seriesIndex, item] of series.entries()) {
@@ -528,6 +526,23 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     pathElement.dataset.values = item.points.map((point) => String(point.value)).join(',');
     svg.append(pathElement);
   }
+  for (const tick of createHistoryAxisTicks(result.from, result.to, historyRange)) {
+    const position = result.to === result.from ? 0 : (tick.at - result.from) / (result.to - result.from);
+    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('class', 'history-axis-tick');
+    label.setAttribute('x', String(Math.min(1, Math.max(0, position)) * 700 + 10));
+    label.setAttribute('y', '187');
+    label.setAttribute('text-anchor', position === 0 ? 'start' : position === 1 ? 'end' : 'middle');
+    label.textContent = tick.label;
+    svg.append(label);
+  }
+  const axisTitle = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+  axisTitle.setAttribute('class', 'history-axis-title');
+  axisTitle.setAttribute('x', '360');
+  axisTitle.setAttribute('y', '210');
+  axisTitle.setAttribute('text-anchor', 'middle');
+  axisTitle.textContent = '时间（本地时区）';
+  svg.append(axisTitle);
   const legend = document.createElement('ul');
   legend.className = 'history-legend';
   for (const item of series) legend.append(textElement('li', '', historyMetricLabel(item.metric)));
@@ -535,6 +550,11 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     .map((item) => `${historyMetricLabel(item.metric)} ${formatHistoryValue(item.value, item.unit)}`).join('，'));
   figure.append(svg, legend, caption);
   return figure;
+}
+
+function formatSeriesValue(series: DisplayHistorySeries): string {
+  const values = series.points.flatMap((point) => point.value === null ? [] : [point.value]);
+  return values.length === 0 ? '未采集' : formatHistoryValue(values.reduce((sum, value) => sum + value, 0), series.unit);
 }
 
 function createBackfillSettings(): HTMLElement {

@@ -205,8 +205,7 @@ describe('Agent Guard panel', () => {
       preferredBucket: 'minute',
     });
     expect(document.body.textContent).toContain('历史用量');
-    await vi.waitFor(() => expect(document.body.textContent).toContain('实测网络流量'));
-    expect(document.body.textContent).toContain('0 B');
+    await vi.waitFor(() => expect(document.querySelectorAll('.agent-history-row')).toHaveLength(2));
     expect(document.body.textContent).toContain('未采集');
     expect(document.querySelector('[data-action="history-agent-claude"]')).toBeNull();
     expect(document.querySelector('[data-action="history-agent-codex"]')).toBeNull();
@@ -214,15 +213,43 @@ describe('Agent Guard panel', () => {
     expect(document.querySelector('.route-metrics [data-metric="bytes-out"]')?.getAttribute('data-values')).toBeNull();
     expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')?.getAttribute('data-values')).toBe('3072,null');
     expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')?.getAttribute('data-values')).toBe('1536,0');
-    const measuredZero = [...document.querySelectorAll('.history-stat')]
-      .find((item) => item.textContent?.includes('上行'));
-    expect(measuredZero?.textContent).toContain('0 B');
-    expect(measuredZero?.textContent).not.toContain('未采集');
+    expect(document.querySelector('[data-history-agent="claude"]')?.textContent).toContain('Claude');
+    expect(document.querySelector('[data-history-agent="codex"]')?.textContent).toContain('Codex');
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(26_000);
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(2);
+    panel.unmount();
+  });
+
+  it('renders independent Agent history rows with a real local-time axis', async () => {
+    const request = vi.fn(async (_plugin: string, method: string, input?: { domain?: 'network' | 'model-usage' }) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return input?.domain === 'model-usage'
+        ? modelHistoryResult()
+        : agentSummaryHistoryResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelector('[data-history-agent="claude"] [data-metric="bytes-in"]')).not.toBeNull());
+    expect(document.querySelector('[data-history-agent="claude"] [data-metric="bytes-in"]')?.textContent).toContain('300 B');
+    expect(document.querySelector('[data-history-agent="claude"] [data-metric="bytes-out"]')?.textContent).toContain('未采集');
+    expect(document.querySelector('[data-history-agent="codex"] [data-metric="bytes-in"]')?.textContent).toContain('0 B');
+    expect(document.querySelectorAll('.history-axis-tick')).toHaveLength(5);
+    expect(document.querySelector('.history-axis-title')?.textContent).toBe('时间（本地时区）');
+    expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
+
+    document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-history-agent="claude"] [data-metric="input-tokens"]')).not.toBeNull());
+    for (const agent of ['claude', 'codex']) {
+      expect([...document.querySelectorAll(`[data-history-agent="${agent}"] [data-metric]`)].map((item) => item.getAttribute('data-metric')))
+        .toEqual(['input-tokens', 'output-tokens', 'cache-tokens', 'requests', 'sessions']);
+    }
+    expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
     panel.unmount();
   });
 
@@ -350,13 +377,13 @@ describe('Agent Guard panel', () => {
     await vi.waitFor(() => expect(document.querySelectorAll('.history-chart path[data-metric]')).toHaveLength(2));
     expect([...document.querySelectorAll('.history-chart path[data-metric]')].map((item) => item.getAttribute('data-values')))
       .toEqual(['', '']);
-    expect(document.querySelectorAll('.history-stat')).toHaveLength(2);
+    expect(document.querySelectorAll('.history-stat')).toHaveLength(4);
     expect([...document.querySelectorAll('.history-stat')].every((item) => (
       item.textContent?.includes('未采集') && item.textContent.includes('覆盖 0%')
     ))).toBe(true);
 
     document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
-    await vi.waitFor(() => expect(document.querySelectorAll('.history-stat')).toHaveLength(5));
+    await vi.waitFor(() => expect(document.querySelectorAll('.history-stat')).toHaveLength(10));
     expect(document.querySelectorAll('.history-chart path[data-metric]')).toHaveLength(2);
     expect([...document.querySelectorAll('.history-stat')].every((item) => (
       item.textContent?.includes('未采集') && item.textContent.includes('覆盖 0%')
@@ -364,7 +391,7 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
-  it('shows only token trends and groups model summary metrics into two rows', async () => {
+  it('shows only token trends and displays every model metric for each Agent', async () => {
     const request = vi.fn(async (_plugin: string, method: string, input?: { domain?: string }) => {
       if (method === 'getSnapshot') return snapshot();
       if (method === 'getTrafficHistory') return input?.domain === 'model-usage' ? modelHistoryResult() : historyResult();
@@ -378,14 +405,10 @@ describe('Agent Guard panel', () => {
     await vi.waitFor(() => expect(document.querySelector('[data-metric="input-tokens"]')).not.toBeNull());
 
     expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
-    expect(document.querySelector('[data-metric="input-tokens"]')).not.toBeNull();
-    expect(document.querySelector('[data-metric="output-tokens"]')).not.toBeNull();
-    expect(document.querySelector('[data-metric="cache-tokens"]')).toBeNull();
-    expect(document.querySelector('[data-summary-row="primary"]')?.textContent).toContain('输入 token');
-    expect(document.querySelector('[data-summary-row="primary"]')?.textContent).toContain('输出 token');
-    expect(document.querySelector('[data-summary-row="primary"]')?.textContent).toContain('缓存 token');
-    expect(document.querySelector('[data-summary-row="secondary"]')?.textContent).toContain('请求');
-    expect(document.querySelector('[data-summary-row="secondary"]')?.textContent).toContain('会话');
+    for (const agent of ['claude', 'codex']) {
+      expect([...document.querySelectorAll(`[data-history-agent="${agent}"] [data-metric]`)].map((item) => item.getAttribute('data-metric')))
+        .toEqual(['input-tokens', 'output-tokens', 'cache-tokens', 'requests', 'sessions']);
+    }
     panel.unmount();
   });
 
@@ -730,6 +753,39 @@ function modelHistoryResult() {
     ],
     sources: [{ provenance: 'local-session', quality: 'derived', pointCount: 10 }],
   };
+}
+
+function agentSummaryHistoryResult() {
+  return {
+    ...historyResult(),
+    series: [
+      ...agentSummarySeries('bytes-in', 'claude', 'anthropic.example.test', [100]),
+      ...agentSummarySeries('bytes-in', 'claude', 'relay.example.test', [200]),
+      ...agentSummarySeries('bytes-in', 'codex', 'openai.example.test', [0]),
+      ...agentSummarySeries('bytes-out', 'codex', 'openai.example.test', [500, null]),
+    ],
+    summary: [],
+  };
+}
+
+function agentSummarySeries(
+  metric: 'bytes-in' | 'bytes-out',
+  agent: 'claude' | 'codex',
+  hostname: string,
+  values: Array<number | null>,
+) {
+  return [{
+    metric, unit: 'bytes', agent, provider: 'custom', hostname,
+    points: values.map((value, index) => ({
+      start: NOW - (values.length - index) * 60_000,
+      end: NOW - (values.length - index - 1) * 60_000,
+      value,
+      coverage: value === null ? 'missing' : 'complete',
+      coverageReason: value === null ? 'collector-stopped' : null,
+      provenance: value === null ? null : 'network-sample',
+      quality: value === null ? null : 'measured',
+    })),
+  }];
 }
 
 function modelHistorySeries(metric: string, unit: string, claude: number, codex: number) {
