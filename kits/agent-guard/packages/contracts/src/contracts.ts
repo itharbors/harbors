@@ -82,6 +82,101 @@ export type AgentGuardCommand =
   | { type: 'terminate'; incidentId: string }
   | { type: 'ignore'; incidentId: string; durationMinutes: 15 | 30 | 60 };
 
+export type HistoryDomain = 'network' | 'model-usage';
+export type HistoryBucket = 'minute' | 'hour' | 'day';
+export type HistoryCoverage = 'complete' | 'partial' | 'missing';
+export type HistoryCoverageReason =
+  | 'collector-stopped'
+  | 'collector-degraded'
+  | 'agent-disabled'
+  | 'raw-cap-reached'
+  | 'retention-boundary'
+  | 'unsupported';
+export type HistoryProvenance = 'network-sample' | 'local-session';
+export type HistoryQuality = 'measured' | 'derived';
+export type HistoryMetric =
+  | 'bytes-in'
+  | 'bytes-out'
+  | 'input-tokens'
+  | 'output-tokens'
+  | 'cache-tokens'
+  | 'requests'
+  | 'sessions';
+export type HistoryUnit = 'bytes' | 'tokens' | 'requests' | 'sessions';
+
+export interface TrafficHistoryQuery {
+  from: number;
+  to: number;
+  domain: HistoryDomain;
+  agents?: AgentId[];
+  hostnames?: string[];
+  preferredBucket?: HistoryBucket;
+}
+
+export interface HistoryPoint {
+  start: number;
+  end: number;
+  value: number | null;
+  coverage: HistoryCoverage;
+  coverageReason: HistoryCoverageReason | null;
+  provenance: HistoryProvenance | null;
+  quality: HistoryQuality | null;
+}
+
+export interface HistorySeries {
+  metric: HistoryMetric;
+  unit: HistoryUnit;
+  agent: AgentId;
+  provider: string;
+  hostname: string;
+  points: HistoryPoint[];
+}
+
+export interface HistorySummary {
+  metric: HistoryMetric;
+  unit: HistoryUnit;
+  value: number;
+  coverageRatio: number;
+  derivedRatio: number;
+}
+
+export interface HistorySourceSummary {
+  provenance: HistoryProvenance;
+  quality: HistoryQuality;
+  pointCount: number;
+}
+
+export interface TrafficHistoryResult {
+  schemaVersion: 1;
+  domain: HistoryDomain;
+  from: number;
+  to: number;
+  actualBucket: HistoryBucket;
+  generation: number;
+  persistent: boolean;
+  series: HistorySeries[];
+  summary: HistorySummary[];
+  sources: HistorySourceSummary[];
+  warnings: string[];
+}
+
+export interface HistorySettings {
+  localSessionBackfill: boolean;
+}
+
+export interface HistoryStatus {
+  schemaVersion: 1;
+  persistent: boolean;
+  storageBytes: number;
+  earliestAt: number | null;
+  latestAt: number | null;
+  generation: number;
+  lastCompactedAt: number | null;
+  lastBackfilledAt: number | null;
+  settings: HistorySettings;
+  warnings: string[];
+}
+
 type UnknownRecord = Record<string, unknown>;
 
 function record(value: unknown, context: string): UnknownRecord {
@@ -96,6 +191,19 @@ function exact(value: UnknownRecord, fields: readonly string[], context: string)
   const unknown = Object.keys(value).find((field) => !allowed.has(field));
   if (unknown) throw new TypeError(`${context} contains unknown field "${unknown}"`);
   const missing = fields.find((field) => !(field in value));
+  if (missing) throw new TypeError(`${context}.${missing} is required`);
+}
+
+function allowedFields(
+  value: UnknownRecord,
+  required: readonly string[],
+  optional: readonly string[],
+  context: string,
+): void {
+  const allowed = new Set([...required, ...optional]);
+  const unknown = Object.keys(value).find((field) => !allowed.has(field));
+  if (unknown) throw new TypeError(`${context} contains unknown field "${unknown}"`);
+  const missing = required.find((field) => !(field in value));
   if (missing) throw new TypeError(`${context}.${missing} is required`);
 }
 
@@ -131,6 +239,27 @@ function numericEnum<T extends number>(value: unknown, allowed: readonly T[], co
     throw new TypeError(`${context} must be one of: ${allowed.join(', ')}`);
   }
   return value as T;
+}
+
+function boolean(value: unknown, context: string): boolean {
+  if (typeof value !== 'boolean') throw new TypeError(`${context} must be a boolean`);
+  return value;
+}
+
+function nullableInteger(value: unknown, context: string): number | null {
+  return value === null ? null : integer(value, context);
+}
+
+function ratio(value: unknown, context: string): number {
+  const result = number(value, context);
+  if (result > 1) throw new TypeError(`${context} must be between 0 and 1`);
+  return result;
+}
+
+function boundedText(value: unknown, context: string, maxLength: number): string {
+  const result = text(value, context);
+  if (result.length > maxLength) throw new TypeError(`${context} is too long`);
+  return result;
 }
 
 function normalizeEndpoint(value: unknown, context: string): AgentEndpointSnapshot {
@@ -274,4 +403,222 @@ export function normalizeCommand(value: unknown): AgentGuardCommand {
     return { type, incidentId, durationMinutes };
   }
   return { type, incidentId };
+}
+
+const MAX_HISTORY_RANGE_MS = 366 * 24 * 60 * 60_000;
+const MAX_HISTORY_POINTS = 2_000;
+
+export function normalizeTrafficHistoryQuery(value: unknown): TrafficHistoryQuery {
+  const input = record(value, 'history query');
+  allowedFields(input, ['from', 'to', 'domain'], ['agents', 'hostnames', 'preferredBucket'], 'history query');
+  const from = integer(input.from, 'history query.from');
+  const to = integer(input.to, 'history query.to');
+  if (to <= from) throw new TypeError('history query range must end after it starts');
+  if (to - from > MAX_HISTORY_RANGE_MS) throw new TypeError('history query range must not exceed 366 days');
+  const agents = normalizeUniqueAgents(input.agents, 'history query.agents');
+  const hostnames = normalizeUniqueText(input.hostnames, 'history query.hostnames', 32, 253);
+  const preferredBucket = input.preferredBucket === undefined
+    ? undefined
+    : enumValue<HistoryBucket>(input.preferredBucket, ['minute', 'hour', 'day'], 'history query.preferredBucket');
+  return {
+    from,
+    to,
+    domain: enumValue(input.domain, ['network', 'model-usage'], 'history query.domain'),
+    ...(agents === undefined ? {} : { agents }),
+    ...(hostnames === undefined ? {} : { hostnames }),
+    ...(preferredBucket === undefined ? {} : { preferredBucket }),
+  };
+}
+
+export function normalizeTrafficHistoryResult(value: unknown): TrafficHistoryResult {
+  const input = record(value, 'history result');
+  exact(input, [
+    'schemaVersion', 'domain', 'from', 'to', 'actualBucket', 'generation', 'persistent',
+    'series', 'summary', 'sources', 'warnings',
+  ], 'history result');
+  if (input.schemaVersion !== 1) throw new TypeError('history result.schemaVersion must be 1');
+  const domain = enumValue(input.domain, ['network', 'model-usage'], 'history result.domain');
+  if (!Array.isArray(input.series) || input.series.length > 64) {
+    throw new TypeError('history result.series must contain at most 64 entries');
+  }
+  if (!Array.isArray(input.summary) || input.summary.length > 16) {
+    throw new TypeError('history result.summary must contain at most 16 entries');
+  }
+  if (!Array.isArray(input.sources) || input.sources.length > 8) {
+    throw new TypeError('history result.sources must contain at most 8 entries');
+  }
+  const series = input.series.map((item, index) => normalizeHistorySeries(item, domain, `history result.series[${index}]`));
+  const pointCount = series.reduce((sum, item) => sum + item.points.length, 0);
+  if (pointCount > MAX_HISTORY_POINTS) throw new TypeError('history result must contain at most 2000 points');
+  const summary = input.summary.map((item, index) => normalizeHistorySummary(item, domain, `history result.summary[${index}]`));
+  const sources = input.sources.map((item, index) => normalizeHistorySource(item, `history result.sources[${index}]`));
+  const warnings = normalizeUniqueText(input.warnings, 'history result.warnings', 64, 128) ?? [];
+  const from = integer(input.from, 'history result.from');
+  const to = integer(input.to, 'history result.to');
+  if (to <= from) throw new TypeError('history result range must end after it starts');
+  return {
+    schemaVersion: 1,
+    domain,
+    from,
+    to,
+    actualBucket: enumValue(input.actualBucket, ['minute', 'hour', 'day'], 'history result.actualBucket'),
+    generation: integer(input.generation, 'history result.generation'),
+    persistent: boolean(input.persistent, 'history result.persistent'),
+    series,
+    summary,
+    sources,
+    warnings,
+  };
+}
+
+export function normalizeHistorySettings(value: unknown): HistorySettings {
+  const input = record(value, 'history settings');
+  exact(input, ['localSessionBackfill'], 'history settings');
+  return { localSessionBackfill: boolean(input.localSessionBackfill, 'history settings.localSessionBackfill') };
+}
+
+export function normalizeHistoryStatus(value: unknown): HistoryStatus {
+  const input = record(value, 'history status');
+  exact(input, [
+    'schemaVersion', 'persistent', 'storageBytes', 'earliestAt', 'latestAt', 'generation',
+    'lastCompactedAt', 'lastBackfilledAt', 'settings', 'warnings',
+  ], 'history status');
+  if (input.schemaVersion !== 1) throw new TypeError('history status.schemaVersion must be 1');
+  return {
+    schemaVersion: 1,
+    persistent: boolean(input.persistent, 'history status.persistent'),
+    storageBytes: integer(input.storageBytes, 'history status.storageBytes'),
+    earliestAt: nullableInteger(input.earliestAt, 'history status.earliestAt'),
+    latestAt: nullableInteger(input.latestAt, 'history status.latestAt'),
+    generation: integer(input.generation, 'history status.generation'),
+    lastCompactedAt: nullableInteger(input.lastCompactedAt, 'history status.lastCompactedAt'),
+    lastBackfilledAt: nullableInteger(input.lastBackfilledAt, 'history status.lastBackfilledAt'),
+    settings: normalizeHistorySettings(input.settings),
+    warnings: normalizeUniqueText(input.warnings, 'history status.warnings', 64, 128) ?? [],
+  };
+}
+
+export function normalizeClearHistory(value: unknown): { confirmation: 'clear-history' } {
+  const input = record(value, 'clear history');
+  exact(input, ['confirmation'], 'clear history');
+  if (input.confirmation !== 'clear-history') {
+    throw new TypeError('clear history.confirmation must be clear-history');
+  }
+  return { confirmation: 'clear-history' };
+}
+
+function normalizeHistorySeries(value: unknown, domain: HistoryDomain, context: string): HistorySeries {
+  const input = record(value, context);
+  exact(input, ['metric', 'unit', 'agent', 'provider', 'hostname', 'points'], context);
+  const metric = enumValue(input.metric, [
+    'bytes-in', 'bytes-out', 'input-tokens', 'output-tokens', 'cache-tokens', 'requests', 'sessions',
+  ], `${context}.metric`);
+  const unit = enumValue(input.unit, ['bytes', 'tokens', 'requests', 'sessions'], `${context}.unit`);
+  assertMetricUnit(domain, metric, unit, context);
+  if (!Array.isArray(input.points) || input.points.length > MAX_HISTORY_POINTS) {
+    throw new TypeError(`${context}.points must contain at most 2000 entries`);
+  }
+  return {
+    metric,
+    unit,
+    agent: enumValue(input.agent, ['claude', 'codex'], `${context}.agent`),
+    provider: boundedText(input.provider, `${context}.provider`, 128),
+    hostname: boundedText(input.hostname, `${context}.hostname`, 253),
+    points: input.points.map((item, index) => normalizeHistoryPoint(item, `${context}.points[${index}]`)),
+  };
+}
+
+function normalizeHistoryPoint(value: unknown, context: string): HistoryPoint {
+  const input = record(value, context);
+  exact(input, [
+    'start', 'end', 'value', 'coverage', 'coverageReason', 'provenance', 'quality',
+  ], context);
+  const start = integer(input.start, `${context}.start`);
+  const end = integer(input.end, `${context}.end`);
+  if (end <= start) throw new TypeError(`${context} range must end after it starts`);
+  const coverage = enumValue(input.coverage, ['complete', 'partial', 'missing'], `${context}.coverage`);
+  const metricValue = input.value === null ? null : integer(input.value, `${context}.value`);
+  const coverageReason = input.coverageReason === null ? null : enumValue(input.coverageReason, [
+    'collector-stopped', 'collector-degraded', 'agent-disabled',
+    'raw-cap-reached', 'retention-boundary', 'unsupported',
+  ], `${context}.coverageReason`);
+  const provenance = input.provenance === null ? null : enumValue(
+    input.provenance, ['network-sample', 'local-session'], `${context}.provenance`,
+  );
+  const quality = input.quality === null ? null : enumValue(
+    input.quality, ['measured', 'derived'], `${context}.quality`,
+  );
+  if (coverage === 'missing' && metricValue !== null) throw new TypeError(`${context}.value must be null when missing`);
+  if (coverage !== 'missing' && metricValue === null) throw new TypeError(`${context}.value must be present when covered`);
+  if (coverage === 'missing' && (provenance !== null || quality !== null)) {
+    throw new TypeError(`${context} missing points cannot claim a source`);
+  }
+  return { start, end, value: metricValue, coverage, coverageReason, provenance, quality };
+}
+
+function normalizeHistorySummary(value: unknown, domain: HistoryDomain, context: string): HistorySummary {
+  const input = record(value, context);
+  exact(input, ['metric', 'unit', 'value', 'coverageRatio', 'derivedRatio'], context);
+  const metric = enumValue(input.metric, [
+    'bytes-in', 'bytes-out', 'input-tokens', 'output-tokens', 'cache-tokens', 'requests', 'sessions',
+  ], `${context}.metric`);
+  const unit = enumValue(input.unit, ['bytes', 'tokens', 'requests', 'sessions'], `${context}.unit`);
+  assertMetricUnit(domain, metric, unit, context);
+  return {
+    metric,
+    unit,
+    value: integer(input.value, `${context}.value`),
+    coverageRatio: ratio(input.coverageRatio, `${context}.coverageRatio`),
+    derivedRatio: ratio(input.derivedRatio, `${context}.derivedRatio`),
+  };
+}
+
+function normalizeHistorySource(value: unknown, context: string): HistorySourceSummary {
+  const input = record(value, context);
+  exact(input, ['provenance', 'quality', 'pointCount'], context);
+  return {
+    provenance: enumValue(input.provenance, ['network-sample', 'local-session'], `${context}.provenance`),
+    quality: enumValue(input.quality, ['measured', 'derived'], `${context}.quality`),
+    pointCount: integer(input.pointCount, `${context}.pointCount`),
+  };
+}
+
+function assertMetricUnit(domain: HistoryDomain, metric: HistoryMetric, unit: HistoryUnit, context: string): void {
+  const expected: Record<HistoryMetric, { domain: HistoryDomain; unit: HistoryUnit }> = {
+    'bytes-in': { domain: 'network', unit: 'bytes' },
+    'bytes-out': { domain: 'network', unit: 'bytes' },
+    'input-tokens': { domain: 'model-usage', unit: 'tokens' },
+    'output-tokens': { domain: 'model-usage', unit: 'tokens' },
+    'cache-tokens': { domain: 'model-usage', unit: 'tokens' },
+    requests: { domain: 'model-usage', unit: 'requests' },
+    sessions: { domain: 'model-usage', unit: 'sessions' },
+  };
+  if (expected[metric].domain !== domain || expected[metric].unit !== unit) {
+    throw new TypeError(`${context} metric and unit do not belong to ${domain}`);
+  }
+}
+
+function normalizeUniqueAgents(value: unknown, context: string): AgentId[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 2) throw new TypeError(`${context} must contain at most 2 entries`);
+  const result: AgentId[] = value.map((item, index) => (
+    enumValue<AgentId>(item, ['claude', 'codex'], `${context}[${index}]`)
+  ));
+  if (new Set(result).size !== result.length) throw new TypeError(`${context} contains duplicate entries`);
+  return result;
+}
+
+function normalizeUniqueText(
+  value: unknown,
+  context: string,
+  maxItems: number,
+  maxLength: number,
+): string[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > maxItems) {
+    throw new TypeError(`${context} must contain at most ${maxItems} entries`);
+  }
+  const result = value.map((item, index) => boundedText(item, `${context}[${index}]`, maxLength));
+  if (new Set(result).size !== result.length) throw new TypeError(`${context} contains duplicate entries`);
+  return result;
 }
