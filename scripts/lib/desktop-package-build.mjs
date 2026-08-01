@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { access, readdir } from 'node:fs/promises';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { extractFile, listPackage, statFile } from '@electron/asar';
 
@@ -12,19 +12,15 @@ const DESKTOP_KEYRING_VERSION = '1.3.0';
 const DESKTOP_KEYRING_WRAPPER_MANIFEST = 'node_modules/@napi-rs/keyring/package.json';
 const DESKTOP_KEYRING_NATIVE_MANIFEST = 'node_modules/@napi-rs/keyring-darwin-arm64/package.json';
 const DESKTOP_KEYRING_WRAPPER_MAIN = 'node_modules/@napi-rs/keyring/index.js';
-const KEYRING_TEXT_ENTRY = /(?:\.(?:[cm]?js|json|ts|md|txt)|\/(?:license|readme))$/iu;
-const CREDENTIAL_MODULE_ENTRY = /^(?:dist|packages\/server\/dist)\/(?:.*\/)?credentials(?:\/.*)?\.[cm]?js$/iu;
+const APP_OWNED_ENTRY = /^(?:dist|packages\/server\/dist)\//u;
+const STRICT_CREDENTIAL_ENTRY = /^(?:dist\/(?:framework\.mjs|credentials(?:\/.*)?\.[cm]?js)|packages\/server\/dist\/credentials(?:\/.*)?\.[cm]?js)$/iu;
+const SELECTED_KEYRING_ENTRY = /^node_modules\/@napi-rs\/keyring(?:-darwin-arm64)?\//u;
 const KEYRING_MUSL_PROBE = /require\((['"])child_process\1\)\.execSync\((['"])ldd --version\2,\s*\{\s*encoding:\s*(['"])utf8\3\s*\}\)/gu;
-const FORBIDDEN_CREDENTIAL_CONTENT = Object.freeze([
-  Object.freeze({ label: 'child process module', pattern: /\b(?:node:)?child_process\b/u }),
-  Object.freeze({
-    label: 'process execution call',
-    pattern: /(?<![\w$.])(?:exec|execFile|execSync|spawn|spawnSync)\s*\(/u,
-  }),
+const CREDENTIAL_FALLBACK_MARKERS = Object.freeze([
   Object.freeze({ label: 'Linux secret-tool helper', pattern: /\bsecret-tool\b/iu }),
   Object.freeze({
-    label: 'macOS security helper',
-    pattern: /(?:\/usr\/bin\/security\b|\bsecurity\s+(?:add|find|delete)-generic-password\b)/iu,
+    label: 'macOS security credential verb',
+    pattern: /\b(?:add|find|delete)-generic-password\b/iu,
   }),
   Object.freeze({ label: 'Windows cmdkey helper', pattern: /\bcmdkey(?:\.exe)?\b/iu }),
   Object.freeze({ label: 'basic text backend', pattern: /\bbasic[-_ ]?text\b/iu }),
@@ -33,6 +29,9 @@ const FORBIDDEN_CREDENTIAL_CONTENT = Object.freeze([
     label: 'fixed credential key',
     pattern: /\b(?:fixed|hardcoded)[-_ ]?(?:credential[-_ ]?)?key\b/iu,
   }),
+]);
+const STRICT_PROCESS_MARKERS = Object.freeze([
+  Object.freeze({ label: 'child process module', pattern: /\b(?:node:)?child_process\b/u }),
 ]);
 
 function npmCommand() {
@@ -122,21 +121,48 @@ function exactStringArray(value, expected) {
     && value.every((entry, index) => entry === expected[index]);
 }
 
-async function listFiles(directory, prefix = '') {
+async function listUnpackedNativeFiles(directory, prefix = '') {
   const entries = await readdir(directory, { withFileTypes: true });
   const files = [];
   for (const entry of entries) {
     const relative = path.posix.join(prefix, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...await listFiles(path.join(directory, entry.name), relative));
-    } else if (entry.isFile()) {
+    if (/\.node$/iu.test(entry.name)) {
+      if (!entry.isFile() || entry.isSymbolicLink()) {
+        throw new Error(
+          `Packaged keyring verification failed: invalid unpacked native file closure; non-regular ${relative}`,
+        );
+      }
       files.push(relative);
+    } else if (entry.isDirectory()) {
+      files.push(...await listUnpackedNativeFiles(path.join(directory, entry.name), relative));
     }
   }
   return files.sort();
 }
 
-function assertNoCredentialFallback(entry, content, { allowKeyringMuslProbe = false } = {}) {
+function isWithin(root, candidate) {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (
+    relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative)
+  );
+}
+
+function readArchiveText(archive, entry) {
+  const metadata = statFile(archive, entry);
+  if (!metadata || !Number.isInteger(metadata.size) || typeof metadata.link === 'string') return null;
+  if (/\.node$/iu.test(entry)) return null;
+  const content = extractFile(archive, entry);
+  if (content.includes(0)) return null;
+  return content.toString('utf8');
+}
+
+function assertNoCredentialFallback(
+  entry,
+  content,
+  { allowKeyringMuslProbe = false, strictProcessSource = false } = {},
+) {
   let inspectedContent = content;
   if (allowKeyringMuslProbe) {
     const probes = [...content.matchAll(KEYRING_MUSL_PROBE)];
@@ -147,7 +173,10 @@ function assertNoCredentialFallback(entry, content, { allowKeyringMuslProbe = fa
     }
     inspectedContent = content.replace(KEYRING_MUSL_PROBE, '');
   }
-  const forbidden = FORBIDDEN_CREDENTIAL_CONTENT.find(({ pattern }) => pattern.test(inspectedContent));
+  const markers = strictProcessSource
+    ? [...CREDENTIAL_FALLBACK_MARKERS, ...STRICT_PROCESS_MARKERS]
+    : CREDENTIAL_FALLBACK_MARKERS;
+  const forbidden = markers.find(({ pattern }) => pattern.test(inspectedContent));
   if (forbidden) {
     throw new Error(
       `Packaged keyring verification failed: forbidden credential fallback content in ${entry} (${forbidden.label})`,
@@ -171,11 +200,14 @@ export async function verifyPackagedKeyring({ cwd }) {
   if (!entries.includes(frameworkEntry)) {
     throw new Error('Packaged keyring verification failed: Framework bundle is missing');
   }
-  const frameworkBundle = extractFile(archive, frameworkEntry).toString('utf8');
+  const frameworkBundle = readArchiveText(archive, frameworkEntry);
+  if (frameworkBundle === null) {
+    throw new Error('Packaged keyring verification failed: Framework bundle is not regular text');
+  }
   if (!/import\(["']@napi-rs\/keyring["']\)/u.test(frameworkBundle)) {
     throw new Error('Packaged keyring verification failed: external import is missing');
   }
-  assertNoCredentialFallback(frameworkEntry, frameworkBundle);
+  assertNoCredentialFallback(frameworkEntry, frameworkBundle, { strictProcessSource: true });
 
   const keyringPackages = [...new Set(entries.flatMap((entry) => {
     const match = /^node_modules\/@napi-rs\/(keyring(?:-[^/]+)?)(?:\/|$)/u.exec(entry);
@@ -232,17 +264,21 @@ export async function verifyPackagedKeyring({ cwd }) {
   if (entries.some((entry) => /shell[-_.]?helper|plain(?:text)?[-_.]?store|basic_text/iu.test(entry))) {
     throw new Error('Packaged keyring verification failed: forbidden credential helper artifact is present');
   }
-  const credentialModuleEntries = entries.filter((entry) => CREDENTIAL_MODULE_ENTRY.test(entry));
-  for (const entry of credentialModuleEntries) {
-    assertNoCredentialFallback(entry, extractFile(archive, entry).toString('utf8'));
+  const appOwnedEntries = entries.filter((entry) => APP_OWNED_ENTRY.test(entry));
+  for (const entry of appOwnedEntries) {
+    const content = readArchiveText(archive, entry);
+    if (content === null) continue;
+    assertNoCredentialFallback(entry, content, {
+      strictProcessSource: STRICT_CREDENTIAL_ENTRY.test(entry),
+    });
   }
-  const keyringTextEntries = entries.filter((entry) => (
-    /^node_modules\/@napi-rs\/keyring(?:-[^/]+)?\//u.test(entry)
-    && KEYRING_TEXT_ENTRY.test(entry)
-  ));
-  for (const entry of keyringTextEntries) {
-    assertNoCredentialFallback(entry, extractFile(archive, entry).toString('utf8'), {
+  const selectedKeyringEntries = entries.filter((entry) => SELECTED_KEYRING_ENTRY.test(entry));
+  for (const entry of selectedKeyringEntries) {
+    const content = readArchiveText(archive, entry);
+    if (content === null) continue;
+    assertNoCredentialFallback(entry, content, {
       allowKeyringMuslProbe: entry === DESKTOP_KEYRING_WRAPPER_MAIN,
+      strictProcessSource: true,
     });
   }
   const archiveNativeFiles = entries.filter((entry) => (
@@ -254,9 +290,25 @@ export async function verifyPackagedKeyring({ cwd }) {
   if (statFile(archive, DESKTOP_KEYRING_NATIVE_FILE).unpacked !== true) {
     throw new Error('Packaged keyring verification failed: Darwin ARM64 native file is not unpacked');
   }
-  const unpackedRoot = path.join(`${archive}.unpacked`, 'node_modules', '@napi-rs');
-  await access(path.join(`${archive}.unpacked`, DESKTOP_KEYRING_NATIVE_FILE));
-  const unpackedNativeFiles = (await listFiles(unpackedRoot))
+  const unpackedArchiveRoot = `${archive}.unpacked`;
+  const unpackedRoot = path.join(unpackedArchiveRoot, 'node_modules', '@napi-rs');
+  const expectedNative = path.join(unpackedArchiveRoot, DESKTOP_KEYRING_NATIVE_FILE);
+  const expectedNativeStat = await lstat(expectedNative);
+  if (!expectedNativeStat.isFile() || expectedNativeStat.isSymbolicLink()) {
+    throw new Error('Packaged keyring verification failed: expected native file is not regular');
+  }
+  const [unpackedArchiveRealRoot, unpackedRealRoot, expectedNativeReal] = await Promise.all([
+    realpath(unpackedArchiveRoot),
+    realpath(unpackedRoot),
+    realpath(expectedNative),
+  ]);
+  if (
+    !isWithin(unpackedArchiveRealRoot, unpackedRealRoot)
+    || !isWithin(unpackedArchiveRealRoot, expectedNativeReal)
+  ) {
+    throw new Error('Packaged keyring verification failed: unpacked native file escapes archive root');
+  }
+  const unpackedNativeFiles = (await listUnpackedNativeFiles(unpackedRoot))
     .filter((entry) => /^keyring(?:-[^/]+)?\/.*\.node$/u.test(entry))
     .map((entry) => path.posix.join('node_modules/@napi-rs', entry));
   if (!exactStringArray(unpackedNativeFiles, [DESKTOP_KEYRING_NATIVE_FILE])) {
