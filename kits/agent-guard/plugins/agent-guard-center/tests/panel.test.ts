@@ -122,13 +122,13 @@ describe('Agent Guard panel', () => {
     release!();
     await mounting;
     await vi.advanceTimersByTimeAsync(2000);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter((call) => call[1] === 'getSnapshot')).toHaveLength(2);
     await vi.advanceTimersByTimeAsync(2000);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter((call) => call[1] === 'getSnapshot')).toHaveLength(2);
     panel.unmount();
     release!();
     await vi.advanceTimersByTimeAsync(4000);
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls.filter((call) => call[1] === 'getSnapshot')).toHaveLength(2);
   });
 
   it('serializes policy changes through the center bridge', async () => {
@@ -159,6 +159,89 @@ describe('Agent Guard panel', () => {
     expect(document.querySelector('.state-detail')?.textContent).toBe('Policy bridge rejected the update');
     panel.unmount();
   });
+
+  it('loads a 24-hour history once and distinguishes measured zero from missing coverage', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    expect(request).toHaveBeenCalledWith('@itharbors/agent-guard-center', 'getTrafficHistory', {
+      from: NOW - 24 * 60 * 60_000,
+      to: NOW,
+      domain: 'network',
+      agents: ['claude', 'codex'],
+      hostnames: [],
+      preferredBucket: 'minute',
+    });
+    expect(document.body.textContent).toContain('历史用量');
+    await vi.waitFor(() => expect(document.body.textContent).toContain('实测网络流量'));
+    expect(document.body.textContent).toContain('0 B');
+    expect(document.body.textContent).toContain('未采集');
+    expect(document.querySelectorAll('.history-chart path')).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(1);
+    panel.unmount();
+  });
+
+  it('updates local backfill and requires a second action before clearing history', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      if (method === 'updateHistorySettings') return { ...historyStatus(), settings: { localSessionBackfill: false } };
+      if (method === 'clearHistory') return { ...historyStatus(), generation: 4 };
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelector('[data-action="toggle-backfill"]')).not.toBeNull());
+    document.querySelector<HTMLButtonElement>('[data-action="toggle-backfill"]')!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/agent-guard-center', 'updateHistorySettings', { localSessionBackfill: false },
+    ));
+    document.querySelector<HTMLButtonElement>('[data-action="clear-history"]')!.click();
+    expect(request.mock.calls.some((call) => call[1] === 'clearHistory')).toBe(false);
+    document.querySelector<HTMLButtonElement>('[data-action="confirm-clear-history"]')!.click();
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/agent-guard-center', 'clearHistory', { confirmation: 'clear-history' },
+    ));
+    panel.unmount();
+  });
+
+  it('reloads history when the domain, range, or Agent filter changes', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    await vi.waitFor(() => expect(document.querySelector('[data-action="history-agent-claude"]')).not.toBeNull());
+
+    document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
+    await vi.waitFor(() => expect(request.mock.calls.some((call) => (
+      call[1] === 'getTrafficHistory' && (call[2] as { domain?: string }).domain === 'model-usage'
+    ))).toBe(true));
+    document.querySelector<HTMLButtonElement>('[data-action="history-range-7d"]')!.click();
+    await vi.waitFor(() => expect(request.mock.calls.some((call) => (
+      call[1] === 'getTrafficHistory' && (call[2] as { preferredBucket?: string }).preferredBucket === 'hour'
+    ))).toBe(true));
+    document.querySelector<HTMLButtonElement>('[data-action="history-agent-claude"]')!.click();
+    await vi.waitFor(() => expect(request.mock.calls.some((call) => (
+      call[1] === 'getTrafficHistory' && JSON.stringify((call[2] as { agents?: string[] }).agents) === '["claude"]'
+    ))).toBe(true));
+    panel.unmount();
+  });
 });
 
 function snapshot() {
@@ -179,3 +262,44 @@ function snapshot() {
 }
 
 const MIB = 1024 * 1024;
+const NOW = Date.parse('2026-08-01T08:00:00.000Z');
+
+function historyResult() {
+  return {
+    schemaVersion: 1,
+    domain: 'network',
+    from: NOW - 24 * 60 * 60_000,
+    to: NOW,
+    actualBucket: 'minute',
+    generation: 3,
+    persistent: false,
+    series: [{
+      metric: 'bytes-out', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: NOW - 120_000, end: NOW - 60_000, value: 0, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }, {
+        start: NOW - 60_000, end: NOW, value: null, coverage: 'missing', coverageReason: 'collector-stopped',
+        provenance: null, quality: null,
+      }],
+    }],
+    summary: [{ metric: 'bytes-out', unit: 'bytes', value: 0, coverageRatio: 0.5, derivedRatio: 0 }],
+    sources: [{ provenance: 'network-sample', quality: 'measured', pointCount: 1 }],
+    warnings: ['partial-collector-coverage'],
+  };
+}
+
+function historyStatus() {
+  return {
+    schemaVersion: 1,
+    persistent: false,
+    storageBytes: 2048,
+    earliestAt: NOW - 24 * 60 * 60_000,
+    latestAt: NOW,
+    generation: 3,
+    lastCompactedAt: NOW - 60_000,
+    lastBackfilledAt: NOW - 120_000,
+    settings: { localSessionBackfill: true },
+    warnings: [],
+  };
+}

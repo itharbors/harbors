@@ -1,10 +1,14 @@
 import {
+  normalizeHistoryStatus,
   normalizeSnapshot,
+  normalizeTrafficHistoryResult,
   type AgentEndpointSnapshot,
   type AgentGuardCommand,
   type AgentGuardSnapshot,
+  type HistoryStatus,
   type IncidentSummary,
   type PolicyV1,
+  type TrafficHistoryResult,
 } from '@itharbors/agent-guard-contracts';
 
 type PanelContext = {
@@ -22,6 +26,15 @@ let requestGeneration = 0;
 let refreshPromise: Promise<void> | null = null;
 let mutation: Promise<void> | null = null;
 let signature = '';
+let latestSnapshot: AgentGuardSnapshot | null = null;
+let historyResult: TrafficHistoryResult | null = null;
+let historyStatus: HistoryStatus | null = null;
+let historyError: string | null = null;
+let historyVersion = 0;
+let historyRange: '1h' | '24h' | '7d' | '30d' | '90d' | '1y' = '24h';
+let historyDomain: 'network' | 'model-usage' = 'network';
+let historyAgents: Array<'claude' | 'codex'> = ['claude', 'codex'];
+let clearConfirmation = false;
 
 const panel = {
   async mount(nextContext: PanelContext) {
@@ -33,6 +46,7 @@ const panel = {
     signature = '';
     renderState('正在启动本机流量监控…', 'loading');
     await refresh();
+    if (mounted) void refreshHistory();
     if (mounted) timer = window.setInterval(() => { void refresh(); }, POLL_MS);
   },
   unmount() {
@@ -93,7 +107,16 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
     setButtonsDisabled(true);
     try {
       await activeContext.message.request(PLUGIN, method, input);
-      signature = '';
+    signature = '';
+    latestSnapshot = null;
+    historyResult = null;
+    historyStatus = null;
+    historyError = null;
+    historyVersion += 1;
+    historyRange = '24h';
+    historyDomain = 'network';
+    historyAgents = ['claude', 'codex'];
+    clearConfirmation = false;
       mutation = null;
       await refresh();
     } catch (error) {
@@ -107,9 +130,10 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
 
 function renderSnapshot(snapshot: AgentGuardSnapshot): void {
   if (!root) return;
+  latestSnapshot = snapshot;
   const workspace = document.createElement('div');
   workspace.className = 'guard-workspace';
-  workspace.append(createHeader(snapshot), createTrafficSection(snapshot.endpoints));
+  workspace.append(createHeader(snapshot), createTrafficSection(snapshot.endpoints), createHistorySection());
 
   const lower = document.createElement('div');
   lower.className = 'lower-deck';
@@ -123,6 +147,208 @@ function renderSnapshot(snapshot: AgentGuardSnapshot): void {
   status.textContent = `已观测 ${snapshot.endpoints.length} 个端点，保护状态：${stateLabel(snapshot.state)}`;
   workspace.append(status);
   root.replaceChildren(workspace);
+}
+
+async function refreshHistory(): Promise<void> {
+  if (!mounted || !context) return;
+  const activeContext = context;
+  const activeVersion = version;
+  const requestVersion = ++historyVersion;
+  const to = Date.now();
+  const input = {
+    from: to - historyRangeMs(historyRange),
+    to,
+    domain: historyDomain,
+    agents: [...historyAgents],
+    hostnames: [],
+    preferredBucket: historyBucket(historyRange),
+  } as const;
+  historyError = null;
+  try {
+    const [result, status] = await Promise.all([
+      activeContext.message.request(PLUGIN, 'getTrafficHistory', input),
+      activeContext.message.request(PLUGIN, 'getHistoryStatus'),
+    ]);
+    if (!mounted || version !== activeVersion || historyVersion !== requestVersion) return;
+    historyResult = normalizeTrafficHistoryResult(result);
+    historyStatus = normalizeHistoryStatus(status);
+    if (latestSnapshot) renderSnapshot(latestSnapshot);
+  } catch (error) {
+    if (!mounted || version !== activeVersion || historyVersion !== requestVersion) return;
+    historyError = errorDetail(error) ?? '历史数据暂不可用';
+    if (latestSnapshot) renderSnapshot(latestSnapshot);
+  }
+}
+
+function createHistorySection(): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'history-deck';
+  section.setAttribute('aria-labelledby', 'history-title');
+  const heading = textElement('div', 'section-heading history-heading', '');
+  const title = textElement('h2', '', '历史用量');
+  title.id = 'history-title';
+  heading.append(title, textElement('span', 'section-note', historyStatus?.persistent === false ? '当前 Web 会话 · 不持久化' : '仅保存在本机'));
+  section.append(heading, createHistoryControls());
+  if (historyError) {
+    section.append(textElement('p', 'history-message', `历史数据暂不可用：${historyError}`));
+    return section;
+  }
+  if (!historyResult) {
+    section.append(textElement('p', 'history-message', '正在读取历史数据…'));
+    return section;
+  }
+  section.append(createHistorySummary(historyResult), createHistoryChart(historyResult), createHistoryManagement());
+  return section;
+}
+
+function createHistoryControls(): HTMLElement {
+  const controls = document.createElement('div');
+  controls.className = 'history-controls';
+  const domains = document.createElement('div');
+  domains.className = 'history-switch';
+  for (const [value, label] of [['network', '网络流量'], ['model-usage', '模型用量']] as const) {
+    const control = button(label, `history-domain-${value}`, () => {
+      historyDomain = value;
+      void refreshHistory();
+    });
+    control.setAttribute('aria-pressed', String(historyDomain === value));
+    domains.append(control);
+  }
+  const ranges = document.createElement('div');
+  ranges.className = 'history-switch history-ranges';
+  for (const value of ['1h', '24h', '7d', '30d', '90d', '1y'] as const) {
+    const control = button(value, `history-range-${value}`, () => {
+      historyRange = value;
+      void refreshHistory();
+    });
+    control.setAttribute('aria-pressed', String(historyRange === value));
+    ranges.append(control);
+  }
+  const agents = document.createElement('div');
+  agents.className = 'history-switch history-agents';
+  for (const [value, label] of [['claude', 'Claude'], ['codex', 'Codex']] as const) {
+    const control = button(label, `history-agent-${value}`, () => {
+      historyAgents = historyAgents.length === 1 && historyAgents[0] === value
+        ? ['claude', 'codex']
+        : [value];
+      void refreshHistory();
+    });
+    control.setAttribute('aria-pressed', String(historyAgents.includes(value)));
+    agents.append(control);
+  }
+  controls.append(domains, agents, ranges);
+  return controls;
+}
+
+function createHistorySummary(result: TrafficHistoryResult): HTMLElement {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'history-summary';
+  const title = result.domain === 'network' ? '实测网络流量' : '本地日志回填';
+  wrapper.append(textElement('strong', '', title));
+  for (const item of result.summary) {
+    const card = document.createElement('div');
+    card.className = 'history-stat';
+    card.append(
+      textElement('span', '', historyMetricLabel(item.metric)),
+      textElement('b', '', formatHistoryValue(item.value, item.unit)),
+      textElement('small', '', `覆盖 ${(item.coverageRatio * 100).toFixed(0)}%`),
+    );
+    wrapper.append(card);
+  }
+  const missing = result.series.flatMap((item) => item.points).some((point) => point.coverage === 'missing');
+  if (missing) wrapper.append(textElement('span', 'history-warning', '未采集区间不会按零流量计算'));
+  return wrapper;
+}
+
+function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
+  const figure = document.createElement('figure');
+  figure.className = 'history-chart';
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 720 180');
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', result.domain === 'network' ? '网络流量历史趋势' : '模型用量历史趋势');
+  const values = result.series.flatMap((item) => item.points).flatMap((point) => point.value === null ? [] : [point.value]);
+  const maximum = Math.max(1, ...values);
+  for (const [seriesIndex, item] of result.series.entries()) {
+    let pathData = '';
+    for (const [index, point] of item.points.entries()) {
+      if (point.value === null) continue;
+      const x = item.points.length <= 1 ? 0 : index / (item.points.length - 1) * 700 + 10;
+      const y = 165 - point.value / maximum * 145;
+      const previousMissing = index === 0 || item.points[index - 1]?.value === null;
+      pathData += `${previousMissing ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)} `;
+    }
+    if (!pathData) continue;
+    const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    pathElement.setAttribute('d', pathData.trim());
+    pathElement.dataset.metric = item.metric;
+    pathElement.dataset.series = String(seriesIndex);
+    svg.append(pathElement);
+  }
+  const caption = textElement('figcaption', 'sr-only', result.summary
+    .map((item) => `${historyMetricLabel(item.metric)} ${formatHistoryValue(item.value, item.unit)}`).join('，'));
+  figure.append(svg, caption);
+  return figure;
+}
+
+function createHistoryManagement(): HTMLElement {
+  const aside = document.createElement('aside');
+  aside.className = 'history-management';
+  const storage = historyStatus
+    ? `${formatBytes(historyStatus.storageBytes)} · ${historyStatus.persistent ? '本机持久化' : '当前会话内存'}`
+    : '存储状态未知';
+  aside.append(textElement('span', 'section-note', storage));
+  if (historyStatus) {
+    aside.append(button(
+      historyStatus.settings.localSessionBackfill ? '关闭本地日志回填' : '开启本地日志回填',
+      'toggle-backfill',
+      () => { void updateBackfill(!historyStatus!.settings.localSessionBackfill); },
+    ));
+  }
+  if (clearConfirmation) {
+    aside.append(
+      textElement('span', 'history-warning', '只清空历史，不删除策略和异常事件。'),
+      button('确认清空', 'confirm-clear-history', () => { void clearHistoryData(); }),
+      button('取消', 'cancel-clear-history', () => {
+        clearConfirmation = false;
+        if (latestSnapshot) renderSnapshot(latestSnapshot);
+      }),
+    );
+  } else {
+    aside.append(button('清空历史', 'clear-history', () => {
+      clearConfirmation = true;
+      if (latestSnapshot) renderSnapshot(latestSnapshot);
+    }));
+  }
+  return aside;
+}
+
+async function updateBackfill(enabled: boolean): Promise<void> {
+  if (!context) return;
+  try {
+    historyStatus = normalizeHistoryStatus(await context.message.request(
+      PLUGIN, 'updateHistorySettings', { localSessionBackfill: enabled },
+    ));
+    if (latestSnapshot) renderSnapshot(latestSnapshot);
+  } catch (error) {
+    historyError = errorDetail(error) ?? '历史设置更新失败';
+    if (latestSnapshot) renderSnapshot(latestSnapshot);
+  }
+}
+
+async function clearHistoryData(): Promise<void> {
+  if (!context) return;
+  try {
+    historyStatus = normalizeHistoryStatus(await context.message.request(
+      PLUGIN, 'clearHistory', { confirmation: 'clear-history' },
+    ));
+    historyResult = null;
+    clearConfirmation = false;
+    await refreshHistory();
+  } catch (error) {
+    historyError = errorDetail(error) ?? '历史清理失败';
+    if (latestSnapshot) renderSnapshot(latestSnapshot);
+  }
 }
 
 function createHeader(snapshot: AgentGuardSnapshot): HTMLElement {
@@ -352,6 +578,41 @@ function formatRate(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB/min`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB/min`;
   return `${bytes} B/min`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${bytes} B`;
+}
+
+function formatHistoryValue(value: number, unit: string): string {
+  if (unit === 'bytes') return formatBytes(value);
+  return `${value.toLocaleString('zh-CN')} ${unit === 'tokens' ? 'tokens' : unit === 'requests' ? '次请求' : '个会话'}`;
+}
+
+function historyMetricLabel(metric: string): string {
+  return ({
+    'bytes-in': '下行', 'bytes-out': '上行', 'input-tokens': '输入 token',
+    'output-tokens': '输出 token', 'cache-tokens': '缓存 token', requests: '请求', sessions: '会话',
+  } as Record<string, string>)[metric] ?? metric;
+}
+
+function historyRangeMs(value: typeof historyRange): number {
+  return ({
+    '1h': 60 * 60_000,
+    '24h': 24 * 60 * 60_000,
+    '7d': 7 * 24 * 60 * 60_000,
+    '30d': 30 * 24 * 60 * 60_000,
+    '90d': 90 * 24 * 60 * 60_000,
+    '1y': 365 * 24 * 60 * 60_000,
+  } as const)[value];
+}
+
+function historyBucket(value: typeof historyRange): 'minute' | 'hour' | 'day' {
+  if (value === '1h' || value === '24h') return 'minute';
+  if (value === '7d' || value === '30d') return 'hour';
+  return 'day';
 }
 
 function confidenceLabel(value: AgentEndpointSnapshot['confidence']): string {
