@@ -45,6 +45,13 @@ describe('Agent Guard panel accessibility', () => {
     expect(css).toMatch(/\.history-deck\s*\{[^}]*grid-template-rows:\s*auto auto auto minmax\(110px,\s*1fr\)/su);
   });
 
+  it('places every normal-state active panel in the remaining-height grid row', () => {
+    const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
+    for (const panel of ['overview', 'incidents', 'settings']) {
+      expect(css).toMatch(new RegExp(`#${panel}-panel[^}]*grid-row:\\s*2`, 'su'));
+    }
+  });
+
   it('allows the Harbors host to run its injected panel bridge', () => {
     expect(readCspDirectives().get('script-src')).toEqual(["'self'", "'unsafe-inline'"]);
   });
