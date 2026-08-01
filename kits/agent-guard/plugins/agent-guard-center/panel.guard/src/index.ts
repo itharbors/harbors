@@ -40,7 +40,8 @@ let historyVersion = 0;
 let historyRange: '1h' | '24h' | '7d' | '30d' | '90d' | '1y' = '24h';
 let historyDomain: 'network' | 'model-usage' = 'network';
 let clearConfirmation = false;
-export type DashboardTab = 'overview' | 'incidents';
+export type DashboardTab = 'overview' | 'incidents' | 'settings';
+const DASHBOARD_TABS: readonly DashboardTab[] = ['overview', 'incidents', 'settings'];
 let activeTab: DashboardTab = 'overview';
 let policyDraft: { warning: string; trip: string } | null = null;
 
@@ -171,6 +172,7 @@ export function createDashboardTabs(snapshot: AgentGuardSnapshot): HTMLElement {
   tabs.append(
     createDashboardTab('overview', '总览', snapshot.incidents.length),
     createDashboardTab('incidents', '事件记录', snapshot.incidents.length),
+    createDashboardTab('settings', '设置', snapshot.incidents.length),
   );
   return tabs;
 }
@@ -193,9 +195,9 @@ function createDashboardTab(tab: DashboardTab, label: string, incidentCount: num
   }
   value.addEventListener('keydown', (event) => {
     const target = event.key === 'ArrowLeft' || event.key === 'ArrowRight'
-      ? tab === 'overview' ? 'incidents' : 'overview'
+      ? adjacentTab(tab, event.key === 'ArrowLeft' ? -1 : 1)
       : event.key === 'Home' ? 'overview'
-      : event.key === 'End' ? 'incidents'
+      : event.key === 'End' ? 'settings'
       : event.key === 'Enter' || event.key === ' ' ? tab
       : null;
     if (!target) return;
@@ -203,6 +205,11 @@ function createDashboardTab(tab: DashboardTab, label: string, incidentCount: num
     activateDashboardTab(target, true);
   });
   return value;
+}
+
+function adjacentTab(current: DashboardTab, direction: -1 | 1): DashboardTab {
+  const index = DASHBOARD_TABS.indexOf(current);
+  return DASHBOARD_TABS[(index + direction + DASHBOARD_TABS.length) % DASHBOARD_TABS.length];
 }
 
 export function activateDashboardTab(tab: DashboardTab, focusTab: boolean): void {
@@ -232,11 +239,29 @@ function createIncidentsPanel(snapshot: AgentGuardSnapshot): HTMLElement {
   panel.id = 'incidents-panel';
   panel.setAttribute('role', 'tabpanel');
   panel.setAttribute('aria-labelledby', 'incidents-tab');
-  const lower = document.createElement('div');
-  lower.className = 'lower-deck';
-  lower.append(createIncidentLedger(snapshot.incidents), createPolicyPanel());
-  panel.append(lower);
+  panel.append(createIncidentLedger(snapshot.incidents));
   return panel;
+}
+
+function createSettingsPanel(): HTMLElement {
+  const panel = document.createElement('section');
+  panel.id = 'settings-panel';
+  panel.setAttribute('role', 'tabpanel');
+  panel.setAttribute('aria-labelledby', 'settings-tab');
+  panel.append(
+    settingsSection('保护策略', createPolicyPanel()),
+    settingsSection('历史采集', createBackfillSettings()),
+    settingsSection('缓存管理', createCacheSettings()),
+    settingsSection('隐私说明', createPrivacyNote()),
+  );
+  return panel;
+}
+
+function settingsSection(title: string, content: HTMLElement): HTMLElement {
+  const section = document.createElement('section');
+  section.className = 'settings-section';
+  section.append(textElement('h2', '', title), content);
+  return section;
 }
 
 function createLiveStatus(snapshot: AgentGuardSnapshot): HTMLElement {
@@ -274,11 +299,16 @@ function renderSnapshotWithState(snapshot: AgentGuardSnapshot, renderState: Rend
   const workspace = document.createElement('div');
   workspace.className = 'guard-workspace';
   workspace.append(createHeader(snapshot), createDashboardTabs(snapshot));
-  if (mutationError) workspace.append(createOperationError(mutationError));
+  const dashboardContent = document.createElement('div');
+  dashboardContent.className = 'dashboard-content';
+  if (mutationError) dashboardContent.append(createOperationError(mutationError));
   const content = activeTab === 'overview'
     ? createOverviewPanel(snapshot)
-    : createIncidentsPanel(snapshot);
-  workspace.append(content, createPrivacyNote(), createLiveStatus(snapshot));
+    : activeTab === 'incidents'
+      ? createIncidentsPanel(snapshot)
+      : createSettingsPanel();
+  dashboardContent.append(content);
+  workspace.append(dashboardContent, createLiveStatus(snapshot));
   root.replaceChildren(workspace);
   restoreRenderState(renderState);
 }
@@ -351,7 +381,7 @@ function createHistorySection(): HTMLElement {
     section.append(textElement('p', 'history-message', '正在读取历史数据…'));
     return section;
   }
-  section.append(createHistorySummary(historyResult), createHistoryChart(historyResult), createHistoryManagement());
+  section.append(createHistorySummary(historyResult), createHistoryChart(historyResult));
   return section;
 }
 
@@ -507,19 +537,36 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   return figure;
 }
 
-function createHistoryManagement(): HTMLElement {
+function createBackfillSettings(): HTMLElement {
   const aside = document.createElement('aside');
   aside.className = 'history-management';
-  const storage = historyStatus
-    ? `${formatBytes(historyStatus.storageBytes)} · ${historyStatus.persistent ? '本机持久化' : '当前会话内存'}`
-    : '存储状态未知';
-  aside.append(textElement('span', 'section-note', storage));
+  const control = button(
+    historyStatus?.settings.localSessionBackfill ? '关闭本地日志回填' : '开启本地日志回填',
+    'toggle-backfill',
+    () => {
+      if (historyStatus) void updateBackfill(!historyStatus.settings.localSessionBackfill);
+    },
+  );
+  control.disabled = !historyStatus;
+  aside.append(control);
+  return aside;
+}
+
+function createCacheSettings(): HTMLElement {
+  const aside = document.createElement('aside');
+  aside.className = 'history-management';
   if (historyStatus) {
-    aside.append(button(
-      historyStatus.settings.localSessionBackfill ? '关闭本地日志回填' : '开启本地日志回填',
-      'toggle-backfill',
-      () => { void updateBackfill(!historyStatus!.settings.localSessionBackfill); },
-    ));
+    const details = document.createElement('div');
+    details.className = 'cache-status';
+    details.append(
+      textElement('span', 'section-note', historyStatus.persistent ? '本机持久化' : '当前会话内存'),
+      textElement('span', 'section-note', `占用 ${formatBytes(historyStatus.storageBytes)}`),
+      textElement('span', 'section-note', `最早记录 ${formatLocalTimestamp(historyStatus.earliestAt)}`),
+      textElement('span', 'section-note', `最新记录 ${formatLocalTimestamp(historyStatus.latestAt)}`),
+    );
+    aside.append(details);
+  } else {
+    aside.append(textElement('span', 'section-note', '存储状态未知'));
   }
   if (clearConfirmation) {
     aside.append(
@@ -811,6 +858,13 @@ function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
   if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
   return `${bytes} B`;
+}
+
+function formatLocalTimestamp(timestamp: number): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    dateStyle: 'short',
+    timeStyle: 'medium',
+  }).format(timestamp);
 }
 
 function formatHistoryValue(value: number, unit: string): string {

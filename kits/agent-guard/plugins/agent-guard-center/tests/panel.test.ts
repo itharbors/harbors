@@ -24,7 +24,7 @@ describe('Agent Guard panel', () => {
     expect(document.body.textContent).toContain('观测路由');
     expect(document.querySelector('[data-incident-id]')).toBeNull();
     expect(document.body.textContent).not.toContain('双重信号触发暂停');
-    expect(document.body.textContent).toContain('仅采集本机连接元数据');
+    expect(document.body.textContent).not.toContain('仅采集本机连接元数据');
     expect(document.body.textContent).toContain('relay.example.test');
     expect(document.body.textContent).not.toContain('Local agent traffic');
     expect(document.body.textContent).not.toMatch(/request count|token cost/iu);
@@ -136,7 +136,7 @@ describe('Agent Guard panel', () => {
     const request = vi.fn(async (_plugin: string, method: string) => method === 'getSnapshot' ? snapshot() : undefined);
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
-    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!.click();
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
     const warning = document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!;
     warning.value = '256';
     document.querySelector<HTMLButtonElement>('[data-action="save-policy"]')!.click();
@@ -148,7 +148,7 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
-  it('keeps a failed policy mutation inline and retryable without losing incident workspace state', async () => {
+  it('keeps a failed policy mutation inline and retryable without losing settings workspace state', async () => {
     let updateAttempts = 0;
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
@@ -163,7 +163,7 @@ describe('Agent Guard panel', () => {
     });
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
-    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!.click();
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
     const warning = document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!;
     expect(warning.getAttribute('autocomplete')).toBe('off');
     warning.value = '256';
@@ -172,7 +172,7 @@ describe('Agent Guard panel', () => {
 
     await vi.waitFor(() => expect(document.querySelector('[role="alert"]')?.textContent).toContain('Policy bridge rejected the update'));
     expect(document.querySelector('h1')?.textContent).toBe('本机智能体流量');
-    expect(document.querySelector('[role="tab"][data-tab="incidents"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
     const restoredWarning = document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!;
     expect(restoredWarning.value).toBe('256');
     expect(document.activeElement).toBe(restoredWarning);
@@ -180,7 +180,7 @@ describe('Agent Guard panel', () => {
     document.querySelector<HTMLButtonElement>('[data-action="save-policy"]')!.click();
     await vi.waitFor(() => expect(updateAttempts).toBe(2));
     await vi.waitFor(() => expect(document.querySelector('[role="alert"]')).toBeNull());
-    expect(document.querySelector('[role="tab"][data-tab="incidents"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
     panel.unmount();
   });
 
@@ -238,7 +238,8 @@ describe('Agent Guard panel', () => {
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
 
-    await vi.waitFor(() => expect(document.querySelector('[data-action="toggle-backfill"]')).not.toBeNull());
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-action="toggle-backfill"]')).not.toBeNull());
     document.querySelector<HTMLButtonElement>('[data-action="toggle-backfill"]')!.click();
     await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
       '@itharbors/agent-guard-center', 'updateHistorySettings', { localSessionBackfill: false },
@@ -370,7 +371,7 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
-  it('separates the overview from the incidents and policy workspace', async () => {
+  it('separates overview, incidents, and settings ownership', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
       if (method === 'getTrafficHistory') return historyResult();
@@ -380,6 +381,9 @@ describe('Agent Guard panel', () => {
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
 
+    expect([...document.querySelectorAll<HTMLElement>('[role="tab"]')].map((tab) => tab.dataset.tab)).toEqual([
+      'overview', 'incidents', 'settings',
+    ]);
     const overview = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!;
     const incidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
     expect(overview.getAttribute('aria-selected')).toBe('true');
@@ -387,9 +391,12 @@ describe('Agent Guard panel', () => {
     const overviewPanel = document.querySelector('#overview-panel');
     expect(overviewPanel).not.toBeNull();
     expect(overviewPanel?.hasAttribute('hidden')).toBe(false);
+    expect(document.querySelectorAll('.dashboard-content [role="tabpanel"]')).toHaveLength(1);
     expect(document.querySelector('#incidents-panel')).toBeNull();
     expect(document.querySelector('[data-incident-id]')).toBeNull();
     expect(document.querySelector('.policy-panel')).toBeNull();
+    expect(overviewPanel?.querySelector('[data-action="toggle-backfill"]')).toBeNull();
+    expect(overviewPanel?.querySelector('[data-action="clear-history"]')).toBeNull();
     expect(incidents.textContent).toContain('1');
     expect(incidents.getAttribute('aria-controls')).toBe('incidents-panel');
 
@@ -399,11 +406,20 @@ describe('Agent Guard panel', () => {
     expect(incidentsPanel?.hasAttribute('hidden')).toBe(false);
     expect(document.querySelector('#overview-panel')).toBeNull();
     expect(incidentsPanel?.querySelector('[data-incident-id="incident-1"]')).not.toBeNull();
-    expect(incidentsPanel?.querySelector('.policy-panel')).not.toBeNull();
+    expect(incidentsPanel?.querySelector('.policy-panel')).toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    const settingsPanel = document.querySelector('#settings-panel');
+    expect([...settingsPanel!.querySelectorAll<HTMLElement>('.settings-section')].map((section) => section.querySelector('h2')?.textContent))
+      .toEqual(['保护策略', '历史采集', '缓存管理', '隐私说明']);
+    expect(settingsPanel?.querySelector('.policy-panel')).not.toBeNull();
+    expect(settingsPanel?.querySelector('[data-action="toggle-backfill"]')).not.toBeNull();
+    expect(settingsPanel?.querySelector('[data-action="clear-history"]')).not.toBeNull();
+    expect(settingsPanel?.querySelector('.privacy-note')).not.toBeNull();
     panel.unmount();
   });
 
-  it('marks both Tabs generically and gives the incident badge an explicit count state', async () => {
+  it('marks all Tabs generically and gives the incident badge an explicit count state', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
       if (method === 'getTrafficHistory') return historyResult();
@@ -415,8 +431,10 @@ describe('Agent Guard panel', () => {
 
     const overview = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!;
     const incidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
+    const settings = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!;
     expect(overview.classList.contains('dashboard-tab')).toBe(true);
     expect(incidents.classList.contains('dashboard-tab')).toBe(true);
+    expect(settings.classList.contains('dashboard-tab')).toBe(true);
     const badge = incidents.querySelector<HTMLElement>('.dashboard-tab-badge');
     expect(badge?.textContent).toBe('1');
     expect(badge?.dataset.state).toBe('nonzero');
@@ -445,12 +463,12 @@ describe('Agent Guard panel', () => {
 
     const tab = () => document.querySelector<HTMLButtonElement>('[role="tab"][aria-selected="true"]')!;
     tab().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
-    expect(tab().dataset.tab).toBe('incidents');
+    expect(tab().dataset.tab).toBe('settings');
     expect(document.activeElement).toBe(tab());
     tab().dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     expect(tab().dataset.tab).toBe('overview');
     tab().dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
-    expect(tab().dataset.tab).toBe('incidents');
+    expect(tab().dataset.tab).toBe('settings');
     tab().dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
     expect(tab().dataset.tab).toBe('overview');
     const inactiveIncidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
@@ -478,13 +496,13 @@ describe('Agent Guard panel', () => {
     incidents.focus();
     incidents.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
 
-    const overview = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!;
-    expect(overview.getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(overview);
+    const settings = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!;
+    expect(settings.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(settings);
     panel.unmount();
   });
 
-  it('preserves incident Tab state, policy drafts, focus, and scroll through polling', async () => {
+  it('preserves settings Tab state, policy drafts, focused management controls, and scroll through polling', async () => {
     vi.useFakeTimers();
     const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
     Object.defineProperties(window, {
@@ -500,15 +518,17 @@ describe('Agent Guard panel', () => {
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
 
-    const incidents = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
-    incidents.click();
-    incidents.focus();
+    const settings = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!;
+    settings.click();
     document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!.value = '256';
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('[data-action="toggle-backfill"]')?.disabled).toBe(false));
+    const toggleBackfill = document.querySelector<HTMLButtonElement>('[data-action="toggle-backfill"]')!;
+    toggleBackfill.focus();
     await vi.advanceTimersByTimeAsync(2_000);
 
-    const active = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="incidents"]')!;
+    const active = document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!;
     expect(active.getAttribute('aria-selected')).toBe('true');
-    expect(document.activeElement).toBe(active);
+    expect((document.activeElement as HTMLElement).dataset.action).toBe('toggle-backfill');
     expect(document.querySelector<HTMLInputElement>('input[name="warning-outbound"]')!.value).toBe('256');
     expect(scrollTo).toHaveBeenCalledWith(18, 240);
     panel.unmount();
