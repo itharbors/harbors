@@ -27,6 +27,47 @@ SessionManager 的 `getOrCreate` 负责持久元数据；`SessionRuntimeRegistry
 即使配置层名为 shared/global，其可变 store 也只在当前 Editor 内共享，不跨 session。
 只有 Electron 的 KitCatalog、托盘、窗口注册表等明确的应用服务属于 application scope。
 
+## 本机凭据边界
+
+Credential Vault 是 application-owned 的本机能力，但插件只能拿到预绑定、可撤销的 Session
+facade。授予同时要求当前 Kit 的 `kit.json` 声明 `credentials` permission、目标插件的
+`ce-editor.capabilities` 声明 `credentials` capability，并且宿主模式不是 `off`；缺少任一条件都
+不会把 facade 注入运行时。MySQL Kit 中只有 `@itharbors/mysql-core` 满足插件条件，Panel 和另外五个
+MySQL 插件都不能读取保存项。
+
+facade 绑定 `kitId + pluginName` 的 SHA-256 scope。系统凭据 service 固定为
+`com.itharbors.credentials.v1`，account 为
+`<scope>:<profileId>:<secretVersion>`；其他 Kit、同一 Kit 的其他插件和其他 scope 即使知道 profile
+ID，也只能得到 not-found。插件卸载后 facade 立即撤销。浏览器只看到 profile 元数据和
+`mode/status/reason` 能力快照；secret reference、scope、account、版本和密码都留在 Server/OS
+边界内。
+
+Web 默认 `off`。只有显式 `HARBORS_CREDENTIAL_MODE=local` 且
+`HARBORS_BIND_HOST=127.0.0.1` 或 `::1` 才能启用；非法或非 loopback 组合在 Gateway、Client 和
+Server 监听前拒绝。Electron 固定传入 `local + 127.0.0.1`。`multi-user`、远程凭据和多用户共享
+凭据尚未实现，不存在向这些模式降级的 fallback。
+
+SQLite 只保存标签、MySQL 非秘密连接元数据、opaque ID、scope hash、secret reference 和事务
+状态；密码由当前 OS 用户的原生凭据后端保存。Vault 使用 `pending → active → deleting` 与 durable
+cleanup ledger 恢复进程中断的创建、更新和删除，应用停止时先销毁 Session/plugin 再关闭 Vault。
+OS 后端缺失、锁定、丢失条目或拒绝访问时能力变为 unavailable/locked；保存连接失败关闭，手工
+连接路径仍保持可用，且不会用明文文件、shell helper 或固定密钥替代。
+
+连接资料不会自动连接、导出或恢复密码到 Panel。更新由 mysql-core 先探测完整新密码，再写入新
+版本并原子发布新的连接身份；删除活动 profile 先断开。OS 条目丢失时用户只能回到手工连接，删除
+失效 profile 后重新保存，不能从 SQLite 或 UI 恢复密码。
+
+当前并发模型是一个 Harbors Server/Vault writer。store 内部 SQLite swap 使用旧 secret version
+做 CAS，Vault 的进程内锁也串行化同一 profile；但公开 facade 没有 `expectedVersion` 参数。尤其
+mysql-core 在 vault 写入后、连接提交异常时执行的补偿 `put` 无法表达跨 writer 的期望版本，可能
+覆盖另一个进程刚完成的更新。因此不得让多个进程共享同一 SQLite/keyring namespace；该限制也是
+远程/多人模式保持禁用的原因之一。扩展到多 writer 前必须设计端到端 version token 与补偿协议，
+不能把现有 ledger 当成跨进程事务保证。
+
+威胁模型保护的是 saved secret 的应用侧静态存储与非秘密投影：它不进入 SQLite、Session、浏览器
+storage、URL、bootstrap、快照、广播、日志或公开错误。它不防御已攻陷的同一 OS 账号、具有进程
+内存读取能力的代码、键盘记录器、恶意/失陷的 MySQL 端点，也不替代 TLS 和数据库最小权限配置。
+
 ## Kit manifest
 
 Kit package 的核心结构：
@@ -72,6 +113,8 @@ Kit package 的核心结构：
 - `windowEntries.main` 与 `secondary` 必须是非空字符串。
 - `startup.plugins` 缺省为空数组，只允许唯一非空 package name。
 - `plugin` 缺省为空数组。
+- `permissions` 来自同目录 `kit.json`；高风险 `credentials` 仍需插件独立声明同名 capability，
+  manifest permission 本身不会向所有插件授予凭据。
 - 同一 package name 不能同时出现在 `startup.plugins` 与 `plugin`。
 - theme key 使用 `--ce-*` token。
 

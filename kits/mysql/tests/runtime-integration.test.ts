@@ -1,8 +1,13 @@
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { unwrapMysqlResponse } from '@itharbors/mysql-contracts';
 import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
+import type { KeyringAdapter } from '../../../packages/server/src/credentials/keyring';
+import { CredentialStore } from '../../../packages/server/src/credentials/store';
+import { CredentialVault } from '../../../packages/server/src/credentials/vault';
 import { createEditor } from '../../../packages/server/src/editor/index';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
@@ -19,15 +24,30 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
     const parentName = `harbors_parent_${suffix}`;
     const childName = `harbors_child_${suffix}`;
     const viewName = `harbors_view_${suffix}`;
+    const credentialDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-mysql-live-credentials-'));
+    const keyring = new EphemeralKeyring();
+    const livePassword = decodeURIComponent(url.password);
+    const credentialVault = new CredentialVault({
+      mode: 'local',
+      store: new CredentialStore(path.join(credentialDirectory, 'credentials.sqlite')),
+      keyring,
+    });
+    const serializableSurfaces: unknown[] = [];
     const editor = createEditor(`mysql-kit-${suffix}`, {
       assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      credentialVault,
     });
     const call = <T>(method: string, input?: unknown): Promise<T> => Promise.resolve(
       input === undefined
         ? editor.plugin.callPlugin('@itharbors/mysql-core', method)
         : editor.plugin.callPlugin('@itharbors/mysql-core', method, input),
-    ).then((value) => unwrapMysqlResponse<T>(value));
+    ).then((value) => unwrapMysqlResponse<T>(value))
+      .then((value) => {
+        serializableSurfaces.push(value);
+        return value;
+      });
     let connected = false;
+    let profileId: string | undefined;
 
     try {
       await editor.kit.load(path.join(projectRoot, 'kits/mysql'));
@@ -40,6 +60,16 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
         '@itharbors/mysql-relationships',
         '@itharbors/mysql-sql',
       ]));
+      editor.message.registerBroadcast(
+        '@itharbors/mysql-live-leak-observer',
+        '*',
+        (...args) => { serializableSurfaces.push(args); },
+      );
+      await expect(call('getConnectionState')).resolves.toMatchObject({
+        connected: false,
+        profileId: null,
+      });
+      await expect(call('getCredentialCapability')).resolves.toEqual({ available: true });
 
       const connection = await call<{
         connected: boolean;
@@ -62,6 +92,25 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
         schemaRevision: 1,
         dataRevision: 1,
       });
+
+      const profile = await call<{ id: string }>('saveCurrentConnection', {
+        label: `MySQL live ${suffix}`,
+      });
+      profileId = profile.id;
+      await expect(call<Array<{ id: string }>>('listConnectionProfiles')).resolves.toEqual([
+        expect.objectContaining({ id: profileId }),
+      ]);
+      await call('disconnect');
+      connected = false;
+      await expect(call('connectSaved', { profileId })).resolves.toMatchObject({
+        connected: true,
+        profileId,
+      });
+      connected = true;
+      await expect(call('updateConnectionProfile', {
+        profileId,
+        password: livePassword,
+      })).resolves.toMatchObject({ id: profileId });
 
       await call('executeSql', {
         sql: `CREATE TABLE ${quote(parentName)} (
@@ -205,16 +254,49 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
         pageSize: 25,
       })).total).toBe(0);
     } finally {
-      if (connected) {
-        await call('executeSql', { sql: `DROP VIEW IF EXISTS ${quote(viewName)}` }).catch(() => undefined);
-        await call('executeSql', { sql: `DROP TABLE IF EXISTS ${quote(childName)}` }).catch(() => undefined);
-        await call('executeSql', { sql: `DROP TABLE IF EXISTS ${quote(parentName)}` }).catch(() => undefined);
-        await call('disconnect').catch(() => undefined);
+      try {
+        if (connected) {
+          await call('executeSql', { sql: `DROP VIEW IF EXISTS ${quote(viewName)}` }).catch(() => undefined);
+          await call('executeSql', { sql: `DROP TABLE IF EXISTS ${quote(childName)}` }).catch(() => undefined);
+          await call('executeSql', { sql: `DROP TABLE IF EXISTS ${quote(parentName)}` }).catch(() => undefined);
+        }
+        if (profileId) {
+          await call('deleteConnectionProfile', { profileId }).catch(() => undefined);
+        } else if (connected) {
+          await call('disconnect').catch(() => undefined);
+        }
+        if (livePassword !== '') {
+          expect(JSON.stringify(serializableSurfaces)).not.toContain(livePassword);
+        }
+        expect(keyring.secrets.size).toBe(0);
+      } finally {
+        try {
+          await editor.dispose();
+        } finally {
+          credentialVault.close();
+          keyring.secrets.clear();
+          fs.rmSync(credentialDirectory, { recursive: true, force: true });
+        }
       }
-      await editor.dispose();
     }
   });
 });
+
+class EphemeralKeyring implements KeyringAdapter {
+  readonly secrets = new Map<string, string>();
+
+  async get(account: string): Promise<string | null> {
+    return this.secrets.get(account) ?? null;
+  }
+
+  async set(account: string, secret: string): Promise<void> {
+    this.secrets.set(account, secret);
+  }
+
+  async delete(account: string): Promise<void> {
+    this.secrets.delete(account);
+  }
+}
 
 function quote(name: string): string {
   return `\`${name.replaceAll('`', '``')}\``;
