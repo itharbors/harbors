@@ -121,6 +121,7 @@ test('active sources and root docs contain no central builtin constants or produ
   ];
   const sources = await Promise.all(sourcePaths.map(read));
   const prose = await Promise.all(rootDocs.map(read));
+  const artifactGuide = await read('docs/guides/kit-artifacts.md');
   assert.doesNotMatch(sources.join('\n'), /BUILTIN_KITS|BUILTIN_KIT_IDS/u);
   assert.doesNotMatch(
     [...sources, ...prose].join('\n'),
@@ -131,6 +132,8 @@ test('active sources and root docs contain no central builtin constants or produ
     /@itharbors\/kit-(?:agent-guard|csv|default|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
   );
   assert.doesNotMatch(prose.join('\n'), /根\s*`?package-lock\.json`?/u);
+  assert.doesNotMatch(artifactGuide, /Default builtin/iu);
+  assert.match(artifactGuide, /所有动态发现的 builtin Kit 目录[^。]+恰好一个声明 default 角色/iu);
   assert.doesNotMatch(
     prose.join('\n'),
     /^(?:[│├└].*\b(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)\b.*)$/gmu,

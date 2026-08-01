@@ -91,7 +91,8 @@ application-scope 插件状态，并创建一次可回收 Session 真实加载�
 `installed.json` 使用同目录临时文件、fsync 和 rename。
 
 Electron 启动时只读取完成 pending 校验后的 active 版本，并通过 `HARBORS_KIT_SOURCES`
-把权威 Kit 来源快照传给 Server：Default builtin 目录以及当前 active 的已安装目录。每个已安装
+把权威 Kit 来源快照传给 Server：所有动态发现的 builtin Kit 目录（其中恰好一个声明 default 角色）
+以及当前 active 的已安装目录。每个已安装
 Kit 只有 active 版本目录会进入快照；Server 不扫描 Store 根，也不猜测版本。环境变量必须是非空
 的 JSON 数组，数组元素是带有绝对 `directory` 与 `source` 的来源对象。目录变化在下一次桌面启动时生效。
 每次 Manager 运行时事务都会重新生成这份快照，所以安装、更新、版本切换和删除也会在当前 Electron
