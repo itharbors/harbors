@@ -163,7 +163,7 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
-  it('loads a 24-hour history once and distinguishes measured zero from missing coverage', async () => {
+  it('merges all Agent history into two metric trend lines', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(NOW);
     const request = vi.fn(async (_plugin: string, method: string) => {
@@ -187,7 +187,11 @@ describe('Agent Guard panel', () => {
     await vi.waitFor(() => expect(document.body.textContent).toContain('实测网络流量'));
     expect(document.body.textContent).toContain('0 B');
     expect(document.body.textContent).toContain('未采集');
-    expect(document.querySelectorAll('.history-chart path')).toHaveLength(1);
+    expect(document.querySelector('[data-action="history-agent-claude"]')).toBeNull();
+    expect(document.querySelector('[data-action="history-agent-codex"]')).toBeNull();
+    expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
+    expect(document.querySelector('[data-metric="bytes-in"]')?.getAttribute('data-values')).toBe('3072,null');
+    expect(document.querySelector('[data-metric="bytes-out"]')?.getAttribute('data-values')).toBe('1536,0');
 
     await vi.advanceTimersByTimeAsync(4_000);
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(1);
@@ -222,7 +226,7 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
-  it('reloads history when the domain, range, or Agent filter changes', async () => {
+  it('reloads history when the domain or range changes while keeping both Agents', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getSnapshot') return snapshot();
       if (method === 'getTrafficHistory') return historyResult();
@@ -231,7 +235,9 @@ describe('Agent Guard panel', () => {
     });
     const panel = (await import('../panel.guard/src/index')).default;
     await panel.mount({ message: { request } });
-    await vi.waitFor(() => expect(document.querySelector('[data-action="history-agent-claude"]')).not.toBeNull());
+    await vi.waitFor(() => expect(document.querySelector('[data-action="history-range-7d"]')).not.toBeNull());
+    expect(document.querySelector('[data-action="history-agent-claude"]')).toBeNull();
+    expect(document.querySelector('[data-action="history-agent-codex"]')).toBeNull();
 
     document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
     await vi.waitFor(() => expect(request.mock.calls.some((call) => (
@@ -241,10 +247,34 @@ describe('Agent Guard panel', () => {
     await vi.waitFor(() => expect(request.mock.calls.some((call) => (
       call[1] === 'getTrafficHistory' && (call[2] as { preferredBucket?: string }).preferredBucket === 'hour'
     ))).toBe(true));
-    document.querySelector<HTMLButtonElement>('[data-action="history-agent-claude"]')!.click();
-    await vi.waitFor(() => expect(request.mock.calls.some((call) => (
-      call[1] === 'getTrafficHistory' && JSON.stringify((call[2] as { agents?: string[] }).agents) === '["claude"]'
-    ))).toBe(true));
+    expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory').every((call) => (
+      JSON.stringify((call[2] as { agents?: string[] }).agents) === '["claude","codex"]'
+    ))).toBe(true);
+    panel.unmount();
+  });
+
+  it('shows only token trends and groups model summary metrics into two rows', async () => {
+    const request = vi.fn(async (_plugin: string, method: string, input?: { domain?: string }) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return input?.domain === 'model-usage' ? modelHistoryResult() : historyResult();
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-metric="input-tokens"]')).not.toBeNull());
+
+    expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
+    expect(document.querySelector('[data-metric="input-tokens"]')).not.toBeNull();
+    expect(document.querySelector('[data-metric="output-tokens"]')).not.toBeNull();
+    expect(document.querySelector('[data-metric="cache-tokens"]')).toBeNull();
+    expect(document.querySelector('[data-summary-row="primary"]')?.textContent).toContain('输入 token');
+    expect(document.querySelector('[data-summary-row="primary"]')?.textContent).toContain('输出 token');
+    expect(document.querySelector('[data-summary-row="primary"]')?.textContent).toContain('缓存 token');
+    expect(document.querySelector('[data-summary-row="secondary"]')?.textContent).toContain('请求');
+    expect(document.querySelector('[data-summary-row="secondary"]')?.textContent).toContain('会话');
     panel.unmount();
   });
 
@@ -382,19 +412,84 @@ function historyResult() {
     generation: 3,
     persistent: false,
     series: [{
-      metric: 'bytes-out', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+      metric: 'bytes-in', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
       points: [{
-        start: NOW - 120_000, end: NOW - 60_000, value: 0, coverage: 'complete', coverageReason: null,
+        start: NOW - 120_000, end: NOW - 60_000, value: 1024, coverage: 'complete', coverageReason: null,
         provenance: 'network-sample', quality: 'measured',
       }, {
         start: NOW - 60_000, end: NOW, value: null, coverage: 'missing', coverageReason: 'collector-stopped',
         provenance: null, quality: null,
+      }],
+    }, {
+      metric: 'bytes-in', unit: 'bytes', agent: 'codex', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: NOW - 120_000, end: NOW - 60_000, value: 2048, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }, {
+        start: NOW - 60_000, end: NOW, value: null, coverage: 'missing', coverageReason: 'collector-stopped',
+        provenance: null, quality: null,
+      }],
+    }, {
+      metric: 'bytes-out', unit: 'bytes', agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: NOW - 120_000, end: NOW - 60_000, value: 1024, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }, {
+        start: NOW - 60_000, end: NOW, value: 0, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }],
+    }, {
+      metric: 'bytes-out', unit: 'bytes', agent: 'codex', provider: 'custom', hostname: 'relay.example.test',
+      points: [{
+        start: NOW - 120_000, end: NOW - 60_000, value: 512, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
+      }, {
+        start: NOW - 60_000, end: NOW, value: 0, coverage: 'complete', coverageReason: null,
+        provenance: 'network-sample', quality: 'measured',
       }],
     }],
     summary: [{ metric: 'bytes-out', unit: 'bytes', value: 0, coverageRatio: 0.5, derivedRatio: 0 }],
     sources: [{ provenance: 'network-sample', quality: 'measured', pointCount: 1 }],
     warnings: ['partial-collector-coverage'],
   };
+}
+
+function modelHistoryResult() {
+  return {
+    ...historyResult(),
+    domain: 'model-usage',
+    series: [
+      ...modelHistorySeries('input-tokens', 'tokens', 120, 80),
+      ...modelHistorySeries('output-tokens', 'tokens', 60, 40),
+      ...modelHistorySeries('cache-tokens', 'tokens', 30, 20),
+      ...modelHistorySeries('requests', 'requests', 6, 4),
+      ...modelHistorySeries('sessions', 'sessions', 2, 1),
+    ],
+    summary: [
+      { metric: 'input-tokens', unit: 'tokens', value: 200, coverageRatio: 1, derivedRatio: 0 },
+      { metric: 'output-tokens', unit: 'tokens', value: 100, coverageRatio: 1, derivedRatio: 0 },
+      { metric: 'cache-tokens', unit: 'tokens', value: 50, coverageRatio: 1, derivedRatio: 0 },
+      { metric: 'requests', unit: 'requests', value: 10, coverageRatio: 1, derivedRatio: 0 },
+      { metric: 'sessions', unit: 'sessions', value: 3, coverageRatio: 1, derivedRatio: 0 },
+    ],
+    sources: [{ provenance: 'local-session', quality: 'derived', pointCount: 10 }],
+  };
+}
+
+function modelHistorySeries(metric: string, unit: string, claude: number, codex: number) {
+  return [{
+    metric, unit, agent: 'claude', provider: 'custom', hostname: 'relay.example.test',
+    points: [{
+      start: NOW - 60_000, end: NOW, value: claude, coverage: 'complete', coverageReason: null,
+      provenance: 'local-session', quality: 'derived',
+    }],
+  }, {
+    metric, unit, agent: 'codex', provider: 'custom', hostname: 'relay.example.test',
+    points: [{
+      start: NOW - 60_000, end: NOW, value: codex, coverage: 'complete', coverageReason: null,
+      provenance: 'local-session', quality: 'derived',
+    }],
+  }];
 }
 
 function historyStatus() {

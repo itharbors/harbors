@@ -6,6 +6,8 @@ import {
   type AgentGuardCommand,
   type AgentGuardSnapshot,
   type HistoryStatus,
+  type HistoryPoint,
+  type HistorySeries,
   type IncidentSummary,
   type PolicyV1,
   type TrafficHistoryResult,
@@ -35,7 +37,6 @@ let historyError: string | null = null;
 let historyVersion = 0;
 let historyRange: '1h' | '24h' | '7d' | '30d' | '90d' | '1y' = '24h';
 let historyDomain: 'network' | 'model-usage' = 'network';
-let historyAgents: Array<'claude' | 'codex'> = ['claude', 'codex'];
 let clearConfirmation = false;
 export type DashboardTab = 'overview' | 'incidents';
 let activeTab: DashboardTab = 'overview';
@@ -135,7 +136,6 @@ function runMutation(method: 'executeCommand' | 'updatePolicy', input: AgentGuar
     historyVersion += 1;
     historyRange = '24h';
     historyDomain = 'network';
-    historyAgents = ['claude', 'codex'];
     clearConfirmation = false;
       mutation = null;
       await refresh();
@@ -286,7 +286,7 @@ async function refreshHistory(): Promise<void> {
     from: to - historyRangeMs(historyRange),
     to,
     domain: historyDomain,
-    agents: [...historyAgents],
+    agents: ['claude', 'codex'],
     hostnames: [],
     preferredBucket: historyBucket(historyRange),
   } as const;
@@ -351,20 +351,53 @@ function createHistoryControls(): HTMLElement {
     control.setAttribute('aria-pressed', String(historyRange === value));
     ranges.append(control);
   }
-  const agents = document.createElement('div');
-  agents.className = 'history-switch history-agents';
-  for (const [value, label] of [['claude', 'Claude'], ['codex', 'Codex']] as const) {
-    const control = button(label, `history-agent-${value}`, () => {
-      historyAgents = historyAgents.length === 1 && historyAgents[0] === value
-        ? ['claude', 'codex']
-        : [value];
-      void refreshHistory();
-    });
-    control.setAttribute('aria-pressed', String(historyAgents.includes(value)));
-    agents.append(control);
-  }
-  controls.append(domains, agents, ranges);
+  controls.append(domains, ranges);
   return controls;
+}
+
+export type DisplayHistorySeries = Pick<HistorySeries, 'metric' | 'unit' | 'points'>;
+
+export function visibleHistoryMetrics(domain: TrafficHistoryResult['domain']): HistorySeries['metric'][] {
+  return domain === 'network'
+    ? ['bytes-in', 'bytes-out']
+    : ['input-tokens', 'output-tokens'];
+}
+
+export function mergeHistorySeriesByMetric(result: TrafficHistoryResult): DisplayHistorySeries[] {
+  return visibleHistoryMetrics(result.domain).flatMap((metric) => {
+    const inputs = result.series.filter((series) => series.metric === metric);
+    if (inputs.length === 0) return [];
+    const buckets = new Map<string, HistoryPoint[]>();
+    for (const series of inputs) for (const point of series.points) {
+      const key = `${point.start}\u0000${point.end}`;
+      buckets.set(key, [...(buckets.get(key) ?? []), point]);
+    }
+    return [{
+      metric: inputs[0].metric,
+      unit: inputs[0].unit,
+      points: [...buckets.values()]
+        .sort((left, right) => left[0].start - right[0].start)
+        .map((points) => mergeHistoryPoints(points)),
+    }];
+  });
+}
+
+function mergeHistoryPoints(points: HistoryPoint[]): HistoryPoint {
+  const present = points.filter((point) => point.value !== null);
+  const coverage = present.length === 0
+    ? 'missing'
+    : points.every((point) => point.coverage === 'complete') ? 'complete' : 'partial';
+  const first = points[0];
+  const source = present[0];
+  return {
+    start: first.start,
+    end: first.end,
+    value: present.length === 0 ? null : present.reduce((sum, point) => sum + point.value!, 0),
+    coverage,
+    coverageReason: coverage === 'complete' ? null : points.find((point) => point.coverageReason !== null)?.coverageReason ?? null,
+    provenance: source?.provenance ?? null,
+    quality: source?.quality ?? null,
+  };
 }
 
 function createHistorySummary(result: TrafficHistoryResult): HTMLElement {
@@ -372,19 +405,33 @@ function createHistorySummary(result: TrafficHistoryResult): HTMLElement {
   wrapper.className = 'history-summary';
   const title = result.domain === 'network' ? '实测网络流量' : '本地日志回填';
   wrapper.append(textElement('strong', '', title));
-  for (const item of result.summary) {
-    const card = document.createElement('div');
-    card.className = 'history-stat';
-    card.append(
-      textElement('span', '', historyMetricLabel(item.metric)),
-      textElement('b', '', formatHistoryValue(item.value, item.unit)),
-      textElement('small', '', `覆盖 ${(item.coverageRatio * 100).toFixed(0)}%`),
-    );
-    wrapper.append(card);
+  const rows = result.domain === 'model-usage'
+    ? [['primary', ['input-tokens', 'output-tokens', 'cache-tokens']], ['secondary', ['requests', 'sessions']]] as const
+    : [['primary', ['bytes-in', 'bytes-out']]] as const;
+  for (const [rowName, metrics] of rows) {
+    const row = document.createElement('div');
+    row.className = 'history-summary-row';
+    if (result.domain === 'model-usage') row.dataset.summaryRow = rowName;
+    for (const metric of metrics) {
+      const item = result.summary.find((summary) => summary.metric === metric);
+      if (item) row.append(createHistorySummaryCard(item));
+    }
+    wrapper.append(row);
   }
   const missing = result.series.flatMap((item) => item.points).some((point) => point.coverage === 'missing');
   if (missing) wrapper.append(textElement('span', 'history-warning', '未采集区间不会按零流量计算'));
   return wrapper;
+}
+
+function createHistorySummaryCard(item: TrafficHistoryResult['summary'][number]): HTMLElement {
+  const card = document.createElement('div');
+  card.className = 'history-stat';
+  card.append(
+    textElement('span', '', historyMetricLabel(item.metric)),
+    textElement('b', '', formatHistoryValue(item.value, item.unit)),
+    textElement('small', '', `覆盖 ${(item.coverageRatio * 100).toFixed(0)}%`),
+  );
+  return card;
 }
 
 function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
@@ -394,9 +441,10 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   svg.setAttribute('viewBox', '0 0 720 180');
   svg.setAttribute('role', 'img');
   svg.setAttribute('aria-label', result.domain === 'network' ? '网络流量历史趋势' : '模型用量历史趋势');
-  const values = result.series.flatMap((item) => item.points).flatMap((point) => point.value === null ? [] : [point.value]);
+  const series = mergeHistorySeriesByMetric(result);
+  const values = series.flatMap((item) => item.points).flatMap((point) => point.value === null ? [] : [point.value]);
   const maximum = Math.max(1, ...values);
-  for (const [seriesIndex, item] of result.series.entries()) {
+  for (const [seriesIndex, item] of series.entries()) {
     let pathData = '';
     for (const [index, point] of item.points.entries()) {
       if (point.value === null) continue;
@@ -410,11 +458,15 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     pathElement.setAttribute('d', pathData.trim());
     pathElement.dataset.metric = item.metric;
     pathElement.dataset.series = String(seriesIndex);
+    pathElement.dataset.values = item.points.map((point) => String(point.value)).join(',');
     svg.append(pathElement);
   }
+  const legend = document.createElement('ul');
+  legend.className = 'history-legend';
+  for (const item of series) legend.append(textElement('li', '', historyMetricLabel(item.metric)));
   const caption = textElement('figcaption', 'sr-only', result.summary
     .map((item) => `${historyMetricLabel(item.metric)} ${formatHistoryValue(item.value, item.unit)}`).join('，'));
-  figure.append(svg, caption);
+  figure.append(svg, legend, caption);
   return figure;
 }
 
@@ -677,7 +729,11 @@ function metric(label: string, value: string, name?: string): HTMLElement {
   const wrapper = document.createElement('div');
   const term = textElement('dt', '', label);
   const description = textElement('dd', '', value);
-  if (name) description.dataset.metric = name;
+  if (name) {
+    description.dataset.metric = name;
+    const series = historyResult && mergeHistorySeriesByMetric(historyResult).find((item) => item.metric === name);
+    if (series) description.dataset.values = series.points.map((point) => String(point.value)).join(',');
+  }
   wrapper.append(term, description);
   return wrapper;
 }
