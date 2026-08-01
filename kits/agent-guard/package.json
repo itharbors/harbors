@@ -31,5 +31,16 @@
         "--ce-accent": "#ff8a3d"
       }
     }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "macos-14" },
+    "docs": { "summary": "Claude Code 与 Codex 的本机零配置流量监控、异常预警和安全熔断" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
+    }
   }
 }

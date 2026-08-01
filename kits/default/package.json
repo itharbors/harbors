@@ -23,5 +23,16 @@
         "@itharbors/title-bar"
       ]
     }
+  },
+  "harbors": {
+    "distribution": "builtin",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "默认 Kit，提供基础插件与布局" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test:kit"
+    }
   }
 }

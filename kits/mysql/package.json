@@ -36,5 +36,16 @@
         "--ce-accent": "#4f9fdf"
       }
     }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "MySQL 数据库连接、浏览、编辑、关系图与 SQL 工作台" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
+    }
   }
 }

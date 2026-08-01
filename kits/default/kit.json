@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "id": "@itharbors/kit-default",
+  "version": "0.0.1",
+  "channel": "stable",
+  "publisher": "itharbors",
+  "requires": {
+    "harbors": ">=0.0.1 <0.1.0",
+    "kitApi": "^1.0.0",
+    "protocolVersion": 1
+  },
+  "target": { "platform": "any", "arch": "any" },
+  "permissions": [],
+  "entry": "package.json"
+}

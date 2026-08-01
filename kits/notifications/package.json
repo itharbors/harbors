@@ -32,5 +32,16 @@
         "--ce-accent": "#76d0ec"
       }
     }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "桌面通知中心与 Codex notify-user Skill 安装能力" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
+    }
   }
 }

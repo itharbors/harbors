@@ -32,5 +32,16 @@
         "--ce-accent": "#1b6688"
       }
     }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "本地 Node.js 脚本的定时、循环与错过触发管理" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
+    }
   }
 }

@@ -26,5 +26,16 @@
       ],
       "theme": { "--ce-accent": "#e6944a" }
     }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "Codex 多轮编排、执行证据与因果流程可视化工作台" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
+    }
   }
 }
