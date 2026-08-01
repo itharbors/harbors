@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
-  "dependencies": { "@itharbors/mysql-contracts": "0.0.1" },
+  "dependencies": { "@itharbors/mysql-contracts": "file:../../packages/contracts" },
   "ce-editor": {
     "contribute": {
       "panel": { "schema": { "entry": "./panel.schema/dist/index.html", "title": "MySQL 结构", "minWidth": 480, "minHeight": 320, "multiInstance": false } },

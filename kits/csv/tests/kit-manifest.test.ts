@@ -1,14 +1,34 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-import { CsvRequestError, unwrapCsvResponse } from '../../../packages/csv-contracts/src/request.ts';
+import {
+  CsvRequestError,
+  unwrapCsvResponse,
+  type CsvConnectionSnapshot,
+  type CsvSampleInput,
+  type CsvSamplePreview,
+} from '@itharbors/csv-contracts';
 
 const kitRoot = fileURLToPath(new URL('..', import.meta.url));
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const requireFromKit = createRequire(path.join(kitRoot, 'package.json'));
 
 describe('CSV kit manifest', () => {
+  it('resolves its private contracts package inside the CSV Kit', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
+    const contractsRoot = resolvePackageRoot('@itharbors/csv-contracts');
+    const relativeOwner = path.relative(fs.realpathSync(kitRoot), contractsRoot);
+
+    expect(relativeOwner).not.toBe('');
+    expect(relativeOwner.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeOwner)).toBe(false);
+    expect(pkg.workspaces).toEqual(['packages/*', 'plugins/*']);
+    expect(pkg.dependencies['@itharbors/csv-contracts']).toBe('file:packages/contracts');
+  });
+
   it('declares the focused CSV plugins and workspace layout', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
     const layout = JSON.parse(fs.readFileSync(path.join(kitRoot, 'layout.json'), 'utf8'));
@@ -61,13 +81,17 @@ describe('CSV kit manifest', () => {
     };
 
     expect(pluginPackages.core.dependencies).toEqual({
-      '@itharbors/csv-contracts': '0.0.1',
+      '@itharbors/csv-contracts': 'file:../../packages/contracts',
       'better-sqlite3': '^12.10.1',
       'csv-parse': '^7.0.1',
       'iconv-lite': '^0.7.3',
     });
-    expect(pluginPackages.explorer.dependencies).toEqual({ '@itharbors/csv-contracts': '0.0.1' });
-    expect(pluginPackages.data.dependencies).toEqual({ '@itharbors/csv-contracts': '0.0.1' });
+    expect(pluginPackages.explorer.dependencies).toEqual({
+      '@itharbors/csv-contracts': 'file:../../packages/contracts',
+    });
+    expect(pluginPackages.data.dependencies).toEqual({
+      '@itharbors/csv-contracts': 'file:../../packages/contracts',
+    });
   });
 
   it('declares only the csv-core server request contributions', () => {
@@ -161,20 +185,28 @@ describe('CSV kit manifest', () => {
   });
 });
 
+function resolvePackageRoot(packageName: string): string {
+  const packageJson = requireFromKit.resolve.paths(packageName)
+    ?.map((directory) => path.join(directory, packageName, 'package.json'))
+    .find((candidate) => fs.existsSync(candidate));
+  if (!packageJson) throw new Error(`Cannot resolve ${packageName} from ${kitRoot}`);
+  return fs.realpathSync(path.dirname(packageJson));
+}
+
 describe('CSV response contracts', () => {
   it('unwraps successful responses', () => {
     expect(unwrapCsvResponse<{ rows: string[] }>({ rows: ['one'] })).toEqual({ rows: ['one'] });
   });
 
   it('publishes bounded sample previews and connection metadata through shared contracts', () => {
-    const input: import('../../../packages/csv-contracts/src/contracts.ts').CsvSampleInput = {
+    const input: CsvSampleInput = {
       path: '/tmp/people.csv', encoding: 'utf8', delimiter: ',',
     };
-    const preview: import('../../../packages/csv-contracts/src/contracts.ts').CsvSamplePreview = {
+    const preview: CsvSamplePreview = {
       cells: ['name', 'city'],
       truncated: false,
     };
-    const snapshot: import('../../../packages/csv-contracts/src/contracts.ts').CsvConnectionSnapshot = {
+    const snapshot: CsvConnectionSnapshot = {
       connectionRevision: 1, phase: 'ready', path: '/tmp/people.csv', fileName: 'people.csv',
       encoding: 'utf8', delimiter: ',', hasHeader: true, progress: 1, error: null,
       byteSize: 123, rowCount: 2, columnCount: 2, irregularRowCount: 0,

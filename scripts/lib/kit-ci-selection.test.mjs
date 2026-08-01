@@ -131,7 +131,14 @@ test('selects only changed official Kits in deterministic order', () => {
     ['agent-guard'],
   );
   assert.deepEqual(selectKitSlugs(['kits/csv/package.json'], allDescriptors), ['csv']);
+  assert.deepEqual(selectKitSlugs(['kits/csv/packages/contracts/src/index.ts'], allDescriptors), ['csv']);
   assert.deepEqual(selectKitSlugs(['kits/mysql/package.json'], allDescriptors), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/mysql/packages/contracts/src/index.ts'], allDescriptors), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/sqlite/packages/contracts/src/index.ts'], allDescriptors), ['sqlite']);
+  assert.deepEqual(
+    selectKitSlugs(['kits/traceweave/packages/contracts/src/index.ts'], allDescriptors),
+    ['traceweave'],
+  );
   assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json'], allDescriptors), ['scheduler']);
   assert.deepEqual(
     selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json'], allDescriptors),
@@ -173,9 +180,6 @@ test('selects all official Kits for shared build, validation, Registry, and work
 
 test('selects every descriptor for shared framework and workflow surfaces', () => {
   const cases = [
-    ['packages/csv-contracts/src/index.ts', allKits],
-    ['packages/mysql-contracts/src/index.ts', allKits],
-    ['packages/sqlite-contracts/src/index.ts', allKits],
     ['packages/relationship-graph/src/index.ts', allKits],
     ['.agents/skills/notify-user/SKILL.md', []],
     ['scripts/ce-plugin.mjs', allKits],

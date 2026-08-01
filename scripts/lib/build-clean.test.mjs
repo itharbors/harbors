@@ -13,9 +13,6 @@ test('removes build-cache records and existing build outputs', async (t) => {
   const cacheRecord = join(rootDir, '.cache', 'harbors-build', 'v1', 'runtime.json');
   const workspaceOutputRoots = [
     'packages/plugin-types/dist',
-    'packages/csv-contracts/dist',
-    'packages/sqlite-contracts/dist',
-    'packages/mysql-contracts/dist',
     'packages/relationship-graph/dist',
     'packages/kit-core/dist',
     'packages/kit-cli/dist',
@@ -32,17 +29,21 @@ test('removes build-cache records and existing build outputs', async (t) => {
     }));
     await writeFile(join(rootDir, outputRoot, 'output.js'), 'export {};');
   }
-  const kitWorkspace = join(rootDir, 'kits', 'fixture', 'packages', 'contracts');
-  await mkdir(join(kitWorkspace, 'dist'), { recursive: true });
-  await writeFile(join(rootDir, 'kits', 'fixture', 'package.json'), JSON.stringify({
-    name: '@fixture/kit',
-    workspaces: ['packages/*'],
-  }));
-  await writeFile(join(kitWorkspace, 'package.json'), JSON.stringify({
-    name: '@fixture/contracts',
-    scripts: { build: 'fixture-build' },
-  }));
-  await writeFile(join(kitWorkspace, 'dist', 'output.js'), 'export {};');
+  const kitWorkspaces = ['alpha', 'zeta'].map((slug) => (
+    join(rootDir, 'kits', slug, 'packages', 'contracts')
+  ));
+  for (const [index, kitWorkspace] of kitWorkspaces.entries()) {
+    await mkdir(join(kitWorkspace, 'dist'), { recursive: true });
+    await writeFile(join(rootDir, 'kits', ['alpha', 'zeta'][index], 'package.json'), JSON.stringify({
+      name: `@fixture/kit-${index}`,
+      workspaces: ['packages/*'],
+    }));
+    await writeFile(join(kitWorkspace, 'package.json'), JSON.stringify({
+      name: `@fixture/contracts-${index}`,
+      scripts: { build: 'fixture-build' },
+    }));
+    await writeFile(join(kitWorkspace, 'dist', 'output.js'), 'export {};');
+  }
 
   cleanBuildArtifacts(rootDir);
 
@@ -50,5 +51,7 @@ test('removes build-cache records and existing build outputs', async (t) => {
   for (const outputRoot of workspaceOutputRoots) {
     await assert.rejects(access(join(rootDir, outputRoot)), { code: 'ENOENT' });
   }
-  await assert.rejects(access(join(kitWorkspace, 'dist')), { code: 'ENOENT' });
+  for (const kitWorkspace of kitWorkspaces) {
+    await assert.rejects(access(join(kitWorkspace, 'dist')), { code: 'ENOENT' });
+  }
 });

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,17 @@ import {
 } from './build-tasks.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+test('private contracts exist only beneath their owning Kits', () => {
+  for (const name of ['csv', 'sqlite', 'mysql', 'traceweave']) {
+    assert.equal(existsSync(path.join(rootDir, 'packages', `${name}-contracts`)), false, name);
+    assert.equal(
+      existsSync(path.join(rootDir, 'kits', name, 'packages', 'contracts', 'package.json')),
+      true,
+      name,
+    );
+  }
+});
 
 test('discovers buildable Framework workspaces and orders their package dependencies first', async (t) => {
   const fixture = await createWorkspaceFixture(t, [

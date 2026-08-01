@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const kitRoot = fileURLToPath(new URL('..', import.meta.url));
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const requireFromKit = createRequire(path.join(kitRoot, 'package.json'));
 const pluginNames = [
   '@itharbors/mysql-core',
   '@itharbors/mysql-explorer',
@@ -15,6 +17,29 @@ const pluginNames = [
 ];
 
 describe('MySQL kit manifest', () => {
+  it('resolves its private contracts package inside the MySQL Kit', () => {
+    const pkg = readJson(path.join(kitRoot, 'package.json'));
+    const contractsRoot = resolvePackageRoot('@itharbors/mysql-contracts');
+    const relativeOwner = path.relative(fs.realpathSync(kitRoot), contractsRoot);
+
+    expect(relativeOwner).not.toBe('');
+    expect(relativeOwner.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeOwner)).toBe(false);
+    expect(pkg.workspaces).toEqual(['packages/*', 'plugins/*']);
+    expect(pkg.dependencies['@itharbors/mysql-contracts']).toBe('file:packages/contracts');
+    for (const pluginName of pluginNames) {
+      const plugin = readJson(path.join(
+        kitRoot,
+        'plugins',
+        pluginName.replace('@itharbors/', ''),
+        'package.json',
+      ));
+      expect(plugin.dependencies['@itharbors/mysql-contracts']).toBe(
+        'file:../../packages/contracts',
+      );
+    }
+  });
+
   it('declares six independent plugins in the native split layout', () => {
     const pkg = readJson(path.join(kitRoot, 'package.json'));
     const layout = readJson(path.join(kitRoot, 'layout.json'));
@@ -109,4 +134,12 @@ describe('MySQL kit manifest', () => {
 
 function readJson(file: string): any {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function resolvePackageRoot(packageName: string): string {
+  const packageJson = requireFromKit.resolve.paths(packageName)
+    ?.map((directory) => path.join(directory, packageName, 'package.json'))
+    .find((candidate) => fs.existsSync(candidate));
+  if (!packageJson) throw new Error(`Cannot resolve ${packageName} from ${kitRoot}`);
+  return fs.realpathSync(path.dirname(packageJson));
 }

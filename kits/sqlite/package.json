@@ -3,13 +3,22 @@
   "version": "0.1.0-preview.1",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "scripts": {
-    "build": "npm run build -w @itharbors/sqlite-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/sqlite-core && node ../../scripts/ce-plugin.mjs build plugins/sqlite-data && node ../../scripts/ce-plugin.mjs build plugins/sqlite-explorer && node ../../scripts/ce-plugin.mjs build plugins/sqlite-relationships && node ../../scripts/ce-plugin.mjs build plugins/sqlite-schema && node ../../scripts/ce-plugin.mjs build plugins/sqlite-sql",
+    "build": "npm run build --prefix packages/contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/sqlite-core && node ../../scripts/ce-plugin.mjs build plugins/sqlite-data && node ../../scripts/ce-plugin.mjs build plugins/sqlite-explorer && node ../../scripts/ce-plugin.mjs build plugins/sqlite-relationships && node ../../scripts/ce-plugin.mjs build plugins/sqlite-schema && node ../../scripts/ce-plugin.mjs build plugins/sqlite-sql",
     "test:prepare": "node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
     "test": "npm run test:prepare && vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@itharbors/sqlite-contracts": "file:packages/contracts",
     "better-sqlite3": "^12.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
   },
   "ce-editor": {
     "kit": {
