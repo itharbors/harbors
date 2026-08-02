@@ -52,6 +52,30 @@ test('CI dependency lock does not reference the private npm registry', async () 
   );
 });
 
+test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
+  const [packageText, packageLockText] = await Promise.all([
+    readFile(packageUrl, 'utf8'),
+    readFile(packageLockUrl, 'utf8'),
+  ]);
+  const packageJson = JSON.parse(packageText);
+  const packageLock = JSON.parse(packageLockText);
+  const version = '4.60.4';
+  const packageName = '@rollup/rollup-linux-x64-gnu';
+  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
+
+  assert.equal(packageJson.optionalDependencies?.[packageName], version);
+  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
+  assert.equal(lockedPackage?.version, version);
+  assert.equal(
+    lockedPackage?.resolved,
+    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
+  );
+  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
+  assert.deepEqual(lockedPackage?.os, ['linux']);
+  assert.deepEqual(lockedPackage?.cpu, ['x64']);
+  assert.equal(lockedPackage?.optional, true);
+});
+
 test('CI runs for every pull request change without repository-inaccurate path filters', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
   const triggers = parseWorkflowTriggers(workflow);
@@ -166,7 +190,7 @@ test('Kit CI runs each descriptor-owned matrix entry after installing lifecycle 
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const checkKit = workflowJob(workflow, 'check-kit');
   const installIndex = checkKit.indexOf('run: npm ci');
-  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/server');
+  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/server');
   const staticIndex = checkKit.indexOf('npm run kits:boundary -- "${{ matrix.kit }}"');
   const checkIndex = checkKit.indexOf('node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"');
 

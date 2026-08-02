@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import { existsSync, realpathSync } from 'node:fs';
-import { createRequire } from 'node:module';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -27,22 +26,28 @@ test('private contracts exist only beneath their owning Kits', () => {
   }
 });
 
-test('database Kits resolve distinct Relationship Graph package owners', () => {
-  const owners = ['sqlite', 'mysql'].map((kit) => {
+test('database Kits declare distinct local Relationship Graph package owners', async () => {
+  const owners = await Promise.all(['sqlite', 'mysql'].map(async (kit) => {
     const kitRoot = path.join(rootDir, 'kits', kit);
-    const requireFromKit = createRequire(path.join(kitRoot, 'package.json'));
-    const packageJson = requireFromKit.resolve.paths('@itharbors/relationship-graph')
-      ?.map((directory) => path.join(
-        directory,
-        '@itharbors/relationship-graph/package.json',
-      ))
-      .find((candidate) => existsSync(candidate));
-    assert.ok(packageJson, `Relationship Graph resolves from ${kit}`);
-    const owner = realpathSync(path.dirname(packageJson));
+    const [kitPackage, kitLock, relationshipPackage] = await Promise.all([
+      readJson(path.join(kitRoot, 'package.json')),
+      readJson(path.join(kitRoot, 'package-lock.json')),
+      readJson(path.join(kitRoot, 'packages/relationship-graph/package.json')),
+    ]);
+    const dependency = 'file:packages/relationship-graph';
+    assert.equal(kitPackage.dependencies?.['@itharbors/relationship-graph'], dependency, kit);
+    assert.equal(kitLock.packages?.['']?.dependencies?.['@itharbors/relationship-graph'], dependency, kit);
+    assert.deepEqual(
+      kitLock.packages?.['node_modules/@itharbors/relationship-graph'],
+      { resolved: 'packages/relationship-graph', link: true },
+      kit,
+    );
+    assert.equal(relationshipPackage.name, '@itharbors/relationship-graph', kit);
+    const owner = realpathSync(path.join(kitRoot, 'packages/relationship-graph'));
     const relativeOwner = path.relative(realpathSync(kitRoot), owner);
     assert.ok(relativeOwner !== '' && !relativeOwner.startsWith(`..${path.sep}`), kit);
     return owner;
-  });
+  }));
 
   assert.notEqual(owners[0], owners[1]);
   assert.equal(existsSync(path.join(rootDir, 'packages/relationship-graph')), false);
@@ -213,6 +218,10 @@ async function discoverBuildablePackageDirectories(repositoryRoot) {
     if (typeof manifest.scripts?.build === 'string') values.push(`packages/${entry.name}`);
   }
   return values.sort();
+}
+
+async function readJson(filePath) {
+  return JSON.parse(await readFile(filePath, 'utf8'));
 }
 
 async function pathExists(candidate) {
