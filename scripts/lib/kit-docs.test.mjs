@@ -27,15 +27,17 @@ test('root scripts expose the Kit artifact and targeted-check CLIs without migra
   assert.doesNotMatch(packageJson.scripts.test, /test:kit-(?:registry-)?migration/u);
 });
 
-test('active Kit docs define one mainline development and Tag release lifecycle', async () => {
+test('active Kit docs define one mainline development and automatic merge release lifecycle', async () => {
   const development = compact(await read('docs/guides/development-workflow.md'));
   for (const expected of [
     'main',
     'kit-change/<name>/<type>/<slug>',
     'PR base main',
-    'merge without Release',
+    'PR 合并即发布授权',
     'kits/<name>/kit.json',
     'kits/<name>/package.json',
+    'kits/<name>/package-lock.json',
+    '自动创建',
     'release-kit.sh',
     'kit/<name>/v<semver>',
   ]) assert.match(development, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
