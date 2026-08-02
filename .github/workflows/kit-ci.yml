@@ -119,6 +119,36 @@ jobs:
           printf 'matrix-json=%s\nhas-kits=%s\nbase-sha=%s\nhead-sha=%s\n' \
             "$matrix_json" "$has_kits" "$base_sha" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Validate Kit release intent
+        shell: bash
+        env:
+          BASE_SHA: ${{ steps.selection.outputs.base-sha }}
+          HEAD_SHA: ${{ steps.selection.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+          release_output="$(node scripts/plan-kit-releases.mjs "$BASE_SHA" "$HEAD_SHA")"
+          releases_json=''
+          has_releases=''
+          while IFS= read -r line; do
+            case "$line" in
+              RELEASES_JSON=*)
+                test -z "$releases_json"
+                releases_json="${line#RELEASES_JSON=}"
+                ;;
+              HAS_RELEASES=true|HAS_RELEASES=false)
+                test -z "$has_releases"
+                has_releases="${line#HAS_RELEASES=}"
+                ;;
+              *)
+                echo 'Release planner emitted an invalid output record' >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$release_output"
+          test -n "$releases_json"
+          test -n "$has_releases"
+          printf '### Kit release intent\n\n`%s`\n' "$releases_json" >> "$GITHUB_STEP_SUMMARY"
+
   check-kit:
     needs: select
     if: needs.select.outputs.has-kits == 'true'
