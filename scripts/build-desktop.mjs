@@ -1,11 +1,13 @@
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-import { buildDesktop } from './lib/desktop-build.mjs';
+import { prepareDesktopRuntime } from './lib/desktop-prepare.mjs';
+import { discoverRepositoryBuiltinKits } from './lib/repository-kits.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
 const outputRoot = path.join(repositoryRoot, 'dist', 'desktop-runtime');
-const result = await buildDesktop({ repositoryRoot, outputRoot });
+const descriptors = await discoverRepositoryBuiltinKits({ repositoryRoot });
+const result = await prepareDesktopRuntime({ repositoryRoot, outputRoot, descriptors });
 
 console.log(`Desktop runtime staged at ${result.outputRoot}`);
-console.log(`Desktop runtime files: ${result.inventory.length}`);
+console.log(`Desktop builtin Kits: ${result.builtinKitIds.length}`);

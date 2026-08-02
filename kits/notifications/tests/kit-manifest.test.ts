@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { cp, mkdtemp, readFile, rm } from 'node:fs/promises';
+import os from 'node:os';
+import { buildKit } from '@itharbors/kit-cli';
 import { describe, expect, it } from 'vitest';
 
 const kitRoot = fileURLToPath(new URL('..', import.meta.url));
@@ -64,12 +67,26 @@ describe('Notification Kit manifest', () => {
     expect(secondaryEntry).toContain('<title>Notification Window</title>');
   });
 
-  it('runs Notification Kit tests from the repository test gate', () => {
-    const rootPackage = readJson(path.join(projectRoot, 'package.json'));
-    expect(rootPackage.scripts.test).toContain(
-      'npm run test -w @itharbors/kit-notifications',
-    );
-  });
+  it('builds the Skill artifact from an isolated copy of only this Kit', async () => {
+    const temporary = await mkdtemp(path.join(os.tmpdir(), 'notifications-isolated-'));
+    const isolatedKit = path.join(temporary, 'kit');
+    try {
+      const sourceTestResource = path.join(kitRoot, 'plugins/notification-background/main/src/resources');
+      await cp(kitRoot, isolatedKit, { recursive: true, filter: (source) => (
+        source !== sourceTestResource
+        && !source.startsWith(`${sourceTestResource}${path.sep}`)
+        && !source.split(path.sep).some((component) => ['.build', 'dist', 'node_modules'].includes(component))
+      ) });
+      await cp(path.join(projectRoot, 'node_modules/@types/node'), path.join(isolatedKit, 'node_modules/@types/node'), { recursive: true });
+      await cp(path.join(projectRoot, 'node_modules/undici-types'), path.join(isolatedKit, 'node_modules/undici-types'), { recursive: true });
+      await buildKit({ directory: isolatedKit });
+      expect(await readFile(path.join(isolatedKit, 'plugins/notification-background/main/dist/resources/notify-user/SKILL.md'), 'utf8'))
+        .toBe(await readFile(path.join(isolatedKit, 'resources/notify-user/SKILL.md'), 'utf8'));
+    } finally {
+      await rm(temporary, { recursive: true, force: true });
+    }
+  }, 30_000);
+
 });
 
 function readJson(file: string) {

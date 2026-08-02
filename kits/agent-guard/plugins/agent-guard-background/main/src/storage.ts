@@ -66,6 +66,7 @@ export interface ControlLedgerEntryV1 {
 
 interface StoreOptions {
   dataDir?: string;
+  legacyDataDirs?: readonly string[];
   hostMode: 'desktop' | 'web';
   metricDailyCapBytes?: number;
 }
@@ -87,6 +88,10 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
   if (options.hostMode !== 'desktop' || !options.dataDir) return degradedStore();
   if (!path.isAbsolute(options.dataDir)) throw new TypeError('Agent Guard data directory must be absolute');
   const dataDir = path.resolve(options.dataDir);
+  const legacyDataDirs = (options.legacyDataDirs ?? []).map((directory) => {
+    if (!path.isAbsolute(directory)) throw new TypeError('Agent Guard legacy data directory must be absolute');
+    return path.resolve(directory);
+  });
   const parent = path.dirname(dataDir);
   const parentReal = await realpath(parent);
   const expectedReal = path.join(parentReal, path.basename(dataDir));
@@ -135,12 +140,12 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
   return {
     status: 'ready',
     async loadState() {
-      try {
-        return normalizeState(JSON.parse(await readFile(path.join(dataDir, 'state.json'), 'utf8')));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
-        throw error;
-      }
+      return readFirstExisting(
+        [dataDir, ...legacyDataDirs],
+        'state.json',
+        async (file) => normalizeState(JSON.parse(await readFile(file, 'utf8'))),
+        null,
+      );
     },
     async saveState(value) {
       await atomicJson('state.json', normalizeState(value));
@@ -154,20 +159,32 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
       for (const [day, records] of grouped) await appendBounded(`incidents-${day}.ndjson`, records);
     },
     async readIncidents(day) {
-      return readNdjson(path.join(dataDir, `incidents-${formatDay(day)}.ndjson`), normalizeIncident);
+      const filename = `incidents-${formatDay(day)}.ndjson`;
+      const sources = await Promise.all(
+        [...legacyDataDirs, dataDir].map((directory) => (
+          readNdjson(path.join(directory, filename), normalizeIncident)
+        )),
+      );
+      const unique = new Map<string, PersistedIncidentV1>();
+      for (const event of sources.flat()) unique.set(JSON.stringify(event), event);
+      return [...unique.values()].sort((left, right) => (
+        left.at - right.at || left.id.localeCompare(right.id) || JSON.stringify(left).localeCompare(JSON.stringify(right))
+      ));
     },
     async saveControlLedger(entries) {
       await atomicJson('control-ledger.json', entries.map(normalizeLedger));
     },
     async loadControlLedger() {
-      try {
-        const value: unknown = JSON.parse(await readFile(path.join(dataDir, 'control-ledger.json'), 'utf8'));
-        if (!Array.isArray(value)) throw new TypeError('control ledger must be an array');
-        return value.map(normalizeLedger);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
-        throw error;
-      }
+      return readFirstExisting(
+        [dataDir, ...legacyDataDirs],
+        'control-ledger.json',
+        async (file) => {
+          const value: unknown = JSON.parse(await readFile(file, 'utf8'));
+          if (!Array.isArray(value)) throw new TypeError('control ledger must be an array');
+          return value.map(normalizeLedger);
+        },
+        [],
+      );
     },
     async enforceRetention(now) {
       const names = (await readdir(dataDir)).sort((left, right) => {
@@ -191,9 +208,35 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
       }
     },
     async listMetricFiles() {
-      return (await readdir(dataDir)).filter((name) => /^metrics-.*\.ndjson$/u.test(name)).sort();
+      const names = await Promise.all([...legacyDataDirs, dataDir].map(readDirectoryIfPresent));
+      return [...new Set(names.flat().filter((name) => /^metrics-.*\.ndjson$/u.test(name)))].sort();
     },
   };
+}
+
+async function readFirstExisting<T>(
+  directories: readonly string[],
+  filename: string,
+  read: (file: string) => Promise<T>,
+  missing: T,
+): Promise<T> {
+  for (const directory of directories) {
+    try {
+      return await read(path.join(directory, filename));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    }
+  }
+  return missing;
+}
+
+async function readDirectoryIfPresent(directory: string): Promise<string[]> {
+  try {
+    return await readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
 }
 
 function degradedStore(): AgentGuardStore {

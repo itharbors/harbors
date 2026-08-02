@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 
 import { canonicalJson } from './checksums.js';
 import { inspectKit, packKit } from './archive.js';
+import { buildKit, testKit } from './build.js';
 import { validateKit } from './kit-project.js';
 
 interface CliWriter {
@@ -15,9 +16,16 @@ export interface CliIo {
   stderr: CliWriter;
 }
 
+export interface CliLifecycleOperations {
+  buildKit: typeof buildKit;
+  testKit: typeof testKit;
+}
+
 const USAGE = [
   'Usage:',
   '  harbors-kit validate <kit-directory>',
+  '  harbors-kit build <kit-directory>',
+  '  harbors-kit test <kit-directory>',
   '  harbors-kit pack <kit-directory> --output <file.hkit>',
   '  harbors-kit inspect <file.hkit> [--json]',
   '',
@@ -35,6 +43,7 @@ function usage(io: CliIo): number {
 export async function runCli(
   args: string[],
   io: CliIo = process,
+  lifecycle: CliLifecycleOperations = { buildKit, testKit },
 ): Promise<number> {
   try {
     const [command] = args;
@@ -45,6 +54,26 @@ export async function runCli(
         ['KIT_ID', project.manifest.id],
         ['KIT_VERSION', project.manifest.version],
         ['FILES', project.payload.length],
+      ]));
+      return 0;
+    }
+    if (command === 'build') {
+      if (args.length !== 2) return usage(io);
+      const built = await lifecycle.buildKit({ directory: args[1] });
+      io.stdout.write(lines([
+        ['KIT_ID', built.id],
+        ['KIT_VERSION', built.version],
+        ['PLUGINS', built.plugins.length],
+      ]));
+      return 0;
+    }
+    if (command === 'test') {
+      if (args.length !== 2) return usage(io);
+      const tested = await lifecycle.testKit({ directory: args[1] });
+      io.stdout.write(lines([
+        ['KIT_ID', tested.id],
+        ['KIT_VERSION', tested.version],
+        ['SCRIPT', tested.script],
       ]));
       return 0;
     }

@@ -4,7 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { discoverAllPlugins, discoverPlugin, discoverRuntimePlugins } from './discover.mjs';
+import {
+  discoverAllPlugins,
+  discoverPlugin,
+  discoverRuntimePlugins,
+} from '@itharbors/kit-cli';
 
 function createRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-plugin-discovery-'));
@@ -35,6 +39,19 @@ function relativePlugins(rootDir, plugins) {
   return plugins.map((item) => path.relative(rootDir, item));
 }
 
+function builtinDescriptor(rootDir, overrides = {}) {
+  return {
+    slug: 'default',
+    directory: path.join(rootDir, 'kits/default'),
+    id: '@itharbors/kit-default',
+    distribution: 'builtin',
+    isDefault: true,
+    menuRoot: { id: 'default', label: 'Default' },
+    packageJson: {},
+    ...overrides,
+  };
+}
+
 test('runtime discovery reconciles ordinary and startup declarations in deterministic order', () => {
   const rootDir = createRoot();
   try {
@@ -54,7 +71,7 @@ test('runtime discovery reconciles ordinary and startup declarations in determin
     const brokenPluginDir = path.join(rootDir, 'kits/broken/plugins/failure');
     writePackageJson(brokenPluginDir, '{ not valid JSON');
 
-    assert.deepEqual(relativePlugins(rootDir, discoverRuntimePlugins(rootDir)), [
+    assert.deepEqual(relativePlugins(rootDir, discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)])), [
       'kits/default/plugins/a-background',
       'kits/default/plugins/z-log',
       'plugins/menu',
@@ -76,7 +93,7 @@ test('runtime discovery rejects a missing declared builtin plugin', () => {
   try {
     writeBuiltinKit(rootDir, { ordinary: ['@fixture/missing'] });
     assert.throws(
-      () => discoverRuntimePlugins(rootDir),
+      () => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)]),
       /missing declared plugin.*@fixture\/missing/iu,
     );
   } finally {
@@ -93,7 +110,7 @@ test('runtime discovery rejects a mismatched builtin plugin package', () => {
       JSON.stringify({ name: '@fixture/other' }),
     );
     assert.throws(
-      () => discoverRuntimePlugins(rootDir),
+      () => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)]),
       /undeclared plugin.*@fixture\/other|mismatch/iu,
     );
   } finally {
@@ -112,7 +129,7 @@ test('runtime discovery rejects duplicate directories for one declared plugin', 
       );
     }
     assert.throws(
-      () => discoverRuntimePlugins(rootDir),
+      () => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)]),
       /duplicate.*@fixture\/duplicate/iu,
     );
   } finally {
@@ -131,7 +148,19 @@ test('runtime discovery rejects ordinary and startup declaration overlap', () =>
       path.join(rootDir, 'kits/default/plugins/overlap'),
       JSON.stringify({ name: '@fixture/overlap' }),
     );
-    assert.throws(() => discoverRuntimePlugins(rootDir), /ordinary and startup|overlap/iu);
+    assert.throws(() => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)]), /ordinary and startup|overlap/iu);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime discovery rejects a Kit slug that escapes the repository', () => {
+  const rootDir = createRoot();
+  try {
+    assert.throws(
+      () => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir, { slug: '..' })]),
+      /slug.*directory name/i,
+    );
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }
@@ -146,7 +175,7 @@ test('runtime discovery rejects undeclared and invalid builtin plugin directorie
         path.join(rootDir, 'kits/default/plugins/extra'),
         JSON.stringify({ name: '@fixture/extra' }),
       );
-      assert.throws(() => discoverRuntimePlugins(rootDir), /undeclared plugin.*@fixture\/extra/iu);
+      assert.throws(() => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)]), /undeclared plugin.*@fixture\/extra/iu);
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }
@@ -156,7 +185,7 @@ test('runtime discovery rejects undeclared and invalid builtin plugin directorie
     try {
       writeBuiltinKit(rootDir, { ordinary: ['@fixture/invalid'] });
       writePackageJson(path.join(rootDir, 'kits/default/plugins/invalid'), '{ bad json');
-      assert.throws(() => discoverRuntimePlugins(rootDir), /invalid builtin plugin|JSON/iu);
+      assert.throws(() => discoverRuntimePlugins(rootDir, [builtinDescriptor(rootDir)]), /invalid builtin plugin|JSON/iu);
     } finally {
       fs.rmSync(rootDir, { recursive: true, force: true });
     }

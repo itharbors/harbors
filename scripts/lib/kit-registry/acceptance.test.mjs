@@ -213,6 +213,12 @@ test('acceptance: Registry refresh through installed Server discovery preserves 
         { directory: defaultKitDirectory, source: 'builtin' },
         ...activeSources.map(({ directory }) => ({ directory, source: 'installed' })),
       ],
+      pluginPathRoots: {
+        applicationData: root,
+        data: path.join(root, 'plugins', 'data'),
+        cache: path.join(root, 'plugins', 'cache'),
+        temp: path.join(root, 'plugins', 'temp'),
+      },
       host: '127.0.0.1',
     });
     const frameworkPort = await framework.start();

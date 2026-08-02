@@ -141,6 +141,6 @@ Server/存储协议，而不是读取任意 DOM 样式作为系统状态。
 - [Tab drop resolver](../../packages/client/src/layout/tab-drop-resolver.ts)
 - [Tab drag controller](../../packages/client/src/layout/tab-drag-controller.ts)
 - [Split resize](../../packages/client/src/layout/resizable-split.ts)
-- [默认 Kit layout](../../kits/default/layout.json)
+- 各 `kits/<slug>/layout.json`
 
 关联阅读：[核心运行流程](./runtime-flows.md) · [UI 系统](./ui-system.md)

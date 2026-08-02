@@ -1,4 +1,5 @@
 node_modules
+**/main/.build/
 dist
 @types
 bundle
@@ -16,3 +17,4 @@ tsconfig.tsbuildinfo
 /dist/desktop-runtime/
 /dist/desktop-release/
 /.cache/harbors-build/
+/.cache/harbors-kit-installs/

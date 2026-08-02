@@ -16,6 +16,8 @@ test_skill_layout_and_contract() {
   assert_contains "$(cat "$SKILL_SOURCE/agents/openai.yaml")" 'display_name: "Kit Workflow"'
   assert_contains "$(cat "$SKILL_SOURCE/agents/openai.yaml")" 'main'
   grep -Fq '"test:kit-workflow"' "$REPO_SOURCE/package.json" || fail 'package test script is missing'
+  grep -Fq '"kit:boundary"' "$REPO_SOURCE/package.json" || fail 'kit:boundary script is missing'
+  grep -Fq '"test:kit-boundary"' "$REPO_SOURCE/package.json" || fail 'test:kit-boundary script is missing'
 }
 
 run_contract_tests() { run_case 'skill layout and active contract' test_skill_layout_and_contract; }

@@ -1,9 +1,15 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createServer } from '../../src/server';
+import { createServer as createServerWithOptions } from '../../src/server';
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { testAssembly } from '../helpers/assembly';
+import { testAssembly, testKitFixture } from '../helpers/assembly';
+import { createKitFixture } from '../../src/framework/__tests__/kit-fixture';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createServer = (
+  options: Omit<Parameters<typeof createServerWithOptions>[0], 'pluginPathRoots'>,
+) => createServerWithOptions({ ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('Framework Integration', () => {
   let port: number;
@@ -11,10 +17,20 @@ describe('Framework Integration', () => {
   let baseURL: string;
   let editorMap: Map<string, ReturnType<typeof createServer>['editorMap'] extends Map<string, infer E> ? E : never>;
   const tempDirs: string[] = [];
+  const betaKit = createKitFixture({
+    name: '@example/kit-beta',
+    label: 'Beta Fixture',
+    plugins: [{
+      name: '@example/beta-panel',
+      contribute: {
+        panel: { viewer: { entry: './panel.viewer/dist/index.html' } },
+        menu: [{ type: 'menu', id: 'Beta', label: 'Beta' }],
+      },
+    }],
+  });
   const repositoryKitSources = [
-    { directory: path.join(testAssembly.builtinKitsDir, 'default'), source: 'builtin' as const },
-    { directory: path.join(testAssembly.kitsDir, 'mysql'), source: 'development' as const },
-    { directory: path.join(testAssembly.kitsDir, 'sqlite'), source: 'development' as const },
+    { directory: testKitFixture.directory, source: 'builtin' as const },
+    { directory: betaKit.directory, source: 'development' as const },
   ];
 
   beforeAll(async () => {
@@ -29,6 +45,7 @@ describe('Framework Integration', () => {
 
   afterAll(async () => {
     await stop();
+    await betaKit.dispose();
     for (const dir of tempDirs) {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -74,7 +91,7 @@ describe('Framework Integration', () => {
     const data = await resp.json();
     expect(resp.status).toBe(200);
     expect(data.sessionId).toBe('boot-test');
-    expect(data.kitName).toBe('@itharbors/kit-default');
+    expect(data.kitName).toBe(testKitFixture.name);
     expect(data.panels.some((panel: { name: string }) => panel.name === 'test.editor')).toBe(true);
   });
 
@@ -86,9 +103,8 @@ describe('Framework Integration', () => {
 
     expect(resp.status).toBe(200);
     expect(data.kits).toEqual(expect.arrayContaining([
-      { id: 'default', name: '@itharbors/kit-default', label: 'Default Kit' },
-      { id: 'sqlite', name: '@itharbors/kit-sqlite', label: 'SQLite' },
-      { id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' },
+      { id: 'kit-alpha', name: testKitFixture.name, label: 'Alpha Fixture' },
+      { id: 'kit-beta', name: betaKit.name, label: 'Beta Fixture' },
     ]));
     expect(data.kits.every((kit: Record<string, unknown>) => !('directory' in kit))).toBe(true);
     expect(editorMap.size).toBe(before);
@@ -117,9 +133,8 @@ describe('Framework Integration', () => {
     const server = createServer({
       defaultKit: externalKit,
       kitSources: [
-        { directory: path.join(testAssembly.builtinKitsDir, 'default'), source: 'builtin' },
-        { directory: path.join(testAssembly.kitsDir, 'mysql'), source: 'development' },
-        { directory: path.join(testAssembly.kitsDir, 'sqlite'), source: 'development' },
+        { directory: testKitFixture.directory, source: 'builtin' },
+        { directory: betaKit.directory, source: 'development' },
         { directory: externalKit, source: 'explicit' },
       ],
     });
@@ -130,10 +145,9 @@ describe('Framework Integration', () => {
       const data = await resp.json();
       expect(data).toEqual({
         kits: expect.arrayContaining([
-          { id: 'default', name: '@itharbors/kit-default', label: 'Default Kit' },
+          { id: 'kit-alpha', name: testKitFixture.name, label: 'Alpha Fixture' },
           { id: 'external', name: '@example/external-kit', label: 'External Kit' },
-          { id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' },
-          { id: 'sqlite', name: '@itharbors/kit-sqlite', label: 'SQLite' },
+          { id: 'kit-beta', name: betaKit.name, label: 'Beta Fixture' },
         ]),
       });
       expect(server.editorMap.size).toBe(0);
@@ -180,7 +194,7 @@ describe('Framework Integration', () => {
     const server = createServer({
       defaultKit: '@example/kit-installed',
       kitSources: [
-        { directory: path.join(testAssembly.builtinKitsDir, 'default'), source: 'builtin' },
+        { directory: testKitFixture.directory, source: 'builtin' },
         { directory: installedKit, source: 'installed' },
       ],
     });
@@ -273,7 +287,7 @@ describe('Framework Integration', () => {
   });
 
   it('POST /api/session uses the server default kit when one is configured', async () => {
-    const server = createServer({ assembly: testAssembly, defaultKit: '@itharbors/kit-default' });
+    const server = createServer({ assembly: testAssembly, defaultKit: testKitFixture.name });
     const customPort = await server.start(0);
     const customBaseURL = `http://localhost:${customPort}`;
 
@@ -289,9 +303,9 @@ describe('Framework Integration', () => {
       const data = await resp.json();
 
       expect(resp.status).toBe(200);
-      expect(data.kitName).toBe('@itharbors/kit-default');
+      expect(data.kitName).toBe(testKitFixture.name);
       expect(data.panels.map((panel: { name: string }) => panel.name)).toEqual(
-        expect.arrayContaining(['@itharbors/status-bar.status', '@itharbors/log.log']),
+        expect.arrayContaining([testKitFixture.primaryPanel]),
       );
     } finally {
       await server.stop();
@@ -305,7 +319,7 @@ describe('Framework Integration', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           sessionId: 'multi-kit-default',
-          kit: '@itharbors/kit-default',
+          kit: testKitFixture.name,
         }),
       }),
       fetch(`${baseURL}/api/session`, {
@@ -313,7 +327,7 @@ describe('Framework Integration', () => {
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           sessionId: 'multi-kit-sqlite',
-          kit: '@itharbors/kit-sqlite',
+          kit: betaKit.name,
         }),
       }),
     ]);
@@ -323,22 +337,22 @@ describe('Framework Integration', () => {
 
     const defaultEditor = editorMap.get('multi-kit-default')!;
     const sqliteEditor = editorMap.get('multi-kit-sqlite')!;
-    expect(defaultEditor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
-    expect(sqliteEditor.kit.getCurrent()?.name).toBe('@itharbors/kit-sqlite');
+    expect(defaultEditor.kit.getCurrent()?.name).toBe(testKitFixture.name);
+    expect(sqliteEditor.kit.getCurrent()?.name).toBe(betaKit.name);
 
     for (const builtin of ['@itharbors/panel', '@itharbors/message', '@itharbors/menu', '@itharbors/config']) {
       expect(defaultEditor.plugin.listLoaded()).toContain(builtin);
       expect(sqliteEditor.plugin.listLoaded()).toContain(builtin);
     }
-    expect(defaultEditor.plugin.listLoaded()).toContain('@itharbors/log');
-    expect(defaultEditor.plugin.listLoaded()).not.toContain('@itharbors/sqlite-core');
-    expect(sqliteEditor.plugin.listLoaded()).toContain('@itharbors/sqlite-core');
-    expect(sqliteEditor.plugin.listLoaded()).not.toContain('@itharbors/log');
+    expect(defaultEditor.plugin.listLoaded()).toContain(testKitFixture.primaryPlugin);
+    expect(defaultEditor.plugin.listLoaded()).not.toContain(betaKit.primaryPlugin);
+    expect(sqliteEditor.plugin.listLoaded()).toContain(betaKit.primaryPlugin);
+    expect(sqliteEditor.plugin.listLoaded()).not.toContain(testKitFixture.primaryPlugin);
 
-    expect(defaultEditor.panel.getInfo('@itharbors/log.log')).toBeDefined();
-    expect(() => defaultEditor.panel.getInfo('@itharbors/sqlite-explorer.explorer')).toThrow(/not registered/);
-    expect(sqliteEditor.panel.getInfo('@itharbors/sqlite-explorer.explorer')).toBeDefined();
-    expect(() => sqliteEditor.panel.getInfo('@itharbors/log.log')).toThrow(/not registered/);
+    expect(defaultEditor.panel.getInfo(testKitFixture.primaryPanel)).toBeDefined();
+    expect(() => defaultEditor.panel.getInfo(betaKit.primaryPanel)).toThrow(/not registered/);
+    expect(sqliteEditor.panel.getInfo(betaKit.primaryPanel)).toBeDefined();
+    expect(() => sqliteEditor.panel.getInfo(testKitFixture.primaryPanel)).toThrow(/not registered/);
 
     defaultEditor.message.registerRequest('default-only', 'ping', () => 'default');
     await expect(defaultEditor.message.request('default-only', 'ping')).resolves.toBe('default');
@@ -362,7 +376,7 @@ describe('Framework Integration', () => {
     const data = await resp.json();
 
     expect(resp.status).toBe(200);
-    expect(data.kitName).toBe('@itharbors/kit-default');
+    expect(data.kitName).toBe(testKitFixture.name);
     expect(data.menuTree).toEqual(expect.arrayContaining([
       expect.objectContaining({
         id: 'file',

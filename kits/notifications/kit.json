@@ -10,6 +10,6 @@
     "protocolVersion": 1
   },
   "target": {"platform": "any", "arch": "any"},
-  "permissions": ["network", "filesystem", "application-startup"],
+  "permissions": ["network", "filesystem", "application-startup", "notifications"],
   "entry": "package.json"
 }

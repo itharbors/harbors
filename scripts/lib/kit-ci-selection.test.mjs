@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -8,21 +8,44 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
+import { loadKitPolicy, loadTrustedMarketKit } from './kit-monorepo.mjs';
 
-const allKits = ['agent-guard', 'csv', 'mysql', 'notifications', 'scheduler', 'skill-manager', 'sqlite', 'traceweave'];
-const runners = Object.freeze({
-  'agent-guard': 'macos-14',
-  csv: 'macos-14',
-  mysql: 'ubuntu-latest',
-  notifications: 'ubuntu-latest',
-  'skill-manager': 'ubuntu-latest',
-  scheduler: 'ubuntu-latest',
-  sqlite: 'macos-14',
-  traceweave: 'ubuntu-latest',
-});
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const cli = path.join(repositoryRoot, 'scripts/select-kit-ci.mjs');
+
+// Derive the authoritative trusted slug set and runner map from the repository
+// policy and descriptors at runtime, rather than hard-coding them.
+const policy = await loadKitPolicy({ repositoryRoot });
+const allKits = Object.keys(policy.kits).sort();
+const allDescriptors = Object.freeze(
+  await Promise.all(allKits.map((slug) => loadTrustedMarketKit({ repositoryRoot, slug }))),
+);
+const runners = Object.freeze(
+  Object.fromEntries(
+    allDescriptors.map((descriptor) => [descriptor.slug, descriptor.ciRunner]),
+  ),
+);
+
+const dynamicDescriptors = Object.freeze([
+  Object.freeze({ slug: 'zeta', directory: '/fixtures/kits/zeta', ciRunner: 'ubuntu-latest' }),
+  Object.freeze({ slug: 'alpha', directory: '/fixtures/kits/alpha', ciRunner: 'macos-14' }),
+]);
+
+test('selects only descriptor fixtures without product-specific maps', () => {
+  assert.deepEqual(
+    selectKitSlugs(['kits/zeta/packages/contracts/src/index.ts'], dynamicDescriptors),
+    ['zeta'],
+  );
+  assert.deepEqual(
+    selectKitSlugs(['packages/kit-core/src/model.ts'], dynamicDescriptors),
+    ['alpha', 'zeta'],
+  );
+  assert.throws(
+    () => selectKitSlugs(['kits/unknown/a.ts'], dynamicDescriptors),
+    /Unknown Kit directory/u,
+  );
+});
 
 async function git(repository, ...args) {
   return (await execFileAsync('git', args, { cwd: repository, encoding: 'utf8' })).stdout.trim();
@@ -42,6 +65,34 @@ async function initializeRepository({ seedRoot = true } = {}) {
     path.join(repository, 'registry/policy.json'),
     await readFile(path.join(repositoryRoot, 'registry/policy.json')),
   );
+  // Copy the root package-lock so loadTrustedMarketKit can verify the Kit
+  // lock identity against the descriptor. The lockfile is not committed in
+  // root-commit tests but is still readable from the working tree.
+  await cp(
+    path.join(repositoryRoot, 'package-lock.json'),
+    path.join(repository, 'package-lock.json'),
+  );
+  // Copy the minimum real Task 1 descriptor inputs (kit.json and package.json)
+  // for every trusted Kit so loadTrustedMarketKit can resolve ciRunner.
+  for (const slug of allKits) {
+    await mkdir(path.join(repository, 'kits', slug), { recursive: true });
+    await cp(
+      path.join(repositoryRoot, 'kits', slug, 'kit.json'),
+      path.join(repository, 'kits', slug, 'kit.json'),
+    );
+    await cp(
+      path.join(repositoryRoot, 'kits', slug, 'package.json'),
+      path.join(repository, 'kits', slug, 'package.json'),
+    );
+    const packageJson = JSON.parse(
+      await readFile(path.join(repositoryRoot, 'kits', slug, 'package.json'), 'utf8'),
+    );
+    for (const resource of packageJson.harbors?.resources ?? []) {
+      const destination = path.join(repository, 'kits', slug, resource);
+      await mkdir(path.dirname(destination), { recursive: true });
+      await cp(path.join(repositoryRoot, 'kits', slug, resource), destination, { recursive: true });
+    }
+  }
   return repository;
 }
 
@@ -74,20 +125,39 @@ function expectedCliOutput(slugs) {
 }
 
 test('selects only changed official Kits in deterministic order', () => {
-  assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json']), ['agent-guard']);
-  assert.deepEqual(selectKitSlugs(['kits/csv/package.json']), ['csv']);
-  assert.deepEqual(selectKitSlugs(['kits/mysql/package.json']), ['mysql']);
-  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json']), ['scheduler']);
+  assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json'], allDescriptors), ['agent-guard']);
   assert.deepEqual(
-    selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json']),
+    selectKitSlugs(['kits/agent-guard/packages/contracts/src/index.ts'], allDescriptors),
+    ['agent-guard'],
+  );
+  assert.deepEqual(selectKitSlugs(['kits/csv/package.json'], allDescriptors), ['csv']);
+  assert.deepEqual(selectKitSlugs(['kits/csv/packages/contracts/src/index.ts'], allDescriptors), ['csv']);
+  assert.deepEqual(selectKitSlugs(['kits/mysql/package.json'], allDescriptors), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/mysql/packages/contracts/src/index.ts'], allDescriptors), ['mysql']);
+  assert.deepEqual(
+    selectKitSlugs(['kits/mysql/packages/relationship-graph/src/index.ts'], allDescriptors),
+    ['mysql'],
+  );
+  assert.deepEqual(selectKitSlugs(['kits/sqlite/packages/contracts/src/index.ts'], allDescriptors), ['sqlite']);
+  assert.deepEqual(
+    selectKitSlugs(['kits/sqlite/packages/relationship-graph/src/index.ts'], allDescriptors),
+    ['sqlite'],
+  );
+  assert.deepEqual(
+    selectKitSlugs(['kits/traceweave/packages/contracts/src/index.ts'], allDescriptors),
+    ['traceweave'],
+  );
+  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json'], allDescriptors), ['scheduler']);
+  assert.deepEqual(
+    selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json'], allDescriptors),
     ['notifications', 'sqlite'],
   );
-  assert.deepEqual(selectKitSlugs(['kits/sqlite', 'kits/sqlite/kit.json']), ['sqlite']);
+  assert.deepEqual(selectKitSlugs(['kits/sqlite', 'kits/sqlite/kit.json'], allDescriptors), ['sqlite']);
 });
 
-test('ignores unrelated paths and the non-official default fixture', () => {
-  assert.deepEqual(selectKitSlugs(['docs/README.md']), []);
-  assert.deepEqual(selectKitSlugs(['kits/default/kit.json']), []);
+test('ignores unrelated paths and rejects an undiscovered Kit directory', () => {
+  assert.deepEqual(selectKitSlugs(['docs/README.md'], allDescriptors), []);
+  assert.throws(() => selectKitSlugs(['kits/default/kit.json'], allDescriptors), /Unknown Kit directory/u);
 });
 
 test('selects all official Kits for shared build, validation, Registry, and workflow paths', () => {
@@ -112,34 +182,27 @@ test('selects all official Kits for shared build, validation, Registry, and work
     '.github/workflows/publish-kit-reusable.yml',
     '.github/workflows/publish-kit-registry.yml',
   ]) {
-    assert.deepEqual(selectKitSlugs([sharedPath]), allKits, sharedPath);
+    assert.deepEqual(selectKitSlugs([sharedPath], allDescriptors), allKits, sharedPath);
   }
 });
 
-test('maps direct Kit-check dependency surfaces to only their affected Kits', () => {
+test('selects every descriptor for shared framework and workflow surfaces', () => {
   const cases = [
-    ['packages/agent-guard-contracts/src/index.ts', ['agent-guard']],
-    ['packages/csv-contracts/src/index.ts', ['csv']],
-    ['packages/mysql-contracts/src/index.ts', ['mysql']],
-    ['packages/sqlite-contracts/src/index.ts', ['sqlite']],
-    ['packages/relationship-graph/src/index.ts', ['mysql', 'sqlite']],
-    ['scripts/prepare-notification-skill-resource.mjs', ['notifications']],
-    ['scripts/lib/codex-skill-resource.mjs', ['notifications']],
-    ['.agents/skills/notify-user/SKILL.md', ['notifications']],
+    ['.agents/skills/notify-user/SKILL.md', []],
     ['scripts/ce-plugin.mjs', allKits],
     ['scripts/lib/plugin-build/validate.mjs', allKits],
   ];
   for (const [changedPath, expected] of cases) {
-    assert.deepEqual(selectKitSlugs([changedPath]), expected, changedPath);
+    assert.deepEqual(selectKitSlugs([changedPath], allDescriptors), expected, changedPath);
   }
 });
 
 test('rejects unknown Kit directories', () => {
   assert.throws(
-    () => selectKitSlugs(['kits/unknown/package.json']),
+    () => selectKitSlugs(['kits/unknown/package.json'], allDescriptors),
     /unknown Kit directory/i,
   );
-  assert.throws(() => selectKitSlugs(['kits/unknown']), /unknown Kit directory/i);
+  assert.throws(() => selectKitSlugs(['kits/unknown'], allDescriptors), /unknown Kit directory/i);
 });
 
 test('rejects non-canonical repository paths instead of ambiguously classifying them', () => {
@@ -159,16 +222,37 @@ test('rejects non-canonical repository paths instead of ambiguously classifying 
     'kits/sqlite/bad\u0085name',
   ]) {
     assert.throws(
-      () => selectKitSlugs([changedPath]),
+      () => selectKitSlugs([changedPath], allDescriptors),
       /canonical repository path/i,
       JSON.stringify(changedPath),
     );
   }
-  assert.throws(() => selectKitSlugs('kits/sqlite/package.json'), /paths must be an array/i);
-  assert.throws(() => selectKitSlugs([null]), /canonical repository path/i);
+  assert.throws(() => selectKitSlugs('kits/sqlite/package.json', allDescriptors), /paths must be an array/i);
+  assert.throws(() => selectKitSlugs([null], allDescriptors), /canonical repository path/i);
 });
 
-test('CLI selects policy-owned runners from a real NUL-delimited Git diff', async () => {
+test('rejects invalid descriptor collections', () => {
+  assert.throws(
+    () => selectKitSlugs([], 'sqlite'),
+    /descriptors must be an array/u,
+  );
+  for (const descriptors of [
+    ['sqlite', 'sqlite'],
+    ['../sqlite'],
+    ['SQLite'],
+    ['sqlite-'],
+    ['sqlite--next'],
+    [null],
+  ]) {
+    assert.throws(
+      () => selectKitSlugs([], descriptors),
+      /descriptors/u,
+      JSON.stringify(descriptors),
+    );
+  }
+});
+
+test('CLI selects descriptor-derived runners from a real NUL-delimited Git diff', async () => {
   const repository = await initializeRepository();
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
@@ -192,9 +276,9 @@ test('CLI selects policy-owned runners from a real NUL-delimited Git diff', asyn
 test('CLI includes current root-commit paths when the comparison base is the root', async () => {
   const repository = await initializeRepository({ seedRoot: false });
   try {
-    await mkdir(path.join(repository, 'kits/mysql'), { recursive: true });
-    await writeFile(path.join(repository, 'kits/mysql/package.json'), '{}\n');
-    await git(repository, 'add', 'kits/mysql/package.json');
+    // initializeRepository copied every trusted Kit descriptor; stage only the
+    // mysql descriptor paths so the root diff selects mysql alone.
+    await git(repository, 'add', 'kits/mysql/kit.json', 'kits/mysql/package.json');
     await git(repository, 'commit', '-qm', 'root Kit');
     const rootCommit = await git(repository, 'rev-parse', 'HEAD');
 
@@ -309,7 +393,7 @@ test('CLI rejects control-bearing Git paths without newline-based misclassificat
   }
 });
 
-test('CLI loads runner metadata through the strict Kit policy loader', async () => {
+test('CLI validates descriptor files instead of reading policy metadata', async () => {
   const repository = await initializeRepository();
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
@@ -317,16 +401,24 @@ test('CLI loads runner metadata through the strict Kit policy loader', async () 
     await mkdir(path.join(repository, 'kits/mysql'), { recursive: true });
     await writeFile(path.join(repository, 'kits/mysql/package.json'), '{}\n');
     const head = await commitAll(repository, 'mysql');
-    const policy = JSON.parse(await readFile(path.join(repository, 'registry/policy.json'), 'utf8'));
-    policy.untrusted = true;
-    await writeFile(path.join(repository, 'registry/policy.json'), JSON.stringify(policy));
-
     const result = await runCli(repository, [base, head]);
     assert.equal(result.status, 1);
     assert.equal(result.stdout, '');
-    assert.match(result.stderr, /^ERROR=Kit policy contains unexpected fields\n$/u);
+    assert.match(result.stderr, /^ERROR=Kit identity mismatch for mysql/u);
   } finally {
     await rm(repository, { recursive: true, force: true });
+  }
+});
+
+test('policy entries carry only the trusted identity and no product metadata fields', async () => {
+  const policy = await loadKitPolicy({ repositoryRoot });
+  for (const slug of Object.keys(policy.kits)) {
+    const entry = policy.kits[slug];
+    assert.deepEqual(Object.keys(entry), ['id'], slug);
+    assert.equal(entry.id, `@itharbors/kit-${slug}`, slug);
+    assert.equal(entry.runner, undefined, `${slug} must not expose runner`);
+    assert.equal(entry.label, undefined, `${slug} must not expose label`);
+    assert.equal(entry.summary, undefined, `${slug} must not expose summary`);
   }
 });
 

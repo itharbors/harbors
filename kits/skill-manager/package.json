@@ -2,6 +2,10 @@
   "name": "@itharbors/kit-skill-manager",
   "version": "0.1.0-preview.1",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "type": "module",
   "scripts": {
     "build": "node ../../scripts/ce-plugin.mjs build plugins/skill-manager",
@@ -29,6 +33,17 @@
       "theme": {
         "--ce-accent": "#b8f36b"
       }
+    }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "Codex Skill 全局安装与来源目录比较管理工具" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
     }
   }
 }

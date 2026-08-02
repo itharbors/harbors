@@ -34,7 +34,7 @@
 3. [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md)
 4. [开发工作流](./guides/development-workflow.md)
 5. [Kit 制品与本地安装](./guides/kit-artifacts.md)
-6. [TraceWeave Kit](../kits/traceweave/README.md)：只读观察 Codex 多轮编排与证据。
+6. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
 
 ## 文档地图
 
@@ -50,7 +50,7 @@
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
 | [Kit 制品、Registry 与本地安装](./guides/kit-artifacts.md) | 如何校验、发现、下载和事务安装 Kit 制品？ |
-| [TraceWeave Kit](../kits/traceweave/README.md) | 如何查看 Codex Flow、Events、回放与脱敏证据？ |
+| `kits/<name>/README.md` | 某个 Kit 的能力、生命周期和所有权边界是什么？ |
 | [文档维护指南](./guides/maintaining-docs.md) | 代码变化后应更新哪些文档，如何验证？ |
 | [架构决策记录](./decisions/README.md) | 重要设计为何被采用，替代方案是什么？ |
 

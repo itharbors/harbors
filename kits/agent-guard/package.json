@@ -3,12 +3,22 @@
   "version": "0.1.0-preview.2",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "scripts": {
-    "build": "npm run build -w @itharbors/agent-guard-contracts && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/agent-guard-background && node ../../scripts/ce-plugin.mjs build plugins/agent-guard-center",
-    "test": "vitest run --config vitest.config.ts"
+    "build": "node ../../packages/kit-cli/dist/cli.js build .",
+    "test:kit": "vitest run --config vitest.config.ts",
+    "test": "npm run test:kit",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "@itharbors/agent-guard-contracts": "^0.0.1"
+    "@itharbors/agent-guard-contracts": "file:packages/contracts"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
   },
   "ce-editor": {
     "kit": {
@@ -30,6 +40,18 @@
       "theme": {
         "--ce-accent": "#ff8a3d"
       }
+    }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "macos-14" },
+    "docs": { "summary": "Claude Code 与 Codex 的本机零配置流量监控、异常预警和安全熔断" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": ["agent-guard"] },
+    "scripts": {
+      "build": "build",
+      "test": "test:kit",
+      "smoke": "smoke"
     }
   }
 }

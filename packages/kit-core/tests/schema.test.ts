@@ -90,6 +90,11 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(preview)).toEqual(preview);
   });
 
+  it('accepts the permission-gated notifications host capability', () => {
+    expect(parseKitPackageManifest({ ...kitManifest, permissions: ['notifications'] }).permissions)
+      .toEqual(['notifications']);
+  });
+
   it('rejects permissions outside the Registry v1 contract', () => {
     const manifest = {
       ...kitManifest,

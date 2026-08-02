@@ -3,7 +3,7 @@
   "version": "0.0.1",
   "type": "module",
   "dependencies": {
-    "@itharbors/agent-guard-contracts": "^0.0.1"
+    "@itharbors/agent-guard-contracts": "file:../../packages/contracts"
   },
   "main": "./main/dist/index.js",
   "ce-editor": {

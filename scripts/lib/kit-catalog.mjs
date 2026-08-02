@@ -2,7 +2,6 @@ import { readFile, readdir, realpath } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
 import path from 'node:path';
 import { parseKitPackageManifest } from '@itharbors/kit-core';
-import { BUILTIN_KITS } from './builtin-kits.mjs';
 
 const SOURCE_PRIORITY = Object.freeze({
   installed: 1,
@@ -98,11 +97,7 @@ function compareKits(left, right) {
 
 async function discoverRepositoryKits(rootDir, profile) {
   const kitsDir = path.join(rootDir, 'kits');
-  const candidates = BUILTIN_KITS.map(({ slug }) => ({
-    directory: path.join(kitsDir, slug),
-    source: 'builtin',
-  }));
-  if (profile !== 'development') return candidates;
+  const candidates = [];
   let entries;
   try {
     entries = await readdir(kitsDir, { withFileTypes: true });
@@ -111,11 +106,17 @@ async function discoverRepositoryKits(rootDir, profile) {
     throw error;
   }
 
-  const builtinSlugs = new Set(BUILTIN_KITS.map((kit) => kit.slug));
   for (const directory of entries
-    .filter((entry) => entry.isDirectory() && !builtinSlugs.has(entry.name))
+    .filter((entry) => entry.isDirectory())
     .sort((a, b) => a.name.localeCompare(b.name))) {
-    candidates.push({ directory: path.join(kitsDir, directory.name), source: 'development' });
+    const kitDirectory = path.join(kitsDir, directory.name);
+    let source = 'development';
+    try {
+      const pkg = JSON.parse(await readFile(path.join(kitDirectory, 'package.json'), 'utf8'));
+      if (pkg?.harbors?.distribution === 'builtin') source = 'builtin';
+    } catch {}
+    if (profile === 'stable' && source !== 'builtin') continue;
+    candidates.push({ directory: kitDirectory, source });
   }
   return candidates;
 }

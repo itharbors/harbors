@@ -68,12 +68,72 @@ describe('Agent Guard metadata storage', () => {
     fs.appendFileSync(path.join(dataDir, 'incidents-2026-07-30.ndjson'), '{"torn":');
     expect(await store.readIncidents(new Date('2026-07-30T00:00:00.000Z'))).toEqual([incident()]);
   });
+
+  it('reads legacy data without mutating it and writes only to owner data', async () => {
+    const root = temporaryRoot();
+    const dataDir = path.join(root, 'owner-data');
+    const legacyDataDir = path.join(root, 'agent-guard');
+    fs.mkdirSync(legacyDataDir, { mode: 0o700 });
+    const legacyState = {
+      schemaVersion: 1, createdAt: 1000, saltHex: 'a'.repeat(64), policyOverrides: {}, baselines: [],
+    };
+    const legacyIncident = incident();
+    const legacyLedger = [{
+      schemaVersion: 1 as const, incidentId: 'incident-1', pid: 41, processGroupId: 41,
+      processStartTime: 1000, executableIdentity: 'sha256:claude', action: 'paused' as const,
+    }];
+    fs.writeFileSync(path.join(legacyDataDir, 'state.json'), `${JSON.stringify(legacyState)}\n`);
+    fs.writeFileSync(
+      path.join(legacyDataDir, 'incidents-2026-07-30.ndjson'),
+      `${JSON.stringify(legacyIncident)}\n`,
+    );
+    fs.writeFileSync(path.join(legacyDataDir, 'control-ledger.json'), `${JSON.stringify(legacyLedger)}\n`);
+    fs.writeFileSync(path.join(legacyDataDir, 'metrics-2026-07-01.ndjson'), '{}\n');
+    const legacyBefore = snapshotDirectory(legacyDataDir);
+
+    const store = await createAgentGuardStore({
+      dataDir,
+      legacyDataDirs: [legacyDataDir],
+      hostMode: 'desktop',
+    });
+
+    expect(await store.loadState()).toEqual(legacyState);
+    expect(await store.readIncidents(new Date('2026-07-30T00:00:00.000Z'))).toEqual([
+      legacyIncident,
+    ]);
+    expect(await store.loadControlLedger()).toEqual(legacyLedger);
+    expect(await store.listMetricFiles()).toContain('metrics-2026-07-01.ndjson');
+
+    await store.saveState({ ...legacyState, createdAt: 2000 });
+    await store.appendIncidents([
+      { ...legacyIncident, id: 'incident-2', at: legacyIncident.at + 1 },
+      legacyIncident,
+    ]);
+    await store.saveControlLedger([]);
+    await store.enforceRetention(new Date('2026-07-30T12:00:00.000Z'));
+
+    expect(JSON.parse(fs.readFileSync(path.join(dataDir, 'state.json'), 'utf8')).createdAt).toBe(2000);
+    expect(fs.existsSync(path.join(dataDir, 'incidents-2026-07-30.ndjson'))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, 'control-ledger.json'))).toBe(true);
+    expect(await store.loadControlLedger()).toEqual([]);
+    expect((await store.readIncidents(new Date('2026-07-30T00:00:00.000Z'))).map(
+      (entry) => entry.id,
+    )).toEqual(['incident-1', 'incident-2']);
+    expect(snapshotDirectory(legacyDataDir)).toEqual(legacyBefore);
+  });
 });
 
 function temporaryRoot(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-guard-store-'));
   roots.push(root);
   return root;
+}
+
+function snapshotDirectory(directory: string): Record<string, string> {
+  return Object.fromEntries(fs.readdirSync(directory).sort().map((name) => [
+    name,
+    fs.readFileSync(path.join(directory, name), 'utf8'),
+  ]));
 }
 
 function metric() {

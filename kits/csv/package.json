@@ -3,15 +3,24 @@
   "version": "0.1.0-preview.1",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "scripts": {
-    "build": "npm run build -w @itharbors/csv-contracts && node ../../scripts/ce-plugin.mjs build plugins/csv-core && node ../../scripts/ce-plugin.mjs build plugins/csv-explorer && node ../../scripts/ce-plugin.mjs build plugins/csv-data",
+    "build": "npm run build --prefix packages/contracts && node ../../scripts/ce-plugin.mjs build plugins/csv-core && node ../../scripts/ce-plugin.mjs build plugins/csv-explorer && node ../../scripts/ce-plugin.mjs build plugins/csv-data",
     "test:prepare": "npm run build && node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
     "test": "npm run test:prepare && vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@itharbors/csv-contracts": "file:packages/contracts",
     "better-sqlite3": "^12.10.1",
     "csv-parse": "^7.0.1",
     "iconv-lite": "^0.7.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
   },
   "ce-editor": {
     "kit": {
@@ -24,6 +33,17 @@
         "@itharbors/csv-data"
       ],
       "theme": { "--ce-accent": "#56b6a9" }
+    }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "macos-14" },
+    "docs": { "summary": "CSV/TSV 文件浏览、筛选、排序与导出工作台" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
     }
   }
 }

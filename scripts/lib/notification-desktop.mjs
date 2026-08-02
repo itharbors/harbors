@@ -3,6 +3,13 @@ const DEFAULT_TOAST_WIDTH = 360;
 const DEFAULT_TOAST_MARGIN = 16;
 const DEFAULT_TOAST_GAP = 12;
 
+export function resolveOwnerKit(pluginOwner, catalog) {
+  if (typeof pluginOwner !== 'string' || !Array.isArray(catalog)) return undefined;
+  const matches = catalog.filter((kit) => Array.isArray(kit?.startupPlugins)
+    && kit.startupPlugins.includes(pluginOwner));
+  return matches.length === 1 ? matches[0].name : undefined;
+}
+
 export function createToastQueue({
   limit = 3,
   schedule = (callback, delay) => setTimeout(callback, delay),

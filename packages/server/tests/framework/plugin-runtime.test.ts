@@ -3,12 +3,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { PluginModule } from '../../src/framework/plugin/index';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { PluginRuntimeHost } from '../../src/editor/types';
 import type { ApplicationPluginRuntimeHost } from '../../src/editor/types';
+import type { PluginPathRoots } from '../../src/framework/plugin/paths';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
 const assembly = testAssembly;
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 function mkPlugin(
   root: string,
@@ -71,7 +77,32 @@ function applicationRuntimeHost(): ApplicationPluginRuntimeHost {
     },
     host: {
       mode: 'desktop',
+      notifications: Object.freeze({
+        create: vi.fn(),
+        list: vi.fn(),
+        markRead: vi.fn(),
+        markAllRead: vi.fn(),
+        remove: vi.fn(),
+      }),
     },
+  };
+}
+
+function pluginPathRoots(root: string): PluginPathRoots {
+  return {
+    applicationData: root,
+    data: path.join(root, 'plugins', 'data'),
+    cache: path.join(root, 'plugins', 'cache'),
+    temp: path.join(root, 'plugins', 'temp'),
+  };
+}
+
+function sessionLoadOptions(host: PluginRuntimeHost) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-runtime-paths-'));
+  return {
+    scope: 'session' as const,
+    host,
+    paths: { roots: pluginPathRoots(root), legacyDataDirectories: [] },
   };
 }
 
@@ -138,8 +169,8 @@ describe('PluginModule', () => {
     await left.register(pluginDir, { kind: 'external' });
     await right.register(pluginDir, { kind: 'external' });
 
-    await left.load(pluginDir, withRuntimeMenu(createEditor('left-editor', { assembly })));
-    await right.load(pluginDir, withRuntimeMenu(createEditor('right-editor', { assembly })));
+    await left.load(pluginDir, sessionLoadOptions(withRuntimeMenu(createEditor('left-editor', { assembly }))));
+    await right.load(pluginDir, sessionLoadOptions(withRuntimeMenu(createEditor('right-editor', { assembly }))));
 
     expect(left.listLoaded()).toEqual(['shared']);
     expect(right.listLoaded()).toEqual(['shared']);
@@ -162,8 +193,8 @@ describe('PluginModule', () => {
     await second.register(secondDir, { kind: 'external' });
 
     await Promise.all([
-      first.load(firstDir, withRuntimeMenu(createEditor('first-editor', { assembly }))),
-      second.load(secondDir, withRuntimeMenu(createEditor('second-editor', { assembly }))),
+      first.load(firstDir, sessionLoadOptions(withRuntimeMenu(createEditor('first-editor', { assembly })))),
+      second.load(secondDir, sessionLoadOptions(withRuntimeMenu(createEditor('second-editor', { assembly })))),
     ]);
 
     expect(first.callPlugin('first-plugin', 'owner')).toBe('first-plugin');
@@ -191,7 +222,7 @@ describe('PluginModule', () => {
     const runtimeHost = withRuntimeMenu(editor);
 
     await plugin.register(pluginDir, { kind: 'external' });
-    await plugin.load(pluginDir, runtimeHost);
+    await plugin.load(pluginDir, sessionLoadOptions(runtimeHost));
 
     expect(editor.message.queryRequest('message-owner', 'ping')).toBeUndefined();
     expect(editor.message.queryBroadcast('topic')).toEqual([]);
@@ -219,7 +250,7 @@ describe('PluginModule', () => {
     const runtimeHost = withRuntimeMenu(editor);
 
     await plugin.register(pluginDir, { kind: 'external' });
-    await plugin.load(pluginDir, runtimeHost);
+    await plugin.load(pluginDir, sessionLoadOptions(runtimeHost));
     const spy = vi.spyOn(editor.message, 'broadcast');
 
     plugin.callPlugin('dynamic-broadcast', 'emit');
@@ -246,7 +277,7 @@ describe('PluginModule', () => {
     const runtimeHost = withRuntimeMenu(createEditor('menu-runtime-contract-editor', { assembly }));
 
     await plugin.register(pluginDir, { kind: 'external' });
-    await plugin.load(pluginDir, runtimeHost);
+    await plugin.load(pluginDir, sessionLoadOptions(runtimeHost));
 
     expect(runtimeHost.menu.attach).toHaveBeenCalledWith('menu-owner', {
       menu: [{ type: 'menu', id: 'tools', label: 'Tools' }],
@@ -285,16 +316,63 @@ describe('PluginModule', () => {
     const host = applicationRuntimeHost();
 
     await plugin.register(pluginDir, { kind: 'external' });
-    await plugin.load(pluginDir, { scope: 'application', host });
+    await plugin.load(pluginDir, {
+      scope: 'application',
+      host,
+      paths: { roots: pluginPathRoots(root), legacyDataDirectories: [] },
+    });
 
     expect(plugin.callPlugin('background', 'runtimeKeys')).toEqual([
-      'host', 'menu', 'message', 'plugin', 'service',
+      'host', 'menu', 'message', 'paths', 'plugin', 'service',
     ]);
     expect(plugin.callPlugin('background', 'menuKeys')).toEqual([
       'attach', 'detach', 'getState',
     ]);
     expect(plugin.callPlugin('background', 'hostMode')).toBe('desktop');
     expect(host.service.register).toHaveBeenCalledWith('background', 'notification-client', { ready: true });
+  });
+
+  it('binds application and session storage paths to the registered plugin owner', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-owner-paths-'));
+    const applicationDir = mkPlugin(root, 'application', '@scope/application', `
+      let paths;
+      let runtimeFrozen;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { paths = runtime.paths; runtimeFrozen = Object.isFrozen(runtime); } },
+        methods: { paths() { return paths; }, runtimeFrozen() { return runtimeFrozen; } },
+      });
+    `);
+    const sessionDir = mkPlugin(root, 'session', '@scope/session', `
+      let paths;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { paths = runtime.paths; } },
+        methods: { paths() { return paths; } },
+      });
+    `);
+    const roots = pluginPathRoots(root);
+    const application = new PluginModule();
+    const session = new PluginModule();
+
+    await application.register(applicationDir, { kind: 'external' });
+    await session.register(sessionDir, { kind: 'external' });
+    await application.load(applicationDir, {
+      scope: 'application',
+      host: applicationRuntimeHost(),
+      paths: { roots, legacyDataDirectories: ['legacy-application'] },
+    });
+    await session.load(sessionDir, {
+      scope: 'session',
+      host: withRuntimeMenu(createEditor('paths-session', { assembly })),
+      paths: { roots, legacyDataDirectories: [] },
+    });
+
+    const applicationPaths = application.callPlugin('@scope/application', 'paths') as Record<string, unknown>;
+    const sessionPaths = session.callPlugin('@scope/session', 'paths') as Record<string, unknown>;
+    expect(applicationPaths.data).not.toBe(sessionPaths.data);
+    expect(applicationPaths.legacyData).toEqual([path.join(root, 'legacy-application')]);
+    expect(Object.isFrozen(applicationPaths)).toBe(true);
+    expect(Object.isFrozen(sessionPaths)).toBe(true);
+    expect(application.callPlugin('@scope/application', 'runtimeFrozen')).toBe(true);
   });
 
   it('rejects browser and panel message routes from application plugins', async () => {
@@ -316,6 +394,7 @@ describe('PluginModule', () => {
     await expect(plugin.load(pluginDir, {
       scope: 'application',
       host: applicationRuntimeHost(),
+      paths: { roots: pluginPathRoots(root), legacyDataDirectories: [] },
     })).rejects.toThrow(/application plugin.*server message/i);
     expect(plugin.listLoaded()).not.toContain('background');
   });
@@ -350,7 +429,7 @@ describe('PluginModule', () => {
 
     await plugin.register(pluginDir, { kind: 'external' });
 
-    await expect(plugin.load(pluginDir, withRuntimeMenu(editor))).rejects.toThrow(/cannot register as "victim"/);
+    await expect(plugin.load(pluginDir, sessionLoadOptions(withRuntimeMenu(editor)))).rejects.toThrow(/cannot register as "victim"/);
     expect(editor.message.queryRequest('victim', 'ping')).toBeUndefined();
   });
 
@@ -428,7 +507,7 @@ describe('PluginModule', () => {
 
     let failure: unknown;
     try {
-      await plugin.load(pluginDir, withRuntimeMenu(createEditor('double-failure-editor', { assembly })));
+      await plugin.load(pluginDir, sessionLoadOptions(withRuntimeMenu(createEditor('double-failure-editor', { assembly }))));
     } catch (error) {
       failure = error;
     }

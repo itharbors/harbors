@@ -24,6 +24,7 @@ function launch(child, overrides = {}) {
     command: '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS',
     args: ['/Applications/ITHARBORS.app/Contents/Resources/app.asar/dist/framework.mjs'],
     env: { ELECTRON_RUN_AS_NODE: '1' },
+    cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
     stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
     ...overrides,
   }, {
@@ -42,12 +43,14 @@ test('uses Electron run-as-node and IPC instead of a development command', () =>
   const spec = createPackagedFrameworkSpec({
     executable: '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS',
     frameworkEntry: '/Applications/ITHARBORS.app/Contents/Resources/app.asar/dist/framework.mjs',
+    cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
     env: { HARBORS_RUNTIME_ROOT: '/Applications/ITHARBORS.app/Contents/Resources/runtime' },
   });
 
   assert.equal(spec.command, '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS');
   assert.deepEqual(spec.args, ['/Applications/ITHARBORS.app/Contents/Resources/app.asar/dist/framework.mjs']);
   assert.equal(spec.env.ELECTRON_RUN_AS_NODE, '1');
+  assert.equal(spec.cwd, '/Applications/ITHARBORS.app/Contents/Resources/runtime');
   assert.deepEqual(spec.stdio, ['ignore', 'inherit', 'inherit', 'ipc']);
   assert.doesNotMatch(JSON.stringify(spec), /npm|vite|tsx/iu);
 });

@@ -1,13 +1,14 @@
 import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { unwrapMysqlResponse } from '@itharbors/mysql-contracts';
-import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
-import { createEditor } from '../../../packages/server/src/editor/index';
+import { createDefaultAssemblyConfig, createEditor } from '@itharbors/server/testing';
+import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const kitSources = [
-  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
   { directory: path.join(projectRoot, 'kits/mysql'), source: 'development' },
 ];
 const connectionUrl = process.env.MYSQL_TEST_URL;
@@ -19,8 +20,13 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
     const parentName = `harbors_parent_${suffix}`;
     const childName = `harbors_child_${suffix}`;
     const viewName = `harbors_view_${suffix}`;
+    const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'mysql-kit-runtime-'));
     const editor = createEditor(`mysql-kit-${suffix}`, {
-      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources,
+        defaultKit: '@itharbors/kit-mysql',
+      }),
+      pluginPathRoots: createPluginPathRoots(applicationData),
     });
     const call = <T>(method: string, input?: unknown): Promise<T> => Promise.resolve(
       input === undefined
@@ -212,6 +218,7 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
         await call('disconnect').catch(() => undefined);
       }
       await editor.dispose();
+      fs.rmSync(applicationData, { recursive: true, force: true });
     }
   });
 });
