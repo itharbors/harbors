@@ -110,7 +110,7 @@ describe('application server lifecycle', () => {
       })),
       capability: vi.fn(() => ({ mode: 'local' as const, status: 'available' as const })),
       bind: vi.fn(),
-      close: vi.fn(() => { events.push('credentials:close'); }),
+      close: vi.fn(async () => { events.push('credentials:close'); }),
     };
     const applicationRuntime = {
       start: vi.fn(async () => {

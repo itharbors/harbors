@@ -410,7 +410,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       const info = plugin.getInfo(pluginPath);
       if (!info) throw new Error(`Plugin "${pluginName}" registration did not produce plugin info`);
       const credentials = options.credentialVault
-        && options.credentialVault.capability().mode !== 'off'
+        && options.credentialVault.capability().mode === 'local'
         && descriptor.permissions?.includes('credentials')
         && info.capabilities?.includes('credentials')
         ? options.credentialVault.bind(descriptor.name, info.name)

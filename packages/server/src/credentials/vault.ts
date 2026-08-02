@@ -76,6 +76,9 @@ export class CredentialVault {
   private readonly locks = new Map<string, Promise<void>>();
   private lifecycle: 'open' | 'closing' | 'closed' = 'open';
   private activeOperations = 0;
+  private closePromise?: Promise<void>;
+  private resolveClose?: () => void;
+  private rejectClose?: (error: unknown) => void;
 
   constructor(options: CredentialVaultOptions) {
     this.mode = options.mode;
@@ -205,10 +208,15 @@ export class CredentialVault {
     });
   }
 
-  close(): void {
-    if (this.lifecycle !== 'open') return;
+  close(): Promise<void> {
+    if (this.closePromise) return this.closePromise;
     this.lifecycle = 'closing';
-    if (this.activeOperations === 0) this.finishClose();
+    this.closePromise = new Promise<void>((resolve, reject) => {
+      this.resolveClose = resolve;
+      this.rejectClose = reject;
+    });
+    this.finishCloseIfDrained();
+    return this.closePromise;
   }
 
   private async list(scope: string): Promise<CredentialProfile[]> {
@@ -595,7 +603,12 @@ export class CredentialVault {
   private finishClose(): void {
     if (this.lifecycle === 'closed') return;
     this.lifecycle = 'closed';
-    this.store?.close();
+    try {
+      this.store?.close();
+      this.resolveClose?.();
+    } catch (error) {
+      this.rejectClose?.(error);
+    }
   }
 
   private async withLock<T>(scope: string, id: string, operation: () => Promise<T>): Promise<T> {

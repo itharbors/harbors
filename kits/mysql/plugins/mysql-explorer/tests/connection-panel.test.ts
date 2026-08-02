@@ -608,6 +608,27 @@ describe('MySQL connection panel', () => {
     },
   );
 
+  it('allows intentionally replacing a saved password with an empty password', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getConnectionState') return disconnected;
+      if (method === 'getCredentialCapability') return { available: true };
+      if (method === 'listConnectionProfiles') return [profile];
+      if (method === 'updateConnectionProfile') return profile;
+      throw new Error(`Unexpected request ${method}`);
+    });
+    const definition = (await import('../panel.connection/src/index')).default as PanelDefinition;
+    await definition.mount({ message: { request } });
+    (document.querySelector('[data-connection-mode="saved"]') as HTMLButtonElement).click();
+    (document.querySelector('[data-action="show-password-update"]') as HTMLButtonElement).click();
+    setValue('replacement-password', 'temporary');
+    setValue('replacement-password', '');
+    (document.querySelector('[data-action="update-password"]') as HTMLButtonElement).click();
+
+    await vi.waitFor(() => expect(request).toHaveBeenCalledWith(
+      '@itharbors/mysql-core', 'updateConnectionProfile', { profileId, password: '' },
+    ));
+  });
+
   it('requires the exact confirmation before deleting a saved profile', async () => {
     const request = vi.fn(async (_plugin: string, method: string) => {
       if (method === 'getConnectionState') return disconnected;

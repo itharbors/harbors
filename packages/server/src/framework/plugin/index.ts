@@ -126,7 +126,7 @@ function resolveLoadEntryPath(pluginRoot: string, entry: string): string {
 export class PluginModule {
   private pathMap = new Map<string, Plugin>();
   private nameMap = new Map<string, Plugin>();
-  private credentialRevokers = new Map<string, () => void>();
+  private credentialRevokers = new Map<string, () => Promise<void>>();
 
   async register(pluginPath: string, options: { kind: PluginKind } = { kind: 'external' }): Promise<void> {
     const absPath = path.resolve(pluginPath);
@@ -249,13 +249,13 @@ export class PluginModule {
         }
       });
     } catch (error) {
-      credentialLease?.revoke();
+      await credentialLease?.revokeAndDrain();
       plugin.status = PluginStatus.Idle;
       throw error;
     }
 
     if (!definition) {
-      credentialLease?.revoke();
+      await credentialLease?.revokeAndDrain();
       plugin.status = PluginStatus.Idle;
       throw new Error(`Plugin "${registeredPlugin.name}" did not call editor.plugin.define()`);
     }
@@ -266,7 +266,7 @@ export class PluginModule {
     };
     plugin.status = PluginStatus.Running;
     this.nameMap.set(plugin.name, plugin);
-    if (credentialLease) this.credentialRevokers.set(plugin.path, credentialLease.revoke);
+    if (credentialLease) this.credentialRevokers.set(plugin.path, credentialLease.revokeAndDrain);
 
     try {
       if (definition.lifecycle?.load) {
@@ -304,6 +304,13 @@ export class PluginModule {
     const errors: unknown[] = [];
 
     try {
+      await this.credentialRevokers.get(plugin.path)?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    this.credentialRevokers.delete(plugin.path);
+
+    try {
       if (plugin.instance?.definition?.lifecycle?.unload) {
         await plugin.instance.definition.lifecycle.unload();
       }
@@ -320,9 +327,6 @@ export class PluginModule {
         }
       }
     }
-
-    this.credentialRevokers.get(plugin.path)?.();
-    this.credentialRevokers.delete(plugin.path);
 
     this.nameMap.delete(plugin.name);
     plugin.status = PluginStatus.Idle;
@@ -367,7 +371,7 @@ export class PluginModule {
 
   callPlugin(name: string, method: string, ...args: unknown[]): unknown {
     const plugin = this.nameMap.get(name);
-    if (!plugin?.instance) {
+    if (!plugin?.instance || plugin.status !== PluginStatus.Running) {
       throw new Error(`Plugin "${name}" is not loaded`);
     }
 
@@ -462,28 +466,44 @@ function createPluginDefinitionBridge(
 
 function createRevocableCredentialVault(credentials: PluginCredentialVault): {
   facade: PluginCredentialVault;
-  revoke(): void;
+  revokeAndDrain(): Promise<void>;
 } {
   let active = true;
-  const run = <T>(operation: () => Promise<T>): Promise<T> => (
-    active ? operation() : Promise.reject(credentialError('CREDENTIAL_OPERATION_FAILED'))
-  );
+  const operations = new Set<Promise<unknown>>();
+  let drainPromise: Promise<void> | undefined;
+  const run = <T>(operation: () => Promise<T>): Promise<T> => {
+    if (!active) return Promise.reject(credentialError('CREDENTIAL_OPERATION_FAILED'));
+    const result = Promise.resolve().then(operation);
+    operations.add(result);
+    void result.then(
+      () => { operations.delete(result); },
+      () => { operations.delete(result); },
+    );
+    return result;
+  };
+  const revokeAndDrain = (): Promise<void> => {
+    active = false;
+    drainPromise ??= (async () => {
+      while (operations.size > 0) {
+        await Promise.allSettled([...operations]);
+      }
+    })();
+    return drainPromise;
+  };
   return {
     facade: {
-      capability: async () => active
-        ? credentials.capability()
-        : {
+      capability: () => run(() => credentials.capability()).catch(() => ({
             mode: 'local',
             status: 'unavailable',
             reason: 'CREDENTIALS_UNAVAILABLE',
-          },
-      available: async () => active && credentials.available(),
+          })),
+      available: async () => active && run(() => credentials.available()),
       list: () => run(() => credentials.list()),
       get: (id) => run(() => credentials.get(id)),
       put: (input) => run(() => credentials.put(input)),
       delete: (id) => run(() => credentials.delete(id)),
     },
-    revoke: () => { active = false; },
+    revokeAndDrain,
   };
 }
 

@@ -100,6 +100,36 @@ describe('CredentialVault', () => {
     await expect(bound.available()).resolves.toBe(false);
   });
 
+  it('rejects new work and waits for active keyring operations before close resolves', async () => {
+    const bound = vault.bind(kitId, pluginName);
+    const profile = await bound.put({
+      label: '排空测试',
+      metadata: { host: 'localhost' },
+      secret: 'saved-value',
+    });
+    let releaseGet!: () => void;
+    const getGate = new Promise<void>((resolve) => { releaseGet = resolve; });
+    vi.spyOn(keyring, 'get').mockImplementation(async (account) => {
+      await getGate;
+      return keyring.secrets.get(account) ?? null;
+    });
+    const closeStore = vi.spyOn(store, 'close');
+
+    const reading = bound.get(profile.id);
+    const closing = vault.close();
+    let closed = false;
+    void closing.then(() => { closed = true; });
+    await Promise.resolve();
+
+    expect(closed).toBe(false);
+    expect(closeStore).not.toHaveBeenCalled();
+    await expect(bound.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+    releaseGet();
+    await expect(reading).resolves.toMatchObject({ secret: 'saved-value' });
+    await closing;
+    expect(closeStore).toHaveBeenCalledOnce();
+  });
+
   it('recovers a latched locked operation after the backend is unlocked', async () => {
     const bound = vault.bind(kitId, pluginName);
     const profile = await bound.put({

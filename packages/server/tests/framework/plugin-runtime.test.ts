@@ -177,7 +177,7 @@ describe('PluginModule', () => {
             credentials = runtime.credentials;
             globalThis.__retainedCredentials = runtime.credentials;
           },
-          async unload() { await credentials.list(); },
+          unload() {},
         },
         methods: { hasCredentials() { return credentials !== undefined; } },
       });
@@ -204,9 +204,42 @@ describe('PluginModule', () => {
     expect(plugin.callPlugin('capable', 'hasCredentials')).toBe(true);
     expect(plugin.callPlugin('incapable', 'hasCredentials')).toBe(false);
     await plugin.unload(capableDir);
-    expect(credentials.list).toHaveBeenCalledOnce();
+    expect(credentials.list).not.toHaveBeenCalled();
     await expect(retained.available()).resolves.toBe(false);
     await expect(retained.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+  });
+
+  it('stops new plugin calls and drains active credential work before unload completes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-credential-drain-'));
+    const capableDir = mkPlugin(root, 'capable', 'capable', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: {
+          startCredentialWork() { credentials.list(); },
+          ping() { return 'pong'; },
+        },
+      });
+    `, ['credentials']);
+    let releaseList!: () => void;
+    const listGate = new Promise<void>((resolve) => { releaseList = resolve; });
+    const credentials = credentialFacadeDouble();
+    credentials.list.mockImplementation(async () => { await listGate; return []; });
+    const plugin = new PluginModule();
+    const host = withRuntimeMenu(createEditor('credential-drain-editor', { assembly }));
+    await plugin.register(capableDir, { kind: 'external' });
+    await plugin.load(capableDir, { ...sessionLoadOptions(host), credentials });
+
+    plugin.callPlugin('capable', 'startCredentialWork');
+    let unloaded = false;
+    const unloading = plugin.unload(capableDir).then(() => { unloaded = true; });
+    await Promise.resolve();
+
+    expect(unloaded).toBe(false);
+    expect(() => plugin.callPlugin('capable', 'ping')).toThrow(/not loaded/i);
+    releaseList();
+    await unloading;
+    expect(unloaded).toBe(true);
   });
 
   it('keeps Session credentials out of a hostile shared editor accessor', async () => {

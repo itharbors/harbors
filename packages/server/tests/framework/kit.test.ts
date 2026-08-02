@@ -311,6 +311,7 @@ describe('KitModule', () => {
       },
     });
     const offVault = new CredentialVault({ mode: 'off' });
+    const multiUserVault = new CredentialVault({ mode: 'multi-user' });
     const createVaultEditor = (sessionId: string, kitDir: string, credentialVault: CredentialVault) => (
       createEditor(sessionId, {
         assembly: assemblyFor(kitDir),
@@ -322,12 +323,14 @@ describe('KitModule', () => {
     const noPermission = createVaultEditor('no-permission', noPermissionKit, vault);
     const otherOwner = createVaultEditor('other-owner', otherKit, vault);
     const offMode = createVaultEditor('off-mode', ownerKit, offVault);
+    const multiUserMode = createVaultEditor('multi-user-mode', ownerKit, multiUserVault);
 
     await Promise.all([
       owner.kit.load(),
       noPermission.kit.load(),
       otherOwner.kit.load(),
       offMode.kit.load(),
+      multiUserMode.kit.load(),
     ]);
     const ownerProfile = await owner.plugin.callPlugin('@scope/mysql-core', 'put', {
       label: 'Owner database',
@@ -340,12 +343,12 @@ describe('KitModule', () => {
     expect((owner as unknown as { credentials?: unknown }).credentials).toBeUndefined();
     expect(noPermission.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
     expect(offMode.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
+    expect(multiUserMode.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
     await expect(otherOwner.plugin.callPlugin('@scope/mysql-core', 'get', ownerProfile.id))
       .rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
 
-    await Promise.all([owner.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose()]);
-    vault.close();
-    offVault.close();
+    await Promise.all([owner.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose(), multiUserMode.dispose()]);
+    await Promise.all([vault.close(), offVault.close(), multiUserVault.close()]);
   });
 
   it('revokes the old credential lease and binds a new owner on successful Kit switch', async () => {

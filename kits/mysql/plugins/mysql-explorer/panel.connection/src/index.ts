@@ -101,6 +101,7 @@ let invalidField: InvalidField | null = null;
 let manualConnectEligible = false;
 let profileLabel = '';
 let replacementPassword = '';
+let replacementPasswordEdited = false;
 let passwordUpdateVisible = false;
 let mountGeneration = 0;
 let hydrationGeneration = 0;
@@ -193,6 +194,7 @@ const definition = {
     manualConnectEligible = false;
     profileLabel = '';
     replacementPassword = '';
+    replacementPasswordEdited = false;
     passwordUpdateVisible = false;
     connectionGeneration = 0;
     interactionGeneration = 0;
@@ -254,6 +256,7 @@ function resetState(): void {
   manualConnectEligible = false;
   profileLabel = '';
   replacementPassword = '';
+  replacementPasswordEdited = false;
   passwordUpdateVisible = false;
   activeAction = null;
   hydrationGeneration += 1;
@@ -384,10 +387,10 @@ async function saveCurrentConnection(): Promise<void> {
 async function updatePassword(): Promise<void> {
   const profileId = selectedProfile()?.id;
   if (!profileId) return;
-  if (!replacementPassword || replacementPassword.length > 4096) {
+  if (!replacementPasswordEdited || replacementPassword.length > 4096) {
     showValidation({
       field: 'replacement-password',
-      message: replacementPassword ? '新密码不能超过 4096 个字符。' : '请输入完整的新密码。',
+      message: replacementPassword.length > 4096 ? '新密码不能超过 4096 个字符。' : '请输入完整的新密码。',
     });
     return;
   }
@@ -395,6 +398,7 @@ async function updatePassword(): Promise<void> {
   await runAction('update-password', async (token) => {
     const pendingUpdate = requestCore<unknown>('updateConnectionProfile', { profileId, password });
     replacementPassword = '';
+    replacementPasswordEdited = false;
     render();
     const next = sanitizeProfile(await pendingUpdate);
     if (!next) {
@@ -431,6 +435,7 @@ async function deleteProfile(): Promise<void> {
     saved.profiles = saved.profiles.filter((profile) => profile.id !== profileId);
     saved.selectedProfileId = selectAvailableProfile(null, saved.profiles);
     replacementPassword = '';
+    replacementPasswordEdited = false;
     passwordUpdateVisible = false;
     manualConnectEligible = false;
     feedbackGeneration += 1;
@@ -545,6 +550,7 @@ async function refreshCredentialState(expectedMountGeneration: number): Promise<
     mode = 'manual';
     passwordUpdateVisible = false;
     replacementPassword = '';
+    replacementPasswordEdited = false;
   }
   render();
   return profileError;
@@ -828,6 +834,7 @@ function bindEvents(): void {
   root?.querySelector('[data-action="show-password-update"]')?.addEventListener('click', () => {
     passwordUpdateVisible = true;
     replacementPassword = '';
+    replacementPasswordEdited = false;
     feedbackGeneration += 1;
     error = null;
     notice = null;
@@ -837,6 +844,7 @@ function bindEvents(): void {
   root?.querySelector('[data-action="cancel-password-update"]')?.addEventListener('click', () => {
     passwordUpdateVisible = false;
     replacementPassword = '';
+    replacementPasswordEdited = false;
     invalidField = null;
     feedbackGeneration += 1;
     error = null;
@@ -866,6 +874,7 @@ function bindEvents(): void {
   });
   root?.querySelector<HTMLInputElement>('[data-field="replacement-password"]')?.addEventListener('input', (event) => {
     replacementPassword = (event.currentTarget as HTMLInputElement).value;
+    replacementPasswordEdited = true;
     clearFieldError('replacement-password');
   });
   root?.querySelector<HTMLSelectElement>('[data-field="profile"]')?.addEventListener('change', (event) => {
@@ -875,6 +884,7 @@ function bindEvents(): void {
     saved.selectedProfileId = saved.profiles.some((profile) => profile.id === profileId) ? profileId : null;
     passwordUpdateVisible = false;
     replacementPassword = '';
+    replacementPasswordEdited = false;
     invalidField = null;
     feedbackGeneration += 1;
     error = null;
@@ -891,6 +901,7 @@ function switchMode(next: ConnectionMode, focusTab = false): void {
     mode = next;
   }
   replacementPassword = '';
+  replacementPasswordEdited = false;
   passwordUpdateVisible = false;
   invalidField = null;
   feedbackGeneration += 1;

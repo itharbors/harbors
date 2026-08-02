@@ -236,7 +236,7 @@ export function createServer(options: ServerOptions) {
       errors.push(error);
     }
     try {
-      (await credentialVaultPromise)?.close();
+      await (await credentialVaultPromise)?.close();
       recoveredCredentialVault = undefined;
     } catch (error) {
       errors.push(error);
