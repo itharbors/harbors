@@ -3,9 +3,13 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  normalizeClearHistory,
   normalizeCommand,
+  normalizeHistorySettings,
   normalizePolicy,
   normalizeSnapshot,
+  normalizeTrafficHistoryQuery,
+  normalizeTrafficHistoryResult,
 } from '@itharbors/agent-guard-contracts';
 
 const snapshot = {
@@ -34,6 +38,59 @@ const snapshot = {
 };
 
 describe('Agent Guard public contracts', () => {
+  it('normalizes bounded history queries and rejects ambiguous ranges', () => {
+    expect(normalizeTrafficHistoryQuery({
+      from: NOW - 86_400_000,
+      to: NOW,
+      domain: 'network',
+      agents: ['claude'],
+      hostnames: ['relay.example.test'],
+      preferredBucket: 'minute',
+    })).toEqual({
+      from: NOW - 86_400_000,
+      to: NOW,
+      domain: 'network',
+      agents: ['claude'],
+      hostnames: ['relay.example.test'],
+      preferredBucket: 'minute',
+    });
+    expect(() => normalizeTrafficHistoryQuery({
+      from: NOW, to: NOW - 1, domain: 'network', agents: [], hostnames: [], preferredBucket: 'minute',
+    })).toThrow(/range/iu);
+    expect(() => normalizeTrafficHistoryQuery({
+      from: NOW - 367 * 86_400_000, to: NOW, domain: 'network',
+      agents: [], hostnames: [], preferredBucket: 'day',
+    })).toThrow(/366/iu);
+    expect(() => normalizeTrafficHistoryQuery({
+      from: NOW - 1, to: NOW, domain: 'network',
+      agents: ['claude', 'claude'], hostnames: [], preferredBucket: 'minute',
+    })).toThrow(/duplicate/iu);
+  });
+
+  it('keeps history units separate and missing points nullable', () => {
+    const result = networkHistory();
+    expect(normalizeTrafficHistoryResult(result)).toEqual(result);
+    expect(() => normalizeTrafficHistoryResult({
+      ...result,
+      series: [{ ...result.series[0], unit: 'tokens' }],
+    })).toThrow(/unit/iu);
+    expect(() => normalizeTrafficHistoryResult({
+      ...result,
+      series: [{
+        ...result.series[0],
+        points: [{ ...result.series[0].points[0], value: 0, coverage: 'missing' }],
+      }],
+    })).toThrow(/missing/iu);
+    expect(() => normalizeTrafficHistoryResult({ ...result, prompt: 'secret' }))
+      .toThrow(/unknown field/iu);
+  });
+
+  it('strictly normalizes history settings and destructive confirmation', () => {
+    expect(normalizeHistorySettings({ localSessionBackfill: true })).toEqual({ localSessionBackfill: true });
+    expect(normalizeClearHistory({ confirmation: 'clear-history' })).toEqual({ confirmation: 'clear-history' });
+    expect(() => normalizeClearHistory({ confirmation: 'yes' })).toThrow(/clear-history/iu);
+  });
+
   it('accepts metadata-only snapshots and rejects unknown sensitive fields', () => {
     expect(normalizeSnapshot(snapshot)).toEqual(snapshot);
     for (const sensitiveField of ['prompt', 'response', 'authorization', 'cookie', 'apiKey', 'argv', 'env']) {
@@ -91,3 +148,42 @@ describe('Agent Guard public contracts', () => {
     expect(`${observer}\n${watchdog}`).not.toMatch(/(?:args|command|env)=/u);
   });
 });
+
+function networkHistory() {
+  return {
+    schemaVersion: 1 as const,
+    domain: 'network' as const,
+    from: NOW - 60_000,
+    to: NOW,
+    actualBucket: 'minute' as const,
+    generation: 3,
+    persistent: true,
+    series: [{
+      metric: 'bytes-out' as const,
+      unit: 'bytes' as const,
+      agent: 'claude' as const,
+      provider: 'custom',
+      hostname: 'relay.example.test',
+      points: [{
+        start: NOW - 60_000,
+        end: NOW,
+        value: 2048,
+        coverage: 'complete' as const,
+        coverageReason: null,
+        provenance: 'network-sample' as const,
+        quality: 'measured' as const,
+      }],
+    }],
+    summary: [{
+      metric: 'bytes-out' as const,
+      unit: 'bytes' as const,
+      value: 2048,
+      coverageRatio: 1,
+      derivedRatio: 0,
+    }],
+    sources: [{ provenance: 'network-sample' as const, quality: 'measured' as const, pointCount: 1 }],
+    warnings: [],
+  };
+}
+
+const NOW = Date.parse('2026-08-01T08:00:00.000Z');

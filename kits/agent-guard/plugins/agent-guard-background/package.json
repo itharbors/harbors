@@ -16,7 +16,12 @@
           "getSnapshot": ["getSnapshot"],
           "updatePolicy": ["updatePolicy"],
           "executeCommand": ["executeCommand"],
-          "getIncidents": ["getIncidents"]
+          "getIncidents": ["getIncidents"],
+          "getTrafficHistory": ["getTrafficHistory"],
+          "getHistoryStatus": ["getHistoryStatus"],
+          "updateHistorySettings": ["updateHistorySettings"],
+          "runHistoryBackfill": ["runHistoryBackfill"],
+          "clearHistory": ["clearHistory"]
         }
       }
     }

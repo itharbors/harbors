@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 const root = path.resolve(__dirname, '..');
 
 describe('Agent Guard background plugin', () => {
-  it('is panel-free and exposes only the four application methods', () => {
+  it('is panel-free and exposes live plus history application methods', () => {
     const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
     expect(manifest['ce-editor'].contribute.panel).toBeUndefined();
     expect(manifest['ce-editor'].contribute.message.request).toEqual({
@@ -13,6 +13,11 @@ describe('Agent Guard background plugin', () => {
       updatePolicy: ['updatePolicy'],
       executeCommand: ['executeCommand'],
       getIncidents: ['getIncidents'],
+      getTrafficHistory: ['getTrafficHistory'],
+      getHistoryStatus: ['getHistoryStatus'],
+      updateHistorySettings: ['updateHistorySettings'],
+      runHistoryBackfill: ['runHistoryBackfill'],
+      clearHistory: ['clearHistory'],
     });
   });
 
