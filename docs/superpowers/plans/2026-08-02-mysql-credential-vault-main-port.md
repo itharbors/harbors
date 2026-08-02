@@ -60,4 +60,4 @@
 - [x] Complete browser acceptance for default-off and explicit-loopback local modes.
 - [x] Run `npm run check`, MySQL boundary checks, leak regression, and `git diff --check`.
 - [x] Mark this plan complete and commit the final reviewed tree.
-- [ ] Push, create a conflict-free replacement PR against `main`, link it to #44, and close #44 only after the replacement PR is verified open.
+- [x] Push, create a conflict-free replacement PR against `main`, link it to #44, and close #44 only after the replacement PR is verified open.
