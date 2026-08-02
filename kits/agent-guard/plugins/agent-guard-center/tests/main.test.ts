@@ -20,6 +20,11 @@ describe('Agent Guard center main', () => {
     await definition.methods.updatePolicy({ schemaVersion: 1 });
     await definition.methods.executeCommand({ type: 'resume', incidentId: 'i-1' });
     await definition.methods.getIncidents({ limit: 20 });
+    await definition.methods.getTrafficHistory({ from: 1, to: 2, domain: 'network' });
+    await definition.methods.getHistoryStatus();
+    await definition.methods.updateHistorySettings({ localSessionBackfill: false });
+    await definition.methods.runHistoryBackfill({ reason: 'manual' });
+    await definition.methods.clearHistory({ confirmation: 'clear-history' });
     definition.methods.openGuardPanel();
 
     expect(application.request.mock.calls).toEqual([
@@ -27,6 +32,11 @@ describe('Agent Guard center main', () => {
       ['@itharbors/agent-guard-background', 'updatePolicy', { schemaVersion: 1 }],
       ['@itharbors/agent-guard-background', 'executeCommand', { type: 'resume', incidentId: 'i-1' }],
       ['@itharbors/agent-guard-background', 'getIncidents', { limit: 20 }],
+      ['@itharbors/agent-guard-background', 'getTrafficHistory', { from: 1, to: 2, domain: 'network' }],
+      ['@itharbors/agent-guard-background', 'getHistoryStatus'],
+      ['@itharbors/agent-guard-background', 'updateHistorySettings', { localSessionBackfill: false }],
+      ['@itharbors/agent-guard-background', 'runHistoryBackfill', { reason: 'manual' }],
+      ['@itharbors/agent-guard-background', 'clearHistory', { confirmation: 'clear-history' }],
     ]);
     expect(openPanel).toHaveBeenCalledWith('@itharbors/agent-guard-center.guard');
   });

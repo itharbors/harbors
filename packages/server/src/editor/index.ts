@@ -1,4 +1,4 @@
-import type { Editor } from './types';
+import type { Editor, PluginLoadOptions, PluginRuntimeHost } from './types';
 import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '../framework/menu/types';
 import { ConfigModule } from '../framework/config';
 import type { ConfigLayerStore } from '../framework/config';
@@ -17,6 +17,8 @@ import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
 import path from 'node:path';
 import fs from 'node:fs';
+import type { PluginPathRoots } from '../framework/plugin/paths';
+import { parseRepositoryKitPackage } from '@itharbors/kit-core';
 
 const BUILTIN_PLUGINS = [
   '@itharbors/panel',
@@ -44,11 +46,13 @@ interface KitPackageJson {
       };
     };
   };
+  harbors?: unknown;
 }
 
 interface ActiveExternalPlugin {
   path: string;
   name: string;
+  legacyDataDirectories: readonly string[];
 }
 
 interface CreateEditorOptions {
@@ -65,10 +69,12 @@ interface CreateEditorOptions {
   ) => void;
   initialLocale?: string;
   platform?: MenuPlatform;
+  pluginPathRoots: PluginPathRoots;
 }
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
   const assembly = options.assembly;
+  const runtimePluginPathRoots = options.pluginPathRoots;
   let activeKitDirectory: string | undefined;
   const plugin = new PluginModule();
   const panel = new PanelModule();
@@ -117,6 +123,19 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       });
     },
   };
+  function pluginLoadOptions(
+    host: PluginRuntimeHost,
+    legacyDataDirectories: readonly string[],
+  ): PluginLoadOptions {
+    return {
+      scope: 'session',
+      host,
+      paths: {
+        roots: runtimePluginPathRoots,
+        legacyDataDirectories,
+      },
+    };
+  }
   const message = new MessageModule({
     dispatchPanelRequest: (panelKey, method, args) => panel.dispatch(panelKey, method, args),
     dispatchBrowserRequest: options.dispatchBrowserRequest,
@@ -144,7 +163,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const errors: unknown[] = [];
     const loadedPlugins = plugin.listLoaded().flatMap((name) => {
       const info = plugin.getInfo(name);
-      return info ? [{ name: info.name, path: info.path }] : [];
+      return info ? [{ name: info.name, path: info.path, legacyDataDirectories: [] }] : [];
     });
 
     try {
@@ -202,10 +221,10 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         for (const name of BUILTIN_PLUGINS) {
           const pluginPath = await resolvePlugin(name, pluginResolveContext());
           await plugin.register(pluginPath, { kind: 'builtin' });
-          await plugin.load(pluginPath, {
+          await plugin.load(pluginPath, pluginLoadOptions({
             ...editor,
             menu: runtimeMenu,
-          });
+          }, []));
           loaded.push(pluginPath);
         }
       } catch (err) {
@@ -221,7 +240,11 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     return corePluginsLoaded;
   }
 
-  async function resolveAndReadKit(kitNameOrPath: string): Promise<{ descriptor: KitDescriptor; kitPath: string }> {
+  async function resolveAndReadKit(kitNameOrPath: string): Promise<{
+    descriptor: KitDescriptor;
+    kitPath: string;
+    legacyDataDirectories: string[];
+  }> {
     const { resolveKit } = await import('../plugin/resolver');
     const kitPath = await resolveKit(kitNameOrPath, {
       kitSources: assembly.kitSources,
@@ -257,6 +280,9 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     }
 
     const plugins = pkg['ce-editor'].kit.plugin ?? [];
+    const legacyDataDirectories = pkg.harbors === undefined
+      ? []
+      : [...parseRepositoryKitPackage(pkg.harbors).legacyDataDirectories];
 
     const descriptor: KitDescriptor = {
       name: pkg.name,
@@ -269,7 +295,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       windowEntries: normalizedWindowEntries,
     };
 
-    return { descriptor, kitPath };
+    return { descriptor, kitPath, legacyDataDirectories };
   }
 
   async function unloadExternalPlugins(pluginsToUnload: ActiveExternalPlugin[]): Promise<void> {
@@ -305,13 +331,17 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
 
   const cleanupLoadedExternalPlugins = unloadExternalPlugins;
 
-  async function loadExternalPlugin(pluginPath: string, pluginName: string): Promise<ActiveExternalPlugin> {
-    const externalPlugin = { path: pluginPath, name: pluginName };
+  async function loadExternalPlugin(
+    pluginPath: string,
+    pluginName: string,
+    legacyDataDirectories: readonly string[] = [],
+  ): Promise<ActiveExternalPlugin> {
+    const externalPlugin = { path: pluginPath, name: pluginName, legacyDataDirectories };
     try {
-      await plugin.load(pluginPath, {
+      await plugin.load(pluginPath, pluginLoadOptions({
         ...editor,
         menu: runtimeMenu,
-      });
+      }, legacyDataDirectories));
       return externalPlugin;
     } catch (loadError) {
       try {
@@ -330,7 +360,11 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const restoredPlugins: ActiveExternalPlugin[] = [];
     try {
       for (const previousPlugin of previousPlugins) {
-        restoredPlugins.push(await loadExternalPlugin(previousPlugin.path, previousPlugin.name));
+        restoredPlugins.push(await loadExternalPlugin(
+          previousPlugin.path,
+          previousPlugin.name,
+          previousPlugin.legacyDataDirectories,
+        ));
       }
       activeExternalPlugins = restoredPlugins;
     } catch (restoreError) {
@@ -352,12 +386,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     await ensureCorePluginsLoaded();
 
     const { resolvePlugin } = await import('../plugin/resolver');
-    const { descriptor, kitPath } = await resolveAndReadKit(kitNameOrPath);
+    const { descriptor, kitPath, legacyDataDirectories } = await resolveAndReadKit(kitNameOrPath);
     const preparedPlugins: ActiveExternalPlugin[] = [];
     for (const pluginName of descriptor.plugins) {
       const pluginPath = await resolvePlugin(pluginName, pluginResolveContext(path.join(kitPath, 'plugins')));
       await plugin.register(pluginPath, { kind: 'external' });
-      preparedPlugins.push({ path: pluginPath, name: pluginName });
+      preparedPlugins.push({ path: pluginPath, name: pluginName, legacyDataDirectories });
     }
     const previousExternalPlugins = [...activeExternalPlugins];
     const loadedPlugins: ActiveExternalPlugin[] = [];
@@ -369,7 +403,11 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     try {
       await unloadActiveExternalPlugins();
       for (const preparedPlugin of preparedPlugins) {
-        loadedPlugins.push(await loadExternalPlugin(preparedPlugin.path, preparedPlugin.name));
+        loadedPlugins.push(await loadExternalPlugin(
+          preparedPlugin.path,
+          preparedPlugin.name,
+          legacyDataDirectories,
+        ));
       }
     } catch (switchError) {
       const rollbackErrors: unknown[] = [];
@@ -482,10 +520,10 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         await ensureCorePluginsLoaded();
         const info = plugin.getInfo(pluginPath);
         try {
-          await plugin.load(pluginPath, {
+          await plugin.load(pluginPath, pluginLoadOptions({
             ...editor,
             menu: runtimeMenu,
-          });
+          }, []));
         } catch (err) {
           if (info) {
             panel.clearOwner(info.name);

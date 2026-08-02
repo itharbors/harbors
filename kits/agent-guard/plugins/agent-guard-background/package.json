@@ -3,17 +3,25 @@
   "version": "0.0.1",
   "type": "module",
   "dependencies": {
-    "@itharbors/agent-guard-contracts": "^0.0.1"
+    "@itharbors/agent-guard-contracts": "file:../../packages/contracts"
   },
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "assets": {
+      "public": ["resources"]
+    },
     "contribute": {
       "message": {
         "request": {
           "getSnapshot": ["getSnapshot"],
           "updatePolicy": ["updatePolicy"],
           "executeCommand": ["executeCommand"],
-          "getIncidents": ["getIncidents"]
+          "getIncidents": ["getIncidents"],
+          "getTrafficHistory": ["getTrafficHistory"],
+          "getHistoryStatus": ["getHistoryStatus"],
+          "updateHistorySettings": ["updateHistorySettings"],
+          "runHistoryBackfill": ["runHistoryBackfill"],
+          "clearHistory": ["clearHistory"]
         }
       }
     }

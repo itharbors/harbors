@@ -3,13 +3,23 @@
   "version": "0.1.0-preview.1",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "scripts": {
-    "build": "npm run build -w @itharbors/sqlite-contracts && npm run build -w @itharbors/relationship-graph && npm run build -w @itharbors/kit-core && npm run build -w @itharbors/kit-cli && node ../../scripts/ce-plugin.mjs build plugins/sqlite-core && node ../../scripts/ce-plugin.mjs build plugins/sqlite-data && node ../../scripts/ce-plugin.mjs build plugins/sqlite-explorer && node ../../scripts/ce-plugin.mjs build plugins/sqlite-relationships && node ../../scripts/ce-plugin.mjs build plugins/sqlite-schema && node ../../scripts/ce-plugin.mjs build plugins/sqlite-sql",
+    "build": "npm run build --prefix packages/contracts && npm run build --prefix packages/relationship-graph && node ../../scripts/ce-plugin.mjs build plugins/sqlite-core && node ../../scripts/ce-plugin.mjs build plugins/sqlite-data && node ../../scripts/ce-plugin.mjs build plugins/sqlite-explorer && node ../../scripts/ce-plugin.mjs build plugins/sqlite-relationships && node ../../scripts/ce-plugin.mjs build plugins/sqlite-schema && node ../../scripts/ce-plugin.mjs build plugins/sqlite-sql",
     "test:prepare": "node ../../scripts/ce-plugin.mjs build ../../plugins/panel && node ../../scripts/ce-plugin.mjs build ../../plugins/message && node ../../scripts/ce-plugin.mjs build ../../plugins/menu && node ../../scripts/ce-plugin.mjs build ../../plugins/config",
-    "test": "npm run test:prepare && vitest run --config vitest.config.ts"
+    "test": "npm run test:prepare && npm test --prefix packages/relationship-graph && vitest run --config vitest.config.ts"
   },
   "dependencies": {
+    "@itharbors/sqlite-contracts": "file:packages/contracts",
+    "@itharbors/relationship-graph": "file:packages/relationship-graph",
     "better-sqlite3": "^12.10.1"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.19",
+    "typescript": "5.9.3"
   },
   "ce-editor": {
     "kit": {
@@ -35,6 +45,17 @@
       "theme": {
         "--ce-accent": "#56b6a9"
       }
+    }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "macos-14" },
+    "docs": { "summary": "SQLite 数据库浏览、编辑、关系图与 SQL 工作台" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
     }
   }
 }

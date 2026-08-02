@@ -171,8 +171,9 @@ test('root check runs every focused desktop and app publication suite', async ()
     packageJson.scripts['test:app-publish'],
     'node --test scripts/lib/app-publish/*.test.mjs',
   );
-  assert.match(packageJson.scripts.test, /npm run test:desktop/u);
-  assert.match(packageJson.scripts.test, /npm run test:app-workflow/u);
+  assert.match(packageJson.scripts.test, /npm run test:workflows/u);
+  assert.match(packageJson.scripts['test:workflows'], /npm run test:desktop/u);
+  assert.match(packageJson.scripts['test:workflows'], /npm run test:app-workflow/u);
 });
 
 function workflowJob(workflow, name) {

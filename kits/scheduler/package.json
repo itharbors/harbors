@@ -2,6 +2,10 @@
   "name": "@itharbors/kit-scheduler",
   "version": "0.1.0-preview.1",
   "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
   "type": "module",
   "scripts": {
     "build": "node ../../scripts/ce-plugin.mjs build plugins/scheduler-service && node ../../scripts/ce-plugin.mjs build plugins/scheduler-panel",
@@ -31,6 +35,17 @@
       "theme": {
         "--ce-accent": "#1b6688"
       }
+    }
+  },
+  "harbors": {
+    "distribution": "market",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "本地 Node.js 脚本的定时、循环与错过触发管理" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test"
     }
   }
 }

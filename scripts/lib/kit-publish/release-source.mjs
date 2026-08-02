@@ -3,7 +3,7 @@ import {
   validateRegistryRelease,
 } from './registry.mjs';
 
-const RELEASE_TAG = /^kit\/(agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite)\/v(.+)$/u;
+const RELEASE_TAG = /^kit\/([a-z0-9]+(?:-[a-z0-9]+)*)\/v(.+)$/u;
 const API_VERSION = '2026-03-10';
 const API_ORIGIN = 'https://api.github.com';
 const GITHUB_ORIGIN = 'https://github.com';
@@ -506,9 +506,13 @@ export async function discoverTrustedKitReleases({
       entry.source.repository !== repository
       || entry.source.tag !== releaseRecord.tag_name
       || entry.id !== policyKit.id
-      || entry.label !== policyKit.label
-      || entry.summary !== policyKit.summary
     ) throw new Error('Registry entry does not match trusted Release policy identity');
+    if (typeof entry.label !== 'string' || entry.label.trim().length === 0) {
+      throw new Error('Registry entry label must be a non-empty string');
+    }
+    if (typeof entry.summary !== 'string' || entry.summary.trim().length === 0) {
+      throw new Error('Registry entry summary must be a non-empty string');
+    }
     if (releaseUrls.has(entry.releaseManifestUrl)) throw new Error(`Duplicate trusted Release manifest URL: ${entry.releaseManifestUrl}`);
     releaseUrls.add(entry.releaseManifestUrl);
     const rawRelease = await fetchAssetJson(assets.get('release.json'), {

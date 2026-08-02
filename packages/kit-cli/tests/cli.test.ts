@@ -63,6 +63,31 @@ describe('runCli', () => {
     expect(inspectIo.stderr()).toBe('');
   });
 
+  it('dispatches build and test to the Kit lifecycle API', async () => {
+    const buildIo = captureIo();
+    const testIo = captureIo();
+    const invoked: string[] = [];
+    const lifecycle = {
+      buildKit: async ({ directory }: { directory: string }) => {
+        invoked.push(`build:${directory}`);
+        return { directory, id: '@example/kit-demo', version: '1.2.3', plugins: ['plugin-a'] };
+      },
+      testKit: async ({ directory }: { directory: string }) => {
+        invoked.push(`test:${directory}`);
+        return { directory, id: '@example/kit-demo', version: '1.2.3', script: 'test:kit' };
+      },
+    };
+
+    await expect(runCli(['build', '/fixture/kit'], buildIo.io, lifecycle)).resolves.toBe(0);
+    await expect(runCli(['test', '/fixture/kit'], testIo.io, lifecycle)).resolves.toBe(0);
+
+    expect(invoked).toEqual(['build:/fixture/kit', 'test:/fixture/kit']);
+    expect(buildIo.stdout()).toBe('KIT_ID=@example/kit-demo\nKIT_VERSION=1.2.3\nPLUGINS=1\n');
+    expect(testIo.stdout()).toBe('KIT_ID=@example/kit-demo\nKIT_VERSION=1.2.3\nSCRIPT=test:kit\n');
+    expect(buildIo.stderr()).toBe('');
+    expect(testIo.stderr()).toBe('');
+  });
+
   it('returns 2 for usage errors and 1 for validation errors', async () => {
     const usageIo = captureIo();
     const validationIo = captureIo();

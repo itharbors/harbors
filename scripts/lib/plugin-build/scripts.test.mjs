@@ -3,8 +3,11 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { copyPanelAssets } from './assets.mjs';
-import { compilePanelScripts } from './scripts.mjs';
+import {
+  copyPanelAssets,
+  compilePanelScripts,
+  discoverPlugin,
+} from '@itharbors/kit-cli';
 
 test('panel compilation bundles bare package imports for direct browser loading', () => {
   const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-panel-build-'));
@@ -111,6 +114,26 @@ test('panel asset copying excludes bundled TypeScript sources recursively', () =
     assert.equal(fs.existsSync(path.join(distDir, 'index.ts')), false);
     assert.equal(fs.existsSync(path.join(distDir, 'app.tsx')), false);
     assert.equal(fs.existsSync(path.join(distDir, 'components/helper.ts')), false);
+  } finally {
+    fs.rmSync(rootDir, { recursive: true, force: true });
+  }
+});
+
+test('plugin discovery rejects a symlinked declared output path', () => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-plugin-symlink-'));
+  try {
+    const externalDir = path.join(rootDir, 'external');
+    const pluginDir = path.join(rootDir, 'plugin');
+    fs.mkdirSync(externalDir, { recursive: true });
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.symlinkSync(externalDir, path.join(pluginDir, 'main'), 'dir');
+    fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
+      name: '@fixture/symlinked-plugin',
+      main: './main/dist/index.js',
+      'ce-editor': {},
+    }));
+
+    assert.throws(() => discoverPlugin(pluginDir), /symbolic links/i);
   } finally {
     fs.rmSync(rootDir, { recursive: true, force: true });
   }

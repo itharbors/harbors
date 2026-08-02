@@ -91,7 +91,8 @@ application-scope 插件状态，并创建一次可回收 Session 真实加载�
 `installed.json` 使用同目录临时文件、fsync 和 rename。
 
 Electron 启动时只读取完成 pending 校验后的 active 版本，并通过 `HARBORS_KIT_SOURCES`
-把权威 Kit 来源快照传给 Server：Default builtin 目录以及当前 active 的已安装目录。每个已安装
+把权威 Kit 来源快照传给 Server：所有动态发现的 builtin Kit 目录（其中恰好一个声明 default 角色）
+以及当前 active 的已安装目录。每个已安装
 Kit 只有 active 版本目录会进入快照；Server 不扫描 Store 根，也不猜测版本。环境变量必须是非空
 的 JSON 数组，数组元素是带有绝对 `directory` 与 `source` 的来源对象。目录变化在下一次桌面启动时生效。
 每次 Manager 运行时事务都会重新生成这份快照，所以安装、更新、版本切换和删除也会在当前 Electron
@@ -128,9 +129,8 @@ bundle 或 Kit artifact 下载地址。
 
 ## GitHub 自动发布
 
-Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager、TraceWeave 的发布源分别是 `main` 上的
-`kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、
-`kits/skill-manager`、`kits/traceweave`。普通 PR 合并只更新代码，不触发 Kit 或 Framework Release，也不要求修改
+每个市场 Kit 的发布源是 `main` 上的 `kits/<name>`。descriptor 的 `distribution=market` 使其进入
+自动 Release 投影；普通 PR 合并只更新代码，不触发 Kit 或 Framework Release，也不要求修改
 Framework 版本。发布者从干净且与 `origin/main` 完全一致的 checkout 创建专属 Tag：
 
 ```text
@@ -139,7 +139,7 @@ kit/<name>/v<semver>
 
 `.github/workflows/publish-kit.yml` 从 Tag 解析 `<name>` 与 `<semver>`，只允许
 `registry/policy.json` 中的官方 Kit，并调用固定的 `kit-publish-v2` reusable workflow。Tag 版本、
-`kits/<name>/kit.json`、`kits/<name>/package.json` 和根 `package-lock.json` 的身份必须完全一致。
+`kits/<name>/kit.json`、`kits/<name>/package.json` 和 `kits/<name>/package-lock.json` 的身份必须完全一致。
 普通 SemVer 对应 `stable`，prerelease SemVer 对应 `preview`，build metadata 被拒绝。
 
 workflow 只对目标目录运行 `npm run kit:check -- <name>`，生成 canonical `.hkit`、`release.json`、
@@ -149,10 +149,10 @@ workflow 只对目标目录运行 `npm run kit:check -- <name>`，生成 canonic
 Preview Release 标记为 prerelease；Stable Release 走受保护环境。生产仓库必须先启用 GitHub
 Release immutability，已存在的 Tag 或 Release 不允许覆盖。
 
-例如，CSV Kit 的本地官方检查会构建、测试、校验、封装并检查制品：
+例如，某个 Kit 的本地官方检查会构建、测试、校验、封装并检查制品：
 
 ```bash
-npm run kit:check -- csv --output-directory "$PWD/dist/kit-check"
+npm run kit:check -- <slug> --output-directory "$PWD/dist/kit-check"
 ```
 
 发布完成后，`.github/workflows/publish-kit-registry.yml` 自动扫描仓库的可信、不可变 Release，

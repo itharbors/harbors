@@ -78,12 +78,6 @@ describe('Skill Manager Kit manifest', () => {
     expect(secondaryEntry).toContain('<title>Skill 管理器</title>');
   });
 
-  it('runs Skill Manager tests from the repository test gate', () => {
-    const rootPackage = readJson(path.join(projectRoot, 'package.json'));
-    expect(rootPackage.scripts.test).toContain(
-      'npm run test -w @itharbors/kit-skill-manager',
-    );
-  });
 });
 
 function readJson(file: string) {

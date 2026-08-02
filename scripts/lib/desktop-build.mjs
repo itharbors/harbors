@@ -1,4 +1,5 @@
 import { build as esbuild } from 'esbuild';
+import { validateKit } from '@itharbors/kit-cli';
 import {
   copyFile,
   lstat,
@@ -9,9 +10,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import path from 'node:path';
-import { BUILTIN_KITS } from './builtin-kits.mjs';
 
-const BUILTIN_KIT_SLUGS = new Set(BUILTIN_KITS.map(({ slug }) => slug));
 const FRAMEWORK_PLUGINS = Object.freeze(['config', 'menu', 'message', 'panel']);
 
 // Unicode 16.0 CaseFolding.txt C + F records (default full case folding).
@@ -359,21 +358,60 @@ const DESKTOP_ASSETS = Object.freeze([
   }),
 ]);
 
-async function runtimeEntries(repositoryRoot) {
+function createDescriptorPolicy(descriptors, { requireBuiltin = false, requireDefault = true } = {}) {
+  if (!Array.isArray(descriptors)) throw new TypeError('Desktop Kit descriptors must be an array');
+  const bySlug = new Map();
+  const builtin = [];
+  const ids = new Set();
+  const menuRoots = new Set();
+  for (const descriptor of descriptors) {
+    if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor)
+      || typeof descriptor.slug !== 'string'
+      || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(descriptor.slug)
+      || typeof descriptor.id !== 'string'
+      || descriptor.id.length === 0
+      || typeof descriptor.isDefault !== 'boolean'
+      || !['builtin', 'market'].includes(descriptor.distribution)) {
+      throw new Error('Desktop Kit descriptor is malformed');
+    }
+    if (bySlug.has(descriptor.slug)) throw new Error(`Duplicate Desktop Kit slug: ${descriptor.slug}`);
+    bySlug.set(descriptor.slug, descriptor);
+    const menuRootId = descriptor.menuRoot?.id;
+    if (typeof menuRootId !== 'string' || menuRootId.length === 0) {
+      throw new Error(`Desktop Kit ${descriptor.slug} must declare a menu root id`);
+    }
+    if (ids.has(descriptor.id)) throw new Error(`Duplicate Desktop Kit id: ${descriptor.id}`);
+    if (menuRoots.has(menuRootId)) throw new Error(`Duplicate Desktop Kit menu root: ${menuRootId}`);
+    ids.add(descriptor.id);
+    menuRoots.add(menuRootId);
+    if (descriptor.isDefault === true && descriptor.distribution !== 'builtin') {
+      throw new Error(`Desktop default Kit must use builtin distribution: ${descriptor.slug}`);
+    }
+    if (descriptor.distribution !== 'builtin') continue;
+    builtin.push(descriptor);
+  }
+  if (requireBuiltin && builtin.length === 0) {
+    throw new Error('Desktop Kit descriptors must contain at least one builtin Kit');
+  }
+  if (requireDefault && builtin.length > 0
+    && builtin.filter((descriptor) => descriptor.isDefault).length !== 1) {
+    throw new Error('Desktop builtin Kits must declare exactly one default');
+  }
+  builtin.sort((left, right) => left.slug.localeCompare(right.slug));
+  return { builtin, bySlug };
+}
+
+export function validateDesktopKitDescriptors(descriptors) {
+  const policy = createDescriptorPolicy(descriptors, { requireBuiltin: true, requireDefault: true });
+  return Object.freeze({
+    builtin: Object.freeze([...policy.builtin]),
+    descriptors: Object.freeze([...policy.bySlug.values()]),
+  });
+}
+
+async function runtimeEntries(repositoryRoot, policy) {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
-    {
-      source: '.agents/skills/notify-user/SKILL.md',
-      destination: 'resources/notify-user/SKILL.md',
-    },
-    {
-      source: '.agents/skills/notify-user/agents/openai.yaml',
-      destination: 'resources/notify-user/agents/openai.yaml',
-    },
-    {
-      source: '.agents/skills/notify-user/scripts/notify.mjs',
-      destination: 'resources/notify-user/scripts/notify.mjs',
-    },
   ];
   for (const plugin of FRAMEWORK_PLUGINS) {
     entries.push(
@@ -388,7 +426,7 @@ async function runtimeEntries(repositoryRoot) {
       },
     );
   }
-  entries.push(...await builtinKitEntries(repositoryRoot));
+  entries.push(...await builtinKitEntries(repositoryRoot, policy));
   return entries;
 }
 
@@ -431,22 +469,27 @@ function validateRelative(value, label) {
   return value;
 }
 
-function rejectNonBuiltinKit(relative) {
+function rejectNonBuiltinKit(relative, policy) {
   const parts = portable(relative).split('/');
   if (portableIdentity(parts[0] ?? '') !== 'kits') return;
   if (parts[0] !== 'kits') throw new Error(`Desktop source spelling alias is not portable: ${relative}`);
   if (!parts[1]) throw new Error('Desktop runtime cannot include the Kit root');
-  const builtinSlug = [...BUILTIN_KIT_SLUGS]
+  const descriptorSlug = [...policy.bySlug.keys()]
     .find((slug) => portableIdentity(slug) === portableIdentity(parts[1]));
-  if (!builtinSlug) throw new Error(`Desktop runtime cannot include product Kit ${parts[1]}`);
+  if (!descriptorSlug) throw new Error(`Desktop runtime cannot include unowned product Kit ${parts[1]}`);
+  const descriptor = policy.bySlug.get(descriptorSlug);
+  if (descriptor.distribution !== 'builtin') {
+    throw new Error(`Desktop builtin staging cannot include market Kit ${parts[1]}`);
+  }
+  const builtinSlug = descriptor.slug;
   if (parts[1] !== builtinSlug) {
     throw new Error(`Desktop source spelling alias is not portable: ${relative}`);
   }
 }
 
-async function checkedPath(repositoryRoot, source) {
+async function checkedPath(repositoryRoot, source, policy) {
   validateRelative(source, 'Desktop source');
-  rejectNonBuiltinKit(source);
+  rejectNonBuiltinKit(source, policy);
   const absolute = path.resolve(repositoryRoot, source);
   if (!inside(repositoryRoot, absolute)) throw new Error('Desktop source is outside the repository');
   let current = repositoryRoot;
@@ -459,8 +502,8 @@ async function checkedPath(repositoryRoot, source) {
   return absolute;
 }
 
-async function checkedFile(repositoryRoot, source) {
-  const absolute = await checkedPath(repositoryRoot, source);
+async function checkedFile(repositoryRoot, source, policy) {
+  const absolute = await checkedPath(repositoryRoot, source, policy);
   if (!(await lstat(absolute)).isFile()) {
     throw new Error(`Desktop source is missing or not a regular file: ${source}`);
   }
@@ -503,9 +546,9 @@ function builtDirectory(entry, kind) {
   return { directory, normalized };
 }
 
-async function builtDirectoryEntry(repositoryRoot, pluginRoot, entry, kind) {
+async function builtDirectoryEntry(repositoryRoot, pluginRoot, entry, kind, policy) {
   const { directory, normalized } = builtDirectory(entry, kind);
-  await checkedFile(repositoryRoot, `${pluginRoot}/${normalized}`);
+  await checkedFile(repositoryRoot, `${pluginRoot}/${normalized}`, policy);
   const source = `${pluginRoot}/${directory}`;
   return { source, destination: source, recursive: true };
 }
@@ -541,7 +584,7 @@ async function readJsonManifest(filename, label) {
   }
 }
 
-async function kitPayloadEntries(repositoryRoot, slug, kit) {
+async function kitPayloadEntries(repositoryRoot, slug, kit, policy) {
   const label = `Desktop builtin Kit ${slug}`;
   const layouts = kit?.layouts;
   if (!layouts || typeof layouts !== 'object' || Array.isArray(layouts)
@@ -574,13 +617,13 @@ async function kitPayloadEntries(repositoryRoot, slug, kit) {
     const source = `${kitRoot}/${relative}`;
     if (seen.has(source)) continue;
     seen.add(source);
-    await checkedFile(repositoryRoot, source);
+    await checkedFile(repositoryRoot, source, policy);
     entries.push({ source, destination: source });
   }
   return entries;
 }
 
-async function pluginPublicEntries(repositoryRoot, pluginRoot, manifest) {
+async function pluginPublicEntries(repositoryRoot, pluginRoot, manifest, policy) {
   const assets = manifest?.['ce-editor']?.assets;
   if (assets === undefined) return [];
   if (!assets || typeof assets !== 'object' || Array.isArray(assets)
@@ -598,7 +641,7 @@ async function pluginPublicEntries(repositoryRoot, pluginRoot, manifest) {
     const source = `${pluginRoot}/${relative}`;
     let directory;
     try {
-      directory = await checkedPath(repositoryRoot, source);
+      directory = await checkedPath(repositoryRoot, source, policy);
     } catch (error) {
       throw new Error(`Desktop plugin public asset root is invalid: ${error.message}`);
     }
@@ -610,10 +653,10 @@ async function pluginPublicEntries(repositoryRoot, pluginRoot, manifest) {
   return entries;
 }
 
-async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames) {
+async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames, policy) {
   const entries = [];
   const pluginsRoot = `kits/${slug}/plugins`;
-  const pluginsDirectory = await checkedPath(repositoryRoot, pluginsRoot);
+  const pluginsDirectory = await checkedPath(repositoryRoot, pluginsRoot, policy);
   const pluginDirectories = (await readdir(pluginsDirectory, { withFileTypes: true }))
     .filter((entry) => entry.isDirectory())
     .map((entry) => entry.name)
@@ -622,7 +665,7 @@ async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames
   for (const plugin of pluginDirectories) {
     const pluginRoot = `${pluginsRoot}/${plugin}`;
     const packageSource = `${pluginRoot}/package.json`;
-    const packageFile = await checkedFile(repositoryRoot, packageSource);
+    const packageFile = await checkedFile(repositoryRoot, packageSource, policy);
     const manifest = await readJsonManifest(packageFile, `Desktop builtin plugin ${plugin}`);
     if (typeof manifest?.name !== 'string' || manifest.name.length === 0) {
       throw new Error(`Desktop builtin plugin ${plugin} must declare a package name`);
@@ -653,20 +696,23 @@ async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames
       })
       .sort((left, right) => String(left).localeCompare(String(right)));
     entries.push({ source: packageSource, destination: packageSource });
-    entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, manifest.main, 'main'));
+    entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, manifest.main, 'main', policy));
     for (const entry of panelEntries) {
-      entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, entry, 'panel'));
+      entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, entry, 'panel', policy));
     }
-    entries.push(...await pluginPublicEntries(repositoryRoot, pluginRoot, manifest));
+    entries.push(...await pluginPublicEntries(repositoryRoot, pluginRoot, manifest, policy));
   }
   return entries;
 }
 
-async function builtinKitEntries(repositoryRoot) {
+async function builtinKitEntries(repositoryRoot, policy) {
   const entries = [];
-  for (const { slug } of BUILTIN_KITS) {
+  for (const descriptor of policy.builtin) {
+    const { slug } = descriptor;
     const packageSource = `kits/${slug}/package.json`;
-    const packageFile = await checkedFile(repositoryRoot, packageSource);
+    const manifestSource = `kits/${slug}/kit.json`;
+    const packageFile = await checkedFile(repositoryRoot, packageSource, policy);
+    await checkedFile(repositoryRoot, manifestSource, policy);
     const manifest = await readJsonManifest(packageFile, `Desktop builtin Kit ${slug} package.json`);
     const kit = manifest?.['ce-editor']?.kit;
     if (!kit || typeof kit !== 'object' || Array.isArray(kit)) {
@@ -674,8 +720,16 @@ async function builtinKitEntries(repositoryRoot) {
     }
     const pluginNames = readKitPluginNames(kit, `Desktop builtin Kit ${slug}`);
     entries.push({ source: packageSource, destination: packageSource });
-    entries.push(...await kitPayloadEntries(repositoryRoot, slug, kit));
-    entries.push(...await builtinKitPluginEntries(repositoryRoot, slug, pluginNames));
+    entries.push({ source: manifestSource, destination: manifestSource });
+    entries.push(...await kitPayloadEntries(repositoryRoot, slug, kit, policy));
+    for (const resource of descriptor.resources ?? []) {
+      const relative = manifestRelativePath(resource, `Desktop builtin Kit ${slug} resource`);
+      const source = `kits/${slug}/${relative}`;
+      const sourcePath = await checkedPath(repositoryRoot, source, policy);
+      const info = await lstat(sourcePath);
+      entries.push({ source, destination: source, recursive: info.isDirectory() });
+    }
+    entries.push(...await builtinKitPluginEntries(repositoryRoot, slug, pluginNames, policy));
   }
   return entries;
 }
@@ -701,7 +755,7 @@ async function expandTree(repositoryRoot, sourceRoot, destinationRoot, files) {
   }
 }
 
-async function createCopyPlan({ repositoryRoot, outputRoot, entries }) {
+async function createCopyPlan({ repositoryRoot, outputRoot, entries, policy }) {
   if (!Array.isArray(entries)) throw new TypeError('Desktop copy entries must be an array');
   const files = [];
   for (const entry of entries) {
@@ -710,8 +764,8 @@ async function createCopyPlan({ repositoryRoot, outputRoot, entries }) {
     }
     const sourceRelative = validateRelative(entry.source, 'Desktop source');
     const destinationRelative = validateRelative(entry.destination, 'Desktop destination');
-    rejectNonBuiltinKit(sourceRelative);
-    const source = await checkedPath(repositoryRoot, sourceRelative);
+    rejectNonBuiltinKit(sourceRelative, policy);
+    const source = await checkedPath(repositoryRoot, sourceRelative, policy);
     const destination = path.resolve(outputRoot, destinationRelative);
     if (!inside(outputRoot, destination)) throw new Error('Desktop destination is outside its output root');
     const info = await lstat(source);
@@ -774,15 +828,55 @@ async function canonicalRoots(repositoryRoot, outputRoot) {
   return { root, output };
 }
 
-export async function stageDesktopFiles({ repositoryRoot, outputRoot, entries }) {
+export async function stageDesktopFiles({ repositoryRoot, outputRoot, entries, descriptors }) {
   const { root, output } = await canonicalRoots(repositoryRoot, outputRoot);
-  const files = await createCopyPlan({ repositoryRoot: root, outputRoot: output, entries });
+  const policy = createDescriptorPolicy(descriptors);
+  const files = await createCopyPlan({ repositoryRoot: root, outputRoot: output, entries, policy });
   await mkdir(output, { recursive: true });
   return copyPlan(output, files);
 }
 
-export async function buildDesktop({ repositoryRoot, outputRoot }) {
+export async function stageBuiltinKit({
+  repositoryRoot,
+  outputRoot,
+  descriptor,
+}) {
+  if (descriptor?.distribution !== 'builtin') {
+    throw new Error('Desktop builtin staging rejects market Kit descriptors');
+  }
   const { root, output } = await canonicalRoots(repositoryRoot, outputRoot);
+  const policy = createDescriptorPolicy([descriptor], { requireDefault: false });
+  if (policy.builtin.length !== 1) throw new Error('Desktop Kit staging requires one builtin descriptor');
+  const kitRelative = `kits/${descriptor.slug}`;
+  const kitDirectory = await checkedPath(root, kitRelative, policy);
+  const kitInfo = await lstat(kitDirectory);
+  if (kitInfo.isSymbolicLink() || !kitInfo.isDirectory()) {
+    throw new Error(`Desktop builtin Kit ${descriptor.slug} must be a physical directory`);
+  }
+  const canonicalKitDirectory = await realpath(kitDirectory);
+  const project = await validateKit(kitDirectory);
+  if (project?.directory !== canonicalKitDirectory || !Array.isArray(project.payload)) {
+    throw new Error(`Desktop builtin Kit ${descriptor.slug} validated payload is invalid`);
+  }
+  const entries = project.payload.map((file) => ({
+    source: portable(path.relative(root, file.absolutePath)),
+    destination: `${kitRelative}/${file.archivePath}`,
+  }));
+  for (const resource of descriptor.resources ?? []) {
+    const relative = manifestRelativePath(resource, `Desktop builtin Kit ${descriptor.slug} resource`);
+    const source = `${kitRelative}/${relative}`;
+    const sourcePath = await checkedPath(root, source, policy);
+    const info = await lstat(sourcePath);
+    entries.push({ source, destination: source, recursive: info.isDirectory() });
+  }
+  const files = await createCopyPlan({ repositoryRoot: root, outputRoot: output, entries, policy });
+  await mkdir(output, { recursive: true });
+  return copyPlan(output, files);
+}
+
+export async function buildDesktop({ repositoryRoot, outputRoot, descriptors }) {
+  const { root, output } = await canonicalRoots(repositoryRoot, outputRoot);
+  const policy = createDescriptorPolicy(descriptors);
   const distRoot = path.join(root, 'dist');
   if (!inside(distRoot, output)) {
     throw new Error('Desktop runtime output must be a child of the repository dist directory');
@@ -791,17 +885,19 @@ export async function buildDesktop({ repositoryRoot, outputRoot }) {
   if (inside(desktopDist, output) || inside(output, desktopDist) || output === desktopDist) {
     throw new Error('Desktop bundle and runtime output directories must not overlap');
   }
-  const mainEntry = await checkedFile(root, 'scripts/electron.mjs');
-  const frameworkEntry = await checkedFile(root, 'packages/desktop/src/framework.mjs');
+  const mainEntry = await checkedFile(root, 'scripts/electron.mjs', policy);
+  const frameworkEntry = await checkedFile(root, 'packages/desktop/src/framework.mjs', policy);
   const desktopFiles = await createCopyPlan({
     repositoryRoot: root,
     outputRoot: desktopDist,
     entries: DESKTOP_ASSETS,
+    policy,
   });
   const runtimeFiles = await createCopyPlan({
     repositoryRoot: root,
     outputRoot: output,
-    entries: await runtimeEntries(root),
+    entries: await runtimeEntries(root, policy),
+    policy,
   });
 
   await rm(desktopDist, { recursive: true, force: true });

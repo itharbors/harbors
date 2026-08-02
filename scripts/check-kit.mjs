@@ -4,15 +4,22 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { checkOfficialKit } from './lib/kit-check.mjs';
-import { OFFICIAL_KIT_SLUGS } from './lib/kit-monorepo.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('..', import.meta.url));
-const USAGE = 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave> --output-directory <absolute-directory>\n';
+const USAGE = 'Usage: node scripts/check-kit.mjs <kit-slug> --output-directory <absolute-directory>\n';
+
+// Matches C0 controls (U+0000-U+001F), DEL (U+007F), C1 controls (U+0080-U+009F),
+// CR, LF, and the Unicode line/paragraph separators. Built from an ASCII string so
+// the source file contains no literal control bytes.
+const CONTROL_CHARACTERS = new RegExp(
+  '[\\r\\n\\u2028\\u2029\\u0000-\\u001f\\u007f-\\u009f]',
+  'gu',
+);
 
 function sanitizeErrorMessage(error) {
   const message = error instanceof Error ? error.message : String(error);
   return message
-    .replace(/[\r\n\u2028\u2029\u0000-\u001f\u007f-\u009f]/gu, ' ')
+    .replace(CONTROL_CHARACTERS, ' ')
     .replace(/\s+/gu, ' ')
     .trim() || 'Unknown error';
 }
@@ -31,7 +38,6 @@ export async function runCheckKitCli(
     typeof slug !== 'string'
     || typeof option !== 'string'
     || typeof outputDirectory !== 'string'
-    || !OFFICIAL_KIT_SLUGS.includes(slug)
     || option !== '--output-directory'
     || !path.isAbsolute(outputDirectory)
   ) {

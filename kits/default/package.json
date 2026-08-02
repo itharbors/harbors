@@ -1,6 +1,15 @@
 {
   "name": "@itharbors/kit-default",
   "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "plugins/*"
+  ],
+  "scripts": {
+    "build": "node ../../packages/kit-cli/dist/cli.js build .",
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate ."
+  },
   "ce-editor": {
     "kit": {
       "menuRoot": {
@@ -22,6 +31,18 @@
         "@itharbors/status-bar",
         "@itharbors/title-bar"
       ]
+    }
+  },
+  "harbors": {
+    "distribution": "builtin",
+    "default": true,
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "默认 Kit，提供基础插件与布局" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test:kit"
     }
   }
 }

@@ -36,6 +36,15 @@ describe('ApplicationRuntime', () => {
     return { name, path: pluginDir, kits: [`${name}-kit`] };
   }
 
+  function pluginPathRoots() {
+    return {
+      applicationData: root,
+      data: path.join(root, 'runtime', 'data'),
+      cache: path.join(root, 'runtime', 'cache'),
+      temp: path.join(root, 'runtime', 'temp'),
+    };
+  }
+
   it('loads application contributions without a Session and serves menu requests', async () => {
     const plugin = createPlugin('background', '@scope/background', `
       editor.plugin.define({
@@ -50,12 +59,26 @@ describe('ApplicationRuntime', () => {
       ],
       message: { request: { ping: ['ping'] } },
     });
-    const runtime = new ApplicationRuntime({ plugins: [plugin], hostMode: 'desktop' });
+    plugin.legacyDataDirectories = ['private-legacy-name'];
+    const runtime = new ApplicationRuntime({
+      plugins: [plugin],
+      hostMode: 'desktop',
+      pluginPathRoots: pluginPathRoots(),
+    });
+    const emitted: unknown[] = [];
+    runtime.subscribe((event) => emitted.push(event.bootstrap));
 
     const bootstrap = await runtime.start();
 
     expect(bootstrap.phase).toBe('ready');
     expect(JSON.stringify(bootstrap.menu.tree)).toContain('tools/ping');
+    expect(bootstrap.plugins[0]).toEqual({
+      name: '@scope/background',
+      path: plugin.path,
+      kits: ['@scope/background-kit'],
+      status: 'running',
+    });
+    expect(JSON.stringify([bootstrap, ...emitted])).not.toContain('private-legacy-name');
     await expect(runtime.request('@scope/background', 'ping')).resolves.toBe('pong');
     await expect(runtime.triggerMenu('tools/ping')).resolves.toBe('pong');
     await runtime.dispose();
@@ -82,7 +105,9 @@ describe('ApplicationRuntime', () => {
     const healthy = createPlugin('healthy', '@scope/healthy', `
       editor.plugin.define({ methods: { status() { return 'healthy'; } } });
     `, { message: { request: { status: ['status'] } } });
-    const runtime = new ApplicationRuntime({ plugins: [failing, healthy], hostMode: 'web' });
+    const runtime = new ApplicationRuntime({
+      plugins: [failing, healthy], hostMode: 'web', pluginPathRoots: pluginPathRoots(),
+    });
 
     const bootstrap = await runtime.start();
 
@@ -115,7 +140,9 @@ describe('ApplicationRuntime', () => {
         methods: {},
       });
     `);
-    const runtime = new ApplicationRuntime({ plugins: [healthy, failing], hostMode: 'desktop' });
+    const runtime = new ApplicationRuntime({
+      plugins: [healthy, failing], hostMode: 'desktop', pluginPathRoots: pluginPathRoots(),
+    });
 
     const bootstrap = await runtime.start();
 
@@ -145,7 +172,9 @@ describe('ApplicationRuntime', () => {
         methods: {},
       });
     `);
-    const runtime = new ApplicationRuntime({ plugins: [first, second], hostMode: 'desktop' });
+    const runtime = new ApplicationRuntime({
+      plugins: [first, second], hostMode: 'desktop', pluginPathRoots: pluginPathRoots(),
+    });
     const phases: string[] = [];
     runtime.subscribe((event) => phases.push(event.bootstrap.phase));
 
@@ -170,7 +199,9 @@ describe('ApplicationRuntime', () => {
     });
     fs.mkdirSync(path.join(invalid.path, 'panel.center', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(invalid.path, 'panel.center', 'dist', 'index.html'), '<html></html>');
-    const runtime = new ApplicationRuntime({ plugins: [invalid], hostMode: 'desktop' });
+    const runtime = new ApplicationRuntime({
+      plugins: [invalid], hostMode: 'desktop', pluginPathRoots: pluginPathRoots(),
+    });
 
     const bootstrap = await runtime.start();
 

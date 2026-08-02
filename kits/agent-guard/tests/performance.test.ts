@@ -15,6 +15,36 @@ const roots: string[] = [];
 afterEach(() => roots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true })));
 
 describe('Agent Guard bounded synthetic pipeline', () => {
+  it('promotes multi-series history to stay within the response point budget', async () => {
+    const store = await createAgentGuardStore({ hostMode: 'web' });
+    const start = Date.parse('2026-08-01T00:00:00.000Z');
+    await store.history.appendCoverage([{
+      schemaVersion: 1,
+      start,
+      end: start + 24 * 60 * 60_000,
+      collectorEpoch: 1,
+      status: 'complete',
+      reason: null,
+      endpoints: [
+        { agent: 'claude', provider: 'custom', hostname: 'relay.example.test', enabled: true },
+        { agent: 'codex', provider: 'custom', hostname: 'relay.example.test', enabled: true },
+      ],
+    }]);
+
+    const history = await store.history.query({
+      from: start,
+      to: start + 24 * 60 * 60_000,
+      domain: 'network',
+      agents: ['claude', 'codex'],
+      hostnames: ['relay.example.test'],
+      preferredBucket: 'minute',
+    });
+
+    expect(history.actualBucket).toBe('hour');
+    expect(history.series.flatMap((item) => item.points).length).toBeLessThanOrEqual(2_000);
+    expect(Buffer.byteLength(JSON.stringify(history))).toBeLessThan(2 * 1024 * 1024);
+  });
+
   it('streams 100,000 observations without retaining the input or exceeding the storage cap', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-guard-performance-'));
     roots.push(root);
@@ -30,7 +60,7 @@ describe('Agent Guard bounded synthetic pipeline', () => {
     const dns = new DnsHistory();
     dns.update('relay.example.test', ['203.0.113.8'], now, 60 * 60_000);
     const policy = normalizePolicy(JSON.parse(fs.readFileSync(
-      path.resolve(__dirname, '../resources/policy-v1.json'), 'utf8',
+      path.resolve(__dirname, '../plugins/agent-guard-background/resources/policy-v1.json'), 'utf8',
     )));
     const engine = new PolicyEngine(policy);
     const configuration = {

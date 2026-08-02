@@ -16,18 +16,19 @@ test('the root Kit check command bootstraps Kit Core and Kit CLI before loading 
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/server && node scripts/check-kit.mjs',
   );
 });
 
 function expectedCommands({ artifactName, slug, outputDirectory }) {
   const artifactPath = path.join(outputDirectory, artifactName);
+  const kitDirectory = `/runs/${slug}/repository/kits/${slug}`;
   return [
-    ['npm', ['run', 'build', '-w', `@itharbors/kit-${slug}`]],
-    ['npm', ['test', '-w', `@itharbors/kit-${slug}`]],
-    [process.execPath, ['packages/kit-cli/dist/cli.js', 'validate', `kits/${slug}`]],
+    [process.execPath, ['packages/kit-cli/dist/cli.js', 'build', kitDirectory]],
+    [process.execPath, ['packages/kit-cli/dist/cli.js', 'test', kitDirectory]],
+    [process.execPath, ['packages/kit-cli/dist/cli.js', 'validate', kitDirectory]],
     [process.execPath, [
-      'packages/kit-cli/dist/cli.js', 'pack', `kits/${slug}`, '--output', artifactPath,
+      'packages/kit-cli/dist/cli.js', 'pack', kitDirectory, '--output', artifactPath,
     ]],
     [process.execPath, ['packages/kit-cli/dist/cli.js', 'inspect', artifactPath, '--json']],
   ];
@@ -39,12 +40,18 @@ async function checkCommandSequence({
 }) {
   const outputDirectory = await mkdtemp(path.join(tmpdir(), `kit-check-${slug}-`));
   const calls = [];
+  const removed = [];
   try {
     const result = await checkOfficialKit({
       repositoryRoot,
       slug,
       outputDirectory,
       runCommand: async (command, args, options) => calls.push([command, args, options]),
+      ensureInstall: async () => ({
+        installRoot: `/runs/${slug}/repository/kits/${slug}`,
+        runRoot: `/runs/${slug}`,
+      }),
+      removeDirectory: async (directory) => removed.push(directory),
     });
     assert.equal(result.artifactPath, path.join(outputDirectory, artifactName));
     assert.equal(result.kit.slug, slug);
@@ -53,6 +60,7 @@ async function checkCommandSequence({
       expectedCommands({ artifactName, slug, outputDirectory })
         .map(([command, args]) => [command, args, { cwd: repositoryRoot }]),
     );
+    assert.deepEqual(removed, [`/runs/${slug}`]);
   } finally {
     await rm(outputDirectory, { recursive: true, force: true });
   }
@@ -67,7 +75,7 @@ test('checks MySQL with its exact affected build, test, pack, and inspect sequen
 test('checks Agent Guard with its macOS-only build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'agent-guard',
-    artifactName: 'kit-agent-guard-0.1.0-preview.1-darwin-arm64.hkit',
+    artifactName: 'kit-agent-guard-0.1.0-preview.2-darwin-arm64.hkit',
   });
 });
 
@@ -121,8 +129,9 @@ test('rejects an unknown slug before running a command', async () => {
       slug: 'unknown',
       outputDirectory: path.join(tmpdir(), 'kit-check-unknown'),
       runCommand: async (...args) => calls.push(args),
+      ensureInstall: async () => { throw new Error('must not install'); },
     }),
-    /unknown official Kit slug/i,
+    /not trusted for market publication/u,
   );
   assert.deepEqual(calls, []);
 });
@@ -138,6 +147,7 @@ test('rejects a relative output directory before running commands or creating it
         slug: 'sqlite',
         outputDirectory,
         runCommand: async (...args) => calls.push(args),
+        ensureInstall: async () => { throw new Error('must not install'); },
       }),
       /outputDirectory must be a non-empty absolute path/u,
     );
@@ -159,6 +169,11 @@ test('normalizes an absolute output directory before every artifact operation', 
       slug: 'mysql',
       outputDirectory,
       runCommand: async (command, args, options) => calls.push([command, args, options]),
+      ensureInstall: async () => ({
+        installRoot: '/runs/mysql/repository/kits/mysql',
+        runRoot: '/runs/mysql',
+      }),
+      removeDirectory: async () => undefined,
     });
     const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.1-any-any.hkit');
     assert.equal(result.artifactPath, artifactPath);
@@ -166,6 +181,29 @@ test('normalizes an absolute output directory before every artifact operation', 
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('preserves operation and run-root cleanup failures together', async (t) => {
+  const outputDirectory = await mkdtemp(path.join(tmpdir(), 'kit-check-cleanup-'));
+  t.after(() => rm(outputDirectory, { recursive: true, force: true }));
+  await assert.rejects(
+    checkOfficialKit({
+      repositoryRoot,
+      slug: 'mysql',
+      outputDirectory,
+      ensureInstall: async () => ({
+        installRoot: '/runs/mysql/repository/kits/mysql',
+        runRoot: '/runs/mysql',
+      }),
+      runCommand: async () => { throw new Error('operation failed'); },
+      removeDirectory: async () => { throw new Error('cleanup failed'); },
+    }),
+    (error) => {
+      assert.ok(error instanceof AggregateError);
+      assert.deepEqual(error.errors.map((item) => item.message), ['operation failed', 'cleanup failed']);
+      return true;
+    },
+  );
 });
 
 test('runCheckedCommand rejects non-zero exits, signals, error events, and invalid spawn input', async () => {
@@ -207,7 +245,7 @@ test('the CLI returns Usage for non-array arguments and non-string output direct
       { checkOfficialKit: async () => { throw new Error('must not run'); } },
     );
     assert.equal(code, 2);
-    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave> --output-directory <absolute-directory>\n');
+    assert.equal(stderr.join(''), 'Usage: node scripts/check-kit.mjs <kit-slug> --output-directory <absolute-directory>\n');
   }
 });
 

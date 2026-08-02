@@ -4,8 +4,8 @@
   "type": "module",
   "main": "./main/dist/index.js",
   "dependencies": {
-    "@itharbors/mysql-contracts": "0.0.1",
-    "@itharbors/relationship-graph": "0.0.1"
+    "@itharbors/mysql-contracts": "file:../../packages/contracts",
+    "@itharbors/relationship-graph": "file:../../packages/relationship-graph"
   },
   "ce-editor": {
     "contribute": {

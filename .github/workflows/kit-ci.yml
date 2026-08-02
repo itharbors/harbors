@@ -11,11 +11,39 @@ permissions:
   contents: read
 
 jobs:
+  kit-change-boundary:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'kit-change/')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full comparison history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Enforce declared Kit diff boundary
+        shell: bash
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$HEAD_REF" =~ ^kit-change/([a-z0-9]+(-[a-z0-9]+)*)/(feature|bug|docs|refactor|optimize|test|chore)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+            echo 'Kit change branch name is not canonical' >&2
+            exit 1
+          fi
+          declared_kit="${BASH_REMATCH[1]}"
+          test -f "kits/$declared_kit/kit.json"
+          npm run kit:boundary -- "$declared_kit" --base "$BASE_SHA" --head "$HEAD_SHA"
+
   select:
     runs-on: ubuntu-latest
     outputs:
       matrix-json: ${{ steps.selection.outputs.matrix-json }}
       has-kits: ${{ steps.selection.outputs.has-kits }}
+      base-sha: ${{ steps.selection.outputs.base-sha }}
+      head-sha: ${{ steps.selection.outputs.head-sha }}
     steps:
       - name: Checkout full comparison history
         uses: actions/checkout@v6
@@ -86,7 +114,10 @@ jobs:
           done <<< "$selector_output"
           test -n "$matrix_json"
           test -n "$has_kits"
-          printf 'matrix-json=%s\nhas-kits=%s\n' "$matrix_json" "$has_kits" >> "$GITHUB_OUTPUT"
+          git cat-file -e "$base_sha^{commit}"
+          git cat-file -e "$HEAD_SHA^{commit}"
+          printf 'matrix-json=%s\nhas-kits=%s\nbase-sha=%s\nhead-sha=%s\n' \
+            "$matrix_json" "$has_kits" "$base_sha" "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
   check-kit:
     needs: select
@@ -100,6 +131,7 @@ jobs:
       - name: Checkout selected revision
         uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Setup Node.js
@@ -111,9 +143,14 @@ jobs:
       - name: Install locked dependencies
         run: npm ci
 
+      - name: Build Kit lifecycle dependencies
+        run: npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/server
+
+      - name: Audit selected Kit architecture
+        run: npm run kits:boundary -- "${{ matrix.kit }}"
+
       - name: Validate selected Kit
         shell: bash
         run: |
           set -euo pipefail
-          output_directory="$RUNNER_TEMP/kit-${{ matrix.kit }}"
-          npm run kit:check -- "${{ matrix.kit }}" --output-directory "$output_directory"
+          node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"

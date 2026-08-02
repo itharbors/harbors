@@ -20,6 +20,8 @@
   },
   "dependencies": {
     "@itharbors/kit-core": "^0.0.1",
+    "esbuild": "^0.28.0",
+    "typescript": "^5.9.3",
     "yauzl": "^3.4.0",
     "yazl": "^3.3.1"
   },

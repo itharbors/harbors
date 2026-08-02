@@ -16,7 +16,8 @@ npx --no-install asar list \
 ```
 
 确认可执行文件为 `arm64`、`app.asar` 含桌面入口而不含产品 Kit、
-`Contents/Resources/runtime/kits` 仅含 `default`，并确认原生 `better-sqlite3` 位于 asar 解包位置。
+`Contents/Resources/runtime/kits` 精确包含 descriptor 发现的 builtin 集合且不含 market Kit，
+并确认原生 `better-sqlite3` 位于 asar 解包位置。
 An unsigned local package supports isolated structural and runtime-smoke acceptance only; it is not signing, notarization, update, or Release acceptance.
 
 启动目录包必须隔离真实状态并关闭更新检查：
@@ -28,7 +29,7 @@ HARBORS_DISABLE_UPDATE_CHECKS=1 \
   --user-data-dir="$acceptance_user_data"
 ```
 
-等待 Framework health、Default Kit/Kit Manager 可用；通过真实本地 installer 安装临时 fixture Kit，
+等待 Framework health、descriptor 声明的默认 Kit 与 Kit Manager 可用；通过真实本地 installer 安装临时 fixture Kit，
 正常退出并重启后确认状态持久化。headless 验收可向主进程发送 `SIGTERM` 或 `SIGINT`；它们会进入与托盘
 “Quit ITHARBORS”相同的 `app.quit()` 有序关闭路径，而不是强制终止。不要复用真实 userData 或使用 `kill -9`。仅在确认变量仍指向这次
 `mktemp -d` 创建的目录后删除它。签名、Gatekeeper、stapling 与更新验收只能针对 GitHub 签名产物。

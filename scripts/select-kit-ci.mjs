@@ -4,7 +4,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { selectKitSlugs } from './lib/kit-ci-selection.mjs';
-import { loadKitPolicy } from './lib/kit-monorepo.mjs';
+import { discoverRepositoryKits } from './lib/repository-kits.mjs';
 
 const execFileAsync = promisify(execFile);
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
@@ -82,14 +82,13 @@ async function main(args) {
     return 2;
   }
   try {
-    const slugs = selectKitSlugs(await changedPaths(args[0], args[1]));
-    const policy = slugs.length === 0
-      ? null
-      : await loadKitPolicy({ repositoryRoot: process.cwd() });
-    const matrix = {
-      include: slugs.map((kit) => ({ kit, runner: policy.kits[kit].runner })),
-    };
-    process.stdout.write(`MATRIX_JSON=${JSON.stringify(matrix)}\n`);
+    const repositoryRoot = process.cwd();
+    const paths = await changedPaths(args[0], args[1]);
+    const descriptors = await discoverRepositoryKits({ repositoryRoot });
+    const slugs = selectKitSlugs(paths, descriptors);
+    const bySlug = new Map(descriptors.map((descriptor) => [descriptor.slug, descriptor]));
+    const include = slugs.map((slug) => ({ kit: slug, runner: bySlug.get(slug).ciRunner }));
+    process.stdout.write(`MATRIX_JSON=${JSON.stringify({ include })}\n`);
     process.stdout.write(`HAS_KITS=${slugs.length > 0}\n`);
     return 0;
   } catch (error) {

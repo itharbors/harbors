@@ -1,19 +1,18 @@
 #!/usr/bin/env node
 
 import {
+  copyFile,
   mkdir,
   rm,
   writeFile,
 } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
-  buildSpdx,
   canonicalJson,
   inspectKit,
-  packKit,
-  validateKit,
 } from '@itharbors/kit-cli';
 
 import {
@@ -21,12 +20,14 @@ import {
   deriveArtifactName,
 } from './lib/kit-publish/metadata.mjs';
 import { aggregateKitRegistry } from './lib/kit-publish/registry.mjs';
+import { readEmbeddedSpdx } from './lib/kit-publish/archive-metadata.mjs';
 import { GitHubArtifactAttestationVerifier } from './lib/kit-registry/github-attestation.mjs';
 
 const USAGE = [
   'Usage:',
   '  node scripts/kit-publish.mjs prepare \\',
-  '    --kit-directory <directory> --output-directory <directory> \\',
+  '    --kit-artifact <file> --output-directory <directory> \\',
+  '    --kit-id <id> --kit-version <version> --kit-channel <channel> \\',
   '    --repository <owner/repo> --commit <sha> --workflow <workflow@ref> \\',
   '    --signer-workflow <workflow@ref> \\',
   '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
@@ -38,8 +39,11 @@ const USAGE = [
 ].join('\n');
 
 const PREPARE_OPTIONS = [
-  'kit-directory',
+  'kit-artifact',
   'output-directory',
+  'kit-id',
+  'kit-version',
+  'kit-channel',
   'repository',
   'commit',
   'workflow',
@@ -80,32 +84,45 @@ function parseOptions(args, allowed) {
 }
 
 async function prepare(options) {
-  const project = await validateKit(options['kit-directory']);
-  const artifactName = deriveArtifactName(project.manifest);
+  const kitArtifact = path.resolve(options['kit-artifact']);
+  const inspected = await inspectKit({ archive: kitArtifact });
+  const artifactName = deriveArtifactName(inspected.manifest);
+  if (path.basename(kitArtifact) !== artifactName) {
+    throw new Error(`Kit artifact must use canonical artifact name ${artifactName}`);
+  }
+  for (const [field, actual, expected] of [
+    ['id', inspected.manifest.id, options['kit-id']],
+    ['version', inspected.manifest.version, options['kit-version']],
+    ['channel', inspected.manifest.channel, options['kit-channel']],
+  ]) {
+    if (actual !== expected) {
+      throw new Error(`Kit artifact ${field} does not match expected ${field}`);
+    }
+  }
+  const spdx = await readEmbeddedSpdx(kitArtifact);
+  const metadata = createKitPublicationMetadata({
+    manifest: inspected.manifest,
+    sha256: inspected.sha256,
+    size: inspected.compressedSize,
+    repository: options.repository,
+    commit: options.commit,
+    workflow: options.workflow,
+    signerWorkflow: options['signer-workflow'],
+    ref: options.ref,
+    tag: options.tag,
+    label: options.label,
+    summary: options.summary,
+  });
+  if (metadata.artifactName !== artifactName) {
+    throw new Error('Inspected artifact identity changed during metadata creation');
+  }
   const outputDirectory = path.resolve(options['output-directory']);
   let ownsOutputDirectory = false;
   try {
     await mkdir(outputDirectory, { mode: 0o700 });
     ownsOutputDirectory = true;
     const artifactPath = path.join(outputDirectory, artifactName);
-    await packKit({ directory: project.directory, output: artifactPath });
-    const inspected = await inspectKit({ archive: artifactPath });
-    const metadata = createKitPublicationMetadata({
-      manifest: inspected.manifest,
-      sha256: inspected.sha256,
-      size: inspected.compressedSize,
-      repository: options.repository,
-      commit: options.commit,
-      workflow: options.workflow,
-      signerWorkflow: options['signer-workflow'],
-      ref: options.ref,
-      tag: options.tag,
-      label: options.label,
-      summary: options.summary,
-    });
-    if (metadata.artifactName !== artifactName) {
-      throw new Error('Packed artifact identity changed during inspection');
-    }
+    await copyFile(kitArtifact, artifactPath, fsConstants.COPYFILE_EXCL);
     await Promise.all([
       writeFile(
         path.join(outputDirectory, 'release.json'),
@@ -119,7 +136,7 @@ async function prepare(options) {
       ),
       writeFile(
         path.join(outputDirectory, 'sbom.spdx.json'),
-        canonicalJson(await buildSpdx(project)),
+        canonicalJson(spdx),
         { flag: 'wx', mode: 0o600 },
       ),
     ]);

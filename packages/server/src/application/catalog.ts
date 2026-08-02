@@ -1,5 +1,6 @@
 import { readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { parseKitPackageManifest, parseRepositoryKitPackage, type KitPermission } from '@itharbors/kit-core';
 
 import type { AssemblyConfig } from '../assembly/config';
 import { listAssemblyKitSources } from '../assembly/kit-catalog';
@@ -14,6 +15,8 @@ interface KitStartupDeclaration {
   name: string;
   path: string;
   startupPlugins: string[];
+  legacyDataDirectories: string[];
+  permissions: KitPermission[];
 }
 
 export async function discoverApplicationPlugins(
@@ -62,13 +65,33 @@ export async function discoverApplicationPlugins(
       }
       const existing = byName.get(pluginName);
       if (!existing) {
-        const spec = { name: pluginName, path: pluginPath, kits: [declaration.name] };
+        const spec = {
+          name: pluginName,
+          path: pluginPath,
+          kits: [declaration.name],
+          ...(declaration.permissions.length > 0
+            ? { permissions: [...declaration.permissions] }
+            : {}),
+          ...(declaration.legacyDataDirectories.length > 0
+            ? { legacyDataDirectories: [...declaration.legacyDataDirectories] }
+            : {}),
+        };
         byName.set(pluginName, spec);
         plugins.push(spec);
         continue;
       }
       if (existing.path === pluginPath) {
         if (!existing.kits.includes(declaration.name)) existing.kits.push(declaration.name);
+        for (const directory of declaration.legacyDataDirectories) {
+          existing.legacyDataDirectories ??= [];
+          if (!existing.legacyDataDirectories.includes(directory)) {
+            existing.legacyDataDirectories.push(directory);
+          }
+        }
+        if (existing.permissions || declaration.permissions.length > 0) {
+          existing.permissions = (existing.permissions ?? [])
+            .filter((permission) => declaration.permissions.includes(permission));
+        }
         continue;
       }
 
@@ -166,8 +189,16 @@ async function readKitDeclaration(
     return undefined;
   }
   const startupPlugins = isRecord(startup) ? startup.plugins : undefined;
+  const legacyDataDirectories = readLegacyDataDirectories(
+    manifest as Record<string, unknown>,
+    name,
+    diagnostics,
+  );
+  if (!legacyDataDirectories) return undefined;
+  const permissions = await readKitPermissions(kitPath, name, diagnostics);
+  if (!permissions) return undefined;
   if (startupPlugins === undefined) {
-    return { name, path: kitPath, startupPlugins: [] };
+    return { name, path: kitPath, startupPlugins: [], legacyDataDirectories, permissions };
   }
   if (!isStringArray(startupPlugins) || new Set(startupPlugins).size !== startupPlugins.length) {
     diagnostics.push({
@@ -188,7 +219,48 @@ async function readKitDeclaration(
     });
     return undefined;
   }
-  return { name, path: kitPath, startupPlugins };
+  return { name, path: kitPath, startupPlugins, legacyDataDirectories, permissions };
+}
+
+async function readKitPermissions(
+  kitPath: string,
+  kitName: string,
+  diagnostics: ApplicationDiagnostic[],
+): Promise<KitPermission[] | undefined> {
+  try {
+    const publication = parseKitPackageManifest(JSON.parse(
+      await readFile(path.join(kitPath, 'kit.json'), 'utf8'),
+    ));
+    if (publication.id !== kitName) throw new Error('kit.json id does not match package name');
+    return [...publication.permissions];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: kitName,
+      message: `Kit "${kitName}" permissions are invalid: ${errorMessage(error)}`,
+    });
+    return undefined;
+  }
+}
+
+function readLegacyDataDirectories(
+  manifest: Record<string, unknown>,
+  kitName: string,
+  diagnostics: ApplicationDiagnostic[],
+): string[] | undefined {
+  const harbors = manifest.harbors;
+  if (harbors === undefined) return [];
+  try {
+    return [...parseRepositoryKitPackage(harbors).legacyDataDirectories];
+  } catch (error) {
+    diagnostics.push({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: kitName,
+      message: `Kit "${kitName}" ${errorMessage(error)}`,
+    });
+    return undefined;
+  }
 }
 
 function validateKitShell(kit: Record<string, unknown>): string | undefined {

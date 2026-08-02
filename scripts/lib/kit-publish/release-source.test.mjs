@@ -15,10 +15,10 @@ const policy = Object.freeze({
   repository,
   signerWorkflows: [signerWorkflow],
   kits: {
-    csv: { id: '@itharbors/kit-csv', label: 'CSV', summary: 'CSV/TSV 文件浏览、筛选、排序与导出工作台' },
-    mysql: { id: '@itharbors/kit-mysql', label: 'MySQL', summary: 'MySQL database workbench' },
-    notifications: { id: '@itharbors/kit-notifications', label: 'Notifications', summary: 'Notification kit' },
-    sqlite: { id: '@itharbors/kit-sqlite', label: 'SQLite', summary: 'SQLite database workbench' },
+    csv: { id: '@itharbors/kit-csv' },
+    mysql: { id: '@itharbors/kit-mysql' },
+    notifications: { id: '@itharbors/kit-notifications' },
+    sqlite: { id: '@itharbors/kit-sqlite' },
   },
 });
 
@@ -174,9 +174,9 @@ function metadataFor(value) {
   ]);
 }
 
-async function discover({ pages, metadata, refs, calls, verifierOptions, responseFor, requestTimeoutMs } = {}) {
+async function discover({ pages, metadata, refs, calls, verifierOptions, responseFor, requestTimeoutMs, policy: policyOverride } = {}) {
   return discoverTrustedKitReleases({
-    policy,
+    policy: policyOverride ?? policy,
     repository,
     githubToken: 'token',
     fetchImpl: releaseFetch({ pages, metadata, refs, calls, responseFor }),
@@ -322,15 +322,26 @@ test('accepts terminal GitHub Link headers that contain only first and previous 
   }), /Link|trusted/i);
 });
 
-test('requires policy display identity and rejects duplicate trusted Release identities', async () => {
+test('requires non-empty display metadata and rejects duplicate trusted Release identities', async () => {
   const value = values();
-  await assert.rejects(discover({
-    pages: new Map([['1', [releaseRecord(value)]]]),
-    metadata: new Map([
-      [browserAssetUrl(value.tag, 'release.json'), value.release],
-      [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, label: 'Drift' }],
-    ]),
-  }), /policy|identity/i);
+  for (const label of ['', '   ', '\t', '\n']) {
+    await assert.rejects(discover({
+      pages: new Map([['1', [releaseRecord(value)]]]),
+      metadata: new Map([
+        [browserAssetUrl(value.tag, 'release.json'), value.release],
+        [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, label }],
+      ]),
+    }), /label|non-empty/i);
+  }
+  for (const summary of ['', '   ', '\t', '\n']) {
+    await assert.rejects(discover({
+      pages: new Map([['1', [releaseRecord(value)]]]),
+      metadata: new Map([
+        [browserAssetUrl(value.tag, 'release.json'), value.release],
+        [browserAssetUrl(value.tag, 'registry-entry.json'), { ...value.entry, summary }],
+      ]),
+    }), /summary|non-empty/i);
+  }
   await assert.rejects(discover({
     pages: new Map([['1', [releaseRecord(value), releaseRecord(value)]]]),
     metadata: metadataFor(value),
@@ -770,4 +781,144 @@ test('rejects the complete aggregation for metadata drift and failed attestation
     })]]]),
     metadata: metadataFor(valid),
   }), /asset/i);
+});
+
+test('accepts a TraceWeave preview release when its policy identity matches', async () => {
+  const version = '0.1.0-preview.1';
+  const tag = `kit/traceweave/v${version}`;
+  const artifactName = `kit-traceweave-${version}-any-any.hkit`;
+  const manifest = {
+    schemaVersion: 1,
+    id: '@itharbors/kit-traceweave',
+    version,
+    channel: 'preview',
+    publisher: 'itharbors',
+    requires: {
+      harbors: '>=1.0.0 <2.0.0',
+      kitApi: '>=1.0.0 <2.0.0',
+      protocolVersion: 1,
+    },
+    target: { platform: 'any', arch: 'any' },
+    permissions: ['filesystem'],
+    entry: 'package.json',
+  };
+  const entry = {
+    schemaVersion: 1,
+    id: manifest.id,
+    label: 'TraceWeave',
+    publisher: 'itharbors',
+    summary: 'TraceWeave tracing toolkit',
+    channel: 'preview',
+    version,
+    releaseManifestUrl: assetUrl(tag, 'release.json'),
+    permissions: ['filesystem'],
+    source: { repository, tag },
+  };
+  const release = {
+    schemaVersion: 1,
+    id: manifest.id,
+    version,
+    channel: 'preview',
+    publisher: 'itharbors',
+    source: {
+      repository,
+      commit,
+      workflow: `${repository}/.github/workflows/publish-kit.yml@refs/tags/${tag}`,
+      signerWorkflow,
+      attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${digest}`,
+    },
+    assets: [{
+      name: artifactName,
+      url: assetUrl(tag, artifactName),
+      sha256: digest,
+      size: 3179,
+      manifest,
+    }],
+  };
+  const traceweavePolicy = {
+    ...policy,
+    kits: { ...policy.kits, traceweave: { id: '@itharbors/kit-traceweave' } },
+  };
+
+  const result = await discover({
+    pages: new Map([['1', [releaseRecord({ tag, artifactName, entry, release })]]]),
+    metadata: new Map([
+      [browserAssetUrl(tag, 'release.json'), release],
+      [browserAssetUrl(tag, 'registry-entry.json'), entry],
+    ]),
+    policy: traceweavePolicy,
+  });
+
+  assert.equal(result.entries.length, 1);
+  assert.equal(result.entries[0].id, '@itharbors/kit-traceweave');
+});
+
+test('rejects a TraceWeave release whose trusted policy identity mismatches', async () => {
+  const version = '0.1.0-preview.1';
+  const tag = `kit/traceweave/v${version}`;
+  const artifactName = `kit-traceweave-${version}-any-any.hkit`;
+  const manifest = {
+    schemaVersion: 1,
+    id: '@itharbors/kit-traceweave',
+    version,
+    channel: 'preview',
+    publisher: 'itharbors',
+    requires: {
+      harbors: '>=1.0.0 <2.0.0',
+      kitApi: '>=1.0.0 <2.0.0',
+      protocolVersion: 1,
+    },
+    target: { platform: 'any', arch: 'any' },
+    permissions: ['filesystem'],
+    entry: 'package.json',
+  };
+  const entry = {
+    schemaVersion: 1,
+    id: manifest.id,
+    label: 'TraceWeave',
+    publisher: 'itharbors',
+    summary: 'TraceWeave tracing toolkit',
+    channel: 'preview',
+    version,
+    releaseManifestUrl: assetUrl(tag, 'release.json'),
+    permissions: ['filesystem'],
+    source: { repository, tag },
+  };
+  const release = {
+    schemaVersion: 1,
+    id: manifest.id,
+    version,
+    channel: 'preview',
+    publisher: 'itharbors',
+    source: {
+      repository,
+      commit,
+      workflow: `${repository}/.github/workflows/publish-kit.yml@refs/tags/${tag}`,
+      signerWorkflow,
+      attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${digest}`,
+    },
+    assets: [{
+      name: artifactName,
+      url: assetUrl(tag, artifactName),
+      sha256: digest,
+      size: 3179,
+      manifest,
+    }],
+  };
+
+  const mismatchedPolicy = {
+    ...policy,
+    kits: { ...policy.kits, traceweave: { id: '@itharbors/kit-other' } },
+  };
+
+  // The generic tag syntax parses, but the trusted identity gate still rejects
+  // descriptor/registry identity drift.
+  await assert.rejects(discover({
+    pages: new Map([['1', [releaseRecord({ tag, artifactName, entry, release })]]]),
+    metadata: new Map([
+      [browserAssetUrl(tag, 'release.json'), release],
+      [browserAssetUrl(tag, 'registry-entry.json'), entry],
+    ]),
+    policy: mismatchedPolicy,
+  }), /policy identity/i);
 });

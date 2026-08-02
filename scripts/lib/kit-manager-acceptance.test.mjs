@@ -277,6 +277,12 @@ test('acceptance: Kit Manager installs, deactivates, switches, and uninstalls th
           { directory: defaultKitDirectory, source: 'builtin' },
           ...prepared.activeSources.map(({ directory }) => ({ directory, source: 'installed' })),
         ],
+        pluginPathRoots: {
+          applicationData: root,
+          data: path.join(root, 'plugins', 'data'),
+          cache: path.join(root, 'plugins', 'cache'),
+          temp: path.join(root, 'plugins', 'temp'),
+        },
         host: '127.0.0.1',
       });
       const frameworkPort = await framework.start();

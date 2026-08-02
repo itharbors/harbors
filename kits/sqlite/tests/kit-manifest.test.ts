@@ -1,12 +1,57 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
 const kitRoot = fileURLToPath(new URL('..', import.meta.url));
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
+const requireFromKit = createRequire(path.join(kitRoot, 'package.json'));
 
 describe('SQLite kit manifest', () => {
+  it('resolves its private contracts package inside the SQLite Kit', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
+    const contractsRoot = resolvePackageRoot('@itharbors/sqlite-contracts');
+    const relativeOwner = path.relative(fs.realpathSync(kitRoot), contractsRoot);
+
+    expect(relativeOwner).not.toBe('');
+    expect(relativeOwner.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeOwner)).toBe(false);
+    expect(pkg.workspaces).toEqual(['packages/*', 'plugins/*']);
+    expect(pkg.dependencies['@itharbors/sqlite-contracts']).toBe('file:packages/contracts');
+    for (const pluginName of pkg['ce-editor'].kit.plugin) {
+      const plugin = JSON.parse(fs.readFileSync(path.join(
+        kitRoot,
+        'plugins',
+        pluginName.replace('@itharbors/', ''),
+        'package.json',
+      ), 'utf8'));
+      expect(plugin.dependencies['@itharbors/sqlite-contracts']).toBe(
+        'file:../../packages/contracts',
+      );
+    }
+  });
+
+  it('resolves an independently owned Relationship Graph inside the SQLite Kit', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
+    const relationshipRoot = resolvePackageRoot('@itharbors/relationship-graph');
+    const relativeOwner = path.relative(fs.realpathSync(kitRoot), relationshipRoot);
+    const relationshipPlugin = JSON.parse(fs.readFileSync(path.join(
+      kitRoot,
+      'plugins/sqlite-relationships/package.json',
+    ), 'utf8'));
+
+    expect(relativeOwner).not.toBe('');
+    expect(relativeOwner.startsWith(`..${path.sep}`)).toBe(false);
+    expect(path.isAbsolute(relativeOwner)).toBe(false);
+    expect(pkg.dependencies['@itharbors/relationship-graph']).toBe(
+      'file:packages/relationship-graph',
+    );
+    expect(relationshipPlugin.dependencies['@itharbors/relationship-graph']).toBe(
+      'file:../../packages/relationship-graph',
+    );
+  });
+
   it('declares six focused plugins with a connection bar above Explorer and four workspace tabs', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(kitRoot, 'package.json'), 'utf8'));
     const layout = JSON.parse(fs.readFileSync(path.join(kitRoot, 'layout.json'), 'utf8'));
@@ -75,11 +120,12 @@ describe('SQLite kit manifest', () => {
     expect(secondaryEntry).toContain('<title>SQLite 工作台窗口</title>');
   });
 
-  it('runs the SQLite kit tests from the repository test gate', () => {
-    const rootPackage = JSON.parse(
-      fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8'),
-    );
-
-    expect(rootPackage.scripts.test).toContain('npm run test -w @itharbors/kit-sqlite');
-  });
 });
+
+function resolvePackageRoot(packageName: string): string {
+  const packageJson = requireFromKit.resolve.paths(packageName)
+    ?.map((directory) => path.join(directory, packageName, 'package.json'))
+    .find((candidate) => fs.existsSync(candidate));
+  if (!packageJson) throw new Error(`Cannot resolve ${packageName} from ${kitRoot}`);
+  return fs.realpathSync(path.dirname(packageJson));
+}

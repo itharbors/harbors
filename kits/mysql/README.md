@@ -31,3 +31,25 @@ Kit 由六个职责独立的插件组成：`mysql-core` 独占连接池与全部
 - 每次显式执行一条 SQL，行结果最多显示 500 条。
 - mutation 结果展示影响行数、插入 ID 和警告状态。
 - SQL 错误不会清空草稿；连接变化会清理旧结果但保留当前草稿。
+
+## Local lifecycle
+
+```bash
+npm ci --prefix kits/mysql
+npm run build --prefix kits/mysql
+npm run test --prefix kits/mysql
+```
+
+本 Kit 未声明独立 smoke 脚本，以仓库目标 Kit 的完整检查验收。
+
+## Permissions
+
+`network`。
+
+## Platform
+
+支持任意平台与架构。
+
+## Ownership boundary
+
+MySQL 功能、依赖与测试均由本目录拥有。

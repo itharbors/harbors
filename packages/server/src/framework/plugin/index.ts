@@ -19,6 +19,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withPluginDefinitionLock } from './load-lock';
+import { createPluginPaths, type PluginPaths } from './paths';
 
 interface PackageJson {
   name?: string;
@@ -134,7 +135,7 @@ export class PluginModule {
 
   async load(
     pluginPath: string,
-    runtimeInput?: PluginRuntimeHost | PluginLoadOptions,
+    runtimeInput: PluginLoadOptions,
   ): Promise<void> {
     const absPath = path.resolve(pluginPath);
     const registeredPlugin = this.pathMap.get(absPath);
@@ -158,21 +159,23 @@ export class PluginModule {
     const entryPath = resolveLoadEntryPath(absPath, registeredPlugin.info.entry);
 
     let definition: LoadedPluginModule['definition'];
-    const runtimeOptions = normalizeLoadOptions(runtimeInput);
-    const runtimeEditor = runtimeOptions?.scope === 'application'
-      ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name)
-      : runtimeOptions?.scope === 'session'
-        ? createPluginRuntime(runtimeOptions.host, registeredPlugin.name)
-        : undefined;
+    const runtimeOptions = runtimeInput;
+    const runtimePaths = await createPluginPaths({
+      roots: runtimeOptions.paths.roots,
+      owner: registeredPlugin.name,
+      legacyDataDirectories: runtimeOptions.paths.legacyDataDirectories,
+    });
+    const runtimeEditor: PluginRuntime | ApplicationPluginRuntime = runtimeOptions.scope === 'application'
+      ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name, runtimePaths)
+      : createPluginRuntime(runtimeOptions.host, registeredPlugin.name, runtimePaths);
 
-    if (runtimeEditor) {
-      runtimeEditor.plugin.define = (nextDefinition) => {
-        if (definition) {
-          throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
-        }
-        definition = nextDefinition;
-      };
-    }
+    runtimeEditor.plugin.define = (nextDefinition) => {
+      if (definition) {
+        throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
+      }
+      definition = nextDefinition;
+    };
+    Object.freeze(runtimeEditor);
 
     try {
       await withPluginDefinitionLock(async () => {
@@ -180,9 +183,7 @@ export class PluginModule {
           editor?: PluginRuntime | ApplicationPluginRuntime;
         };
         const previousEditor = globalScope.editor;
-        if (runtimeEditor) {
-          globalScope.editor = runtimeEditor;
-        }
+        globalScope.editor = runtimeEditor;
 
         try {
           importNonce += 1;
@@ -214,7 +215,7 @@ export class PluginModule {
 
     try {
       if (definition.lifecycle?.load) {
-        await definition.lifecycle.load(runtimeEditor as PluginRuntime | ApplicationPluginRuntime);
+        await definition.lifecycle.load(runtimeEditor);
       }
 
       for (const otherPlugin of this.nameMap.values()) {
@@ -322,20 +323,13 @@ export class PluginModule {
   }
 }
 
-function normalizeLoadOptions(
-  input: PluginRuntimeHost | PluginLoadOptions | undefined,
-): PluginLoadOptions | undefined {
-  if (!input) return undefined;
-  if ('scope' in input && 'host' in input) return input;
-  return { scope: 'session', host: input };
-}
-
 function createPluginRuntime(
   editor: PluginRuntimeHost,
   ownerName: string,
+  paths: PluginPaths,
 ): PluginRuntime {
   const menu = editor.menu;
-  return {
+  const runtime: Omit<PluginRuntime, 'paths'> = {
     ...editor,
     application: {
       request: (pluginName, name, ...args) =>
@@ -396,13 +390,15 @@ function createPluginRuntime(
         editor.message.broadcast(topic, ...args),
     },
   };
+  return { ...runtime, paths };
 }
 
 function createApplicationPluginRuntime(
   application: ApplicationPluginRuntimeHost,
   ownerName: string,
+  paths: PluginPaths,
 ): ApplicationPluginRuntime {
-  return {
+  const runtime: Omit<ApplicationPluginRuntime, 'paths'> = {
     plugin: {
       define: application.plugin.define,
       getInfo: application.plugin.getInfo,
@@ -450,8 +446,9 @@ function createApplicationPluginRuntime(
       unregister: (name) => application.service.unregister(ownerName, name),
       get: (name) => application.service.get(name),
     },
-    host: Object.freeze({ ...application.host }),
+    host: application.host,
   };
+  return { ...runtime, paths };
 }
 
 function assertApplicationMessageRoute(
