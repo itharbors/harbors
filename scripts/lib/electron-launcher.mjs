@@ -4,6 +4,13 @@ export function shouldStartElectronApp({ isPackaged, entryPath, modulePath }) {
   return isPackaged === true || (typeof entryPath === 'string' && entryPath === modulePath);
 }
 
+export function shouldUseBundledFramework({ isPackaged, runtimeProfile }) {
+  if (runtimeProfile !== 'stable' && runtimeProfile !== 'development') {
+    throw new TypeError('runtimeProfile must be stable or development');
+  }
+  return isPackaged === true || runtimeProfile === 'stable';
+}
+
 export function registerDesktopSignalHandlers({ signalSource, quit }) {
   let disposed = false;
   let quitRequested = false;

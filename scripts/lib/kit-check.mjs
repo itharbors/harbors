@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
-import { mkdir } from 'node:fs/promises';
+import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadOfficialKit } from './kit-monorepo.mjs';
+import { loadTrustedMarketKit } from './kit-monorepo.mjs';
+import { ensureKitInstall } from './kit-install.mjs';
 import { deriveArtifactName } from './kit-publish/metadata.mjs';
 
 function normalizeOutputDirectory(outputDirectory) {
@@ -34,22 +35,41 @@ export async function checkOfficialKit({
   slug,
   outputDirectory,
   runCommand = runCheckedCommand,
+  cacheRoot = path.join(repositoryRoot, '.cache', 'harbors-kit-installs'),
+  ensureInstall = ensureKitInstall,
+  removeDirectory = (directory) => rm(directory, { recursive: true, force: true }),
 }) {
   const normalizedOutputDirectory = normalizeOutputDirectory(outputDirectory);
-  const kit = await loadOfficialKit({ repositoryRoot, slug });
-  await runCommand('npm', ['run', 'build', '-w', kit.id], { cwd: repositoryRoot });
-
-  await runCommand('npm', ['test', '-w', kit.id], { cwd: repositoryRoot });
-  await runCommand(process.execPath, ['packages/kit-cli/dist/cli.js', 'validate', `kits/${slug}`], {
-    cwd: repositoryRoot,
-  });
-  const artifactPath = path.join(normalizedOutputDirectory, deriveArtifactName(kit.manifest));
-  await mkdir(normalizedOutputDirectory, { recursive: true });
-  await runCommand(process.execPath, [
-    'packages/kit-cli/dist/cli.js', 'pack', `kits/${slug}`, '--output', artifactPath,
-  ], { cwd: repositoryRoot });
-  await runCommand(process.execPath, [
-    'packages/kit-cli/dist/cli.js', 'inspect', artifactPath, '--json',
-  ], { cwd: repositoryRoot });
-  return Object.freeze({ artifactPath, kit });
+  const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
+  const install = await ensureInstall({ descriptor: kit, cacheRoot });
+  let result;
+  let operationError;
+  try {
+    for (const action of ['build', 'test', 'validate']) {
+      await runCommand(process.execPath, [
+        'packages/kit-cli/dist/cli.js', action, install.installRoot,
+      ], { cwd: repositoryRoot });
+    }
+    const artifactPath = path.join(normalizedOutputDirectory, deriveArtifactName(kit.manifest));
+    await mkdir(normalizedOutputDirectory, { recursive: true });
+    await runCommand(process.execPath, [
+      'packages/kit-cli/dist/cli.js', 'pack', install.installRoot, '--output', artifactPath,
+    ], { cwd: repositoryRoot });
+    await runCommand(process.execPath, [
+      'packages/kit-cli/dist/cli.js', 'inspect', artifactPath, '--json',
+    ], { cwd: repositoryRoot });
+    result = Object.freeze({ artifactPath, kit });
+  } catch (error) {
+    operationError = error;
+  }
+  try {
+    await removeDirectory(install.runRoot);
+  } catch (cleanupError) {
+    if (operationError) {
+      throw new AggregateError([operationError, cleanupError], 'Kit check operation and cleanup failed');
+    }
+    throw cleanupError;
+  }
+  if (operationError) throw operationError;
+  return result;
 }

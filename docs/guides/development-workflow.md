@@ -43,7 +43,7 @@ npm run dev
 ```
 
 开发入口使用同一套来源解析，但额外加载仓库 `kits/*` 中所有合法 Kit，因此可以直接联合调试
-Default、Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 和 TraceWeave，不需要先从市场安装。开发源码与 active 商城 Kit
+descriptor 发现的全部合法 Kit，不需要先从市场安装。开发源码与 active 商城 Kit
 同 ID 时只在当前开发进程中临时使用源码，不修改 `installed.json`。
 
 两种 Electron 入口分别启动以下 Web 开发服务：
@@ -70,10 +70,7 @@ Web 栈始终运行统一 Kit 主机，裸地址显示 Kit 选择页，并提供
 
 ```text
 Kit 选择页   http://localhost:49380/
-Default Kit  http://localhost:49380/kits/default
-CSV           http://localhost:49380/kits/csv
-SQLite       http://localhost:49380/kits/sqlite
-MySQL        http://localhost:49380/kits/mysql
+任意 Kit     http://localhost:49380/kits/<name>
 ```
 
 ### Kit Web 优先、桌面能力按需验收
@@ -98,8 +95,8 @@ MySQL        http://localhost:49380/kits/mysql
 ## 指定 Kit
 
 ```bash
-npm run dev -- --kit ./kits/default
-npm run dev -- --kit @itharbors/kit-default
+npm run dev -- --kit ./kits/<name>
+npm run dev -- --kit <package-name>
 ```
 
 `--kit`、`--kit-path` 和 `--kitPath` 都被开发 Electron 启动脚本接受。指定参数代表已经显式
@@ -120,7 +117,7 @@ npm run start
 启动桌面宿主。传给 Electron 的 Kit 参数会继续转发给 Web 开发栈：
 
 ```bash
-npm run dev -- --kit ./kits/default
+npm run dev -- --kit ./kits/<name>
 ```
 
 ## 构建
@@ -141,14 +138,21 @@ npm run build
 ```bash
 node scripts/ce-plugin.mjs build plugins/menu
 node scripts/ce-plugin.mjs check plugins/menu
-node scripts/ce-plugin.mjs build kits/default/plugins/log
-node scripts/ce-plugin.mjs check kits/default/plugins/log
+node scripts/ce-plugin.mjs build kits/<name>/plugins/<plugin>
+node scripts/ce-plugin.mjs check kits/<name>/plugins/<plugin>
 
 npm run plugins:build
 npm run plugins:check
 ```
 
-`build` 会重建目标 `dist/`；`check` 要求产物已经存在，只做 manifest 与文件校验。
+`build` 会重建目标 `dist/`；单目录 `check` 要求产物已经存在，只做 manifest 与文件校验。
+根 `plugins:check` 先检查 Framework 插件，再在隔离副本中构建每个发现到的 Kit，既保留全量语义，
+也不会要求源码树预先保存市场 Kit 的 `dist/`。Framework CI 使用更窄的
+`npm run plugins:check:framework`。
+
+Kit 的运行时测试如果需要创建真实 Editor，只能从 `@itharbors/server/testing` 使用稳定的窄测试入口；
+隔离 runner 会提供对应 Framework toolchain。不要相对导入 `packages/server/src/**`，也不要借用
+其他 Kit 目录作为测试夹具。
 
 ## 测试
 
@@ -242,9 +246,7 @@ Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill
 | Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 | 单个 Kit | `origin/main` / `main` | `kit-change/<name>/<type>/<slug>` | `kit-workflow` |
 
-Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 和 TraceWeave 分别保存在
-`kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、
-`kits/skill-manager`、`kits/traceweave`。
+每个 Kit 保存在自己的 `kits/<name>` 功能单元中；根工作流按 descriptor 发现，不维护产品清单。
 Kit 合并只改变 `main` 上的目录内容，不发布 Release，也不修改或发布 Framework 版本。完整生命周期是：
 
 ```text
@@ -257,10 +259,10 @@ main
   -> push kit/<name>/v<semver>
 ```
 
-开始 SQLite 变更：
+开始某个 Kit 的变更：
 
 ```bash
-bash .agents/skills/kit-workflow/scripts/start-kit-change.sh sqlite feature add-import
+bash .agents/skills/kit-workflow/scripts/start-kit-change.sh <name> feature add-import
 ```
 
 该命令固定获取 `origin/main` 并校验仓库本地 Git 身份，然后创建隔离 worktree、执行根目录
@@ -269,18 +271,18 @@ bash .agents/skills/kit-workflow/scripts/start-kit-change.sh sqlite feature add-
 
 ```bash
 bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
-  sqlite "添加数据导入" /absolute/path/to/pr-body.md
+  <name> "添加数据导入" /absolute/path/to/pr-body.md
 ```
 
-finish 只运行目标 Kit 的 `npm run kit:check -- sqlite`，普通 push 后创建并核验 base 为 `main`
+finish 只运行目标 Kit 的 `npm run kit:check -- <name>`，普通 push 后创建并核验 base 为 `main`
 的 PR。路径级 CI 至少检查被修改的 Kit；`kit-core`、Kit CLI、发布/Registry 工具或其他共享
 构建面变化会触发所有官方 Kit CI。
 
-发布前用独立 PR 同步更新目标目录的 `kit.json`、`package.json` 和根 `package-lock.json`。
+发布前用独立 PR 同步更新目标目录的 `kit.json`、`package.json` 和 `package-lock.json`。
 合并并确保本地干净 `main` 与 `origin/main` 完全一致后运行：
 
 ```bash
-bash .agents/skills/kit-workflow/scripts/release-kit.sh sqlite 1.2.0
+bash .agents/skills/kit-workflow/scripts/release-kit.sh <name> 1.2.0
 ```
 
 第一次运行只显示 Kit、版本、频道、Commit、Tag 和精确的 `Tag@40-char-SHA` 确认令牌，不创建
@@ -307,7 +309,7 @@ Tag。获得用户对这次发布的明确确认后，按输出设置 `HARBORS_K
 | `[Test]` | 不伴随产品行为变化的独立测试建设 |
 | `[Chore]` | 依赖、构建工具和日常维护 |
 
-例如：`[Feature] 添加用户登录`、`[Bug] 修复 SQLite 连接泄漏`、`[Docs] 完善开发指南`、
+例如：`[Feature] 添加用户登录`、`[Bug] 修复连接泄漏`、`[Docs] 完善开发指南`、
 `[Refactor] 拆分插件加载器`、`[Optimize] 减少查询内存占用`、`[Test] 补充工作流回归测试`、
 `[Chore] 更新构建依赖`。类型大小写必须与表格完全一致；摘要使用简洁中文，末尾不加
 句号。每个提交只表达一个可审查的逻辑改动。
@@ -331,10 +333,14 @@ Tag。获得用户对这次发布的明确确认后，按输出设置 `HARBORS_K
 npm run check
 ```
 
-它依次构建共享协议包、运行 Server/Client 全量测试并校验所有插件产物。按变更范围快速
+它依次构建共享协议包、运行 Server/Client 全量测试并校验所有插件产物。`npm run kits:boundary`
+会独立审计完整源码树；`npm run kits:boundary -- <slug>` 只审计目标 Kit，不会被无关 Kit 的临时损坏拖累。
+审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失 lockfile、Framework 产品特判和静态产品清单。
+按变更范围快速
 迭代时可拆分执行，但提交前不要少于：
 
 ```bash
+npm run kits:boundary
 npm run test -w packages/server
 npm run test -w packages/client
 npm run plugins:check

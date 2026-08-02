@@ -30,7 +30,7 @@ test_release_supports_stable_and_enforces_channel_from_semver() {
 
   prepare_release
   set_kit_version "$REPO" 0.1.0-preview.1 stable
-  git -C "$REPO" add kits/sqlite package-lock.json
+  git -C "$REPO" add kits/sqlite
   git -C "$REPO" commit -m '[Bug] 制造预览频道错误' >/dev/null
   git -C "$REPO" push origin main >/dev/null 2>&1
   if output=$("$RELEASE" sqlite 0.1.0-preview.1 2>&1); then fail 'prerelease with stable manifest succeeded'; fi
@@ -38,7 +38,7 @@ test_release_supports_stable_and_enforces_channel_from_semver() {
 
   prepare_release
   set_kit_version "$REPO" 0.1.0 stable
-  git -C "$REPO" add kits/sqlite package-lock.json
+  git -C "$REPO" add kits/sqlite
   git -C "$REPO" commit -m '[Feature] 准备稳定版本' >/dev/null
   git -C "$REPO" push origin main >/dev/null 2>&1
   commit=$(git -C "$REPO" rev-parse HEAD)

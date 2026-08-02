@@ -7,7 +7,11 @@
     "contribute": {
       "message": {
         "request": {
-          "installCodexSkill": ["installCodexSkill"]
+          "installCodexSkill": ["installCodexSkill"],
+          "getSnapshot": ["getSnapshot"],
+          "markRead": ["markRead"],
+          "markAllRead": ["markAllRead"],
+          "removeNotification": ["removeNotification"]
         }
       },
       "menu": [

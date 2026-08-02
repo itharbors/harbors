@@ -4,7 +4,7 @@ import { HttpError } from '../http/errors';
 import { sendJson } from '../http/json';
 
 export function createKitCatalogRouter(
-  catalogPromise: Promise<KitCatalogEntry[]>,
+  loadCatalog: () => Promise<KitCatalogEntry[]>,
 ) {
   return async function kitCatalogRouter(
     req: IncomingMessage,
@@ -21,7 +21,7 @@ export function createKitCatalogRouter(
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
     }
 
-    const catalog = await catalogPromise;
+    const catalog = await loadCatalog();
     if (isCatalog) {
       sendJson(res, 200, {
         kits: catalog.map(({ id, name, label }) => ({ id, name, label })),

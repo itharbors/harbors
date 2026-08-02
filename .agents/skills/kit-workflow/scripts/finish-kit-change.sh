@@ -32,9 +32,15 @@ label=$(kit_workflow_label_for_type "$change_type")
 
 test -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" || kit_workflow_fail 'working tree is not clean'
 git -C "$repo_root" remote get-url origin >/dev/null 2>&1 || kit_workflow_fail 'origin remote is missing'
-git -C "$repo_root" fetch origin --prune
 target_branch=main
 target_ref="refs/remotes/origin/$target_branch"
+git -C "$repo_root" show-ref --verify --quiet "$target_ref" || kit_workflow_fail "origin/$target_branch is missing"
+
+# Fail closed on directory scope before the first network operation. The same
+# boundary is checked again after fetch so the final decision uses fresh main.
+npm --prefix "$repo_root" run kit:boundary -- "$kit" --base "$target_ref" --head HEAD
+
+git -C "$repo_root" fetch origin --prune
 git -C "$repo_root" show-ref --verify --quiet "$target_ref" || kit_workflow_fail "origin/$target_branch is missing"
 git -C "$repo_root" merge-base --is-ancestor "$target_ref" HEAD \
   || kit_workflow_fail "change branch is not based on origin/$target_branch"
@@ -43,6 +49,8 @@ test "$(git -C "$repo_root" rev-list --count "$target_ref"..HEAD)" -gt 0 || kit_
 while IFS= read -r subject; do
   case "$subject" in "[$label] "*) ;; *) kit_workflow_fail "commits must start with [$label]: $subject" ;; esac
 done < <(git -C "$repo_root" log --format=%s "$target_ref"..HEAD)
+
+npm --prefix "$repo_root" run kit:boundary -- "$kit" --base "$target_ref" --head HEAD
 
 pack_dir=$(mktemp -d "${TMPDIR:-/tmp}/kit-workflow-pack.XXXXXX")
 trap 'rm -rf -- "$pack_dir"' EXIT

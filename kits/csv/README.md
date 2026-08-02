@@ -7,6 +7,28 @@ CSV Kit 是 Harbors 内置的中文只读表格检查器。它直接打开本地
 npm run dev -- --kit ./kits/csv
 ```
 
+## Local lifecycle
+
+```bash
+npm ci --prefix kits/csv
+npm run build --prefix kits/csv
+npm run test --prefix kits/csv
+```
+
+本 Kit 未声明独立 smoke 脚本，以仓库目标 Kit 的完整检查验收。
+
+## Permissions
+
+`filesystem`、`native-code`。
+
+## Platform
+
+仅支持 macOS arm64，Node ABI 127。
+
+## Ownership boundary
+
+CSV 功能实现、原生依赖与测试均由本目录拥有。
+
 ## 格式与解析配置
 
 - 支持 UTF-8（含 BOM）和 GB18030。自动模式仅在 UTF-8 BOM 存在时直接确定编码；否则严格尝试

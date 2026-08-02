@@ -20,6 +20,10 @@ describe('Agent Guard background plugin', () => {
     const source = fs.readFileSync(path.join(root, 'main/src/index.ts'), 'utf8');
     expect(source).toMatch(/await service\.start\(\)/u);
     expect(source).toMatch(/await service\?\.dispose\(\)/u);
+    expect(source).toMatch(/dataDir:\s*runtime\.paths\.data/u);
+    expect(source).toMatch(/legacyDataDirs:\s*runtime\.paths\.legacyData/u);
+    expect(source).toMatch(/hostMode:\s*runtime\.host\.mode/u);
+    expect(source).not.toMatch(/HARBORS_AGENT_GUARD_DATA_DIR/u);
     expect(source).not.toMatch(/panel\s*:/u);
   });
 });

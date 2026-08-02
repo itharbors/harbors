@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PluginModule } from '../../src/framework/plugin/index';
 import { Plugin } from '../../src/framework/plugin/plugin';
 import { PluginStatus } from '../../src/framework/plugin/types';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { PluginRuntimeHost } from '../../src/editor/types';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -11,6 +11,12 @@ import path from 'node:path';
 // @ts-expect-error The plugin build script is an ESM runtime entry without declarations.
 import { discoverAllPlugins, discoverPlugin } from '../../../../scripts/lib/plugin-build/discover.mjs';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 function writePlugin(root: string, name: string, code = 'editor.plugin.define({ methods: { greet: (name) => `Hello ${name}` } });'): string {
   const dir = path.join(root, name);
@@ -44,6 +50,23 @@ function withRuntimeMenu(editor: ReturnType<typeof createEditor>): PluginRuntime
       clearDefaults: vi.fn(),
       reset: vi.fn(),
       getState: () => editor.menu.getState(),
+    },
+  };
+}
+
+function sessionLoadOptions(host: PluginRuntimeHost) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-test-paths-'));
+  return {
+    scope: 'session' as const,
+    host,
+    paths: {
+      roots: {
+        applicationData: root,
+        data: path.join(root, 'plugins', 'data'),
+        cache: path.join(root, 'plugins', 'cache'),
+        temp: path.join(root, 'plugins', 'temp'),
+      },
+      legacyDataDirectories: [],
     },
   };
 }
@@ -207,7 +230,7 @@ describe('PluginModule', () => {
   it('load and unload transition plugin state', async () => {
     const dir = writePlugin(tmpDir, 'my-plugin');
     await pluginModule.register(dir);
-    await pluginModule.load(dir, withRuntimeMenu(createEditor('plugin-test-session', { assembly: testAssembly })));
+    await pluginModule.load(dir, sessionLoadOptions(withRuntimeMenu(createEditor('plugin-test-session', { assembly: testAssembly }))));
     expect(pluginModule.listLoaded()).toEqual(['my-plugin']);
     await pluginModule.unload(dir);
     expect(pluginModule.listLoaded()).toEqual([]);
@@ -216,7 +239,7 @@ describe('PluginModule', () => {
   it('callPlugin invokes a method on a loaded plugin', async () => {
     const dir = writePlugin(tmpDir, 'my-plugin');
     await pluginModule.register(dir);
-    await pluginModule.load(dir, withRuntimeMenu(createEditor('plugin-test-session', { assembly: testAssembly })));
+    await pluginModule.load(dir, sessionLoadOptions(withRuntimeMenu(createEditor('plugin-test-session', { assembly: testAssembly }))));
     expect(pluginModule.callPlugin('my-plugin', 'greet', 'World')).toBe('Hello World');
   });
 
@@ -231,7 +254,7 @@ describe('PluginModule', () => {
     fs.writeFileSync(path.join(dir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: { ping: () => "pong" } });');
 
     await pluginModule.register(dir);
-    await pluginModule.load(dir, withRuntimeMenu(createEditor('plugin-main-session', { assembly: testAssembly })));
+    await pluginModule.load(dir, sessionLoadOptions(withRuntimeMenu(createEditor('plugin-main-session', { assembly: testAssembly }))));
 
     expect(pluginModule.callPlugin('@scope/declared-main', 'ping')).toBe('pong');
   });
@@ -239,7 +262,7 @@ describe('PluginModule', () => {
   it('unregister requires unload first', async () => {
     const dir = writePlugin(tmpDir, 'my-plugin');
     await pluginModule.register(dir);
-    await pluginModule.load(dir, withRuntimeMenu(createEditor('plugin-test-session', { assembly: testAssembly })));
+    await pluginModule.load(dir, sessionLoadOptions(withRuntimeMenu(createEditor('plugin-test-session', { assembly: testAssembly }))));
     expect(() => pluginModule.unregister(dir)).toThrow(/unloaded/);
     await pluginModule.unload(dir);
     pluginModule.unregister(dir);
@@ -479,7 +502,7 @@ describe('PluginModule', () => {
 
     const editor = createEditor('plugin-define-session', { assembly: testAssembly });
     await pluginModule.register(dir);
-    await pluginModule.load(dir, withRuntimeMenu(editor));
+    await pluginModule.load(dir, sessionLoadOptions(withRuntimeMenu(editor)));
 
     expect((globalThis as typeof globalThis & { __loadedSessionId?: string }).__loadedSessionId).toBe('plugin-define-session');
     expect(pluginModule.callPlugin('@scope/define-plugin', 'ping', 'hello')).toEqual({ echoed: 'hello' });
@@ -499,6 +522,6 @@ describe('PluginModule', () => {
     const editor = createEditor('plugin-define-session', { assembly: testAssembly });
     await pluginModule.register(dir);
 
-    await expect(pluginModule.load(dir, withRuntimeMenu(editor))).rejects.toThrow(/editor\.plugin\.define/);
+    await expect(pluginModule.load(dir, sessionLoadOptions(withRuntimeMenu(editor)))).rejects.toThrow(/editor\.plugin\.define/);
   });
 });

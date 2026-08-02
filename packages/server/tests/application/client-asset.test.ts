@@ -5,8 +5,13 @@ import path from 'node:path';
 import { Writable } from 'node:stream';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createClientAssetRouter } from '../../src/routes/client-asset';
-import { createServer } from '../../src/server';
+import { createServer as createServerWithOptions } from '../../src/server';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createServer = (
+  options: Omit<Parameters<typeof createServerWithOptions>[0], 'pluginPathRoots'>,
+) => createServerWithOptions({ ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 const temporaryDirectories: string[] = [];
 

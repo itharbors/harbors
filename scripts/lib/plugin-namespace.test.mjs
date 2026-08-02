@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { promisify } from 'node:util';
@@ -34,12 +35,8 @@ test('legacy namespace detection respects package-name boundaries', () => {
 
 test('all tracked repository references use the itharbors namespace', async () => {
   const violations = [];
-  const { stdout } = await execFileAsync('git', ['ls-files', '-z'], {
-    cwd: projectRoot,
-    encoding: 'utf8',
-  });
 
-  for (const relativePath of stdout.split('\0').filter(Boolean)) {
+  for (const relativePath of await listTrackedWorktreeFiles(projectRoot)) {
     const content = await readFile(path.join(projectRoot, relativePath), 'utf8');
     if (!content.includes('\0') && hasLegacyNamespace(content)) {
       violations.push(relativePath);
@@ -52,6 +49,36 @@ test('all tracked repository references use the itharbors namespace', async () =
     `legacy plugin namespace remains in:\n${violations.join('\n')}`,
   );
 });
+
+test('tracked worktree enumeration excludes unstaged deletions without splitting filenames', async () => {
+  const repository = await mkdtemp(path.join(os.tmpdir(), 'plugin-namespace-'));
+  const retainedPath = 'retained\nreference.txt';
+  const deletedPath = 'deleted-reference.txt';
+
+  try {
+    await execFileAsync('git', ['init', '--quiet'], { cwd: repository });
+    await writeFile(path.join(repository, retainedPath), 'retained', 'utf8');
+    await writeFile(path.join(repository, deletedPath), 'deleted', 'utf8');
+    await execFileAsync('git', ['add', '--', retainedPath, deletedPath], { cwd: repository });
+    await unlink(path.join(repository, deletedPath));
+
+    assert.deepEqual(await listTrackedWorktreeFiles(repository), [retainedPath]);
+  } finally {
+    await rm(repository, { recursive: true, force: true });
+  }
+});
+
+async function listTrackedWorktreeFiles(repositoryRoot) {
+  const options = { cwd: repositoryRoot, encoding: 'utf8' };
+  const [{ stdout: trackedOutput }, { stdout: deletedOutput }] = await Promise.all([
+    execFileAsync('git', ['ls-files', '-z'], options),
+    execFileAsync('git', ['ls-files', '--deleted', '-z'], options),
+  ]);
+  const deletedPaths = new Set(deletedOutput.split('\0').filter(Boolean));
+  return trackedOutput
+    .split('\0')
+    .filter((relativePath) => relativePath && !deletedPaths.has(relativePath));
+}
 
 function hasLegacyNamespace(content) {
   return forbiddenNamespacePatterns.some((pattern) => pattern.test(content));

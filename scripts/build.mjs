@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { runCachedTask } from './lib/build-cache.mjs';
@@ -14,10 +15,11 @@ export async function runBuild({
   graphName,
   force = false,
   stdout = process.stdout,
-  plan = createBuildPlan(rootDir, graphName),
+  plan,
 }) {
+  const resolvedPlan = plan ?? await createBuildPlan(rootDir, graphName);
   const completed = new Map();
-  for (const task of plan.tasks) {
+  for (const task of resolvedPlan.tasks) {
     const dependencyDigests = [];
     for (const dependency of task.dependencies ?? []) {
       const result = completed.get(dependency);
@@ -30,7 +32,7 @@ export async function runBuild({
     try {
       const result = await runCachedTask({
         rootDir,
-        cacheDir: plan.cacheDir,
+        cacheDir: resolvedPlan.cacheDir,
         task,
         dependencyDigests,
         force,
@@ -48,7 +50,7 @@ export async function runBuild({
 export async function runBuildCli(
   args,
   io = process,
-  dependencies = { createPlan: createBuildPlan },
+  dependencies = { createPlan: createBuildPlan, preparePlanner: prepareBuildPlanner },
 ) {
   const options = parseBuildArgs(args);
   if (!options) {
@@ -56,17 +58,38 @@ export async function runBuildCli(
     return 2;
   }
   try {
+    if (dependencies.preparePlanner) {
+      await dependencies.preparePlanner(dependencies.rootDir ?? repositoryRoot);
+    }
     await runBuild({
       rootDir: dependencies.rootDir ?? repositoryRoot,
       graphName: options.graphName,
       force: options.force,
       stdout: io.stdout,
-      plan: dependencies.createPlan(dependencies.rootDir ?? repositoryRoot, options.graphName),
+      plan: await dependencies.createPlan(dependencies.rootDir ?? repositoryRoot, options.graphName),
     });
     return 0;
   } catch (error) {
     return error?.status ?? 1;
   }
+}
+
+async function prepareBuildPlanner(rootDir) {
+  await new Promise((resolve, reject) => {
+    const child = spawn('npm', [
+      'run',
+      'build',
+      '-w',
+      '@itharbors/kit-core',
+      '-w',
+      '@itharbors/kit-cli',
+    ], { cwd: rootDir, stdio: 'inherit' });
+    child.once('error', reject);
+    child.once('close', (code, signal) => {
+      if (code === 0) resolve();
+      else reject(new Error(`Build planner preparation failed${signal ? ` with signal ${signal}` : ` with exit code ${String(code)}`}`));
+    });
+  });
 }
 
 function parseBuildArgs(args) {

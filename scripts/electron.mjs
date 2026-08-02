@@ -17,6 +17,7 @@ import {
   createNotificationHtml,
   createToastQueue,
   formatNotificationTooltip,
+  resolveOwnerKit,
 } from './lib/notification-desktop.mjs';
 import {
   createNotificationHost,
@@ -47,11 +48,11 @@ import {
   reloadKitWindows,
   selectMenuWindow,
   shouldStartElectronApp,
+  shouldUseBundledFramework,
   shutdownDesktopServices,
   finishDesktopShutdown,
   showKitChooser,
 } from './lib/electron-launcher.mjs';
-import { resolveCodexSkillSource } from './lib/codex-skill-resource.mjs';
 import { WorkspaceStore } from './lib/workspace-store.mjs';
 import { InstalledKitStore } from './lib/kit-store/state.mjs';
 import {
@@ -59,6 +60,7 @@ import {
   prepareInstalledKitsForStartup,
 } from './lib/kit-store/startup.mjs';
 import { createKitManagerService } from './lib/kit-manager-service.mjs';
+import { discoverRepositoryBuiltinKits } from './lib/repository-kits.mjs';
 import { KitArtifactUninstaller } from './lib/kit-store/uninstaller.mjs';
 import { createKitRuntimeCoordinator } from './lib/kit-runtime-coordinator.mjs';
 import {
@@ -66,7 +68,6 @@ import {
   restoreLiveKitDeactivation,
 } from './lib/kit-live-deactivation.mjs';
 import { createLiveKitManager } from './lib/live-kit-manager.mjs';
-import { BUILTIN_KIT_IDS } from './lib/builtin-kits.mjs';
 import { registerKitManagerIpc } from './lib/kit-manager-ipc.mjs';
 import { createKitManagerWindowController } from './lib/kit-manager-window.mjs';
 import {
@@ -86,7 +87,6 @@ const kitManagerHtmlPath = fileURLToPath(new URL('./kit-manager.html', import.me
 const trayIconPath = fileURLToPath(new URL('./assets/tray-icon.png', import.meta.url));
 const frameworkArgs = createFrameworkArgs(process.argv.slice(2));
 const applicationControlToken = randomBytes(32).toString('hex');
-const NOTIFICATION_KIT_NAME = '@itharbors/kit-notifications';
 const TOAST_WIDTH = 360;
 const TOAST_HEIGHT = 176;
 let rootDir = repositoryRoot;
@@ -141,7 +141,6 @@ let disposeDesktopSignalHandlers;
 let notificationStore;
 let notificationHost;
 let notificationPort;
-let codexSkillSource;
 let applicationMenuTree = [];
 let applicationRuntimeClient;
 let frameworkReloading = false;
@@ -335,17 +334,22 @@ function startElectronApp() {
   app.whenReady()
     .then(async () => {
       electronOptions = parseElectronOptions(process.argv.slice(2));
+      runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
       desktopPaths = resolveDesktopPaths({
         isPackaged: app.isPackaged,
+        runtimeProfile,
         repositoryRoot,
         resourcesPath: process.resourcesPath,
         moduleDirectory,
         userData: app.getPath('userData'),
       });
       rootDir = desktopPaths.rootDir;
-      runtimeProfile = resolveRuntimeProfile(process.env.HARBORS_RUNTIME_PROFILE, 'stable');
       runtimePorts = resolveRuntimePorts(process.env, runtimeProfile);
-      startUrl = app.isPackaged
+      const bundledFramework = shouldUseBundledFramework({
+        isPackaged: app.isPackaged,
+        runtimeProfile,
+      });
+      startUrl = bundledFramework
         ? undefined
         : process.env.ELECTRON_START_URL || `http://localhost:${runtimePorts.gateway}/`;
       const desktopVersion = resolveDesktopVersion({
@@ -357,7 +361,7 @@ function startElectronApp() {
         harborsVersion: desktopVersion,
         kitApiVersion: '1.0.0',
         protocolVersion: 1,
-        ...(app.isPackaged ? resolveCurrentProcessRuntime(process) : resolveFrameworkRuntime()),
+        ...(bundledFramework ? resolveCurrentProcessRuntime(process) : resolveFrameworkRuntime()),
       });
       updateController = createAppUpdater({
         updater: autoUpdater,
@@ -376,10 +380,15 @@ function startElectronApp() {
       updateUnsubscribe = updateController.subscribe(handleUpdateSnapshot);
       const kitStoreRoot = desktopPaths.kitStoreRoot;
       kitStore = new InstalledKitStore(kitStoreRoot);
+      const repositoryKitDescriptors = await discoverRepositoryBuiltinKits({ repositoryRoot: rootDir });
+      const builtinKitIds = repositoryKitDescriptors
+        .filter((descriptor) => descriptor.distribution === 'builtin')
+        .map((descriptor) => descriptor.id);
       kitManagerService = createKitManagerService({
         storeRoot: kitStoreRoot,
         store: kitStore,
         runtime: kitRuntime,
+        builtinKitIds,
       });
       kitArtifactUninstaller = new KitArtifactUninstaller({
         storeRoot: kitStoreRoot,
@@ -434,7 +443,7 @@ function startElectronApp() {
       liveKitManager = createLiveKitManager({
         manager: kitManagerService.manager,
         coordinator: kitRuntimeCoordinator,
-        builtinKitIds: BUILTIN_KIT_IDS,
+        builtinKitIds,
       });
       kitManagerWindowController = createKitManagerWindowController({
         BrowserWindow,
@@ -446,11 +455,6 @@ function startElectronApp() {
           kitManagerIpcRegistration = undefined;
           kitManagerCloseDrain = registration?.drain() ?? Promise.resolve();
         },
-      });
-      codexSkillSource = resolveCodexSkillSource({
-        isPackaged: app.isPackaged,
-        resourcesPath: process.resourcesPath,
-        rootDir,
       });
       await initializeKitHost(electronOptions, {
         createTray: createApplicationTray,
@@ -514,7 +518,9 @@ function startElectronApp() {
 }
 
 async function startFramework() {
-  if (app.isPackaged) return startPackagedFramework();
+  if (shouldUseBundledFramework({ isPackaged: app.isPackaged, runtimeProfile })) {
+    return startPackagedFramework();
+  }
   return startDevelopmentFramework();
 }
 
@@ -523,15 +529,17 @@ async function startPackagedFramework() {
   const started = startDesktopFrameworkProcess(createPackagedFrameworkSpec({
     executable: process.execPath,
     frameworkEntry: desktopPaths.frameworkEntry,
+    cwd: desktopPaths.runtimeRoot,
     env: {
       ...process.env,
       HARBORS_RUNTIME_ROOT: desktopPaths.runtimeRoot,
       HARBORS_CLIENT_ASSETS_ROOT: desktopPaths.clientAssetsRoot,
       HARBORS_DATA_ROOT: desktopPaths.dataRoot,
       HARBORS_DB_PATH: desktopPaths.dbPath,
-      HARBORS_AGENT_GUARD_DATA_DIR: desktopPaths.agentGuardDataDir,
+      HARBORS_PLUGIN_DATA_ROOT: desktopPaths.pluginDataRoot,
+      HARBORS_PLUGIN_CACHE_ROOT: desktopPaths.pluginCacheRoot,
+      HARBORS_PLUGIN_TEMP_ROOT: desktopPaths.pluginTempRoot,
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
-      HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
       HARBORS_APPLICATION_TOKEN: applicationControlToken,
       HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
     },
@@ -556,10 +564,11 @@ function startDevelopmentFramework() {
       HARBORS_SERVER_PORT: String(runtimePorts.server),
       HARBORS_CLIENT_PORT: String(runtimePorts.client),
       HARBORS_NOTIFICATION_PORT: String(notificationPort),
-      HARBORS_NOTIFY_SKILL_SOURCE: codexSkillSource,
       HARBORS_DATA_ROOT: desktopPaths.dataRoot,
+      HARBORS_PLUGIN_DATA_ROOT: desktopPaths.pluginDataRoot,
+      HARBORS_PLUGIN_CACHE_ROOT: desktopPaths.pluginCacheRoot,
+      HARBORS_PLUGIN_TEMP_ROOT: desktopPaths.pluginTempRoot,
       HARBORS_HOST_MODE: 'desktop',
-      HARBORS_AGENT_GUARD_DATA_DIR: desktopPaths.agentGuardDataDir,
       HARBORS_APPLICATION_TOKEN: applicationControlToken,
       HARBORS_BIND_HOST: '127.0.0.1',
       HARBORS_KIT_SOURCES: JSON.stringify(kitSources),
@@ -1045,6 +1054,7 @@ async function startNotificationService() {
   notificationHost = createNotificationHost({
     store: notificationStore,
     port: runtimePorts.notification,
+    ownerAuthToken: applicationControlToken,
   });
   notificationPort = await notificationHost.start();
   refreshNotificationIndicators();
@@ -1082,6 +1092,9 @@ function registerNotificationToastIpc() {
   ipcMain.handle('harbors:notification-open-center', async (event) => {
     const notificationId = toastWindowNotifications.get(event.sender.id);
     if (!notificationId) return false;
+    const notification = notificationStore?.snapshot().notifications
+      .find((item) => item.id === notificationId);
+    if (!notification) return false;
 
     try {
       notificationStore?.markRead(notificationId);
@@ -1089,7 +1102,12 @@ function registerNotificationToastIpc() {
       console.error(`Failed to mark notification ${notificationId} as read:`, error);
     }
     toastQueue?.close(notificationId, 'opened');
-    return Boolean(await openKit(NOTIFICATION_KIT_NAME));
+    const ownerKit = resolveOwnerKit(notification.pluginOwner, kitCatalog);
+    if (!ownerKit) {
+      console.warn('Notification owner has no unique Kit navigation target');
+      return false;
+    }
+    return Boolean(await openKit(ownerKit));
   });
   ipcMain.handle('harbors:notification-close-toast', (event) => {
     const notificationId = toastWindowNotifications.get(event.sender.id);
@@ -1211,7 +1229,7 @@ function refreshApplicationTray() {
     kits: kitCatalog,
     workspaceRecords: trayWorkspaceRecords,
     unreadCount: currentUnreadCount,
-    notificationKitName: NOTIFICATION_KIT_NAME,
+    notificationKitName: resolveIndicatorKitName(),
   }, {
     openKit,
     openKitManager,
@@ -1220,6 +1238,15 @@ function refreshApplicationTray() {
   trayContextMenu = Menu.buildFromTemplate(template);
   tray.setContextMenu(trayContextMenu);
   tray.setToolTip(formatNotificationTooltip(currentUnreadCount));
+}
+
+function resolveIndicatorKitName() {
+  const visibleOwners = new Set((notificationStore?.snapshot().notifications ?? [])
+    .filter((item) => !item.read)
+    .map((item) => item.pluginOwner)
+    .filter(Boolean));
+  if (visibleOwners.size !== 1) return null;
+  return resolveOwnerKit([...visibleOwners][0], kitCatalog) ?? null;
 }
 
 function registerMenuIpc() {

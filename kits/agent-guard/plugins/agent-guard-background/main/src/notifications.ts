@@ -7,15 +7,10 @@ export interface IncidentNotice {
 }
 
 export function createIncidentNotifier(options: {
-  port: number;
-  fetch?: typeof fetch;
+  create(input: Record<string, unknown>): Promise<unknown>;
   now?: () => number;
   dedupeMs?: number;
 }) {
-  if (!Number.isInteger(options.port) || options.port < 1 || options.port > 65535) {
-    throw new TypeError('Notification port must be between 1 and 65535');
-  }
-  const request = options.fetch ?? fetch;
   const now = options.now ?? Date.now;
   const dedupeMs = options.dedupeMs ?? 10 * 60_000;
   const sent = new Map<string, number>();
@@ -26,18 +21,13 @@ export function createIncidentNotifier(options: {
       const current = now();
       if (previous !== undefined && current - previous < dedupeMs) return false;
       try {
-        const response = await request(`http://127.0.0.1:${options.port}/v1/notifications`, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
+        await options.create({
             title: notice.level === 'tripped' ? 'Agent Guard stopped abnormal activity' : 'Agent Guard traffic warning',
             body: notice.summary,
             level: notice.level === 'tripped' ? 'error' : 'warning',
             source: 'Agent Guard',
             persistent: notice.level === 'tripped',
-          }),
-        });
-        if (!response.ok) return false;
+          });
         sent.set(key, current);
         return true;
       } catch {

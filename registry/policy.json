@@ -8,52 +8,28 @@
   ],
   "kits": {
     "agent-guard": {
-      "id": "@itharbors/kit-agent-guard",
-      "label": "Agent Guard",
-      "summary": "Claude Code 与 Codex 的本机零配置流量监控、异常预警和安全熔断",
-      "runner": "macos-14"
+      "id": "@itharbors/kit-agent-guard"
     },
     "csv": {
-      "id": "@itharbors/kit-csv",
-      "label": "CSV",
-      "summary": "CSV/TSV 文件浏览、筛选、排序与导出工作台",
-      "runner": "macos-14"
+      "id": "@itharbors/kit-csv"
     },
     "mysql": {
-      "id": "@itharbors/kit-mysql",
-      "label": "MySQL",
-      "summary": "MySQL 数据库连接、浏览、编辑、关系图与 SQL 工作台",
-      "runner": "ubuntu-latest"
+      "id": "@itharbors/kit-mysql"
     },
     "notifications": {
-      "id": "@itharbors/kit-notifications",
-      "label": "Notifications",
-      "summary": "桌面通知中心与 Codex notify-user Skill 安装能力",
-      "runner": "ubuntu-latest"
+      "id": "@itharbors/kit-notifications"
     },
     "scheduler": {
-      "id": "@itharbors/kit-scheduler",
-      "label": "Scheduler",
-      "summary": "本地 Node.js 脚本的定时、循环与错过触发管理",
-      "runner": "ubuntu-latest"
+      "id": "@itharbors/kit-scheduler"
     },
     "skill-manager": {
-      "id": "@itharbors/kit-skill-manager",
-      "label": "Skill Manager",
-      "summary": "Codex Skill 全局安装与来源目录比较管理工具",
-      "runner": "ubuntu-latest"
+      "id": "@itharbors/kit-skill-manager"
     },
     "sqlite": {
-      "id": "@itharbors/kit-sqlite",
-      "label": "SQLite",
-      "summary": "SQLite 数据库浏览、编辑、关系图与 SQL 工作台",
-      "runner": "macos-14"
+      "id": "@itharbors/kit-sqlite"
     },
     "traceweave": {
-      "id": "@itharbors/kit-traceweave",
-      "label": "TraceWeave",
-      "summary": "Codex 多轮编排、执行证据与因果流程可视化工作台",
-      "runner": "ubuntu-latest"
+      "id": "@itharbors/kit-traceweave"
     }
   }
 }

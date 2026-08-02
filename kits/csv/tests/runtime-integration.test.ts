@@ -3,13 +3,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createDefaultAssemblyConfig } from '../../../packages/server/src/assembly/config';
-import { createEditor } from '../../../packages/server/src/editor/index';
+import { createDefaultAssemblyConfig, createEditor } from '@itharbors/server/testing';
 import { createCsvFixture } from './fixtures/create-csv-fixture';
+import { createPluginPathRoots } from './fixtures/create-plugin-path-roots';
 
 const projectRoot = fileURLToPath(new URL('../../..', import.meta.url));
 const kitSources = [
-  { directory: path.join(projectRoot, 'kits/default'), source: 'builtin' },
   { directory: path.join(projectRoot, 'kits/csv'), source: 'development' },
 ];
 
@@ -30,7 +29,11 @@ describe('CSV kit runtime integration', () => {
     const sourceBefore = fs.readFileSync(sourcePath);
     const outputPath = path.join(tempDir, 'filtered.csv');
     const editor = createEditor('csv-kit-runtime', {
-      assembly: createDefaultAssemblyConfig(projectRoot, { kitSources }),
+      assembly: createDefaultAssemblyConfig(projectRoot, {
+        kitSources,
+        defaultKit: '@itharbors/kit-csv',
+      }),
+      pluginPathRoots: createPluginPathRoots(tempDir),
     });
 
     try {

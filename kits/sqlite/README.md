@@ -31,3 +31,25 @@ Kit 由六个职责独立的插件组成：`sqlite-core` 独占数据库连接�
 - 支持格式化、关键字/对象补全、查询计划、20 条会话历史及结果复制/导出。
 - 写 SQL 会先分析风险并要求确认；只读连接不会获得写入确认令牌。
 - 查询结果最多渲染 50 行。执行中的 SQL 可取消，取消后仍可继续运行下一条语句。
+
+## Local lifecycle
+
+```bash
+npm ci --prefix kits/sqlite
+npm run build --prefix kits/sqlite
+npm run test --prefix kits/sqlite
+```
+
+本 Kit 未声明独立 smoke 脚本，以仓库目标 Kit 的完整检查验收。
+
+## Permissions
+
+`filesystem`、`native-code`。
+
+## Platform
+
+仅支持 macOS arm64，Node ABI 127。
+
+## Ownership boundary
+
+SQLite 功能、原生依赖与测试均由本目录拥有。

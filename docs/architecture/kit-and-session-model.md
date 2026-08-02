@@ -33,12 +33,12 @@ Kit package 的核心结构：
 
 ```json
 {
-  "name": "@itharbors/kit-default",
+  "name": "@example/kit-example",
   "ce-editor": {
     "kit": {
       "menuRoot": {
-        "id": "default",
-        "label": "Default Kit"
+        "id": "example",
+        "label": "Example Kit"
       },
       "layouts": {
         "default": "layout.json"
@@ -97,7 +97,7 @@ Attestation 绑定 signer workflow、caller Tag 和精确 Commit。
 entry；策略和撤回文件只是低频治理输入。客户端和聚合器只跟随 GitHub Release 到官方内容 CDN，
 不会接受任意重定向。
 
-当前官方市场 Kit 是 CSV、SQLite、MySQL、Notifications 与 TraceWeave。TraceWeave 展示了
+市场 Kit 由 `distribution=market` descriptor 自动投影。具体功能契约由各 Kit README 维护；示例 Kit 展示了
 Session 插件边界的一个完整例子：Node main 只读解析本机 Codex 会话，Panel 不能访问文件系统，
 只通过 message request 获取不透明 id、归一化 trace 与按需脱敏证据。它不建立第二个 HTTP 服务。
 
@@ -112,8 +112,9 @@ Electron 先把 builtin、active installed 和开发模式允许的 development 
 再把唯一的 resolved source snapshot 交给 Framework。Server 只在这份快照中按路径或 package name
 解析 Kit，并重新校验运行时 manifest；不会扫描 Store 根、任意版本目录或快照之外的仓库目录。
 
-默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，installed 目录默认为空，默认 Kit 是
-`@itharbors/kit-default`。装配配置保留了分离 builtin 与外部目录的能力。
+默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，installed 目录默认为空。默认 Kit 由
+descriptor 集合中唯一的 `distribution=builtin` 且 `default=true` 角色决定，不依赖包名或 slug。
+装配配置保留了分离 builtin 与外部目录的能力。
 
 Electron 在启动或 Manager 运行时事务中先将 pending 版本暂存为 active 并用完整 Catalog 校验，
 再让新 Framework 检查 application-scope 启动状态并通过一次临时 Session 真实加载普通插件。两层
@@ -144,21 +145,10 @@ Kit 选择器生成的新浏览器 session 与 Electron Workspace session 采用
 写入 Electron 的 WorkspaceStore。session 一旦建立 runtime，其 Kit 即为该 session 的权威
 状态；URL 中后续出现的其他 Kit 参数不会触发隐式切换。
 
-## Skill Manager 的来源与恢复状态
+## Kit 产品状态
 
-Skill Manager 的全局目标固定为 `$CODEX_HOME/skills`，没有显式 `CODEX_HOME` 时等价于
-`~/.codex/skills`。可选来源目录只属于当前 Session 的运行时状态，不写入持久 workspace，Server
-重启后不会自动重新打开。切换或清除来源会递增 scan generation、取消旧扫描，并丢弃晚到的结果；
-Panel 同时以 revision 拒绝过期的详情和写操作。
-
-Server 在私有索引中保留真实目录，Renderer 只收到不透明目录 ID、Skill ID、摘要和展示标签，
-不能提交原始路径来扩大扫描或写入范围。扫描拒绝符号链接、路径逃逸、超限文件和非法
-`SKILL.md`；`.system` 目录固定映射为 `protected`，不会进入修改操作。
-
-停用与卸载都不会永久删除 Skill。Server 先核对目录身份和内容摘要，再把目录原子移动到
-`$CODEX_HOME/skill-manager-store/v1` 的 `disabled` 或 `trash` 区，并写入可恢复记录；恢复时再次
-核对摘要和目标占用。安装与更新同样在目标父目录中暂存和验证后发布，冲突或回滚失败会保留诊断
-记录，不会绕过边界继续写入。该 Kit 只管理本机文件，不访问网络或 GitHub。
+Framework 只定义 Session 隔离、目录身份、能力授权与恢复所需的通用契约。具体 Kit 的来源、
+持久化状态、资源限制和恢复语义由对应 `kits/<slug>/README.md` 维护。
 
 ## 插件范围
 
@@ -238,10 +228,8 @@ BrowserRequestBroker 和数据库。
 - [Kit 类型](../../packages/server/src/framework/kit/types.ts)
 - [Kit 标准化](../../packages/server/src/framework/kit/index.ts)
 - [Kit/plugin resolver](../../packages/server/src/plugin/resolver.ts)
-- [TraceWeave Kit](../../kits/traceweave/README.md)
-- [默认 Kit manifest](../../kits/default/package.json)
-- [默认布局](../../kits/default/layout.json)
-- [Skill Manager Kit](../../kits/skill-manager/package.json)
+- 各 `kits/<name>/README.md`
+- `kits/<name>/kit.json` 与 `kits/<name>/package.json`
 
 关联阅读：[插件运行时模型](./plugin-runtime-model.md) ·
 [布局模型](./layout-model.md)

@@ -13,6 +13,7 @@ const ALLOWED_INPUT_KEYS = new Set([
   'durationMs',
   'persistent',
 ]);
+const OWNER_PROOF_DOMAIN = 'harbors.notification-owner.v1\0';
 
 export class NotificationError extends Error {
   constructor(status, code, message) {
@@ -64,10 +65,11 @@ export function createNotificationStore({
     }
   }
 
-  function create(input) {
+  function create(input, { pluginOwner } = {}) {
     const normalized = normalizeNotificationInput(input);
     const notification = {
       id: String(randomUUID()),
+      ...(pluginOwner ? { pluginOwner } : {}),
       ...normalized,
       createdAt: now().toISOString(),
       read: false,
@@ -135,6 +137,7 @@ export function createNotificationHost({
   store,
   port = DEFAULT_PORT,
   host = '127.0.0.1',
+  ownerAuthToken,
 } = {}) {
   if (!store || typeof store.create !== 'function') {
     throw new TypeError('A notification store is required');
@@ -147,7 +150,7 @@ export function createNotificationHost({
   }
 
   const server = http.createServer((request, response) => {
-    void dispatchRequest(request, response, store).catch((error) => {
+    void dispatchRequest(request, response, store, ownerAuthToken).catch((error) => {
       sendError(response, error);
     });
   });
@@ -296,7 +299,7 @@ function notFoundError() {
   return new NotificationError(404, 'NOTIFICATION_NOT_FOUND', 'Notification not found');
 }
 
-async function dispatchRequest(request, response, store) {
+async function dispatchRequest(request, response, store, ownerAuthToken) {
   const url = new URL(request.url || '/', 'http://127.0.0.1');
   const pathname = url.pathname;
 
@@ -314,7 +317,8 @@ async function dispatchRequest(request, response, store) {
     if (request.method === 'POST') {
       assertTrustedMutation(request, { requireJson: true });
       const input = await readJsonBody(request);
-      sendJson(response, 201, store.create(input));
+      const owner = authenticatedPluginOwner(request.headers, ownerAuthToken);
+      sendJson(response, 201, store.create(input, { pluginOwner: owner }));
       return;
     }
     throw methodNotAllowed();
@@ -346,6 +350,36 @@ async function dispatchRequest(request, response, store) {
   }
 
   throw new NotificationError(404, 'NOT_FOUND', 'Not found');
+}
+
+function authenticatedPluginOwner(headers, expectedToken) {
+  const ownerHeader = headers['x-harbors-plugin-owner'];
+  const proofHeader = headers['x-harbors-owner-proof'];
+  if (ownerHeader === undefined && proofHeader === undefined) return undefined;
+  const owner = normalizePluginOwner(ownerHeader);
+  const expectedProof = typeof expectedToken === 'string' && expectedToken.length > 0
+    ? crypto.createHmac('sha256', expectedToken).update(OWNER_PROOF_DOMAIN).update(owner).digest('hex')
+    : '';
+  if (!expectedProof || !safeTokenEqual(proofHeader, expectedProof)) {
+    throw new NotificationError(403, 'OWNER_AUTH_REJECTED', 'Notification owner authentication failed');
+  }
+  return owner;
+}
+
+function safeTokenEqual(value, expected) {
+  if (Array.isArray(value) || typeof value !== 'string') return false;
+  const left = Buffer.from(value);
+  const right = Buffer.from(expected);
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function normalizePluginOwner(value) {
+  if (value === undefined) return undefined;
+  if (Array.isArray(value) || typeof value !== 'string' || value.length > 200
+    || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(value)) {
+    throw badRequest('Notification plugin owner is invalid');
+  }
+  return value;
 }
 
 function assertMethod(request, expected) {

@@ -235,10 +235,11 @@ Installed Kit Store。
 
 ### 官方 Kit 的目录与发布边界
 
-Default 是唯一的 builtin Kit。Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 与 TraceWeave 是官方市场 Kit；其实现固定保存在
-主分支的 `kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、`kits/skill-manager`、`kits/traceweave`，这些仓库目录只会由
-`npm run dev` 自动加载。每个目录独立维护
-`kit.json`、`package.json`、插件、测试和构建产物，但共用根 `package-lock.json` 和发布工具链。
+Kit 的 descriptor 通过 `harbors.distribution` 声明 builtin 或 market；builtin 中恰好一个以
+`harbors.default=true` 声明默认角色。实现固定保存在主分支的 `kits/<name>`；development profile
+发现全部合法 Kit，stable profile 只选择 descriptor 声明的 builtin，并从隔离构建生成的 staging
+加载。每个目录独立维护 `kit.json`、`package.json`、`package-lock.json`、依赖安装、插件、测试和
+构建产物，仓库只共享通用发布工具链。
 修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
 不会发布 Kit 或 Framework。
 
@@ -254,10 +255,8 @@ Registry entry。具体确认令牌、Stable/Preview 频道和回滚规则见
 服务桥接或全局安装动作。启动插件仍是标准插件 package，但 manifest 只能贡献应用菜单和
 Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser message。
 
-Agent Guard 是这一模型的完整示例：`agent-guard-background` 在应用启动时以低频率读取 macOS
-进程表和 `netstat` 累计计数，`agent-guard-center` 仅在用户打开 Kit 时建立会话和 2 秒 UI 轮询。
-后台快照默认 5 秒一次；UI 轮询不会提高后台采集频率。
-后台与面板通过 `application.request` 转发结构化快照，Panel 不获得进程控制能力。
+典型实现会让 application-scope 插件维护宿主级服务，让 session-scope 插件通过
+`application.request` 转发结构化结果；Panel 始终不直接获得进程、文件系统或其他宿主权限。
 
 ```json
 {
@@ -343,151 +342,18 @@ npm run dev -- --kit ./kits/my-kit
 5. 切换 Kit 后旧 Panel、菜单和消息路由不再存在。
 6. 主窗口与次窗口都能加载各自 entry。
 
-## SQLite Kit
+## Kit 专属文档
 
-官方市场 Kit `@itharbors/kit-sqlite` 提供本地 SQLite 数据库工作台。启动前先构建它的插件：
-
-```bash
-npm run plugins:build
-npm run dev -- --kit ./kits/sqlite
-```
-
-SQLite Kit 由 Core、Explorer、Data、Schema、Relationships 和 SQL 六个插件组成。启动后在左侧
-资源管理器打开或创建数据库；已有文件默认只读，需要修改时必须显式启用写入。右侧原生标签组
-提供分页数据编辑、结构、全库关系图和 SQL 工作区。视图、虚拟表、影子表及没有稳定行标识的表
-保持只读，BLOB 显示大小与十六进制摘要。
-
-SQL 页每次执行一个语句，可运行查询、DDL 或 DML；结果集每页最多返回 50 行。所有表格生成的
-写操作使用参数绑定，删除记录与写 SQL 都会要求确认。
-
-## CSV Kit
-
-官方市场 Kit `@itharbors/kit-csv` 是只读 CSV/TSV 文本检查器。它支持 UTF-8（含 BOM）与
-GB18030，允许在打开前确认逗号、制表符或分号分隔符和表头配置，并对不规则记录给出警告。
-
-```bash
-npm run dev -- --kit ./kits/csv
-```
-
-Core 插件流式解析源文件并建立会话临时索引；Panel 仅获取当前页。数据页提供全字段搜索、字段筛选、
-稳定文本排序和 25/50/100/250 行分页，结构页按需读取空值数与最大长度。导出始终创建新的 UTF-8 BOM
-CSV 并拒绝覆盖源文件或已有目标。完整格式、查询语义与资源上限见 [CSV Kit README](../../kits/csv/README.md)。
-
-## TraceWeave Kit
-
-官方市场 Kit `@itharbors/kit-traceweave` 只读解析本机 Codex JSONL 会话，通过 Session main 插件与
-React Panel 间的 message request 展示四阶段 Flow、完整 Events、证据筛选、回放和脱敏检查器：
-
-```bash
-npm run dev -- --kit ./kits/traceweave
-```
-
-该 Kit 的数据插件不启动端口，不把 Codex Home 或 rollout 绝对路径发送给 Panel。独立的
-`@itharbors/traceweave-contracts` workspace 是 main/Panel 唯一共享协议。支持范围、证据语义、
-隐私边界和验证命令见 [TraceWeave Kit README](../../kits/traceweave/README.md)。
-
-## MySQL Kit
-
-官方市场 Kit `@itharbors/kit-mysql` 提供远程 MySQL 数据库工作台。启动前先构建它的插件：
-
-```bash
-npm run plugins:build
-npm run dev -- --kit ./kits/mysql
-```
-
-连接时需要填写主机、端口、用户、密码和数据库名，也可启用 TLS。密码只保留在当前 Server
-会话中，不会写入配置或返回 Panel；连接成功后输入框会立即清空。启用 TLS 时由 MySQL 驱动
-验证服务端证书，证书不受信任会导致连接失败。
-
-MySQL Kit 由 Core、Explorer、Data、Schema、Relationships 和 SQL 六个插件组成。左侧列出表与
-视图，右侧原生标签组提供分页数据编辑、结构、全库关系图和 SQL。关系图只使用当前 database
-真实声明的外键，支持复合、自引用、循环和平行关系。视图始终只读；没有可用主键的表可预览
-和新增，但不能修改或删除。BLOB 只显示大小与十六进制摘要，二进制主键不参与行编辑。
-
-SQL 页每次显式执行一个语句，可运行查询、DDL 或 DML；结果集最多预览 500 行。表格 CRUD
-使用参数绑定并在事务中校验影响行数，数据库权限仍由所连接的 MySQL 账号控制。
-
-## Notification Kit 与 Agent Skill
-
-`@itharbors/kit-notifications` 提供通知中心，Electron 主进程同时启动仅监听 loopback 的
-Notification Host。Agent 应使用 `notify-user` Skill 的脚本，不要自行拼 HTTP，也不要退回到
-平台专属通知命令。Harbors Electron 内置仓库中的
-[`.agents/skills/notify-user`](../../.agents/skills/notify-user/)，用户通过主菜单
-**APP → Install or Update Codex Notification Skill…** 安装或更新到
-`~/.codex/skills/notify-user`。正式用户流程完全离线，不访问 GitHub，也不依赖 Codex CLI。
-
-菜单动作使用独立的应用级 `menuId -> message -> plugin method` 链路，不依赖 Notification Kit
-Session。Electron 将开发态仓库路径或打包态
-`kits/notifications/plugins/notification-background/main/dist/resources/notify-user` 通过
-`HARBORS_NOTIFY_SKILL_SOURCE` 传给 Framework；插件方法不接受调用方提供的源路径或目标路径。
-安装器先在同一父目录暂存和校验内容，再独占创建目标目录并最后写入 `SKILL.md` 与管理标记；
-更新前会将旧版本原子移动到备份。安装器只自动更新带 Harbors 管理标记且未被用户修改的版本；
-其他同名目录保持不变并报告冲突。
-
-Skill 必须定位已加载 `SKILL.md` 的目录，再用绝对路径运行脚本：
-
-```bash
-node "<skill-directory>/scripts/notify.mjs" \
-  --title "Approval required" \
-  --body "The release is waiting for production approval" \
-  --level warning \
-  --persistent
-```
-
-这样调用与当前项目目录无关；`<skill-directory>` 只表示运行时解析出的安装目录。
-
-参数约束：
-
-- `--title` 必填，最多 120 字符；`--body` 最多 2,000 字符；
-- `--level` 可取 `info`、`success`、`warning`、`error`；
-- `--duration` 仅用于临时通知，范围 1,000–60,000 毫秒，默认 8,000；
-- `--persistent` 用于阻塞、审批或其他需要用户处理的事项；
-- `--source` 默认是 `Codex`。
-
-脚本输出 `Notification sent: <id>` 且退出码为 0 才表示 Host 已接收。若 Electron 未运行，
-应把投递失败告知用户，不应声称通知成功。开发时可通过以下接口检查完整状态流：
-
-| Method | Path | 用途 |
-| --- | --- | --- |
-| `GET` | `/health` | Host 存活检查 |
-| `POST` / `GET` | `/v1/notifications` | 创建通知 / 获取快照 |
-| `POST` | `/v1/notifications/:id/read` | 标记单条已读 |
-| `POST` | `/v1/notifications/read-all` | 全部已读 |
-| `DELETE` | `/v1/notifications/:id` | 删除通知 |
-
-默认端口是 `48383`，可用 `HARBORS_NOTIFICATION_PORT` 修改；无论端口如何配置，Host 都只绑定
-`127.0.0.1`。创建请求必须使用 `application/json`；Host 会拒绝所有带 `Origin` 的写请求，
-因此浏览器 Panel 必须经 server-side plugin 调用，不能直接 fetch Host。通知是桌面应用生命周期
-内的内存状态，不承诺跨重启保存。
-
-## Skill Manager Kit
-
-官方市场 Kit `@itharbors/kit-skill-manager` 提供本地 Codex Skill 工作台。它默认扫描
-`$CODEX_HOME/skills`，未设置 `CODEX_HOME` 时使用 `~/.codex/skills`；也可以选择一个来源目录，
-在当前 Session 中对照可安装或可更新内容。来源选择不会跨 Server 重启保存，清除或切换来源会取消
-旧扫描并开始新的 generation。
-
-```bash
-npm run dev -- --kit ./kits/skill-manager
-```
-
-列表区分 `source-only`、`current`、`update-available`、`global-only`、`disabled`、`trashed`、
-`protected`、`conflict` 和 `invalid`。安装与更新会在同一目标父目录暂存、校验后再发布；停用与卸载
-只会把原目录移动到 `$CODEX_HOME/skill-manager-store/v1`，可通过恢复操作放回，不提供永久删除。
-`.system` 下的系统 Skill 始终为 `protected`，不能修改。
-
-Panel 的 request 只提交快照 revision、digest 和不透明 Skill/目录 ID；Renderer 不接收或提交原始
-文件系统路径。当前版本只管理本机目录，不访问网络或 GitHub，也不提供远程仓库安装。完整状态与
-恢复规则见 [Skill Manager README](../../kits/skill-manager/README.md)。
+Framework 文档只维护通用的 Kit、Plugin、Catalog 与 Host 契约。每个 Kit 的功能、生命周期、
+权限、平台限制、资源上限和验证命令由 `kits/<slug>/README.md` 维护；新增或修改产品行为时，
+应在对应 Kit 内同步更新。仓库级 Agent 通知流程另见
+[notify-user Skill](../../.agents/skills/notify-user/SKILL.md)。
 
 ## 参考实现
 
-- [默认 Kit](../../kits/default/package.json)
-- [默认布局](../../kits/default/layout.json)
-- [Log 插件 manifest](../../kits/default/plugins/log/package.json)
-- [Log main](../../kits/default/plugins/log/main/src/index.ts)
-- [Log Panel](../../kits/default/plugins/log/panel.log/src/index.ts)
+- `kits/<name>/package.json` 与 `kit.json`
+- `kits/<name>/layout.json`
+- `kits/<name>/plugins/<plugin>/package.json`
 - [共享插件协议](../../packages/plugin-types/src/index.ts)
-- [Notification Kit](../../kits/notifications/package.json)
-- [Skill Manager Kit](../../kits/skill-manager/package.json)
+- 各 Kit 自己的 README
 - [notify-user Skill](../../.agents/skills/notify-user/SKILL.md)

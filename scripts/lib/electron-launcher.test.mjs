@@ -23,6 +23,7 @@ import {
   finishDesktopShutdown,
   showKitChooser,
   shouldStartElectronApp,
+  shouldUseBundledFramework,
 } from './electron-launcher.mjs';
 import { createDevPages, createDevServerEnv, createDevStackEnvironments } from './dev-launcher.mjs';
 
@@ -66,6 +67,12 @@ test('starts packaged Electron when LaunchServices does not provide the bundled 
     entryPath: modulePath,
     modulePath,
   }), true);
+});
+
+test('uses the bundled Framework for stable source and packaged runs only', () => {
+  assert.equal(shouldUseBundledFramework({ isPackaged: false, runtimeProfile: 'stable' }), true);
+  assert.equal(shouldUseBundledFramework({ isPackaged: false, runtimeProfile: 'development' }), false);
+  assert.equal(shouldUseBundledFramework({ isPackaged: true, runtimeProfile: 'development' }), true);
 });
 
 test('registers SIGTERM and SIGINT as one graceful desktop quit, then disposes both listeners', () => {
@@ -177,7 +184,7 @@ test('always prints the chooser and adds an encoded requested Kit shortcut', () 
 test('keeps electron stable and makes dev an isolated Electron entry', async () => {
   const packageJson = JSON.parse(await readFile(new URL('package.json', rootDir), 'utf8'));
 
-  assert.equal(packageJson.scripts.prestart, 'npm run build:runtime');
+  assert.equal(packageJson.scripts.prestart, 'npm run desktop:prepare');
   assert.equal(
     packageJson.scripts['plugins:build:runtime'],
     'node scripts/build.mjs plugins-runtime',
@@ -189,7 +196,7 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
   assert.equal(packageJson.scripts.build, 'node scripts/build.mjs all');
   assert.equal(packageJson.scripts['plugins:build'], 'node scripts/build.mjs plugins');
   assert.match(
-    packageJson.scripts.test,
+    packageJson.scripts['test:framework'],
     /scripts\/lib\/plugin-build\/discover\.test\.mjs/u,
   );
   assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
@@ -198,6 +205,7 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
   const electronSource = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   assert.match(electronSource, /resolveRuntimePorts/);
   assert.match(electronSource, /HARBORS_RUNTIME_PROFILE/);
+  assert.match(electronSource, /shouldUseBundledFramework/u);
 });
 
 test('limits the default cleanup command to development ports', async () => {
@@ -827,7 +835,17 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /createApplicationRuntimeClient/);
   assert.match(source, /HARBORS_HOST_MODE:\s*'desktop'/);
   assert.match(source, /HARBORS_APPLICATION_TOKEN:\s*applicationControlToken/);
-  assert.match(source, /HARBORS_AGENT_GUARD_DATA_DIR:\s*desktopPaths\.agentGuardDataDir/);
+  assert.doesNotMatch(source, /HARBORS_AGENT_GUARD_DATA_DIR|agentGuardDataDir/);
+  for (const [environmentName, propertyName] of [
+    ['HARBORS_PLUGIN_DATA_ROOT', 'pluginDataRoot'],
+    ['HARBORS_PLUGIN_CACHE_ROOT', 'pluginCacheRoot'],
+    ['HARBORS_PLUGIN_TEMP_ROOT', 'pluginTempRoot'],
+  ]) {
+    assert.equal(
+      [...source.matchAll(new RegExp(`${environmentName}:\\s*desktopPaths\\.${propertyName}`, 'g'))].length,
+      2,
+    );
+  }
   assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
   assert.equal(
     [...source.matchAll(/HARBORS_DATA_ROOT:\s*desktopPaths\.dataRoot/g)].length,
@@ -836,7 +854,7 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
   assert.match(source, /new InstalledKitStore\(kitStoreRoot\)/);
   assert.match(source, /app\.getVersion\(\)/);
-  assert.match(source, /app\.isPackaged\s*\?\s*resolveCurrentProcessRuntime\(process\)\s*:\s*resolveFrameworkRuntime\(\)/);
+  assert.match(source, /bundledFramework\s*\?\s*resolveCurrentProcessRuntime\(process\)\s*:\s*resolveFrameworkRuntime\(\)/);
   assert.match(source, /prepareInstalledKitsForStartup/);
   assert.match(source, /finalizePendingKitActivations/);
   assert.match(source, /validateInstalledKitRuntime/);
@@ -855,6 +873,12 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
   assert.ok(stopHost >= 0 && unsubscribeStore >= 0 && stopHost < unsubscribeStore);
 });
 
+test('derives notification navigation from plugin ownership without a Kit identity constant', async () => {
+  const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /NOTIFICATION_KIT_NAME|@itharbors\/kit-notifications/u);
+  assert.match(source, /resolveOwnerKit\(notification\.pluginOwner, kitCatalog\)/u);
+});
+
 test('uses only Electron run-as-node and IPC for packaged Framework startup', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const packagedStart = source.slice(
@@ -868,7 +892,7 @@ test('uses only Electron run-as-node and IPC for packaged Framework startup', as
   assert.match(packagedStart, /HARBORS_RUNTIME_ROOT/);
   assert.match(packagedStart, /HARBORS_CLIENT_ASSETS_ROOT/);
   assert.match(packagedStart, /HARBORS_DB_PATH/);
-  assert.match(packagedStart, /HARBORS_AGENT_GUARD_DATA_DIR/);
+  assert.doesNotMatch(packagedStart, /HARBORS_AGENT_GUARD_DATA_DIR|agentGuardDataDir/);
   assert.match(packagedStart, /HARBORS_KIT_SOURCES/);
   assert.doesNotMatch(packagedStart, /npm|vite|tsx|\bnode\b/iu);
   const spawned = packagedStart.indexOf('const started = startDesktopFrameworkProcess');
@@ -878,17 +902,14 @@ test('uses only Electron run-as-node and IPC for packaged Framework startup', as
   assert.match(packagedStart, /frameworkStop = started\.stop/);
 });
 
-test('passes the Agent Guard data directory to the development Framework', async () => {
+test('uses only generic plugin storage roots for the development Framework', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
   const developmentStart = source.slice(
     source.indexOf('function startDevelopmentFramework'),
     source.indexOf('function observeFrameworkProcess'),
   );
 
-  assert.match(
-    developmentStart,
-    /HARBORS_AGENT_GUARD_DATA_DIR:\s*desktopPaths\.agentGuardDataDir/,
-  );
+  assert.doesNotMatch(developmentStart, /HARBORS_AGENT_GUARD_DATA_DIR|agentGuardDataDir/);
 });
 
 test('consults the supervised Framework stop result even after the child exits early', async () => {
@@ -905,6 +926,8 @@ test('consults the supervised Framework stop result even after the child exits e
 
 test('commits pending installed Kits through an in-process Framework generation recovery', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
+  assert.match(source, /discoverRepositoryBuiltinKits/u);
+  assert.doesNotMatch(source, /discoverRepositoryKits\s*\(/u);
   const prepare = source.indexOf('await prepareInstalledKitsForStartup');
   const discover = source.indexOf('kitCatalog = await discoverKits');
   const initialize = source.indexOf('await initializeKitHost');

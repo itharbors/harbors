@@ -43,7 +43,7 @@ npm run dev
 
 `npm run dev` 会启动隔离的开发 Electron，额外加载仓库 `kits/*` 中的开发 Kit，加载各 Kit 声明的应用级启动插件并显示系统托盘图标，但不会
 自动打开默认 Kit。单击或右键托盘
-图标，从列表选择 Default、Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager 或 TraceWeave；首次选择会按需加载，之后再次选择只会打开或
+图标，从 descriptor 动态生成的列表中选择 Kit；首次选择会按需加载，之后再次选择只会打开或
 聚焦已有窗口。选择 **Kit Manager…** 可刷新市场、安装 Stable/Preview Kit；安装、更新、启用、
 回滚和删除会在当前 Electron 会话中立即应用。运行时切换只替换后台 Framework 子进程，托盘、
 Kit Manager 和 Notification Host 保持运行。首个可信 Kit Release 完成发布和索引部署前，Registry 可能为空。
@@ -74,10 +74,7 @@ npm run start
 的多 Kit 聚合形式：
 
 ```bash
-npm run dev -- --kit ./kits/sqlite
-npm run dev -- --kit ./kits/csv
-npm run dev -- --kit ./kits/agent-guard
-npm run dev -- --kit ./kits/traceweave
+npm run dev -- --kit ./kits/<name>
 ```
 
 ### Agent 通知
@@ -128,13 +125,13 @@ npm run plugins:check
 
 # 构建或校验单个插件
 node scripts/ce-plugin.mjs build plugins/menu
-node scripts/ce-plugin.mjs check kits/default/plugins/log
+node scripts/ce-plugin.mjs check kits/<name>/plugins/<plugin>
 
 # 只启动 Web 开发栈
 npm run dev:web
 
 # 使用指定 Kit 目录启动 Electron
-npm run dev -- --kit ./kits/default
+npm run dev -- --kit ./kits/<name>
 
 # 校验、封装并检查可发布 Kit 制品
 npm run kit -- validate ./path/to/kit
@@ -157,10 +154,8 @@ Kit Manager 默认读取 `https://itharbors.github.io/harbors/index.v1.json`。�
 `HARBORS_KIT_PUBLISHER_POLICIES_JSON`、`HARBORS_KIT_AUTO_UPDATE_PUBLISHERS` 显式配置，非法配置
 会阻止市场服务启动。
 
-Agent Guard、CSV、SQLite、MySQL、Notifications、Scheduler、Skill Manager、TraceWeave 分别维护在
-`kits/agent-guard`、`kits/csv`、`kits/sqlite`、`kits/mysql`、`kits/notifications`、`kits/scheduler`、
-`kits/skill-manager`、`kits/traceweave`。TraceWeave 将本机 Codex JSONL 会话只读投影为四阶段 Flow、
-完整 Events、回放与脱敏证据检查器；使用方式见 [TraceWeave Kit](./kits/traceweave/README.md)。
+每个 Kit 维护在自己的 `kits/<name>` 功能单元中。仓库从 `kit.json` 与 `package.json` 生成
+descriptor；`harbors.distribution` 决定 builtin 或 market 投影，根文档不维护产品清单。
 Framework 与 Kit 变更都通过 PR 合入 `main`，但 Kit 使用仓库本地 `kit-workflow` 从
 `origin/main` 创建 `kit-change/<name>/<type>/<slug>` 隔离 worktree，并只检查目标 Kit。普通合并
 不会发布 Kit 或 Framework。
@@ -241,13 +236,7 @@ packages/
 ├── plugin-types/  共享插件协议与类型
 └── server/        会话、运行时、Kit、插件和 API 路由
 kits/
-├── default/       内置默认 Kit 及其外部插件
-├── agent-guard/   Claude Code / Codex 本机流量守卫
-├── csv/           CSV Kit
-├── sqlite/        SQLite Kit
-├── mysql/         MySQL Kit
-├── notifications/ Notifications Kit
-└── skill-manager/ Codex Skill 管理 Kit
+└── <slug>/        自包含的 Kit 功能、依赖、构建、测试与文档
 plugins/           内置插件（配置、菜单、消息、面板）
 scripts/           开发栈、Electron 宿主和插件构建工具
 docs/              架构约束、操作指南和历史记录

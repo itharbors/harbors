@@ -1,7 +1,13 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { MessageModule } from '../../src/framework/message/index';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('MessageModule', () => {
   let messageModule: MessageModule;

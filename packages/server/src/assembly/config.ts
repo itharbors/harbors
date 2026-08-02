@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
+import { parseRepositoryKitPackage } from '@itharbors/kit-core';
 
 export interface AssemblyConfig {
   builtinPluginsDir: string;
@@ -28,8 +30,32 @@ export function createDefaultAssemblyConfig(
     builtinKitsDir: path.join(projectRoot, 'kits'),
     kitsDir: path.join(projectRoot, 'kits'),
     kitSources: [],
-    defaultKit: '@itharbors/kit-default',
+    defaultKit: '',
   }, override);
+}
+
+export function resolveDefaultKitFromSources(sources: AssemblyKitSource[]): string {
+  const builtinSources = sources.filter((source) => source.source === 'builtin');
+  const defaults = builtinSources.flatMap((source) => {
+    try {
+      const packageJson = JSON.parse(readFileSync(path.join(source.directory, 'package.json'), 'utf8'));
+      const metadata = parseRepositoryKitPackage(packageJson.harbors);
+      if (metadata.distribution !== 'builtin') {
+        throw new Error('builtin Assembly source must declare builtin distribution');
+      }
+      if (typeof packageJson.name !== 'string'
+        || !/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(packageJson.name)) {
+        throw new Error('builtin Assembly source package name must be canonical');
+      }
+      return metadata.isDefault === true ? [packageJson.name] : [];
+    } catch (error) {
+      throw new Error(`Cannot resolve default Kit descriptor from ${source.directory}`, { cause: error });
+    }
+  });
+  if (defaults.length !== 1) {
+    throw new Error('Kit sources must contain exactly one builtin default descriptor');
+  }
+  return defaults[0];
 }
 
 export function normalizeAssemblyConfig(

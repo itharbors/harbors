@@ -62,6 +62,16 @@ write_kit_files() {
     '  "permissions": ["filesystem"],' \
     '  "entry": "package.json"' \
     '}' > "$directory/kits/$kit/kit.json"
+  printf '%s\n' \
+    '{' \
+    "  \"name\": \"@itharbors/kit-$kit\"," \
+    "  \"version\": \"$version\"," \
+    '  "lockfileVersion": 3,' \
+    '  "requires": true,' \
+    '  "packages": {' \
+    "    \"\": { \"name\": \"@itharbors/kit-$kit\", \"version\": \"$version\" }" \
+    '  }' \
+    '}' > "$directory/kits/$kit/package-lock.json"
 }
 
 write_repository_files() {
@@ -79,10 +89,7 @@ write_repository_files() {
     '  "name": "itharbors",' \
     '  "lockfileVersion": 3,' \
     '  "requires": true,' \
-    '  "packages": {' \
-    '    "": { "name": "itharbors" },' \
-    '    "kits/sqlite": { "name": "@itharbors/kit-sqlite", "version": "0.1.0-preview.1" }' \
-    '  }' \
+    '  "packages": { "": { "name": "itharbors" } }' \
     '}' > "$directory/package-lock.json"
   printf '%s\n' \
     '{' \
@@ -112,9 +119,10 @@ for (const relative of ['kits/sqlite/kit.json', 'kits/sqlite/package.json']) {
   if (relative.endsWith('kit.json')) value.channel = channel;
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
 }
-const lockFile = path.join(root, 'package-lock.json');
+const lockFile = path.join(root, 'kits/sqlite/package-lock.json');
 const lock = JSON.parse(fs.readFileSync(lockFile, 'utf8'));
-lock.packages['kits/sqlite'].version = version;
+lock.version = version;
+lock.packages[''].version = version;
 fs.writeFileSync(lockFile, `${JSON.stringify(lock, null, 2)}\n`);
 NODE
 }

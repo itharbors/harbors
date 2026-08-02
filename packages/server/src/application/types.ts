@@ -1,9 +1,12 @@
 import type { NormalizedMenuResult } from '../framework/menu/types';
+import type { KitPermission } from '@itharbors/kit-core';
 
 export interface ApplicationPluginSpec {
   name: string;
   path: string;
   kits: string[];
+  permissions?: KitPermission[];
+  legacyDataDirectories?: string[];
 }
 
 export type ApplicationDiagnosticCode =

@@ -21,6 +21,9 @@ async function createKit(rootDir, directoryName, options = {}) {
         ...(options.startupPlugins ? { startup: { plugins: options.startupPlugins } } : {}),
       },
     },
+    harbors: {
+      distribution: options.distribution ?? (directoryName === 'default' ? 'builtin' : 'market'),
+    },
   };
   await writeFile(path.join(kitDir, 'package.json'), JSON.stringify(manifest));
   return kitDir;
@@ -49,6 +52,26 @@ test('discovers valid Kit manifests in deterministic order', async () => {
   assert.deepEqual(kits.map(({ source, version }) => ({ source, version })), [
     { source: 'builtin', version: '0.0.1' },
     { source: 'development', version: '0.0.1' },
+  ]);
+});
+
+test('reports an invalid development Kit while retaining the healthy Catalog', async () => {
+  const rootDir = await mkdtemp(path.join(os.tmpdir(), 'itharbors-catalog-'));
+  await createKit(rootDir, 'default', { menuRoot: { id: 'default', label: 'Default Kit' } });
+  await createKit(rootDir, 'broken-market', {
+    raw: { harbors: { distribution: 'market' } },
+  });
+  const diagnostics = [];
+
+  const catalog = await discoverKits({
+    rootDir,
+    profile: 'development',
+    onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+  });
+
+  assert.deepEqual(catalog.map((kit) => kit.name), ['@itharbors/kit-default']);
+  assert.deepEqual(diagnostics.map((diagnostic) => diagnostic.code), [
+    'INVALID_DEVELOPMENT_KIT',
   ]);
 });
 

@@ -10,6 +10,7 @@ import { createApp } from './app';
 import {
   createDefaultAssemblyConfig,
   normalizeAssemblyConfig,
+  resolveDefaultKitFromSources,
   type AssemblyConfig,
   type AssemblyKitSource,
   type KitSourceKind,
@@ -17,6 +18,7 @@ import {
 import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
+import type { PluginPathRoots } from './framework/plugin/paths';
 
 export interface ServerOptions {
   port?: number;
@@ -26,7 +28,8 @@ export interface ServerOptions {
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
   applicationControlToken?: string;
-  agentGuardDataDir?: string;
+  notificationPort?: number;
+  pluginPathRoots: PluginPathRoots;
   clientAssetsRoot?: string;
   host?: string;
   applicationRuntime?: Pick<
@@ -76,23 +79,21 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
   });
 }
 
-export function createServer(options: ServerOptions = {}) {
-  if (options.agentGuardDataDir !== undefined && !path.isAbsolute(options.agentGuardDataDir)) {
-    throw new Error('agentGuardDataDir must be an absolute path');
-  }
+export function createServer(options: ServerOptions) {
   if (!options.assembly && (!options.kitSources || options.kitSources.length === 0)) {
     throw new Error('Server requires at least one Kit source');
   }
   if (options.assembly && options.assembly.kitSources.length === 0) {
     throw new Error('Server requires at least one Kit source');
   }
+  const pluginPathRoots = requirePluginPathRoots(options.pluginPathRoots);
   const dbPath = options.dbPath || ':memory:';
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
   const channel = new SSEChannel();
   const broker = new BrowserRequestBroker();
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
-  const assembly = freezeAssemblySnapshot(options.assembly
+  const configuredAssembly = options.assembly
     ? normalizeAssemblyConfig(options.assembly)
     : createDefaultAssemblyConfig(
         path.resolve(serverDir, '../../..'),
@@ -100,16 +101,30 @@ export function createServer(options: ServerOptions = {}) {
           defaultKit: options.defaultKit,
           kitSources: options.kitSources,
         },
-      ));
+      );
+  if (!configuredAssembly.defaultKit) {
+    configuredAssembly.defaultKit = resolveDefaultKitFromSources(configuredAssembly.kitSources);
+  }
+  const assembly = freezeAssemblySnapshot(configuredAssembly);
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
     hostMode: options.applicationHostMode ?? 'web',
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
+    pluginPathRoots,
+    notificationPort: options.notificationPort,
+    notificationOwnerAuthToken: options.applicationControlToken,
   });
-  const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
+  const {
+    handleRequest,
+    registry,
+    editorMap,
+    stopDisconnectHandling,
+    prepareKitCatalog,
+  } = createApp(manager, channel, {
     assembly,
     applicationRuntime,
     applicationControlToken: options.applicationControlToken,
     clientAssetsRoot: options.clientAssetsRoot,
+    pluginPathRoots,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -134,7 +149,7 @@ export function createServer(options: ServerOptions = {}) {
   };
 
   const startInternal = async (port?: number): Promise<number> => {
-    await applicationRuntime.start();
+    await Promise.all([applicationRuntime.start(), prepareKitCatalog()]);
     if (stopping) throw new ServerStoppingError();
     const listeningPort = await new Promise<number>((resolve, reject) => {
       const p = port || options.port || 0;
@@ -221,6 +236,26 @@ export function createServer(options: ServerOptions = {}) {
     editorMap,
     applicationRuntime,
   };
+}
+
+function requirePluginPathRoots(roots: PluginPathRoots): PluginPathRoots {
+  if (!roots || typeof roots !== 'object') {
+    throw new Error('pluginPathRoots is required');
+  }
+  for (const [name, value] of Object.entries(roots)) {
+    if (typeof value !== 'string' || !path.isAbsolute(value)) {
+      throw new Error(`pluginPathRoots.${name} must be an absolute path`);
+    }
+  }
+  for (const name of ['applicationData', 'data', 'cache', 'temp'] as const) {
+    if (!Object.hasOwn(roots, name)) throw new Error(`pluginPathRoots.${name} is required`);
+  }
+  return Object.freeze({
+    applicationData: path.resolve(roots.applicationData),
+    data: path.resolve(roots.data),
+    cache: path.resolve(roots.cache),
+    temp: path.resolve(roots.temp),
+  });
 }
 
 function freezeAssemblySnapshot(assembly: AssemblyConfig): AssemblyConfig {

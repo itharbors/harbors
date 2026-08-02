@@ -28,12 +28,14 @@ import { createApplicationEventsRouter } from './routes/application-events';
 import { createApplicationMenuTriggerRouter } from './routes/application-menu-trigger';
 import { createKitCatalogRouter } from './routes/kit-catalog';
 import { createClientAssetRouter } from './routes/client-asset';
+import type { PluginPathRoots } from './framework/plugin/paths';
 
 export interface AppOptions {
   assembly: AssemblyConfig;
   applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe'>;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
+  pluginPathRoots: PluginPathRoots;
 }
 
 export function createApp(
@@ -46,10 +48,15 @@ export function createApp(
     broker.rejectSession(sessionId, new Error('Browser disconnected'));
   });
   const assembly = appOptions.assembly;
-  const kitCatalogPromise = discoverKitCatalog(assembly);
+  let kitCatalogPromise: ReturnType<typeof discoverKitCatalog> | undefined;
+  const loadKitCatalog = () => {
+    kitCatalogPromise ??= discoverKitCatalog(assembly);
+    return kitCatalogPromise;
+  };
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
     const editor = createEditor(session.sessionId, {
         assembly,
+        pluginPathRoots: appOptions.pluginPathRoots,
         applicationRequest: (plugin, name, ...args) => (
           appOptions.applicationRuntime.request(plugin, name, ...args)
         ),
@@ -110,7 +117,7 @@ export function createApp(
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
     const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
     const catalogEntry = requestedKit
-      ? (await kitCatalogPromise).find((entry) => entry.name === requestedKit)
+      ? (await loadKitCatalog()).find((entry) => entry.name === requestedKit)
       : undefined;
     await registry.getOrCreate(session.sessionId, {
       ...options,
@@ -139,7 +146,7 @@ export function createApp(
     appOptions.applicationRuntime,
     { controlToken: appOptions.applicationControlToken },
   );
-  const kitCatalogRouter = createKitCatalogRouter(kitCatalogPromise);
+  const kitCatalogRouter = createKitCatalogRouter(loadKitCatalog);
   const clientAssetRouter = appOptions.clientAssetsRoot
     ? createClientAssetRouter(appOptions.clientAssetsRoot)
     : undefined;
@@ -264,7 +271,14 @@ export function createApp(
     }
   };
 
-  return { handleRequest, registry, editorMap, broker, stopDisconnectHandling };
+  return {
+    handleRequest,
+    registry,
+    editorMap,
+    broker,
+    stopDisconnectHandling,
+    prepareKitCatalog: loadKitCatalog,
+  };
 }
 
 const INDEX_HTML = `<!DOCTYPE html>

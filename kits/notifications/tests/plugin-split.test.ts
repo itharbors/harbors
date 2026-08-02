@@ -34,6 +34,10 @@ describe('notification plugin scopes', () => {
     expect(background['ce-editor'].contribute.panel).toBeUndefined();
     expect(background['ce-editor'].contribute.message.request).toEqual({
       installCodexSkill: ['installCodexSkill'],
+      getSnapshot: ['getSnapshot'],
+      markRead: ['markRead'],
+      markAllRead: ['markAllRead'],
+      removeNotification: ['removeNotification'],
     });
     expect(background['ce-editor'].contribute.menu).toEqual([
       expect.objectContaining({

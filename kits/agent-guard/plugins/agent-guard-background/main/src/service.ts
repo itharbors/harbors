@@ -159,7 +159,14 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
   };
 }
 
-export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
+interface DefaultAgentGuardServiceOptions {
+  dataDir: string;
+  legacyDataDirs: readonly string[];
+  hostMode: 'desktop' | 'web';
+  createNotification?: (input: Record<string, unknown>) => Promise<unknown>;
+}
+
+export async function createDefaultAgentGuardService(options: DefaultAgentGuardServiceOptions) {
   const policyPath = path.resolve(
     path.dirname(fileURLToPath(import.meta.url)), '../../resources/policy-v1.json',
   );
@@ -180,8 +187,9 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     catch { return fallbackAdapters[index].discoverConfiguration(); }
   }));
   const store = await createAgentGuardStore({
-    dataDir: env.HARBORS_AGENT_GUARD_DATA_DIR,
-    hostMode: env.HARBORS_HOST_MODE === 'desktop' ? 'desktop' : 'web',
+    dataDir: options.dataDir,
+    legacyDataDirs: options.legacyDataDirs,
+    hostMode: options.hostMode,
   });
   const persistedState = await store.loadState();
   const salt = persistedState ? Buffer.from(persistedState.saltHex, 'hex') : randomBytes(32);
@@ -335,8 +343,9 @@ export async function createDefaultAgentGuardService(env: NodeJS.ProcessEnv) {
     processMap.clear();
     for (const process of processes) processMap.set(process.pid, process);
   };
-  const notificationPort = parseNotificationPort(env.HARBORS_NOTIFICATION_PORT);
-  const notifier = notificationPort ? createIncidentNotifier({ port: notificationPort }) : undefined;
+  const notifier = options.createNotification
+    ? createIncidentNotifier({ create: options.createNotification })
+    : undefined;
   const refreshConfigurations = async () => {
     const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));
     configurations = configurations.map((current, index) => (
@@ -545,12 +554,6 @@ function applyPolicyOverrides(policy: PolicyV1, overrides: Record<string, unknow
       outboundMiB: typeof trip === 'number' ? trip : policy.fixedTrip.outboundMiB,
     },
   });
-}
-
-function parseNotificationPort(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const port = Number(value);
-  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : undefined;
 }
 
 function collectDescendants(pid: number, processes: Map<number, ProcessSnapshot>): ProcessSnapshot[] {

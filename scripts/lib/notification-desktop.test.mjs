@@ -9,7 +9,18 @@ import {
   formatNotificationCount,
   formatNotificationKitLabel,
   formatNotificationTooltip,
+  resolveOwnerKit,
 } from './notification-desktop.mjs';
+
+test('resolves a startup plugin owner to exactly one arbitrary Kit', () => {
+  assert.equal(resolveOwnerKit('@example/background', [{
+    name: '@example/kit-zeta', startupPlugins: ['@example/background'],
+  }]), '@example/kit-zeta');
+  assert.equal(resolveOwnerKit('@example/background', [
+    { name: '@example/kit-a', startupPlugins: ['@example/background'] },
+    { name: '@example/kit-b', startupPlugins: ['@example/background'] },
+  ]), undefined);
+});
 
 test('shows three toasts and promotes FIFO overflow after a close', () => {
   const shown = [];

@@ -8,7 +8,86 @@ on:
 permissions: {}
 
 jobs:
+  context:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      slug: ${{ steps.kit.outputs.slug }}
+      runner: ${{ steps.kit.outputs.runner }}
+    steps:
+      - name: Checkout release Tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Pin npm
+        run: npm install --global npm@10.9.3
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Build descriptor parser
+        run: npm run build -w @itharbors/kit-core
+
+      - name: Resolve trusted release Kit
+        id: kit
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { appendFileSync } from 'node:fs';
+          import { loadTrustedMarketKit } from './scripts/lib/kit-monorepo.mjs';
+
+          const match = /^refs\/tags\/kit\/([a-z0-9]+(?:-[a-z0-9]+)*)\/v.+$/u.exec(process.env.GITHUB_REF);
+          if (!match) throw new Error('Publication requires an exact canonical Kit Tag');
+          const kit = await loadTrustedMarketKit({
+            repositoryRoot: process.env.GITHUB_WORKSPACE,
+            slug: match[1],
+          });
+          appendFileSync(process.env.GITHUB_OUTPUT, `slug=${kit.slug}\nrunner=${kit.ciRunner}\n`, 'utf8');
+          NODE
+
+  preflight:
+    needs: context
+    runs-on: ${{ needs.context.outputs.runner }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout release Tag
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Pin npm
+        run: npm install --global npm@10.9.3
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Audit and isolate release Kit
+        env:
+          KIT_NAME: ${{ needs.context.outputs.slug }}
+        run: |
+          npm run kits:boundary -- "$KIT_NAME"
+          node scripts/run-kit-matrix.mjs check "$KIT_NAME"
+
   publish:
+    needs: preflight
     permissions:
       contents: write
       id-token: write

@@ -37,7 +37,10 @@ while IFS= read -r subject; do
   case "$subject" in
     "[$label] "*) ;;
     "[Docs] "*|"[Test] "*)
-      test "$change_type" = bug || fail "commits must start with [$label]: $subject"
+      case "$change_type" in bug|refactor) ;; *) fail "commits must start with [$label]: $subject" ;; esac
+      ;;
+    "[Bug] "*)
+      test "$change_type" = refactor || fail "commits must start with [$label]: $subject"
       ;;
     *) fail "commits must start with [$label]: $subject" ;;
   esac

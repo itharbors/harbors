@@ -2,79 +2,46 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { createEditor } from '../../src/editor/index';
+import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import { testAssembly } from '../helpers/assembly';
+import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+import { createKitFixture, type TestKitPlugin } from '../../src/framework/__tests__/kit-fixture';
+
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
 
-interface TestPlugin {
-  name: string;
-  dir: string;
-  contribute?: Record<string, unknown>;
-  code?: string;
-}
-
-function createDistPlugin(pluginsDir: string, plugin: TestPlugin) {
-  const pluginDir = path.join(pluginsDir, plugin.dir);
-  fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
-  writeJson(path.join(pluginDir, 'package.json'), {
-    name: plugin.name,
-    type: 'module',
-    main: './main/dist/index.js',
-    'ce-editor': {
-      contribute: plugin.contribute ?? {},
-    },
-  });
-  fs.writeFileSync(
-    path.join(pluginDir, 'main', 'dist', 'index.js'),
-    plugin.code ?? 'editor.plugin.define({ methods: {} });',
-  );
-
-  const panels = plugin.contribute?.panel && typeof plugin.contribute.panel === 'object'
-    ? plugin.contribute.panel
-    : {};
-  for (const definition of Object.values(panels)) {
-    if (!definition || typeof definition !== 'object' || typeof (definition as { entry?: unknown }).entry !== 'string') {
-      continue;
-    }
-    const entryPath = path.resolve(pluginDir, (definition as { entry: string }).entry);
-    fs.mkdirSync(path.dirname(entryPath), { recursive: true });
-    fs.writeFileSync(entryPath, '<html></html>');
-  }
-}
+type TestPlugin = TestKitPlugin & { dir: string };
 
 function createKit(name: string, plugins: TestPlugin[]): string {
-  const kitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-lifecycle-'));
-  const pluginsDir = path.join(kitDir, 'plugins');
-  fs.mkdirSync(pluginsDir, { recursive: true });
-  fs.writeFileSync(path.join(kitDir, 'layout.json'), JSON.stringify({ windows: [] }));
-  writeJson(path.join(kitDir, 'package.json'), {
+  return createKitFixture({
     name,
-    'ce-editor': {
-      kit: {
-        layouts: { default: 'layout.json' },
-        plugin: plugins.map((plugin) => plugin.name),
-        windowEntries: {
-          main: 'main.html',
-          secondary: 'secondary.html',
-        },
-      },
-    },
-  });
+    label: name,
+    plugins: plugins.map(({ dir, ...plugin }) => ({ ...plugin, directory: dir })),
+    mainPanel: null,
+  }).directory;
+}
 
-  for (const plugin of plugins) {
-    createDistPlugin(pluginsDir, plugin);
-  }
-
-  return kitDir;
+function validHarbors() {
+  return {
+    distribution: 'builtin',
+    ci: { runner: 'ubuntu-latest' },
+    docs: { summary: 'test kit' },
+    resources: [],
+    storage: { legacyDataDirectories: [] },
+    scripts: { build: 'build', test: 'test' },
+  };
 }
 
 function createDefaultKitFixture(): string {
-  return createKit('@itharbors/kit-default', [
+  return createKit('@example/kit-source', [
     {
-      name: '@itharbors/log',
+      name: '@example/source-log',
       dir: 'log',
       contribute: {
         panel: {
@@ -102,16 +69,16 @@ function createDefaultKitFixture(): string {
       `,
     },
     {
-      name: '@itharbors/plugin-list',
+      name: '@example/source-list',
       dir: 'plugin-list',
     },
   ]);
 }
 
 function createAlternateKitFixture(): string {
-  return createKit('@itharbors/kit-alternate', [
+  return createKit('@example/kit-alternate', [
     {
-      name: '@itharbors/alternate-header',
+      name: '@example/alternate-header',
       dir: 'alternate-header',
     },
   ]);
@@ -166,7 +133,7 @@ function createFailingKit(): string {
 }
 
 function createUnresolvableKit(): string {
-  const kitDir = createKit('@itharbors/kit-unresolvable', []);
+  const kitDir = createKit('@example/kit-unresolvable', []);
   const packagePath = path.join(kitDir, 'package.json');
   const pkg = JSON.parse(fs.readFileSync(packagePath, 'utf-8')) as {
     'ce-editor': { kit: { plugin: string[] } };
@@ -177,7 +144,7 @@ function createUnresolvableKit(): string {
 }
 
 function createUnloadFailingKit(): string {
-  return createKit('@itharbors/kit-unload-failing', [
+  return createKit('@example/kit-unload-failing', [
     {
       name: 'survivor-plugin',
       dir: 'survivor',
@@ -200,7 +167,7 @@ function createUnloadFailingKit(): string {
 }
 
 function createRollbackFailingSourceKit(): string {
-  return createKit('@itharbors/kit-rollback-source', [
+  return createKit('@example/kit-rollback-source', [
     {
       name: 'rollback-source-plugin',
       dir: 'rollback-source',
@@ -238,6 +205,29 @@ function assemblyForKits(...kitDirectories: string[]) {
 }
 
 describe('kit lifecycle', () => {
+  it('rejects malformed repository metadata through the shared Kit parser', async () => {
+    const invalidMetadata = [
+      null,
+      { ...validHarbors(), storage: { legacyDataDirectories: [], unknown: true } },
+      { ...validHarbors(), unknown: true },
+    ];
+    for (const [index, harbors] of invalidMetadata.entries()) {
+      const kitDir = createKit(`@example/kit-invalid-metadata-${index}`, []);
+      const manifestPath = path.join(kitDir, 'package.json');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      manifest.harbors = harbors;
+      writeJson(manifestPath, manifest);
+      const editor = createEditor(`kit-invalid-metadata-${index}`, { assembly: assemblyForKits(kitDir) });
+
+      try {
+        await expect(editor.kit.load(kitDir)).rejects.toThrow(/harbors/iu);
+      } finally {
+        await editor.dispose();
+        removeKits(kitDir);
+      }
+    }
+  });
+
   it('keeps builtin plugins loaded and unloads external kit plugins on switch', async () => {
     const defaultKit = createDefaultKitFixture();
     const alternateKit = createAlternateKitFixture();
@@ -246,19 +236,19 @@ describe('kit lifecycle', () => {
     try {
       await editor.kit.load(defaultKit);
       const before = editor.plugin.listLoaded();
-      expect(before).toEqual(expect.arrayContaining(['@itharbors/menu', '@itharbors/log', '@itharbors/plugin-list']));
-      expect(editor.panel.getRegistration('@itharbors/log.log')).toMatchObject({ owner: '@itharbors/log' });
-      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
+      expect(before).toEqual(expect.arrayContaining(['@itharbors/menu', '@example/source-log', '@example/source-list']));
+      expect(editor.panel.getRegistration('@example/source-log.log')).toMatchObject({ owner: '@example/source-log' });
+      expect(editor.message.queryRequest('@example/source-log', 'getLogs')).toBeDefined();
 
       await editor.kit.switchKit(alternateKit);
       const after = editor.plugin.listLoaded();
 
       expect(after).toContain('@itharbors/menu');
-      expect(after).toContain('@itharbors/alternate-header');
-      expect(after).not.toContain('@itharbors/log');
-      expect(after).not.toContain('@itharbors/plugin-list');
-      expect(editor.panel.list().some((panel) => panel.name === '@itharbors/log.log')).toBe(false);
-      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeUndefined();
+      expect(after).toContain('@example/alternate-header');
+      expect(after).not.toContain('@example/source-log');
+      expect(after).not.toContain('@example/source-list');
+      expect(editor.panel.list().some((panel) => panel.name === '@example/source-log.log')).toBe(false);
+      expect(editor.message.queryRequest('@example/source-log', 'getLogs')).toBeUndefined();
     } finally {
       removeKits(defaultKit, alternateKit);
     }
@@ -317,23 +307,23 @@ describe('kit lifecycle', () => {
     try {
       await editor.kit.load(defaultKit);
       const previousDirectory = editor.kit.getCurrentDirectory();
-      expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
-      expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
-      expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
-      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
+      expect(editor.kit.getCurrent()?.name).toBe('@example/kit-source');
+      expect(editor.plugin.listLoaded()).toContain('@example/source-log');
+      expect(editor.panel.getRegistration('@example/source-log.log')).toBeDefined();
+      expect(editor.message.queryRequest('@example/source-log', 'getLogs')).toBeDefined();
 
       await expect(editor.kit.switchKit(failingKit)).rejects.toThrow('bad plugin load failed');
 
-      expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+      expect(editor.kit.getCurrent()?.name).toBe('@example/kit-source');
       expect(editor.kit.getCurrentDirectory()).toBe(previousDirectory);
-      expect(editor.plugin.listLoaded()).toContain('@itharbors/log');
-      expect(editor.plugin.listLoaded()).toContain('@itharbors/plugin-list');
+      expect(editor.plugin.listLoaded()).toContain('@example/source-log');
+      expect(editor.plugin.listLoaded()).toContain('@example/source-list');
       expect(editor.plugin.listLoaded()).not.toContain('good-plugin');
       expect(editor.plugin.listLoaded()).not.toContain('bad-plugin');
-      expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
+      expect(editor.panel.getRegistration('@example/source-log.log')).toBeDefined();
       expect(editor.panel.getRegistration('good-plugin.main')).toBeUndefined();
       expect(editor.panel.getRegistration('bad-plugin.main')).toBeUndefined();
-      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
+      expect(editor.message.queryRequest('@example/source-log', 'getLogs')).toBeDefined();
       expect(editor.message.queryRequest('good-plugin', 'ping')).toBeUndefined();
       expect(editor.message.queryRequest('bad-plugin', 'ping')).toBeUndefined();
     } finally {
@@ -354,11 +344,11 @@ describe('kit lifecycle', () => {
 
       await expect(editor.kit.switchKit(unresolvableKit)).rejects.toThrow('Plugin "missing-plugin" not found');
 
-      expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-default');
+      expect(editor.kit.getCurrent()?.name).toBe('@example/kit-source');
       expect(editor.window.getSnapshot()).toEqual(previousSnapshot);
-      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@itharbors/log', '@itharbors/plugin-list']));
-      expect(editor.panel.getRegistration('@itharbors/log.log')).toBeDefined();
-      expect(editor.message.queryRequest('@itharbors/log', 'getLogs')).toBeDefined();
+      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@example/source-log', '@example/source-list']));
+      expect(editor.panel.getRegistration('@example/source-log.log')).toBeDefined();
+      expect(editor.message.queryRequest('@example/source-log', 'getLogs')).toBeDefined();
     } finally {
       removeKits(defaultKit, unresolvableKit);
     }
@@ -376,7 +366,7 @@ describe('kit lifecycle', () => {
 
       await expect(editor.kit.switchKit(alternateKit)).rejects.toThrow('old plugin unload failed');
 
-      expect(editor.kit.getCurrent()?.name).toBe('@itharbors/kit-unload-failing');
+      expect(editor.kit.getCurrent()?.name).toBe('@example/kit-unload-failing');
       expect(editor.plugin.listLoaded()).toEqual(
         expect.arrayContaining(['survivor-plugin', 'unload-failing-plugin']),
       );

@@ -18,13 +18,12 @@ flowchart LR
     Browser["浏览器"]
     Tray["Electron Tray / KitCatalog"]
     Electron["按需 Kit BrowserWindow"]
-    Host["Notification Host 127.0.0.1:48383"]
-    Agent["Agent / notify-user Skill"]
-    Toast["桌面弹窗 / 任务栏角标"]
+    Host["Desktop capability hosts"]
+    Agent["Authorized local clients"]
+    NativeUI["Native desktop UI"]
     Gateway["Gateway :48380"]
     Server["Server :48381"]
     AppRuntime["Application Runtime / startup plugins"]
-    Guard["Agent Guard: ps + netstat + private metadata"]
     Client["Vite Client :48382"]
     DB[("SQLite 会话元数据")]
     Panel["Panel iframe"]
@@ -32,14 +31,13 @@ flowchart LR
     User --> Browser
     User --> Tray
     Agent --> Host
-    Host --> Toast
+    Host --> NativeUI
     Host --> Electron
     Tray --> Electron
     Browser --> Gateway
     Electron --> Gateway
     Gateway -- "/api/* 与 /sse/*" --> Server
     Server --> AppRuntime
-    AppRuntime --> Guard
     Gateway -- "其他请求" --> Client
     Server --> DB
     Client --> Panel
@@ -58,7 +56,7 @@ flowchart LR
 | `packages/client` | 工作台、Web Components、布局交互、主题、HTTP/SSE 客户端 | 插件装载和权威窗口状态 |
 | `packages/plugin-types` | 插件与 Panel 可见的共享 TypeScript 协议 | 运行时实现 |
 | `plugins` | 始终可用的框架级插件：panel、message、menu、config | 具体 Kit 的产品能力 |
-| `kits` | 会话可选择的插件集合、布局、主题和窗口入口；包含通知中心 | Framework 通用实现 |
+| `kits` | 会话可选择的插件集合、布局、主题和窗口入口 | Framework 通用实现 |
 | `scripts` | 开发栈、Electron 宿主、通知 Host、插件构建与校验 | Server 会话业务状态 |
 | `.agents/skills/notify-user` | Agent 发送桌面通知的受控 CLI 与使用策略 | 启动 Electron 或绕过 Host 直接操作桌面 |
 
@@ -115,13 +113,7 @@ flowchart TD
 | tab 拖动、临时 resize | Client DOM/控制器 | 当前页面交互 |
 | Kit 目录与窗口注册表 | Electron main process | 应用生命周期 |
 | Kit sessionId 与窗口 bounds | Electron userData `workspaces.json` | 跨 Electron 重启 |
-| 通知、未读数与弹窗队列 | Electron main process 的 Notification Host | 当前桌面应用生命周期，最多 500 条 |
-| Agent Guard 基线、分钟指标、事件与控制账本 | Electron `userData/agent-guard`，目录 0700、文件 0600 | 指标 7 天、事件 30 天；未恢复的暂停账本优先保留 |
-
-Agent Guard 不安装代理、不修改 Claude/Codex 配置，也不解密 TLS。它把进程树、已知 Agent
-配置端点、DNS 历史和 `netstat` 累计字节组合成带置信度的连接归因；因此“连接数”不是 HTTP
-请求数，Relay 域名也只有在进程、配置和地址证据同时成立时才会被视为确认的模型流量。
-相邻 5 秒快照之间完整建立并关闭的短连接可能漏记，缺口不会被估算为可自动控制的证据。
+| 桌面能力 Host 的瞬时状态 | Electron main process | 当前桌面应用生命周期 |
 
 ## Web 与 Electron
 
@@ -138,14 +130,15 @@ Electron 额外提供：
 - 所有 Kit 窗口统一把菜单聚合为 `APP / <Kit...>`；
 - 把原生菜单点击送回对应 session 的窗口，发送前先显示目标窗口；
 - 只允许通过系统浏览器打开 `http:` 或 `https:` URL。
-- 在 `127.0.0.1` 暴露 Notification Host，驱动最多三个并发弹窗、系统未读角标与托盘标签；
-- 用独立且窄化的 preload 处理弹窗点击，通知 ID 由主进程按来源窗口反查。
+- 按能力契约在 loopback 上暴露受控桌面 Host，并由窄化 preload 连接原生 UI；
+- 校验 Host 输入与调用来源，不向 Renderer 暴露操作系统级权限。
 
 这些能力通过 context-isolated preload 暴露，不改变核心运行时边界。
 
-Notification Host 不经过 Gateway 或 Server，也不监听外部网卡。Notification Center 插件的
-server-side main 和 `notify-user` Skill 都只访问该 loopback 接口；Electron 会把实际端口通过
-`HARBORS_NOTIFICATION_PORT` 传给 Web 子进程。通知当前不持久化，桌面应用退出时清空。
+桌面 Host 不监听外部网卡。Kit 的 server-side main 必须通过 permission-gated
+`runtime.host` capability 访问宿主能力，并由 Server 按 owner 与声明权限授权；Panel 不读取
+宿主端口，也不能直接访问 loopback 控制面。具体能力的生命周期和状态语义由其 Framework
+契约与消费它的 Kit 文档分别维护。
 
 ## 源码索引
 

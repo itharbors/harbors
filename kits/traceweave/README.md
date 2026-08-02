@@ -54,3 +54,25 @@ npm run kit:check -- traceweave --output-directory "$(mktemp -d)"
 - Sessions 为空：确认 `CODEX_HOME` 指向包含 `sessions` 或 `archived_sessions` 的目录，然后 Refresh。
 - 某阶段为空：切换 Events 检查是否被证据筛选或回放位置隐藏；TraceWeave 不补造缺失事件。
 - 原始证据不可用：对应 JSONL 可能已移动或刷新；重新扫描后再选择 run。
+
+## Local lifecycle
+
+```bash
+npm ci --prefix kits/traceweave
+npm run build --prefix kits/traceweave
+npm run test --prefix kits/traceweave
+```
+
+本 Kit 未声明独立 smoke 脚本，以仓库目标 Kit 的完整检查验收。
+
+## Permissions
+
+`filesystem`。
+
+## Platform
+
+支持任意平台与架构。
+
+## Ownership boundary
+
+TraceWeave 功能、证据处理与测试均由本目录拥有。

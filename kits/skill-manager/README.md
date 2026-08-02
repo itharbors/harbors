@@ -45,3 +45,25 @@ npm run build -w @itharbors/kit-skill-manager
 npm run test -w @itharbors/kit-skill-manager
 npm run kit:check -- skill-manager --output-directory "$PWD/dist/skill-manager-check"
 ```
+
+## Local lifecycle
+
+```bash
+npm ci --prefix kits/skill-manager
+npm run build --prefix kits/skill-manager
+npm run test --prefix kits/skill-manager
+```
+
+本 Kit 未声明独立 smoke 脚本，以仓库目标 Kit 的完整检查验收。
+
+## Permissions
+
+`filesystem`。
+
+## Platform
+
+支持任意平台与架构。
+
+## Ownership boundary
+
+Skill 管理功能、状态与测试均由本目录拥有。

@@ -1,16 +1,36 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { createEditor } from '../../editor';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
+import { createEditor as createEditorWithOptions } from '../../editor';
 import { createDefaultAssemblyConfig } from '../../assembly/config';
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { PluginPathRoots } from '../plugin/paths';
+import { createKitFixture } from './kit-fixture';
 
 const projectRoot = fileURLToPath(new URL('../../../../../', import.meta.url));
+const testKitFixture = createKitFixture();
+afterAll(async () => {
+  await testKitFixture.dispose();
+});
+const tempDirs: string[] = [];
+function createTestPluginPathRoots(): PluginPathRoots {
+  const applicationData = mkdtempSync(path.join(os.tmpdir(), 'harbors-editor-test-paths-'));
+  tempDirs.push(applicationData);
+  return {
+    applicationData,
+    data: path.join(applicationData, 'plugins', 'data'),
+    cache: path.join(applicationData, 'plugins', 'cache'),
+    temp: path.join(applicationData, 'plugins', 'temp'),
+  };
+}
+const createEditor = (
+  sessionId: string,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('panel plugin contributions', () => {
-  const tempDirs: string[] = [];
-
   afterEach(async () => {
     await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
@@ -44,7 +64,8 @@ describe('panel plugin contributions', () => {
     const editor = createEditor('test-session', {
       assembly: createDefaultAssemblyConfig(projectRoot, {
         pluginsDir: pluginRoot,
-        kitSources: [{ directory: path.join(projectRoot, 'kits/default'), source: 'builtin' }],
+        kitSources: [{ directory: testKitFixture.directory, source: 'builtin' }],
+        defaultKit: testKitFixture.name,
       }),
     });
 
@@ -60,17 +81,18 @@ describe('panel plugin contributions', () => {
   it('opens a secondary window-group for a multi-instance panel', async () => {
     const editor = createEditor('test-session', {
       assembly: createDefaultAssemblyConfig(projectRoot, {
-        kitSources: [{ directory: path.join(projectRoot, 'kits/default'), source: 'builtin' }],
+        kitSources: [{ directory: testKitFixture.directory, source: 'builtin' }],
+        defaultKit: testKitFixture.name,
       }),
     });
 
-    await editor.kit.load('@itharbors/kit-default');
+    await editor.kit.load(testKitFixture.name);
 
-    const opened = editor.window.openPanel('@itharbors/log.log');
+    const opened = editor.window.openPanel(testKitFixture.primaryPanel);
 
     expect(opened).toMatchObject({
       disposition: 'open-window-group',
-      panelName: '@itharbors/log.log',
+      panelName: testKitFixture.primaryPanel,
       carrier: 'window-group',
     });
     expect(editor.window.getSnapshot().windows).toEqual(

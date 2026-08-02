@@ -1,8 +1,13 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { createServer } from '../src/server';
-import { testAssembly } from './helpers/assembly';
+import { createServer as createServerWithOptions } from '../src/server';
+import { testAssembly, testKitFixture } from './helpers/assembly';
 import type { ServerResponse } from 'node:http';
 import { Writable } from 'node:stream';
+import { createTestPluginPathRoots } from './helpers/plugin-paths';
+
+const createServer = (
+  options: Omit<Parameters<typeof createServerWithOptions>[0], 'pluginPathRoots'>,
+) => createServerWithOptions({ ...options, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('Server Integration', () => {
   let port: number;

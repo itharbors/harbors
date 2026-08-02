@@ -56,11 +56,10 @@ kit_workflow_validate_product() {
   local repo_root=$1 kit=$2 required_channel=${3:-any}
   local manifest_path="$repo_root/kits/$kit/kit.json"
   local package_path="$repo_root/kits/$kit/package.json"
-  local lock_path="$repo_root/package-lock.json"
+  local lock_path="$repo_root/kits/$kit/package-lock.json"
   local policy_path="$repo_root/registry/policy.json"
   kit_workflow_validate_identity "$repo_root"
   test -f "$policy_path" || kit_workflow_fail 'registry/policy.json is missing from repository root'
-  test -f "$lock_path" || kit_workflow_fail 'package-lock.json is missing from repository root'
   node - "$policy_path" "$kit" <<'NODE'
 const fs = require('node:fs');
 const [file, kit] = process.argv.slice(2);
@@ -74,6 +73,7 @@ if (!policy?.kits || !Object.prototype.hasOwnProperty.call(policy.kits, kit)) {
 NODE
   test -f "$manifest_path" || kit_workflow_fail "kits/$kit/kit.json is missing"
   test -f "$package_path" || kit_workflow_fail "kits/$kit/package.json is missing"
+  test -f "$lock_path" || kit_workflow_fail "kits/$kit/package-lock.json is missing"
   node - "$repo_root" "$kit" "$required_channel" <<'NODE'
 const fs = require('node:fs');
 const path = require('node:path');
@@ -85,7 +85,7 @@ const read = (name) => {
 };
 const manifest = read(`kits/${kit}/kit.json`);
 const pkg = read(`kits/${kit}/package.json`);
-const lock = read('package-lock.json');
+const lock = read(`kits/${kit}/package-lock.json`);
 const policy = read('registry/policy.json');
 const expectedId = `@itharbors/kit-${kit}`;
 const stop = (message) => { console.error(`error: ${message}`); process.exit(1); };
@@ -104,7 +104,7 @@ if (manifest.channel !== derivedChannel) stop(`${derivedChannel} channel is requ
 if (requiredChannel !== 'any' && manifest.channel !== requiredChannel) {
   stop(`${requiredChannel} channel is required, got ${String(manifest.channel)}`);
 }
-const workspaceLock = lock.packages?.[`kits/${kit}`];
+const workspaceLock = lock.packages?.[''];
 if (workspaceLock?.name !== pkg.name || workspaceLock?.version !== pkg.version) {
   stop(`package-lock identity for kits/${kit} does not match package.json`);
 }

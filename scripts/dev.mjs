@@ -164,8 +164,8 @@ Usage:
   npm run dev:web -- --kit <kit-package-name-or-path>
 
 Examples:
-  npm run dev:web -- --kit @itharbors/kit-default
-  npm run dev:web -- --kit ./kits/default
+  npm run dev:web -- --kit <package-name>
+  npm run dev:web -- --kit ./kits/<name>
   npm run dev:web -- --kit-path /absolute/path/to/kit
 `.trim());
 }
