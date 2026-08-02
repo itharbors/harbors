@@ -5,6 +5,8 @@ import {
   type AgentEndpointSnapshot,
   type AgentGuardCommand,
   type AgentGuardSnapshot,
+  type HistoryBackfillProgress,
+  type HistoryBackfillState,
   type HistoryStatus,
   type HistoryPoint,
   type HistorySeries,
@@ -42,6 +44,7 @@ let historyResultQueryKey: string | null = null;
 let historyStatus: HistoryStatus | null = null;
 let historyError: string | null = null;
 let historyManagementError: { operation: 'backfill' | 'clear'; detail: string } | null = null;
+let backfillPending = false;
 let historyVersion = 0;
 let historyRange: HistoryRange = '24h';
 let historyDomain: 'network' | 'model-usage' = 'network';
@@ -71,6 +74,7 @@ const panel = {
     policyDraft = null;
     mutationError = null;
     historyManagementError = null;
+    backfillPending = false;
     renderState('正在启动本机流量监控…', 'loading');
     await refresh();
     if (mounted) void refreshHistory();
@@ -94,6 +98,7 @@ const panel = {
     policyDraft = null;
     mutationError = null;
     historyManagementError = null;
+    backfillPending = false;
   },
 };
 
@@ -379,7 +384,7 @@ function createHistorySection(): HTMLElement {
   const heading = textElement('div', 'section-heading history-heading', '');
   const title = textElement('h2', '', '历史用量');
   title.id = 'history-title';
-  heading.append(title, textElement('span', 'section-note', historyStatus?.persistent === false ? '当前 Web 会话 · 不持久化' : '仅保存在本机'));
+  heading.append(title, createBackfillChip(), textElement('span', 'section-note', historyStatus?.persistent === false ? '当前 Web 会话 · 不持久化' : '仅保存在本机'));
   section.append(heading, createHistoryControls());
   if (historyError) {
     section.append(textElement('p', 'history-message', `历史数据暂不可用：${historyError}`));
@@ -563,7 +568,7 @@ function formatSeriesValue(series: DisplayHistorySeries): string {
 
 function createBackfillSettings(): HTMLElement {
   const aside = document.createElement('aside');
-  aside.className = 'history-management';
+  aside.className = 'history-management backfill-management';
   const control = button(
     historyStatus?.settings.localSessionBackfill ? '关闭本地日志回填' : '开启本地日志回填',
     'toggle-backfill',
@@ -573,8 +578,149 @@ function createBackfillSettings(): HTMLElement {
   );
   control.disabled = !historyStatus;
   aside.append(control);
+  if (historyStatus) {
+    aside.append(createBackfillProgress(historyStatus.backfill));
+    const run = button('立即继续回填', 'run-backfill', () => { void runBackfill(); });
+    run.className = 'backfill-run';
+    run.disabled = backfillPending || historyStatus.backfill.state === 'disabled';
+    aside.append(run);
+  }
   appendHistoryManagementError(aside, 'backfill');
   return aside;
+}
+
+const BACKFILL_STATUS_LABELS: Record<HistoryBackfillState, string> = {
+  disabled: '回填已关闭',
+  idle: '等待回填',
+  discovering: '正在回填',
+  scanning: '正在回填',
+  partial: '历史待继续',
+  complete: '历史已更新',
+  error: '回填失败',
+};
+
+function backfillStatusLabel(state: HistoryBackfillState): string {
+  return BACKFILL_STATUS_LABELS[state];
+}
+
+function createBackfillChip(): HTMLElement {
+  const chip = textElement('span', 'section-note backfill-chip', historyStatus ? backfillStatusLabel(historyStatus.backfill.state) : '回填状态未知');
+  chip.dataset.backfillStatus = historyStatus ? historyStatus.backfill.state : 'unknown';
+  return chip;
+}
+
+const BACKFILL_STATE_SUMMARIES: Record<HistoryBackfillState, string> = {
+  disabled: '本地日志回填已关闭，历史仅记录实时观测。',
+  idle: '已就绪，等待下一次回填读取本地日志。',
+  discovering: '正在扫描本地日志文件，尚未确定总量。',
+  scanning: '正在读取本地日志并补齐历史用量。',
+  partial: '本批已处理部分文件，仍有历史等待继续。',
+  complete: '本地日志已读取完毕，历史保持最新。',
+  error: '回填过程中出现错误，已保留此前的进度。',
+};
+
+function createBackfillProgress(backfill: HistoryBackfillProgress): HTMLElement {
+  const region = document.createElement('div');
+  region.className = 'backfill-progress';
+  region.dataset.backfillState = backfill.state;
+  region.setAttribute('role', 'group');
+  region.setAttribute('aria-label', '历史采集进度');
+
+  const status = document.createElement('div');
+  status.className = 'backfill-status';
+  status.setAttribute('role', 'status');
+  status.setAttribute('aria-live', 'polite');
+  status.append(
+    textElement('strong', 'backfill-state-label', backfillStatusLabel(backfill.state)),
+    textElement('span', 'backfill-state-note', BACKFILL_STATE_SUMMARIES[backfill.state]),
+  );
+  region.append(status);
+
+  const bar = createBackfillBar(backfill);
+  if (bar) region.append(bar);
+
+  region.append(createBackfillMeta(backfill));
+
+  const rows = document.createElement('div');
+  rows.className = 'backfill-agent-list';
+  for (const agent of backfill.agents) rows.append(createBackfillAgentRow(agent));
+  region.append(rows);
+  return region;
+}
+
+function createBackfillBar(backfill: HistoryBackfillProgress): HTMLElement | null {
+  if (backfill.state === 'disabled' || backfill.state === 'idle') return null;
+  const progress = document.createElement('progress');
+  progress.className = 'backfill-bar';
+  progress.setAttribute('aria-label', '历史采集进度');
+  const determinate = backfill.state !== 'discovering' && backfill.filesEligible > 0;
+  if (determinate) {
+    progress.max = backfill.filesEligible;
+    progress.value = Math.min(backfill.filesScanned, backfill.filesEligible);
+  }
+  return progress;
+}
+
+function createBackfillMeta(backfill: HistoryBackfillProgress): HTMLElement {
+  const meta = document.createElement('dl');
+  meta.className = 'backfill-meta';
+  meta.append(
+    backfillMetric('已扫描 / 待处理', `${backfill.filesScanned} / ${backfill.filesEligible}`),
+    backfillMetric('写入事件', String(backfill.eventsWritten)),
+    backfillMetric('错误', String(backfill.errors)),
+    backfillMetric('上次完成', formatLocalTimestamp(backfill.completedAt)),
+    backfillMetric('最近有效事件', formatLocalTimestamp(backfill.lastSuccessfulEventAt)),
+  );
+  return meta;
+}
+
+function backfillMetric(label: string, value: string): HTMLElement {
+  const wrapper = document.createElement('div');
+  wrapper.append(textElement('dt', '', label), textElement('dd', '', value));
+  return wrapper;
+}
+
+function createBackfillAgentRow(agent: HistoryBackfillProgress['agents'][number]): HTMLElement {
+  const row = document.createElement('div');
+  row.className = 'backfill-agent-row';
+  row.dataset.backfillAgent = agent.agent;
+  row.append(textElement('strong', 'backfill-agent-identity', agent.agent === 'claude' ? 'Claude' : 'Codex'));
+  const stats = document.createElement('div');
+  stats.className = 'backfill-agent-stats';
+  stats.append(
+    backfillAgentStat('文件', `${agent.filesScanned} / ${agent.filesEligible}`),
+    backfillAgentStat('事件', String(agent.eventsWritten)),
+    backfillAgentStat('错误', String(agent.errors)),
+  );
+  row.append(stats);
+  return row;
+}
+
+function backfillAgentStat(label: string, value: string): HTMLElement {
+  const stat = document.createElement('span');
+  stat.className = 'backfill-agent-stat';
+  stat.append(textElement('small', '', label), textElement('b', '', value));
+  return stat;
+}
+
+async function runBackfill(): Promise<void> {
+  if (!context || backfillPending) return;
+  const activeContext = context;
+  backfillPending = true;
+  const capturedState = captureRenderState();
+  if (latestSnapshot) renderSnapshotWithState(latestSnapshot, capturedState);
+  try {
+    historyStatus = normalizeHistoryStatus(await activeContext.message.request(
+      PLUGIN, 'runHistoryBackfill', { reason: 'manual' },
+    ));
+    historyManagementError = null;
+    backfillPending = false;
+    if (latestSnapshot) renderSnapshotWithState(latestSnapshot, capturedState);
+  } catch (error) {
+    historyManagementError = { operation: 'backfill', detail: errorDetail(error) ?? '回填暂不可用' };
+    backfillPending = false;
+    if (latestSnapshot) renderSnapshotWithState(latestSnapshot, capturedState);
+  }
 }
 
 function createCacheSettings(): HTMLElement {

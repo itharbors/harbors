@@ -59,6 +59,20 @@ describe('Agent Guard panel accessibility', () => {
     }
   });
 
+  it('keeps the backfill progress rail contained and animation-free under reduced motion', () => {
+    const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
+    expect(css).toMatch(/\.backfill-progress[^}]*overflow-wrap:\s*anywhere/su);
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?progress[^}]*animation:\s*none/su);
+  });
+
+  it('gives the SVG history axis explicit compact monospace type and frost fill', () => {
+    const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
+    for (const selector of ['\\.history-axis-tick', '\\.history-axis-title']) {
+      expect(css).toMatch(new RegExp(`${selector}\\s*\\{[^}]*fill:\\s*var\\(--frost-300\\)`, 'su'));
+      expect(css).toMatch(new RegExp(`${selector}\\s*\\{[^}]*font:[^}]*(?:"SF Mono"|ui-monospace|monospace)`, 'su'));
+    }
+  });
+
   it('allows the Harbors host to run its injected panel bridge', () => {
     expect(readCspDirectives().get('script-src')).toEqual(["'self'", "'unsafe-inline'"]);
   });

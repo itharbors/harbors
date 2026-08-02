@@ -731,6 +731,265 @@ describe('Agent Guard panel', () => {
     expect(document.querySelector('.ledger-empty')?.textContent).toContain('后台监控仍在继续');
     panel.unmount();
   });
+
+  it('shows only a compact mapped backfill status next to the Overview history heading', async () => {
+    const cases: Array<[() => ReturnType<typeof historyStatus>, string]> = [
+      [disabledStatus, '回填已关闭'],
+      [historyStatus, '等待回填'],
+      [discoveringStatus, '正在回填'],
+      [scanningStatus, '正在回填'],
+      [partialStatus, '历史待继续'],
+      [completeStatus, '历史已更新'],
+      [errorStatus, '回填失败'],
+    ];
+    for (const [status, label] of cases) {
+      const request = vi.fn(async (_plugin: string, method: string) => {
+        if (method === 'getSnapshot') return snapshot();
+        if (method === 'getTrafficHistory') return historyResult();
+        if (method === 'getHistoryStatus') return status();
+        throw new Error(`Unexpected ${method}`);
+      });
+      const panel = (await import('../panel.guard/src/index')).default;
+      await panel.mount({ message: { request } });
+      await vi.waitFor(() => expect(document.querySelector('#overview-panel [data-backfill-status]')?.textContent).toBe(label));
+
+      const chip = document.querySelector<HTMLElement>('#overview-panel [data-backfill-status]')!;
+      expect(chip.textContent).toBe(label);
+      expect(chip.closest('.history-heading')).not.toBeNull();
+      expect(document.querySelector('#overview-panel [data-action="run-backfill"]')).toBeNull();
+      expect(document.querySelector('#overview-panel [data-backfill-state]')).toBeNull();
+      expect(document.querySelector('#overview-panel progress')).toBeNull();
+      panel.unmount();
+      vi.resetModules();
+    }
+  });
+
+  it('renders an indeterminate native progress bar while discovering history', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return discoveringStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-backfill-state]')).not.toBeNull());
+    expect(document.querySelector('#settings-panel [data-backfill-state]')?.getAttribute('data-backfill-state')).toBe('discovering');
+    const progress = document.querySelector<HTMLProgressElement>('#settings-panel progress')!;
+    expect(progress).not.toBeNull();
+    expect(progress.hasAttribute('value')).toBe(false);
+    panel.unmount();
+  });
+
+  it('renders a determinate native progress bar with a real denominator while scanning', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return scanningStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel progress')).not.toBeNull());
+    const progress = document.querySelector<HTMLProgressElement>('#settings-panel progress')!;
+    expect(progress.hasAttribute('value')).toBe(true);
+    expect(progress.getAttribute('value')).toBe('3');
+    expect(progress.getAttribute('max')).toBe('8');
+    panel.unmount();
+  });
+
+  it('lists Claude then Codex backfill rows with file, event, and error counts', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return scanningStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelectorAll('#settings-panel [data-backfill-agent]')).toHaveLength(2));
+    const rows = [...document.querySelectorAll<HTMLElement>('#settings-panel [data-backfill-agent]')];
+    expect(rows.map((row) => row.dataset.backfillAgent)).toEqual(['claude', 'codex']);
+    expect(rows[0].textContent).toContain('Claude');
+    expect(rows[0].textContent).toContain('2 / 6');
+    expect(rows[0].textContent).toContain('5');
+    expect(rows[1].textContent).toContain('Codex');
+    expect(rows[1].textContent).toContain('1 / 2');
+    expect(rows[1].textContent).toContain('2');
+    panel.unmount();
+  });
+
+  it('never claims completion in partial or error backfill copy', async () => {
+    for (const status of [partialStatus, errorStatus]) {
+      const request = vi.fn(async (_plugin: string, method: string) => {
+        if (method === 'getSnapshot') return snapshot();
+        if (method === 'getTrafficHistory') return historyResult();
+        if (method === 'getHistoryStatus') return status();
+        throw new Error(`Unexpected ${method}`);
+      });
+      const panel = (await import('../panel.guard/src/index')).default;
+      await panel.mount({ message: { request } });
+      document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+      await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-backfill-state]')).not.toBeNull());
+      const region = document.querySelector('#settings-panel [data-backfill-state]')!;
+      expect(region.textContent).not.toContain('历史已更新');
+      expect(region.textContent).not.toContain('已完成');
+      panel.unmount();
+      vi.resetModules();
+    }
+  });
+
+  it('explains the disabled backfill state without a vague apology', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return disabledStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-backfill-state="disabled"]')).not.toBeNull());
+    const region = document.querySelector('#settings-panel [data-backfill-state="disabled"]')!;
+    expect(region.textContent).toContain('回填已关闭');
+    expect(region.querySelector('progress')).toBeNull();
+    panel.unmount();
+  });
+
+  it('sends the exact manual backfill RPC, disables while pending, and preserves Settings and scroll', async () => {
+    vi.useFakeTimers();
+    const scrollTo = vi.spyOn(window, 'scrollTo').mockImplementation(() => undefined);
+    Object.defineProperties(window, {
+      scrollX: { configurable: true, value: 12 },
+      scrollY: { configurable: true, value: 96 },
+    });
+    let releaseRun: ((value: unknown) => void) | undefined;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return partialStatus();
+      if (method === 'runHistoryBackfill') return new Promise((resolve) => { releaseRun = resolve; });
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    await vi.advanceTimersByTimeAsync(0);
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')).not.toBeNull());
+    const run = document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')!;
+    expect(run.textContent).toBe('立即继续回填');
+    run.focus();
+    run.click();
+
+    await vi.waitFor(() => expect(releaseRun).toBeTypeOf('function'));
+    expect(request).toHaveBeenCalledWith('@itharbors/agent-guard-center', 'runHistoryBackfill', { reason: 'manual' });
+    expect(document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')?.disabled).toBe(true);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(document.querySelector('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')?.disabled).toBe(true);
+    expect(scrollTo).toHaveBeenCalledWith(12, 96);
+
+    releaseRun?.(completeStatus());
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.waitFor(() => expect(document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')?.disabled).toBe(false));
+    expect((document.activeElement as HTMLElement).dataset.action).toBe('run-backfill');
+    panel.unmount();
+  });
+
+  it('keeps a rejected manual backfill error local to Settings and clears it on the next success', async () => {
+    let attempts = 0;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return partialStatus();
+      if (method === 'runHistoryBackfill') {
+        attempts += 1;
+        if (attempts === 1) throw new Error('Backfill run rejected by the coordinator');
+        return completeStatus();
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    await vi.waitFor(() => expect(document.querySelectorAll('.agent-history-row')).toHaveLength(2));
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    const run = document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')!;
+    run.focus();
+    run.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-history-management-error="backfill"]')?.textContent)
+      .toContain('Backfill run rejected by the coordinator'));
+    expect(document.querySelector('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
+    expect((document.activeElement as HTMLElement).dataset.action).toBe('run-backfill');
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="overview"]')!.click();
+    expect(document.querySelectorAll('.agent-history-row')).toHaveLength(2);
+
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+    document.querySelector<HTMLButtonElement>('#settings-panel [data-action="run-backfill"]')!.click();
+    await vi.waitFor(() => expect(document.querySelector('[data-history-management-error]')).toBeNull());
+    panel.unmount();
+  });
+
+  it('resets backfill progress and clear confirmation while staying in Settings after clearing history', async () => {
+    let cleared = false;
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return cleared ? statusWithBackfill({ state: 'idle' }) : completeStatus();
+      if (method === 'clearHistory') {
+        cleared = true;
+        return { ...historyStatus(), generation: 4, backfill: backfillProgress() };
+      }
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-backfill-state="complete"]')).not.toBeNull());
+    document.querySelector<HTMLButtonElement>('[data-action="clear-history"]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-action="confirm-clear-history"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-backfill-state="idle"]')).not.toBeNull());
+    expect(document.querySelector('[role="tab"][data-tab="settings"]')?.getAttribute('aria-selected')).toBe('true');
+    expect(document.querySelector('[data-action="confirm-clear-history"]')).toBeNull();
+    expect(document.querySelector('#settings-panel [data-backfill-state="complete"]')).toBeNull();
+    panel.unmount();
+  });
+
+  it('labels the Settings backfill progress region and action for assistive technology', async () => {
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return historyResult();
+      if (method === 'getHistoryStatus') return scanningStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+    document.querySelector<HTMLButtonElement>('[role="tab"][data-tab="settings"]')!.click();
+
+    await vi.waitFor(() => expect(document.querySelector('#settings-panel [data-backfill-state]')).not.toBeNull());
+    const region = document.querySelector<HTMLElement>('#settings-panel [data-backfill-state]')!;
+    expect(region.getAttribute('role')).toBe('group');
+    expect(region.getAttribute('aria-label')).toBe('历史采集进度');
+    const live = region.querySelector('[aria-live="polite"]');
+    expect(live).not.toBeNull();
+    const progress = document.querySelector<HTMLProgressElement>('#settings-panel progress')!;
+    expect(progress.getAttribute('aria-label')).toBe('历史采集进度');
+    panel.unmount();
+  });
 });
 
 function snapshot() {
@@ -946,5 +1205,157 @@ function historyStatus() {
     lastBackfilledAt: NOW - 120_000,
     settings: { localSessionBackfill: true },
     warnings: [],
+    backfill: backfillProgress(),
   };
+}
+
+function agentProgress(agent: 'claude' | 'codex', overrides: Record<string, number> = {}) {
+  return {
+    agent,
+    filesDiscovered: 0,
+    filesEligible: 0,
+    filesScanned: 0,
+    filesSkipped: 0,
+    eventsWritten: 0,
+    errors: 0,
+    ...overrides,
+  };
+}
+
+function backfillProgress(overrides: Record<string, unknown> = {}) {
+  return {
+    state: 'idle',
+    runId: 0,
+    startedAt: null,
+    updatedAt: null,
+    completedAt: null,
+    filesDiscovered: 0,
+    filesEligible: 0,
+    filesScanned: 0,
+    filesSkipped: 0,
+    bytesRead: 0,
+    eventsWritten: 0,
+    unsupportedRecords: 0,
+    errors: 0,
+    remainingFiles: null,
+    lastSuccessfulEventAt: null,
+    message: '',
+    agents: [agentProgress('claude'), agentProgress('codex')],
+    ...overrides,
+  };
+}
+
+function statusWithBackfill(overrides: Record<string, unknown>) {
+  return { ...historyStatus(), backfill: backfillProgress(overrides) };
+}
+
+function discoveringStatus() {
+  return statusWithBackfill({
+    state: 'discovering',
+    runId: 2,
+    startedAt: NOW - 2_000,
+    updatedAt: NOW - 1_000,
+    filesDiscovered: 10,
+    filesEligible: 0,
+    message: 'discovering',
+    agents: [
+      agentProgress('claude', { filesDiscovered: 7 }),
+      agentProgress('codex', { filesDiscovered: 3 }),
+    ],
+  });
+}
+
+function scanningStatus() {
+  return statusWithBackfill({
+    state: 'scanning',
+    runId: 3,
+    startedAt: NOW - 5_000,
+    updatedAt: NOW - 1_000,
+    filesDiscovered: 24,
+    filesEligible: 8,
+    filesScanned: 3,
+    filesSkipped: 16,
+    bytesRead: 4_096,
+    eventsWritten: 7,
+    unsupportedRecords: 2,
+    errors: 0,
+    remainingFiles: 5,
+    lastSuccessfulEventAt: NOW - 3_000,
+    message: 'scanning',
+    agents: [
+      agentProgress('claude', { filesDiscovered: 20, filesEligible: 6, filesScanned: 2, filesSkipped: 14, eventsWritten: 5 }),
+      agentProgress('codex', { filesDiscovered: 4, filesEligible: 2, filesScanned: 1, filesSkipped: 2, eventsWritten: 2 }),
+    ],
+  });
+}
+
+function partialStatus() {
+  return statusWithBackfill({
+    state: 'partial',
+    runId: 3,
+    startedAt: NOW - 9_000,
+    updatedAt: NOW - 1_000,
+    filesDiscovered: 24,
+    filesEligible: 12,
+    filesScanned: 8,
+    filesSkipped: 12,
+    eventsWritten: 40,
+    errors: 1,
+    remainingFiles: 4,
+    lastSuccessfulEventAt: NOW - 2_000,
+    message: 'partial',
+    agents: [
+      agentProgress('claude', { filesDiscovered: 20, filesEligible: 9, filesScanned: 6, filesSkipped: 11, eventsWritten: 30, errors: 1 }),
+      agentProgress('codex', { filesDiscovered: 4, filesEligible: 3, filesScanned: 2, filesSkipped: 1, eventsWritten: 10 }),
+    ],
+  });
+}
+
+function completeStatus() {
+  return statusWithBackfill({
+    state: 'complete',
+    runId: 5,
+    startedAt: NOW - 20_000,
+    updatedAt: NOW - 100,
+    completedAt: NOW - 100,
+    filesDiscovered: 24,
+    filesEligible: 8,
+    filesScanned: 8,
+    filesSkipped: 16,
+    eventsWritten: 60,
+    errors: 0,
+    remainingFiles: 0,
+    lastSuccessfulEventAt: NOW - 500,
+    message: 'complete',
+    agents: [
+      agentProgress('claude', { filesDiscovered: 20, filesEligible: 6, filesScanned: 6, filesSkipped: 14, eventsWritten: 45 }),
+      agentProgress('codex', { filesDiscovered: 4, filesEligible: 2, filesScanned: 2, filesSkipped: 2, eventsWritten: 15 }),
+    ],
+  });
+}
+
+function disabledStatus() {
+  return statusWithBackfill({ state: 'disabled', message: 'disabled' });
+}
+
+function errorStatus() {
+  return statusWithBackfill({
+    state: 'error',
+    runId: 6,
+    startedAt: NOW - 3_000,
+    updatedAt: NOW - 500,
+    filesDiscovered: 5,
+    filesEligible: 3,
+    filesScanned: 1,
+    filesSkipped: 0,
+    eventsWritten: 4,
+    errors: 2,
+    remainingFiles: 2,
+    lastSuccessfulEventAt: NOW - 1_500,
+    message: 'error',
+    agents: [
+      agentProgress('claude', { filesDiscovered: 4, filesEligible: 2, filesScanned: 1, eventsWritten: 4, errors: 2 }),
+      agentProgress('codex', { filesDiscovered: 1, filesEligible: 1 }),
+    ],
+  });
 }
