@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -50,6 +50,24 @@ test('CI dependency lock does not reference the private npm registry', async () 
     false,
     'package-lock.json must use a registry reachable by public GitHub runners',
   );
+});
+
+test('every Kit dependency lock uses a registry reachable by public CI', async () => {
+  const kitEntries = await readdir(new URL('kits/', rootUrl), { withFileTypes: true });
+  const kitLocks = await Promise.all(kitEntries
+    .filter((entry) => entry.isDirectory())
+    .map(async (entry) => ({
+      kit: entry.name,
+      lock: await readFile(new URL(`kits/${entry.name}/package-lock.json`, rootUrl), 'utf8'),
+    })));
+
+  for (const { kit, lock } of kitLocks) {
+    assert.equal(
+      lock.includes('https://bnpm.byted.org/'),
+      false,
+      `${kit}/package-lock.json must use a registry reachable by public CI`,
+    );
+  }
 });
 
 test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
