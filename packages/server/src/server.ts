@@ -113,7 +113,13 @@ export function createServer(options: ServerOptions) {
     notificationPort: options.notificationPort,
     notificationOwnerAuthToken: options.applicationControlToken,
   });
-  const { handleRequest, registry, editorMap, stopDisconnectHandling } = createApp(manager, channel, {
+  const {
+    handleRequest,
+    registry,
+    editorMap,
+    stopDisconnectHandling,
+    prepareKitCatalog,
+  } = createApp(manager, channel, {
     assembly,
     applicationRuntime,
     applicationControlToken: options.applicationControlToken,
@@ -143,7 +149,7 @@ export function createServer(options: ServerOptions) {
   };
 
   const startInternal = async (port?: number): Promise<number> => {
-    await applicationRuntime.start();
+    await Promise.all([applicationRuntime.start(), prepareKitCatalog()]);
     if (stopping) throw new ServerStoppingError();
     const listeningPort = await new Promise<number>((resolve, reject) => {
       const p = port || options.port || 0;

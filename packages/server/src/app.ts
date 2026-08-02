@@ -48,7 +48,11 @@ export function createApp(
     broker.rejectSession(sessionId, new Error('Browser disconnected'));
   });
   const assembly = appOptions.assembly;
-  const kitCatalogPromise = discoverKitCatalog(assembly);
+  let kitCatalogPromise: ReturnType<typeof discoverKitCatalog> | undefined;
+  const loadKitCatalog = () => {
+    kitCatalogPromise ??= discoverKitCatalog(assembly);
+    return kitCatalogPromise;
+  };
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
     const editor = createEditor(session.sessionId, {
         assembly,
@@ -113,7 +117,7 @@ export function createApp(
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
     const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
     const catalogEntry = requestedKit
-      ? (await kitCatalogPromise).find((entry) => entry.name === requestedKit)
+      ? (await loadKitCatalog()).find((entry) => entry.name === requestedKit)
       : undefined;
     await registry.getOrCreate(session.sessionId, {
       ...options,
@@ -142,7 +146,7 @@ export function createApp(
     appOptions.applicationRuntime,
     { controlToken: appOptions.applicationControlToken },
   );
-  const kitCatalogRouter = createKitCatalogRouter(kitCatalogPromise);
+  const kitCatalogRouter = createKitCatalogRouter(loadKitCatalog);
   const clientAssetRouter = appOptions.clientAssetsRoot
     ? createClientAssetRouter(appOptions.clientAssetsRoot)
     : undefined;
@@ -267,7 +271,14 @@ export function createApp(
     }
   };
 
-  return { handleRequest, registry, editorMap, broker, stopDisconnectHandling };
+  return {
+    handleRequest,
+    registry,
+    editorMap,
+    broker,
+    stopDisconnectHandling,
+    prepareKitCatalog: loadKitCatalog,
+  };
 }
 
 const INDEX_HTML = `<!DOCTYPE html>

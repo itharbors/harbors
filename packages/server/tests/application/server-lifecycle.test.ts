@@ -131,6 +131,28 @@ describe('application server lifecycle', () => {
     await expect(response.json()).resolves.toMatchObject({ phase: 'degraded' });
   });
 
+  it('rejects startup before listening when Kit catalog discovery fails', async () => {
+    const invalidKit = createKitFixture({ name: '@example/invalid-kit' });
+    await invalidKit.dispose();
+    const server = createServer({
+      assembly: {
+        ...testAssembly,
+        defaultKit: invalidKit.name,
+        kitSources: [{ directory: invalidKit.directory, source: 'builtin' }],
+      },
+      applicationRuntime: new ApplicationRuntime({
+        plugins: [], hostMode: 'web', pluginPathRoots: createTestPluginPathRoots(),
+      }),
+    });
+
+    try {
+      await expect(server.start(0)).rejects.toThrow(`Kit "${invalidKit.name}" not found`);
+      expect(server.server.listening).toBe(false);
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('binds the desktop control plane to loopback and protects application mutations', async () => {
     const server = createServer({
       assembly: testAssembly,
