@@ -7,7 +7,8 @@ import {
   normalizeTrafficHistoryQuery,
   normalizeTrafficHistoryResult,
   type HistorySettings,
-  type HistoryStatus,
+  type HistoryStorageStatus,
+  type HistoryBackfillProgress,
   type HistorySeries,
   type TrafficHistoryQuery,
   type TrafficHistoryResult,
@@ -34,17 +35,37 @@ export interface BackfillCursorV1 {
   sessionCounted?: boolean;
 }
 
+export interface BackfillCursorV2 {
+  identityDigest: string;
+  agent: 'claude' | 'codex' | null;
+  size: number;
+  mtimeMs: number;
+  offset: number;
+  sessionCounted: boolean;
+  parserVersion: number;
+  complete: boolean;
+  lastEventAt: number | null;
+}
+
+export interface BackfillCheckpointV2 {
+  schemaVersion: 2;
+  cursors: Record<string, BackfillCursorV2>;
+  lastRun: HistoryBackfillProgress | null;
+}
+
 export interface HistoryStore {
   readonly persistent: boolean;
   appendNetworkSamples(values: NetworkHistorySampleV2[]): Promise<void>;
   appendCoverage(values: CoverageIntervalV1[]): Promise<void>;
   appendUsageEvents(values: UsageEventV1[]): Promise<void>;
   query(input: TrafficHistoryQuery): Promise<TrafficHistoryResult>;
-  status(): Promise<HistoryStatus>;
+  status(): Promise<HistoryStorageStatus>;
   compact(now: Date): Promise<void>;
   loadBackfillCursors(): Promise<Record<string, BackfillCursorV1>>;
   saveBackfillCursors(value: Record<string, BackfillCursorV1>): Promise<void>;
-  updateSettings(value: HistorySettings): Promise<HistoryStatus>;
+  loadBackfillCheckpoint(): Promise<BackfillCheckpointV2>;
+  saveBackfillCheckpoint(value: BackfillCheckpointV2): Promise<void>;
+  updateSettings(value: HistorySettings): Promise<HistoryStorageStatus>;
   clearHistory(): Promise<void>;
 }
 
@@ -85,6 +106,7 @@ function createMemoryHistoryStore(): HistoryStore {
   let coverage: CoverageIntervalV1[] = [];
   let usage: UsageEventV1[] = [];
   let cursors: Record<string, BackfillCursorV1> = {};
+  let checkpoint: BackfillCheckpointV2 = { schemaVersion: 2, cursors: {}, lastRun: null };
   let settings: HistorySettings = { localSessionBackfill: true };
   let manifest: HistoryManifestV1 = { schemaVersion: 1, generation: 0, lastCompactedAt: null };
   return {
@@ -99,6 +121,8 @@ function createMemoryHistoryStore(): HistoryStore {
     async compact(now) { manifest = { schemaVersion: 1, generation: manifest.generation + 1, lastCompactedAt: now.getTime() }; },
     async loadBackfillCursors() { return structuredClone(cursors); },
     async saveBackfillCursors(value) { cursors = structuredClone(value); },
+    async loadBackfillCheckpoint() { return structuredClone(checkpoint); },
+    async saveBackfillCheckpoint(value) { checkpoint = structuredClone(value); },
     async updateSettings(value) {
       settings = normalizeHistorySettings(value);
       return buildStatus(false, manifest, settings, network, coverage, usage, 0);
@@ -108,6 +132,7 @@ function createMemoryHistoryStore(): HistoryStore {
       coverage = [];
       usage = [];
       cursors = {};
+      checkpoint = { schemaVersion: 2, cursors: {}, lastRun: null };
       manifest = { schemaVersion: 1, generation: manifest.generation + 1, lastCompactedAt: null };
     },
   };
@@ -233,6 +258,10 @@ async function createFileHistoryStore(
       return await loadJson<Record<string, BackfillCursorV1>>(path.join(dataDir, 'history-cursors.json')) ?? {};
     },
     async saveBackfillCursors(value) { await atomicJson(dataDir, 'history-cursors.json', value); },
+    async loadBackfillCheckpoint() {
+      return readCheckpoint(await loadJson<unknown>(path.join(dataDir, 'history-cursors.json')));
+    },
+    async saveBackfillCheckpoint(value) { await atomicJson(dataDir, 'history-cursors.json', value); },
     async updateSettings(value) {
       settings = normalizeHistorySettings(value);
       await atomicJson(dataDir, 'history-settings.json', settings);
@@ -329,7 +358,7 @@ function buildStatus(
   usage: readonly UsageEventV1[],
   storageBytes: number,
   warnings: string[] = [],
-): HistoryStatus {
+): HistoryStorageStatus {
   const timestamps = [
     ...network.flatMap((item) => [item.intervalStart, item.intervalEnd]),
     ...coverage.flatMap((item) => [item.start, item.end]),
@@ -429,6 +458,51 @@ async function loadJson<T>(file: string): Promise<T | null> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
   }
+}
+
+// Reads either a v2 checkpoint or the legacy v1 cursor map, always returning v2.
+function readCheckpoint(raw: unknown): BackfillCheckpointV2 {
+  if (!raw || typeof raw !== 'object') return { schemaVersion: 2, cursors: {}, lastRun: null };
+  const document = raw as UnknownRecord;
+  if (document.schemaVersion === 2) {
+    return {
+      schemaVersion: 2,
+      cursors: migrateCursors(document.cursors),
+      lastRun: (document.lastRun ?? null) as HistoryBackfillProgress | null,
+    };
+  }
+  return { schemaVersion: 2, cursors: migrateCursors(document), lastRun: null };
+}
+
+function migrateCursors(value: unknown): Record<string, BackfillCursorV2> {
+  if (!value || typeof value !== 'object') return {};
+  const cursors: Record<string, BackfillCursorV2> = {};
+  for (const [key, entry] of Object.entries(value as UnknownRecord)) {
+    if (!entry || typeof entry !== 'object') continue;
+    const cursor = entry as UnknownRecord;
+    const size = finiteCount(cursor.size);
+    const offset = finiteCount(cursor.offset);
+    cursors[key] = {
+      identityDigest: typeof cursor.identityDigest === 'string' ? cursor.identityDigest : key,
+      agent: cursor.agent === 'claude' || cursor.agent === 'codex' ? cursor.agent : null,
+      size,
+      mtimeMs: finiteCount(cursor.mtimeMs),
+      offset,
+      sessionCounted: cursor.sessionCounted === true,
+      parserVersion: typeof cursor.parserVersion === 'number' && Number.isSafeInteger(cursor.parserVersion)
+        ? cursor.parserVersion
+        : 1,
+      complete: typeof cursor.complete === 'boolean' ? cursor.complete : offset >= size,
+      lastEventAt: typeof cursor.lastEventAt === 'number' && Number.isFinite(cursor.lastEventAt)
+        ? cursor.lastEventAt
+        : null,
+    };
+  }
+  return cursors;
+}
+
+function finiteCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
 async function historyStorageBytes(dataDir: string): Promise<number> {

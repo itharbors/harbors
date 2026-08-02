@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { createAgentGuardStore } from '../main/src/storage.js';
 import { createHistoryStore } from '../main/src/history-storage.js';
+import type { BackfillCheckpointV2, BackfillCursorV2 } from '../main/src/history-storage.js';
 import type { CoverageIntervalV1, NetworkHistorySampleV2, UsageEventV1 } from '../main/src/history-aggregation.js';
 
 const roots: string[] = [];
@@ -196,6 +197,96 @@ describe('Agent Guard history storage', () => {
     expect((await store.history.status()).warnings).toContain('raw-cap-reached');
   });
 });
+
+describe('Agent Guard backfill checkpoint persistence', () => {
+  it('returns an isolated clone from the memory store so callers cannot mutate stored cursors', async () => {
+    const store = await createAgentGuardStore({ hostMode: 'web' });
+    const checkpoint = checkpointV2();
+    await store.history.saveBackfillCheckpoint(checkpoint);
+
+    checkpoint.cursors.file.offset = 999;
+    checkpoint.lastRun = null;
+    const loaded = await store.history.loadBackfillCheckpoint();
+
+    expect(loaded.cursors.file.offset).toBe(10);
+    expect(loaded.lastRun?.state).toBe('complete');
+    loaded.cursors.file.offset = 5;
+    expect((await store.history.loadBackfillCheckpoint()).cursors.file.offset).toBe(10);
+  });
+
+  it('defaults to an empty v2 checkpoint when nothing has been saved', async () => {
+    const store = await createAgentGuardStore({ hostMode: 'web' });
+    const loaded = await store.history.loadBackfillCheckpoint();
+    expect(loaded).toEqual({ schemaVersion: 2, cursors: {}, lastRun: null });
+  });
+
+  it('round-trips a v2 checkpoint atomically with private permissions on disk', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const store = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
+    const checkpoint = checkpointV2();
+    await store.history.saveBackfillCheckpoint(checkpoint);
+
+    const file = path.join(dataDir, 'history-cursors.json');
+    expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).schemaVersion).toBe(2);
+
+    const reopened = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
+    expect(await reopened.history.loadBackfillCheckpoint()).toEqual(checkpoint);
+  });
+
+  it('migrates a legacy v1 cursor map into a v2 checkpoint', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(dataDir, 'history-cursors.json'),
+      `${JSON.stringify({ abc: { identityDigest: 'abc', size: 20, mtimeMs: 30, offset: 20, sessionCounted: true } })}\n`,
+    );
+
+    const store = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
+    const loaded = await store.history.loadBackfillCheckpoint();
+
+    expect(loaded.schemaVersion).toBe(2);
+    expect(loaded.lastRun).toBeNull();
+    expect(loaded.cursors.abc).toEqual({
+      identityDigest: 'abc', agent: null, size: 20, mtimeMs: 30, offset: 20,
+      sessionCounted: true, parserVersion: 1, complete: true, lastEventAt: null,
+    });
+  });
+
+  it('clears cursors and lastRun on clearHistory while preserving settings', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const store = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
+    await store.history.updateSettings({ localSessionBackfill: false });
+    await store.history.saveBackfillCheckpoint(checkpointV2());
+
+    await store.history.clearHistory();
+
+    const loaded = await store.history.loadBackfillCheckpoint();
+    expect(loaded).toEqual({ schemaVersion: 2, cursors: {}, lastRun: null });
+    expect((await store.history.status()).settings.localSessionBackfill).toBe(false);
+  });
+});
+
+function checkpointV2(): BackfillCheckpointV2 {
+  const cursor: BackfillCursorV2 = {
+    identityDigest: 'file', agent: 'claude', size: 40, mtimeMs: 50, offset: 10,
+    sessionCounted: true, parserVersion: 1, complete: false, lastEventAt: START,
+  };
+  return {
+    schemaVersion: 2,
+    cursors: { file: cursor },
+    lastRun: {
+      state: 'complete', runId: 1, startedAt: START, updatedAt: START + 1_000, completedAt: START + 1_000,
+      filesDiscovered: 2, filesEligible: 2, filesScanned: 2, filesSkipped: 0, bytesRead: 128,
+      eventsWritten: 3, unsupportedRecords: 0, errors: 0, remainingFiles: 0,
+      lastSuccessfulEventAt: START, message: 'complete',
+      agents: [
+        { agent: 'claude', filesDiscovered: 1, filesEligible: 1, filesScanned: 1, filesSkipped: 0, eventsWritten: 2, errors: 0 },
+        { agent: 'codex', filesDiscovered: 1, filesEligible: 1, filesScanned: 1, filesSkipped: 0, eventsWritten: 1, errors: 0 },
+      ],
+    },
+  };
+}
 
 function temporaryRoot() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-guard-history-'));

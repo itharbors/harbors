@@ -164,6 +164,45 @@ export interface HistorySettings {
   localSessionBackfill: boolean;
 }
 
+export type HistoryBackfillState =
+  | 'disabled'
+  | 'idle'
+  | 'discovering'
+  | 'scanning'
+  | 'partial'
+  | 'complete'
+  | 'error';
+
+export interface AgentBackfillProgress {
+  agent: AgentId;
+  filesDiscovered: number;
+  filesEligible: number;
+  filesScanned: number;
+  filesSkipped: number;
+  eventsWritten: number;
+  errors: number;
+}
+
+export interface HistoryBackfillProgress {
+  state: HistoryBackfillState;
+  runId: number;
+  startedAt: number | null;
+  updatedAt: number | null;
+  completedAt: number | null;
+  filesDiscovered: number;
+  filesEligible: number;
+  filesScanned: number;
+  filesSkipped: number;
+  bytesRead: number;
+  eventsWritten: number;
+  unsupportedRecords: number;
+  errors: number;
+  remainingFiles: number | null;
+  lastSuccessfulEventAt: number | null;
+  message: string;
+  agents: [AgentBackfillProgress, AgentBackfillProgress];
+}
+
 export interface HistoryStatus {
   schemaVersion: 1;
   persistent: boolean;
@@ -175,7 +214,11 @@ export interface HistoryStatus {
   lastBackfilledAt: number | null;
   settings: HistorySettings;
   warnings: string[];
+  backfill: HistoryBackfillProgress;
 }
+
+// Storage layer owns durable facts; only the service composes live backfill progress.
+export type HistoryStorageStatus = Omit<HistoryStatus, 'backfill'>;
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -481,7 +524,7 @@ export function normalizeHistoryStatus(value: unknown): HistoryStatus {
   const input = record(value, 'history status');
   exact(input, [
     'schemaVersion', 'persistent', 'storageBytes', 'earliestAt', 'latestAt', 'generation',
-    'lastCompactedAt', 'lastBackfilledAt', 'settings', 'warnings',
+    'lastCompactedAt', 'lastBackfilledAt', 'settings', 'warnings', 'backfill',
   ], 'history status');
   if (input.schemaVersion !== 1) throw new TypeError('history status.schemaVersion must be 1');
   return {
@@ -495,7 +538,69 @@ export function normalizeHistoryStatus(value: unknown): HistoryStatus {
     lastBackfilledAt: nullableInteger(input.lastBackfilledAt, 'history status.lastBackfilledAt'),
     settings: normalizeHistorySettings(input.settings),
     warnings: normalizeUniqueText(input.warnings, 'history status.warnings', 64, 128) ?? [],
+    backfill: normalizeBackfillProgress(input.backfill, 'history status.backfill'),
   };
+}
+
+const BACKFILL_STATES: readonly HistoryBackfillState[] = [
+  'disabled', 'idle', 'discovering', 'scanning', 'partial', 'complete', 'error',
+];
+
+export function normalizeBackfillProgress(value: unknown, context = 'backfill'): HistoryBackfillProgress {
+  const input = record(value, context);
+  exact(input, [
+    'state', 'runId', 'startedAt', 'updatedAt', 'completedAt', 'filesDiscovered', 'filesEligible',
+    'filesScanned', 'filesSkipped', 'bytesRead', 'eventsWritten', 'unsupportedRecords', 'errors',
+    'remainingFiles', 'lastSuccessfulEventAt', 'message', 'agents',
+  ], context);
+  if (!Array.isArray(input.agents) || input.agents.length !== 2) {
+    throw new TypeError(`${context}.agents must contain a Claude and a Codex entry`);
+  }
+  const agents = input.agents.map((item, index) => normalizeAgentBackfillProgress(item, `${context}.agents[${index}]`));
+  if (agents[0].agent !== 'claude' || agents[1].agent !== 'codex') {
+    throw new TypeError(`${context}.agents must be in fixed Claude then Codex order`);
+  }
+  return {
+    state: enumValue(input.state, BACKFILL_STATES, `${context}.state`),
+    runId: integer(input.runId, `${context}.runId`),
+    startedAt: nullableInteger(input.startedAt, `${context}.startedAt`),
+    updatedAt: nullableInteger(input.updatedAt, `${context}.updatedAt`),
+    completedAt: nullableInteger(input.completedAt, `${context}.completedAt`),
+    filesDiscovered: integer(input.filesDiscovered, `${context}.filesDiscovered`),
+    filesEligible: integer(input.filesEligible, `${context}.filesEligible`),
+    filesScanned: integer(input.filesScanned, `${context}.filesScanned`),
+    filesSkipped: integer(input.filesSkipped, `${context}.filesSkipped`),
+    bytesRead: integer(input.bytesRead, `${context}.bytesRead`),
+    eventsWritten: integer(input.eventsWritten, `${context}.eventsWritten`),
+    unsupportedRecords: integer(input.unsupportedRecords, `${context}.unsupportedRecords`),
+    errors: integer(input.errors, `${context}.errors`),
+    remainingFiles: nullableInteger(input.remainingFiles, `${context}.remainingFiles`),
+    lastSuccessfulEventAt: nullableInteger(input.lastSuccessfulEventAt, `${context}.lastSuccessfulEventAt`),
+    message: boundedMessage(input.message, `${context}.message`, 128),
+    agents: [agents[0], agents[1]],
+  };
+}
+
+function normalizeAgentBackfillProgress(value: unknown, context: string): AgentBackfillProgress {
+  const input = record(value, context);
+  exact(input, [
+    'agent', 'filesDiscovered', 'filesEligible', 'filesScanned', 'filesSkipped', 'eventsWritten', 'errors',
+  ], context);
+  return {
+    agent: enumValue(input.agent, ['claude', 'codex'], `${context}.agent`),
+    filesDiscovered: integer(input.filesDiscovered, `${context}.filesDiscovered`),
+    filesEligible: integer(input.filesEligible, `${context}.filesEligible`),
+    filesScanned: integer(input.filesScanned, `${context}.filesScanned`),
+    filesSkipped: integer(input.filesSkipped, `${context}.filesSkipped`),
+    eventsWritten: integer(input.eventsWritten, `${context}.eventsWritten`),
+    errors: integer(input.errors, `${context}.errors`),
+  };
+}
+
+function boundedMessage(value: unknown, context: string, maxLength: number): string {
+  if (typeof value !== 'string') throw new TypeError(`${context} must be a string`);
+  if (value.length > maxLength) throw new TypeError(`${context} is too long`);
+  return value;
 }
 
 export function normalizeClearHistory(value: unknown): { confirmation: 'clear-history' } {
