@@ -61,8 +61,9 @@ loopback，来源头可以被伪造，而且它不能限制 Kit/plugin 调用者
 
 宿主在进程启动时确定不可变的凭据模式。Electron 使用 `local`；Web 只有显式请求 `local` 且所有
 公开监听点实际绑定 loopback 时才能使用。Framework 提供 owner-bound 凭据能力，底层直接访问当前
-操作系统用户的 Keychain、Credential Manager 或 Secret Service。该方案没有仓库密钥，不要求改造
-现有用户系统，并为未来远程实现保留替换适配器的边界，因此采用。
+操作系统用户的安全凭据服务。该方案没有仓库密钥，不要求改造现有用户系统，并为未来远程实现保留
+替换适配器的边界，因此采用。首版由 Harbors 自己维护一个最小 Node-API 原生适配器，只实现当前正式
+发布目标 macOS ARM64；其他平台明确返回不支持，待拥有能够保留完整错误语义的原生实现后再开放。
 
 ### 方案三：立即建设多人服务端凭据系统
 
@@ -136,21 +137,40 @@ Kit、owner plugin 和本机 principal 派生内部 scope。首版只向同时�
 本来就在该 Node.js 进程中，因此两种宿主直接复用同一个实现，不新增 Renderer IPC，也不让 Panel
 接触 Electron API。
 
-本机适配器使用固定版本并纳入锁文件、SBOM 与发布审计的 `@napi-rs/keyring`，直接调用：
+本机适配器由仓库内的 `@itharbors/native-credential-vault` workspace package 提供。它使用原始
+Node-API ABI 和 Objective-C++/C++ 调用 macOS Security.framework，不调用 shell，也不依赖会选择多个
+后端的通用 keyring wrapper。原生源码和构建配置可以开源，但其中不存在密码、加密密钥或可复用的
+解密材料。原生二进制在应用构建时从同一提交生成，并作为受校验的 unpacked artifact 打包。
 
-- macOS Keychain；
-- Windows Credential Manager；
-- Linux Secret Service。
+这一边界替代原先采用的 `@napi-rs/keyring@1.3.0`：该依赖把部分读取错误折叠为空值、把删除错误折叠
+为布尔值，而且 Linux 后端可能自动切换实现，无法满足本设计对 locked/unavailable/delete-failure 的
+可证明语义。旧依赖及其平台二进制必须从运行依赖、锁文件、构建 external 和桌面制品中完整移除。
 
-适配器不得调用 shell 命令，也不得提供文件后端、CLI fallback、固定密钥、环境变量密钥或
-`basic_text` fallback。原生模块缺失、系统凭据服务未启动、凭据库锁定或平台不受支持时，vault 为
-`unavailable`。读取、写入和删除返回稳定的通用错误，不把原生错误文本、secret、系统账户或路径
-发送给 Panel。
+首版支持矩阵固定为：
+
+| 平台 | 后端 | 行为 |
+| --- | --- | --- |
+| macOS ARM64 | Security.framework Generic Password | 完整支持 |
+| macOS x64 | 无 | `CREDENTIALS_UNAVAILABLE` |
+| Windows | 无 | `CREDENTIALS_UNAVAILABLE` |
+| Linux | 无 | `CREDENTIALS_UNAVAILABLE`，不加载任何本机后端 |
+
+后续 Windows 实现只能直接绑定 Credential Manager；Linux 实现只能直接绑定 Secret Service。任何平台
+都不得自动选择 kernel keyutils、文件后端、CLI fallback、固定密钥、环境变量密钥或 `basic_text`。
+平台不受支持、原生模块缺失、系统凭据服务未启动或凭据库锁定时安全关闭，手工 MySQL 连接仍可使用。
+
+原生边界只导出 `getPassword(service, account)`、`setPassword(service, account, secret)` 和
+`deletePassword(service, account)`。`getPassword` 只有在 Security.framework 明确返回 item-not-found
+时才返回 `null`；`deletePassword` 也只有 item-not-found 才返回 `false`。其余 OSStatus 必须抛出带稳定
+机器代码的异常：`BACKEND_LOCKED`、`BACKEND_UNAVAILABLE`、`ACCESS_DENIED` 或 `OPERATION_FAILED`。
+JavaScript adapter 再把这些机器代码映射为公开凭据错误；原始 OSStatus、系统错误文本、secret、系统
+账户和路径不得进入日志、HTTP、bootstrap 或 Panel。未知 OSStatus 必须失败关闭，不能折叠为“未找到”。
 
 原生模块加载成功不等于后端可用。Vault 使用一个不符合 profile account 格式的固定保留 account 做
-只读 `get` 健康探测，不创建或写入持久条目。探测失败时保留已加载 adapter，并保留模块 loader 以
-恢复 import 失败；后续 capability 检测和操作可以安全重试。并发重试共享同一探测，关闭开始后不再
-启动探测或把 Vault 重新标记为 available。`off` 模式不加载原生模块，也不执行探测。
+只读 `get` 健康探测，不创建或写入持久条目。只有原生层明确报告 item-not-found 才代表后端可用；
+locked、unavailable、access-denied 和未知失败保持各自错误语义。探测失败时保留已加载 adapter，并
+保留模块 loader 以恢复 import 失败；后续 capability 检测和操作可以安全重试。并发重试共享同一探测，
+关闭开始后不再启动探测或把 Vault 重新标记为 available。`off` 模式不加载原生模块，也不执行探测。
 
 系统 service 名固定为 `com.itharbors.credentials.v1`。scope 摘要是 canonical
 `kitId + NUL + pluginName + NUL + local` 的完整 SHA-256 十六进制值；系统 account 固定为
@@ -260,11 +280,16 @@ profile ID、结果与时间，不记录密码。
 
 ### Vault
 
-- 使用 fake keyring 覆盖新建、读取、版本化更新、删除、并发冲突和不可用后端。
+- 使用 fake native adapter 覆盖新建、读取、版本化更新、删除、并发冲突和不可用后端。
+- 原生 contract 测试证明只有 item-not-found 能产生 `null`/`false`；locked、unavailable、access-denied
+  和未知 OSStatus 均抛出不同的稳定机器代码。
+- macOS ARM64 原生烟测使用真实 Security.framework 完成写入、读取和删除，并验证删除成功后才允许
+  删除 SQLite 元数据；测试条目使用独立 service/account 且在 `finally` 中清理。
 - 故障注入覆盖 SQLite 与 keyring 每个阶段，证明旧 secret 可继续使用或记录进入可恢复清理状态。
 - 启动恢复覆盖 pending、deleting 和旧 secret 清理，且重复执行幂等。
 - 日志、公开错误、数据库行、浏览器响应和快照均不包含测试密码。
-- Linux 无 Secret Service、原生模块缺失或后端锁定时拒绝保存，不产生文件 fallback。
+- macOS x64、Windows、Linux、原生模块缺失或后端锁定时拒绝保存，不加载第三方 keyring wrapper，
+  不产生文件、keyutils 或其他 fallback。
 
 ### MySQL Kit
 
@@ -280,7 +305,7 @@ profile ID、结果与时间，不记录密码。
 - `npm run dev:web -- --kit ./kits/mysql` 在默认 `off` 下完成手工连接烟测。
 - 显式 loopback `local` Web 完成保存、重启、重新连接、更新和删除烟测。
 - 非 loopback `local` 启动在监听前失败。
-- Electron 完成同一流程，并验证系统凭据库中只有不透明 Harbors 条目、应用数据和日志无密码。
+- macOS ARM64 Electron 完成同一流程，并验证系统凭据库中只有不透明 Harbors 条目、应用数据和日志无密码。
 - 运行 Framework、Registry、MySQL Kit 专项测试、构建检查和仓库 `npm run check`。
 
 ## 验收标准
@@ -292,10 +317,13 @@ profile ID、结果与时间，不记录密码。
 5. 安全后端不可用时功能安全关闭，现有不保存密码的手工连接仍可使用。
 6. 凭据写入、更新、删除和恢复在部分失败后保持可重试且不会错误覆盖可用旧 secret。
 7. 未来多人适配器可以替换本机后端，但在认证和 KMS 边界完成前不能启用 `multi-user`。
+8. 原生适配器不会把锁定、不可用、拒绝访问或未知系统错误伪装成“密码不存在”，删除失败也不会提交
+   SQLite 元数据删除。
 
 ## 参考
 
 - [Electron `safeStorage` 的平台安全语义](https://www.electronjs.org/docs/latest/api/safe-storage)
-- [`@napi-rs/keyring`](https://www.npmjs.com/package/@napi-rs/keyring)
+- [Apple Keychain Services](https://developer.apple.com/documentation/security/keychain-services)
+- [Node-API](https://nodejs.org/api/n-api.html)
 - [Kit 与会话模型](../../architecture/kit-and-session-model.md)
 - [MySQL 插件化与关系图设计](./2026-07-20-mysql-plugin-graph-design.md)
