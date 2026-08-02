@@ -8,14 +8,10 @@ export interface KeyringAdapter {
   delete(account: string): Promise<void>;
 }
 
-export interface NativeKeyringEntry {
-  getPassword(): string | null;
-  setPassword(secret: string): void;
-  deletePassword(): boolean;
-}
-
 export interface KeyringModule {
-  Entry: new (service: string, account: string) => NativeKeyringEntry;
+  getPassword(service: string, account: string): string | null;
+  setPassword(service: string, account: string, secret: string): void;
+  deletePassword(service: string, account: string): boolean;
 }
 
 export type KeyringModuleLoader = () => Promise<KeyringModule>;
@@ -29,56 +25,23 @@ export interface NativeKeyringOptions {
 // only attempt a read and never create or mutate a persistent keyring entry.
 export const CREDENTIAL_HEALTH_ACCOUNT = '__harbors_credential_health_v1__';
 
-const NATIVE_NOT_FOUND_CODES = new Set([
-  'NO_ENTRY',
-  'NOENTRY',
-  'NOT_FOUND',
-  'NOTFOUND',
-]);
-const NATIVE_LOCKED_CODES = new Set([
-  'ACCESS_DENIED',
-  'INTERACTION_NOT_ALLOWED',
-  'KEYRING_LOCKED',
-  'LOCKED',
-  'USER_CANCELED',
-  'USER_CANCELLED',
-]);
-const NATIVE_UNAVAILABLE_CODES = new Set([
-  'BINDING_NOT_FOUND',
-  'DBUS_ERROR',
-  'MODULE_NOT_FOUND',
-  'NO_SECRET_SERVICE',
-  'NOT_AVAILABLE',
-  'PLATFORM_UNSUPPORTED',
-  'SERVICE_UNAVAILABLE',
-  'UNAVAILABLE',
-  'UNSUPPORTED_PLATFORM',
-]);
-
 async function loadNativeKeyring(): Promise<KeyringModule> {
-  return import('@napi-rs/keyring');
+  const imported = await import('@itharbors/native-credential-vault');
+  const candidate = imported.default ?? imported;
+  return candidate as KeyringModule;
 }
 
-function nativeErrorClassifications(error: unknown): string[] {
-  if (typeof error !== 'object' || error === null) return [];
-  const record = error as Record<string, unknown>;
-  return [record.code, record.name]
-    .filter((value): value is string => typeof value === 'string')
-    .map((value) => value.toUpperCase().replaceAll(/[ -]/gu, '_'));
+function nativeErrorCode(error: unknown): unknown {
+  return typeof error === 'object' && error !== null
+    ? (error as Record<string, unknown>).code
+    : undefined;
 }
 
 function classifyNativeError(error: unknown): CredentialErrorCode {
   if (isCredentialError(error)) return error.code;
-  const classifications = nativeErrorClassifications(error);
-  if (classifications.some((value) => NATIVE_NOT_FOUND_CODES.has(value))) {
-    return 'CREDENTIAL_PROFILE_NOT_FOUND';
-  }
-  if (classifications.some((value) => NATIVE_LOCKED_CODES.has(value))) {
-    return 'CREDENTIALS_LOCKED';
-  }
-  if (classifications.some((value) => NATIVE_UNAVAILABLE_CODES.has(value))) {
-    return 'CREDENTIALS_UNAVAILABLE';
-  }
+  const code = nativeErrorCode(error);
+  if (code === 'BACKEND_LOCKED') return 'CREDENTIALS_LOCKED';
+  if (code === 'BACKEND_UNAVAILABLE') return 'CREDENTIALS_UNAVAILABLE';
   return 'CREDENTIAL_OPERATION_FAILED';
 }
 
@@ -100,7 +63,11 @@ export async function createNativeKeyringAdapter(
   let module: KeyringModule;
   try {
     module = await (options.load ?? loadNativeKeyring)();
-    if (typeof module.Entry !== 'function') throw credentialError('CREDENTIALS_UNAVAILABLE');
+    if (
+      typeof module?.getPassword !== 'function'
+      || typeof module.setPassword !== 'function'
+      || typeof module.deletePassword !== 'function'
+    ) throw credentialError('CREDENTIALS_UNAVAILABLE');
   } catch {
     throw credentialError('CREDENTIALS_UNAVAILABLE');
   }
@@ -108,16 +75,19 @@ export async function createNativeKeyringAdapter(
   return {
     async get(account) {
       try {
-        return new module.Entry(CREDENTIAL_SERVICE, account).getPassword();
+        const secret = module.getPassword(CREDENTIAL_SERVICE, account);
+        if (secret !== null && typeof secret !== 'string') {
+          throw credentialError('CREDENTIAL_OPERATION_FAILED');
+        }
+        return secret;
       } catch (error) {
-        if (classifyNativeError(error) === 'CREDENTIAL_PROFILE_NOT_FOUND') return null;
         throw mappedNativeError(error);
       }
     },
 
     async set(account, secret) {
       try {
-        new module.Entry(CREDENTIAL_SERVICE, account).setPassword(secret);
+        module.setPassword(CREDENTIAL_SERVICE, account, secret);
       } catch (error) {
         throw mappedNativeError(error);
       }
@@ -125,9 +95,11 @@ export async function createNativeKeyringAdapter(
 
     async delete(account) {
       try {
-        new module.Entry(CREDENTIAL_SERVICE, account).deletePassword();
+        const deleted = module.deletePassword(CREDENTIAL_SERVICE, account);
+        if (typeof deleted !== 'boolean') {
+          throw credentialError('CREDENTIAL_OPERATION_FAILED');
+        }
       } catch (error) {
-        if (classifyNativeError(error) === 'CREDENTIAL_PROFILE_NOT_FOUND') return;
         throw mappedNativeError(error);
       }
     },

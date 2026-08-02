@@ -756,8 +756,8 @@ describe('CredentialVault', () => {
   });
 
   it.each([
-    ['CREDENTIALS_LOCKED', 'KEYRING_LOCKED'],
-    ['CREDENTIALS_UNAVAILABLE', 'NO_SECRET_SERVICE'],
+    ['CREDENTIALS_LOCKED', 'BACKEND_LOCKED'],
+    ['CREDENTIALS_UNAVAILABLE', 'BACKEND_UNAVAILABLE'],
   ] as const)(
     'reports an initial %s snapshot after probing the native backend',
     async (reason, nativeCode) => {
@@ -765,18 +765,12 @@ describe('CredentialVault', () => {
       store = new CredentialStore(databasePath);
       const constructions: Array<[string, string]> = [];
       const load = vi.fn<() => Promise<KeyringModule>>(async () => ({
-        Entry: class {
-          constructor(service: string, account: string) {
-            constructions.push([service, account]);
-          }
-
-          getPassword(): string | null {
-            throw Object.assign(new Error('private native health details'), { code: nativeCode });
-          }
-
-          setPassword(): void {}
-          deletePassword(): boolean { return false; }
+        getPassword(service, account): string | null {
+          constructions.push([service, account]);
+          throw Object.assign(new Error('private native health details'), { code: nativeCode });
         },
+        setPassword(): void {},
+        deletePassword(): boolean { return false; },
       }));
 
       vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
@@ -792,19 +786,16 @@ describe('CredentialVault', () => {
     store = new CredentialStore(databasePath);
     let backendAvailable = false;
     const load = vi.fn<() => Promise<KeyringModule>>(async () => ({
-      Entry: class {
-        constructor(_service: string, private readonly account: string) {}
-
-        getPassword(): string | null {
-          if (this.account === CREDENTIAL_HEALTH_ACCOUNT && !backendAvailable) {
-            throw Object.assign(new Error('private service details'), { code: 'NO_SECRET_SERVICE' });
-          }
-          return null;
+      getPassword(_service, account): string | null {
+        if (account === CREDENTIAL_HEALTH_ACCOUNT && !backendAvailable) {
+          throw Object.assign(new Error('private service details'), {
+            code: 'BACKEND_UNAVAILABLE',
+          });
         }
-
-        setPassword(): void {}
-        deletePassword(): boolean { return false; }
+        return null;
       },
+      setPassword(): void {},
+      deletePassword(): boolean { return false; },
     }));
     vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
     const bound = vault.bind(kitId, pluginName);
@@ -829,11 +820,9 @@ describe('CredentialVault', () => {
       loadAttempt += 1;
       if (loadAttempt === 1) throw new Error('missing native module details');
       return {
-        Entry: class {
-          getPassword(): string | null { return null; }
-          setPassword(): void {}
-          deletePassword(): boolean { return false; }
-        },
+        getPassword(): string | null { return null; },
+        setPassword(): void {},
+        deletePassword(): boolean { return false; },
       };
     });
     vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });

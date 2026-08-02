@@ -100,7 +100,11 @@ describe.skipIf(!connectionUrl)('MySQL kit runtime integration', () => {
         connected: false,
         profileId: null,
       });
-      await expect(call('getCredentialCapability')).resolves.toEqual({ available: true });
+      await expect(call('getCredentialCapability')).resolves.toEqual({
+        mode: 'local',
+        status: 'available',
+        available: true,
+      });
 
       const connection = await call<{
         connected: boolean;

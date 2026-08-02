@@ -14,7 +14,6 @@ import {
   createNativeKeyringAdapter,
   type KeyringAdapter,
   type KeyringModule,
-  type NativeKeyringEntry,
 } from '../../src/credentials/keyring';
 import { CredentialVault } from '../../src/credentials/vault';
 import { createServer } from '../../src/server';
@@ -95,30 +94,23 @@ class NativeEntryHarness {
 
   createModule(): KeyringModule {
     const harness = this;
-    class Entry implements NativeKeyringEntry {
-      constructor(
-        private readonly service: string,
-        private readonly account: string,
-      ) {
+    return {
+      getPassword(service, account) {
         harness.constructions.push({ service, account });
-      }
-
-      getPassword(): string | null {
-        harness.record('get', this.service, this.account);
-        return harness.secrets.get(harness.key(this.service, this.account)) ?? null;
-      }
-
-      setPassword(secretValue: string): void {
-        harness.record('set', this.service, this.account);
-        harness.secrets.set(harness.key(this.service, this.account), secretValue);
-      }
-
-      deletePassword(): boolean {
-        harness.record('delete', this.service, this.account);
-        return harness.secrets.delete(harness.key(this.service, this.account));
-      }
-    }
-    return { Entry };
+        harness.record('get', service, account);
+        return harness.secrets.get(harness.key(service, account)) ?? null;
+      },
+      setPassword(service, account, secretValue) {
+        harness.constructions.push({ service, account });
+        harness.record('set', service, account);
+        harness.secrets.set(harness.key(service, account), secretValue);
+      },
+      deletePassword(service, account) {
+        harness.constructions.push({ service, account });
+        harness.record('delete', service, account);
+        return harness.secrets.delete(harness.key(service, account));
+      },
+    };
   }
 
   failNext(operation: NativeEntryOperation, error: unknown): void {

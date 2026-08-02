@@ -7,72 +7,52 @@ import {
 } from '../../src/credentials/keyring';
 import { CREDENTIAL_SERVICE } from '../../src/credentials/scope';
 
-function moduleWithEntry(entry: {
-  getPassword(): string | null;
-  setPassword(secret: string): void;
-  deletePassword(): boolean;
-}): { module: KeyringModule; constructions: Array<[string, string]> } {
-  const constructions: Array<[string, string]> = [];
-  class Entry {
-    constructor(service: string, account: string) {
-      constructions.push([service, account]);
-    }
-
-    getPassword(): string | null {
-      return entry.getPassword();
-    }
-
-    setPassword(secret: string): void {
-      entry.setPassword(secret);
-    }
-
-    deletePassword(): boolean {
-      return entry.deletePassword();
-    }
-  }
-  return { module: { Entry }, constructions };
+function nativeModule(overrides: Partial<KeyringModule> = {}): KeyringModule {
+  return {
+    getPassword: vi.fn(() => null),
+    setPassword: vi.fn(() => undefined),
+    deletePassword: vi.fn(() => false),
+    ...overrides,
+  };
 }
 
-describe('native keyring adapter', () => {
+function nativeError(code: string, nativeText: string): Error & { code: string } {
+  return Object.assign(new Error(nativeText), { code });
+}
+
+describe('native credential adapter', () => {
   it('probes the fixed service with a read-only reserved non-profile account', async () => {
-    const nativeEntry = {
-      getPassword: vi.fn(() => null),
-      setPassword: vi.fn((_secret: string) => undefined),
-      deletePassword: vi.fn(() => false),
-    };
-    const { module, constructions } = moduleWithEntry(nativeEntry);
+    const module = nativeModule();
     const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
 
     await probeKeyringAdapter(adapter);
 
-    expect(constructions).toEqual([[CREDENTIAL_SERVICE, CREDENTIAL_HEALTH_ACCOUNT]]);
+    expect(module.getPassword).toHaveBeenCalledWith(
+      CREDENTIAL_SERVICE,
+      CREDENTIAL_HEALTH_ACCOUNT,
+    );
     expect(CREDENTIAL_HEALTH_ACCOUNT).not.toMatch(
       /^[a-f0-9]{64}:[0-9a-f-]{36}:[0-9a-f-]{36}$/iu,
     );
-    expect(nativeEntry.getPassword).toHaveBeenCalledOnce();
-    expect(nativeEntry.setPassword).not.toHaveBeenCalled();
-    expect(nativeEntry.deletePassword).not.toHaveBeenCalled();
+    expect(module.setPassword).not.toHaveBeenCalled();
+    expect(module.deletePassword).not.toHaveBeenCalled();
   });
 
-  it('wraps each opaque account with the fixed Harbors service', async () => {
-    const nativeEntry = {
-      getPassword: vi.fn(() => 'stored-value'),
-      setPassword: vi.fn((_secret: string) => undefined),
-      deletePassword: vi.fn(() => true),
-    };
-    const { module, constructions } = moduleWithEntry(nativeEntry);
+  it('passes only the fixed service, opaque account, and secret to the native module', async () => {
+    const module = nativeModule({ getPassword: vi.fn(() => 'stored-value') });
     const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
 
     await expect(adapter.get('opaque-account')).resolves.toBe('stored-value');
     await adapter.set('opaque-account', 'new-value');
     await adapter.delete('opaque-account');
 
-    expect(constructions).toEqual([
-      [CREDENTIAL_SERVICE, 'opaque-account'],
-      [CREDENTIAL_SERVICE, 'opaque-account'],
-      [CREDENTIAL_SERVICE, 'opaque-account'],
-    ]);
-    expect(nativeEntry.setPassword).toHaveBeenCalledWith('new-value');
+    expect(module.getPassword).toHaveBeenCalledWith(CREDENTIAL_SERVICE, 'opaque-account');
+    expect(module.setPassword).toHaveBeenCalledWith(
+      CREDENTIAL_SERVICE,
+      'opaque-account',
+      'new-value',
+    );
+    expect(module.deletePassword).toHaveBeenCalledWith(CREDENTIAL_SERVICE, 'opaque-account');
   });
 
   it('does not load the native module when credential mode is off', async () => {
@@ -85,125 +65,81 @@ describe('native keyring adapter', () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it('maps a missing native module to a fixed unavailable error', async () => {
+  it('maps a missing or malformed native module to a fixed unavailable error', async () => {
     const nativeText = 'Cannot find native binding at /private/native/path';
-
-    const error = await createNativeKeyringAdapter({
+    const missingError = await createNativeKeyringAdapter({
       mode: 'local',
-      load: async () => {
-        throw new Error(nativeText);
-      },
+      load: async () => { throw new Error(nativeText); },
     }).catch((reason: unknown) => reason);
 
-    expect(error).toMatchObject({
+    expect(missingError).toMatchObject({
       code: 'CREDENTIALS_UNAVAILABLE',
       message: '系统凭据库不可用',
     });
-    expect(JSON.stringify(error)).not.toContain(nativeText);
-    expect(String(error)).not.toContain(nativeText);
+    expect(String(missingError)).not.toContain(nativeText);
+    await expect(createNativeKeyringAdapter({
+      mode: 'local',
+      load: async () => ({}) as KeyringModule,
+    })).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
   });
 
-  it('rejects a native module that does not expose Entry', async () => {
-    const malformedModule = {} as KeyringModule;
+  it('maps only stable native machine codes and never native message text', async () => {
+    const lockedText = 'unlock details at /private/keychain';
+    const unavailableText = 'backend details at /private/service';
+    const deniedText = 'user denied details';
+    const locked = await createNativeKeyringAdapter({
+      load: async () => nativeModule({
+        getPassword() { throw nativeError('BACKEND_LOCKED', lockedText); },
+      }),
+    });
+    const unavailable = await createNativeKeyringAdapter({
+      load: async () => nativeModule({
+        setPassword() { throw nativeError('BACKEND_UNAVAILABLE', unavailableText); },
+      }),
+    });
+    const denied = await createNativeKeyringAdapter({
+      load: async () => nativeModule({
+        deletePassword() { throw nativeError('ACCESS_DENIED', deniedText); },
+      }),
+    });
 
-    await expect(
-      createNativeKeyringAdapter({ mode: 'local', load: async () => malformedModule })
-    ).rejects.toMatchObject({
+    const lockedError = await locked.get('account').catch((reason: unknown) => reason);
+    const unavailableError = await unavailable.set('account', 'secret').catch((reason: unknown) => reason);
+    const deniedError = await denied.delete('account').catch((reason: unknown) => reason);
+
+    expect(lockedError).toMatchObject({ code: 'CREDENTIALS_LOCKED', message: '系统凭据库已锁定' });
+    expect(unavailableError).toMatchObject({
       code: 'CREDENTIALS_UNAVAILABLE',
       message: '系统凭据库不可用',
     });
+    expect(deniedError).toMatchObject({
+      code: 'CREDENTIAL_OPERATION_FAILED',
+      message: '凭据操作失败',
+    });
+    expect(JSON.stringify([lockedError, unavailableError, deniedError])).not.toContain('/private');
+    expect(String(deniedError)).not.toContain(deniedText);
   });
 
-  it('maps a Linux host without Secret Service to unavailable without native text', async () => {
-    const nativeText = 'org.freedesktop.secrets service is not available';
-    const { module } = moduleWithEntry({
+  it('maps unknown codes and suggestive messages to operation failed', async () => {
+    const module = nativeModule({
       getPassword() {
-        throw Object.assign(new Error(nativeText), { code: 'NO_SECRET_SERVICE' });
-      },
-      setPassword() {
-        throw new Error('unused');
-      },
-      deletePassword() {
-        throw new Error('unused');
+        throw nativeError('SOMETHING_NEW', 'keyring locked and backend unavailable');
       },
     });
-    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
+    const adapter = await createNativeKeyringAdapter({ load: async () => module });
 
-    const error = await adapter.get('opaque-account').catch((reason: unknown) => reason);
-
-    expect(error).toMatchObject({
-      code: 'CREDENTIALS_UNAVAILABLE',
-      message: '系统凭据库不可用',
-    });
-    expect(String(error)).not.toContain(nativeText);
-  });
-
-  it('maps a locked backend and an unknown failure to fixed errors', async () => {
-    const locked = moduleWithEntry({
-      getPassword: () => null,
-      setPassword() {
-        throw Object.assign(new Error('native unlock details'), { code: 'KEYRING_LOCKED' });
-      },
-      deletePassword: () => false,
-    });
-    const unknown = moduleWithEntry({
-      getPassword: () => null,
-      setPassword: () => undefined,
-      deletePassword() {
-        throw new Error('native delete details');
-      },
-    });
-    const lockedAdapter = await createNativeKeyringAdapter({
-      mode: 'local',
-      load: async () => locked.module,
-    });
-    const unknownAdapter = await createNativeKeyringAdapter({
-      mode: 'local',
-      load: async () => unknown.module,
-    });
-
-    await expect(lockedAdapter.set('opaque-account', 'new-value')).rejects.toMatchObject({
-      code: 'CREDENTIALS_LOCKED',
-      message: '系统凭据库已锁定',
-    });
-    await expect(unknownAdapter.delete('opaque-account')).rejects.toMatchObject({
+    await expect(adapter.get('account')).rejects.toMatchObject({
       code: 'CREDENTIAL_OPERATION_FAILED',
       message: '凭据操作失败',
     });
   });
 
-  it('does not infer a locked or unavailable reason from uncontrolled native message text', async () => {
-    const { module } = moduleWithEntry({
-      getPassword() {
-        throw new Error('keyring locked and secret service unavailable at /private/native/path');
-      },
-      setPassword: () => undefined,
-      deletePassword: () => false,
-    });
-    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
+  it('treats only native null and false results as idempotent absence', async () => {
+    const module = nativeModule();
+    const adapter = await createNativeKeyringAdapter({ load: async () => module });
 
-    const error = await adapter.get('opaque-account').catch((reason: unknown) => reason);
-
-    expect(error).toMatchObject({
-      code: 'CREDENTIAL_OPERATION_FAILED',
-      message: '凭据操作失败',
-    });
-    expect(String(error)).not.toContain('/private/native/path');
-  });
-
-  it('treats a missing native entry as an absent secret and idempotent deletion', async () => {
-    const { module } = moduleWithEntry({
-      getPassword() {
-        throw Object.assign(new Error('NoEntry'), { code: 'NO_ENTRY' });
-      },
-      setPassword: () => undefined,
-      deletePassword() {
-        throw Object.assign(new Error('NoEntry'), { code: 'NO_ENTRY' });
-      },
-    });
-    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
-
-    await expect(adapter.get('opaque-account')).resolves.toBeNull();
-    await expect(adapter.delete('opaque-account')).resolves.toBeUndefined();
+    await expect(adapter.get('missing')).resolves.toBeNull();
+    await expect(adapter.delete('missing')).resolves.toBeUndefined();
+    expect(module.deletePassword).toHaveReturnedWith(false);
   });
 });
