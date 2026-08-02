@@ -21,44 +21,43 @@
 
 **Files:** `packages/host-security/**`, `packages/native-credential-vault/**`, `packages/plugin-types/src/credentials.ts`, root package/build metadata.
 
-- [ ] Port host-mode and native contract tests and verify they fail because the current-main packages do not exist.
-- [ ] Port the minimal implementations and exact machine-code error mapping.
-- [ ] Integrate the native workspace into the Framework build/test graph without adding product Kit workspaces.
-- [ ] Run host-security and real native Keychain tests green.
+- [x] Port host-mode and native contract tests and verify they fail because the current-main packages do not exist.
+- [x] Port the minimal implementations and exact machine-code error mapping.
+- [x] Integrate the native workspace into the Framework build/test graph without adding product Kit workspaces.
+- [x] Run host-security and real native Keychain tests green.
 
 ### Task 2: Server vault and current application lifecycle
 
 **Files:** `packages/server/src/credentials/**`, current application/runtime/editor/plugin interfaces, Server tests.
 
-- [ ] Port store, scope, keyring, and vault tests before implementation.
-- [ ] Port independent credential units and observe focused tests green.
-- [ ] Add failing current-runtime tests for application-owned vault construction, owner-bound facade injection, unload draining, and stable recovery state.
-- [ ] Adapt current application/editor/plugin lifecycle minimally and run the complete Server suite.
+- [x] Port store, scope, keyring, and vault tests before implementation.
+- [x] Port independent credential units and observe focused tests green.
+- [x] Add failing current-runtime tests for application-owned vault construction, owner-bound facade injection, unload draining, and stable recovery state.
+- [x] Adapt current application/editor/plugin lifecycle minimally and run the complete Server suite.
 
 ### Task 3: Self-contained MySQL Kit
 
 **Files:** `kits/mysql/packages/contracts/**`, MySQL core/explorer/panels/tests, `kits/mysql/package.json`, `kits/mysql/package-lock.json`, Kit manifest and README.
 
-- [ ] Port contract, core, and Panel tests into the current Kit paths and verify the saved-profile behavior is missing.
-- [ ] Port protocol/core/UI behavior while retaining current-main Kit package conventions.
-- [ ] Regenerate only the MySQL Kit lockfile and prove root metadata has no MySQL product dependency.
-- [ ] Run MySQL tests and Kit architecture/boundary checks.
+- [x] Port contract, core, and Panel tests into the current Kit paths and verify the saved-profile behavior is missing.
+- [x] Port protocol/core/UI behavior while retaining current-main Kit package conventions.
+- [x] Regenerate only the MySQL Kit lockfile and prove root metadata has no MySQL product dependency.
+- [x] Run MySQL tests and Kit architecture/boundary checks.
 
 ### Task 4: Gateway and desktop artifact trust root
 
 **Files:** Gateway security, Electron launcher, builder config, desktop staging/verifier and tests.
 
-- [ ] Port loopback and package-verifier regression tests and verify their intended failures.
-- [ ] Adapt listener routing, desktop native build ordering, externalization, exact unpack closure, and ASAR non-link checks.
-- [ ] Run focused Gateway and desktop suites, then `npm run desktop:dir`.
-- [ ] Invoke the packaged native module for isolated write/read/delete smoke with cleanup.
+- [x] Port loopback and package-verifier regression tests and verify their intended failures.
+- [x] Adapt listener routing, desktop native build ordering, externalization, exact unpack closure, and ASAR non-link checks.
+- [x] Run focused Gateway and desktop suites, then `npm run desktop:dir`.
+- [x] Invoke the packaged native module for isolated write/read/delete smoke with cleanup.
 
 ### Task 5: Full acceptance and replacement PR
 
 **Files:** user/security docs and this plan.
 
-- [ ] Complete browser acceptance for default-off and explicit-loopback local modes.
-- [ ] Run `npm run check`, MySQL boundary checks, leak regression, and `git diff --check`.
+- [x] Complete browser acceptance for default-off and explicit-loopback local modes.
+- [x] Run `npm run check`, MySQL boundary checks, leak regression, and `git diff --check`.
 - [ ] Mark this plan complete and commit the final reviewed tree.
 - [ ] Push, create a conflict-free replacement PR against `main`, link it to #44, and close #44 only after the replacement PR is verified open.
-

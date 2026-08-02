@@ -3,6 +3,7 @@ import type {
   PluginAssetsManifest,
   PluginInfo,
   PluginKind,
+  PluginCapability,
   PluginModule as LoadedPluginModule,
 } from './types';
 import type {
@@ -20,14 +21,42 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withPluginDefinitionLock } from './load-lock';
 import { createPluginPaths, type PluginPaths } from './paths';
+import type { PluginCredentialVault } from '@itharbors/plugin-types';
+import { credentialError } from '../../credentials/errors';
 
 interface PackageJson {
   name?: string;
   main?: string;
   'ce-editor'?: {
     assets?: PluginAssetsManifest;
+    capabilities?: unknown;
     contribute?: ContributeData;
   };
+}
+
+interface PluginDefinitionBridge {
+  readonly plugin: Readonly<{
+    define(definition: import('./types').PluginDefinition): void;
+  }>;
+}
+
+const PLUGIN_CAPABILITIES = new Set<PluginCapability>(['credentials']);
+
+function parsePluginCapabilities(value: unknown, pluginName: string): PluginCapability[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`Plugin "${pluginName}" ce-editor.capabilities must be an array`);
+  }
+  const capabilities = value.map((capability, index) => {
+    if (typeof capability !== 'string' || !PLUGIN_CAPABILITIES.has(capability as PluginCapability)) {
+      throw new Error(`Plugin "${pluginName}" ce-editor.capabilities[${index}] is unknown`);
+    }
+    return capability as PluginCapability;
+  });
+  if (new Set(capabilities).size !== capabilities.length) {
+    throw new Error(`Plugin "${pluginName}" ce-editor.capabilities contains duplicate values`);
+  }
+  return capabilities;
 }
 
 function isDistJavaScriptEntry(value: string): boolean {
@@ -97,6 +126,7 @@ function resolveLoadEntryPath(pluginRoot: string, entry: string): string {
 export class PluginModule {
   private pathMap = new Map<string, Plugin>();
   private nameMap = new Map<string, Plugin>();
+  private credentialRevokers = new Map<string, () => void>();
 
   async register(pluginPath: string, options: { kind: PluginKind } = { kind: 'external' }): Promise<void> {
     const absPath = path.resolve(pluginPath);
@@ -121,11 +151,13 @@ export class PluginModule {
     const contribute = pkg['ce-editor'].contribute;
     assertPanelContributions(absPath, contribute, pkg.name);
     const assets = pkg['ce-editor'].assets;
+    const capabilities = parsePluginCapabilities(pkg['ce-editor'].capabilities, pkg.name);
     const info: PluginInfo = {
       name: pkg.name,
       path: absPath,
       kind: options.kind,
       entry: pkg.main!,
+      capabilities,
       assets,
       contribute,
     };
@@ -165,43 +197,65 @@ export class PluginModule {
       owner: registeredPlugin.name,
       legacyDataDirectories: runtimeOptions.paths.legacyDataDirectories,
     });
-    const runtimeEditor: PluginRuntime | ApplicationPluginRuntime = runtimeOptions.scope === 'application'
-      ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name, runtimePaths)
-      : createPluginRuntime(runtimeOptions.host, registeredPlugin.name, runtimePaths);
-
-    runtimeEditor.plugin.define = (nextDefinition) => {
-      if (definition) {
-        throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
-      }
-      definition = nextDefinition;
-    };
-    Object.freeze(runtimeEditor);
+    let credentialLease: ReturnType<typeof createRevocableCredentialVault> | undefined;
+    let lifecycleRuntime: PluginRuntime | ApplicationPluginRuntime | undefined;
 
     try {
       await withPluginDefinitionLock(async () => {
         const globalScope = globalThis as typeof globalThis & {
-          editor?: PluginRuntime | ApplicationPluginRuntime;
+          editor?: PluginDefinitionBridge;
         };
-        const previousEditor = globalScope.editor;
-        globalScope.editor = runtimeEditor;
+        const previousEditorDescriptor = Object.getOwnPropertyDescriptor(globalScope, 'editor');
+        if (previousEditorDescriptor && !previousEditorDescriptor.configurable) {
+          throw new Error('Cannot safely install plugin definition bridge: globalThis.editor is non-configurable');
+        }
+
+        credentialLease = runtimeOptions.scope === 'session'
+          && registeredPlugin.info.capabilities?.includes('credentials')
+          && runtimeOptions.credentials
+          ? createRevocableCredentialVault(runtimeOptions.credentials)
+          : undefined;
+        lifecycleRuntime = runtimeOptions.scope === 'application'
+          ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name, runtimePaths)
+          : createPluginRuntime(
+              runtimeOptions.host,
+              registeredPlugin.name,
+              runtimePaths,
+              credentialLease?.facade,
+            );
+        Object.freeze(lifecycleRuntime);
+        const definitionBridge = createPluginDefinitionBridge((nextDefinition) => {
+          if (definition) {
+            throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
+          }
+          definition = nextDefinition;
+        });
+        Object.defineProperty(globalScope, 'editor', {
+          value: definitionBridge,
+          writable: false,
+          configurable: true,
+          enumerable: previousEditorDescriptor?.enumerable ?? false,
+        });
 
         try {
           importNonce += 1;
           await import(pathToFileURL(entryPath).href + `?t=${Date.now()}-${importNonce}`);
         } finally {
-          if (previousEditor === undefined) {
-            delete globalScope.editor;
+          if (previousEditorDescriptor) {
+            Object.defineProperty(globalScope, 'editor', previousEditorDescriptor);
           } else {
-            globalScope.editor = previousEditor;
+            Reflect.deleteProperty(globalScope, 'editor');
           }
         }
       });
     } catch (error) {
+      credentialLease?.revoke();
       plugin.status = PluginStatus.Idle;
       throw error;
     }
 
     if (!definition) {
+      credentialLease?.revoke();
       plugin.status = PluginStatus.Idle;
       throw new Error(`Plugin "${registeredPlugin.name}" did not call editor.plugin.define()`);
     }
@@ -212,10 +266,11 @@ export class PluginModule {
     };
     plugin.status = PluginStatus.Running;
     this.nameMap.set(plugin.name, plugin);
+    if (credentialLease) this.credentialRevokers.set(plugin.path, credentialLease.revoke);
 
     try {
       if (definition.lifecycle?.load) {
-        await definition.lifecycle.load(runtimeEditor);
+        await definition.lifecycle.load(lifecycleRuntime!);
       }
 
       for (const otherPlugin of this.nameMap.values()) {
@@ -265,6 +320,9 @@ export class PluginModule {
         }
       }
     }
+
+    this.credentialRevokers.get(plugin.path)?.();
+    this.credentialRevokers.delete(plugin.path);
 
     this.nameMap.delete(plugin.name);
     plugin.status = PluginStatus.Idle;
@@ -327,6 +385,7 @@ function createPluginRuntime(
   editor: PluginRuntimeHost,
   ownerName: string,
   paths: PluginPaths,
+  credentials?: PluginCredentialVault,
 ): PluginRuntime {
   const menu = editor.menu;
   const runtime: Omit<PluginRuntime, 'paths'> = {
@@ -390,7 +449,42 @@ function createPluginRuntime(
         editor.message.broadcast(topic, ...args),
     },
   };
-  return { ...runtime, paths };
+  return { ...runtime, paths, ...(credentials ? { credentials } : {}) };
+}
+
+function createPluginDefinitionBridge(
+  capture: (definition: import('./types').PluginDefinition) => void,
+): PluginDefinitionBridge {
+  const define = Object.freeze(capture.bind(undefined));
+  const plugin = Object.freeze({ define });
+  return Object.freeze({ plugin });
+}
+
+function createRevocableCredentialVault(credentials: PluginCredentialVault): {
+  facade: PluginCredentialVault;
+  revoke(): void;
+} {
+  let active = true;
+  const run = <T>(operation: () => Promise<T>): Promise<T> => (
+    active ? operation() : Promise.reject(credentialError('CREDENTIAL_OPERATION_FAILED'))
+  );
+  return {
+    facade: {
+      capability: async () => active
+        ? credentials.capability()
+        : {
+            mode: 'local',
+            status: 'unavailable',
+            reason: 'CREDENTIALS_UNAVAILABLE',
+          },
+      available: async () => active && credentials.available(),
+      list: () => run(() => credentials.list()),
+      get: (id) => run(() => credentials.get(id)),
+      put: (input) => run(() => credentials.put(input)),
+      delete: (id) => run(() => credentials.delete(id)),
+    },
+    revoke: () => { active = false; },
+  };
 }
 
 function createApplicationPluginRuntime(

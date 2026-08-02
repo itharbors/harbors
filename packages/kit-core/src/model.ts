@@ -7,6 +7,7 @@ export const KIT_PERMISSIONS = [
   'process-control',
   'application-startup',
   'notifications',
+  'credentials',
 ] as const;
 
 export type KitChannel = 'stable' | 'preview';

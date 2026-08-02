@@ -577,6 +577,34 @@ test('marks process control as elevated risk and includes it in install confirma
   assert.deepEqual(value.calls, []);
 });
 
+test('marks credential storage as elevated risk and includes the fixed install notice', async () => {
+  const credentialsSnapshot = snapshot({
+    kits: [{
+      ...snapshot().kits[0],
+      channels: {
+        stable: { version: '1.2.0', permissions: ['credentials'] },
+      },
+    }],
+  });
+  const confirmations = [];
+  const value = await createView({
+    initial: credentialsSnapshot,
+    confirmInstall: (message) => { confirmations.push(message); return false; },
+  });
+
+  await value.view.start();
+  value.document.querySelector('[data-detail-tab="permissions"]').click();
+  const permission = value.document.querySelector('[data-permission="credentials"]');
+  assert.equal(permission.dataset.risk, 'high');
+  assert.equal(permission.textContent, '凭据存储 — 高风险');
+  value.document.querySelector('[data-action="install"]').click();
+  await value.view.whenIdle();
+
+  assert.equal(confirmations.length, 1);
+  assert.match(confirmations[0], /此版本可在系统凭据库中保存和使用登录秘密。/);
+  assert.deepEqual(value.calls, []);
+});
+
 test('switches to retained versions and explicitly retries abnormal versions', async () => {
   let releaseActivation;
   const activationGate = new Promise((resolve) => { releaseActivation = resolve; });

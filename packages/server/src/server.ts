@@ -1,6 +1,10 @@
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  resolveCredentialMode,
+  type CredentialMode,
+} from '@itharbors/host-security';
 import { SessionStore } from './session/store';
 import { SessionManager } from './session/manager';
 import { SSEChannel } from './sse/channel';
@@ -19,6 +23,9 @@ import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
 import type { PluginPathRoots } from './framework/plugin/paths';
+import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
+
+type CredentialVaultRuntime = Pick<CredentialVault, 'bind' | 'capability' | 'recover' | 'close'>;
 
 export interface ServerOptions {
   port?: number;
@@ -27,6 +34,8 @@ export interface ServerOptions {
   kitSources?: AssemblyKitSource[];
   assembly?: AssemblyConfig;
   applicationHostMode?: ApplicationHostMode;
+  credentialMode?: string;
+  credentialVault?: CredentialVaultRuntime;
   applicationControlToken?: string;
   notificationPort?: number;
   pluginPathRoots: PluginPathRoots;
@@ -80,6 +89,12 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
 }
 
 export function createServer(options: ServerOptions) {
+  const applicationHostMode = options.applicationHostMode ?? 'web';
+  const credentialMode: CredentialMode = resolveCredentialMode({
+    hostMode: applicationHostMode,
+    requested: options.credentialMode,
+    bindHost: options.host,
+  });
   if (!options.assembly && (!options.kitSources || options.kitSources.length === 0)) {
     throw new Error('Server requires at least one Kit source');
   }
@@ -88,6 +103,11 @@ export function createServer(options: ServerOptions) {
   }
   const pluginPathRoots = requirePluginPathRoots(options.pluginPathRoots);
   const dbPath = options.dbPath || ':memory:';
+  const credentialVaultPromise: Promise<CredentialVaultRuntime | undefined> = options.credentialVault
+    ? Promise.resolve(options.credentialVault)
+    : credentialMode === 'local'
+      ? createLocalCredentialVault({ dbPath })
+      : Promise.resolve(undefined);
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
   const channel = new SSEChannel();
@@ -106,12 +126,18 @@ export function createServer(options: ServerOptions) {
     configuredAssembly.defaultKit = resolveDefaultKitFromSources(configuredAssembly.kitSources);
   }
   const assembly = freezeAssemblySnapshot(configuredAssembly);
+  let recoveredCredentialVault: CredentialVaultRuntime | undefined;
   const applicationRuntime = options.applicationRuntime ?? new ApplicationRuntime({
-    hostMode: options.applicationHostMode ?? 'web',
+    hostMode: applicationHostMode,
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
     pluginPathRoots,
     notificationPort: options.notificationPort,
     notificationOwnerAuthToken: options.applicationControlToken,
+    credentialMode,
+    credentialStatusLoader: async () => (
+      (await credentialVaultPromise)?.capability()
+      ?? { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' }
+    ),
   });
   const {
     handleRequest,
@@ -125,6 +151,7 @@ export function createServer(options: ServerOptions) {
     applicationControlToken: options.applicationControlToken,
     clientAssetsRoot: options.clientAssetsRoot,
     pluginPathRoots,
+    credentialVault: () => recoveredCredentialVault,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -149,6 +176,11 @@ export function createServer(options: ServerOptions) {
   };
 
   const startInternal = async (port?: number): Promise<number> => {
+    if (credentialMode === 'local') {
+      const credentialVault = await credentialVaultPromise;
+      await credentialVault?.recover();
+      recoveredCredentialVault = credentialVault;
+    }
     await Promise.all([applicationRuntime.start(), prepareKitCatalog()]);
     if (stopping) throw new ServerStoppingError();
     const listeningPort = await new Promise<number>((resolve, reject) => {
@@ -171,11 +203,12 @@ export function createServer(options: ServerOptions) {
   const stop = (): Promise<void> => {
     if (stopPromise) return stopPromise;
     stopping = true;
-    stopPromise = stopInternal();
+    const disposeSessionsPromise = registry.disposeAll();
+    stopPromise = stopInternal(disposeSessionsPromise);
     return stopPromise;
   };
 
-  const stopInternal = async (): Promise<void> => {
+  const stopInternal = async (disposeSessionsPromise: Promise<void>): Promise<void> => {
     const errors: unknown[] = [];
     if (startPromise) {
       try {
@@ -193,12 +226,18 @@ export function createServer(options: ServerOptions) {
         })
       : Promise.resolve();
     try {
-      await registry.disposeAll();
+      await disposeSessionsPromise;
     } catch (error) {
       errors.push(error);
     }
     try {
       await applicationRuntime.dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      (await credentialVaultPromise)?.close();
+      recoveredCredentialVault = undefined;
     } catch (error) {
       errors.push(error);
     }
@@ -226,6 +265,9 @@ export function createServer(options: ServerOptions) {
   };
 
   return {
+    get credentialMode(): CredentialMode {
+      return credentialMode;
+    },
     server,
     start,
     stop,

@@ -1,5 +1,6 @@
 import type { NormalizedMenuResult } from '../framework/menu/types';
 import type { KitPermission } from '@itharbors/kit-core';
+import type { CredentialCapabilitySnapshot } from '@itharbors/plugin-types';
 
 export interface ApplicationPluginSpec {
   name: string;
@@ -39,6 +40,7 @@ export interface ApplicationBootstrap {
   plugins: ApplicationPluginState[];
   diagnostics: ApplicationDiagnostic[];
   menu: NormalizedMenuResult;
+  credentials?: CredentialCapabilitySnapshot;
 }
 
 export interface ApplicationEvent {

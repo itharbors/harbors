@@ -919,7 +919,7 @@ export async function buildDesktop({ repositoryRoot, outputRoot, descriptors }) 
     platform: 'node',
     format: 'esm',
     target: 'node20',
-    external: ['better-sqlite3'],
+    external: ['@itharbors/native-credential-vault', 'better-sqlite3'],
   });
   await copyPlan(desktopDist, desktopFiles);
   const inventory = await copyPlan(output, runtimeFiles);
