@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveGatewayCredentialMode } from '../src/security.js';
+import {
+  resolveGatewayCredentialMode,
+  resolveGatewayUpstreamHost,
+} from '../src/security.js';
 
 describe('gateway credential security', () => {
   it('keeps an ordinary Web gateway off by default', () => {
@@ -24,5 +27,15 @@ describe('gateway credential security', () => {
       HTTP_FORWARDED: 'for=127.0.0.1;host=127.0.0.1',
       HTTP_X_FORWARDED_FOR: '127.0.0.1',
     })).toThrow(/loopback/i);
+  });
+
+  it.each([
+    ['127.0.0.1', '127.0.0.1'],
+    ['::1', '::1'],
+    ['0.0.0.0', '127.0.0.1'],
+    ['::', '::1'],
+    [undefined, 'localhost'],
+  ])('routes upstream traffic to the listener represented by %s', (bindHost, expected) => {
+    expect(resolveGatewayUpstreamHost(bindHost)).toBe(expected);
   });
 });
