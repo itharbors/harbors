@@ -3,11 +3,16 @@ export default {
   productName: 'ITHARBORS',
   electronVersion: '43.2.0',
   directories: { app: 'packages/desktop', output: 'dist/desktop-release' },
-  files: ['package.json', 'dist/**/*'],
+  files: [
+    'package.json',
+    'dist/**/*',
+    '!node_modules/@itharbors/native-credential-vault/{src,scripts,tests}/**/*',
+    '!node_modules/@itharbors/native-credential-vault/{binding.gyp,index.d.ts}',
+  ],
   extraResources: [{ from: 'dist/desktop-runtime', to: 'runtime' }],
   asar: true,
   asarUnpack: [
-    'node_modules/@napi-rs/**/*.node',
+    'node_modules/@itharbors/native-credential-vault/**/*.node',
     'node_modules/better-sqlite3/**/*.node',
   ],
   npmRebuild: true,

@@ -5,17 +5,15 @@ import { extractFile, listPackage, statFile } from '@electron/asar';
 
 export const DESKTOP_ELECTRON_VERSION = '43.2.0';
 export const DESKTOP_ARCH = 'arm64';
-const DESKTOP_KEYRING_PACKAGE = '@napi-rs/keyring';
-const DESKTOP_KEYRING_NATIVE_PACKAGE = '@napi-rs/keyring-darwin-arm64';
-const DESKTOP_KEYRING_NATIVE_FILE = 'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node';
-const DESKTOP_KEYRING_VERSION = '1.3.0';
-const DESKTOP_KEYRING_WRAPPER_MANIFEST = 'node_modules/@napi-rs/keyring/package.json';
-const DESKTOP_KEYRING_NATIVE_MANIFEST = 'node_modules/@napi-rs/keyring-darwin-arm64/package.json';
-const DESKTOP_KEYRING_WRAPPER_MAIN = 'node_modules/@napi-rs/keyring/index.js';
+const DESKTOP_KEYRING_PACKAGE = '@itharbors/native-credential-vault';
+const DESKTOP_KEYRING_NATIVE_FILE = 'node_modules/@itharbors/native-credential-vault/build/Release/harbors_native_credential_vault.node';
+const DESKTOP_KEYRING_VERSION = '0.0.1';
+const DESKTOP_KEYRING_MANIFEST = 'node_modules/@itharbors/native-credential-vault/package.json';
+const DESKTOP_KEYRING_MAIN = 'node_modules/@itharbors/native-credential-vault/index.cjs';
+const DESKTOP_KEYRING_LOADER = 'node_modules/@itharbors/native-credential-vault/lib/loader.cjs';
 const APP_OWNED_ENTRY = /^(?:dist|packages\/server\/dist)\//u;
 const STRICT_CREDENTIAL_ENTRY = /^(?:dist\/(?:framework\.mjs|credentials(?:\/.*)?\.[cm]?js)|packages\/server\/dist\/credentials(?:\/.*)?\.[cm]?js)$/iu;
-const SELECTED_KEYRING_ENTRY = /^node_modules\/@napi-rs\/keyring(?:-darwin-arm64)?\//u;
-const KEYRING_MUSL_PROBE = /require\((['"])child_process\1\)\.execSync\((['"])ldd --version\2,\s*\{\s*encoding:\s*(['"])utf8\3\s*\}\)/gu;
+const SELECTED_KEYRING_ENTRY = /^node_modules\/@itharbors\/native-credential-vault\//u;
 const CREDENTIAL_FALLBACK_MARKERS = Object.freeze([
   Object.freeze({ label: 'Linux secret-tool helper', pattern: /\bsecret-tool\b/iu }),
   Object.freeze({
@@ -230,22 +228,12 @@ function readArchiveScanContent(archive, entry) {
 function assertNoCredentialFallback(
   entry,
   content,
-  { allowKeyringMuslProbe = false, strictProcessSource = false } = {},
+  { strictProcessSource = false } = {},
 ) {
-  let inspectedContent = content;
-  if (allowKeyringMuslProbe) {
-    const probes = [...content.matchAll(KEYRING_MUSL_PROBE)];
-    if (probes.length > 1) {
-      throw new Error(
-        `Packaged keyring verification failed: forbidden credential fallback content in ${entry} (repeated musl probe)`,
-      );
-    }
-    inspectedContent = content.replace(KEYRING_MUSL_PROBE, '');
-  }
   const markers = strictProcessSource
     ? [...CREDENTIAL_FALLBACK_MARKERS, ...STRICT_PROCESS_MARKERS]
     : CREDENTIAL_FALLBACK_MARKERS;
-  const forbidden = markers.find(({ pattern }) => pattern.test(inspectedContent));
+  const forbidden = markers.find(({ pattern }) => pattern.test(content));
   if (forbidden) {
     throw new Error(
       `Packaged keyring verification failed: forbidden credential fallback content in ${entry} (${forbidden.label})`,
@@ -309,32 +297,52 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
     outputReal,
     escapeLabel: 'archive root',
   });
-  const unpackedRoot = path.join(unpackedNodeModules, '@napi-rs');
+  const unpackedRoot = path.join(unpackedNodeModules, '@itharbors');
   const unpackedRealRoot = await assertTrustedChildDirectory({
     parent: unpackedNodeModules,
     parentReal: unpackedNodeModulesReal,
     child: unpackedRoot,
-    basename: '@napi-rs',
+    basename: '@itharbors',
     label: 'unpacked native parent',
     outputReal,
     escapeLabel: 'archive root',
   });
-  const unpackedNativePackage = path.join(unpackedRoot, 'keyring-darwin-arm64');
+  const unpackedNativePackage = path.join(unpackedRoot, 'native-credential-vault');
   const unpackedNativePackageReal = await assertTrustedChildDirectory({
     parent: unpackedRoot,
     parentReal: unpackedRealRoot,
     child: unpackedNativePackage,
-    basename: 'keyring-darwin-arm64',
+    basename: 'native-credential-vault',
     label: 'unpacked native parent',
     outputReal,
     escapeLabel: 'archive root',
   });
-  const expectedNative = path.join(unpackedNativePackage, 'keyring.darwin-arm64.node');
-  await assertTrustedChildFile({
+  const unpackedBuild = path.join(unpackedNativePackage, 'build');
+  const unpackedBuildReal = await assertTrustedChildDirectory({
     parent: unpackedNativePackage,
     parentReal: unpackedNativePackageReal,
+    child: unpackedBuild,
+    basename: 'build',
+    label: 'unpacked native build directory',
+    outputReal,
+    escapeLabel: 'archive root',
+  });
+  const unpackedRelease = path.join(unpackedBuild, 'Release');
+  const unpackedReleaseReal = await assertTrustedChildDirectory({
+    parent: unpackedBuild,
+    parentReal: unpackedBuildReal,
+    child: unpackedRelease,
+    basename: 'Release',
+    label: 'unpacked native release directory',
+    outputReal,
+    escapeLabel: 'archive root',
+  });
+  const expectedNative = path.join(unpackedRelease, 'harbors_native_credential_vault.node');
+  await assertTrustedChildFile({
+    parent: unpackedRelease,
+    parentReal: unpackedReleaseReal,
     child: expectedNative,
-    basename: 'keyring.darwin-arm64.node',
+    basename: 'harbors_native_credential_vault.node',
     label: 'expected native file',
     outputReal,
   });
@@ -347,62 +355,46 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
   if (frameworkBundle === null) {
     throw new Error('Packaged keyring verification failed: Framework bundle is not regular text');
   }
-  if (!/import\(["']@napi-rs\/keyring["']\)/u.test(frameworkBundle)) {
+  if (!/import\(["']@itharbors\/native-credential-vault["']\)/u.test(frameworkBundle)) {
     throw new Error('Packaged keyring verification failed: external import is missing');
   }
   assertNoCredentialFallback(frameworkEntry, frameworkBundle, { strictProcessSource: true });
 
-  const keyringPackages = [...new Set(entries.flatMap((entry) => {
-    const match = /^node_modules\/@napi-rs\/(keyring(?:-[^/]+)?)(?:\/|$)/u.exec(entry);
-    return match ? [`@napi-rs/${match[1]}`] : [];
+  const credentialPackages = [...new Set(entries.flatMap((entry) => {
+    if (/^node_modules\/@itharbors\/native-credential-vault(?:\/|$)/u.test(entry)) {
+      return [DESKTOP_KEYRING_PACKAGE];
+    }
+    const legacy = /^node_modules\/@napi-rs\/(keyring(?:-[^/]+)?)(?:\/|$)/u.exec(entry);
+    return legacy ? [`@napi-rs/${legacy[1]}`] : [];
   }))].sort();
-  const expectedPackages = [DESKTOP_KEYRING_PACKAGE, DESKTOP_KEYRING_NATIVE_PACKAGE].sort();
-  if (
-    keyringPackages.length !== expectedPackages.length
-    || keyringPackages.some((entry, index) => entry !== expectedPackages[index])
-  ) {
+  if (!exactStringArray(credentialPackages, [DESKTOP_KEYRING_PACKAGE])) {
     throw new Error(
-      `Packaged keyring verification failed: unexpected platform dependency closure ${keyringPackages.join(', ')}`,
+      `Packaged keyring verification failed: unexpected credential dependency closure ${credentialPackages.join(', ')}`,
     );
   }
   const wrapperManifest = readArchiveJson(
     archive,
-    DESKTOP_KEYRING_WRAPPER_MANIFEST,
+    DESKTOP_KEYRING_MANIFEST,
     'wrapper',
   );
+  const expectedFiles = [
+    'index.cjs',
+    'index.d.ts',
+    'lib/loader.cjs',
+    'build/Release/harbors_native_credential_vault.node',
+  ];
   if (
     wrapperManifest.name !== DESKTOP_KEYRING_PACKAGE
     || wrapperManifest.version !== DESKTOP_KEYRING_VERSION
-    || wrapperManifest.main !== 'index.js'
-    || !Array.isArray(wrapperManifest.files)
-    || !wrapperManifest.files.includes(wrapperManifest.main)
-    || !entries.includes(DESKTOP_KEYRING_WRAPPER_MAIN)
+    || wrapperManifest.private !== true
+    || wrapperManifest.type !== 'commonjs'
+    || wrapperManifest.main !== 'index.cjs'
+    || wrapperManifest.types !== 'index.d.ts'
+    || !exactStringArray(wrapperManifest.files, expectedFiles)
+    || !entries.includes(DESKTOP_KEYRING_MAIN)
+    || !entries.includes(DESKTOP_KEYRING_LOADER)
   ) {
     throw new Error('Packaged keyring verification failed: invalid wrapper manifest');
-  }
-  if (
-    !wrapperManifest.optionalDependencies
-    || typeof wrapperManifest.optionalDependencies !== 'object'
-    || Array.isArray(wrapperManifest.optionalDependencies)
-    || wrapperManifest.optionalDependencies[DESKTOP_KEYRING_NATIVE_PACKAGE] !== DESKTOP_KEYRING_VERSION
-  ) {
-    throw new Error('Packaged keyring verification failed: invalid wrapper native dependency');
-  }
-  const nativeManifest = readArchiveJson(
-    archive,
-    DESKTOP_KEYRING_NATIVE_MANIFEST,
-    'native',
-  );
-  const nativeFilename = path.posix.basename(DESKTOP_KEYRING_NATIVE_FILE);
-  if (
-    nativeManifest.name !== DESKTOP_KEYRING_NATIVE_PACKAGE
-    || nativeManifest.version !== DESKTOP_KEYRING_VERSION
-    || nativeManifest.main !== nativeFilename
-    || !exactStringArray(nativeManifest.files, [nativeFilename])
-    || !exactStringArray(nativeManifest.os, ['darwin'])
-    || !exactStringArray(nativeManifest.cpu, [DESKTOP_ARCH])
-  ) {
-    throw new Error('Packaged keyring verification failed: invalid native manifest');
   }
   if (entries.some((entry) => /shell[-_.]?helper|plain(?:text)?[-_.]?store|basic_text/iu.test(entry))) {
     throw new Error('Packaged keyring verification failed: forbidden credential helper artifact is present');
@@ -419,13 +411,19 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
   for (const entry of selectedKeyringEntries) {
     const content = readArchiveScanContent(archive, entry);
     if (content === null) continue;
-    assertNoCredentialFallback(entry, content, {
-      allowKeyringMuslProbe: entry === DESKTOP_KEYRING_WRAPPER_MAIN,
-      strictProcessSource: true,
-    });
+    assertNoCredentialFallback(entry, content, { strictProcessSource: true });
   }
+  const expectedKeyringEntries = [
+    'node_modules/@itharbors/native-credential-vault/build',
+    'node_modules/@itharbors/native-credential-vault/build/Release',
+    DESKTOP_KEYRING_NATIVE_FILE,
+    DESKTOP_KEYRING_MAIN,
+    'node_modules/@itharbors/native-credential-vault/lib',
+    DESKTOP_KEYRING_LOADER,
+    DESKTOP_KEYRING_MANIFEST,
+  ].sort();
   const archiveNativeFiles = entries.filter((entry) => (
-    /^node_modules\/@napi-rs\/keyring(?:-[^/]+)?\/.*\.node$/u.test(entry)
+    /^node_modules\/@itharbors\/native-credential-vault\/.*\.node$/u.test(entry)
   )).sort();
   if (!exactStringArray(archiveNativeFiles, [DESKTOP_KEYRING_NATIVE_FILE])) {
     throw new Error('Packaged keyring verification failed: invalid archive native file closure');
@@ -434,15 +432,22 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
     throw new Error('Packaged keyring verification failed: Darwin ARM64 native file is not unpacked');
   }
   const unpackedNativeFiles = (await listUnpackedNativeFiles(unpackedRoot))
-    .filter((entry) => /^keyring(?:-[^/]+)?\/.*\.node$/u.test(entry))
-    .map((entry) => path.posix.join('node_modules/@napi-rs', entry));
+    .filter((entry) => /^native-credential-vault\/.*\.node$/u.test(entry))
+    .map((entry) => path.posix.join('node_modules/@itharbors', entry));
   if (!exactStringArray(unpackedNativeFiles, [DESKTOP_KEYRING_NATIVE_FILE])) {
     throw new Error('Packaged keyring verification failed: invalid unpacked native file closure');
+  }
+  const comparableKeyringEntries = selectedKeyringEntries
+    .filter((entry) => entry !== 'node_modules/@itharbors/native-credential-vault')
+    .sort();
+  if (!exactStringArray(comparableKeyringEntries, expectedKeyringEntries)) {
+    throw new Error(
+      `Packaged keyring verification failed: invalid package file closure ${comparableKeyringEntries.join(', ')}`,
+    );
   }
 
   return Object.freeze({
     external: DESKTOP_KEYRING_PACKAGE,
-    nativePackage: DESKTOP_KEYRING_NATIVE_PACKAGE,
     nativeFile: DESKTOP_KEYRING_NATIVE_FILE,
   });
 }

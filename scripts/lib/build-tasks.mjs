@@ -9,6 +9,27 @@ const NOTIFY_USER_RESOURCE_OUTPUT = `${NOTIFICATION_BACKGROUND_PLUGIN}/main/dist
 const WORKSPACE_TASKS = [
   workspaceTask('plugin-types', '@itharbors/plugin-types', 'packages/plugin-types'),
   workspaceTask('host-security', '@itharbors/host-security', 'packages/host-security'),
+  {
+    name: 'workspace:native-credential-vault',
+    kind: 'workspace',
+    command: {
+      file: 'npm',
+      args: ['run', 'build', '-w', '@itharbors/native-credential-vault'],
+    },
+    inputs: [
+      'package-lock.json',
+      'packages/native-credential-vault/package.json',
+      'packages/native-credential-vault/binding.gyp',
+      'packages/native-credential-vault/index.cjs',
+      'packages/native-credential-vault/index.d.ts',
+      'packages/native-credential-vault/lib',
+      'packages/native-credential-vault/scripts/build.cjs',
+      'packages/native-credential-vault/src',
+    ],
+    outputs: ['packages/native-credential-vault/build'],
+    emptyOutputs: ['packages/native-credential-vault/build'],
+    dependencies: [],
+  },
   workspaceTask(
     'agent-guard-contracts',
     '@itharbors/agent-guard-contracts',
@@ -43,7 +64,11 @@ const WORKSPACE_TASKS = [
     'server',
     'packages/server',
     'packages/server',
-    ['workspace:plugin-types', 'workspace:host-security'],
+    [
+      'workspace:plugin-types',
+      'workspace:host-security',
+      'workspace:native-credential-vault',
+    ],
     {
       config: ['packages/server/tsconfig.build.json', 'packages/server/tsconfig.json'],
     },
@@ -63,6 +88,7 @@ const WORKSPACE_DEPENDENCIES = new Map([
   ['@itharbors/relationship-graph', 'workspace:relationship-graph'],
   ['@itharbors/kit-core', 'workspace:kit-core'],
   ['@itharbors/kit-cli', 'workspace:kit-cli'],
+  ['@itharbors/native-credential-vault', 'workspace:native-credential-vault'],
 ]);
 
 const GRAPH_SELECTIONS = {
@@ -192,6 +218,7 @@ function selectWorkspaceTasks(selection) {
     return WORKSPACE_TASKS.filter((task) => [
       'workspace:plugin-types',
       'workspace:host-security',
+      'workspace:native-credential-vault',
       'workspace:kit-core',
       'workspace:kit-cli',
       'workspace:client',

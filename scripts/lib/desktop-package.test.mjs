@@ -57,7 +57,6 @@ async function createPackagedKeyringFixture(
     foreignPlatform = false,
     forbiddenArtifact = false,
     wrapperManifest: wrapperManifestOverride = {},
-    nativeManifest: nativeManifestOverride = {},
     extraNativeFile = false,
     extraUnpackedNativeFile = false,
     extraUnpackedNativeSymlink = false,
@@ -69,7 +68,7 @@ async function createPackagedKeyringFixture(
     unpackedNativeDirectory = false,
     omitWrapperMain = false,
     credentialModuleContent = 'export const credentialBackend = "os-keyring";\n',
-    keyringTextContent = 'module.exports = {};\n',
+    keyringTextContent = 'module.exports = require("./build/Release/harbors_native_credential_vault.node");\n',
     keyringExtensionlessContent,
     appTextEntries = {},
   } = {},
@@ -88,86 +87,63 @@ async function createPackagedKeyringFixture(
   );
   await write(source, 'dist/framework.mjs', `
 export async function loadKeyring() {
-  return import('@napi-rs/keyring');
+  return import('@itharbors/native-credential-vault');
 }
 export function migrateDatabase(database) {
   database.exec('CREATE TABLE credential_profiles (id TEXT)');
 }
 `);
   const wrapperManifest = {
-    name: '@napi-rs/keyring',
-    version: '1.3.0',
-    main: 'index.js',
-    files: ['index.d.ts', 'index.js', 'keytar.js', 'keytar.d.ts'],
-    optionalDependencies: {
-      '@napi-rs/keyring-darwin-arm64': '1.3.0',
-      '@napi-rs/keyring-darwin-x64': '1.3.0',
-      '@napi-rs/keyring-freebsd-x64': '1.3.0',
-      '@napi-rs/keyring-linux-arm-gnueabihf': '1.3.0',
-      '@napi-rs/keyring-linux-arm64-gnu': '1.3.0',
-      '@napi-rs/keyring-linux-arm64-musl': '1.3.0',
-      '@napi-rs/keyring-linux-riscv64-gnu': '1.3.0',
-      '@napi-rs/keyring-linux-x64-gnu': '1.3.0',
-      '@napi-rs/keyring-linux-x64-musl': '1.3.0',
-      '@napi-rs/keyring-win32-arm64-msvc': '1.3.0',
-      '@napi-rs/keyring-win32-ia32-msvc': '1.3.0',
-      '@napi-rs/keyring-win32-x64-msvc': '1.3.0',
-    },
+    name: '@itharbors/native-credential-vault',
+    version: '0.0.1',
+    private: true,
+    type: 'commonjs',
+    main: 'index.cjs',
+    types: 'index.d.ts',
+    files: [
+      'index.cjs',
+      'index.d.ts',
+      'lib/loader.cjs',
+      'build/Release/harbors_native_credential_vault.node',
+    ],
     ...wrapperManifestOverride,
   };
-  const nativeManifest = {
-    name: '@napi-rs/keyring-darwin-arm64',
-    version: '1.3.0',
-    main: 'keyring.darwin-arm64.node',
-    files: ['keyring.darwin-arm64.node'],
-    os: ['darwin'],
-    cpu: ['arm64'],
-    ...nativeManifestOverride,
-  };
-  await write(source, 'node_modules/@napi-rs/keyring/package.json', JSON.stringify(wrapperManifest));
-  if (!omitWrapperMain) await write(source, 'node_modules/@napi-rs/keyring/index.js', `
-function isMuslFromChildProcess() {
-  return require('child_process').execSync('ldd --version', { encoding: 'utf8' }).includes('musl');
-}
-module.exports = { Entry: class {}, isMuslFromChildProcess };
-`);
-  await write(source, 'node_modules/@napi-rs/keyring/index.d.ts', 'export declare class Entry {}\n');
-  await write(source, 'node_modules/@napi-rs/keyring/keytar.js', keyringTextContent);
-  await write(source, 'node_modules/@napi-rs/keyring/keytar.d.ts', 'export {};\n');
+  await write(
+    source,
+    'node_modules/@itharbors/native-credential-vault/package.json',
+    JSON.stringify(wrapperManifest),
+  );
+  if (!omitWrapperMain) {
+    await write(source, 'node_modules/@itharbors/native-credential-vault/index.cjs', keyringTextContent);
+  }
+  await write(source, 'node_modules/@itharbors/native-credential-vault/lib/loader.cjs', 'module.exports = {};\n');
   if (keyringExtensionlessContent !== undefined) {
     await write(
       source,
-      'node_modules/@napi-rs/keyring/runtime-fallback',
+      'node_modules/@itharbors/native-credential-vault/runtime-fallback',
       keyringExtensionlessContent,
     );
   }
   await write(
     source,
-    'node_modules/@napi-rs/keyring-darwin-arm64/package.json',
-    JSON.stringify(nativeManifest),
-  );
-  await write(
-    source,
-    'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node',
+    'node_modules/@itharbors/native-credential-vault/build/Release/harbors_native_credential_vault.node',
     'fixture native binary',
   );
   if (extraNativeFile) {
     await write(
       source,
-      'node_modules/@napi-rs/keyring-darwin-arm64/extra.node',
+      'node_modules/@itharbors/native-credential-vault/build/Release/extra.node',
       'unexpected native binary',
     );
   }
   if (foreignPlatform) {
-    await write(source, 'node_modules/@napi-rs/keyring-linux-x64-gnu/package.json', JSON.stringify({
-      name: '@napi-rs/keyring-linux-x64-gnu',
+    await write(source, 'node_modules/@napi-rs/keyring/package.json', JSON.stringify({
+      name: '@napi-rs/keyring',
       version: '1.3.0',
-      os: ['linux'],
-      cpu: ['x64'],
     }));
     await write(
       source,
-      'node_modules/@napi-rs/keyring-linux-x64-gnu/keyring.linux-x64-gnu.node',
+      'node_modules/@napi-rs/keyring/keyring.node',
       'foreign native binary',
     );
   }
@@ -185,18 +161,18 @@ module.exports = { Entry: class {}, isMuslFromChildProcess };
   if (extraUnpackedNativeFile) {
     await write(
       path.join(resources, 'app.asar.unpacked'),
-      'node_modules/@napi-rs/keyring-darwin-arm64/stray.node',
+      'node_modules/@itharbors/native-credential-vault/build/Release/stray.node',
       'stray unpacked native binary',
     );
   }
   const unpackedNativeDirectoryPath = path.join(
     resources,
     'app.asar.unpacked',
-    'node_modules/@napi-rs/keyring-darwin-arm64',
+    'node_modules/@itharbors/native-credential-vault/build/Release',
   );
   if (extraUnpackedNativeSymlink) {
     await symlink(
-      'keyring.darwin-arm64.node',
+      'harbors_native_credential_vault.node',
       path.join(unpackedNativeDirectoryPath, 'stray.node'),
     );
   }
@@ -204,7 +180,7 @@ module.exports = { Entry: class {}, isMuslFromChildProcess };
     await mkdir(path.join(unpackedNativeDirectoryPath, 'stray.node'));
   }
   if (expectedNativeSymlink || escapingExpectedNativeSymlink) {
-    const expectedNative = path.join(unpackedNativeDirectoryPath, 'keyring.darwin-arm64.node');
+    const expectedNative = path.join(unpackedNativeDirectoryPath, 'harbors_native_credential_vault.node');
     await rm(expectedNative);
     if (escapingExpectedNativeSymlink) {
       const escapedNative = path.join(cwd, 'escaped-native.node');
@@ -216,10 +192,10 @@ module.exports = { Entry: class {}, isMuslFromChildProcess };
     }
   }
   if (escapingNativeParentSymlink) {
-    const escapedPackage = path.join(cwd, 'escaped-keyring-package');
+    const escapedPackage = path.join(cwd, 'escaped-native-release');
     await mkdir(escapedPackage, { recursive: true });
     await writeFile(
-      path.join(escapedPackage, 'keyring.darwin-arm64.node'),
+      path.join(escapedPackage, 'harbors_native_credential_vault.node'),
       'escaped native binary',
     );
     await rm(unpackedNativeDirectoryPath, { recursive: true });
@@ -227,10 +203,10 @@ module.exports = { Entry: class {}, isMuslFromChildProcess };
   }
   const unpackedArchivePath = path.join(resources, 'app.asar.unpacked');
   if (unpackedNapiParentSymlink) {
-    const napiParent = path.join(unpackedArchivePath, 'node_modules', '@napi-rs');
-    const linkedNapiParent = path.join(unpackedArchivePath, 'node_modules', 'linked-napi-rs');
+    const napiParent = path.join(unpackedArchivePath, 'node_modules', '@itharbors');
+    const linkedNapiParent = path.join(unpackedArchivePath, 'node_modules', 'linked-itharbors');
     await rename(napiParent, linkedNapiParent);
-    await symlink('linked-napi-rs', napiParent);
+    await symlink('linked-itharbors', napiParent);
   }
   if (unpackedRootSymlink) {
     const escapedUnpacked = path.join(cwd, 'escaped-app.asar.unpacked');
@@ -276,9 +252,8 @@ test('accepts a fixture package with only the externalized unpacked Darwin ARM64
   const evidence = await runDesktopPackage({ cwd, mode: 'dir', run: runner.run });
 
   assert.deepEqual(evidence, {
-    external: '@napi-rs/keyring',
-    nativePackage: '@napi-rs/keyring-darwin-arm64',
-    nativeFile: 'node_modules/@napi-rs/keyring-darwin-arm64/keyring.darwin-arm64.node',
+    external: '@itharbors/native-credential-vault',
+    nativeFile: 'node_modules/@itharbors/native-credential-vault/build/Release/harbors_native_credential_vault.node',
   });
 });
 
@@ -369,32 +344,12 @@ for (const fixture of [
     options: { omitWrapperMain: true },
   },
   {
-    name: 'wrapper native dependency relation',
-    options: { wrapperManifest: { optionalDependencies: {} } },
+    name: 'wrapper type',
+    options: { wrapperManifest: { type: 'module' } },
   },
   {
-    name: 'native name',
-    options: { nativeManifest: { name: '@example/keyring-darwin-arm64' } },
-  },
-  {
-    name: 'native version',
-    options: { nativeManifest: { version: '9.9.9' } },
-  },
-  {
-    name: 'native operating system',
-    options: { nativeManifest: { os: ['linux'] } },
-  },
-  {
-    name: 'native architecture',
-    options: { nativeManifest: { cpu: ['x64'] } },
-  },
-  {
-    name: 'native main',
-    options: { nativeManifest: { main: 'extra.node' } },
-  },
-  {
-    name: 'native files',
-    options: { nativeManifest: { files: ['extra.node'] } },
+    name: 'wrapper files',
+    options: { wrapperManifest: { files: ['index.cjs'] } },
   },
 ]) {
   test(`rejects a packaged keyring with an invalid ${fixture.name}`, async (t) => {
@@ -426,7 +381,7 @@ test('rejects app.asar.unpacked when the root itself is a symlink outside the pa
   );
 });
 
-test('rejects a symlinked node_modules/@napi-rs parent even when its target stays inside unpacked', async (t) => {
+test('rejects a symlinked node_modules/@itharbors parent even when its target stays inside unpacked', async (t) => {
   const cwd = await createPackagedKeyringFixture(t, { unpackedNapiParentSymlink: true });
 
   await assert.rejects(
@@ -471,7 +426,7 @@ test('rejects a fixture package containing a foreign native keyring platform', a
 
   await assert.rejects(
     runDesktopPackage({ cwd, mode: 'dir', run: runner.run }),
-    /unexpected platform dependency closure/u,
+    /unexpected credential dependency closure/u,
   );
   assert.equal(runner.calls.at(-1).name, 'restore-node-addon');
 });
@@ -606,11 +561,10 @@ test('rejects an extensionless keyring marker after a NUL byte', async (t) => {
   );
 });
 
-test('accepts NUL-containing app and keyring binary data without fallback markers', async (t) => {
+test('accepts NUL-containing app data without fallback markers', async (t) => {
   const binary = Buffer.concat([Buffer.from([0, 1, 2]), Buffer.from('harbors asset')]);
   const cwd = await createPackagedKeyringFixture(t, {
     appTextEntries: { 'dist/runtime-data': binary },
-    keyringExtensionlessContent: binary,
   });
 
   await runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run });
@@ -726,10 +680,13 @@ test('desktop package owns version, updater, and native runtime dependencies', a
   assert.equal(pkg.main, 'dist/main.mjs');
   assert.equal(pkg.dependencies['electron-updater'], '6.8.9');
   assert.equal(pkg.dependencies['better-sqlite3'], '12.10.1');
-  assert.equal(pkg.dependencies['@napi-rs/keyring'], '1.3.0');
-  assert.equal(rootLock.packages['packages/desktop'].dependencies['@napi-rs/keyring'], '1.3.0');
-  assert.equal(rootLock.packages['node_modules/@napi-rs/keyring'].version, '1.3.0');
-  assert.equal(rootLock.packages['node_modules/@napi-rs/keyring-darwin-arm64'].version, '1.3.0');
+  assert.equal(pkg.dependencies['@itharbors/native-credential-vault'], '0.0.1');
+  assert.equal(
+    rootLock.packages['packages/desktop'].dependencies['@itharbors/native-credential-vault'],
+    '0.0.1',
+  );
+  assert.equal(rootLock.packages['packages/native-credential-vault'].version, '0.0.1');
+  assert.equal(rootLock.packages['node_modules/@napi-rs/keyring'], undefined);
   assert.equal(rootPackage.engines.node, '>=22.12.0');
   assert.equal(rootPackage.devDependencies['@electron/rebuild'], '4.2.0');
   assert.equal(rootPackage.devDependencies.electron, DESKTOP_ELECTRON_VERSION);
@@ -763,7 +720,15 @@ test('builder ships only the staged runtime and unpacks native modules', async (
   assert.equal(config.artifactName, '${productName}-${version}-${arch}-mac.${ext}');
   assert.equal(config.dmg.artifactName, '${productName}-${version}-${arch}.${ext}');
   assert.match(JSON.stringify(config.extraResources), /dist\/desktop-runtime/);
-  assert.ok(config.asarUnpack.includes('node_modules/@napi-rs/**/*.node'));
+  assert.ok(config.files.includes(
+    '!node_modules/@itharbors/native-credential-vault/{src,scripts,tests}/**/*',
+  ));
+  assert.ok(config.files.includes(
+    '!node_modules/@itharbors/native-credential-vault/{binding.gyp,index.d.ts}',
+  ));
+  assert.ok(config.asarUnpack.includes(
+    'node_modules/@itharbors/native-credential-vault/**/*.node',
+  ));
   assert.ok(config.asarUnpack.includes('node_modules/better-sqlite3/**/*.node'));
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlements), entitlementsPath);
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlementsInherit), entitlementsPath);

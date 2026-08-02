@@ -184,18 +184,18 @@ test('keeps the native keyring behind an external Framework import', async (t) =
   const outputRoot = path.join(repositoryRoot, 'dist', 'desktop-runtime');
   await write(repositoryRoot, 'packages/desktop/src/framework.mjs', `
 export async function loadKeyring() {
-  return import('@napi-rs/keyring');
+  return import('@itharbors/native-credential-vault');
 }
 `);
-  await write(repositoryRoot, 'node_modules/@napi-rs/keyring/package.json', JSON.stringify({
-    name: '@napi-rs/keyring',
-    version: '1.3.0',
-    main: 'index.js',
+  await write(repositoryRoot, 'node_modules/@itharbors/native-credential-vault/package.json', JSON.stringify({
+    name: '@itharbors/native-credential-vault',
+    version: '0.0.1',
+    main: 'index.cjs',
   }));
-  await write(repositoryRoot, 'node_modules/@napi-rs/keyring/index.js', `
+  await write(repositoryRoot, 'node_modules/@itharbors/native-credential-vault/index.cjs', `
 import { execFile } from 'node:child_process';
 export const plaintextStore = new Map();
-export const Entry = execFile;
+export const getPassword = execFile;
 `);
 
   await buildDesktop({ repositoryRoot, outputRoot });
@@ -204,7 +204,7 @@ export const Entry = execFile;
     path.join(repositoryRoot, 'packages', 'desktop', 'dist', 'framework.mjs'),
     'utf8',
   );
-  assert.match(frameworkBundle, /import\(["']@napi-rs\/keyring["']\)/u);
+  assert.match(frameworkBundle, /import\(["']@itharbors\/native-credential-vault["']\)/u);
   assert.doesNotMatch(frameworkBundle, /child_process|plaintextStore/u);
 });
 

@@ -18,9 +18,10 @@ test('selects the runtime workspace builds and runtime plugins in root build ord
     runtime.tasks.filter((task) => task.kind === 'plugin').map((task) => task.pluginDir),
     discoverRuntimePlugins(rootDir).map((value) => path.relative(rootDir, value)),
   );
-  assert.deepEqual(runtime.tasks.slice(0, 6).map(({ name }) => name), [
+  assert.deepEqual(runtime.tasks.slice(0, 7).map(({ name }) => name), [
     'workspace:plugin-types',
     'workspace:host-security',
+    'workspace:native-credential-vault',
     'workspace:kit-core',
     'workspace:kit-cli',
     'workspace:client',
@@ -33,6 +34,7 @@ test('selects every full build task before all plugins and notification resource
   const workspaceNames = [
     'workspace:plugin-types',
     'workspace:host-security',
+    'workspace:native-credential-vault',
     'workspace:agent-guard-contracts',
     'workspace:csv-contracts',
     'workspace:sqlite-contracts',
@@ -253,6 +255,7 @@ test('tracks compiler configs extended by the client and server build configs', 
   assert.deepEqual(server.dependencies, [
     'workspace:plugin-types',
     'workspace:host-security',
+    'workspace:native-credential-vault',
   ]);
 });
 
