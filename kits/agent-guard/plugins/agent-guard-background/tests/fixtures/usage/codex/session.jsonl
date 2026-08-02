@@ -1,0 +1,1 @@
+{"timestamp":"2026-08-01T08:00:02.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":7,"cached_input_tokens":3,"output_tokens":5,"reasoning_output_tokens":1,"total_tokens":12}},"message":"sensitive codex response","authorization":"Bearer test-secret"}}

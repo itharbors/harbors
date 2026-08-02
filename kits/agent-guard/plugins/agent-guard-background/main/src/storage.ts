@@ -15,6 +15,8 @@ import path from 'node:path';
 
 import type { AgentId, AttributionConfidence, GuardState } from '@itharbors/agent-guard-contracts';
 
+import { createHistoryStore, type HistoryStore } from './history-storage.js';
+
 const DEFAULT_METRIC_CAP = 20 * 1024 * 1024;
 
 export interface PersistedStateV1 {
@@ -73,6 +75,7 @@ interface StoreOptions {
 
 export interface AgentGuardStore {
   status: 'ready' | 'degraded';
+  history: HistoryStore;
   loadState(): Promise<PersistedStateV1 | null>;
   saveState(state: PersistedStateV1): Promise<void>;
   appendMetrics(metrics: PersistedMetricV1[]): Promise<void>;
@@ -85,7 +88,11 @@ export interface AgentGuardStore {
 }
 
 export async function createAgentGuardStore(options: StoreOptions): Promise<AgentGuardStore> {
-  if (options.hostMode !== 'desktop' || !options.dataDir) return degradedStore();
+  // Persistence follows the explicit data directory, not the host label. With no directory the
+  // store degrades to bounded memory; an absolute directory is file-backed for Web or desktop.
+  if (!options.dataDir) {
+    return degradedStore(await createHistoryStore({ hostMode: options.hostMode }));
+  }
   if (!path.isAbsolute(options.dataDir)) throw new TypeError('Agent Guard data directory must be absolute');
   const dataDir = path.resolve(options.dataDir);
   const legacyDataDirs = (options.legacyDataDirs ?? []).map((directory) => {
@@ -93,6 +100,9 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
     return path.resolve(directory);
   });
   const parent = path.dirname(dataDir);
+  // Create any missing ancestors of an absolute dataDir (e.g. a fresh <worktree>/.cache/agent-guard)
+  // with default modes before resolving the parent; only the final directory below is made private.
+  await mkdir(parent, { recursive: true });
   const parentReal = await realpath(parent);
   const expectedReal = path.join(parentReal, path.basename(dataDir));
   await mkdir(dataDir, { recursive: false, mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
@@ -103,6 +113,7 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
   await chmod(dataDir, 0o700);
   const metricCap = options.metricDailyCapBytes ?? DEFAULT_METRIC_CAP;
   if (!Number.isSafeInteger(metricCap) || metricCap <= 0) throw new TypeError('metricDailyCapBytes is invalid');
+  const history = await createHistoryStore({ hostMode: options.hostMode, dataDir, rawDailyCapBytes: metricCap });
 
   const atomicJson = async (filename: string, value: unknown) => {
     const target = path.join(dataDir, filename);
@@ -139,6 +150,7 @@ export async function createAgentGuardStore(options: StoreOptions): Promise<Agen
 
   return {
     status: 'ready',
+    history,
     async loadState() {
       return readFirstExisting(
         [dataDir, ...legacyDataDirs],
@@ -239,10 +251,11 @@ async function readDirectoryIfPresent(directory: string): Promise<string[]> {
   }
 }
 
-function degradedStore(): AgentGuardStore {
+function degradedStore(history: HistoryStore): AgentGuardStore {
   const readOnly = async () => { throw new Error('Agent Guard storage is read-only in degraded mode'); };
   return {
     status: 'degraded',
+    history,
     loadState: async () => null,
     saveState: readOnly,
     appendMetrics: readOnly,

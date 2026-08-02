@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildProcessTree, parsePsRows } from '../main/src/process-observer.js';
+import { buildProcessTree, observeProcesses, parsePsRows } from '../main/src/process-observer.js';
 import type { ProcessSnapshot } from '../main/src/types.js';
 
 describe('process observer', () => {
@@ -53,6 +53,35 @@ describe('process observer', () => {
     expect(rows[0]).toMatchObject({ pid: 41, ppid: 1, processGroupId: 41 });
     expect(rows[0].processStartTime).toBeGreaterThan(0);
     expect(rows[0].commandMarkers).toEqual(['helper']);
+  });
+
+  it('keeps an allowlisted Claude comm name without accepting unrelated relative executables', () => {
+    const rows = parsePsRows([
+      '  41     1    41 Wed Jul 30 12:34:56 2026 claude',
+      '  42     1    42 Wed Jul 30 12:34:57 2026 node',
+    ].join('\n'));
+
+    expect(rows).toEqual([
+      expect.objectContaining({
+        pid: 41,
+        executable: 'claude',
+        executableIdentity: 'path:claude',
+      }),
+    ]);
+  });
+
+  it('forces a stable locale when reading the macOS process table', async () => {
+    const rows = await observeProcesses({
+      execFile: async (_file, _args, options) => ({
+        stdout: options.env.LC_ALL === 'C'
+          ? '  41     1    41 Wed Jul 30 12:34:56 2026 /Applications/ChatGPT.app/Contents/Resources/codex'
+          : '  41     1    41 qua 30 jul 12:34:56 2026 /Applications/ChatGPT.app/Contents/Resources/codex',
+      }),
+    });
+
+    expect(rows).toEqual([
+      expect.objectContaining({ pid: 41, executableIdentity: 'path:/Applications/ChatGPT.app/Contents/Resources/codex' }),
+    ]);
   });
 });
 

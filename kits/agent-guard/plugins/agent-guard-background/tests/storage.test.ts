@@ -4,8 +4,11 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createAgentGuardStore } from '../main/src/storage.js';
+import type { BackfillCheckpointV2 } from '../main/src/history-storage.js';
+import type { UsageEventV1 } from '../main/src/history-aggregation.js';
 
 const roots: string[] = [];
+const START = Date.parse('2026-08-01T08:00:00.000Z');
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
 });
@@ -121,6 +124,37 @@ describe('Agent Guard metadata storage', () => {
     )).toEqual(['incident-1', 'incident-2']);
     expect(snapshotDirectory(legacyDataDir)).toEqual(legacyBefore);
   });
+
+  it('persists web history and checkpoints across recreation through the entry point', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const first = await createAgentGuardStore({ dataDir, hostMode: 'web' });
+    expect(first.status).toBe('ready');
+    expect(first.history.persistent).toBe(true);
+    await first.history.appendUsageEvents([usage()]);
+    await first.history.saveBackfillCheckpoint(checkpointV2());
+
+    const reopened = await createAgentGuardStore({ dataDir, hostMode: 'web' });
+    const result = await reopened.history.query(usageQuery());
+    expect(result.persistent).toBe(true);
+    expect(result.summary.find((item) => item.metric === 'input-tokens')?.value).toBe(10);
+    expect(await reopened.history.loadBackfillCheckpoint()).toEqual(checkpointV2());
+  });
+
+  it('creates a missing nested web cache path on first launch and keeps the final directory private', async () => {
+    const dataDir = path.join(temporaryRoot(), '.cache', 'agent-guard', 'web');
+    expect(fs.existsSync(path.dirname(dataDir))).toBe(false);
+
+    const store = await createAgentGuardStore({ hostMode: 'web', dataDir });
+    expect(store.status).toBe('ready');
+    expect(store.history.persistent).toBe(true);
+    await store.history.appendUsageEvents([usage()]);
+
+    const reopened = await createAgentGuardStore({ hostMode: 'web', dataDir });
+    const result = await reopened.history.query(usageQuery());
+    expect(result.persistent).toBe(true);
+    expect(result.summary.find((item) => item.metric === 'input-tokens')?.value).toBe(10);
+    expect(fs.statSync(dataDir).mode & 0o777).toBe(0o700);
+  });
 });
 
 function temporaryRoot(): string {
@@ -151,5 +185,47 @@ function incident() {
     ruleId: 'dynamic-warning', state: 'warning' as const, agent: 'claude' as const,
     provider: 'custom', hostname: 'relay.example.test', summary: 'Traffic exceeded baseline',
     evidenceCodes: ['OUTBOUND_BYTES_DYNAMIC'], action: 'none' as const,
+  };
+}
+
+function usage(overrides: Partial<UsageEventV1> = {}): UsageEventV1 {
+  return {
+    schemaVersion: 1, at: START + 1_000, agent: 'claude', provider: 'custom',
+    hostname: 'relay.example.test', eventDigest: 'event-1', inputTokens: 10,
+    outputTokens: 5, cacheTokens: null, requests: 1, sessions: null, parserVersion: 1,
+    ...overrides,
+  };
+}
+
+function usageQuery() {
+  return {
+    from: START,
+    to: START + 60_000,
+    domain: 'model-usage' as const,
+    agents: ['claude' as const],
+    hostnames: ['relay.example.test'],
+    preferredBucket: 'minute' as const,
+  };
+}
+
+function checkpointV2(): BackfillCheckpointV2 {
+  return {
+    schemaVersion: 2,
+    cursors: {
+      file: {
+        identityDigest: 'file', agent: 'claude', size: 40, mtimeMs: 50, offset: 10,
+        sessionCounted: true, parserVersion: 1, complete: false, lastEventAt: START,
+      },
+    },
+    lastRun: {
+      state: 'complete', runId: 1, startedAt: START, updatedAt: START + 1_000, completedAt: START + 1_000,
+      filesDiscovered: 2, filesEligible: 2, filesScanned: 2, filesSkipped: 0, bytesRead: 128,
+      eventsWritten: 3, unsupportedRecords: 0, errors: 0, remainingFiles: 0,
+      lastSuccessfulEventAt: START, message: 'complete',
+      agents: [
+        { agent: 'claude', filesDiscovered: 1, filesEligible: 1, filesScanned: 1, filesSkipped: 0, eventsWritten: 2, errors: 0 },
+        { agent: 'codex', filesDiscovered: 1, filesEligible: 1, filesScanned: 1, filesSkipped: 0, eventsWritten: 1, errors: 0 },
+      ],
+    },
   };
 }
