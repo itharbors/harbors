@@ -23,6 +23,7 @@ describe('Agent Guard center main', () => {
     await definition.methods.getTrafficHistory({ from: 1, to: 2, domain: 'network' });
     await definition.methods.getHistoryStatus();
     await definition.methods.updateHistorySettings({ localSessionBackfill: false });
+    await definition.methods.runHistoryBackfill({ reason: 'manual' });
     await definition.methods.clearHistory({ confirmation: 'clear-history' });
     definition.methods.openGuardPanel();
 
@@ -34,6 +35,7 @@ describe('Agent Guard center main', () => {
       ['@itharbors/agent-guard-background', 'getTrafficHistory', { from: 1, to: 2, domain: 'network' }],
       ['@itharbors/agent-guard-background', 'getHistoryStatus'],
       ['@itharbors/agent-guard-background', 'updateHistorySettings', { localSessionBackfill: false }],
+      ['@itharbors/agent-guard-background', 'runHistoryBackfill', { reason: 'manual' }],
       ['@itharbors/agent-guard-background', 'clearHistory', { confirmation: 'clear-history' }],
     ]);
     expect(openPanel).toHaveBeenCalledWith('@itharbors/agent-guard-center.guard');

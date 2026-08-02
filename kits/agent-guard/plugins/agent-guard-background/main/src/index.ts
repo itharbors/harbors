@@ -41,6 +41,7 @@ editor.plugin.define({
     getTrafficHistory: (input: unknown) => requireService().getTrafficHistory(input),
     getHistoryStatus: () => requireService().getHistoryStatus(),
     updateHistorySettings: (input: unknown) => requireService().updateHistorySettings(input),
+    runHistoryBackfill: (input: unknown) => requireService().runHistoryBackfill(input),
     clearHistory: (input: unknown) => requireService().clearHistory(input),
   },
 });

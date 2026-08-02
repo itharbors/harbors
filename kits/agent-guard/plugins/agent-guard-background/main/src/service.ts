@@ -9,15 +9,19 @@ import {
   normalizeClearHistory,
   normalizeCommand,
   normalizeHistorySettings,
+  normalizeHistoryStatus,
   normalizePolicy,
   normalizeSnapshot,
   normalizeTrafficHistoryQuery,
   type AgentEndpointSnapshot,
   type AgentGuardSnapshot,
+  type HistoryBackfillProgress,
+  type HistoryStorageStatus,
   type IncidentSummary,
   type PolicyV1,
 } from '@itharbors/agent-guard-contracts';
 import { createClaudeAdapter } from './adapters/claude.js';
+import { createBackfillScheduler } from './backfill-scheduler.js';
 import { createCodexAdapter } from './adapters/codex.js';
 import { DnsHistory, attributeConnection } from './attribution.js';
 import { RollingBaseline } from './baseline.js';
@@ -70,6 +74,12 @@ interface AgentGuardServiceOptions {
     updateSettings(input: { localSessionBackfill: boolean }): Promise<unknown>;
     clearHistory(): Promise<void>;
   };
+  // The backfill provider is the only owner of backfill timing and live progress. The scheduler runs
+  // and re-checks the backfiller; the service merely composes its progress into the public status.
+  backfill?: {
+    backfiller: { requestRun(): Promise<unknown>; status(): HistoryBackfillProgress; dispose(): void };
+    scheduler: { start(): void; trigger(): void; dispose(): void };
+  };
 }
 
 export function createAgentGuardService(options: AgentGuardServiceOptions) {
@@ -80,6 +90,21 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
   const incidentTargets = new Map<string, VerifiedControlTarget>();
   const incidents: IncidentSummary[] = [];
   const ignoredUntil = new Map<string, number>();
+
+  // Compose a complete public HistoryStatus from durable storage facts plus live backfill progress.
+  // Both inputs are read but never mutated; normalizeHistoryStatus returns a fresh, validated object.
+  const composeHistoryStatus = (storageStatus: unknown) => {
+    const status = storageStatus as HistoryStorageStatus;
+    const live: HistoryBackfillProgress = options.backfill?.backfiller.status() ?? idleBackfillProgress();
+    // Persisted disabling is authoritative: whenever local backfill is off, public semantics are
+    // 'disabled' regardless of any stale live state. We spread onto a fresh object (never mutating the
+    // backfiller's live progress), preserving observed counters/timestamps as historical facts while
+    // clearing signals of active work — the state must not claim scanning or queued remaining files.
+    const backfill: HistoryBackfillProgress = status?.settings?.localSessionBackfill === false
+      ? { ...live, state: 'disabled', message: 'disabled', remainingFiles: null }
+      : live;
+    return normalizeHistoryStatus({ ...status, backfill });
+  };
 
   return {
     async start() {
@@ -94,6 +119,8 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
       timers.push(options.scheduleInterval(() => {
         void Promise.resolve(options.evaluate()).catch(() => undefined);
       }, policy.evaluationWindowSeconds * 1000));
+      // The scheduler is the sole owner of backfill timing; starting it requests the first run.
+      options.backfill?.scheduler.start();
     },
     async getSnapshot(): Promise<AgentGuardSnapshot> {
       const collector = options.collector.snapshot();
@@ -144,17 +171,33 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
     },
     async getHistoryStatus() {
       if (!options.history) throw new Error('Agent Guard history is unavailable');
-      return options.history.status();
+      return composeHistoryStatus(await options.history.status());
     },
     async updateHistorySettings(input: unknown) {
       if (!options.history) throw new Error('Agent Guard history is unavailable');
-      return options.history.updateSettings(normalizeHistorySettings(input));
+      const settings = normalizeHistorySettings(input);
+      // Persist the setting first so a triggered run observes the new value; disabling never starts work.
+      const status = await options.history.updateSettings(settings);
+      if (settings.localSessionBackfill) options.backfill?.scheduler.trigger();
+      return composeHistoryStatus(status);
+    },
+    async runHistoryBackfill(input: unknown) {
+      if (!options.history) throw new Error('Agent Guard history is unavailable');
+      if (!input || typeof input !== 'object' || Array.isArray(input)) {
+        throw new TypeError('Backfill request must be an object');
+      }
+      const fields = Object.keys(input as object);
+      if (fields.some((field) => field !== 'reason')) throw new TypeError('Backfill request contains unknown field');
+      if (!('reason' in (input as object))) throw new TypeError('Backfill request.reason is required');
+      if ((input as { reason: unknown }).reason !== 'manual') throw new TypeError('Backfill request.reason must be manual');
+      await options.backfill?.backfiller.requestRun();
+      return composeHistoryStatus(await options.history.status());
     },
     async clearHistory(input: unknown) {
       if (!options.history) throw new Error('Agent Guard history is unavailable');
       normalizeClearHistory(input);
       await options.history.clearHistory();
-      return options.history.status();
+      return composeHistoryStatus(await options.history.status());
     },
     registerIncident(id: string, target?: VerifiedControlTarget | null, summary?: IncidentSummary) {
       if (target) incidentTargets.set(id, { ...target });
@@ -178,6 +221,9 @@ export function createAgentGuardService(options: AgentGuardServiceOptions) {
       disposed = true;
       for (const timer of timers) options.clearScheduledInterval(timer);
       timers.length = 0;
+      // Cancel scheduled backfill work before disposing the backfiller so no timer fires afterward.
+      options.backfill?.scheduler.dispose();
+      options.backfill?.backfiller.dispose();
       for (const target of options.controller.pausedTargets()) {
         try { await options.controller.resume(target); } catch { /* watchdog remains the fail-safe */ }
       }
@@ -255,7 +301,6 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
   let observerTimer: ReturnType<typeof setInterval> | undefined;
   let configurationTimer: ReturnType<typeof setInterval> | undefined;
   let dnsTimer: ReturnType<typeof setInterval> | undefined;
-  let backfillTimer: ReturnType<typeof setInterval> | undefined;
   let compactionTimer: ReturnType<typeof setInterval> | undefined;
   let service: ReturnType<typeof createAgentGuardService>;
 
@@ -387,6 +432,11 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
       codex: endpointIdentity(configurations[1]),
     },
     salt,
+  });
+  const backfillScheduler = createBackfillScheduler({
+    backfiller: usageBackfiller,
+    setScheduledTimeout: (handler, delayMs) => setTimeout(handler, delayMs),
+    clearScheduledTimeout: (handle) => clearTimeout(handle),
   });
   const refreshConfigurations = async () => {
     const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));
@@ -568,6 +618,7 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
     evaluate,
     endpoints: () => [...endpointTotals.values()],
     history: store.history,
+    backfill: { backfiller: usageBackfiller, scheduler: backfillScheduler },
     onStart: async () => {
       await refreshProcesses();
       await refreshConfigurations();
@@ -575,17 +626,13 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
       observerTimer = setInterval(() => { void refreshProcesses().catch(() => undefined); }, 5_000);
       configurationTimer = setInterval(() => { void refreshConfigurations(); }, 60_000);
       dnsTimer = setInterval(() => { void refreshDns(); }, 4 * 60_000);
-      void usageBackfiller.runOnce().catch(() => undefined);
-      backfillTimer = setInterval(() => { void usageBackfiller.runOnce().catch(() => undefined); }, 5 * 60_000);
       compactionTimer = setInterval(() => { void store.history.compact(new Date()).catch(() => undefined); }, 60 * 60_000);
     },
     onDispose: async () => {
       if (observerTimer) clearInterval(observerTimer);
       if (configurationTimer) clearInterval(configurationTimer);
       if (dnsTimer) clearInterval(dnsTimer);
-      if (backfillTimer) clearInterval(backfillTimer);
       if (compactionTimer) clearInterval(compactionTimer);
-      usageBackfiller.dispose();
       await watchdog.shutdown();
     },
     onPolicyChanged: async (policy) => {
@@ -608,6 +655,20 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
 
 function safeCounterNumber(value: bigint): number {
   return value > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(value);
+}
+
+// The status shown before any backfill provider is attached: a well-formed idle progress object.
+function idleBackfillProgress(): HistoryBackfillProgress {
+  const zeroAgent = (agent: 'claude' | 'codex') => ({
+    agent, filesDiscovered: 0, filesEligible: 0, filesScanned: 0, filesSkipped: 0, eventsWritten: 0, errors: 0,
+  });
+  return {
+    state: 'idle', runId: 0, startedAt: null, updatedAt: null, completedAt: null,
+    filesDiscovered: 0, filesEligible: 0, filesScanned: 0, filesSkipped: 0, bytesRead: 0,
+    eventsWritten: 0, unsupportedRecords: 0, errors: 0, remainingFiles: null,
+    lastSuccessfulEventAt: null, message: 'idle',
+    agents: [zeroAgent('claude'), zeroAgent('codex')],
+  };
 }
 
 function restoreBaseline(

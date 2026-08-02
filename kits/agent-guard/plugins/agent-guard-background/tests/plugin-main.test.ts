@@ -16,6 +16,7 @@ describe('Agent Guard background plugin', () => {
       getTrafficHistory: ['getTrafficHistory'],
       getHistoryStatus: ['getHistoryStatus'],
       updateHistorySettings: ['updateHistorySettings'],
+      runHistoryBackfill: ['runHistoryBackfill'],
       clearHistory: ['clearHistory'],
     });
   });
