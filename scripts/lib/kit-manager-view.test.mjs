@@ -684,7 +684,16 @@ test('recovers controls after refresh and operation errors without inserting rem
   const api = {
     list: async () => snapshot({ kits: [{ ...snapshot().kits[0], label: malicious }] }),
     refresh: async () => { throw Object.assign(new Error('Registry unavailable'), { code: 'TIMEOUT' }); },
-    install: async () => { throw Object.assign(new Error('Artifact rejected'), { code: 'DIGEST_MISMATCH' }); },
+    install: async () => {
+      throw Object.assign(new Error('Artifact rejected'), {
+        code: 'KIT_RUNTIME_APPLY_FAILED',
+        causes: Object.freeze([
+          'Kit runtime validation failed',
+          'ENOENT: missing plugins/agent-guard-background/resources/policy-v1.json',
+          '<script>alert(1)</script>',
+        ]),
+      });
+    },
   };
   const value = await createView({ api });
   await value.view.start();
@@ -696,9 +705,25 @@ test('recovers controls after refresh and operation errors without inserting rem
   assert.equal(value.document.querySelector('#refresh-button').disabled, false);
   value.document.querySelector('[data-action="install"]').click();
   await value.view.whenIdle();
-  assert.match(value.document.querySelector('#operation-status').textContent, /Artifact rejected/);
+  const operationStatus = value.document.querySelector('#operation-status');
+  assert.match(operationStatus.textContent, /Artifact rejected/);
+  const technicalDetails = operationStatus.querySelector('details');
+  assert.ok(technicalDetails);
+  assert.equal(technicalDetails.open, false);
+  assert.equal(technicalDetails.querySelector('summary').textContent, '技术详情');
+  assert.match(technicalDetails.textContent, /KIT_RUNTIME_APPLY_FAILED/);
+  assert.match(technicalDetails.textContent, /policy-v1\.json/);
+  assert.match(technicalDetails.textContent, /<script>alert\(1\)<\/script>/);
+  assert.equal(technicalDetails.querySelector('script'), null);
+  assert.equal(technicalDetails.querySelector('img'), null);
   assert.equal(value.document.querySelector('[data-action="install"]').disabled, false);
   const detail = value.document.querySelector('#kit-detail');
   assert.equal(detail.dataset.operation, undefined);
   assert.equal(detail.querySelector('.kit-detail__progress').hidden, true);
+
+  value.api.refresh = async () => snapshot();
+  value.document.querySelector('#refresh-button').click();
+  await value.view.whenIdle();
+  assert.match(operationStatus.textContent, /Kit 仓库已刷新/);
+  assert.equal(operationStatus.querySelector('details'), null);
 });

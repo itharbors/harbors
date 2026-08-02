@@ -63,6 +63,26 @@ function parseUninstall(args) {
   return id(args[0]);
 }
 
+function sanitizedMessage(value) {
+  if (typeof value !== 'string') return '';
+  return value
+    .replace(/[\u0000-\u001F\u007F-\u009F]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 240);
+}
+
+function serializeCauses(error) {
+  const causes = [];
+  let current = error?.cause;
+  while (current instanceof Error && causes.length < 4) {
+    const message = sanitizedMessage(current.message);
+    if (message) causes.push(message);
+    current = current.cause;
+  }
+  return causes;
+}
+
 function serializeError(error) {
   if (error instanceof IpcInputError) {
     return { code: 'INVALID_INPUT', message: 'Invalid Kit Manager request' };
@@ -70,11 +90,14 @@ function serializeError(error) {
   if (
     typeof error?.code === 'string'
     && CODE_PATTERN.test(error.code)
-    && typeof error.message === 'string'
-    && error.message.length > 0
-    && error.message.length <= 240
+    && sanitizedMessage(error.message)
   ) {
-    return { code: error.code, message: error.message };
+    const causes = serializeCauses(error);
+    return {
+      code: error.code,
+      message: sanitizedMessage(error.message),
+      ...(causes.length > 0 ? { causes } : {}),
+    };
   }
   return { code: 'OPERATION_FAILED', message: 'Kit Manager operation failed' };
 }

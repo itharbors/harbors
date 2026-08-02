@@ -288,6 +288,33 @@ button {
   color: var(--manager-risk);
 }
 
+.operation-status__message {
+  display: block;
+}
+
+.operation-status__details {
+  margin-top: 6px;
+  color: var(--manager-ink);
+}
+
+.operation-status__details summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--manager-risk);
+  font-weight: 650;
+}
+
+.operation-status__code,
+.operation-status__causes {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.operation-status__causes {
+  padding-left: 22px;
+}
+
 .manager-workspace {
   display: grid;
   grid-template-columns: 320px minmax(0, 1fr);

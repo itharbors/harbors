@@ -15,6 +15,16 @@ function kitAuditIdentity(id, version, channel) {
   return { id, version, channel };
 }
 
+function runtimeFailure(error) {
+  const rawMessage = error instanceof Error ? error.message : '';
+  const message = rawMessage
+    .replace(/[\r\n\u2028\u2029\u0000-\u001f\u007f-\u009f]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .slice(0, 240) || 'Kit runtime validation failed';
+  return { code: 'RUNTIME_LOAD_FAILED', message };
+}
+
 async function canonicalDirectory(directory) {
   if (typeof directory !== 'string' || directory.length === 0) {
     throw new Error('Installed Kit directory is required');
@@ -150,7 +160,8 @@ export async function finalizePendingKitActivations({
     try {
       const exactSelection = await bindInstalledSelection(selection, [selection], catalog);
       await validateRuntime(exactSelection);
-    } catch {
+    } catch (error) {
+      const failureDetail = runtimeFailure(error);
       const failure = await store.failActivation(selection.id, selection.version);
       await safeAudit(audit, {
         event: 'kit.activate', outcome: 'failure', source: 'local', kit,
@@ -161,13 +172,23 @@ export async function finalizePendingKitActivations({
           event: 'kit.rollback', outcome: 'success', source: 'local',
           kit: kitAuditIdentity(selection.id, failure.recoveryVersion, selection.channel),
         });
-        outcomes.push({ id: selection.id, version: selection.version, status: 'recovery-pending' });
+        outcomes.push({
+          id: selection.id,
+          version: selection.version,
+          status: 'recovery-pending',
+          error: failureDetail,
+        });
       } else {
         await safeAudit(audit, {
           event: 'kit.rollback', outcome: 'failure', source: 'local', kit,
           code: 'NO_PREVIOUS',
         });
-        outcomes.push({ id: selection.id, version: selection.version, status: 'disabled' });
+        outcomes.push({
+          id: selection.id,
+          version: selection.version,
+          status: 'disabled',
+          error: failureDetail,
+        });
       }
       continue;
     }

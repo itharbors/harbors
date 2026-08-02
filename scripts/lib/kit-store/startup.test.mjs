@@ -180,7 +180,15 @@ test('does not runtime-validate or commit a pending version shadowed by a later 
   });
 
   assert.equal(runtimeValidations, 0);
-  assert.deepEqual(result.outcomes, [{ id, version: '1.0.0', status: 'disabled' }]);
+  assert.deepEqual(result.outcomes, [{
+    id,
+    version: '1.0.0',
+    status: 'disabled',
+    error: {
+      code: 'RUNTIME_LOAD_FAILED',
+      message: 'Installed Kit @example/kit-demo@1.0.0 is absent from the resolved Catalog',
+    },
+  }]);
   assert.equal((await store.snapshot()).kits[id].active, undefined);
 });
 
@@ -201,14 +209,19 @@ test('marks a real runtime load failure bad and validates the previous version o
     audit: { append: async (entry) => audit.push(entry) },
     selections: prepared.pendingActivations,
     catalog: catalogForSources(prepared.activeSources),
-    validateRuntime: async () => { throw new Error('native module failed to load'); },
+    validateRuntime: async () => { throw new Error('native\r\nmodule failed to load'); },
   });
 
   let record = (await store.snapshot()).kits[id];
   assert.equal(record.active, '1.0.0');
   assert.equal(record.pending, '1.0.0');
   assert.deepEqual(record.badVersions, ['2.0.0']);
-  assert.deepEqual(finalized.outcomes, [{ id, version: '2.0.0', status: 'recovery-pending' }]);
+  assert.deepEqual(finalized.outcomes, [{
+    id,
+    version: '2.0.0',
+    status: 'recovery-pending',
+    error: { code: 'RUNTIME_LOAD_FAILED', message: 'native module failed to load' },
+  }]);
   assert.equal(finalized.restartRequired, true);
 
   const recovery = await prepareInstalledKitsForStartup({
@@ -267,7 +280,12 @@ test('disables a Kit when the restored previous version also fails real runtime 
   assert.equal(record.active, undefined);
   assert.equal(record.pending, undefined);
   assert.deepEqual(record.badVersions.sort(), ['1.0.0', '2.0.0']);
-  assert.deepEqual(finalized.outcomes, [{ id, version: '1.0.0', status: 'disabled' }]);
+  assert.deepEqual(finalized.outcomes, [{
+    id,
+    version: '1.0.0',
+    status: 'disabled',
+    error: { code: 'RUNTIME_LOAD_FAILED', message: 'previous version failed' },
+  }]);
 });
 
 test('marks an invalid pending version bad and restores the previous active version', async () => {

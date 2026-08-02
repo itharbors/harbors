@@ -69,3 +69,47 @@ test('turns sanitized failure envelopes into renderer errors', async () => {
     (error) => error.code === 'DIGEST_MISMATCH' && error.message === 'Artifact digest mismatch',
   );
 });
+
+test('copies validated technical causes and rejects malformed failure envelopes', async () => {
+  const source = await readFile(preloadUrl, 'utf8');
+  const responses = [
+    {
+      ok: false,
+      error: {
+        code: 'KIT_RUNTIME_APPLY_FAILED',
+        message: 'Kit runtime validation failed',
+        causes: ['activation failed', 'policy file was not found'],
+      },
+    },
+    {
+      ok: false,
+      error: {
+        code: 'bad-code',
+        message: '<script>remote body</script>',
+        causes: ['/private/secret'],
+      },
+    },
+  ];
+  let api;
+  vm.runInNewContext(source, {
+    require: () => ({
+      contextBridge: { exposeInMainWorld: (_name, value) => { api = value; } },
+      ipcRenderer: { invoke: async () => responses.shift() },
+    }),
+    Error,
+    Object,
+  });
+
+  await assert.rejects(api.list(), (error) => {
+    assert.equal(error.code, 'KIT_RUNTIME_APPLY_FAILED');
+    assert.deepEqual([...error.causes], ['activation failed', 'policy file was not found']);
+    assert.equal(Object.isFrozen(error.causes), true);
+    return true;
+  });
+  await assert.rejects(api.list(), (error) => {
+    assert.equal(error.code, 'OPERATION_FAILED');
+    assert.equal(error.message, 'Kit Manager operation failed');
+    assert.equal(error.causes, undefined);
+    return true;
+  });
+});

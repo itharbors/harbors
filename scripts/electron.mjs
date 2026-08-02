@@ -63,6 +63,7 @@ import { createKitManagerService } from './lib/kit-manager-service.mjs';
 import { discoverRepositoryBuiltinKits } from './lib/repository-kits.mjs';
 import { KitArtifactUninstaller } from './lib/kit-store/uninstaller.mjs';
 import { createKitRuntimeCoordinator } from './lib/kit-runtime-coordinator.mjs';
+import { createKitRuntimeApplyError } from './lib/kit-runtime-error.mjs';
 import {
   createLiveKitDeactivation,
   restoreLiveKitDeactivation,
@@ -784,10 +785,6 @@ async function finishPendingKitUninstalls(pending) {
   return remaining;
 }
 
-function kitRuntimeOperationError(message, cause) {
-  return Object.assign(new Error(message, { cause }), { code: 'KIT_RUNTIME_APPLY_FAILED' });
-}
-
 async function applyLiveKitActivation(input) {
   const selection = input.rollback
     ? await kitManagerService.manager.rollback(input.id)
@@ -838,26 +835,32 @@ async function replaceFrameworkForKitMutation(operation) {
       await recoverFrameworkMutation(operation, error);
     }
 
-    const runtimeFailed = operation.kind === 'activation'
-      && launched.activation.outcomes.some((outcome) => (
+    const runtimeFailure = operation.kind === 'activation'
+      ? launched.activation.outcomes.find((outcome) => (
         outcome.id === operation.id
         && outcome.version === operation.version
         && outcome.status !== 'activated'
-      ));
-    if (runtimeFailed) {
+      ))
+      : undefined;
+    if (runtimeFailure) {
       await stopFrameworkGeneration();
       const recovery = await buildFrameworkGeneration();
       const recovered = await launchFrameworkGeneration(recovery);
       if (recovered.activation.restartRequired) {
-        throw kitRuntimeOperationError('Kit Runtime recovery failed');
+        throw createKitRuntimeApplyError('Kit Runtime recovery failed');
       }
       await publishFrameworkGeneration(recovery, recovered.bootstrap);
-      throw kitRuntimeOperationError('Kit failed to load; the previous Runtime was restored');
+      throw createKitRuntimeApplyError(
+        'Kit failed to load; the previous Runtime was restored',
+        runtimeFailure.error,
+      );
     }
 
     await publishFrameworkGeneration(generation, launched.bootstrap);
     if (preparationFailed) {
-      throw kitRuntimeOperationError('Kit failed Catalog validation; the previous Runtime was restored');
+      throw createKitRuntimeApplyError(
+        'Kit failed Catalog validation; the previous Runtime was restored',
+      );
     }
   } finally {
     frameworkReloading = false;
@@ -895,7 +898,10 @@ async function recoverFrameworkMutation(operation, originalError) {
       'Kit Runtime replacement and recovery both failed',
     );
   }
-  throw kitRuntimeOperationError('Kit Runtime replacement failed; the previous Runtime was restored', originalError);
+  throw createKitRuntimeApplyError(
+    'Kit Runtime replacement failed; the previous Runtime was restored',
+    originalError,
+  );
 }
 
 function scheduleUpdateCheck(delayMs = 5000) {

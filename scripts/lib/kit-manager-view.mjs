@@ -11,6 +11,8 @@ const CHANNEL_LABELS = Object.freeze({
   preview: '预览版',
 });
 
+const ERROR_CODE_PATTERN = /^[A-Z][A-Z0-9_]{0,63}$/;
+
 function required(document, selector) {
   const node = document.querySelector(selector);
   if (!node) throw new Error(`Kit Manager document is missing ${selector}`);
@@ -28,6 +30,16 @@ function publicMessage(error) {
   return typeof error?.message === 'string' && error.message.length > 0
     ? error.message
     : '操作无法完成。';
+}
+
+function technicalFailure(error) {
+  if (typeof error?.code !== 'string' || !ERROR_CODE_PATTERN.test(error.code)) return undefined;
+  const causes = Array.isArray(error.causes)
+    && error.causes.length <= 4
+    && error.causes.every((cause) => typeof cause === 'string' && cause.length > 0 && cause.length <= 240)
+    ? [...error.causes]
+    : [];
+  return { code: error.code, causes };
 }
 
 function formatValidatedAt(value) {
@@ -172,10 +184,21 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     }
   }
 
-  function setOperationMessage(message, error = false) {
-    operationStatus.textContent = message;
+  function setOperationMessage(message, error = false, sourceError) {
+    operationStatus.replaceChildren(element(document, 'span', 'operation-status__message', message));
     operationStatus.dataset.outcome = error ? 'failure' : 'success';
     operationStatus.setAttribute('role', error ? 'alert' : 'status');
+    const technical = error ? technicalFailure(sourceError) : undefined;
+    if (!technical) return;
+    const details = element(document, 'details', 'operation-status__details');
+    details.append(element(document, 'summary', undefined, '技术详情'));
+    details.append(element(document, 'p', 'operation-status__code', `错误代码：${technical.code}`));
+    if (technical.causes.length > 0) {
+      const causes = element(document, 'ol', 'operation-status__causes');
+      for (const cause of technical.causes) causes.append(element(document, 'li', undefined, cause));
+      details.append(causes);
+    }
+    operationStatus.append(details);
   }
 
   function queue(task) {
@@ -184,7 +207,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
       try {
         await task();
       } catch (error) {
-        setOperationMessage(publicMessage(error), true);
+        setOperationMessage(publicMessage(error), true, error);
       } finally {
         setBusy(false);
       }

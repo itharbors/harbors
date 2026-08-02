@@ -122,6 +122,53 @@ test('serializes only stable errors and replaces prior registrations safely', as
   assert.equal(ipcMain.handlers.size, 0);
 });
 
+test('serializes a bounded sanitized cause chain only for stable errors', async () => {
+  const ipcMain = createIpcMain();
+  const deepest = Object.assign(new Error(`  ${'x'.repeat(260)}  `), {
+    cause: new Error('fifth cause must not cross IPC'),
+  });
+  const third = Object.assign(new Error('policy\r\nfile was not found'), { cause: deepest });
+  const second = Object.assign(new Error('activation failed\u0000'), { cause: third });
+  const top = Object.assign(new Error('Kit runtime validation failed'), {
+    code: 'KIT_RUNTIME_APPLY_FAILED',
+    cause: second,
+    stack: '/private/source/path',
+  });
+  registerKitManagerIpc({
+    ipcMain,
+    getManagerWindow: () => ({ isDestroyed: () => false, webContents: { id: 7 } }),
+    service: { list: async () => { throw top; } },
+  });
+
+  const response = await ipcMain.handlers.get(KIT_MANAGER_CHANNELS.list)(event());
+  assert.deepEqual(response.error, {
+    code: 'KIT_RUNTIME_APPLY_FAILED',
+    message: 'Kit runtime validation failed',
+    causes: [
+      'activation failed',
+      'policy file was not found',
+      'x'.repeat(240),
+      'fifth cause must not cross IPC',
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(response), /private\/source\/path/);
+
+  const untyped = registerKitManagerIpc({
+    ipcMain,
+    getManagerWindow: () => ({ isDestroyed: () => false, webContents: { id: 7 } }),
+    service: {
+      list: async () => {
+        throw Object.assign(new Error('untyped'), { cause: new Error('/private/secret') });
+      },
+    },
+  });
+  assert.deepEqual(await ipcMain.handlers.get(KIT_MANAGER_CHANNELS.list)(event()), {
+    ok: false,
+    error: { code: 'OPERATION_FAILED', message: 'Kit Manager operation failed' },
+  });
+  untyped.unregister();
+});
+
 test('drains in-flight operations after handlers are unregistered', async () => {
   const ipcMain = createIpcMain();
   let finish;
