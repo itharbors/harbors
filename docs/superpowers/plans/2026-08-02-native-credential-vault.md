@@ -43,7 +43,7 @@
 - Produces: `deletePassword(service: string, account: string): boolean`.
 - Throws: `Error & { code: 'BACKEND_LOCKED' | 'BACKEND_UNAVAILABLE' | 'ACCESS_DENIED' | 'OPERATION_FAILED' }`.
 
-- [ ] **Step 1: Write failing loader and native contract tests**
+- [x] **Step 1: Write failing loader and native contract tests**
 
 `loader.test.cjs` must inject platform/arch/loadBinding and prove unsupported targets never invoke the binding loader, while `darwin-arm64` returns exactly the three functions. `status-code.test.mm` must assert these literal mappings:
 
@@ -57,7 +57,7 @@ assert(classifySecurityStatus(-34018) == SecurityStatusClass::OperationFailed);
 
 The smoke test must use a UUID account under `com.itharbors.credentials.test`, observe `null`, write a sentinel, read the same sentinel, delete with `true`, then observe `null` and delete with `false`; cleanup runs in `finally`.
 
-- [ ] **Step 2: Run tests and verify RED**
+- [x] **Step 2: Run tests and verify RED**
 
 Run: `node --test packages/native-credential-vault/tests/loader.test.cjs packages/native-credential-vault/tests/keychain-smoke.test.cjs`
 
@@ -67,7 +67,7 @@ Run on macOS ARM64: `STATUS_TEST_DIR=$(mktemp -d) && c++ -std=c++20 -framework S
 
 Expected: FAIL because `src/status-code.h` does not exist.
 
-- [ ] **Step 3: Implement the platform loader and Node-API binding**
+- [x] **Step 3: Implement the platform loader and Node-API binding**
 
 `createBindingLoader({ platform, arch, loadBinding })` must reject before `loadBinding` unless the target is exactly `darwin-arm64`. `addon.mm` must validate every argument as a JavaScript string, preserve embedded NUL bytes by using explicit UTF-8 lengths, release all Keychain/CF allocations, and implement:
 
@@ -85,17 +85,17 @@ NAPI_MODULE_INIT() {
 
 Map Security.framework status without including numeric status or `SecCopyErrorMessageString` in the thrown error. `setPassword` must update an existing exact service/account item or add a new one. `deletePassword` returns `false` only when lookup reports `errSecItemNotFound`; deletion failure throws.
 
-- [ ] **Step 4: Add deterministic build/test scripts and dependencies**
+- [x] **Step 4: Add deterministic build/test scripts and dependencies**
 
 Add exact `node-gyp@12.4.0` as a dev dependency of the native workspace. Its `build` script runs `node-gyp rebuild` only on `darwin-arm64`; unsupported platforms exit successfully without creating a binding. Its `test` script always runs loader tests and, on `darwin-arm64`, also builds, executes the C++ status test, and runs the real Keychain smoke test. Add the workspace test to the root `npm test` chain.
 
-- [ ] **Step 5: Verify GREEN**
+- [x] **Step 5: Verify GREEN**
 
 Run: `npm test -w @itharbors/native-credential-vault`
 
 Expected on macOS ARM64: loader, status mapping, and real Keychain smoke all PASS with the test entry removed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add package.json package-lock.json packages/native-credential-vault
@@ -117,7 +117,7 @@ git commit -m "[Feature] 增加 macOS 系统凭据原生模块"
 - Preserves: `KeyringAdapter.get/set/delete` used by `CredentialVault`.
 - Produces: native machine-code mapping to public `CredentialErrorCode` without message inspection.
 
-- [ ] **Step 1: Write failing Server tests for production-shaped behavior**
+- [x] **Step 1: Write failing Server tests for production-shaped behavior**
 
 Replace fake `Entry` classes with a complete fake module matching the three production exports. Assert:
 
@@ -131,17 +131,17 @@ await expect(deniedAdapter.delete('account')).rejects.toMatchObject({ code: 'CRE
 
 Add a vault regression proving a thrown delete error leaves the record in `deleting` and therefore retryable; only native `false` (already absent) or `true` allows metadata removal. Update the opt-in real MySQL test to expect the full capability snapshot rather than `{ available: true }` only.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `npm test -w @itharbors/server -- --run tests/credentials/keyring.test.ts tests/credentials/vault.test.ts`
 
 Expected: FAIL because Server still constructs `@napi-rs/keyring.Entry` and ignores the new function contract.
 
-- [ ] **Step 3: Implement the new adapter**
+- [x] **Step 3: Implement the new adapter**
 
 Change the default dynamic import to `@itharbors/native-credential-vault`. Delete message/name heuristics and accept only exact `error.code` values. Map `BACKEND_LOCKED` to `CREDENTIALS_LOCKED`, `BACKEND_UNAVAILABLE` to `CREDENTIALS_UNAVAILABLE`, and `ACCESS_DENIED`/`OPERATION_FAILED`/unknown to `CREDENTIAL_OPERATION_FAILED`. Treat only native `null`/`false` as absence.
 
-- [ ] **Step 4: Verify Server and MySQL suites GREEN**
+- [x] **Step 4: Verify Server and MySQL suites GREEN**
 
 Run: `npm test -w @itharbors/server`
 
@@ -149,7 +149,7 @@ Run: `npm test -w @itharbors/kit-mysql`
 
 Expected: PASS; the real MySQL integration remains skipped unless `MYSQL_TEST_URL` is supplied.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add package-lock.json packages/server kits/mysql/tests/runtime-integration.test.ts
@@ -175,25 +175,25 @@ git commit -m "[Bug] 保留系统凭据失败语义"
 - Produces: Framework external import `@itharbors/native-credential-vault`.
 - Produces: exactly one unpacked artifact `node_modules/@itharbors/native-credential-vault/build/Release/harbors_native_credential_vault.node`.
 
-- [ ] **Step 1: Write failing build and package tests**
+- [x] **Step 1: Write failing build and package tests**
 
 Update fixtures to model the internal package and a single native file. Assert the build graph makes Server depend on the native workspace package, macOS desktop preparation builds it before bundling, Framework externalizes the new package, and packaged verification rejects: old `@napi-rs/keyring` artifacts, extra `.node` files, symlinked package/binary paths, missing binary, malformed manifest, a packed rather than unpacked binary, and forbidden fallback markers.
 
-- [ ] **Step 2: Run focused tests and verify RED**
+- [x] **Step 2: Run focused tests and verify RED**
 
 Run: `node --test scripts/lib/build-tasks.test.mjs scripts/lib/desktop-build.test.mjs scripts/lib/desktop-package.test.mjs`
 
 Expected: FAIL because build and verifier still trust `@napi-rs/keyring` and its optional platform packages.
 
-- [ ] **Step 3: Replace dependencies and build wiring**
+- [x] **Step 3: Replace dependencies and build wiring**
 
 Remove every `@napi-rs/keyring*` runtime/lock entry. Add `@itharbors/native-credential-vault: 0.0.1` to Server and Desktop. Add the native workspace to the build universe and Server dependency graph. Its build command must always create its declared build directory; on unsupported targets it leaves an explicitly allowed empty native output, while on `darwin-arm64` the command itself verifies the expected `.node` file exists. Ensure `desktop:prepare` performs the macOS native build before `buildDesktop`; externalize the internal package in the Framework bundle.
 
-- [ ] **Step 4: Replace desktop verifier and asar rules**
+- [x] **Step 4: Replace desktop verifier and asar rules**
 
 Change `asarUnpack` and the verifier trust root from `node_modules/@napi-rs` to the exact internal package directory. Verify the manifest name/version/main, exact one-file native closure, regular non-symlink paths rooted under the controller-owned output, Framework external import, absence of old third-party keyring packages, and fallback-marker scans over application and wrapper JavaScript.
 
-- [ ] **Step 5: Verify focused build/package suites GREEN**
+- [x] **Step 5: Verify focused build/package suites GREEN**
 
 Run: `node --test scripts/lib/build-tasks.test.mjs scripts/lib/desktop-build.test.mjs scripts/lib/desktop-package.test.mjs`
 
@@ -201,7 +201,7 @@ Run: `npm run build`
 
 Expected: PASS and Framework contains only the internal dynamic import.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add package.json package-lock.json packages/desktop electron-builder.config.mjs scripts/lib/build-tasks.mjs scripts/lib/build-tasks.test.mjs scripts/lib/desktop-build.mjs scripts/lib/desktop-build.test.mjs scripts/lib/desktop-package-build.mjs scripts/lib/desktop-package.test.mjs
@@ -220,21 +220,21 @@ git commit -m "[Bug] 固化自有凭据制品供应链"
 - Consumes: Tasks 1-3 complete implementation.
 - Produces: user-facing supported-platform documentation and final security evidence.
 
-- [ ] **Step 1: Extend leak regression before documentation edits**
+- [x] **Step 1: Extend leak regression before documentation edits**
 
 Add assertions that repository runtime manifests, built Framework, packaged archive and unpacked tree contain no `@napi-rs/keyring`, raw OSStatus text, sentinel password, shell credential verbs, keyutils, fixed keys, or plaintext fallback. The test must inspect behavior/artifacts rather than merely grep a documentation string.
 
-- [ ] **Step 2: Run leak test and verify RED**
+- [x] **Step 2: Run leak test and verify RED**
 
 Run: `npm test -w @itharbors/server -- --run tests/credentials/leak-regression.test.ts`
 
 Expected: FAIL while old dependency/build references remain. If Task 3 removal makes the test green immediately, add one fixture entry named `node_modules/@napi-rs/keyring/index.js`, run once to observe the exact forbidden-dependency failure, then remove that fixture entry and rerun green before committing.
 
-- [ ] **Step 3: Update user and implementation documentation**
+- [x] **Step 3: Update user and implementation documentation**
 
 Document macOS ARM64 support, explicit unsupported behavior elsewhere, no automatic fallback, and that both Electron and loopback Web use the same Node native adapter. Mark the superseded `@napi-rs/keyring` steps in the original implementation plan as replaced by this follow-up plan. Record the final review resolution in the ignored SDD ledger.
 
-- [ ] **Step 4: Run complete verification**
+- [x] **Step 4: Run complete verification**
 
 Run: `npm test -w @itharbors/native-credential-vault`
 
@@ -250,7 +250,7 @@ Run on macOS ARM64: `npm run desktop:dir`, then invoke the packaged module for a
 
 Expected: all automated checks PASS; only the isolated Keychain entry contains the temporary secret during the smoke and it is deleted afterward.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docs/superpowers/plans/2026-08-01-mysql-credential-vault.md kits/mysql/README.md packages/server/tests/credentials/leak-regression.test.ts

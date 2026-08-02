@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **2026-08-02 安全修订：** 本计划中 Task 2 和 Task 6 的 `@napi-rs/keyring` 依赖、构建与制品步骤已废止，由 [`2026-08-02-native-credential-vault.md`](./2026-08-02-native-credential-vault.md) 的 Harbors 自有原生适配器方案取代。下方旧步骤只保留为实施历史，不再代表当前架构或验收标准。
+
 **Goal:** Let Electron and explicitly loopback-only Web hosts remember MySQL passwords in the operating-system credential store without exposing saved secrets to Panels, other Kits, remote deployments, repository files, or application data.
 
-**Architecture:** Add an immutable host credential mode, an application-owned SQLite metadata store plus native keyring adapter, and an owner-bound plugin runtime facade. `mysql-core` alone resolves opaque profile IDs inside the Server and continues to own every `mysql2` pool; the browser receives only non-secret metadata.
+**Architecture:** Add an immutable host credential mode, an application-owned SQLite metadata store plus a Harbors-owned native credential adapter, and an owner-bound plugin runtime facade. `mysql-core` alone resolves opaque profile IDs inside the Server and continues to own every `mysql2` pool; the browser receives only non-secret metadata.
 
-**Tech Stack:** TypeScript, Node.js, `better-sqlite3@12.10.1`, `@napi-rs/keyring@1.3.0`, Electron 43.2.0, Vitest, jsdom, npm workspaces.
+**Tech Stack:** TypeScript, Node.js, raw Node-API, Objective-C++/Security.framework, `node-gyp@12.4.0`, `better-sqlite3@12.10.1`, Electron 43.2.0, Vitest, jsdom, npm workspaces.
 
 ## Global Constraints
 
