@@ -45,6 +45,35 @@ describe('Agent Guard history storage', () => {
     expect((await store.history.status()).persistent).toBe(false);
   });
 
+  it('persists web history and checkpoints across recreation when given an absolute data directory', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const first = await createHistoryStore({ hostMode: 'web', dataDir });
+    await first.appendUsageEvents([usage()]);
+    await first.saveBackfillCheckpoint(checkpointV2());
+
+    expect(first.persistent).toBe(true);
+
+    const reopened = await createHistoryStore({ hostMode: 'web', dataDir });
+    const result = await reopened.query({ ...query(), domain: 'model-usage' });
+    expect(result.persistent).toBe(true);
+    expect(result.summary.find((item) => item.metric === 'input-tokens')?.value).toBe(10);
+    expect(await reopened.loadBackfillCheckpoint()).toEqual(checkpointV2());
+  });
+
+  it('keeps web history in memory when no data directory is supplied', async () => {
+    const store = await createHistoryStore({ hostMode: 'web' });
+    await store.appendUsageEvents([usage()]);
+
+    expect(store.persistent).toBe(false);
+    expect((await store.status()).persistent).toBe(false);
+  });
+
+  it('rejects a non-absolute web data directory before any filesystem writes', async () => {
+    await expect(createHistoryStore({ hostMode: 'web', dataDir: 'relative/agent-guard' }))
+      .rejects.toThrow(/absolute/iu);
+    expect(fs.existsSync(path.resolve('relative/agent-guard'))).toBe(false);
+  });
+
   it('queries every endpoint when the hostname filter is empty', async () => {
     const store = await createAgentGuardStore({ hostMode: 'web' });
     await store.history.appendCoverage([coverage()]);

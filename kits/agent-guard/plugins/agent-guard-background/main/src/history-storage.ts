@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { appendFile, chmod, open, readFile, readdir, rename, stat, unlink } from 'node:fs/promises';
+import { appendFile, chmod, mkdir, open, readFile, readdir, realpath, rename, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -95,10 +95,35 @@ interface LegacyMetricV1 {
 }
 
 export async function createHistoryStore(options: HistoryStoreOptions): Promise<HistoryStore> {
-  if (options.hostMode !== 'desktop' || !options.dataDir) return createMemoryHistoryStore();
+  // Persistence is chosen by an explicit data directory, not the host label: an absolute
+  // directory means file-backed storage for Web or desktop, and no directory means memory.
+  if (!options.dataDir) return createMemoryHistoryStore();
+  if (!path.isAbsolute(options.dataDir)) {
+    throw new TypeError('Agent Guard data directory must be absolute');
+  }
+  const dataDir = await ensureDataDir(options.dataDir);
   return createFileHistoryStore(
-    path.resolve(options.dataDir), options.failAfter, options.rawDailyCapBytes ?? DEFAULT_RAW_DAILY_CAP,
+    dataDir, options.failAfter, options.rawDailyCapBytes ?? DEFAULT_RAW_DAILY_CAP,
   );
+}
+
+// Creates the target directory if missing and enforces private (0700) permissions, keeping the
+// parent-realpath/symlink containment check so the resolved directory cannot escape its parent.
+async function ensureDataDir(rawDir: string): Promise<string> {
+  const dataDir = path.resolve(rawDir);
+  const parent = path.dirname(dataDir);
+  // Create any missing ancestors of an absolute dataDir (e.g. a fresh <worktree>/.cache/agent-guard)
+  // with default modes before resolving the parent; only the final directory below is made private.
+  await mkdir(parent, { recursive: true });
+  const parentReal = await realpath(parent);
+  const expectedReal = path.join(parentReal, path.basename(dataDir));
+  await mkdir(dataDir, { recursive: false, mode: 0o700 }).catch((error: NodeJS.ErrnoException) => {
+    if (error.code !== 'EEXIST') throw error;
+  });
+  const dataReal = await realpath(dataDir);
+  if (dataReal !== expectedReal) throw new Error('Agent Guard data directory resolves outside its declared parent');
+  await chmod(dataDir, 0o700);
+  return dataDir;
 }
 
 function createMemoryHistoryStore(): HistoryStore {
