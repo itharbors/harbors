@@ -103,7 +103,11 @@ export function runDesktopPackageCommand({ command, args, cwd }) {
 function readArchiveJson(archive, entry, label) {
   let value;
   try {
-    value = JSON.parse(extractFile(archive, entry).toString('utf8'));
+    const metadata = statFile(archive, entry, false);
+    if (!metadata || !Number.isInteger(metadata.size) || typeof metadata.link === 'string') {
+      throw new Error('not a regular archive entry');
+    }
+    value = JSON.parse(extractFile(archive, entry, false).toString('utf8'));
   } catch {
     throw new Error(`Packaged keyring verification failed: invalid ${label} manifest`);
   }
@@ -218,10 +222,15 @@ async function assertTrustedChildFile({
 }
 
 function readArchiveScanContent(archive, entry) {
-  const metadata = statFile(archive, entry);
-  if (!metadata || !Number.isInteger(metadata.size) || typeof metadata.link === 'string') return null;
+  const metadata = statFile(archive, entry, false);
+  if (typeof metadata?.link === 'string') {
+    throw new Error(
+      `Packaged keyring verification failed: ${entry} is a symlink, not a regular archive entry`,
+    );
+  }
+  if (!metadata || !Number.isInteger(metadata.size)) return null;
   if (/\.node$/iu.test(entry)) return null;
-  const content = extractFile(archive, entry);
+  const content = extractFile(archive, entry, false);
   return content.toString('latin1');
 }
 
@@ -428,7 +437,7 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
   if (!exactStringArray(archiveNativeFiles, [DESKTOP_KEYRING_NATIVE_FILE])) {
     throw new Error('Packaged keyring verification failed: invalid archive native file closure');
   }
-  if (statFile(archive, DESKTOP_KEYRING_NATIVE_FILE).unpacked !== true) {
+  if (statFile(archive, DESKTOP_KEYRING_NATIVE_FILE, false).unpacked !== true) {
     throw new Error('Packaged keyring verification failed: Darwin ARM64 native file is not unpacked');
   }
   const unpackedNativeFiles = (await listUnpackedNativeFiles(unpackedRoot))

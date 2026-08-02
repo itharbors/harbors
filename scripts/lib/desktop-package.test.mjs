@@ -67,6 +67,8 @@ async function createPackagedKeyringFixture(
     unpackedNapiParentSymlink = false,
     unpackedNativeDirectory = false,
     omitWrapperMain = false,
+    wrapperMainSymlink = false,
+    wrapperLoaderSymlink = false,
     credentialModuleContent = 'export const credentialBackend = "os-keyring";\n',
     keyringTextContent = 'module.exports = require("./build/Release/harbors_native_credential_vault.node");\n',
     keyringExtensionlessContent,
@@ -117,6 +119,23 @@ export function migrateDatabase(database) {
     await write(source, 'node_modules/@itharbors/native-credential-vault/index.cjs', keyringTextContent);
   }
   await write(source, 'node_modules/@itharbors/native-credential-vault/lib/loader.cjs', 'module.exports = {};\n');
+  if (wrapperMainSymlink || wrapperLoaderSymlink) {
+    await write(
+      source,
+      'node_modules/untrusted-credential-code.cjs',
+      'module.exports = {};\n',
+    );
+  }
+  if (wrapperMainSymlink) {
+    const wrapperMain = path.join(source, 'node_modules/@itharbors/native-credential-vault/index.cjs');
+    await rm(wrapperMain);
+    await symlink('../../untrusted-credential-code.cjs', wrapperMain);
+  }
+  if (wrapperLoaderSymlink) {
+    const wrapperLoader = path.join(source, 'node_modules/@itharbors/native-credential-vault/lib/loader.cjs');
+    await rm(wrapperLoader);
+    await symlink('../../../untrusted-credential-code.cjs', wrapperLoader);
+  }
   if (keyringExtensionlessContent !== undefined) {
     await write(
       source,
@@ -359,6 +378,20 @@ for (const fixture of [
     await assert.rejects(
       runDesktopPackage({ cwd, mode: 'dir', run: runner.run }),
       /invalid .* manifest|native dependency/iu,
+    );
+  });
+}
+
+for (const fixture of [
+  { name: 'main', options: { wrapperMainSymlink: true } },
+  { name: 'loader', options: { wrapperLoaderSymlink: true } },
+]) {
+  test(`rejects a packaged keyring whose ${fixture.name} is an ASAR symlink`, async (t) => {
+    const cwd = await createPackagedKeyringFixture(t, fixture.options);
+
+    await assert.rejects(
+      runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+      /keyring.*symlink|regular archive entry/iu,
     );
   });
 }
