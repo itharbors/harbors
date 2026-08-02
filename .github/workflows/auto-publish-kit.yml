@@ -99,9 +99,18 @@ jobs:
               test "$object_sha" = "$HEAD_SHA"
             fi
 
-            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            release_error="$RUNNER_TEMP/release-${slug}.err"
+            set +e
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >/dev/null 2>"$release_error"
+            release_status=$?
+            set -e
+            if [[ "$release_status" -eq 0 ]]; then
               echo "Release already exists: $tag"
               continue
+            fi
+            if ! grep -Fq '(HTTP 404)' "$release_error"; then
+              cat "$release_error" >&2
+              exit "$release_status"
             fi
             request_id="kit-auto-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${slug}"
             gh workflow run publish-kit.yml \

@@ -57,7 +57,8 @@ test('main merge orchestrator validates all release intents before idempotent Ta
   assert.match(workflow, /gh api[\s\S]*git\/matching-refs\/tags/u);
   assert.match(workflow, /object\?\.type[\s\S]*object_type[\s\S]*commit/u);
   assert.match(workflow, /object\?\.sha[\s\S]*object_sha[\s\S]*HEAD_SHA/u);
-  assert.match(workflow, /gh release view "\$tag"/u);
+  assert.match(workflow, /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$tag"/u);
+  assert.match(workflow, /release_error[\s\S]*HTTP 404[\s\S]*exit "\$release_status"/u);
   assert.match(workflow, /gh workflow run publish-kit\.yml[\s\S]*--ref "\$tag"[\s\S]*-f release-tag="\$tag"[\s\S]*-f request-id="\$request_id"/u);
   assert.doesNotMatch(workflow, /git tag -d|gh release delete|--force|--clobber/u);
 });

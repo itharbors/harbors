@@ -54,7 +54,9 @@ async function productAt(sha, slug, optional = false) {
     readJsonAt(sha, `${prefix}/package.json`, optional),
     readJsonAt(sha, `${prefix}/package-lock.json`, optional),
   ]);
-  if (manifest === undefined || packageJson === undefined || lockfile === undefined) return undefined;
+  const present = [manifest, packageJson, lockfile].filter((value) => value !== undefined).length;
+  if (present === 0 && optional) return undefined;
+  if (present !== 3) throw new Error(`Base Kit snapshot for ${slug} is partial`);
   return { manifest, packageJson, lockfile };
 }
 

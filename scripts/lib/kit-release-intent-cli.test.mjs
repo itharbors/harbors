@@ -75,6 +75,26 @@ test('CLI rejects a changed market Kit whose version did not increase', async ()
   }
 });
 
+test('CLI rejects a partially present base Kit instead of treating it as new', async () => {
+  const root = await fixture();
+  try {
+    await rm(path.join(root, 'kits/sqlite/package-lock.json'));
+    git(root, 'add', '-u', 'kits/sqlite');
+    git(root, 'commit', '--amend', '-qm', 'partial base');
+    const base = git(root, 'rev-parse', 'HEAD');
+    await writeKit(root, 'sqlite', '0.1.0-preview.1');
+    await writeFile(path.join(root, 'kits/sqlite/source.txt'), 'changed\n');
+    git(root, 'add', 'kits/sqlite');
+    git(root, 'commit', '-qm', 'restore lock');
+    const head = git(root, 'rev-parse', 'HEAD');
+    const run = spawnSync(process.execPath, [script.pathname, base, head], { cwd: root, encoding: 'utf8' });
+    assert.equal(run.status, 1);
+    assert.match(run.stderr, /Base Kit snapshot for sqlite is partial/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('CLI rejects invalid arguments before invoking Git', () => {
   const run = spawnSync(process.execPath, [script.pathname, 'HEAD', 'main'], { encoding: 'utf8' });
   assert.equal(run.status, 2);
