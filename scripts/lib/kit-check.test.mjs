@@ -16,7 +16,7 @@ test('the root Kit check command bootstraps Kit Core and Kit CLI before loading 
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/server && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
   );
 });
 
@@ -35,7 +35,7 @@ function expectedCommands({ artifactName, slug, outputDirectory }) {
 }
 
 async function checkCommandSequence({
-  artifactName = 'kit-mysql-0.1.0-preview.2-any-any.hkit',
+  artifactName = 'kit-mysql-0.1.0-preview.3-any-any.hkit',
   slug,
 }) {
   const outputDirectory = await mkdtemp(path.join(tmpdir(), `kit-check-${slug}-`));
@@ -175,7 +175,7 @@ test('normalizes an absolute output directory before every artifact operation', 
       }),
       removeDirectory: async () => undefined,
     });
-    const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.2-any-any.hkit');
+    const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.3-any-any.hkit');
     assert.equal(result.artifactPath, artifactPath);
     assert.equal(calls.at(-2)[1].at(-1), artifactPath);
   } finally {

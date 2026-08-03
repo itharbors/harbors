@@ -13,6 +13,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import {
+  loadOfficialKit,
   loadTrustedMarketKit,
   loadKitPolicy,
 } from './kit-monorepo.mjs';
@@ -112,9 +113,11 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
     assert.equal(kit.packageJson.name, kit.id);
     assert.equal(
       kit.manifest.version,
-      ['agent-guard', 'mysql'].includes(slug)
-        ? '0.1.0-preview.2'
-        : '0.1.0-preview.1',
+      slug === 'mysql'
+        ? '0.1.0-preview.3'
+        : slug === 'agent-guard'
+          ? '0.1.0-preview.2'
+          : '0.1.0-preview.1',
     );
     assert.equal(kit.manifest.channel, 'preview');
     assert.equal(typeof kit.packageJson.scripts?.build, 'string');
@@ -125,6 +128,20 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
     assert.notEqual(kit.summary.trim(), '');
     assert.equal(typeof kit.ciRunner, 'string');
   }
+});
+
+test('loads the immutable v2 official Kit contract through the current trust policy', async () => {
+  const current = await loadTrustedMarketKit({ repositoryRoot, slug: 'sqlite' });
+  const compatible = await loadOfficialKit({ repositoryRoot, slug: 'sqlite' });
+  assert.deepEqual(compatible, {
+    ...current,
+    runner: current.ciRunner,
+  });
+  assert.equal(compatible.runner, compatible.ciRunner);
+  await assert.rejects(
+    loadOfficialKit({ repositoryRoot, slug: 'unapproved' }),
+    /not trusted for market publication/u,
+  );
 });
 
 test('sources MySQL summary from the Kit descriptor rather than central policy', async () => {

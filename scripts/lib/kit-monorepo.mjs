@@ -71,3 +71,8 @@ export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
   }
   return descriptor;
 }
+
+export async function loadOfficialKit({ repositoryRoot, slug }) {
+  const descriptor = await loadTrustedMarketKit({ repositoryRoot, slug });
+  return Object.freeze({ ...descriptor, runner: descriptor.ciRunner });
+}

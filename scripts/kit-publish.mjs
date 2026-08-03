@@ -11,8 +11,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import {
+  buildSpdx,
   canonicalJson,
   inspectKit,
+  packKit,
+  validateKit,
 } from '@itharbors/kit-cli';
 
 import {
@@ -31,6 +34,11 @@ const USAGE = [
   '    --repository <owner/repo> --commit <sha> --workflow <workflow@ref> \\',
   '    --signer-workflow <workflow@ref> \\',
   '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
+  '  node scripts/kit-publish.mjs prepare \\',
+  '    --kit-directory <directory> --output-directory <directory> \\',
+  '    --repository <owner/repo> --commit <sha> --workflow <workflow@ref> \\',
+  '    --signer-workflow <workflow@ref> \\',
+  '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
   '  node scripts/kit-publish.mjs aggregate \\',
   '    --repository-root <directory> --repository <owner/repo> --policy-file <file> \\',
   '    --revocations-file <file> \\',
@@ -38,12 +46,25 @@ const USAGE = [
   '',
 ].join('\n');
 
-const PREPARE_OPTIONS = [
+const PREPARE_ARTIFACT_OPTIONS = [
   'kit-artifact',
   'output-directory',
   'kit-id',
   'kit-version',
   'kit-channel',
+  'repository',
+  'commit',
+  'workflow',
+  'signer-workflow',
+  'ref',
+  'tag',
+  'label',
+  'summary',
+];
+
+const PREPARE_DIRECTORY_OPTIONS = [
+  'kit-directory',
+  'output-directory',
   'repository',
   'commit',
   'workflow',
@@ -84,6 +105,11 @@ function parseOptions(args, allowed) {
 }
 
 async function prepare(options) {
+  if (options['kit-directory']) return prepareDirectory(options);
+  return prepareArtifact(options);
+}
+
+async function prepareArtifact(options) {
   const kitArtifact = path.resolve(options['kit-artifact']);
   const inspected = await inspectKit({ archive: kitArtifact });
   const artifactName = deriveArtifactName(inspected.manifest);
@@ -156,6 +182,66 @@ async function prepare(options) {
   }
 }
 
+async function prepareDirectory(options) {
+  const project = await validateKit(options['kit-directory']);
+  const artifactName = deriveArtifactName(project.manifest);
+  const outputDirectory = path.resolve(options['output-directory']);
+  let ownsOutputDirectory = false;
+  try {
+    await mkdir(outputDirectory, { mode: 0o700 });
+    ownsOutputDirectory = true;
+    const artifactPath = path.join(outputDirectory, artifactName);
+    await packKit({ directory: project.directory, output: artifactPath });
+    const inspected = await inspectKit({ archive: artifactPath });
+    const metadata = createKitPublicationMetadata({
+      manifest: inspected.manifest,
+      sha256: inspected.sha256,
+      size: inspected.compressedSize,
+      repository: options.repository,
+      commit: options.commit,
+      workflow: options.workflow,
+      signerWorkflow: options['signer-workflow'],
+      ref: options.ref,
+      tag: options.tag,
+      label: options.label,
+      summary: options.summary,
+    });
+    if (metadata.artifactName !== artifactName) {
+      throw new Error('Packed artifact identity changed during inspection');
+    }
+    await Promise.all([
+      writeFile(
+        path.join(outputDirectory, 'release.json'),
+        canonicalJson(metadata.release),
+        { flag: 'wx', mode: 0o600 },
+      ),
+      writeFile(
+        path.join(outputDirectory, 'registry-entry.json'),
+        canonicalJson(metadata.registryEntry),
+        { flag: 'wx', mode: 0o600 },
+      ),
+      writeFile(
+        path.join(outputDirectory, 'sbom.spdx.json'),
+        canonicalJson(await buildSpdx(project)),
+        { flag: 'wx', mode: 0o600 },
+      ),
+    ]);
+    return {
+      CHANNEL: inspected.manifest.channel,
+      VERSION: inspected.manifest.version,
+      TAG: options.tag,
+      ARTIFACT_NAME: artifactName,
+      ARTIFACT_SHA256: inspected.sha256,
+      RELEASE_MANIFEST: 'release.json',
+      REGISTRY_ENTRY: 'registry-entry.json',
+      SBOM: 'sbom.spdx.json',
+    };
+  } catch (error) {
+    if (ownsOutputDirectory) await rm(outputDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
 function createDefaultProvenanceVerifier({ githubToken }) {
   return new GitHubArtifactAttestationVerifier({ githubToken });
 }
@@ -190,15 +276,15 @@ export async function runKitPublishCli(
 ) {
   const [command, ...rest] = args;
   const allowed = command === 'prepare'
-    ? PREPARE_OPTIONS
+    ? [PREPARE_ARTIFACT_OPTIONS, PREPARE_DIRECTORY_OPTIONS]
     : command === 'aggregate'
-      ? AGGREGATE_OPTIONS
+      ? [AGGREGATE_OPTIONS]
       : null;
   if (!allowed) {
     io.stderr.write(USAGE);
     return 2;
   }
-  const options = parseOptions(rest, allowed);
+  const options = allowed?.map((candidate) => parseOptions(rest, candidate)).find(Boolean);
   if (!options) {
     io.stderr.write(USAGE);
     return 2;
