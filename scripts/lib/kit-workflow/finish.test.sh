@@ -107,6 +107,9 @@ GIT
 
 test_finish_rejects_out_of_boundary_changes_before_pack_and_push() {
   prepare_change feature
+  printf 'outside\n' > "$WORKTREE/outside.txt"
+  git -C "$WORKTREE" add outside.txt
+  git -C "$WORKTREE" commit --amend -m '[Feature] 添加越界变更' >/dev/null
   install_boundary_aware_npm_mock
   install_git_logging_mock
   if output=$("$FINISH" sqlite '完成变更' "$BODY" 2>&1); then fail 'out-of-boundary change succeeded'; fi
@@ -120,7 +123,7 @@ test_finish_rejects_out_of_boundary_changes_before_pack_and_push() {
 
 test_finish_accepts_in_boundary_changes_with_real_gate() {
   prepare_change feature
-  git -C "$WORKTREE" rm change.txt >/dev/null
+  git -C "$WORKTREE" rm kits/sqlite/change.txt >/dev/null
   printf '\n' >> "$WORKTREE/kits/sqlite/package.json"
   git -C "$WORKTREE" add kits/sqlite/package.json
   git -C "$WORKTREE" commit --amend -m '[Feature] 添加 Kit 内变更' >/dev/null
@@ -130,6 +133,19 @@ test_finish_accepts_in_boundary_changes_with_real_gate() {
   npm_log=$(cat "$NPM_LOG")
   assert_contains "$npm_log" 'kit:boundary'
   assert_contains "$npm_log" 'kit:check'
+}
+
+test_finish_rejects_changed_kit_without_version_increase_before_pack_and_push() {
+  prepare_change feature
+  set_kit_version "$WORKTREE" 0.1.0-preview.1 preview
+  git -C "$WORKTREE" add kits/sqlite
+  git -C "$WORKTREE" commit --amend -m '[Feature] 遗漏 Kit 版本升级' >/dev/null
+  install_git_logging_mock
+  if output=$($FINISH sqlite '完成变更' "$BODY" 2>&1); then fail 'unchanged Kit version succeeded'; fi
+  assert_contains "$output" 'must increase from 0.1.0-preview.1'
+  assert_not_contains "$(cat "$NPM_LOG")" 'kit:check'
+  assert_not_contains "$(cat "$GIT_LOG")" 'push --set-upstream'
+  test ! -s "$GH_LOG" || fail 'gh ran after release intent failure'
 }
 
 test_finish_rejects_unrelated_history() {
@@ -151,5 +167,6 @@ run_finish_tests() {
   run_case 'finish runs boundary check before pack and push' test_finish_runs_boundary_check_before_pack_and_push
   run_case 'finish rejects out-of-boundary changes before pack and push' test_finish_rejects_out_of_boundary_changes_before_pack_and_push
   run_case 'finish accepts in-boundary changes with real gate' test_finish_accepts_in_boundary_changes_with_real_gate
+  run_case 'finish rejects a changed Kit without a version increase' test_finish_rejects_changed_kit_without_version_increase_before_pack_and_push
   run_case 'finish rejects unrelated history' test_finish_rejects_unrelated_history
 }

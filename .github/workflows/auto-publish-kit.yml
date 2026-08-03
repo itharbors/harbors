@@ -1,0 +1,125 @@
+name: Automatically Publish Merged Kits
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: automatic-kit-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full merge history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Install locked planner dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Validate complete Kit release plan
+        id: plan
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.before }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$BASE_SHA" =~ ^0{40}$ ]]; then
+            BASE_SHA="$(git rev-list --max-parents=0 --max-count=1 "$HEAD_SHA")"
+          fi
+          output="$(node scripts/plan-kit-releases.mjs "$BASE_SHA" "$HEAD_SHA")"
+          releases_json=''
+          has_releases=''
+          while IFS= read -r line; do
+            case "$line" in
+              RELEASES_JSON=*)
+                test -z "$releases_json"
+                releases_json="${line#RELEASES_JSON=}"
+                ;;
+              HAS_RELEASES=true|HAS_RELEASES=false)
+                test -z "$has_releases"
+                has_releases="${line#HAS_RELEASES=}"
+                ;;
+              *)
+                echo 'Release planner emitted an invalid output record' >&2
+                exit 1
+                ;;
+            esac
+          done <<< "$output"
+          test -n "$releases_json"
+          test -n "$has_releases"
+          printf 'releases-json=%s\nhas-releases=%s\n' "$releases_json" "$has_releases" >> "$GITHUB_OUTPUT"
+
+      - name: Create immutable Tags and dispatch publishers
+        if: steps.plan.outputs.has-releases == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ github.sha }}
+          RELEASES_JSON: ${{ steps.plan.outputs.releases-json }}
+        run: |
+          set -euo pipefail
+          while IFS=$'\t' read -r slug tag; do
+            test -n "$slug"
+            test -n "$tag"
+            refs_json="$(gh api "repos/$GITHUB_REPOSITORY/git/matching-refs/tags/$tag")"
+            ref_identity="$(REFS_JSON="$refs_json" TAG="$tag" node --input-type=module <<'NODE'
+          const refs = JSON.parse(process.env.REFS_JSON);
+          const expected = `refs/tags/${process.env.TAG}`;
+          const matches = refs.filter((entry) => entry?.ref === expected);
+          if (matches.length === 0) process.stdout.write('missing');
+          else if (matches.length === 1) {
+            process.stdout.write(`${matches[0].object?.type ?? ''}\t${matches[0].object?.sha ?? ''}`);
+          } else throw new Error(`Duplicate exact Git ref: ${expected}`);
+          NODE
+            )"
+            if [[ "$ref_identity" == missing ]]; then
+              gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" \
+                -f ref="refs/tags/$tag" \
+                -f sha="$HEAD_SHA" >/dev/null
+            else
+              IFS=$'\t' read -r object_type object_sha <<< "$ref_identity"
+              test "$object_type" = commit
+              test "$object_sha" = "$HEAD_SHA"
+            fi
+
+            release_error="$RUNNER_TEMP/release-${slug}.err"
+            set +e
+            gh api "repos/$GITHUB_REPOSITORY/releases/tags/$tag" >/dev/null 2>"$release_error"
+            release_status=$?
+            set -e
+            if [[ "$release_status" -eq 0 ]]; then
+              echo "Release already exists: $tag"
+              continue
+            fi
+            if ! grep -Fq '(HTTP 404)' "$release_error"; then
+              cat "$release_error" >&2
+              exit "$release_status"
+            fi
+            request_id="kit-auto-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${slug}"
+            gh workflow run publish-kit.yml \
+              --repo "$GITHUB_REPOSITORY" \
+              --ref "$tag" \
+              -f release-tag="$tag" \
+              -f request-id="$request_id"
+          done < <(node --input-type=module <<'NODE'
+          const releases = JSON.parse(process.env.RELEASES_JSON);
+          for (const release of releases) process.stdout.write(`${release.slug}\t${release.tag}\n`);
+          NODE
+          )

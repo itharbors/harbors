@@ -35,10 +35,13 @@ run_case() {
 copy_workflow_scripts() {
   local directory=$1
   mkdir -p "$directory/.agents/skills/kit-workflow/scripts"
+  mkdir -p "$directory/scripts/lib"
   cp "$SOURCE_LIB" "$directory/.agents/skills/kit-workflow/scripts/_kit-workflow-lib.sh"
   cp "$SOURCE_START" "$directory/.agents/skills/kit-workflow/scripts/start-kit-change.sh"
   cp "$SOURCE_FINISH" "$directory/.agents/skills/kit-workflow/scripts/finish-kit-change.sh"
   cp "$SOURCE_RELEASE" "$directory/.agents/skills/kit-workflow/scripts/release-kit.sh"
+  cp "$REPO_SOURCE/scripts/plan-kit-releases.mjs" "$directory/scripts/plan-kit-releases.mjs"
+  cp "$REPO_SOURCE/scripts/lib/kit-release-intent.mjs" "$directory/scripts/lib/kit-release-intent.mjs"
 }
 
 write_kit_files() {
@@ -194,8 +197,9 @@ prepare_change() {
   "$START" sqlite "$type" finish-case >/dev/null
   WORKTREE="$REPO/.worktrees/kit-sqlite-$type-finish-case"
   FINISH="$WORKTREE/.agents/skills/kit-workflow/scripts/finish-kit-change.sh"
-  printf 'change\n' > "$WORKTREE/change.txt"
-  git -C "$WORKTREE" add change.txt
+  printf 'change\n' > "$WORKTREE/kits/sqlite/change.txt"
+  set_kit_version "$WORKTREE" 0.1.0-preview.2 preview
+  git -C "$WORKTREE" add kits/sqlite
   git -C "$WORKTREE" commit -m "[$(label_for_type "$type")] 添加测试变更" >/dev/null
   BODY="$FIXTURE_ROOT/pr-body.md"
   printf '## Summary\n\nChange.\n\n## Testing\n\n- npm run kit:check -- sqlite\n' > "$BODY"

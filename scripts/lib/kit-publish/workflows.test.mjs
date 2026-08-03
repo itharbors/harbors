@@ -21,8 +21,9 @@ function jobBlock(workflow, name) {
 
 test('mainline caller publishes only exact Kit version Tags through immutable v2 workflows', async () => {
   const workflow = await read('.github/workflows/publish-kit.yml');
-  assert.match(workflow, /^on:\n  push:\n    tags:\n      - ['"]kit\/\*\/v\*['"]$/mu);
-  assert.doesNotMatch(workflow, /^\s+(branches:|workflow_dispatch:|pull_request:)/mu);
+  assert.match(workflow, /^on:\n  push:\n    tags:\n      - ['"]kit\/\*\/v\*['"]\n  workflow_dispatch:\n    inputs:\n      release-tag:[\s\S]*required:\s*true[\s\S]*request-id:[\s\S]*required:\s*true/mu);
+  assert.doesNotMatch(workflow, /^\s+(branches:|pull_request:)/mu);
+  assert.match(workflow, /^run-name:\s*Publish Kit \$\{\{ inputs\['release-tag'\] \|\| github\.ref_name \}\} \$\{\{ inputs\['request-id'\] \|\| github\.run_id \}\}$/mu);
   assert.match(
     workflow,
     /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@kit-publish-v2/u,
@@ -32,6 +33,9 @@ test('mainline caller publishes only exact Kit version Tags through immutable v2
   const preflight = jobBlock(workflow, 'preflight');
   const publish = jobBlock(workflow, 'publish');
   assert.match(context, /loadTrustedMarketKit/u);
+  assert.match(context, /github\.event_name == 'workflow_dispatch'/u);
+  assert.match(context, /EXPECTED_TAG:\s*\$\{\{ inputs\['release-tag'\] \}\}/u);
+  assert.match(context, /refs\/tags\/\$EXPECTED_TAG/u);
   assert.match(context, /runner=.*kit\.ciRunner/u);
   assert.match(preflight, /runs-on:\s*\$\{\{ needs\.context\.outputs\.runner \}\}/u);
   assert.match(preflight, /npm run kits:boundary -- "\$KIT_NAME"/u);
@@ -40,6 +44,23 @@ test('mainline caller publishes only exact Kit version Tags through immutable v2
   for (const permission of ['contents: write', 'id-token: write', 'attestations: write', 'pages: write']) {
     assert.match(workflow, new RegExp(permission, 'u'));
   }
+});
+
+test('main merge orchestrator validates all release intents before idempotent Tag creation and dispatch', async () => {
+  const workflow = await read('.github/workflows/auto-publish-kit.yml');
+  assert.match(workflow, /^on:\n  push:\n    branches:\n      - main$/mu);
+  assert.match(workflow, /group:\s*automatic-kit-release[\s\S]*cancel-in-progress:\s*false/u);
+  assert.match(workflow, /permissions:\n\s+contents:\s*write\n\s+actions:\s*write/u);
+  assert.match(workflow, /actions\/checkout@v6[\s\S]*fetch-depth:\s*0/u);
+  assert.match(workflow, /node scripts\/plan-kit-releases\.mjs "\$BASE_SHA" "\$HEAD_SHA"/u);
+  assert.match(workflow, /RELEASES_JSON/u);
+  assert.match(workflow, /gh api[\s\S]*git\/matching-refs\/tags/u);
+  assert.match(workflow, /object\?\.type[\s\S]*object_type[\s\S]*commit/u);
+  assert.match(workflow, /object\?\.sha[\s\S]*object_sha[\s\S]*HEAD_SHA/u);
+  assert.match(workflow, /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$tag"/u);
+  assert.match(workflow, /release_error[\s\S]*HTTP 404[\s\S]*exit "\$release_status"/u);
+  assert.match(workflow, /gh workflow run publish-kit\.yml[\s\S]*--ref "\$tag"[\s\S]*-f release-tag="\$tag"[\s\S]*-f request-id="\$request_id"/u);
+  assert.doesNotMatch(workflow, /git tag -d|gh release delete|--force|--clobber/u);
 });
 
 test('mainline caller refreshes Registry through one correlated main dispatch after publication', async () => {
