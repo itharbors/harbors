@@ -204,6 +204,17 @@ test('Kit CI exposes safe selector outputs and skips the matrix when no Kit appl
   assert.match(checkKit, /include:\s*\$\{\{ fromJSON\(needs\.select\.outputs\.matrix-json\)\.include \}\}/u);
 });
 
+test('Kit CI validates and summarizes release intent inside the existing required selector job', async () => {
+  const workflow = await readFile(kitWorkflowUrl, 'utf8');
+  const select = workflowJob(workflow, 'select');
+
+  assert.match(select, /node scripts\/plan-kit-releases\.mjs/u);
+  assert.match(select, /steps\.selection\.outputs\.base-sha/u);
+  assert.match(select, /steps\.selection\.outputs\.head-sha/u);
+  assert.match(select, /GITHUB_STEP_SUMMARY/u);
+  assert.match(select, /RELEASES_JSON/u);
+});
+
 test('Kit CI runs each descriptor-owned matrix entry after installing lifecycle dependencies and never publishes', async () => {
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const checkKit = workflowJob(workflow, 'check-kit');

@@ -52,6 +52,10 @@ done < <(git -C "$repo_root" log --format=%s "$target_ref"..HEAD)
 
 npm --prefix "$repo_root" run kit:boundary -- "$kit" --base "$target_ref" --head HEAD
 
+(cd "$repo_root" && node scripts/plan-kit-releases.mjs \
+  "$(git rev-parse "$target_ref")" \
+  "$(git rev-parse HEAD)")
+
 pack_dir=$(mktemp -d "${TMPDIR:-/tmp}/kit-workflow-pack.XXXXXX")
 trap 'rm -rf -- "$pack_dir"' EXIT
 kit_workflow_run_product_checks "$repo_root" "$kit" "$pack_dir"
