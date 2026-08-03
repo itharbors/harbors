@@ -120,6 +120,10 @@ export async function runKitMatrix({
     '-w',
     '@itharbors/kit-cli',
     '-w',
+    '@itharbors/plugin-types',
+    '-w',
+    '@itharbors/host-security',
+    '-w',
     '@itharbors/server',
   ], { cwd: repositoryRoot, encoding: 'utf8' });
   const loaded = descriptors ?? await discover(repositoryRoot, slugs);

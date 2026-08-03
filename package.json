@@ -15,7 +15,7 @@
     "dev:web": "node scripts/dev.mjs",
     "electron": "npm run start --",
     "kit": "node packages/kit-cli/dist/cli.js",
-    "kit:check": "npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/server && node scripts/check-kit.mjs",
+    "kit:check": "npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs",
     "kit:boundary": "node scripts/check-kit-boundary.mjs",
     "kits:boundary": "node scripts/check-kit-architecture.mjs",
     "kit:publish": "node scripts/kit-publish.mjs",
