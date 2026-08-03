@@ -1,8 +1,7 @@
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
-import { CsvCoreError, requireNonEmptyString, requireRecord } from './protocol.js';
+import { CsvCoreError, requireNonEmptyString } from './protocol.js';
 
 export const MAX_SOURCE_SIZE = 2 * 1024 * 1024 * 1024;
 export const TEMP_SPACE_SAFETY_MARGIN = 64 * 1024 * 1024;
@@ -31,22 +30,6 @@ export type FilePolicyAdapters = {
   lstat?: (filePath: string) => Promise<StatLike>;
   statfs?: (filePath: string) => Promise<StatFsLike>;
 };
-
-export type CsvFileEntry = {
-  name: string;
-  path: string;
-  kind: 'directory' | 'file';
-  size: number | null;
-  modifiedAt: string | null;
-};
-
-export type CsvDirectoryListing = {
-  currentPath: string;
-  parentPath: string | null;
-  entries: CsvFileEntry[];
-};
-
-const CSV_EXTENSIONS = new Set(['.csv', '.tsv', '.txt']);
 
 export async function validateSourcePath(
   requestedPath: string,
@@ -94,66 +77,4 @@ export async function assertTemporarySpace(
   if (freeBytes < requiredBytes) {
     throw new CsvCoreError('INSUFFICIENT_TEMP_SPACE', '临时目录可用空间不足。');
   }
-}
-
-export async function listDirectory(input: unknown): Promise<CsvDirectoryListing> {
-  const record = requireRecord(input, '文件浏览参数无效。');
-  const requestedPath = requireNonEmptyString(record.path, '请选择要浏览的文件夹。');
-  if (record.showAll !== undefined && typeof record.showAll !== 'boolean') {
-    throw new CsvCoreError('INVALID_INPUT', '“显示全部文件”参数无效。');
-  }
-  const showAll = record.showAll === true;
-  let currentPath: string;
-  try {
-    currentPath = await fsp.realpath(requestedPath);
-    if (!(await fsp.stat(currentPath)).isDirectory()) {
-      throw new CsvCoreError('NOT_A_DIRECTORY', '所选路径不是文件夹。');
-    }
-  } catch (error) {
-    if (error instanceof CsvCoreError) throw error;
-    throw new CsvCoreError('INVALID_PATH', '无法访问这个文件夹。', {}, { cause: error });
-  }
-
-  const entries = (await fsp.readdir(currentPath)).flatMap((name): string[] => [name]);
-  const resolved = await Promise.all(entries.map(async (name): Promise<CsvFileEntry | null> => {
-    const entryPath = path.join(currentPath, name);
-    try {
-      const stat = await fsp.lstat(entryPath);
-      if (stat.isSymbolicLink()) return null;
-      const kind = stat.isDirectory() ? 'directory' : stat.isFile() ? 'file' : null;
-      if (kind === null) return null;
-      if (
-        kind === 'file'
-        && !showAll
-        && !CSV_EXTENSIONS.has(path.extname(name).toLowerCase())
-      ) {
-        return null;
-      }
-      return {
-        name,
-        path: entryPath,
-        kind,
-        size: kind === 'file' ? stat.size : null,
-        modifiedAt: Number.isFinite(stat.mtimeMs) ? stat.mtime.toISOString() : null,
-      };
-    } catch {
-      return null;
-    }
-  }));
-
-  const visibleEntries = resolved.filter((entry): entry is CsvFileEntry => entry !== null);
-  visibleEntries.sort((left, right) => {
-    if (left.kind !== right.kind) return left.kind === 'directory' ? -1 : 1;
-    return left.name.localeCompare(right.name, 'en', { sensitivity: 'base' });
-  });
-  const parent = path.dirname(currentPath);
-  return {
-    currentPath,
-    parentPath: parent === currentPath ? null : await fsp.realpath(parent),
-    entries: visibleEntries,
-  };
-}
-
-export function getDefaultDirectory(): string {
-  return os.homedir();
 }

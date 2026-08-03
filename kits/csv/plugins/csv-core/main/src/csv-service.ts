@@ -24,11 +24,8 @@ import { CsvIndex } from './csv-index.js';
 import { exportCsvRows } from './exporter.js';
 import {
   assertTemporarySpace,
-  getDefaultDirectory,
-  listDirectory,
   MAX_SOURCE_SIZE,
   validateSourcePath,
-  type CsvDirectoryListing,
   type FilePolicyAdapters,
   type StatLike,
 } from './file-policy.js';
@@ -167,14 +164,6 @@ export class CsvService {
       throw new CsvCoreError('INVALID_OPTIONS', 'yieldEveryRecords 必须是正整数。');
     }
     CsvIndex.cleanupExpired(this.temporaryRoot, this.now());
-  }
-
-  listDirectory(input: unknown): Promise<CsvDirectoryListing> {
-    return listDirectory(input);
-  }
-
-  getDefaultDirectory(): string {
-    return getDefaultDirectory();
   }
 
   async sampleFile(input: unknown): Promise<CsvSampleResult> {

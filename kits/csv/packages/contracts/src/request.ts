@@ -1,8 +1,6 @@
 import type { CsvErrorEnvelope, CsvPublicError } from './contracts.js';
 
 export const CSV_CORE_REQUEST_NAMES = [
-  'listDirectory',
-  'getDefaultDirectory',
   'sampleFile',
   'openFile',
   'getConnectionState',

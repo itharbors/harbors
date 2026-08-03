@@ -4,7 +4,6 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   assertTemporarySpace,
-  listDirectory,
   validateSourcePath,
 } from '../main/src/file-policy.js';
 
@@ -56,17 +55,4 @@ describe('CSV source file policy', () => {
     })).rejects.toMatchObject({ code: 'INSUFFICIENT_TEMP_SPACE' });
   });
 
-  it('lists directories and CSV candidates without following symlink entries', async () => {
-    fs.mkdirSync(path.join(directory, 'nested'));
-    fs.writeFileSync(path.join(directory, 'records.csv'), '');
-    fs.writeFileSync(path.join(directory, 'notes.md'), '');
-    fs.symlinkSync(path.join(directory, 'records.csv'), path.join(directory, 'linked.csv'));
-
-    const listing = await listDirectory({ path: directory });
-
-    expect(listing.entries.map((entry) => [entry.name, entry.kind])).toEqual([
-      ['nested', 'directory'],
-      ['records.csv', 'file'],
-    ]);
-  });
 });

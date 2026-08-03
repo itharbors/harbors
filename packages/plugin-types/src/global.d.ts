@@ -1,4 +1,4 @@
-import type { PanelDefinition } from './panel';
+import type { PanelDefinition, PanelFileRuntime } from './panel';
 
 declare global {
   interface Window {
@@ -11,6 +11,7 @@ declare global {
       assets: {
         url(relativePath: string): string;
       };
+      file: PanelFileRuntime;
       i18n: {
         getLocale(): string;
         t(key: string, params?: Record<string, string | number>): string;

@@ -7,7 +7,7 @@ import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistrat
 import type { PluginDefinition, PluginInfo } from '../framework/plugin/types';
 import type { PluginPathRoots, PluginPaths } from '../framework/plugin/paths';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
-import type { PluginCredentialVault } from '@itharbors/plugin-types';
+import type { PanelFileRuntime, PluginCredentialVault } from '@itharbors/plugin-types';
 
 export interface PluginRuntime {
   readonly sessionId: string;
@@ -138,6 +138,7 @@ export interface PanelRuntime {
   assets: {
     url(relativePath: string): string;
   };
+  file: PanelFileRuntime;
   message: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
     broadcast(topic: string, ...args: unknown[]): void;

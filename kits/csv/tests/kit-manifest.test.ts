@@ -100,12 +100,13 @@ describe('CSV kit manifest', () => {
       const pluginPackage = JSON.parse(fs.readFileSync(path.join(pluginRoot, 'package.json'), 'utf8'));
 
       if (pluginName === 'csv-core') {
+        const requests = pluginPackage['ce-editor'].contribute.message.request;
+        expect(requests).not.toHaveProperty('listDirectory');
+        expect(requests).not.toHaveProperty('getDefaultDirectory');
         expect(pluginPackage['ce-editor']).toEqual({
           contribute: {
             message: {
               request: expect.objectContaining({
-                listDirectory: ['listDirectory'],
-                getDefaultDirectory: ['getDefaultDirectory'],
                 sampleFile: ['sampleFile'],
                 openFile: ['openFile'],
                 getConnectionState: ['getConnectionState'],

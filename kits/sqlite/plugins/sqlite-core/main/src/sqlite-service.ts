@@ -1,9 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { homedir } from 'node:os';
 import Database from 'better-sqlite3';
-import { listDirectory, validateCreateTarget, type DirectoryListing } from './file-browser.js';
+import { validateCreateTarget } from './file-browser.js';
 import { analyzeSqlText, type SqlTextAnalysis } from './sql-analysis.js';
 import { SqlWorker } from './sql-worker.js';
 import {
@@ -277,7 +276,6 @@ export class SqliteService {
   private sqliteVersion: string | null = null;
   private foreignKeys: boolean | null = null;
   private busyTimeout: number | null = null;
-  private recentDatabasePaths: string[] = [];
   private databaseGeneration = 0;
   private countCache = new Map<string, number>();
   private lastMutation: MutationSnapshot | null = null;
@@ -289,18 +287,6 @@ export class SqliteService {
   constructor(options: SqliteServiceOptions = {}) {
     this.now = options.now ?? Date.now;
     this.createToken = options.createToken ?? randomUUID;
-  }
-
-  listDirectory(input: unknown): DirectoryListing {
-    return listDirectory(input);
-  }
-
-  getDefaultDirectory(): string {
-    return homedir();
-  }
-
-  getRecentDatabases(): string[] {
-    return [...this.recentDatabasePaths];
   }
 
   getConnectionState(): ConnectionState {
@@ -334,20 +320,35 @@ export class SqliteService {
 
     let absolutePath = path.resolve(requestedPath);
     let createdIdentity: FileIdentity | null = null;
+    let createdByService = false;
     if (input.create) {
-      absolutePath = validateCreateTarget({
+      const createTarget = validateCreateTarget({
         directory: path.dirname(absolutePath),
         fileName: path.basename(absolutePath),
       });
+      absolutePath = createTarget.path;
+      createdByService = !createTarget.existingEmptyFile;
       let descriptor: number | null = null;
       try {
-        descriptor = fs.openSync(absolutePath, 'wx', 0o600);
+        descriptor = fs.openSync(
+          absolutePath,
+          createTarget.existingEmptyFile ? 'r+' : 'wx',
+          0o600,
+        );
         const stat = fs.fstatSync(descriptor);
-        createdIdentity = { device: stat.dev, inode: stat.ino };
-      } catch (error) {
-        if (isNodeError(error) && error.code === 'EEXIST') {
+        if (!stat.isFile() || (createTarget.existingEmptyFile && stat.size !== 0)) {
           throw workbenchError('PATH_EXISTS', '数据库文件已经存在。');
         }
+        createdIdentity = { device: stat.dev, inode: stat.ino };
+        if (!matchesFileIdentity(absolutePath, createdIdentity)) {
+          throw workbenchError('CREATE_TARGET_CHANGED', '新建数据库路径在保留期间发生变化，操作已取消。');
+        }
+      } catch (error) {
+        removeCreatedReservation(absolutePath, createdIdentity, createdByService);
+        if (!createTarget.existingEmptyFile && isNodeError(error) && error.code === 'EEXIST') {
+          throw workbenchError('PATH_EXISTS', '数据库文件已经存在。');
+        }
+        if (error instanceof WorkbenchError) throw error;
         throw new WorkbenchError('INVALID_PATH', '无法在所选文件夹中新建数据库。', errorMessage(error));
       } finally {
         if (descriptor !== null) fs.closeSync(descriptor);
@@ -385,15 +386,12 @@ export class SqliteService {
       this.foreignKeys = connection.foreignKeys;
       this.busyTimeout = connection.busyTimeout;
       this.resetQueryCache();
-      this.rememberDatabasePath(absolutePath);
       candidate = null;
       previous?.close();
       return this.getConnectionState();
     } catch (error) {
       candidate?.close();
-      if (createdIdentity !== null && matchesFileIdentity(absolutePath, createdIdentity)) {
-        fs.unlinkSync(absolutePath);
-      }
+      removeCreatedReservation(absolutePath, createdIdentity, createdByService);
       throw normalizeSqliteError(error);
     }
   }
@@ -1169,13 +1167,6 @@ export class SqliteService {
     return this.database;
   }
 
-  private rememberDatabasePath(databasePath: string): void {
-    this.recentDatabasePaths = [
-      databasePath,
-      ...this.recentDatabasePaths.filter((item) => item !== databasePath),
-    ].slice(0, 10);
-  }
-
   private createConnection(
     databasePath: string,
     mode: ConnectionMode,
@@ -1596,10 +1587,26 @@ function csvCell(value: unknown): string {
 
 function matchesFileIdentity(filePath: string, identity: FileIdentity): boolean {
   try {
-    const stat = fs.statSync(filePath);
-    return stat.isFile() && stat.dev === identity.device && stat.ino === identity.inode;
+    const stat = fs.lstatSync(filePath);
+    return stat.isFile()
+      && !stat.isSymbolicLink()
+      && stat.dev === identity.device
+      && stat.ino === identity.inode;
   } catch {
     return false;
+  }
+}
+
+function removeCreatedReservation(
+  filePath: string,
+  identity: FileIdentity | null,
+  createdByService: boolean,
+): void {
+  if (!createdByService || identity === null || !matchesFileIdentity(filePath, identity)) return;
+  try {
+    fs.unlinkSync(filePath);
+  } catch {
+    // Preserve the original database error if cleanup is no longer possible.
   }
 }
 

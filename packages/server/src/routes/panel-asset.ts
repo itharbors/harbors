@@ -5,6 +5,9 @@ import type { Editor } from '../editor/types';
 import type { I18nVisibleSnapshot } from '../framework/i18n/types';
 import type { PanelModule } from '../framework/panel';
 import type { PanelRegistration } from '../framework/panel/types';
+import { PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
+
+export { createPanelFileRuntime, PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
 
 function escapeForScript(value: string): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
@@ -92,11 +95,13 @@ function createPanelRuntimeScript(panelName: string, panelPluginName: string, in
   const panelLiteral = escapeForScript(panelName);
   const panelPluginLiteral = escapeForScript(panelPluginName);
   const snapshotLiteral = escapeForScript(JSON.stringify(initialSnapshot));
+  const panelFileRuntimeFactory = PANEL_FILE_RUNTIME_FACTORY_SOURCE.replace(/<\/script/gi, '<\\/script');
 
   return `<script type="module">
     const panelName = ${panelLiteral};
     const panelPluginName = ${panelPluginLiteral};
     const sessionId = new URLSearchParams(window.location.search).get('sessionId') || '';
+    const panelFileRuntime = (${panelFileRuntimeFactory})(window, document);
     window.__panelI18n = {
       snapshot: JSON.parse(${snapshotLiteral}),
       listeners: new Set(),
@@ -205,6 +210,7 @@ function createPanelRuntimeScript(panelName: string, panelPluginName: string, in
 
     window.editor = {
       sessionId,
+      file: panelFileRuntime,
       assets: {
         url(relativePath) {
           return createPanelAssetUrl(relativePath);
