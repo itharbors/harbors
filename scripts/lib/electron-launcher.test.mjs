@@ -196,7 +196,7 @@ test('keeps electron stable and makes dev an isolated Electron entry', async () 
   assert.equal(packageJson.scripts.build, 'node scripts/build.mjs all');
   assert.equal(packageJson.scripts['plugins:build'], 'node scripts/build.mjs plugins');
   assert.match(
-    packageJson.scripts['test:framework'],
+    packageJson.scripts['test:framework:prepared'],
     /scripts\/lib\/plugin-build\/discover\.test\.mjs/u,
   );
   assert.equal(packageJson.scripts.start, 'electron scripts/electron.mjs');
