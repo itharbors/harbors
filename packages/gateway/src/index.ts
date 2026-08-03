@@ -1,5 +1,9 @@
 import http from 'node:http';
 import { selectGatewayTarget } from './routing';
+import {
+  resolveGatewayCredentialMode,
+  resolveGatewayUpstreamHost,
+} from './security';
 
 const PORT = parseInt(process.env.PORT || '48380', 10);
 const SERVER_PORT = parseInt(process.env.SERVER_PORT || '48381', 10);
@@ -7,11 +11,13 @@ const CLIENT_PORT = parseInt(process.env.CLIENT_PORT || '48382', 10);
 const IS_PROD = process.env.NODE_ENV === 'production';
 const HOST = process.env.HARBORS_BIND_HOST;
 
-const SERVER_HOST = 'localhost';
+resolveGatewayCredentialMode(process.env);
+
+const UPSTREAM_HOST = resolveGatewayUpstreamHost(HOST);
 
 function proxy(req: http.IncomingMessage, res: http.ServerResponse, targetPort: number): void {
   const options: http.RequestOptions = {
-    hostname: SERVER_HOST,
+    hostname: UPSTREAM_HOST,
     port: targetPort,
     path: req.url,
     method: req.method,

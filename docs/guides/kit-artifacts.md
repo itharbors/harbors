@@ -35,6 +35,28 @@ Kit API SemVer 范围、协议版本、权限和目标。通用包必须使用 `
 Framework Node 模块 ABI（不是 Electron 主进程 ABI）；安装端会同时检查 Framework、Kit API、
 协议、平台、架构和 ABI。
 
+### `credentials` 权限
+
+`credentials` 是高风险、官方发布者专用的权限。Registry reference、Release asset manifest 和
+签名来源声明中的权限集合必须精确一致；Resolver 只接受 publisher 为 `itharbors` 的制品，第三方
+publisher 即使具有有效摘要和 attestation 也会以 `PERMISSION_NOT_ALLOWED` 拒绝。Kit Manager 将其
+标记为“凭据存储 — 高风险”，安装/更新确认明确提示“此版本可在系统凭据库中保存和使用登录秘密”。
+
+permission 只是第一重授权。运行时还要求具体插件在 `ce-editor.capabilities` 中声明
+`credentials`，宿主才会为该 `Kit ID + plugin name` 注入 owner-bound facade；不要给展示 Panel 或
+不需要秘密的业务插件声明 capability。官方 MySQL Kit 只有 `@itharbors/mysql-core` 声明它，并由
+core 独占 `mysql2` 连接池。
+
+发布制品不得包含密码、profile fixture、plaintext store、shell credential helper、固定/硬编码
+加密密钥或把 OS 条目复制到应用数据的 fallback。可发布内容只声明 permission/capability 和使用
+宿主 facade；原生 OS keyring 实现在桌面 Framework 制品中，不打入 `.hkit`。审计记录继续使用固定
+字段，不记录 permission details、profile metadata、scope/account、secret reference 或 secret。
+
+管理员运行约束属于宿主而不是 Kit manifest：Web 默认为 `off`，`local` 只能显式绑定
+`127.0.0.1`/`::1`，remote 与 `multi-user` 禁用。OS backend 不可用时 Kit 必须保留不保存密码的
+手工路径，不能自行实现回退存储。当前官方桌面原生包装验收覆盖 macOS ARM64；增加其他平台需要
+相应 native optional package、打包闭包检查和目标 OS 手工验收，不能仅凭通用 `.hkit` 声明支持。
+
 ## Registry 与 Release
 
 远程市场入口是严格校验的 `index.v1.json`。索引只声明 Kit 展示信息、stable/preview 最新

@@ -18,7 +18,14 @@ import type { PluginResolveContext } from '../plugin/resolver';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { PluginPathRoots } from '../framework/plugin/paths';
-import { parseRepositoryKitPackage } from '@itharbors/kit-core';
+import {
+  parseKitPackageManifest,
+  parseRepositoryKitPackage,
+} from '@itharbors/kit-core';
+import type { PluginCredentialVault } from '@itharbors/plugin-types';
+import type { CredentialVault } from '../credentials/vault';
+
+type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
 const BUILTIN_PLUGINS = [
   '@itharbors/panel',
@@ -29,6 +36,7 @@ const BUILTIN_PLUGINS = [
 
 interface KitPackageJson {
   name?: string;
+  version?: string;
   label?: string;
   icon?: string;
   'ce-editor'?: {
@@ -53,6 +61,7 @@ interface ActiveExternalPlugin {
   path: string;
   name: string;
   legacyDataDirectories: readonly string[];
+  credentials?: PluginCredentialVault;
 }
 
 interface CreateEditorOptions {
@@ -70,6 +79,7 @@ interface CreateEditorOptions {
   initialLocale?: string;
   platform?: MenuPlatform;
   pluginPathRoots: PluginPathRoots;
+  credentialVault?: CredentialVaultBindingSource;
 }
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
@@ -126,6 +136,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   function pluginLoadOptions(
     host: PluginRuntimeHost,
     legacyDataDirectories: readonly string[],
+    credentials?: PluginCredentialVault,
   ): PluginLoadOptions {
     return {
       scope: 'session',
@@ -134,6 +145,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         roots: runtimePluginPathRoots,
         legacyDataDirectories,
       },
+      credentials,
     };
   }
   const message = new MessageModule({
@@ -280,6 +292,16 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     }
 
     const plugins = pkg['ce-editor'].kit.plugin ?? [];
+    const publicationPath = path.join(kitPath, 'kit.json');
+    const publication = fs.existsSync(publicationPath)
+      ? parseKitPackageManifest(JSON.parse(fs.readFileSync(publicationPath, 'utf-8')))
+      : undefined;
+    if (publication && publication.id !== pkg.name) {
+      throw new Error(`Invalid Kit at ${kitPath}: kit.json id must match package name`);
+    }
+    if (publication && publication.version !== pkg.version) {
+      throw new Error(`Invalid Kit at ${kitPath}: kit.json version must match package version`);
+    }
     const legacyDataDirectories = pkg.harbors === undefined
       ? []
       : [...parseRepositoryKitPackage(pkg.harbors).legacyDataDirectories];
@@ -290,6 +312,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       icon: pkg.icon,
       menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
       theme: normalizeKitTheme(pkg['ce-editor'].kit.theme, pkg.name),
+      permissions: publication ? [...publication.permissions] : [],
       plugins,
       layouts,
       windowEntries: normalizedWindowEntries,
@@ -332,16 +355,13 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   const cleanupLoadedExternalPlugins = unloadExternalPlugins;
 
   async function loadExternalPlugin(
-    pluginPath: string,
-    pluginName: string,
-    legacyDataDirectories: readonly string[] = [],
+    externalPlugin: ActiveExternalPlugin,
   ): Promise<ActiveExternalPlugin> {
-    const externalPlugin = { path: pluginPath, name: pluginName, legacyDataDirectories };
     try {
-      await plugin.load(pluginPath, pluginLoadOptions({
+      await plugin.load(externalPlugin.path, pluginLoadOptions({
         ...editor,
         menu: runtimeMenu,
-      }, legacyDataDirectories));
+      }, externalPlugin.legacyDataDirectories, externalPlugin.credentials));
       return externalPlugin;
     } catch (loadError) {
       try {
@@ -349,7 +369,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       } catch (cleanupError) {
         throw new AggregateError(
           [loadError, cleanupError],
-          `Plugin "${pluginName}" load and owner cleanup failed`,
+          `Plugin "${externalPlugin.name}" load and owner cleanup failed`,
         );
       }
       throw loadError;
@@ -360,11 +380,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const restoredPlugins: ActiveExternalPlugin[] = [];
     try {
       for (const previousPlugin of previousPlugins) {
-        restoredPlugins.push(await loadExternalPlugin(
-          previousPlugin.path,
-          previousPlugin.name,
-          previousPlugin.legacyDataDirectories,
-        ));
+        restoredPlugins.push(await loadExternalPlugin(previousPlugin));
       }
       activeExternalPlugins = restoredPlugins;
     } catch (restoreError) {
@@ -391,7 +407,20 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     for (const pluginName of descriptor.plugins) {
       const pluginPath = await resolvePlugin(pluginName, pluginResolveContext(path.join(kitPath, 'plugins')));
       await plugin.register(pluginPath, { kind: 'external' });
-      preparedPlugins.push({ path: pluginPath, name: pluginName, legacyDataDirectories });
+      const info = plugin.getInfo(pluginPath);
+      if (!info) throw new Error(`Plugin "${pluginName}" registration did not produce plugin info`);
+      const credentials = options.credentialVault
+        && options.credentialVault.capability().mode === 'local'
+        && descriptor.permissions?.includes('credentials')
+        && info.capabilities?.includes('credentials')
+        ? options.credentialVault.bind(descriptor.name, info.name)
+        : undefined;
+      preparedPlugins.push({
+        path: pluginPath,
+        name: info.name,
+        legacyDataDirectories,
+        credentials,
+      });
     }
     const previousExternalPlugins = [...activeExternalPlugins];
     const loadedPlugins: ActiveExternalPlugin[] = [];
@@ -403,11 +432,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     try {
       await unloadActiveExternalPlugins();
       for (const preparedPlugin of preparedPlugins) {
-        loadedPlugins.push(await loadExternalPlugin(
-          preparedPlugin.path,
-          preparedPlugin.name,
-          legacyDataDirectories,
-        ));
+        loadedPlugins.push(await loadExternalPlugin(preparedPlugin));
       }
     } catch (switchError) {
       const rollbackErrors: unknown[] = [];

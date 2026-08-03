@@ -112,7 +112,9 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
     assert.equal(kit.packageJson.name, kit.id);
     assert.equal(
       kit.manifest.version,
-      slug === 'agent-guard' ? '0.1.0-preview.2' : '0.1.0-preview.1',
+      ['agent-guard', 'mysql'].includes(slug)
+        ? '0.1.0-preview.2'
+        : '0.1.0-preview.1',
     );
     assert.equal(kit.manifest.channel, 'preview');
     assert.equal(typeof kit.packageJson.scripts?.build, 'string');
