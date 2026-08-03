@@ -113,7 +113,7 @@ export const PANEL_FILE_RUNTIME_FACTORY_SOURCE = String.raw`function createPanel
 
     async saveLocal(options = {}) {
       const bridge = getPathBridge();
-      if (!bridge) throw localFileError();
+      if (!bridge || typeof bridge.getPathForFile !== 'function') throw localFileError();
       if (typeof windowObject.showSaveFilePicker !== 'function') {
         throw new Error('当前浏览器不支持保存文件选择器。');
       }

@@ -155,6 +155,12 @@ describe('panel file runtime', () => {
       message: '该功能只能读取运行 Harbors 的本机文件，请在桌面版中使用。',
     });
     expect(showSaveFilePicker).not.toHaveBeenCalled();
+
+    defineWindowValue('harborsFiles', {});
+    await expect(createRuntime().saveLocal({ suggestedName: 'new.sqlite' })).rejects.toMatchObject({
+      code: 'LOCAL_FILE_PATH_UNAVAILABLE',
+    });
+    expect(showSaveFilePicker).not.toHaveBeenCalled();
   });
 
   it('resolves a save handle File through the same desktop path bridge', async () => {
