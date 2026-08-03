@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -7,7 +7,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { runKitPublishCli } from '../../kit-publish.mjs';
-import { packKit } from '@itharbors/kit-cli';
+import { inspectKit, packKit } from '@itharbors/kit-cli';
 import { GitHubArtifactAttestationVerifier } from '../kit-registry/github-attestation.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
@@ -38,6 +38,23 @@ function runPrepare(kitArtifact, outputDirectory, {
     '--label', 'Demo Kit',
     '--summary', 'A deterministic publication fixture',
     ...extra,
+  ], { encoding: 'utf8' });
+}
+
+function runDirectoryPrepare(kitDirectory, outputDirectory, { tag = 'kit/demo/v1.2.3' } = {}) {
+  return spawnSync(process.execPath, [
+    cli,
+    'prepare',
+    '--kit-directory', kitDirectory,
+    '--output-directory', outputDirectory,
+    '--repository', 'example/harbors',
+    '--commit', commit,
+    '--workflow', `example/harbors/.github/workflows/publish-kit.yml@refs/tags/${tag}`,
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    '--ref', `refs/tags/${tag}`,
+    '--tag', tag,
+    '--label', 'Demo Kit',
+    '--summary', 'A deterministic publication fixture',
   ], { encoding: 'utf8' });
 }
 
@@ -78,6 +95,51 @@ test('prepare copies the checked Kit byte-for-byte and writes its publication me
     const replay = runPrepare(artifact, outputDirectory);
     assert.equal(replay.status, 1);
     assert.match(replay.stderr, /^ERROR=/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('prepare supports the immutable v2 directory contract without weakening publication output guarantees', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-cli-v2-'));
+  const sourceDirectory = path.join(root, 'source');
+  const outputDirectory = path.join(root, 'release');
+  const failedOutput = path.join(root, 'failed-release');
+  try {
+    await cp(fixture, sourceDirectory, { recursive: true });
+
+    const result = runDirectoryPrepare(sourceDirectory, outputDirectory);
+    assert.equal(result.status, 0, result.stderr);
+    const outputs = Object.fromEntries(result.stdout.trim().split('\n').map((line) => line.split('=')));
+    assert.deepEqual((await readdir(outputDirectory)).sort(), [
+      'kit-demo-1.2.3-any-any.hkit',
+      'registry-entry.json',
+      'release.json',
+      'sbom.spdx.json',
+    ]);
+    assert.equal(outputs.ARTIFACT_NAME, 'kit-demo-1.2.3-any-any.hkit');
+    const inspected = await inspectKit({
+      archive: path.join(outputDirectory, outputs.ARTIFACT_NAME),
+    });
+    assert.equal(inspected.manifest.id, '@example/kit-demo');
+    assert.equal(inspected.manifest.version, '1.2.3');
+    assert.equal(inspected.manifest.channel, 'stable');
+    const release = JSON.parse(await readFile(path.join(outputDirectory, 'release.json'), 'utf8'));
+    const entry = JSON.parse(await readFile(path.join(outputDirectory, 'registry-entry.json'), 'utf8'));
+    const sbom = JSON.parse(await readFile(path.join(outputDirectory, 'sbom.spdx.json'), 'utf8'));
+    assert.equal(release.id, '@example/kit-demo');
+    assert.equal(entry.id, '@example/kit-demo');
+    assert.equal(sbom.name, '@example/kit-demo@1.2.3');
+    assert.match(outputs.ARTIFACT_SHA256, /^[a-f0-9]{64}$/u);
+
+    const replay = runDirectoryPrepare(sourceDirectory, outputDirectory);
+    assert.equal(replay.status, 1);
+    assert.match(replay.stderr, /^ERROR=/u);
+
+    const invalid = runDirectoryPrepare(sourceDirectory, failedOutput, { tag: 'kit/other/v1.2.3' });
+    assert.equal(invalid.status, 1);
+    assert.match(invalid.stderr, /requires Tag kit\/demo\/v1\.2\.3/u);
+    await assert.rejects(access(failedOutput));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

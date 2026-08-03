@@ -27,6 +27,17 @@ test('root scripts expose the Kit artifact and targeted-check CLIs without migra
   assert.doesNotMatch(packageJson.scripts.test, /test:kit-(?:registry-)?migration/u);
 });
 
+test('default check orchestration includes the clean-checkout Kit matrix regression suite', async () => {
+  const packageJson = JSON.parse(await read('package.json'));
+  assert.equal(
+    packageJson.scripts['test:kit-check'],
+    'node --test scripts/lib/kit-check.test.mjs scripts/lib/kit-matrix.test.mjs',
+  );
+  assert.match(packageJson.scripts['test:workflows'], /(?:^|&& )npm run test:kit-check(?: &&|$)/u);
+  assert.match(packageJson.scripts.test, /(?:^|&& )npm run test:workflows(?: &&|$)/u);
+  assert.match(packageJson.scripts.check, /(?:^|&& )npm test(?: &&|$)/u);
+});
+
 test('active Kit docs define one mainline development and automatic merge release lifecycle', async () => {
   const development = compact(await read('docs/guides/development-workflow.md'));
   for (const expected of [
