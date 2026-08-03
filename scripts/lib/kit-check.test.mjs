@@ -35,7 +35,7 @@ function expectedCommands({ artifactName, slug, outputDirectory }) {
 }
 
 async function checkCommandSequence({
-  artifactName = 'kit-mysql-0.1.0-preview.2-any-any.hkit',
+  artifactName = 'kit-mysql-0.1.0-preview.3-any-any.hkit',
   slug,
 }) {
   const outputDirectory = await mkdtemp(path.join(tmpdir(), `kit-check-${slug}-`));
@@ -175,7 +175,7 @@ test('normalizes an absolute output directory before every artifact operation', 
       }),
       removeDirectory: async () => undefined,
     });
-    const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.2-any-any.hkit');
+    const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.3-any-any.hkit');
     assert.equal(result.artifactPath, artifactPath);
     assert.equal(calls.at(-2)[1].at(-1), artifactPath);
   } finally {
