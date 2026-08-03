@@ -309,6 +309,31 @@ test('rejects process-control permission from non-official publishers', async ()
   );
 });
 
+test('rejects credentials permission from non-official publishers', async () => {
+  const credentialsManifest = { ...manifest, permissions: ['credentials'] };
+  await assert.rejects(
+    createResolver({
+      index: {
+        ...registryIndex,
+        kits: [{
+          ...registryIndex.kits[0],
+          channels: {
+            stable: {
+              ...registryIndex.kits[0].channels.stable,
+              permissions: ['credentials'],
+            },
+          },
+        }],
+      },
+      releaseValue: {
+        ...release,
+        assets: [{ ...release.assets[0], manifest: credentialsManifest }],
+      },
+    }).resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
+    (error) => error.code === 'PERMISSION_NOT_ALLOWED',
+  );
+});
+
 test('rejects revoked assets before provenance verification', async () => {
   let verifications = 0;
   const resolver = createResolver({

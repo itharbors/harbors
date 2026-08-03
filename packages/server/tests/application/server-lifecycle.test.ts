@@ -100,6 +100,86 @@ describe('application server lifecycle', () => {
     ]);
   });
 
+  it('recovers credentials before application startup and closes them after Sessions and Application', async () => {
+    const events: string[] = [];
+    let releaseRecovery: (() => void) | undefined;
+    const credentialVault = {
+      recover: vi.fn(() => new Promise<void>((resolve) => {
+        events.push('credentials:recover');
+        releaseRecovery = resolve;
+      })),
+      capability: vi.fn(() => ({ mode: 'local' as const, status: 'available' as const })),
+      bind: vi.fn(),
+      close: vi.fn(async () => { events.push('credentials:close'); }),
+    };
+    const applicationRuntime = {
+      start: vi.fn(async () => {
+        events.push('application:start');
+        return {
+          phase: 'ready' as const,
+          plugins: [],
+          diagnostics: [],
+          menu: { tree: [], warnings: [] },
+        };
+      }),
+      getBootstrap: vi.fn(() => ({
+        phase: 'ready' as const,
+        plugins: [],
+        diagnostics: [],
+        menu: { tree: [], warnings: [] },
+      })),
+      request: vi.fn(),
+      triggerMenu: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+      dispose: vi.fn(async () => { events.push('application:dispose'); }),
+    };
+    const server = createServer({
+      assembly: testAssembly,
+      applicationHostMode: 'desktop',
+      host: '127.0.0.1',
+      credentialVault,
+      applicationRuntime,
+    });
+    vi.spyOn(server.registry, 'disposeAll').mockImplementation(async () => {
+      events.push('sessions:dispose');
+    });
+
+    const starting = server.start(0);
+    await vi.waitFor(() => expect(credentialVault.recover).toHaveBeenCalledOnce());
+    expect(server.server.listening).toBe(false);
+    expect(applicationRuntime.start).not.toHaveBeenCalled();
+    releaseRecovery?.();
+    await starting;
+    await server.stop();
+
+    expect(events).toEqual([
+      'credentials:recover',
+      'application:start',
+      'sessions:dispose',
+      'application:dispose',
+      'credentials:close',
+    ]);
+  });
+
+  it('closes the Session runtime creation gate synchronously when stop begins', async () => {
+    const server = createServer({
+      assembly: testAssembly,
+      applicationRuntime: new ApplicationRuntime({
+        plugins: [], hostMode: 'web', pluginPathRoots: createTestPluginPathRoots(),
+      }),
+    });
+    await server.start(0);
+
+    const stopping = server.stop();
+    const lateRuntime = server.registry.getOrCreate('late-after-stop', {});
+
+    await expect(lateRuntime).rejects.toMatchObject({
+      code: 'SESSION_RUNTIME_REGISTRY_CLOSED',
+    });
+    await expect(stopping).resolves.toBeUndefined();
+    expect(server.registry.editors.size).toBe(0);
+  });
+
   it('allows degraded application startup to listen', async () => {
     const server = createServer({
       assembly: testAssembly,
@@ -183,6 +263,28 @@ describe('application server lifecycle', () => {
     expect(address.address).toBe('127.0.0.1');
     expect(unauthorized.status).toBe(403);
     expect(authorized.status).toBe(404);
+  });
+
+  it('rejects local credentials before listening when the bind is not explicit loopback', () => {
+    expect(() => createServer({
+      assembly: testAssembly,
+      applicationHostMode: 'web',
+      credentialMode: 'local',
+    })).toThrow(/loopback/i);
+  });
+
+  it('resolves and exposes one immutable local credential mode for desktop startup', async () => {
+    const server = createServer({
+      assembly: testAssembly,
+      applicationHostMode: 'desktop',
+      host: '::1',
+    });
+
+    expect(server.credentialMode).toBe('local');
+    expect(() => {
+      (server as unknown as { credentialMode: string }).credentialMode = 'off';
+    }).toThrow(TypeError);
+    await server.stop();
   });
 
   it('finishes graceful shutdown while an application event stream is connected', async () => {

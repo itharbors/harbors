@@ -71,6 +71,48 @@ test('serializes concurrent appends as complete records', async () => {
   ]);
 });
 
+test('keeps install and activation audit records free of credential details', async () => {
+  const root = await temporaryRoot();
+  let second = 0;
+  const audit = new KitAuditLog(root, {
+    now: () => `2026-07-23T10:01:${String(second += 1).padStart(2, '0')}.000Z`,
+  });
+  const kit = { id: '@itharbors/kit-mysql', version: '1.2.3', channel: 'stable' };
+  await audit.append({ event: 'kit.install', outcome: 'success', kit });
+  await audit.append({ event: 'kit.activate', outcome: 'success', kit });
+
+  for (const sensitiveField of [
+    { profileMetadata: { label: 'production' } },
+    { permissionDetails: ['credentials'] },
+    { accountId: 'opaque-account' },
+    { secret: '<must-not-be-audited>' },
+  ]) {
+    await assert.rejects(
+      audit.append({
+        event: 'kit.install',
+        outcome: 'success',
+        kit,
+        ...sensitiveField,
+      }),
+      /unexpected/i,
+    );
+  }
+
+  const records = (await readFile(path.join(root, 'audit.ndjson'), 'utf8'))
+    .trim().split('\n').map(JSON.parse);
+  assert.deepEqual(records, [{
+    timestamp: '2026-07-23T10:01:01.000Z',
+    event: 'kit.install',
+    outcome: 'success',
+    kit,
+  }, {
+    timestamp: '2026-07-23T10:01:02.000Z',
+    event: 'kit.activate',
+    outcome: 'success',
+    kit,
+  }]);
+});
+
 test('rejects unknown fields, path-shaped identities, free-form codes, and invalid timestamps', async () => {
   const root = await temporaryRoot();
   const audit = new KitAuditLog(root);

@@ -36,24 +36,41 @@ export type ConnectionInput = {
 
 export type DatabaseValue = null | string | number | boolean;
 
+export type ConnectionMetadata = Omit<ConnectionInput, 'password'>;
+
+export type ConnectionProfileUpdateInput = {
+  profileId: string;
+  password: string;
+};
+
 const PAGE_SIZES = new Set([25, 50, 100, 250]);
 const INTEGER_PATTERN = /^[+-]?\d+$/;
 const DECIMAL_PATTERN = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
+const CONNECTION_KEYS = ['host', 'port', 'user', 'password', 'database', 'tls'] as const;
+const METADATA_KEYS = ['host', 'port', 'user', 'database', 'tls'] as const;
+const PROFILE_ID_KEYS = ['profileId'] as const;
+const PROFILE_LABEL_KEYS = ['label'] as const;
+const PROFILE_UPDATE_KEYS = ['profileId', 'password'] as const;
+const MAX_HOST_LENGTH = 255;
+const MAX_USER_LENGTH = 128;
+const MAX_DATABASE_LENGTH = 64;
+const MAX_PASSWORD_LENGTH = 4096;
+const MAX_LABEL_LENGTH = 80;
 
 export function parseConnectionInput(input: unknown): ConnectionInput {
   if (!isRecord(input)) {
     throw new Error('connection input must be an object');
   }
+  requireExactKeys(input, CONNECTION_KEYS, 'connection input');
 
-  const host = requireTrimmedString(input.host, 'host');
+  const host = requireBoundedTrimmedString(input.host, 'host', MAX_HOST_LENGTH);
   if (!Number.isInteger(input.port) || (input.port as number) < 1 || (input.port as number) > 65_535) {
     throw new Error('port must be an integer between 1 and 65535');
   }
-  const user = requireTrimmedString(input.user, 'user');
-  if (typeof input.password !== 'string') {
-    throw new Error('password must be a string');
-  }
-  const database = optionalTrimmedString(input.database, 'database');
+  const user = requireBoundedTrimmedString(input.user, 'user', MAX_USER_LENGTH);
+  const password = requireBoundedString(input.password, 'password', MAX_PASSWORD_LENGTH);
+  const database = optionalBoundedTrimmedString(input.database, 'database', MAX_DATABASE_LENGTH);
   if (typeof input.tls !== 'boolean') {
     throw new Error('tls must be a boolean');
   }
@@ -62,10 +79,45 @@ export function parseConnectionInput(input: unknown): ConnectionInput {
     host,
     port: input.port as number,
     user,
-    password: input.password,
+    password,
     database,
     tls: input.tls,
   };
+}
+
+export function parseProfileIdInput(input: unknown): { profileId: string } {
+  if (!isRecord(input)) throw new Error('profile input must be an object');
+  requireExactKeys(input, PROFILE_ID_KEYS, 'profile input');
+  return { profileId: parseProfileId(input.profileId) };
+}
+
+export function parseProfileLabelInput(input: unknown): { label: string } {
+  if (!isRecord(input)) throw new Error('profile label input must be an object');
+  requireExactKeys(input, PROFILE_LABEL_KEYS, 'profile label input');
+  return { label: requireBoundedTrimmedString(input.label, 'label', MAX_LABEL_LENGTH) };
+}
+
+export function parseConnectionMetadata(input: unknown): ConnectionMetadata {
+  if (!isRecord(input)) throw new Error('connection metadata must be an object');
+  requireExactKeys(input, METADATA_KEYS, 'connection metadata');
+  const { host, port, user, database, tls } = parseConnectionInput({ ...input, password: '' });
+  return { host, port, user, database, tls };
+}
+
+export function parseConnectionProfileUpdateInput(input: unknown): ConnectionProfileUpdateInput {
+  if (!isRecord(input)) throw new Error('profile update input must be an object');
+  requireExactKeys(input, PROFILE_UPDATE_KEYS, 'profile update input');
+  return {
+    profileId: parseProfileId(input.profileId),
+    password: requireBoundedString(input.password, 'password', MAX_PASSWORD_LENGTH),
+  };
+}
+
+export function parseProfileId(value: unknown): string {
+  if (typeof value !== 'string' || !UUID_PATTERN.test(value)) {
+    throw new Error('profileId must be a UUID');
+  }
+  return value.toLowerCase();
 }
 
 export function parsePageInput(input: unknown): {
@@ -196,20 +248,60 @@ export function deserializeEditableValue(value: unknown): DatabaseValue {
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
-function requireTrimmedString(value: unknown, name: string): string {
+function requireBoundedTrimmedString(value: unknown, name: string, maximumLength: number): string {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new Error(`${name} must be a non-empty string`);
   }
-  return value.trim();
+  const normalized = value.trim();
+  if ([...normalized].length > maximumLength) {
+    throw new Error(`${name} must be at most ${maximumLength} characters`);
+  }
+  return normalized;
 }
 
-function optionalTrimmedString(value: unknown, name: string): string | null {
+function optionalBoundedTrimmedString(
+  value: unknown,
+  name: string,
+  maximumLength: number,
+): string | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== 'string') throw new Error(`${name} must be a string or null`);
-  return value.trim() || null;
+  const normalized = value.trim();
+  if ([...normalized].length > maximumLength) {
+    throw new Error(`${name} must be at most ${maximumLength} characters`);
+  }
+  return normalized || null;
+}
+
+function requireBoundedString(value: unknown, name: string, maximumLength: number): string {
+  if (typeof value !== 'string') throw new Error(`${name} must be a string`);
+  if ([...value].length > maximumLength) {
+    throw new Error(`${name} must be at most ${maximumLength} characters`);
+  }
+  return value;
+}
+
+function requireExactKeys(
+  value: Record<string, unknown>,
+  expectedKeys: readonly string[],
+  name: string,
+): void {
+  const expected = new Set(expectedKeys);
+  const missing = expectedKeys.filter((key) => !Object.prototype.hasOwnProperty.call(value, key));
+  if (missing.length > 0) {
+    throw new Error(`${name} must contain own fields: ${missing.join(', ')}`);
+  }
+  const unexpected = Reflect.ownKeys(value).filter(
+    (key) => typeof key !== 'string' || !expected.has(key),
+  );
+  if (unexpected.length > 0) {
+    throw new Error(`${name} contains unexpected fields: ${unexpected.map(String).join(', ')}`);
+  }
 }
 
 function requireValueString(value: unknown, type: string): string {

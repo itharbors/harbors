@@ -20,6 +20,7 @@ const { start, stop } = createServer({
   defaultKit: DEFAULT_KIT,
   kitSources: parseKitSources(process.env.HARBORS_KIT_SOURCES),
   applicationHostMode: APPLICATION_HOST_MODE,
+  credentialMode: process.env.HARBORS_CREDENTIAL_MODE,
   applicationControlToken: APPLICATION_HOST_SECRETS.applicationControlToken,
   notificationPort: APPLICATION_HOST_SECRETS.notificationPort,
   pluginPathRoots: {

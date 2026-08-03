@@ -146,11 +146,14 @@ function discoverWorkspaceTasks(rootDir) {
   const sorted = topologicalSort(workspaces, dependenciesFor, taskNameByPackage);
   const outputByTask = new Map(sorted.map((workspace) => [
     taskNameByPackage.get(workspace.pkg.name),
-    `packages/${workspace.directoryName}/dist`,
+    workspace.pkg.name === '@itharbors/native-credential-vault'
+      ? `packages/${workspace.directoryName}/build`
+      : `packages/${workspace.directoryName}/dist`,
   ]));
   return sorted.map((workspace) => {
     const name = taskNameByPackage.get(workspace.pkg.name);
     const dependencies = dependenciesFor(workspace);
+    const output = outputByTask.get(name);
     return {
       name,
       kind: 'workspace',
@@ -160,7 +163,10 @@ function discoverWorkspaceTasks(rootDir) {
         ...workspaceInputs(rootDir, workspace.directory),
         ...dependencies.map((dependency) => outputByTask.get(dependency)),
       ]),
-      outputs: [outputByTask.get(name)],
+      outputs: [output],
+      ...(workspace.pkg.name === '@itharbors/native-credential-vault'
+        ? { emptyOutputs: [output] }
+        : {}),
       dependencies,
     };
   });
@@ -250,8 +256,16 @@ function workspaceInputs(rootDir, directory) {
   const inputs = [toRepositoryPath(rootDir, path.join(directory, 'package.json'))];
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     if (entry.name === 'dist' || entry.name === 'node_modules') continue;
-    if (entry.isDirectory() && entry.name === 'src') inputs.push(toRepositoryPath(rootDir, path.join(directory, entry.name)));
-    if (entry.isFile() && (entry.name.endsWith('.json') || entry.name.endsWith('.ts') || entry.name.endsWith('.html'))) {
+    if (entry.isDirectory() && ['lib', 'scripts', 'src'].includes(entry.name)) {
+      inputs.push(toRepositoryPath(rootDir, path.join(directory, entry.name)));
+    }
+    if (entry.isFile() && (
+      entry.name.endsWith('.cjs')
+      || entry.name.endsWith('.gyp')
+      || entry.name.endsWith('.html')
+      || entry.name.endsWith('.json')
+      || entry.name.endsWith('.ts')
+    )) {
       inputs.push(toRepositoryPath(rootDir, path.join(directory, entry.name)));
     }
   }
