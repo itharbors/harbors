@@ -106,6 +106,17 @@ test('CI runs for every pull request change without repository-inaccurate path f
   );
 });
 
+test('Framework CI runs branch pushes only on main while retaining PR and merge queue coverage', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  const triggers = parseWorkflowTriggers(workflow);
+
+  assert.ok(triggers.has('push'));
+  assert.ok(triggers.get('push').has('branches'), 'push CI must declare a branch allowlist');
+  assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/u);
+  assert.ok(triggers.has('pull_request'));
+  assert.ok(triggers.has('merge_group'));
+});
+
 test('Kit CI selects event-specific full-history Git comparisons without path trigger gaps', async () => {
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const triggers = parseWorkflowTriggers(workflow);
