@@ -27,7 +27,7 @@ test('root scripts expose the Kit artifact and targeted-check CLIs without migra
   assert.doesNotMatch(packageJson.scripts.test, /test:kit-(?:registry-)?migration/u);
 });
 
-test('default check orchestration includes the clean-checkout Kit matrix regression suite', async () => {
+test('default check runs the clean-checkout Kit matrix suite once without dropping public test coverage', async () => {
   const packageJson = JSON.parse(await read('package.json'));
   assert.equal(
     packageJson.scripts['test:kit-check'],
@@ -35,7 +35,11 @@ test('default check orchestration includes the clean-checkout Kit matrix regress
   );
   assert.match(packageJson.scripts['test:workflows'], /(?:^|&& )npm run test:kit-check(?: &&|$)/u);
   assert.match(packageJson.scripts.test, /(?:^|&& )npm run test:workflows(?: &&|$)/u);
-  assert.match(packageJson.scripts.check, /(?:^|&& )npm test(?: &&|$)/u);
+  assert.match(packageJson.scripts.check, /(?:^|&& )npm run test:workflows(?: &&|$)/u);
+  assert.match(packageJson.scripts.check, /(?:^|&& )npm run kits:check(?: &&|$)/u);
+  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm test(?: &&|$)/u);
+  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm run kits:(?:test|build)(?: &&|$)/u);
+  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm run plugins:check(?: &&|$)/u);
 });
 
 test('active Kit docs define one mainline development and automatic merge release lifecycle', async () => {
