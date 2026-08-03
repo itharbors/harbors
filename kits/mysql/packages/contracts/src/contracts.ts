@@ -22,6 +22,32 @@ export type ConnectionSnapshot = RevisionSnapshot & {
   database: string | null;
   mysqlVersion: string | null;
   tls: boolean;
+  profileId: string | null;
+};
+
+export type MysqlCredentialCapability =
+  | {
+      mode: 'off' | 'local' | 'multi-user';
+      status: 'available';
+      available: true;
+    }
+  | {
+      mode: 'off' | 'local' | 'multi-user';
+      status: 'unavailable';
+      available: false;
+      reason: 'CREDENTIALS_DISABLED' | 'CREDENTIALS_UNAVAILABLE' | 'CREDENTIALS_LOCKED';
+    };
+
+export type MysqlConnectionProfile = {
+  id: string;
+  label: string;
+  host: string;
+  port: number;
+  user: string;
+  database: string | null;
+  tls: boolean;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type DatabasesSnapshot = RevisionSnapshot & {

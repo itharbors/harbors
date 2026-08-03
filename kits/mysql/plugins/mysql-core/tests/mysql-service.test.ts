@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { MysqlService } from '../main/src/mysql-service';
+import { describe, expect, it, vi } from 'vitest';
+import { MysqlService, type PreparedConnection } from '../main/src/mysql-service';
+import type { DriverResult } from '../main/src/mysql-driver';
 import { FakeMysqlDriver, FakeMysqlPool } from './fake-driver';
 
 const connectionInput = {
@@ -12,6 +13,206 @@ const connectionInput = {
 };
 
 describe('MysqlService connection and schema', () => {
+  it('stages a probed pool until commit and discards candidates without changing active state', async () => {
+    type Prepared = { readonly state: { endpoint: string | null } };
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const discardedPool = driver.queuePool();
+    discardedPool.queueRows([['8.4.2', 'next']], fields('version', 'database'));
+    const committedPool = driver.queuePool();
+    committedPool.queueRows([['8.4.3', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver) as MysqlService & {
+      prepareConnection?: (input: unknown) => Promise<Prepared>;
+      commitPreparedConnection?: (prepared: Prepared) => ReturnType<MysqlService['getConnectionState']>;
+      discardPreparedConnection?: (prepared: Prepared) => Promise<void>;
+    };
+    expect(service.prepareConnection).toBeTypeOf('function');
+    expect(service.commitPreparedConnection).toBeTypeOf('function');
+    expect(service.discardPreparedConnection).toBeTypeOf('function');
+
+    await service.connect(connectionInput);
+    const replacement = { ...connectionInput, host: 'next.local', database: 'next', password: 'next-secret' };
+    const discarded = await service.prepareConnection!(replacement);
+    expect(discarded.state).toMatchObject({ endpoint: 'next.local:3306' });
+    expect(service.getConnectionState()).toMatchObject({ endpoint: 'db.local:3306', database: 'app' });
+    expect(activePool.endCalls).toBe(0);
+    expect(discardedPool.endCalls).toBe(0);
+    await service.discardPreparedConnection!(discarded);
+    expect(discardedPool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toMatchObject({ endpoint: 'db.local:3306', database: 'app' });
+
+    const committed = await service.prepareConnection!(replacement);
+    expect(service.commitPreparedConnection!(committed)).toMatchObject({
+      endpoint: 'next.local:3306',
+      database: 'next',
+    });
+    await Promise.resolve();
+    expect(activePool.endCalls).toBe(1);
+    expect(committedPool.endCalls).toBe(0);
+    expect(service.getActiveConnectionInput()).toEqual(replacement);
+  });
+
+  it('rejects a prepared pool when active connection state changed before commit', async () => {
+    type Prepared = { readonly state: { endpoint: string | null } };
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const candidatePool = driver.queuePool();
+    candidatePool.queueRows([['8.4.2', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver) as MysqlService & {
+      prepareConnection?: (input: unknown) => Promise<Prepared>;
+      commitPreparedConnection?: (prepared: Prepared) => ReturnType<MysqlService['getConnectionState']>;
+    };
+
+    await service.connect(connectionInput);
+    const prepared = await service.prepareConnection!({
+      ...connectionInput,
+      host: 'next.local',
+      database: 'next',
+    });
+    await service.disconnect();
+    expect(() => service.commitPreparedConnection!(prepared)).toThrowError(expect.objectContaining({
+      code: 'STALE_CONNECTION',
+    }));
+    await Promise.resolve();
+    expect(activePool.endCalls).toBe(1);
+    expect(candidatePool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toMatchObject({ connected: false, endpoint: null });
+  });
+
+  it('samples connection generation before a pending probe can be overtaken', async () => {
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const candidatePool = driver.queuePool();
+    const pendingProbe = deferred<DriverResult>();
+    vi.spyOn(candidatePool, 'query').mockImplementation(() => pendingProbe.promise);
+    const service = new MysqlService(driver);
+
+    await service.connect(connectionInput);
+    const preparing = service.prepareConnection({
+      ...connectionInput,
+      host: 'next.local',
+      database: 'next',
+    });
+    await service.disconnect();
+    pendingProbe.resolve({
+      kind: 'rows',
+      rows: [['8.4.2', 'next']],
+      fields: fields('version', 'database'),
+    });
+
+    await expect(preparing).rejects.toMatchObject({ code: 'STALE_CONNECTION' });
+    expect(candidatePool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toEqual({
+      connected: false,
+      endpoint: null,
+      database: null,
+      mysqlVersion: null,
+      tls: false,
+    });
+  });
+
+  it('commits state synchronously and retires the previous pool in the background', async () => {
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const candidatePool = driver.queuePool();
+    candidatePool.queueRows([['9.0.0', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver);
+    await service.connect(connectionInput);
+    const retirement = deferred<void>();
+    let retirementStarted = false;
+    vi.spyOn(activePool, 'end').mockImplementation(() => {
+      retirementStarted = true;
+      return retirement.promise;
+    });
+    const prepared = await service.prepareConnection({
+      ...connectionInput,
+      host: 'next.local',
+      database: 'next',
+    });
+
+    const committed = service.commitPreparedConnection(prepared);
+
+    expect(committed).toEqual({
+      connected: true,
+      endpoint: 'next.local:3306',
+      database: 'next',
+      mysqlVersion: '9.0.0',
+      tls: true,
+    });
+    expect(service.getConnectionState()).toEqual(committed);
+    expect(retirementStarted).toBe(false);
+    await Promise.resolve();
+    expect(retirementStarted).toBe(true);
+
+    const disposing = service.dispose();
+    let disposed = false;
+    void disposing.then(() => { disposed = true; });
+    await Promise.resolve();
+    expect(disposed).toBe(false);
+    retirement.resolve();
+    await disposing;
+    expect(candidatePool.endCalls).toBe(1);
+  });
+
+  it('drains a pending probe during dispose and rejects every later commit', async () => {
+    const driver = new FakeMysqlDriver();
+    const candidatePool = driver.queuePool();
+    const pendingProbe = deferred<DriverResult>();
+    const query = vi.spyOn(candidatePool, 'query').mockImplementation(() => pendingProbe.promise);
+    const service = new MysqlService(driver);
+
+    const preparing = service.prepareConnection(connectionInput);
+    await vi.waitFor(() => expect(query).toHaveBeenCalledOnce());
+    const disposing = service.dispose();
+    pendingProbe.resolve({
+      kind: 'rows',
+      rows: [['8.4.1', 'app']],
+      fields: fields('version', 'database'),
+    });
+
+    await expect(preparing).rejects.toMatchObject({ code: 'STALE_CONNECTION' });
+    await disposing;
+    expect(candidatePool.endCalls).toBe(1);
+    expect(() => service.prepareConnection(connectionInput)).toThrowError(expect.objectContaining({
+      code: 'SERVICE_DISPOSED',
+    }));
+    expect(() => service.commitPreparedConnection({
+      state: {
+        connected: true,
+        endpoint: 'db.local:3306',
+        database: 'app',
+        mysqlVersion: '8.4.1',
+        tls: true,
+      },
+    } satisfies PreparedConnection)).toThrowError(expect.objectContaining({
+      code: 'SERVICE_DISPOSED',
+    }));
+  });
+
+  it('disposes active and staged pools together', async () => {
+    type Prepared = { readonly state: { endpoint: string | null } };
+    const driver = new FakeMysqlDriver();
+    const activePool = driver.queuePool();
+    activePool.queueRows([['8.4.1', 'app']], fields('version', 'database'));
+    const candidatePool = driver.queuePool();
+    candidatePool.queueRows([['8.4.2', 'next']], fields('version', 'database'));
+    const service = new MysqlService(driver) as MysqlService & {
+      prepareConnection?: (input: unknown) => Promise<Prepared>;
+    };
+
+    await service.connect(connectionInput);
+    await service.prepareConnection!({ ...connectionInput, host: 'next.local', database: 'next' });
+    await service.dispose();
+
+    expect(activePool.endCalls).toBe(1);
+    expect(candidatePool.endCalls).toBe(1);
+    expect(service.getConnectionState()).toMatchObject({ connected: false });
+  });
+
   it('connects without exposing secrets and disconnects idempotently', async () => {
     const driver = new FakeMysqlDriver();
     const pool = driver.queuePool();
@@ -27,11 +228,16 @@ describe('MysqlService connection and schema', () => {
     });
     expect(service.getConnectionState()).not.toHaveProperty('password');
     expect(JSON.stringify(service.getConnectionState())).not.toContain('secret');
+    const activeInput = service.getActiveConnectionInput();
+    expect(activeInput).toEqual(connectionInput);
+    activeInput!.password = 'mutated-copy';
+    expect(service.getActiveConnectionInput()).toEqual(connectionInput);
     expect(pool.queries[0]?.sql).toBe(
       'SELECT VERSION() AS version, DATABASE() AS database_name',
     );
 
     await service.disconnect();
+    expect(service.getActiveConnectionInput()).toBeNull();
     await service.disconnect();
 
     expect(pool.endCalls).toBe(1);
@@ -631,4 +837,14 @@ function fields(...names: string[]) {
 
 function mysqlError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((nextResolve, nextReject) => {
+    resolve = nextResolve;
+    reject = nextReject;
+  });
+  return { promise, resolve, reject };
 }

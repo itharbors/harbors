@@ -143,6 +143,15 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(manifest)).toEqual(manifest);
   });
 
+  it('accepts the credentials permission without dropping it', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['network', 'credentials'],
+    } as const;
+
+    expect(parseKitPackageManifest(manifest).permissions).toEqual(['network', 'credentials']);
+  });
+
   it('rejects unknown and duplicate permissions', () => {
     expect(() => parseKitPackageManifest({
       ...kitManifest,

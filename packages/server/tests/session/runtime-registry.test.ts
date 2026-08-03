@@ -80,4 +80,34 @@ describe('SessionRuntimeRegistry', () => {
     expect(manager.get('first')).toBeDefined();
     expect(manager.get('second')).toBeDefined();
   });
+
+  it('closes creation atomically, drains pending runtimes, and revokes their retained leases', async () => {
+    let releaseCreation!: () => void;
+    const creationGate = new Promise<void>((resolve) => { releaseCreation = resolve; });
+    let retainedLeaseAvailable = true;
+    const createdEditors: Editor[] = [];
+    const registry = new SessionRuntimeRegistry(manager, async (session: { sessionId: string }) => {
+      await creationGate;
+      const editor = {
+        ...createDisposableEditor(session.sessionId),
+        dispose: vi.fn(async () => { retainedLeaseAvailable = false; }),
+      };
+      createdEditors.push(editor);
+      return editor;
+    });
+
+    const pending = registry.getOrCreate('pending', {});
+    const closing = registry.disposeAll();
+    const late = registry.getOrCreate('late', {});
+    releaseCreation();
+
+    await expect(late).rejects.toThrow(/closed|closing|unavailable/i);
+    await expect(pending).resolves.toMatchObject({ session: { sessionId: 'pending' } });
+    await expect(closing).resolves.toBeUndefined();
+    expect(createdEditors).toHaveLength(1);
+    expect(createdEditors[0].dispose).toHaveBeenCalledOnce();
+    expect(retainedLeaseAvailable).toBe(false);
+    expect(registry.editors.size).toBe(0);
+    await expect(registry.getOrCreate('after-close', {})).rejects.toThrow(/closed|closing|unavailable/i);
+  });
 });

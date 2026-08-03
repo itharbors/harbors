@@ -619,6 +619,35 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   assert.doesNotMatch(mainBundle, /node_modules\/@sigstore\//u);
 });
 
+test('keeps the native keyring behind an external Framework import', async (t) => {
+  const repositoryRoot = await createRepositoryFixture(t);
+  const outputRoot = path.join(repositoryRoot, 'dist', 'desktop-runtime');
+  await write(repositoryRoot, 'packages/desktop/src/framework.mjs', `
+export async function loadKeyring() {
+  return import('@itharbors/native-credential-vault');
+}
+`);
+  await write(repositoryRoot, 'node_modules/@itharbors/native-credential-vault/package.json', JSON.stringify({
+    name: '@itharbors/native-credential-vault',
+    version: '0.0.1',
+    main: 'index.cjs',
+  }));
+  await write(repositoryRoot, 'node_modules/@itharbors/native-credential-vault/index.cjs', `
+import { execFile } from 'node:child_process';
+export const plaintextStore = new Map();
+export const getPassword = execFile;
+`);
+
+  await buildDesktop({ repositoryRoot, outputRoot });
+
+  const frameworkBundle = await readFile(
+    path.join(repositoryRoot, 'packages', 'desktop', 'dist', 'framework.mjs'),
+    'utf8',
+  );
+  assert.match(frameworkBundle, /import\(["']@itharbors\/native-credential-vault["']\)/u);
+  assert.doesNotMatch(frameworkBundle, /child_process|plaintextStore/u);
+});
+
 for (const [description, update] of [
   ['a main entrypoint below src', (manifest) => { manifest.main = './main/src/index.js'; }],
   ['a directory-valued main entrypoint', (manifest) => { manifest.main = './main/dist'; }],

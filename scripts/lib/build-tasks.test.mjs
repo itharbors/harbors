@@ -96,7 +96,11 @@ test('keeps the complete Framework build graph free of product Kit tasks', async
   assert.equal(plan.cacheDir, path.join(rootDir, '.cache', 'harbors-build', 'v1'));
   assert.deepEqual(
     plan.tasks.filter((task) => task.kind === 'workspace').map((task) => task.outputs[0]).sort(),
-    buildablePackages.map((directory) => `${directory}/dist`),
+    buildablePackages.map((directory) => (
+      directory === 'packages/native-credential-vault'
+        ? `${directory}/build`
+        : `${directory}/dist`
+    )),
   );
   assert.deepEqual(
     plan.tasks.filter((task) => task.kind === 'plugin').map((task) => task.pluginDir),
@@ -104,6 +108,22 @@ test('keeps the complete Framework build graph free of product Kit tasks', async
   );
   assert.equal(plan.tasks.some((task) => task.kind === 'kit'), false);
   assert.ok(plan.tasks.every((task) => !task.inputs.some((input) => input.startsWith('kits/'))));
+});
+
+test('tracks the native credential workspace by its real build output and complete native inputs', async () => {
+  const plan = await createBuildPlan(rootDir, 'all');
+  const native = plan.tasks.find((task) => task.name === 'workspace:native-credential-vault');
+  const server = plan.tasks.find((task) => task.name === 'workspace:server');
+
+  assert.deepEqual(native.outputs, ['packages/native-credential-vault/build']);
+  assert.deepEqual(native.emptyOutputs, ['packages/native-credential-vault/build']);
+  assert.ok(native.inputs.includes('packages/native-credential-vault/binding.gyp'));
+  assert.ok(native.inputs.includes('packages/native-credential-vault/index.cjs'));
+  assert.ok(native.inputs.includes('packages/native-credential-vault/lib'));
+  assert.ok(native.inputs.includes('packages/native-credential-vault/scripts'));
+  assert.ok(native.inputs.includes('packages/native-credential-vault/src'));
+  assert.ok(server.dependencies.includes(native.name));
+  assert.ok(server.inputs.includes(native.outputs[0]));
 });
 
 test('runtime graphs preserve the plugin toolchain dependency closure without product Kits', async () => {

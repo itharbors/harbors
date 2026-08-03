@@ -17,4 +17,5 @@ tsconfig.tsbuildinfo
 /dist/desktop-runtime/
 /dist/desktop-release/
 /.cache/harbors-build/
+/packages/native-credential-vault/build/
 /.cache/harbors-kit-installs/

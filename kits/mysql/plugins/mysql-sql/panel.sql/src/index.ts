@@ -19,6 +19,7 @@ const DISCONNECTED: ConnectionSnapshot = {
   database: null,
   mysqlVersion: null,
   tls: false,
+  profileId: null,
   connectionRevision: 0,
   schemaRevision: 0,
   dataRevision: 0,

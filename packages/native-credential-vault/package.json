@@ -1,0 +1,29 @@
+{
+  "name": "@itharbors/native-credential-vault",
+  "version": "0.0.1",
+  "private": true,
+  "type": "commonjs",
+  "main": "index.cjs",
+  "types": "index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "require": "./index.cjs",
+      "default": "./index.cjs"
+    }
+  },
+  "files": [
+    "index.cjs",
+    "index.d.ts",
+    "lib/loader.cjs",
+    "build/Release/harbors_native_credential_vault.node"
+  ],
+  "scripts": {
+    "install": "node scripts/build.cjs",
+    "build": "node scripts/build.cjs",
+    "test": "npm run build && node --test tests/loader.test.cjs tests/keychain-smoke.test.cjs && node scripts/test-status-code.cjs"
+  },
+  "devDependencies": {
+    "node-gyp": "12.4.0"
+  }
+}

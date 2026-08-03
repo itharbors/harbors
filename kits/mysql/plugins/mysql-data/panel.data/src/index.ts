@@ -38,7 +38,7 @@ type RecordDialog = { mode: 'add' | 'edit'; fields: RecordFieldDraft[]; identity
 type DataActivity = 'load' | 'page' | 'save' | 'delete' | null;
 
 const DISCONNECTED: ConnectionSnapshot = {
-  connected: false, endpoint: null, database: null, mysqlVersion: null, tls: false,
+  connected: false, endpoint: null, database: null, mysqlVersion: null, tls: false, profileId: null,
   connectionRevision: 0, schemaRevision: 0, dataRevision: 0,
 };
 let context: PanelContext | undefined;

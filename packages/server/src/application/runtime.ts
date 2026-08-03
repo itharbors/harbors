@@ -4,6 +4,10 @@ import { MessageModule } from '../framework/message';
 import { PluginModule } from '../framework/plugin';
 import type { ContributeData } from '../framework/plugin/types';
 import type { PluginPathRoots } from '../framework/plugin/paths';
+import type {
+  CredentialCapabilitySnapshot,
+  CredentialMode,
+} from '@itharbors/plugin-types';
 import { ApplicationServiceRegistry } from './service-registry';
 import type {
   ApplicationBootstrap,
@@ -26,6 +30,8 @@ export interface ApplicationRuntimeOptions {
   pluginPathRoots: PluginPathRoots;
   notificationPort?: number;
   notificationOwnerAuthToken?: string;
+  credentialMode?: CredentialMode;
+  credentialStatusLoader?: () => Promise<CredentialCapabilitySnapshot>;
 }
 
 export class ApplicationRuntime {
@@ -41,12 +47,18 @@ export class ApplicationRuntime {
   private readonly loaded: ApplicationPluginSpec[] = [];
   private startPromise: Promise<ApplicationBootstrap> | undefined;
   private disposePromise: Promise<void> | undefined;
+  private credentialStatus: CredentialCapabilitySnapshot;
+  private readonly credentialMode: CredentialMode;
+  private readonly credentialStatusLoader: ApplicationRuntimeOptions['credentialStatusLoader'];
 
   constructor(private readonly options: ApplicationRuntimeOptions) {
     this.pluginSpecs = [...(options.plugins ?? [])];
     this.diagnostics = [...(options.diagnostics ?? [])];
     this.resetPluginStates();
     this.menu = new MenuModule({ onChange: () => this.emit() });
+    this.credentialMode = options.credentialMode ?? 'off';
+    this.credentialStatusLoader = options.credentialStatusLoader;
+    this.credentialStatus = unavailableCredentialStatus(this.credentialMode);
   }
 
   start(): Promise<ApplicationBootstrap> {
@@ -60,6 +72,7 @@ export class ApplicationRuntime {
       plugins: this.pluginStates.map((state) => ({ ...state, kits: [...state.kits] })),
       diagnostics: this.diagnostics.map((item) => ({ ...item })),
       menu: structuredClone(this.menu.getState()),
+      credentials: sanitizeCredentialStatus(this.credentialStatus, this.credentialMode),
     };
   }
 
@@ -95,6 +108,17 @@ export class ApplicationRuntime {
   private async startInternal(): Promise<ApplicationBootstrap> {
     this.phase = 'starting';
     this.emit();
+    if (this.credentialStatusLoader) {
+      try {
+        this.credentialStatus = sanitizeCredentialStatus(
+          await this.credentialStatusLoader(),
+          this.credentialMode,
+        );
+      } catch {
+        this.credentialStatus = unavailableCredentialStatus(this.credentialMode);
+      }
+      this.emit();
+    }
     if (this.options.catalogLoader) {
       try {
         const catalog = await this.options.catalogLoader();
@@ -316,4 +340,37 @@ function assertApplicationContributions(pluginName: string, contribute: Contribu
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function unavailableCredentialStatus(mode: CredentialMode): CredentialCapabilitySnapshot {
+  return mode === 'off'
+    ? { mode, status: 'unavailable', reason: 'CREDENTIALS_DISABLED' }
+    : { mode, status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' };
+}
+
+function sanitizeCredentialStatus(
+  value: CredentialCapabilitySnapshot,
+  configuredMode: CredentialMode,
+): CredentialCapabilitySnapshot {
+  if (!value || value.mode !== configuredMode) {
+    return unavailableCredentialStatus(configuredMode);
+  }
+  if (configuredMode === 'local' && value.status === 'available') {
+    return { mode: configuredMode, status: 'available' };
+  }
+  if (value.status === 'unavailable') {
+    if (configuredMode === 'off' && value.reason === 'CREDENTIALS_DISABLED') {
+      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
+    }
+    if (
+      configuredMode === 'local'
+      && ['CREDENTIALS_UNAVAILABLE', 'CREDENTIALS_LOCKED'].includes(value.reason)
+    ) {
+      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
+    }
+    if (configuredMode === 'multi-user' && value.reason === 'CREDENTIALS_UNAVAILABLE') {
+      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
+    }
+  }
+  return unavailableCredentialStatus(configuredMode);
 }

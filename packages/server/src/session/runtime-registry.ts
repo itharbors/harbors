@@ -19,9 +19,22 @@ export type SessionRuntimeFactory = (
   options: SessionRuntimeCreateOptions,
 ) => Promise<Editor> | Editor;
 
+export const SESSION_RUNTIME_REGISTRY_CLOSED = 'SESSION_RUNTIME_REGISTRY_CLOSED';
+
+export class SessionRuntimeRegistryClosedError extends Error {
+  readonly code = SESSION_RUNTIME_REGISTRY_CLOSED;
+
+  constructor() {
+    super('Session runtime registry is closed');
+    this.name = 'SessionRuntimeRegistryClosedError';
+  }
+}
+
 export class SessionRuntimeRegistry {
   private readonly runtimes = new Map<string, Editor>();
   private readonly pending = new Map<string, Promise<SessionRuntime>>();
+  private accepting = true;
+  private disposePromise: Promise<void> | undefined;
 
   constructor(
     private readonly manager: SessionManager,
@@ -40,6 +53,8 @@ export class SessionRuntimeRegistry {
     sessionId: string,
     options: SessionRuntimeCreateOptions,
   ): Promise<SessionRuntime> {
+    if (!this.accepting) return Promise.reject(new SessionRuntimeRegistryClosedError());
+
     const existingEditor = this.runtimes.get(sessionId);
     if (existingEditor) {
       const session = this.manager.get(sessionId);
@@ -99,7 +114,15 @@ export class SessionRuntimeRegistry {
     return true;
   }
 
-  async disposeAll(): Promise<void> {
+  disposeAll(): Promise<void> {
+    if (!this.disposePromise) {
+      this.accepting = false;
+      this.disposePromise = this.disposeAllInternal();
+    }
+    return this.disposePromise;
+  }
+
+  private async disposeAllInternal(): Promise<void> {
     await Promise.allSettled(this.pending.values());
     const editors = Array.from(this.runtimes.values());
     this.runtimes.clear();

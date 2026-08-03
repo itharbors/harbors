@@ -215,11 +215,11 @@ test('Kit CI validates and summarizes release intent inside the existing require
   assert.match(select, /RELEASES_JSON/u);
 });
 
-test('Kit CI runs each descriptor-owned matrix entry after installing lifecycle dependencies and never publishes', async () => {
+test('Kit CI builds every Server workspace dependency before each Kit lifecycle and never publishes', async () => {
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const checkKit = workflowJob(workflow, 'check-kit');
   const installIndex = checkKit.indexOf('run: npm ci');
-  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/server');
+  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server');
   const staticIndex = checkKit.indexOf('npm run kits:boundary -- "${{ matrix.kit }}"');
   const checkIndex = checkKit.indexOf('node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"');
 

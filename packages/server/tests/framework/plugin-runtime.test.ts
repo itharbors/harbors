@@ -21,6 +21,7 @@ function mkPlugin(
   dirName: string,
   pkgName: string,
   code = 'editor.plugin.define({ methods: {} });',
+  capabilities?: unknown,
 ) {
   const pluginDir = path.join(root, dirName);
   fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
@@ -28,7 +29,7 @@ function mkPlugin(
     name: pkgName,
     type: 'module',
     main: './main/dist/index.js',
-    'ce-editor': {},
+    'ce-editor': capabilities === undefined ? {} : { capabilities },
   }, null, 2));
   fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), code);
   return pluginDir;
@@ -106,10 +107,23 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
   };
 }
 
+function credentialFacadeDouble() {
+  return {
+    capability: vi.fn(async () => ({ mode: 'local' as const, status: 'available' as const })),
+    available: vi.fn(async () => true),
+    list: vi.fn(async () => []),
+    get: vi.fn(),
+    put: vi.fn(),
+    delete: vi.fn(),
+  };
+}
+
 describe('PluginModule', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    delete (globalThis as typeof globalThis & { editor?: unknown }).editor;
+    Reflect.deleteProperty(globalThis, 'editor');
+    Reflect.deleteProperty(globalThis, '__retainedCredentials');
+    Reflect.deleteProperty(globalThis, '__interceptedCredentials');
   });
 
   it('keeps registration state instance-scoped', async () => {
@@ -132,6 +146,156 @@ describe('PluginModule', () => {
     await plugin.register(pluginDir, { kind: 'external' });
 
     expect(plugin.getInfo('log')).toMatchObject({ kind: 'external' });
+  });
+
+  it('validates and exposes declared plugin capabilities', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-capability-'));
+    const capableDir = mkPlugin(root, 'capable', 'capable', undefined, ['credentials']);
+    const duplicateDir = mkPlugin(
+      root,
+      'duplicate',
+      'duplicate',
+      undefined,
+      ['credentials', 'credentials'],
+    );
+    const plugin = new PluginModule();
+
+    await plugin.register(capableDir, { kind: 'external' });
+
+    expect(plugin.getInfo('capable')).toMatchObject({ capabilities: ['credentials'] });
+    await expect(plugin.register(duplicateDir, { kind: 'external' })).rejects.toThrow(/capabilit/i);
+    expect(plugin.getInfo('duplicate')).toBeUndefined();
+  });
+
+  it('injects credentials only into a capable Session plugin and revokes retained access on unload', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-credential-lease-'));
+    const capableDir = mkPlugin(root, 'capable', 'capable', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) {
+            credentials = runtime.credentials;
+            globalThis.__retainedCredentials = runtime.credentials;
+          },
+          unload() {},
+        },
+        methods: { hasCredentials() { return credentials !== undefined; } },
+      });
+    `, ['credentials']);
+    const incapableDir = mkPlugin(root, 'incapable', 'incapable', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: { hasCredentials() { return credentials !== undefined; } },
+      });
+    `);
+    const plugin = new PluginModule();
+    const credentials = credentialFacadeDouble();
+    const host = withRuntimeMenu(createEditor('credential-lease-editor', { assembly }));
+
+    await plugin.register(capableDir, { kind: 'external' });
+    await plugin.register(incapableDir, { kind: 'external' });
+    await plugin.load(capableDir, { ...sessionLoadOptions(host), credentials });
+    await plugin.load(incapableDir, { ...sessionLoadOptions(host), credentials });
+    const retained = (globalThis as typeof globalThis & {
+      __retainedCredentials: ReturnType<typeof credentialFacadeDouble>;
+    }).__retainedCredentials;
+
+    expect(plugin.callPlugin('capable', 'hasCredentials')).toBe(true);
+    expect(plugin.callPlugin('incapable', 'hasCredentials')).toBe(false);
+    await plugin.unload(capableDir);
+    expect(credentials.list).not.toHaveBeenCalled();
+    await expect(retained.available()).resolves.toBe(false);
+    await expect(retained.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+  });
+
+  it('stops new plugin calls and drains active credential work before unload completes', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-credential-drain-'));
+    const capableDir = mkPlugin(root, 'capable', 'capable', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: {
+          startCredentialWork() { credentials.list(); },
+          ping() { return 'pong'; },
+        },
+      });
+    `, ['credentials']);
+    let releaseList!: () => void;
+    const listGate = new Promise<void>((resolve) => { releaseList = resolve; });
+    const credentials = credentialFacadeDouble();
+    credentials.list.mockImplementation(async () => { await listGate; return []; });
+    const plugin = new PluginModule();
+    const host = withRuntimeMenu(createEditor('credential-drain-editor', { assembly }));
+    await plugin.register(capableDir, { kind: 'external' });
+    await plugin.load(capableDir, { ...sessionLoadOptions(host), credentials });
+
+    plugin.callPlugin('capable', 'startCredentialWork');
+    let unloaded = false;
+    const unloading = plugin.unload(capableDir).then(() => { unloaded = true; });
+    await Promise.resolve();
+
+    expect(unloaded).toBe(false);
+    expect(() => plugin.callPlugin('capable', 'ping')).toThrow(/not loaded/i);
+    releaseList();
+    await unloading;
+    expect(unloaded).toBe(true);
+  });
+
+  it('keeps Session credentials out of a hostile shared editor accessor', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-credential-interceptor-'));
+    const interceptorDir = mkPlugin(root, 'interceptor', 'interceptor', `
+      editor.plugin.define({
+        lifecycle: {
+          load() {
+            let current;
+            Object.defineProperty(globalThis, 'editor', {
+              configurable: true,
+              get() { return current; },
+              set(value) {
+                current = value;
+                const originalDefine = value?.plugin?.define;
+                if (!originalDefine) return;
+                value.plugin.define = (definition) => {
+                  const originalLoad = definition.lifecycle?.load;
+                  if (originalLoad) {
+                    definition.lifecycle.load = (runtime) => {
+                      globalThis.__interceptedCredentials = runtime.credentials;
+                      return originalLoad(runtime);
+                    };
+                  }
+                  return originalDefine(definition);
+                };
+              },
+            });
+          },
+        },
+        methods: {},
+      });
+    `);
+    const ownerDir = mkPlugin(root, 'owner', 'owner', `
+      let credentials;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        methods: { hasCredentials() { return credentials !== undefined; } },
+      });
+    `, ['credentials']);
+    const interceptor = new PluginModule();
+    const owner = new PluginModule();
+    const host = withRuntimeMenu(createEditor('credential-interceptor-editor', { assembly }));
+
+    await interceptor.register(interceptorDir, { kind: 'external' });
+    await interceptor.load(interceptorDir, {
+      scope: 'application',
+      host: applicationRuntimeHost(),
+      paths: sessionLoadOptions(host).paths,
+    });
+    await owner.register(ownerDir, { kind: 'external' });
+    await owner.load(ownerDir, { ...sessionLoadOptions(host), credentials: credentialFacadeDouble() });
+
+    expect(owner.callPlugin('owner', 'hasCredentials')).toBe(true);
+    expect((globalThis as typeof globalThis & { __interceptedCredentials?: unknown }).__interceptedCredentials)
+      .toBeUndefined();
   });
 
   it('lets session plugin main entries request application plugin methods', async () => {
@@ -538,5 +702,29 @@ describe('PluginModule', () => {
 
     await expect(editor.plugin.load(pluginDir)).rejects.toThrow(/cannot register as "victim"/);
     expect(editor.panel.getRegistration('victim.main')).toBeUndefined();
+  });
+
+  it('restores the exact editor descriptor without invoking its accessor', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-editor-descriptor-'));
+    const pluginDir = mkPlugin(root, 'owner', 'owner');
+    const plugin = new PluginModule();
+    const getter = vi.fn(() => ({ attacker: true }));
+    const setter = vi.fn();
+    const descriptor: PropertyDescriptor = {
+      configurable: true,
+      enumerable: false,
+      get: getter,
+      set: setter,
+    };
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    Object.defineProperty(globalThis, 'editor', descriptor);
+    await plugin.load(pluginDir, sessionLoadOptions(
+      withRuntimeMenu(createEditor('descriptor-editor', { assembly })),
+    ));
+
+    expect(Object.getOwnPropertyDescriptor(globalThis, 'editor')).toEqual(descriptor);
+    expect(getter).not.toHaveBeenCalled();
+    expect(setter).not.toHaveBeenCalled();
   });
 });

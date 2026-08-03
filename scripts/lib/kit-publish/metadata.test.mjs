@@ -22,7 +22,7 @@ const stableManifest = {
     protocolVersion: 1,
   },
   target: { platform: 'darwin', arch: 'arm64', nodeAbi: '127' },
-  permissions: ['network', 'filesystem', 'native-code'],
+  permissions: ['network', 'filesystem', 'native-code', 'credentials'],
   entry: 'package.json',
 };
 

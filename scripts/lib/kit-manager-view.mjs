@@ -4,6 +4,7 @@ const PERMISSION_LABELS = Object.freeze({
   'native-code': '原生代码 — 高风险',
   'process-control': '进程控制 — 高风险',
   'application-startup': '随 ITHARBORS 启动',
+  credentials: '凭据存储 — 高风险',
 });
 
 const CHANNEL_LABELS = Object.freeze({
@@ -86,7 +87,9 @@ function isUpdate({ kit, reference }) {
 }
 
 function isElevatedRiskPermission(permission) {
-  return permission === 'native-code' || permission === 'process-control';
+  return permission === 'native-code'
+    || permission === 'process-control'
+    || permission === 'credentials';
 }
 
 function elevatedRiskNotice(permissions) {
@@ -96,6 +99,9 @@ function elevatedRiskNotice(permissions) {
   }
   if (permissions.includes('process-control')) {
     notices.push('此版本请求进程控制权限，能够暂停或结束本机进程。');
+  }
+  if (permissions.includes('credentials')) {
+    notices.push('此版本可在系统凭据库中保存和使用登录秘密。');
   }
   return notices.join('');
 }

@@ -289,7 +289,9 @@ export class KitReleaseResolver {
       );
     }
     const officialOnlyPermission = releasedPermissions.find((permission) => (
-      permission === 'application-startup' || permission === 'process-control'
+      permission === 'application-startup'
+      || permission === 'process-control'
+      || permission === 'credentials'
     ));
     if (officialOnlyPermission && release.publisher !== 'itharbors') {
       throw new KitRegistryResolutionError(

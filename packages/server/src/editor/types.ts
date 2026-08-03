@@ -7,10 +7,12 @@ import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistrat
 import type { PluginDefinition, PluginInfo } from '../framework/plugin/types';
 import type { PluginPathRoots, PluginPaths } from '../framework/plugin/paths';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
+import type { PluginCredentialVault } from '@itharbors/plugin-types';
 
 export interface PluginRuntime {
   readonly sessionId: string;
   readonly paths: PluginPaths;
+  readonly credentials?: PluginCredentialVault;
   application: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   };
@@ -224,7 +226,12 @@ export type PluginRuntimeHost = Omit<Editor, 'menu'> & {
 };
 
 export type PluginLoadOptions =
-  | { scope: 'session'; host: PluginRuntimeHost; paths: PluginPathLoadConfiguration }
+  | {
+      scope: 'session';
+      host: PluginRuntimeHost;
+      paths: PluginPathLoadConfiguration;
+      credentials?: PluginCredentialVault;
+    }
   | { scope: 'application'; host: ApplicationPluginRuntimeHost; paths: PluginPathLoadConfiguration };
 
 export interface PluginPathLoadConfiguration {

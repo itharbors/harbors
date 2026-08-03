@@ -1,6 +1,7 @@
 import type { MenuContributionNode } from '../menu/types';
 
 export type PluginKind = 'builtin' | 'external';
+export type PluginCapability = 'credentials';
 
 export interface PluginAssetsManifest {
   public?: string[];
@@ -32,6 +33,7 @@ export interface PluginInfo {
   path: string;
   kind: PluginKind;
   entry: string;
+  capabilities?: PluginCapability[];
   assets?: PluginAssetsManifest;
   contribute?: ContributeData;
 }
