@@ -104,7 +104,20 @@ test('validates builtin Kits without market artifacts and packs exactly one insp
   ]);
   assert.deepEqual(calls[0], {
     file: 'npm',
-    args: ['run', 'build', '-w', '@itharbors/kit-core', '-w', '@itharbors/kit-cli', '-w', '@itharbors/server'],
+    args: [
+      'run',
+      'build',
+      '-w',
+      '@itharbors/kit-core',
+      '-w',
+      '@itharbors/kit-cli',
+      '-w',
+      '@itharbors/plugin-types',
+      '-w',
+      '@itharbors/host-security',
+      '-w',
+      '@itharbors/server',
+    ],
     options: { cwd: repositoryRoot, encoding: 'utf8' },
   });
   assert.deepEqual(
