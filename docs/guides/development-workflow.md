@@ -339,7 +339,21 @@ Tag。获得用户对恢复操作的明确确认后，按输出设置 `HARBORS_K
 npm run check
 ```
 
-它依次构建共享协议包、运行 Server/Client 全量测试并校验所有插件产物。`npm run kits:boundary`
+它只构建一次 Framework，再运行 Framework 与 workflow 测试，并以一次 `kits:check` 完成所有
+Kit 的 build、test、validate 和市场产物检查，最后检查 Framework 插件产物。独立的 `npm test`、
+`kits:test` 与 `plugins:check` 仍保留各自的完整语义，但根门禁不会重复组合它们。
+
+需求开发循环优先运行聚焦测试和紧凑预检：
+
+```bash
+npm run check:preflight
+```
+
+预检执行全仓 Kit 架构审计和关键 workflow/元数据测试，成功时使用紧凑 reporter；它用于快速
+反馈，不替代 `npm run check`。通用变更提交完成后直接调用 `finish-change.sh`，由完成流程运行
+最终全量门禁；不要在没有新代码变化时先手动重复同一轮全量检查。
+
+`npm run kits:boundary`
 会独立审计完整源码树；`npm run kits:boundary -- <slug>` 只审计目标 Kit，不会被无关 Kit 的临时损坏拖累。
 审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失 lockfile、Framework 产品特判和静态产品清单。
 按变更范围快速
