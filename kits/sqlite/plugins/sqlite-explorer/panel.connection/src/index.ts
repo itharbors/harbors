@@ -9,31 +9,13 @@ type PanelContext = {
   message: {
     request(plugin: string, method: string, input?: unknown): Promise<unknown>;
   };
+  file: {
+    openLocal(options?: { accept?: string }): Promise<string | null>;
+    saveLocal(options?: { accept?: string; suggestedName?: string }): Promise<string | null>;
+  };
   panel: {
     setModalOpen(open: boolean): void;
   };
-};
-
-type FileEntry = {
-  name: string;
-  path: string;
-  kind: 'directory' | 'file';
-  sqliteCandidate: boolean;
-  size?: number | null;
-  modifiedAt?: string | null;
-};
-
-type FileDialog = {
-  mode: 'open' | 'create';
-  currentPath: string;
-  parentPath: string | null;
-  entries: FileEntry[];
-  selectedPath: string | null;
-  fileName: string;
-  recentPaths: string[];
-  showAll: boolean;
-  manualPath: string;
-  openerAction: string;
 };
 
 type PanelError = { message: string; detail?: string };
@@ -59,12 +41,13 @@ const DISCONNECTED: ConnectionSnapshot = {
   dataRevision: 0,
 };
 
+const SQLITE_FILE_ACCEPT = '.sqlite,.sqlite3,.db,application/vnd.sqlite3';
+
 let context: PanelContext | undefined;
 let root: HTMLElement | null = null;
 let connection: ConnectionSnapshot = { ...DISCONNECTED };
 let busy = false;
 let error: PanelError | null = null;
-let fileDialog: FileDialog | null = null;
 let writeDialog = false;
 let writeDialogOpener = 'unlock-writes';
 let requestSequence = 0;
@@ -105,7 +88,6 @@ const definition = {
     connection = { ...DISCONNECTED };
     busy = false;
     error = null;
-    fileDialog = null;
     writeDialog = false;
   },
 
@@ -115,7 +97,7 @@ const definition = {
         !isConnectionSnapshot(payload)
         || payload.connectionRevision < connection.connectionRevision
       ) return;
-      const focusTarget = fileDialog?.openerAction ?? (writeDialog ? 'close' : null);
+      const focusTarget = writeDialog ? 'close' : null;
       if (focusTarget && activeAction && isCurrentAction(activeAction)) {
         activeAction.focusAction = focusTarget;
       }
@@ -131,7 +113,6 @@ function resetState(): void {
   connection = { ...DISCONNECTED };
   busy = false;
   error = null;
-  fileDialog = null;
   writeDialog = false;
   activeAction = null;
   requestSequence += 1;
@@ -143,79 +124,28 @@ function acceptConnection(next: ConnectionSnapshot, resetDialogs = true): void {
   connection = { ...next };
   error = null;
   if (resetDialogs) {
-    fileDialog = null;
     writeDialog = false;
     setModalOpen(false);
   }
   render();
 }
 
-async function openFileBrowser(mode: FileDialog['mode'], openerAction: string): Promise<void> {
+async function selectDatabase(create: boolean, openerAction: string): Promise<void> {
   await runAction(async (token) => {
-    const recentPaths = await requestCore<string[]>('getRecentDatabases');
-    if (!isCurrentActionResult(token)) return;
-    const initialPath = (recentPaths[0] ? databaseDirectory(recentPaths[0]) : null)
-      || await requestCore<string>('getDefaultDirectory');
-    if (!isCurrentActionResult(token)) return;
-    const listing = await listDirectory(initialPath, false);
-    if (!isCurrentActionResult(token)) return;
-    fileDialog = {
-      mode,
-      ...listing,
-      selectedPath: mode === 'open' ? recentPaths[0] ?? null : null,
-      fileName: 'database.sqlite',
-      recentPaths,
-      showAll: false,
-      manualPath: '',
-      openerAction,
-    };
-    writeDialog = false;
-    setModalOpen(true);
-  });
-}
-
-function databaseDirectory(databasePath: string): string | null {
-  const separatorIndex = Math.max(databasePath.lastIndexOf('/'), databasePath.lastIndexOf('\\'));
-  if (separatorIndex < 0) return null;
-  if (separatorIndex === 0) return databasePath.slice(0, 1);
-  if (separatorIndex === 2 && /^[A-Za-z]:[\\/]/.test(databasePath)) {
-    return databasePath.slice(0, 3);
-  }
-  return databasePath.slice(0, separatorIndex);
-}
-
-async function browseDirectory(path: string): Promise<void> {
-  if (!fileDialog) return;
-  const currentDialog = fileDialog;
-  await runAction(async (token) => {
-    const listing = await listDirectory(path, currentDialog.showAll);
-    if (!isCurrentActionResult(token) || fileDialog !== currentDialog) return;
-    fileDialog = { ...currentDialog, ...listing, selectedPath: null };
-  });
-}
-
-async function confirmFileDialog(): Promise<void> {
-  const dialog = fileDialog;
-  if (!dialog) return;
-  const target = dialog.manualPath.trim() || (dialog.mode === 'open'
-    ? dialog.selectedPath
-    : joinDisplayPath(dialog.currentPath, dialog.fileName.trim()));
-  if (!target) {
-    error = {
-      message: dialog.mode === 'open'
-        ? '请选择 SQLite 数据库文件或手动输入路径。'
-        : '请输入数据库文件名。',
-    };
-    render();
-    return;
-  }
-  await runAction(async (token) => {
+    token.focusAction = openerAction;
+    if (!context) throw new Error('SQLite 连接栏尚未挂载。');
+    const target = create
+      ? await context.file.saveLocal({
+        accept: SQLITE_FILE_ACCEPT,
+        suggestedName: 'database.sqlite',
+      })
+      : await context.file.openLocal({ accept: SQLITE_FILE_ACCEPT });
+    if (!isCurrentActionResult(token) || target === null) return;
     const next = await requestCore<ConnectionSnapshot>('openDatabase', {
       path: target,
-      create: dialog.mode === 'create',
+      create,
     });
-    if (!isCurrentActionResult(token) || fileDialog !== dialog) return;
-    token.focusAction = dialog.openerAction;
+    if (!isCurrentActionResult(token)) return;
     acceptConnection(next);
   });
 }
@@ -282,14 +212,6 @@ function isCurrentActionResult(token: ActionToken): boolean {
   return isCurrentAction(token) && token.requestSequence === requestSequence;
 }
 
-async function listDirectory(path: string, showAll: boolean): Promise<{
-  currentPath: string;
-  parentPath: string | null;
-  entries: FileEntry[];
-}> {
-  return requestCore('listDirectory', { path, showAll });
-}
-
 async function requestCore<T>(method: string, input?: unknown): Promise<T> {
   if (!context) throw new Error('SQLite 连接栏尚未挂载。');
   return unwrapSqliteResponse<T>(await context.message.request(SQLITE_CORE, method, input));
@@ -302,7 +224,7 @@ async function requestExplorer(method: string, input?: unknown): Promise<unknown
 
 function render(): void {
   if (!root) return;
-  const modalOpen = fileDialog !== null || writeDialog;
+  const modalOpen = writeDialog;
   root.innerHTML = `
     <main class="connection-shell">
       <header class="connection-bar"${modalOpen ? ' inert aria-hidden="true"' : ''}>
@@ -320,13 +242,12 @@ function render(): void {
           ${renderConnectionState()}
         </div>
       </header>
-      ${fileDialog ? renderFileDialog(fileDialog) : ''}
       ${writeDialog ? renderWriteDialog() : ''}
     </main>
   `;
 
-  bindAction('browse-open', () => openFileBrowser('open', 'browse-open'));
-  bindAction('browse-create', () => openFileBrowser('create', 'browse-create'));
+  bindAction('browse-open', () => selectDatabase(false, 'browse-open'));
+  bindAction('browse-create', () => selectDatabase(true, 'browse-create'));
   bindAction('refresh', refreshObjects);
   bindAction('close', closeDatabase);
   bindAction('unlock-writes', () => {
@@ -336,47 +257,8 @@ function render(): void {
     setModalOpen(true);
     render();
   });
-  bindAction('cancel-write-mode', () => closeDialogs(writeDialogOpener));
+  bindAction('cancel-write-mode', () => closeWriteDialog(writeDialogOpener));
   bindAction('confirm-write-mode', confirmWriteMode);
-  bindAction('cancel-file', () => closeDialogs(fileDialog?.openerAction));
-  bindAction('confirm-file', confirmFileDialog);
-  bindAction('parent-directory', () => {
-    if (fileDialog?.parentPath) return browseDirectory(fileDialog.parentPath);
-  });
-
-  for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>('[data-file-path]'))) {
-    button.addEventListener('click', () => {
-      if (!fileDialog) return;
-      if (button.dataset.kind === 'directory') void browseDirectory(button.dataset.filePath!);
-      else {
-        fileDialog.selectedPath = button.dataset.filePath!;
-        render();
-      }
-    });
-  }
-  for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>('[data-recent-path]'))) {
-    button.addEventListener('click', () => {
-      if (!fileDialog) return;
-      fileDialog.selectedPath = button.dataset.recentPath!;
-      fileDialog.manualPath = button.dataset.recentPath!;
-      render();
-    });
-  }
-  root.querySelector<HTMLInputElement>('[data-field="show-all-files"]')?.addEventListener('change', (event) => {
-    if (!fileDialog) return;
-    fileDialog.showAll = (event.currentTarget as HTMLInputElement).checked;
-    void browseDirectory(fileDialog.currentPath);
-  });
-  root.querySelector<HTMLInputElement>('[data-field="manual-path"]')?.addEventListener('input', (event) => {
-    if (!fileDialog) return;
-    fileDialog.manualPath = (event.currentTarget as HTMLInputElement).value;
-    syncConfirmFileDisabled();
-  });
-  root.querySelector<HTMLInputElement>('[data-field="create-name"]')?.addEventListener('input', (event) => {
-    if (!fileDialog) return;
-    fileDialog.fileName = (event.currentTarget as HTMLInputElement).value;
-    syncConfirmFileDisabled();
-  });
 
   for (const button of Array.from(root.querySelectorAll<HTMLButtonElement>('button'))) {
     if (busy) button.disabled = true;
@@ -385,7 +267,7 @@ function render(): void {
 }
 
 function renderConnectionState(): string {
-  if (error && !fileDialog && !writeDialog) {
+  if (error && !writeDialog) {
     return `<div class="connection-error" role="alert">${escapeHtml(error.message)}</div>`;
   }
   if (!connection.connected) {
@@ -396,32 +278,6 @@ function renderConnectionState(): string {
     <span class="connection-summary">${escapeHtml(summary)}</span>
     <code data-current-path title="${escapeHtml(connection.path ?? '')}">${escapeHtml(connection.path ?? '')}</code>
     ${connection.mode === 'readonly' ? '<button type="button" data-action="unlock-writes">启用写入</button>' : ''}`;
-}
-
-function renderFileDialog(dialog: FileDialog): string {
-  const title = dialog.mode === 'open' ? '打开 SQLite 数据库' : '新建 SQLite 数据库';
-  const recent = dialog.mode === 'open' && dialog.recentPaths.length > 0
-    ? `<details class="recent-paths"><summary>最近使用 · ${dialog.recentPaths.length}</summary>${dialog.recentPaths.map((path) => `<button type="button" data-recent-path="${escapeHtml(path)}">${escapeHtml(path)}</button>`).join('')}</details>`
-    : '';
-  return `<div class="modal-backdrop">
-    <section class="modal" data-file-dialog role="dialog" aria-modal="true" aria-labelledby="file-dialog-title" tabindex="-1">
-      <h2 id="file-dialog-title">${title}</h2>
-      <code>${escapeHtml(dialog.currentPath)}</code>
-      ${recent}
-      <label class="show-all"><input type="checkbox" data-field="show-all-files"${dialog.showAll ? ' checked' : ''}> 显示全部文件</label>
-      <div class="file-list">
-        ${dialog.parentPath ? '<button type="button" data-action="parent-directory">← 上一级</button>' : ''}
-        ${dialog.entries.map((entry) => `<button type="button" data-file-path="${escapeHtml(entry.path)}" data-kind="${entry.kind}" class="${entry.path === dialog.selectedPath ? 'selected' : ''}">${entry.kind === 'directory' ? '▸' : '◫'} ${escapeHtml(entry.name)}</button>`).join('') || '<div class="empty-state">这个文件夹中没有可选项目。</div>'}
-      </div>
-      ${dialog.mode === 'create' ? `<input data-field="create-name" aria-label="数据库文件名" value="${escapeHtml(dialog.fileName)}">` : ''}
-      <details class="manual-path"><summary>手动输入路径</summary><input data-field="manual-path" aria-label="手动数据库路径" placeholder="${dialog.mode === 'open' ? '/path/to/database.sqlite' : '/path/to/new-database.sqlite'}" value="${escapeHtml(dialog.manualPath)}"></details>
-      ${error ? renderDialogError(error) : ''}
-      <footer>
-        <button type="button" data-action="cancel-file">取消</button>
-        <button type="button" class="primary" data-action="confirm-file"${isFileConfirmationDisabled(dialog) ? ' disabled' : ''}>${dialog.mode === 'open' ? '打开' : '新建'}</button>
-      </footer>
-    </section>
-  </div>`;
 }
 
 function renderWriteDialog(): string {
@@ -448,9 +304,8 @@ function bindAction(action: string, handler: () => void | Promise<void>): void {
   });
 }
 
-function closeDialogs(openerAction?: string): void {
+function closeWriteDialog(openerAction?: string): void {
   if (busy) return;
-  fileDialog = null;
   writeDialog = false;
   error = null;
   setModalOpen(false);
@@ -461,11 +316,11 @@ function closeDialogs(openerAction?: string): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
-  if (!fileDialog && !writeDialog) return;
+  if (!writeDialog) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     if (busy) return;
-    closeDialogs(fileDialog?.openerAction ?? writeDialogOpener);
+    closeWriteDialog(writeDialogOpener);
     return;
   }
   if (event.key === 'Tab') trapModalFocus(event);
@@ -508,21 +363,6 @@ function getModalFocusable(modal: HTMLElement): HTMLElement[] {
 
 function setModalOpen(open: boolean): void {
   context?.panel.setModalOpen(open);
-}
-
-function syncConfirmFileDisabled(): void {
-  const button = root?.querySelector<HTMLButtonElement>('[data-action="confirm-file"]');
-  if (button && fileDialog) button.disabled = isFileConfirmationDisabled(fileDialog);
-}
-
-function isFileConfirmationDisabled(dialog: FileDialog): boolean {
-  if (dialog.manualPath.trim()) return false;
-  return dialog.mode === 'open' ? !dialog.selectedPath : !dialog.fileName.trim();
-}
-
-function joinDisplayPath(directory: string, name: string): string | null {
-  if (!name) return null;
-  return `${directory.replace(/[\\/]$/, '')}/${name}`;
 }
 
 function fileName(value: string): string {

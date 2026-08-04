@@ -82,13 +82,14 @@ describe('CSV built panel accessibility', () => {
     });
   });
 
-  it('ships keyboard controls for rows, cells, filters, fields, dialogs, and cancellation', () => {
+  it('ships native file selection plus keyboard controls for rows, cells, filters, and cancellation', () => {
     const connection = readBuilt('plugins/csv-explorer/panel.connection', 'index.js');
     const explorer = readBuilt('plugins/csv-explorer/panel.explorer', 'index.js');
     const data = readBuilt('plugins/csv-data/panel.data', 'index.js');
     const schema = readBuilt('plugins/csv-data/panel.schema', 'index.js');
 
-    for (const key of ['Escape', 'Tab']) expect(connection).toContain(key);
+    expect(connection).toContain('file.openLocal');
+    expect(connection).not.toContain('role="dialog"');
     for (const key of ['ArrowUp', 'ArrowDown', 'Home', 'End', 'Enter']) {
       expect(explorer).toContain(key);
       expect(schema).toContain(key);

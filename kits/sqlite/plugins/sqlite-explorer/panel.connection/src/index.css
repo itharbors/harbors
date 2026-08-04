@@ -265,23 +265,6 @@ summary:focus-visible {
   font-weight: 550;
 }
 
-.modal > code {
-  display: block;
-  margin-bottom: 10px;
-  overflow: hidden;
-  color: var(--text-muted);
-  font-family: var(--mono);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.modal > input {
-  width: 100%;
-  min-height: 34px;
-  margin-top: 10px;
-  padding: 0 9px;
-}
-
 .modal details {
   display: grid;
   gap: 6px;
@@ -295,69 +278,11 @@ summary:focus-visible {
   color: var(--text-muted);
 }
 
-.modal details button {
-  display: block;
-  width: 100%;
-  overflow: hidden;
-  margin-top: 5px;
-  font-family: var(--mono);
-  text-align: left;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.modal details input {
-  width: 100%;
-  min-height: 34px;
-  margin-top: 8px;
-  padding: 0 9px;
-  font-family: var(--mono);
-}
-
 .modal footer {
   display: flex;
   justify-content: flex-end;
   gap: 7px;
   margin-top: 16px;
-}
-
-.show-all {
-  display: flex;
-  align-items: center;
-  min-height: 30px;
-  color: var(--text-muted);
-}
-
-.show-all input { accent-color: var(--teal); }
-
-.file-list {
-  display: grid;
-  max-height: 380px;
-  overflow: auto;
-  border: 1px solid var(--grid);
-  background: #0c1217;
-}
-
-.file-list button {
-  justify-content: flex-start;
-  min-height: 34px;
-  border: 0;
-  border-bottom: 1px solid var(--grid);
-  border-radius: 0;
-  background: transparent;
-  font-family: var(--mono);
-  text-align: left;
-}
-
-.file-list button.selected {
-  color: #eafffb;
-  background: var(--teal-soft);
-}
-
-.empty-state {
-  padding: 18px;
-  color: #71828b;
-  text-align: center;
 }
 
 .dialog-error {

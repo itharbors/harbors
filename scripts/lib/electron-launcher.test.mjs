@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
+import vm from 'node:vm';
 
 import {
   buildTrayTemplate,
@@ -658,6 +659,50 @@ test('wires updater IPC, delayed background download, prompt and narrow preload 
     'installAppUpdate',
     'onAppUpdateState',
   ]) assert.match(clientBridge, new RegExp(`export function ${exportName}`));
+});
+
+test('exposes only File-to-path resolution through the desktop local file bridge', async () => {
+  const preload = await readFile(new URL('../electron-preload.cjs', import.meta.url), 'utf8');
+  const exposed = new Map();
+  const ipcCalls = [];
+  const selectedFile = {};
+  const pathCalls = [];
+
+  vm.runInNewContext(preload, {
+    require(specifier) {
+      assert.equal(specifier, 'electron');
+      return {
+        contextBridge: {
+          exposeInMainWorld(name, bridge) {
+            exposed.set(name, bridge);
+          },
+        },
+        ipcRenderer: {
+          send: (...args) => ipcCalls.push(['send', ...args]),
+          invoke: (...args) => {
+            ipcCalls.push(['invoke', ...args]);
+            return Promise.resolve();
+          },
+          on: (...args) => ipcCalls.push(['on', ...args]),
+          removeListener: (...args) => ipcCalls.push(['removeListener', ...args]),
+        },
+        webUtils: {
+          getPathForFile(file) {
+            pathCalls.push(file);
+            return '/tmp/data.csv';
+          },
+        },
+      };
+    },
+  });
+
+  const bridge = exposed.get('harborsFiles');
+  assert.ok(bridge);
+  assert.deepEqual(Object.keys(bridge), ['getPathForFile']);
+  assert.equal(Object.isFrozen(bridge), true);
+  assert.equal(bridge.getPathForFile(selectedFile), '/tmp/data.csv');
+  assert.deepEqual(pathCalls, [selectedFile]);
+  assert.deepEqual(ipcCalls, []);
 });
 
 test('loads externalized electron-updater through a lazy CJS-safe packaged ESM boundary', async () => {

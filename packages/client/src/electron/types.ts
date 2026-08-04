@@ -22,6 +22,10 @@ export interface ElectronMenuBridge {
   openExternalUrl?(url: string): Promise<void>;
 }
 
+export interface ElectronLocalFileBridge {
+  getPathForFile(file: File): string;
+}
+
 export type AppUpdateStatus =
   | 'disabled'
   | 'idle'
@@ -56,6 +60,7 @@ export interface AppUpdateBridge {
 
 declare global {
   interface Window {
+    harborsFiles?: ElectronLocalFileBridge;
     harborsUpdates?: AppUpdateBridge;
   }
 }
