@@ -106,6 +106,17 @@ test('CI runs for every pull request change without repository-inaccurate path f
   );
 });
 
+test('Framework CI runs branch pushes only on main while retaining PR and merge queue coverage', async () => {
+  const workflow = await readFile(workflowUrl, 'utf8');
+  const triggers = parseWorkflowTriggers(workflow);
+
+  assert.ok(triggers.has('push'));
+  assert.ok(triggers.get('push').has('branches'), 'push CI must declare a branch allowlist');
+  assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/u);
+  assert.ok(triggers.has('pull_request'));
+  assert.ok(triggers.has('merge_group'));
+});
+
 test('Kit CI selects event-specific full-history Git comparisons without path trigger gaps', async () => {
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const triggers = parseWorkflowTriggers(workflow);
@@ -250,6 +261,23 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
   assert.equal(packageJson.scripts['plugins:check:framework'], 'node scripts/ce-plugin.mjs check --framework');
   assert.equal(packageJson.scripts['plugins:check'], 'npm run plugins:check:framework && npm run kits:build');
   assert.equal(packageJson.scripts.test, 'npm run test:framework && npm run kits:test && npm run test:workflows');
+  assert.equal(
+    packageJson.scripts['test:framework'],
+    'npm run test:toolchain && npm run test:framework:prepared',
+  );
+  assert.match(
+    packageJson.scripts['test:framework:prepared'],
+    /npm run test -w packages\/server/u,
+  );
+  assert.match(packageJson.scripts['test:preflight'], /--test-reporter=dot/u);
+  assert.equal(
+    packageJson.scripts['check:preflight'],
+    'npm run kits:boundary && npm run test:preflight',
+  );
+  assert.equal(
+    packageJson.scripts.check,
+    'npm run build && npm run test:framework:prepared && npm run test:workflows && npm run kits:check && npm run plugins:check:framework',
+  );
   assert.match(packageJson.scripts['test:workflows'], /npm run test:kit-ci-selection/u);
   const scriptText = JSON.stringify(packageJson.scripts);
   assert.doesNotMatch(scriptText, /@itharbors\/kit-(?:agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u);
@@ -258,12 +286,17 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
 
 test('root test registers live Kit deactivation coverage', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
-  assert.match(packageJson.scripts['test:framework'], /scripts\/lib\/kit-live-deactivation\.test\.mjs/u);
+  assert.match(
+    packageJson.scripts['test:framework:prepared'],
+    /scripts\/lib\/kit-live-deactivation\.test\.mjs/u,
+  );
 });
 
-test('root Framework test command references only existing test files', async () => {
+test('prepared Framework test command references only existing test files', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
-  const testFiles = packageJson.scripts['test:framework'].match(/scripts\/[^ ]+\.test\.mjs/gu) ?? [];
+  const testFiles = packageJson.scripts['test:framework:prepared']?.match(
+    /scripts\/[^ ]+\.test\.mjs/gu,
+  ) ?? [];
   assert.ok(testFiles.length > 0);
   assert.equal(testFiles.includes('scripts/lib/codex-skill-resource.test.mjs'), false);
   await Promise.all(testFiles.map((file) => access(new URL(file, rootUrl))));
