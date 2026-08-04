@@ -103,14 +103,14 @@ test('checks Scheduler through its Kit-local build, test, pack, and inspect sequ
 test('checks SQLite with its exact affected build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'sqlite',
-    artifactName: 'kit-sqlite-0.1.0-preview.1-darwin-arm64-abi127.hkit',
+    artifactName: 'kit-sqlite-0.1.0-preview.2-darwin-arm64-abi127.hkit',
   });
 });
 
 test('checks CSV with its exact affected build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'csv',
-    artifactName: 'kit-csv-0.1.0-preview.1-darwin-arm64-abi127.hkit',
+    artifactName: 'kit-csv-0.1.0-preview.2-darwin-arm64-abi127.hkit',
   });
 });
 

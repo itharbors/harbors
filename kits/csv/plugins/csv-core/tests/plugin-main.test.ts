@@ -35,8 +35,20 @@ afterEach(async () => {
 describe('csv-core plugin bridge', () => {
   it('declares every request method and keeps manifest request names aligned', async () => {
     const loaded = await loadDefinition();
-    const expected = [...CSV_CORE_REQUEST_NAMES];
+    const expected = [
+      'sampleFile',
+      'openFile',
+      'getConnectionState',
+      'cancelOpen',
+      'closeFile',
+      'getSchema',
+      'getRows',
+      'getColumnStats',
+      'exportRows',
+      'cancelExport',
+    ];
 
+    expect(CSV_CORE_REQUEST_NAMES).toEqual(expected);
     expect(Object.keys(loaded.definition.methods).sort()).toEqual([...expected].sort());
     expect(loaded.manifestRequests).toEqual(Object.fromEntries(expected.map((name) => [name, [name]])));
   });

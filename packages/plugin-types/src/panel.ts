@@ -1,3 +1,16 @@
+export interface LocalFilePickerOptions {
+  accept?: string;
+}
+
+export interface LocalFileSaveOptions extends LocalFilePickerOptions {
+  suggestedName?: string;
+}
+
+export interface PanelFileRuntime {
+  openLocal(options?: LocalFilePickerOptions): Promise<string | null>;
+  saveLocal(options?: LocalFileSaveOptions): Promise<string | null>;
+}
+
 export interface PanelContext {
   message: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
@@ -6,6 +19,7 @@ export interface PanelContext {
   assets: {
     url(relativePath: string): string;
   };
+  file: PanelFileRuntime;
   i18n: {
     getLocale(): string;
     t(key: string, params?: Record<string, string | number>): string;

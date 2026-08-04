@@ -1,4 +1,10 @@
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
+
+contextBridge.exposeInMainWorld('harborsFiles', Object.freeze({
+  getPathForFile(file) {
+    return webUtils.getPathForFile(file);
+  },
+}));
 
 contextBridge.exposeInMainWorld('electronMenu', {
   syncMenu(payload) {

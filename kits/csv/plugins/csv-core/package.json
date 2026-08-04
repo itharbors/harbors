@@ -13,8 +13,6 @@
     "contribute": {
       "message": {
         "request": {
-          "listDirectory": ["listDirectory"],
-          "getDefaultDirectory": ["getDefaultDirectory"],
           "sampleFile": ["sampleFile"],
           "openFile": ["openFile"],
           "getConnectionState": ["getConnectionState"],

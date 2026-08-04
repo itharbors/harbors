@@ -391,6 +391,79 @@ describe('SqliteService connection and schema', () => {
     expect(() => service.openDatabase({ path: dbPath, create: true })).toThrow(/PATH_EXISTS/);
   });
 
+  it('creates a database in an existing zero-byte regular file from a browser save picker', () => {
+    const newPath = path.join(tempDir, 'browser-created.sqlite');
+    fs.writeFileSync(newPath, '');
+    const before = fs.statSync(newPath);
+
+    expect(service.openDatabase({ path: newPath, create: true })).toMatchObject({
+      connected: true,
+      path: fs.realpathSync(newPath),
+      mode: 'readwrite',
+    });
+    const after = fs.statSync(newPath);
+    expect({ dev: after.dev, ino: after.ino }).toEqual({ dev: before.dev, ino: before.ino });
+  });
+
+  it('rejects non-empty files and symbolic links as create targets', () => {
+    const nonEmpty = path.join(tempDir, 'non-empty.sqlite');
+    const empty = path.join(tempDir, 'empty.sqlite');
+    const symbolicLink = path.join(tempDir, 'linked.sqlite');
+    fs.writeFileSync(nonEmpty, 'existing data');
+    fs.writeFileSync(empty, '');
+    fs.symlinkSync(empty, symbolicLink);
+
+    expect(() => service.openDatabase({ path: nonEmpty, create: true })).toThrow(/PATH_EXISTS/);
+    expect(() => service.openDatabase({ path: symbolicLink, create: true })).toThrow(/PATH_EXISTS/);
+    expect(fs.readFileSync(nonEmpty, 'utf8')).toBe('existing data');
+    expect(fs.lstatSync(symbolicLink).isSymbolicLink()).toBe(true);
+  });
+
+  it('preserves a pre-existing empty file when database initialization fails', () => {
+    const target = path.join(tempDir, 'preserved.sqlite');
+    fs.writeFileSync(target, '');
+    const before = fs.statSync(target);
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(() => {
+      throw new Error('forced initialization failure');
+    });
+
+    expect(() => service.openDatabase({ path: target, create: true })).toThrow(/SQLITE_ERROR/);
+    expect(fs.existsSync(target)).toBe(true);
+    const after = fs.statSync(target);
+    expect({ dev: after.dev, ino: after.ino }).toEqual({ dev: before.dev, ino: before.ino });
+  });
+
+  it('removes only a reservation created by the service when initialization fails', () => {
+    const target = path.join(tempDir, 'service-reservation.sqlite');
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(() => {
+      throw new Error('forced initialization failure');
+    });
+
+    expect(() => service.openDatabase({ path: target, create: true })).toThrow(/SQLITE_ERROR/);
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
+  it('rejects an empty create target whose filesystem identity changes during connection', () => {
+    const target = path.join(tempDir, 'changed.sqlite');
+    const movedTarget = path.join(tempDir, 'changed-original.sqlite');
+    fs.writeFileSync(target, '');
+    const originalPragma = Database.prototype.pragma;
+    let replaced = false;
+    vi.spyOn(Database.prototype, 'pragma').mockImplementation(function (...args) {
+      if (!replaced) {
+        replaced = true;
+        fs.renameSync(target, movedTarget);
+        fs.writeFileSync(target, 'replacement');
+      }
+      return originalPragma.apply(this, args as Parameters<typeof originalPragma>);
+    });
+
+    expect(() => service.openDatabase({ path: target, create: true })).toThrow(
+      /CREATE_TARGET_CHANGED/,
+    );
+    expect(fs.readFileSync(target, 'utf8')).toBe('replacement');
+  });
+
   it('normalizes extensionless create targets through the controlled file policy', () => {
     const requestedPath = path.join(tempDir, 'notes');
     const normalizedPath = `${requestedPath}.sqlite`;
@@ -426,39 +499,6 @@ describe('SqliteService connection and schema', () => {
     expect(() => service.openDatabase({ path: missingPath, create: true })).toThrow(/INVALID_PATH/);
     expect(service.getConnectionState().path).toBe(fs.realpathSync(dbPath));
     expect(service.getSchema().objects.map((item) => item.name)).toContain('users');
-  });
-
-  it('keeps normalized recent database paths for the current service session', () => {
-    const secondPath = path.join(tempDir, 'second.sqlite');
-    const second = new Database(secondPath);
-    second.close();
-
-    service.openDatabase({ path: dbPath, create: false });
-    service.openDatabase({ path: secondPath, create: false });
-    service.openDatabase({ path: dbPath, create: false });
-
-    const recent = service.getRecentDatabases();
-    expect(recent).toEqual([fs.realpathSync(dbPath), fs.realpathSync(secondPath)]);
-    recent.push('/mutated/by/caller.sqlite');
-    expect(service.getRecentDatabases()).toEqual([
-      fs.realpathSync(dbPath),
-      fs.realpathSync(secondPath),
-    ]);
-  });
-
-  it('uses the current user home as the default file browser directory', () => {
-    expect(service.getDefaultDirectory()).toBe(os.homedir());
-  });
-
-  it('keeps only the ten most recently opened database paths', () => {
-    const databasePaths = Array.from({ length: 11 }, (_, index) => {
-      const databasePath = path.join(tempDir, `recent-${index}.sqlite`);
-      new Database(databasePath).close();
-      service.openDatabase({ path: databasePath, create: false });
-      return fs.realpathSync(databasePath);
-    });
-
-    expect(service.getRecentDatabases()).toEqual(databasePaths.slice(1).reverse());
   });
 
   it('rejects directories and invalid database files', () => {

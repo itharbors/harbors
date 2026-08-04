@@ -100,23 +100,14 @@ select:disabled { cursor: not-allowed; opacity: .38; }
 .delimiter-ruler b { color: var(--amber); }
 .delimiter-ruler small { margin-left: auto; color: var(--text-muted); }
 .preview-loading { padding: 5px 12px; border-bottom: 1px solid var(--grid); color: var(--amber); background: var(--deck); font: 11px var(--csv-mono); }
-.error { margin: 8px 12px; padding: 7px 9px; border-left: 3px solid var(--coral); color: var(--text); background: var(--coral-soft); }
-.backdrop { position: fixed; z-index: 2; inset: 0; display: grid; background: rgb(0 0 0 / 55%); place-items: center; }
-.file-dialog {
-  width: min(620px, calc(100vw - 32px));
-  max-height: min(560px, calc(100vh - 32px));
-  overflow: auto;
-  padding: 14px;
-  border: 1px solid var(--grid-strong);
-  background: var(--deck);
-  box-shadow: 0 14px 42px rgb(0 0 0 / 45%);
+.state.error {
+  flex: 1 1 250px;
+  margin: 0;
+  padding: 4px 7px;
+  border-left: 3px solid var(--coral);
+  color: var(--text);
+  background: var(--coral-soft);
 }
-.file-dialog header { display: flex; justify-content: space-between; gap: 12px; }
-.file-dialog code { overflow-wrap: anywhere; color: var(--text-muted); font-family: var(--csv-mono); }
-.file-list { display: grid; gap: 3px; margin: 12px 0; }
-.file-list button { text-align: left; }
-.file-dialog footer { display: flex; justify-content: end; }
-
 @media (max-width: 660px) {
   .state { width: 100%; }
   .file-control code { max-width: 50vw; }

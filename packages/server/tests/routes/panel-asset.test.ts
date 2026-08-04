@@ -49,6 +49,8 @@ describe('createPanelAssetRouter', () => {
     expect(html).toContain('Panel module must default-export a PanelDefinition object');
     expect(html).toContain('window.__panelDefinition = definition;');
     expect(html).toContain('window.editor = {');
+    expect(html).toContain('const panelFileRuntime = (');
+    expect(html).toContain('file: panelFileRuntime,');
     expect(html).not.toContain('editor.panel.define');
     expect(html).not.toContain('/api/assets/panel-module/');
     fs.rmSync(tmpDir, { recursive: true, force: true });

@@ -45,14 +45,11 @@ describe('SQLite core plugin main', () => {
       'explainSql',
       'exportRows',
       'getConnectionState',
-      'getDefaultDirectory',
       'getObjectSchema',
-      'getRecentDatabases',
       'getRelationshipGraph',
       'getRows',
       'getSchema',
       'insertRow',
-      'listDirectory',
       'openDatabase',
       'setConnectionMode',
       'undoLastMutation',
@@ -61,9 +58,9 @@ describe('SQLite core plugin main', () => {
     const pluginPackage = JSON.parse(
       fs.readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as { 'ce-editor': { contribute: { message: { request: Record<string, string[]> } } } };
-    expect(pluginPackage['ce-editor'].contribute.message.request.getDefaultDirectory).toEqual([
-      'getDefaultDirectory',
-    ]);
+    expect(pluginPackage['ce-editor'].contribute.message.request).not.toHaveProperty('listDirectory');
+    expect(pluginPackage['ce-editor'].contribute.message.request).not.toHaveProperty('getDefaultDirectory');
+    expect(pluginPackage['ce-editor'].contribute.message.request).not.toHaveProperty('getRecentDatabases');
 
     const broadcast = vi.fn();
     definition!.lifecycle?.load?.({ message: { broadcast } });

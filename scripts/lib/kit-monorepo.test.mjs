@@ -115,7 +115,7 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
       kit.manifest.version,
       slug === 'mysql'
         ? '0.1.0-preview.3'
-        : slug === 'agent-guard'
+        : ['agent-guard', 'csv', 'sqlite'].includes(slug)
           ? '0.1.0-preview.2'
           : '0.1.0-preview.1',
     );

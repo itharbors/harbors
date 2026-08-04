@@ -110,8 +110,6 @@ editor.plugin.define({
     },
   },
   methods: {
-    listDirectory: (input: unknown) => callService('listDirectory', input),
-    getDefaultDirectory: () => callService('getDefaultDirectory'),
     sampleFile: (input: unknown) => callService('sampleFile', input),
     openFile,
     getConnectionState: connectionState,
