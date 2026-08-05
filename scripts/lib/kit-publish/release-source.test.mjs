@@ -9,7 +9,7 @@ const API_ORIGIN = 'https://api.github.com';
 const repositoryId = '123456';
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const digest = 'a'.repeat(64);
-const signerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3';
+const signerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
 
 const policy = Object.freeze({
   repository,

@@ -3,7 +3,6 @@
 import {
   copyFile,
   mkdir,
-  readFile,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -25,7 +24,6 @@ import {
 } from './lib/kit-publish/metadata.mjs';
 import { aggregateKitRegistry } from './lib/kit-publish/registry.mjs';
 import { readEmbeddedSpdx } from './lib/kit-publish/archive-metadata.mjs';
-import { createKitProvenancePredicate } from './lib/kit-publish/provenance.mjs';
 import { GitHubArtifactAttestationVerifier } from './lib/kit-registry/github-attestation.mjs';
 
 const USAGE = [
@@ -36,8 +34,6 @@ const USAGE = [
   '    --repository <owner/repo> --commit <sha> --workflow <workflow@ref> \\',
   '    --signer-workflow <workflow@ref> \\',
   '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
-  '  node scripts/kit-publish.mjs provenance \\',
-  '    --release-manifest <release.json> --output <provenance.json>',
   '  node scripts/kit-publish.mjs prepare \\',
   '    --kit-directory <directory> --output-directory <directory> \\',
   '    --repository <owner/repo> --commit <sha> --workflow <workflow@ref> \\',
@@ -88,8 +84,6 @@ const AGGREGATE_OPTIONS = [
   'generated-at',
 ];
 
-const PROVENANCE_OPTIONS = ['release-manifest', 'output'];
-
 function parseOptions(args, allowed) {
   if (args.length !== allowed.length * 2) return null;
   const values = Object.create(null);
@@ -113,17 +107,6 @@ function parseOptions(args, allowed) {
 async function prepare(options) {
   if (options['kit-directory']) return prepareDirectory(options);
   return prepareArtifact(options);
-}
-
-async function provenance(options) {
-  const release = JSON.parse(await readFile(path.resolve(options['release-manifest']), 'utf8'));
-  const predicate = createKitProvenancePredicate(release);
-  await writeFile(
-    path.resolve(options.output),
-    canonicalJson(predicate),
-    { flag: 'wx', mode: 0o600 },
-  );
-  return { PREDICATE: path.basename(options.output) };
 }
 
 async function prepareArtifact(options) {
@@ -294,9 +277,7 @@ export async function runKitPublishCli(
   const [command, ...rest] = args;
   const allowed = command === 'prepare'
     ? [PREPARE_ARTIFACT_OPTIONS, PREPARE_DIRECTORY_OPTIONS]
-    : command === 'provenance'
-      ? [PROVENANCE_OPTIONS]
-      : command === 'aggregate'
+    : command === 'aggregate'
         ? [AGGREGATE_OPTIONS]
         : null;
   if (!allowed) {
@@ -315,9 +296,7 @@ export async function runKitPublishCli(
       ?? createDefaultProvenanceVerifier;
     const outputs = command === 'prepare'
       ? await prepare(options)
-      : command === 'provenance'
-        ? await provenance(options)
-        : await aggregate(
+      : await aggregate(
           options,
           aggregateImplementation,
           environment,

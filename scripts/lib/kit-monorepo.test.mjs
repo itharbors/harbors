@@ -36,6 +36,7 @@ test('loads the trusted market Kit set from one strict policy', async () => {
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
+    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4',
   ]);
 });
 
@@ -153,7 +154,7 @@ test('validates a historical product snapshot through an explicit current publis
     const historicalPolicyFile = path.join(root, 'registry', 'policy.json');
     const historicalPolicy = JSON.parse(await readFile(historicalPolicyFile, 'utf8'));
     historicalPolicy.signerWorkflows = historicalPolicy.signerWorkflows.filter((value) => (
-      !value.endsWith('/kit-publish-v3')
+      !value.endsWith('/kit-publish-v4')
     ));
     await writeFile(historicalPolicyFile, `${JSON.stringify(historicalPolicy, null, 2)}\n`);
 

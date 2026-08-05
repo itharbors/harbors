@@ -41,10 +41,10 @@ jobs:
           fi
           echo "release-ref=refs/tags/$RELEASE_TAG" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout immutable v3 publisher
+      - name: Checkout immutable v4 publisher
         uses: actions/checkout@v6
         with:
-          ref: refs/tags/kit-publish-v3
+          ref: refs/tags/kit-publish-v4
           path: publisher
           fetch-depth: 1
           persist-credentials: false
@@ -235,10 +235,10 @@ jobs:
       RELEASE_REF: ${{ needs.context.outputs.release-ref }}
       RELEASE_TAG: ${{ needs.context.outputs.tag }}
     steps:
-      - name: Checkout immutable v3 publisher
+      - name: Checkout immutable v4 publisher
         uses: actions/checkout@v6
         with:
-          ref: refs/tags/kit-publish-v3
+          ref: refs/tags/kit-publish-v4
           fetch-depth: 1
           persist-credentials: false
 
@@ -311,7 +311,7 @@ jobs:
             --repository "$GITHUB_REPOSITORY" \
             --commit "$RELEASE_COMMIT" \
             --workflow "$GITHUB_REPOSITORY/.github/workflows/publish-kit.yml@$RELEASE_REF" \
-            --signer-workflow itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3 \
+            --signer-workflow itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4 \
             --ref "$RELEASE_REF" \
             --tag "$RELEASE_TAG" \
             --label "$KIT_LABEL" \
@@ -346,15 +346,6 @@ jobs:
           ) throw new Error('Prepare outputs do not match validated Tag context');
           appendFileSync(process.env.GITHUB_OUTPUT, `artifact-name=${outputs.get('ARTIFACT_NAME')}\n`, 'utf8');
           NODE
-
-      - name: Generate product Tag provenance predicate
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir "$RUNNER_TEMP/kit-provenance"
-          node scripts/kit-publish.mjs provenance \
-            --release-manifest "$RUNNER_TEMP/kit-release/release.json" \
-            --output "$RUNNER_TEMP/kit-provenance/provenance.json"
 
       - name: Inspect and verify prepared publication
         shell: bash
@@ -407,14 +398,6 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-      - name: Transfer provenance predicate
-        uses: actions/upload-artifact@v7
-        with:
-          name: kit-provenance
-          path: ${{ runner.temp }}/kit-provenance/provenance.json
-          if-no-files-found: error
-          retention-days: 1
-
   publish-preview:
     if: needs.context.outputs.channel == 'preview'
     needs: [context, package]
@@ -429,12 +412,6 @@ jobs:
         with:
           name: kit-publication
           path: ${{ runner.temp }}/kit-release
-
-      - name: Download provenance predicate
-        uses: actions/download-artifact@v8
-        with:
-          name: kit-provenance
-          path: ${{ runner.temp }}/kit-provenance
 
       - name: Require missing Preview Release
         shell: bash
@@ -463,8 +440,6 @@ jobs:
           subject-path: |
             ${{ runner.temp }}/kit-release/${{ needs.package.outputs.artifact-name }}
             ${{ runner.temp }}/kit-release/release.json
-          predicate-type: https://slsa.dev/provenance/v1
-          predicate-path: ${{ runner.temp }}/kit-provenance/provenance.json
 
       - name: Create immutable Preview Release
         shell: bash
@@ -505,12 +480,6 @@ jobs:
           name: kit-publication
           path: ${{ runner.temp }}/kit-release
 
-      - name: Download provenance predicate
-        uses: actions/download-artifact@v8
-        with:
-          name: kit-provenance
-          path: ${{ runner.temp }}/kit-provenance
-
       - name: Require missing Stable Release
         shell: bash
         env:
@@ -538,8 +507,6 @@ jobs:
           subject-path: |
             ${{ runner.temp }}/kit-release/${{ needs.package.outputs.artifact-name }}
             ${{ runner.temp }}/kit-release/release.json
-          predicate-type: https://slsa.dev/provenance/v1
-          predicate-path: ${{ runner.temp }}/kit-provenance/provenance.json
 
       - name: Create immutable Stable Release
         shell: bash
@@ -570,5 +537,5 @@ jobs:
       attestations: read
       pages: write
       id-token: write
-    uses: itharbors/harbors/.github/workflows/publish-kit-registry.yml@kit-publish-v3
+    uses: itharbors/harbors/.github/workflows/publish-kit-registry.yml@kit-publish-v4
     secrets: inherit

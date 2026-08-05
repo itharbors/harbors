@@ -169,7 +169,7 @@ jobs:
       id-token: write
       attestations: write
       pages: write
-    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v3
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v4
     with:
       release-tag: ${{ needs.context.outputs.release-tag }}
     secrets: inherit
