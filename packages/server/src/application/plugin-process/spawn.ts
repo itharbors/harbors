@@ -1,11 +1,12 @@
 import { spawn as spawnChild } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { APPLICATION_HOST_SECRET_ENVIRONMENT_KEYS } from '../host-environment.js';
 
 const OUTPUT_TAIL_BYTES = 64 * 1024;
-const CAPTURED_APPLICATION_HOST_ENVIRONMENT_KEYS = Object.freeze([
-  'HARBORS_APPLICATION_TOKEN',
-  'HARBORS_NOTIFICATION_PORT',
+const APPLICATION_PLUGIN_PRIVATE_ENVIRONMENT_KEYS = Object.freeze([
+  'HARBORS_NOTIFICATION_OWNER_TOKEN',
+  'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
 ]);
 
 export type ApplicationPluginRunnerRuntimeMode = 'node' | 'electron-run-as-node';
@@ -23,19 +24,32 @@ export interface ApplicationPluginProcessRuntimeOptions {
   secretEnvironmentKeys?: readonly string[];
 }
 
+export interface ApplicationPluginChildError {
+  code: string;
+  message: string;
+}
+
+export interface ApplicationPluginChildTerminal {
+  kind: 'error' | 'disconnect' | 'exit';
+  code: number | null;
+  signal: NodeJS.Signals | null;
+  error: ApplicationPluginChildError | null;
+}
+
 export interface ApplicationPluginChild {
   readonly pid: number | undefined;
   readonly stdoutTail: string;
   readonly stderrTail: string;
   send(message: unknown): Promise<void>;
   subscribeMessage(listener: (message: unknown) => void): () => void;
-  subscribeExit(listener: (code: number | null, signal: NodeJS.Signals | null) => void): () => void;
+  subscribeExit(listener: (terminal: ApplicationPluginChildTerminal) => void): () => void;
   terminate(): boolean;
   kill(): boolean;
 }
 
 interface ApplicationPluginReadable {
   on(event: 'data', listener: (chunk: unknown) => void): unknown;
+  on(event: 'error', listener: (error: unknown) => void): unknown;
 }
 
 interface SpawnedApplicationPluginProcess {
@@ -45,9 +59,10 @@ interface SpawnedApplicationPluginProcess {
   send(message: unknown, callback: (error: Error | null) => void): boolean;
   kill(signal: NodeJS.Signals): boolean;
   on(event: 'message', listener: (message: unknown) => void): unknown;
+  on(event: 'error', listener: (error: unknown) => void): unknown;
+  on(event: 'disconnect', listener: () => void): unknown;
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
   off(event: 'message', listener: (message: unknown) => void): unknown;
-  off(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
 }
 
 interface ApplicationPluginSpawnOptions {
@@ -96,15 +111,38 @@ export function spawnApplicationPluginProcess(
     serialization: 'advanced',
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
+  let terminal: ApplicationPluginChildTerminal | undefined;
+  const terminalListeners = new Set<(terminal: ApplicationPluginChildTerminal) => void>();
+  const notifyTerminal = (value: ApplicationPluginChildTerminal): void => {
+    if (terminal) return;
+    terminal = Object.freeze(value);
+    for (const listener of [...terminalListeners]) safelyNotifyTerminal(listener, terminal);
+    terminalListeners.clear();
+  };
+  child.on('error', (error) => {
+    notifyTerminal({
+      kind: 'error',
+      code: null,
+      signal: null,
+      error: sanitizeChildError(error),
+    });
+  });
+  child.on('disconnect', () => {
+    notifyTerminal({ kind: 'disconnect', code: null, signal: null, error: null });
+  });
+  child.on('exit', (code, signal) => {
+    notifyTerminal({ kind: 'exit', code, signal, error: null });
+  });
+
   let stdoutTail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
   let stderrTail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
-  child.stdout?.on('data', (chunk) => { stdoutTail = appendTail(stdoutTail, chunk); });
-  child.stderr?.on('data', (chunk) => { stderrTail = appendTail(stderrTail, chunk); });
+  captureOutputTail(child.stdout, (chunk) => { stdoutTail = appendTail(stdoutTail, chunk); });
+  captureOutputTail(child.stderr, (chunk) => { stderrTail = appendTail(stderrTail, chunk); });
 
   const adapter: ApplicationPluginChild = {
     pid: child.pid,
-    get stdoutTail() { return stdoutTail.toString('utf8'); },
-    get stderrTail() { return stderrTail.toString('utf8'); },
+    get stdoutTail() { return renderOutputTail(stdoutTail); },
+    get stderrTail() { return renderOutputTail(stderrTail); },
     send(message) {
       return new Promise<void>((resolve, reject) => {
         try {
@@ -122,8 +160,12 @@ export function spawnApplicationPluginProcess(
       return () => { child.off('message', listener); };
     },
     subscribeExit(listener) {
-      child.on('exit', listener);
-      return () => { child.off('exit', listener); };
+      if (terminal) {
+        safelyNotifyTerminal(listener, terminal);
+        return () => undefined;
+      }
+      terminalListeners.add(listener);
+      return () => { terminalListeners.delete(listener); };
     },
     terminate: () => child.kill('SIGTERM'),
     kill: () => child.kill('SIGKILL'),
@@ -138,11 +180,12 @@ function sanitizeChildEnvironment(options: ApplicationPluginProcessRuntimeOption
     )),
   );
   const secretKeys = new Set([
-    ...CAPTURED_APPLICATION_HOST_ENVIRONMENT_KEYS,
+    ...APPLICATION_HOST_SECRET_ENVIRONMENT_KEYS,
+    ...APPLICATION_PLUGIN_PRIVATE_ENVIRONMENT_KEYS,
     ...(options.secretEnvironmentKeys ?? []),
   ]);
   for (const key of Object.keys(environment)) {
-    if (secretKeys.has(key) || isCredentialEnvironmentSecret(key)) delete environment[key];
+    if (secretKeys.has(key)) delete environment[key];
   }
   delete environment.ELECTRON_RUN_AS_NODE;
   if (options.runner.runtimeMode === 'electron-run-as-node') {
@@ -151,12 +194,67 @@ function sanitizeChildEnvironment(options: ApplicationPluginProcessRuntimeOption
   return environment;
 }
 
-function isCredentialEnvironmentSecret(key: string): boolean {
-  return /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PRIVATE_KEY)$/iu.test(key);
-}
-
 function isElectronRunAsNode(): boolean {
   return Boolean(process.versions.electron) && process.env.ELECTRON_RUN_AS_NODE === '1';
+}
+
+function sanitizeChildError(input: unknown): ApplicationPluginChildError {
+  const inputCode = input && typeof input === 'object' && 'code' in input
+    ? (input as { code?: unknown }).code
+    : undefined;
+  const code = typeof inputCode === 'string' && /^[A-Z0-9_]+$/u.test(inputCode)
+    ? inputCode
+    : 'APPLICATION_PLUGIN_PROCESS_ERROR';
+  return Object.freeze({
+    code,
+    message: `Application plugin process failed (${code})`,
+  });
+}
+
+function safelyNotifyTerminal(
+  listener: (terminal: ApplicationPluginChildTerminal) => void,
+  terminal: ApplicationPluginChildTerminal,
+): void {
+  try {
+    listener(terminal);
+  } catch {
+    // A terminal observer cannot destabilize Framework cleanup.
+  }
+}
+
+function captureOutputTail(
+  stream: ApplicationPluginReadable | null,
+  append: (chunk: unknown) => void,
+): void {
+  if (!stream) return;
+  let capturing = true;
+  stream.on('error', () => { capturing = false; });
+  stream.on('data', (chunk) => {
+    if (capturing) append(chunk);
+  });
+}
+
+function renderOutputTail(tail: Buffer<ArrayBufferLike>): string {
+  const decoded = tail.toString('utf8');
+  if (Buffer.byteLength(decoded, 'utf8') <= OUTPUT_TAIL_BYTES) return decoded;
+  const suffix: string[] = [];
+  let bytes = 0;
+  let index = decoded.length;
+  while (index > 0) {
+    let start = index - 1;
+    const last = decoded.charCodeAt(start);
+    if (last >= 0xdc00 && last <= 0xdfff && start > 0) {
+      const previous = decoded.charCodeAt(start - 1);
+      if (previous >= 0xd800 && previous <= 0xdbff) start -= 1;
+    }
+    const character = decoded.slice(start, index);
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (bytes + characterBytes > OUTPUT_TAIL_BYTES) break;
+    suffix.push(character);
+    bytes += characterBytes;
+    index = start;
+  }
+  return suffix.reverse().join('');
 }
 
 function appendTail(current: Buffer<ArrayBufferLike>, chunk: unknown): Buffer<ArrayBufferLike> {

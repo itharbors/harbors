@@ -96,6 +96,7 @@ describe('application plugin child adapter', () => {
         CODEX_HOME: '/Users/me/.codex',
         HARBORS_RUNTIME_PROFILE: 'development',
         HARBORS_CREDENTIAL_MODE: 'local',
+        HARBORS_ALLOW_SECRET: '1',
         HARBORS_APPLICATION_TOKEN: 'application-secret',
         HARBORS_NOTIFICATION_PORT: '49123',
         HARBORS_NOTIFICATION_OWNER_TOKEN: 'notification-secret',
@@ -122,6 +123,7 @@ describe('application plugin child adapter', () => {
           CODEX_HOME: '/Users/me/.codex',
           HARBORS_RUNTIME_PROFILE: 'development',
           HARBORS_CREDENTIAL_MODE: 'local',
+          HARBORS_ALLOW_SECRET: '1',
         },
         serialization: 'advanced',
         stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
@@ -164,7 +166,7 @@ describe('application plugin child adapter', () => {
     expect(runner.args.join(' ')).not.toContain('ELECTRON_RUN_AS_NODE');
   });
 
-  it('waits for IPC backpressure callbacks and exposes send failures', async () => {
+  it('waits for a successful IPC callback after send reports backpressure', async () => {
     const rawChild = fakeChildProcess();
     let complete: ((error: Error | null) => void) | undefined;
     rawChild.send = vi.fn((_message, callback) => {
@@ -186,8 +188,147 @@ describe('application plugin child adapter', () => {
     );
     await Promise.resolve();
     expect(settled).toBe(false);
-    complete?.(new Error('ipc queue closed'));
+    complete?.(null);
+    await expect(sent).resolves.toBeUndefined();
+  });
+
+  it('exposes asynchronous IPC callback failures', async () => {
+    const rawChild = fakeChildProcess();
+    rawChild.send = vi.fn((_message, callback) => {
+      callback(new Error('ipc queue closed'));
+      return false;
+    });
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+
+    const sent = child.send({ kind: 'request' });
     await expect(sent).rejects.toThrow('ipc queue closed');
+  });
+
+  it('exposes synchronous IPC send failures', async () => {
+    const rawChild = fakeChildProcess();
+    rawChild.send = vi.fn(() => { throw new Error('ipc disconnected'); });
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+
+    await expect(child.send({ kind: 'request' })).rejects.toThrow('ipc disconnected');
+  });
+
+  it('reports a real spawn ENOENT as one sanitized terminal event', async () => {
+    const child = spawnApplicationPluginProcess({
+      runner: {
+        executable: `/definitely-missing-harbors-runner-${process.pid}`,
+        args: ['/runner.js'],
+        runtimeMode: 'node',
+      },
+      cwd: process.cwd(),
+      env: { PATH: process.env.PATH },
+    });
+
+    const terminal = await new Promise<unknown>((resolve) => {
+      child.subscribeExit(resolve);
+    });
+    expect(terminal).toMatchObject({
+      kind: 'error',
+      code: null,
+      signal: null,
+      error: { code: 'ENOENT', message: expect.any(String) },
+    });
+    expect((terminal as { error: object }).error).not.toHaveProperty('stack');
+  }, 1_000);
+
+  it('treats disconnect without exit as terminal and ignores a later exit', () => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    const terminals: unknown[] = [];
+    child.subscribeExit((terminal) => terminals.push(terminal));
+
+    rawChild.emit('disconnect');
+    rawChild.emit('exit', 1, 'SIGTERM');
+
+    expect(terminals).toEqual([{
+      kind: 'disconnect', code: null, signal: null, error: null,
+    }]);
+  });
+
+  it('replays a terminal event that raced ahead of subscription', () => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    rawChild.emit('disconnect');
+    const terminals: unknown[] = [];
+
+    child.subscribeExit((terminal) => terminals.push(terminal));
+
+    expect(terminals).toEqual([{
+      kind: 'disconnect', code: null, signal: null, error: null,
+    }]);
+  });
+
+  it.each(['stdout', 'stderr'] as const)('contains %s stream errors and stops that tail capture', (streamName) => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    const stream = rawChild[streamName];
+    stream.write('before-error');
+
+    expect(() => stream.emit('error', new Error(`${streamName} failed`))).not.toThrow();
+    stream.write('after-error');
+
+    expect(child[`${streamName}Tail`]).toBe('before-error');
+  });
+
+  it('bounds invalid UTF-8 public tail output to 64 KiB', () => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+
+    rawChild.stderr.write(Buffer.alloc(64 * 1024, 0xff));
+
+    expect(Buffer.byteLength(child.stderrTail, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+  });
+
+  it('keeps a valid multibyte suffix across split chunks and a truncated prefix', () => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    const content = Buffer.from(`${'你'.repeat(22_000)}结尾`, 'utf8');
+    for (let offset = 0; offset < content.length; offset += 5) {
+      rawChild.stdout.write(content.subarray(offset, offset + 5));
+    }
+
+    expect(Buffer.byteLength(child.stdoutTail, 'utf8')).toBeLessThanOrEqual(64 * 1024);
+    expect(child.stdoutTail.endsWith('结尾')).toBe(true);
+    expect(child.stdoutTail).not.toContain('\ufffd');
   });
 
   it('supports narrow subscriptions, signals, and bounded stdout/stderr tails', () => {
@@ -199,9 +340,9 @@ describe('application plugin child adapter', () => {
       spawn: () => rawChild,
     });
     const messages: unknown[] = [];
-    const exits: Array<[number | null, NodeJS.Signals | null]> = [];
+    const exits: unknown[] = [];
     const unsubscribeMessage = child.subscribeMessage((message) => messages.push(message));
-    const unsubscribeExit = child.subscribeExit((code, signal) => exits.push([code, signal]));
+    const unsubscribeExit = child.subscribeExit((terminal) => exits.push(terminal));
 
     rawChild.emit('message', { type: 'one' });
     unsubscribeMessage();
@@ -215,7 +356,9 @@ describe('application plugin child adapter', () => {
     rawChild.emit('exit', 1, null);
 
     expect(messages).toEqual([{ type: 'one' }]);
-    expect(exits).toEqual([[0, null]]);
+    expect(exits).toEqual([{
+      kind: 'exit', code: 0, signal: null, error: null,
+    }]);
     expect(Buffer.byteLength(child.stdoutTail)).toBeLessThanOrEqual(64 * 1024);
     expect(Buffer.byteLength(child.stderrTail)).toBeLessThanOrEqual(64 * 1024);
     expect(child.stdoutTail.endsWith('stdout-end')).toBe(true);
