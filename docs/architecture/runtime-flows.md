@@ -89,9 +89,13 @@ application token 的 `POST /api/application/plugin/retry` 明确恢复。
 
 Web/source runner 使用 `tsx` 加载当前 `runner.ts`，编译后的 Node Server 使用相邻 `runner.js`。
 packaged Electron 使用 `ELECTRON_RUN_AS_NODE=1` 和 staged
-`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js`。runner argv 与
-环境不含 Application、Notification owner 或 credential transport token；这只是秘密最小化与故障
-收敛，不是 OS 权限沙箱，插件仍继承明确保留的非秘密环境、Framework cwd 和同一账号的文件访问权。
+`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js`。child env 先复制
+Framework 父环境，再删除权威固定 host secret 键和显式 `secretEnvironmentKeys`；固定 Application、
+Notification owner 与 credential transport secret 也不进入 runner argv。该机制既不是通用 secret
+detector，也不是 allowlist，未登记的自定义 token 或云凭据仍可能被继承。开发者不得把敏感值放在
+普通环境变量中；Framework 集成方必须通过 capture/`secretEnvironmentKeys` 登记新增 secret，或使用
+未来的窄化 capability。这仍只是秘密最小化和 crash containment，不是 OS 权限沙箱：插件使用
+Framework cwd，以同一 OS 账号运行，并拥有该账号的文件访问权。
 
 ## 2. Agent 桌面通知
 

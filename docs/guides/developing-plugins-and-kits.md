@@ -319,16 +319,23 @@ owner，最后广播新 snapshot。`failed` 可由 Electron 内部控制面调�
 canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒绝。
 
 该进程边界是 crash containment，不是权限 sandbox。插件仍是受信 Node.js 代码，以同一 OS 账号
-运行并继承 Framework 明确保留的非秘密环境、cwd 和该账号的文件系统权限。Application token、
-Notification owner token 与 credential transport secret 不会进入插件 argv/env；新插件应优先使用
-`ctx.paths.data/cache/temp/legacyData`，不能把环境过滤理解成文件访问隔离。
+运行，使用 Framework cwd，并拥有该账号的文件系统权限。新插件应优先使用
+`ctx.paths.data/cache/temp/legacyData`；这些 owner 专属路径和环境过滤都不是文件访问隔离。
+
+child env 从 Framework 父环境的副本开始，然后删除权威固定 host secret 键和集成方显式提供的
+`secretEnvironmentKeys`。固定 Application token、Notification owner token 与 credential transport
+secret 不会进入插件 argv/env，但这不是通用 secret detector，也不是只传安全值的 allowlist：未登记
+的自定义 token、云凭据等敏感值仍可能被继承。插件开发者不得把敏感值放进普通环境变量；Framework
+集成方捕获或新增 host secret 时，必须通过 capture 并在 `secretEnvironmentKeys` 登记变量名，或使用
+未来提供的窄化 capability。
 
 ### 官方 Kit 与 runner 兼容
 
 官方 Notifications、Scheduler 和 Agent Guard 的现有 startup plugin package 继续走同一 manifest
-与 runtime facade，不需要为进程化复制一份实现。为兼容 Scheduler 已发布行为，非秘密
-`HARBORS_DATA_ROOT` 会与 `PATH`、locale 等产品环境一起保留；新代码仍应优先使用 `ctx.paths`，不要
-把 `HARBORS_DATA_ROOT` 当成新的通用插件 API，也不要把 host token 塞入自定义环境变量规避过滤。
+与 runtime facade，不需要为进程化复制一份实现。为兼容 Scheduler 已发布行为，
+`HARBORS_DATA_ROOT` 目前因未列入移除键而与 `PATH`、locale 等父环境一起保留；它不得承载敏感值。
+新代码仍应优先使用 `ctx.paths`，不要把 `HARBORS_DATA_ROOT` 当成新的通用插件 API，也不要把 host
+token 或云凭据塞入未登记的自定义环境变量。
 
 Web/source 开发从当前 Server 源码解析 `runner.ts` 并使用仓库 `tsx` loader；编译 Server 使用同目录
 `runner.js`。packaged Electron 使用自己的 executable 配合 `ELECTRON_RUN_AS_NODE=1`，并从

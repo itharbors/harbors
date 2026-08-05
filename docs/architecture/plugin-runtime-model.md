@@ -131,10 +131,17 @@ symbol、accessor、Proxy、自定义 prototype 和循环引用都会被拒绝�
 
 独立 OS 进程可以把未捕获异常、unhandled rejection、主动退出和 IPC 故障限制在该 Application
 插件：Framework 与健康 sibling 继续运行，失败 owner 的贡献先清除，再决定重启或熔断。它不是
-OS 权限沙箱，也不把受信插件变成不受信代码。子进程仍以同一 OS 账号运行，继承明确传入的非秘密
-环境、Framework cwd 和该账号可访问的文件系统权限；`runtime.paths` 提供 owner 专属 data/cache/
-temp 路径，但不能替代操作系统访问控制。Application、Notification owner 与 credential transport
-token 不进入 runner argv 或 child env。
+OS 权限沙箱，也不把受信插件变成不受信代码。子进程仍以同一 OS 账号运行，使用 Framework cwd
+并拥有该账号可访问的文件系统权限；`runtime.paths` 提供 owner 专属 data/cache/temp 路径，但不能
+替代操作系统访问控制。
+
+child env 从 Framework 父环境的副本开始，然后只删除权威固定键 `HARBORS_APPLICATION_TOKEN`、
+`HARBORS_NOTIFICATION_PORT`、`HARBORS_NOTIFICATION_OWNER_TOKEN`、
+`HARBORS_CREDENTIAL_TRANSPORT_SECRET`，以及集成方显式提供的 `secretEnvironmentKeys`。这不是通用
+secret detector，也不是环境 allowlist；未登记的自定义 token、云凭据等敏感值仍可能被继承。开发者
+不得把敏感值放进普通环境变量。Framework 集成方捕获或新增 host secret 时，必须通过 capture 并在
+`secretEnvironmentKeys` 登记对应环境变量名，或等待未来提供窄化 capability。固定 host secret 不进入
+runner argv/child env，但这项移除不构成权限隔离。
 
 ## 生命周期
 

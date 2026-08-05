@@ -8,6 +8,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rename,
   rm,
   symlink,
@@ -27,6 +28,14 @@ import { buildDesktop } from './desktop-build.mjs';
 import { runDesktopFrameworkProcess } from './desktop-framework.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+const PACKAGED_PLUGIN_PROCESS_FILES = Object.freeze([
+  'error.js',
+  'protocol.js',
+  'rpc-peer.js',
+  'runner-host.js',
+  'runner-runtime.js',
+  'runner.js',
+]);
 let freshServerBuildRoot;
 
 before(async () => {
@@ -107,17 +116,33 @@ export const main = true;
     await write(root, `plugins/${plugin}/package.json`, JSON.stringify({ name: `@itharbors/${plugin}` }));
     await write(root, `plugins/${plugin}/main/dist/index.js`, 'export default {};\n');
   }
-  const emittedRunner = path.join(
-    freshServerBuildRoot,
-    'application/plugin-process/runner.js',
-  );
+  const emittedProcessRoot = path.join(freshServerBuildRoot, 'application/plugin-process');
   const fixtureProcessRoot = path.join(
     root,
     'packages/server/dist/application/plugin-process',
   );
   await mkdir(path.dirname(fixtureProcessRoot), { recursive: true });
-  await cp(path.dirname(emittedRunner), fixtureProcessRoot, { recursive: true });
-  return { root, emittedRunner };
+  await cp(emittedProcessRoot, fixtureProcessRoot, { recursive: true });
+  return { root, emittedProcessRoot };
+}
+
+function collectStaticLocalJavaScriptClosure(sources, entry) {
+  const pending = [entry];
+  const visited = new Set();
+  const localImport = /^\s*import(?:\s+[^'"\n]*\s+from)?\s*['"](\.\/[^'"]+\.js)['"];?\s*$/gmu;
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (visited.has(current)) continue;
+    const source = sources.get(current);
+    if (source === undefined) throw new Error(`Missing static runner dependency: ${current}`);
+    visited.add(current);
+    for (const match of source.matchAll(localImport)) {
+      pending.push(path.posix.normalize(path.posix.join(path.posix.dirname(current), match[1])));
+    }
+  }
+
+  return [...visited].sort();
 }
 
 function packagedArtifactPaths(cwd) {
@@ -848,7 +873,7 @@ test('builder ships only the staged runtime and unpacks native modules', async (
   await access(entitlementsPath);
 });
 
-test('stages the fresh current Server runner at the packaged Framework default path', async (t) => {
+test('stages exactly the fresh Server runner static dependency closure', async (t) => {
   const fixture = await createDesktopRuntimeFixture(t);
   const runtimeRoot = path.join(fixture.root, 'dist', 'desktop-runtime');
   const staged = await buildDesktop({
@@ -881,9 +906,34 @@ test('stages the fresh current Server runner at the packaged Framework default p
 
   const relativeRunner = 'packages/server/dist/application/plugin-process/runner.js';
   const stagedRunner = path.join(runtimeRoot, relativeRunner);
+  const stagedProcessRoot = path.dirname(stagedRunner);
+  const freshSources = new Map(await Promise.all(PACKAGED_PLUGIN_PROCESS_FILES.map(async (file) => [
+    file,
+    await readFile(path.join(fixture.emittedProcessRoot, file), 'utf8'),
+  ])));
+
+  assert.deepEqual(
+    collectStaticLocalJavaScriptClosure(freshSources, 'runner.js'),
+    PACKAGED_PLUGIN_PROCESS_FILES,
+  );
+  for (const missing of PACKAGED_PLUGIN_PROCESS_FILES.filter((file) => file !== 'runner.js')) {
+    const mutatedSources = new Map(freshSources);
+    mutatedSources.delete(missing);
+    assert.throws(
+      () => collectStaticLocalJavaScriptClosure(mutatedSources, 'runner.js'),
+      new RegExp(`Missing static runner dependency: ${missing.replace('.', '\\.')}`, 'u'),
+    );
+  }
+
+  assert.deepEqual((await readdir(stagedProcessRoot)).sort(), PACKAGED_PLUGIN_PROCESS_FILES);
   assert.ok(staged.inventory.includes(relativeRunner));
   assert.equal(serverOptions.applicationPluginProcess.runner.args.at(-1), stagedRunner);
-  assert.deepEqual(await readFile(stagedRunner), await readFile(fixture.emittedRunner));
+  for (const file of PACKAGED_PLUGIN_PROCESS_FILES) {
+    assert.deepEqual(
+      await readFile(path.join(stagedProcessRoot, file)),
+      await readFile(path.join(fixture.emittedProcessRoot, file)),
+    );
+  }
   const smokeEnvironment = { ...process.env };
   delete smokeEnvironment.ELECTRON_RUN_AS_NODE;
   const smoke = spawnSync(process.execPath, [stagedRunner], {
