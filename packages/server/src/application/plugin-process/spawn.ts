@@ -29,12 +29,35 @@ export interface ApplicationPluginChildError {
   message: string;
 }
 
-export interface ApplicationPluginChildTerminal {
-  kind: 'error' | 'disconnect' | 'exit';
-  code: number | null;
-  signal: NodeJS.Signals | null;
-  error: ApplicationPluginChildError | null;
-}
+export type ApplicationPluginChildTerminal =
+  | Readonly<{
+    kind: 'disconnect';
+    final: false;
+    code: null;
+    signal: null;
+    error: null;
+  }>
+  | Readonly<{
+    kind: 'error';
+    final: false;
+    code: null;
+    signal: null;
+    error: ApplicationPluginChildError;
+  }>
+  | Readonly<{
+    kind: 'error';
+    final: true;
+    code: null;
+    signal: null;
+    error: ApplicationPluginChildError;
+  }>
+  | Readonly<{
+    kind: 'exit';
+    final: true;
+    code: number | null;
+    signal: NodeJS.Signals | null;
+    error: null;
+  }>;
 
 export interface ApplicationPluginChild {
   readonly pid: number | undefined;
@@ -59,6 +82,7 @@ interface SpawnedApplicationPluginProcess {
   send(message: unknown, callback: (error: Error | null) => void): boolean;
   kill(signal: NodeJS.Signals): boolean;
   on(event: 'message', listener: (message: unknown) => void): unknown;
+  on(event: 'spawn', listener: () => void): unknown;
   on(event: 'error', listener: (error: unknown) => void): unknown;
   on(event: 'disconnect', listener: () => void): unknown;
   on(event: 'exit', listener: (code: number | null, signal: NodeJS.Signals | null) => void): unknown;
@@ -111,27 +135,56 @@ export function spawnApplicationPluginProcess(
     serialization: 'advanced',
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
   });
-  let terminal: ApplicationPluginChildTerminal | undefined;
+  let spawned = false;
+  let faultPublished = false;
+  let exitPublished = false;
+  let spawnFailed = false;
+  const lifecycle: ApplicationPluginChildTerminal[] = [];
+  const notificationQueue: ApplicationPluginChildTerminal[] = [];
+  let notifying = false;
   const terminalListeners = new Set<(terminal: ApplicationPluginChildTerminal) => void>();
-  const notifyTerminal = (value: ApplicationPluginChildTerminal): void => {
-    if (terminal) return;
-    terminal = Object.freeze(value);
-    for (const listener of [...terminalListeners]) safelyNotifyTerminal(listener, terminal);
-    terminalListeners.clear();
+  const publishLifecycle = (value: ApplicationPluginChildTerminal): void => {
+    const event = Object.freeze(value);
+    lifecycle.push(event);
+    notificationQueue.push(event);
+    if (notifying) return;
+    notifying = true;
+    try {
+      while (notificationQueue.length > 0) {
+        const next = notificationQueue.shift()!;
+        for (const listener of [...terminalListeners]) safelyNotifyTerminal(listener, next);
+        if (next.final) terminalListeners.clear();
+      }
+    } finally {
+      notifying = false;
+    }
   };
+  child.on('spawn', () => { spawned = true; });
   child.on('error', (error) => {
-    notifyTerminal({
+    if (spawnFailed || exitPublished || faultPublished) return;
+    const final = !spawned;
+    faultPublished = true;
+    spawnFailed = final;
+    publishLifecycle({
       kind: 'error',
+      final,
       code: null,
       signal: null,
       error: sanitizeChildError(error),
     });
   });
   child.on('disconnect', () => {
-    notifyTerminal({ kind: 'disconnect', code: null, signal: null, error: null });
+    if (spawnFailed || exitPublished || faultPublished) return;
+    faultPublished = true;
+    publishLifecycle({
+      kind: 'disconnect', final: false, code: null, signal: null, error: null,
+    });
   });
   child.on('exit', (code, signal) => {
-    notifyTerminal({ kind: 'exit', code, signal, error: null });
+    if (spawnFailed || exitPublished) return;
+    exitPublished = true;
+    // The OS exit event is authoritative; close is intentionally not a second lifecycle event.
+    publishLifecycle({ kind: 'exit', final: true, code, signal, error: null });
   });
 
   let stdoutTail: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -160,8 +213,12 @@ export function spawnApplicationPluginProcess(
       return () => { child.off('message', listener); };
     },
     subscribeExit(listener) {
-      if (terminal) {
-        safelyNotifyTerminal(listener, terminal);
+      let replayed = 0;
+      while (replayed < lifecycle.length) {
+        safelyNotifyTerminal(listener, lifecycle[replayed]!);
+        replayed += 1;
+      }
+      if (spawnFailed || exitPublished) {
         return () => undefined;
       }
       terminalListeners.add(listener);

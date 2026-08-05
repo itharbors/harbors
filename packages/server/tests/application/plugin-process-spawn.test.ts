@@ -10,12 +10,16 @@ import {
 function fakeChildProcess() {
   const child = new EventEmitter() as EventEmitter & {
     pid: number;
+    exitCode: number | null;
+    signalCode: NodeJS.Signals | null;
     stdout: PassThrough;
     stderr: PassThrough;
     send: ReturnType<typeof vi.fn>;
     kill: ReturnType<typeof vi.fn>;
   };
   child.pid = 43210;
+  child.exitCode = null;
+  child.signalCode = null;
   child.stdout = new PassThrough();
   child.stderr = new PassThrough();
   child.send = vi.fn(() => true);
@@ -233,19 +237,26 @@ describe('application plugin child adapter', () => {
       env: { PATH: process.env.PATH },
     });
 
+    const events: unknown[] = [];
     const terminal = await new Promise<unknown>((resolve) => {
-      child.subscribeExit(resolve);
+      child.subscribeExit((event) => {
+        events.push(event);
+        resolve(event);
+      });
     });
     expect(terminal).toMatchObject({
       kind: 'error',
+      final: true,
       code: null,
       signal: null,
       error: { code: 'ENOENT', message: expect.any(String) },
     });
     expect((terminal as { error: object }).error).not.toHaveProperty('stack');
+    await new Promise<void>((resolve) => { setImmediate(resolve); });
+    expect(events).toEqual([terminal]);
   }, 1_000);
 
-  it('treats disconnect without exit as terminal and ignores a later exit', () => {
+  it('reports disconnect immediately and still confirms the later OS exit', () => {
     const rawChild = fakeChildProcess();
     const child = spawnApplicationPluginProcess({
       runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
@@ -256,15 +267,20 @@ describe('application plugin child adapter', () => {
     const terminals: unknown[] = [];
     child.subscribeExit((terminal) => terminals.push(terminal));
 
+    rawChild.emit('spawn');
     rawChild.emit('disconnect');
-    rawChild.emit('exit', 1, 'SIGTERM');
+    expect(rawChild.exitCode).toBe(null);
+    rawChild.exitCode = 7;
+    rawChild.emit('exit', 7, null);
 
-    expect(terminals).toEqual([{
-      kind: 'disconnect', code: null, signal: null, error: null,
-    }]);
+    expect(terminals).toEqual([
+      { kind: 'disconnect', final: false, code: null, signal: null, error: null },
+      { kind: 'exit', final: true, code: 7, signal: null, error: null },
+    ]);
+    expect(rawChild.kill).not.toHaveBeenCalled();
   });
 
-  it('replays a terminal event that raced ahead of subscription', () => {
+  it('reports a post-spawn error before the authoritative OS exit', () => {
     const rawChild = fakeChildProcess();
     const child = spawnApplicationPluginProcess({
       runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
@@ -272,14 +288,130 @@ describe('application plugin child adapter', () => {
       env: {},
       spawn: () => rawChild,
     });
+    const terminals: unknown[] = [];
+    child.subscribeExit((terminal) => terminals.push(terminal));
+
+    rawChild.emit('spawn');
+    rawChild.emit('error', Object.assign(new Error('runtime fault'), { code: 'EIO' }));
     rawChild.emit('disconnect');
+    rawChild.emit('exit', null, 'SIGKILL');
+
+    expect(terminals).toEqual([
+      {
+        kind: 'error',
+        final: false,
+        code: null,
+        signal: null,
+        error: { code: 'EIO', message: 'Application plugin process failed (EIO)' },
+      },
+      { kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null },
+    ]);
+  });
+
+  it('delivers an exit queued synchronously by a fault observer', () => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    const terminals: unknown[] = [];
+    child.subscribeExit((terminal) => {
+      terminals.push(terminal);
+      if (terminal.kind === 'disconnect') rawChild.emit('exit', 9, null);
+    });
+
+    rawChild.emit('spawn');
+    rawChild.emit('disconnect');
+
+    expect(terminals).toEqual([
+      { kind: 'disconnect', final: false, code: null, signal: null, error: null },
+      { kind: 'exit', final: true, code: 9, signal: null, error: null },
+    ]);
+  });
+
+  it('replays fault and exit events in original order to a late subscriber', () => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    rawChild.emit('spawn');
+    rawChild.emit('disconnect');
+    rawChild.emit('exit', 7, null);
     const terminals: unknown[] = [];
 
     child.subscribeExit((terminal) => terminals.push(terminal));
 
-    expect(terminals).toEqual([{
-      kind: 'disconnect', code: null, signal: null, error: null,
-    }]);
+    expect(terminals).toEqual([
+      { kind: 'disconnect', final: false, code: null, signal: null, error: null },
+      { kind: 'exit', final: true, code: 7, signal: null, error: null },
+    ]);
+  });
+
+  it.each([
+    {
+      label: 'disconnect',
+      emit(rawChild: ReturnType<typeof fakeChildProcess>) {
+        rawChild.emit('spawn');
+        rawChild.emit('disconnect');
+        rawChild.emit('disconnect');
+        rawChild.emit('exit', 0, null);
+      },
+      expected: [
+        { kind: 'disconnect', final: false, code: null, signal: null, error: null },
+        { kind: 'exit', final: true, code: 0, signal: null, error: null },
+      ],
+    },
+    {
+      label: 'error',
+      emit(rawChild: ReturnType<typeof fakeChildProcess>) {
+        const error = Object.assign(new Error('runtime fault'), { code: 'EIO' });
+        rawChild.emit('spawn');
+        rawChild.emit('error', error);
+        rawChild.emit('error', error);
+        rawChild.emit('exit', 2, null);
+      },
+      expected: [
+        {
+          kind: 'error',
+          final: false,
+          code: null,
+          signal: null,
+          error: { code: 'EIO', message: 'Application plugin process failed (EIO)' },
+        },
+        { kind: 'exit', final: true, code: 2, signal: null, error: null },
+      ],
+    },
+    {
+      label: 'exit',
+      emit(rawChild: ReturnType<typeof fakeChildProcess>) {
+        rawChild.emit('spawn');
+        rawChild.emit('exit', 0, null);
+        rawChild.emit('exit', 1, null);
+        rawChild.emit('close', 0, null);
+      },
+      expected: [
+        { kind: 'exit', final: true, code: 0, signal: null, error: null },
+      ],
+    },
+  ])('deduplicates repeated $label lifecycle events', ({ emit, expected }) => {
+    const rawChild = fakeChildProcess();
+    const child = spawnApplicationPluginProcess({
+      runner: { executable: '/node', args: ['/runner.js'], runtimeMode: 'node' },
+      cwd: '/framework',
+      env: {},
+      spawn: () => rawChild,
+    });
+    const terminals: unknown[] = [];
+    child.subscribeExit((terminal) => terminals.push(terminal));
+
+    emit(rawChild);
+
+    expect(terminals).toEqual(expected);
   });
 
   it.each(['stdout', 'stderr'] as const)('contains %s stream errors and stops that tail capture', (streamName) => {
@@ -357,7 +489,7 @@ describe('application plugin child adapter', () => {
 
     expect(messages).toEqual([{ type: 'one' }]);
     expect(exits).toEqual([{
-      kind: 'exit', code: 0, signal: null, error: null,
+      kind: 'exit', final: true, code: 0, signal: null, error: null,
     }]);
     expect(Buffer.byteLength(child.stdoutTail)).toBeLessThanOrEqual(64 * 1024);
     expect(Buffer.byteLength(child.stderrTail)).toBeLessThanOrEqual(64 * 1024);
