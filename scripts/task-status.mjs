@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { closeSync, constants, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, resolve } from 'node:path';
 
 import { TASK_STAGES, TASK_TYPES, applyTaskStatusAction, createInitialTaskStatus, validateTaskStatus } from './lib/task-status.mjs';
@@ -38,22 +38,11 @@ function initializeTask(args, io, root, now) {
   const taskId = `${date}-${slug}`;
   const taskDirectory = resolve(root, 'docs', 'tasks', taskId);
   assertInsideRoot(root, taskDirectory);
-  assertSafeDirectory(root, taskDirectory);
-  if (existsSync(taskDirectory)) {
-    throw new TaskStatusError(`Task already exists: ${taskId}`);
-  }
-
-  mkdirSync(dirname(taskDirectory), { recursive: true });
-  mkdirSync(taskDirectory, { recursive: false });
-  try {
-    const status = createInitialTaskStatus({ taskId, type, now });
-    atomicWrite(join(taskDirectory, 'status.json'), `${JSON.stringify(status, null, 2)}\n`);
-    writeFileSync(join(taskDirectory, 'task.md'), `# ${taskId}\n\n## Summary\n\n`);
-    mkdirSync(join(taskDirectory, '.work'));
-  } catch (error) {
-    rmSync(taskDirectory, { recursive: true, force: true });
-    throw error;
-  }
+  createManagedDirectory(root, taskDirectory);
+  const status = createInitialTaskStatus({ taskId, type, now });
+  atomicWrite(root, join(taskDirectory, 'status.json'), `${JSON.stringify(status, null, 2)}\n`);
+  createManagedFile(root, join(taskDirectory, 'task.md'), `# ${taskId}\n\n## Summary\n\n`);
+  createManagedDirectory(root, join(taskDirectory, '.work'));
   io.stdout.write(`${taskId}\n`);
   return taskId;
 }
@@ -67,11 +56,11 @@ function updateTask(args, io, root, now) {
   const action = command === 'set-pr'
     ? { kind: command, number: Number(value) }
     : { kind: command, stage: value };
-  if (command === 'set-pr' && (!/^\d+$/u.test(value) || !Number.isSafeInteger(action.number))) {
+  if (command === 'set-pr' && (!/^\d+$/u.test(value) || !Number.isSafeInteger(action.number) || action.number < 1)) {
     throw new UsageError('pull request number must be a positive integer');
   }
   const next = applyTaskStatusAction(status, action, { now });
-  atomicWrite(statusPath, `${JSON.stringify(next, null, 2)}\n`);
+  atomicWrite(root, statusPath, `${JSON.stringify(next, null, 2)}\n`);
   io.stdout.write(`${next.taskId}\n`);
   return next.taskId;
 }
@@ -151,12 +140,9 @@ function readTaskStatus(root, taskId) {
   }
   const taskDirectory = resolve(root, 'docs', 'tasks', taskId);
   assertInsideRoot(root, taskDirectory);
-  assertSafeDirectory(root, taskDirectory);
-  if (!existsSync(taskDirectory) || !lstatSync(taskDirectory).isDirectory()) {
-    throw new TaskStatusError(`Task directory does not exist: ${taskId}`);
-  }
+  assertManagedExistingDirectory(root, taskDirectory);
   const statusPath = join(taskDirectory, 'status.json');
-  assertSafeFile(root, statusPath);
+  assertManagedRegularFile(root, statusPath);
   let parsed;
   try {
     parsed = JSON.parse(readFileSync(statusPath, 'utf8'));
@@ -173,7 +159,7 @@ function readTaskStatus(root, taskId) {
 function assertReadyForPr(root, taskDirectory, status) {
   for (const name of ['task.md', 'status.json', 'summary.md']) {
     const file = join(taskDirectory, name);
-    assertSafeFile(root, file);
+    assertManagedRegularFile(root, file);
     if (readFileSync(file, 'utf8').trim() === '') {
       throw new TaskStatusError(`${name} must be present and non-empty before a PR`);
     }
@@ -191,27 +177,79 @@ function findGitRoot(cwd) {
   }
 }
 
-function assertSafeDirectory(root, target) {
-  let current = root;
-  for (const segment of relative(root, target).split('/')) {
-    current = join(current, segment);
-    if (!existsSync(current)) continue;
-    if (lstatSync(current).isSymbolicLink()) {
-      const actual = realpathSync(current);
-      assertInsideRoot(root, actual);
-    }
-  }
-  let existingParent = target;
-  while (!existsSync(existingParent)) existingParent = dirname(existingParent);
-  assertInsideRoot(root, realpathSync(existingParent));
+function createManagedDirectory(root, path) {
+  assertInsideRoot(root, path);
+  ensureManagedDirectory(root, dirname(path));
+  if (lstatOrNull(path)) throw new TaskStatusError(`Task path already exists: ${path}`);
+  assertManagedExistingDirectory(root, dirname(path));
+  mkdirSync(path);
+  assertManagedExistingDirectory(root, path);
 }
 
-function assertSafeFile(root, path) {
+function createManagedFile(root, path, contents) {
+  assertManagedExistingDirectory(root, dirname(path));
+  if (lstatOrNull(path)) throw new TaskStatusError(`Task file already exists: ${path}`);
+  const identity = writeExclusiveFile(path, contents);
+  assertManagedRegularFile(root, path);
+  assertSameFile(path, identity);
+}
+
+function ensureManagedDirectory(root, path) {
   assertInsideRoot(root, path);
-  if (!existsSync(path) || lstatSync(path).isSymbolicLink()) {
-    throw new TaskStatusError(`required file does not exist: ${path}`);
+  let current = root;
+  for (const segment of relative(root, path).split('/')) {
+    current = join(current, segment);
+    const details = lstatOrNull(current);
+    if (details) {
+      assertDirectory(details, current);
+      continue;
+    }
+    assertManagedExistingDirectory(root, dirname(current));
+    mkdirSync(current);
+    assertManagedExistingDirectory(root, current);
   }
-  assertInsideRoot(root, realpathSync(path));
+}
+
+function assertManagedExistingDirectory(root, path) {
+  assertInsideRoot(root, path);
+  let current = root;
+  const rootDetails = lstatOrNull(root);
+  if (!rootDetails) throw new TaskStatusError('Git root no longer exists');
+  assertDirectory(rootDetails, root);
+  for (const segment of relative(root, path).split('/')) {
+    current = join(current, segment);
+    const details = lstatOrNull(current);
+    if (!details) throw new TaskStatusError(`managed directory does not exist: ${current}`);
+    assertDirectory(details, current);
+  }
+  if (realpathSync(path) !== path) {
+    throw new TaskStatusError(`managed path changed during validation: ${path}`);
+  }
+  return lstatSync(path);
+}
+
+function assertManagedRegularFile(root, path) {
+  assertManagedExistingDirectory(root, dirname(path));
+  const details = lstatOrNull(path);
+  if (!details || details.isSymbolicLink() || !details.isFile()) {
+    throw new TaskStatusError(`required regular file does not exist: ${path}`);
+  }
+  return details;
+}
+
+function assertDirectory(details, path) {
+  if (details.isSymbolicLink() || !details.isDirectory()) {
+    throw new TaskStatusError(`managed path must be a directory, not a symlink: ${path}`);
+  }
+}
+
+function lstatOrNull(path) {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if (error.code === 'ENOENT') return null;
+    throw error;
+  }
 }
 
 function assertInsideRoot(root, target) {
@@ -229,13 +267,59 @@ function isCalendarDate(value) {
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-function atomicWrite(path, contents) {
-  const temporary = join(dirname(path), `.${process.pid}-${Date.now()}.tmp`);
+function atomicWrite(root, path, contents) {
+  const parent = dirname(path);
+  let temporary;
+  let temporaryIdentity;
   try {
-    writeFileSync(temporary, contents, { flag: 'wx' });
+    assertManagedExistingDirectory(root, parent);
+    const existing = lstatOrNull(path);
+    if (existing && (existing.isSymbolicLink() || !existing.isFile())) {
+      throw new TaskStatusError(`status path is not a regular file: ${path}`);
+    }
+    temporary = join(parent, `.task-status-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.tmp`);
+    writeExclusiveFile(temporary, contents, (identity) => { temporaryIdentity = identity; });
+    assertManagedRegularFile(root, temporary);
+    assertSameFile(temporary, temporaryIdentity);
+    assertManagedExistingDirectory(root, parent);
+    assertSameFile(temporary, temporaryIdentity);
+    const destination = lstatOrNull(path);
+    if (destination && (destination.isSymbolicLink() || !destination.isFile())) {
+      throw new TaskStatusError(`status path is not a regular file: ${path}`);
+    }
     renameSync(temporary, path);
   } finally {
-    rmSync(temporary, { force: true });
+    if (temporary && temporaryIdentity) cleanupTemporary(root, temporary, temporaryIdentity);
+  }
+}
+
+function writeExclusiveFile(path, contents, onCreated) {
+  const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
+  const descriptor = openSync(path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | noFollow, 0o600);
+  try {
+    const identity = lstatSync(path);
+    onCreated?.(identity);
+    writeFileSync(descriptor, contents);
+    return identity;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function assertSameFile(path, expected) {
+  const actual = lstatOrNull(path);
+  if (!actual || actual.isSymbolicLink() || !actual.isFile() || actual.dev !== expected.dev || actual.ino !== expected.ino) {
+    throw new TaskStatusError(`temporary file changed before rename: ${path}`);
+  }
+}
+
+function cleanupTemporary(root, path, expected) {
+  try {
+    assertManagedExistingDirectory(root, dirname(path));
+    assertSameFile(path, expected);
+    unlinkSync(path);
+  } catch (error) {
+    if (error.code !== 'ENOENT') return;
   }
 }
 

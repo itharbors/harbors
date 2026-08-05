@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -82,6 +82,23 @@ test('init refuses a docs/tasks symlink that escapes the Git root', (t) => {
   assert.equal(existsSync(join(outside, '2026-08-04-safe-login')), false);
 });
 
+test('init rejects every managed path component when it is a symlink inside the Git root', (t) => {
+  for (const component of ['docs', 'docs/tasks', 'docs/tasks/2026-08-04-safe-login']) {
+    const fixture = createGitFixture();
+    t.after(() => fixture[Symbol.dispose]());
+    const target = join(fixture.path, 'managed-target');
+    mkdirSync(target);
+    const link = join(fixture.path, component);
+    mkdirSync(join(link, '..'), { recursive: true });
+    symlinkSync(target, link);
+
+    const result = runCli(fixture.path, ['init', 'feature', 'safe-login', '--date', '2026-08-04']);
+
+    assert.equal(result.status, 1, `${component}: ${result.stderr}`);
+    assert.deepEqual(readdirSync(target), [], component);
+  }
+});
+
 test('state commands persist valid transitions and leave a file unchanged on an invalid transition', (t) => {
   const fixture = createGitFixture();
   t.after(() => fixture[Symbol.dispose]());
@@ -107,6 +124,16 @@ test('set-pr accepts a positive number only after every stage is terminal', (t) 
   finishTask(fixture.path, taskId);
   assert.equal(runCli(fixture.path, ['set-pr', taskId, '7']).stdout, `${taskId}\n`);
   assert.deepEqual(JSON.parse(readFileSync(join(fixture.path, `docs/tasks/${taskId}/status.json`), 'utf8')).pullRequest, { number: 7 });
+});
+
+test('set-pr rejects non-positive, non-numeric, and unsafe numbers as usage errors', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+
+  for (const value of ['0', '-1', 'seven', '9007199254740992']) {
+    assert.equal(runCli(fixture.path, ['set-pr', taskId, value]).status, 2, value);
+  }
 });
 
 test('check distinguishes structural validation from the ready-for-pr gate', (t) => {
