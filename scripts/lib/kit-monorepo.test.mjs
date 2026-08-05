@@ -113,9 +113,9 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
     assert.equal(kit.packageJson.name, kit.id);
     assert.equal(
       kit.manifest.version,
-      slug === 'mysql'
+      ['mysql', 'agent-guard'].includes(slug)
         ? '0.1.0-preview.3'
-        : ['agent-guard', 'csv', 'sqlite'].includes(slug)
+        : ['csv', 'sqlite'].includes(slug)
           ? '0.1.0-preview.2'
           : '0.1.0-preview.1',
     );
