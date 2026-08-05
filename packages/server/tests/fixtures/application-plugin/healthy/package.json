@@ -1,0 +1,14 @@
+{
+  "name": "@acceptance/healthy",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "ping": ["ping"]
+        }
+      }
+    }
+  }
+}
