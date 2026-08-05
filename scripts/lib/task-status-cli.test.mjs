@@ -142,11 +142,81 @@ test('check distinguishes structural validation from the ready-for-pr gate', (t)
   const taskId = initializeTask(fixture.path);
   const taskDirectory = join(fixture.path, `docs/tasks/${taskId}`);
 
+  writeFileSync(join(taskDirectory, 'task.md'), validTaskMarkdown(taskId));
   assert.equal(runCli(fixture.path, ['check', taskId]).stdout, `${taskId}\n`);
   assert.equal(runCli(fixture.path, ['check', taskId, '--ready-for-pr']).status, 1);
-  writeFileSync(join(taskDirectory, 'summary.md'), '# Summary\n');
+  writeFileSync(join(taskDirectory, 'summary.md'), validSummaryMarkdown());
   finishTask(fixture.path, taskId);
   assert.equal(runCli(fixture.path, ['check', taskId, '--ready-for-pr']).stdout, `${taskId}\n`);
+});
+
+test('check rejects task.md without the required Task metadata and sections', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+
+  const result = runCli(fixture.path, ['check', taskId]);
+
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /Task ID/u);
+});
+
+test('check rejects duplicate headings, empty sections, and metadata mismatches in task.md', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskPath = join(fixture.path, `docs/tasks/${taskId}/task.md`);
+
+  for (const content of [
+    validTaskMarkdown(taskId).replace('## 目标\n\n说明预期结果。', '## 目标\n\n## 目标\n\n说明预期结果。'),
+    validTaskMarkdown(taskId).replace('## 约束\n\n说明实施约束。', '## 约束\n\n'),
+    validTaskMarkdown(taskId).replace(`Task ID: \`${taskId}\``, `Task ID: \`2026-08-04-other-task\``),
+    validTaskMarkdown(taskId).replace('Type: `feature`', 'Type: `bug`'),
+    validTaskMarkdown(taskId).replace('Type: `feature`', 'Type: `feature`\nType: `feature`'),
+  ]) {
+    writeFileSync(taskPath, content);
+    assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+  }
+});
+
+test('check does not treat a heading in a fenced code block as a required task section', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskPath = join(fixture.path, `docs/tasks/${taskId}/task.md`);
+  const markdown = validTaskMarkdown(taskId)
+    .replace('\n## 需求变更\n\n说明当前没有需求变更。\n', '\n```md\n## 需求变更\n```\n');
+  writeFileSync(taskPath, markdown);
+
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
+test('check rejects invalid existing summaries and requires a summary when consolidation is terminal', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskDirectory = join(fixture.path, `docs/tasks/${taskId}`);
+  writeFileSync(join(taskDirectory, 'task.md'), validTaskMarkdown(taskId));
+  writeFileSync(join(taskDirectory, 'summary.md'), '# Summary\n');
+
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+  writeFileSync(join(taskDirectory, 'summary.md'), validSummaryMarkdown());
+  finishTask(fixture.path, taskId);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 0);
+  rmSync(join(taskDirectory, 'summary.md'));
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
+test('ready-for-pr rejects non-empty Markdown that does not meet the contract', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskDirectory = join(fixture.path, `docs/tasks/${taskId}`);
+  writeFileSync(join(taskDirectory, 'task.md'), validTaskMarkdown(taskId));
+  writeFileSync(join(taskDirectory, 'summary.md'), '# still non-empty\n');
+  finishTask(fixture.path, taskId);
+
+  assert.equal(runCli(fixture.path, ['check', taskId, '--ready-for-pr']).status, 1);
 });
 
 test('resolve verifies the branch type and rejects multiple changed task statuses', (t) => {
@@ -155,11 +225,14 @@ test('resolve verifies the branch type and rejects multiple changed task statuse
   execFileSync('git', ['checkout', '--quiet', '-b', 'feature/safe-login'], { cwd: fixture.path });
   const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: fixture.path, encoding: 'utf8' }).trim();
   const taskId = initializeTask(fixture.path);
-  writeFileSync(join(fixture.path, `docs/tasks/${taskId}/summary.md`), '# Summary\n');
+  writeFileSync(join(fixture.path, `docs/tasks/${taskId}/task.md`), validTaskMarkdown(taskId));
+  writeFileSync(join(fixture.path, `docs/tasks/${taskId}/summary.md`), validSummaryMarkdown());
   finishTask(fixture.path, taskId);
   commitAll(fixture.path, 'add task');
 
   assert.equal(runCli(fixture.path, ['resolve', 'feature/safe-login', base, '--ready-for-pr']).stdout, `${taskId}\n`);
+  writeFileSync(join(fixture.path, `docs/tasks/${taskId}/summary.md`), '# malformed but non-empty\n');
+  assert.equal(runCli(fixture.path, ['resolve', 'feature/safe-login', base, '--ready-for-pr']).status, 1);
   assert.equal(runCli(fixture.path, ['resolve', 'bug/safe-login', base]).status, 1);
 
   const secondTaskId = initializeTask(fixture.path, '2026-08-05', 'second-task');
@@ -196,6 +269,14 @@ function finishTask(cwd, taskId) {
     const result = runCli(cwd, [command, taskId, stage]);
     assert.equal(result.status, 0, result.stderr);
   }
+}
+
+function validTaskMarkdown(taskId, type = 'feature') {
+  return `# ${taskId}\n\nTask ID: \`${taskId}\`\nType: \`${type}\`\n\n## 背景与问题\n\n说明现有问题。\n\n## 目标\n\n说明预期结果。\n\n## 范围\n\n说明本次范围。\n\n## 非目标\n\n说明不包含的内容。\n\n## 验收标准\n\n说明可验证的结果。\n\n## 约束\n\n说明实施约束。\n\n## 需求变更\n\n说明当前没有需求变更。\n`;
+}
+
+function validSummaryMarkdown() {
+  return '# Summary\n\n## 最终结论\n\n说明最终结论。\n\n## 需求完成情况\n\n说明需求完成情况。\n\n## 主要改动\n\n说明主要改动。\n\n## 关键决定\n\n说明关键决定。\n\n## 验证结果\n\n说明验证结果。\n\n## 影响与风险\n\n说明影响与风险。\n\n## 偏差与遗留\n\n说明偏差与遗留。\n\n## 后续关注\n\n说明后续关注。\n';
 }
 
 function commitAll(cwd, message) {

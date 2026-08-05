@@ -72,6 +72,7 @@ function checkTask(args, io, root) {
   }
   const { status, taskDirectory } = readTaskStatus(root, taskId);
   if (flag === '--ready-for-pr') assertReadyForPr(root, taskDirectory, status);
+  else assertTaskDocuments(root, taskDirectory, status);
   io.stdout.write(`${status.taskId}\n`);
   return status.taskId;
 }
@@ -157,6 +158,7 @@ function readTaskStatus(root, taskId) {
 }
 
 function assertReadyForPr(root, taskDirectory, status) {
+  assertTaskDocuments(root, taskDirectory, status);
   for (const name of ['task.md', 'status.json', 'summary.md']) {
     const file = join(taskDirectory, name);
     assertManagedRegularFile(root, file);
@@ -167,6 +169,81 @@ function assertReadyForPr(root, taskDirectory, status) {
   if (!TASK_STAGES.every((stage) => ['completed', 'skipped'].includes(status.stages[stage]))) {
     throw new TaskStatusError('all stages must be terminal before a PR');
   }
+}
+
+function assertTaskDocuments(root, taskDirectory, status) {
+  const taskPath = join(taskDirectory, 'task.md');
+  assertManagedRegularFile(root, taskPath);
+  validateTaskMarkdown(readFileSync(taskPath, 'utf8'), status);
+
+  const summaryPath = join(taskDirectory, 'summary.md');
+  if (lstatOrNull(summaryPath)) {
+    assertManagedRegularFile(root, summaryPath);
+    validateSummaryMarkdown(readFileSync(summaryPath, 'utf8'));
+  } else if (['completed', 'skipped'].includes(status.stages.consolidation)) {
+    throw new TaskStatusError('summary.md must be present when consolidation is terminal');
+  }
+}
+
+const TASK_SECTION_HEADINGS = Object.freeze(['背景与问题', '目标', '范围', '非目标', '验收标准', '约束', '需求变更']);
+const SUMMARY_SECTION_HEADINGS = Object.freeze(['最终结论', '需求完成情况', '主要改动', '关键决定', '验证结果', '影响与风险', '偏差与遗留', '后续关注']);
+
+export function validateTaskMarkdown(content, { taskId, type }) {
+  const lines = markdownLinesOutsideCodeFences(content);
+  validateExactMetadata(lines, 'Task ID', taskId);
+  validateExactMetadata(lines, 'Type', type);
+  validateRequiredSections(lines, TASK_SECTION_HEADINGS, 'task.md');
+}
+
+export function validateSummaryMarkdown(content) {
+  validateRequiredSections(markdownLinesOutsideCodeFences(content), SUMMARY_SECTION_HEADINGS, 'summary.md');
+}
+
+function markdownLinesOutsideCodeFences(content) {
+  if (typeof content !== 'string') throw new TaskStatusError('Markdown content must be text');
+  const lines = [];
+  let fence = null;
+  for (const line of content.split(/\r?\n/u)) {
+    const marker = /^\s*(`{3,}|~{3,})/u.exec(line)?.[1];
+    if (marker) {
+      if (!fence) fence = marker[0];
+      else if (marker[0] === fence) fence = null;
+      continue;
+    }
+    if (!fence) lines.push(line);
+  }
+  return lines;
+}
+
+function validateExactMetadata(lines, label, value) {
+  const metadataLines = lines.filter((line) => new RegExp(`^${escapeRegExp(label)}:`, 'u').test(line));
+  if (metadataLines.length !== 1) {
+    throw new TaskStatusError(`${label} must appear exactly once`);
+  }
+  if (metadataLines[0] !== `${label}: \`${value}\``) {
+    throw new TaskStatusError(`${label} must equal \`${value}\``);
+  }
+}
+
+function validateRequiredSections(lines, headings, name) {
+  const sections = lines
+    .map((line, index) => ({ heading: /^##\s+(.+?)\s*$/u.exec(line)?.[1], index }))
+    .filter(({ heading }) => heading !== undefined);
+  for (const heading of headings) {
+    const matches = sections.filter((section) => section.heading === heading);
+    if (matches.length !== 1) {
+      throw new TaskStatusError(`${name} heading \`${heading}\` must appear exactly once`);
+    }
+    const start = matches[0].index + 1;
+    const next = sections.find((section) => section.index >= start)?.index ?? lines.length;
+    if (!lines.slice(start, next).some((line) => line.trim() !== '')) {
+      throw new TaskStatusError(`${name} heading \`${heading}\` must have non-empty content`);
+    }
+  }
+}
+
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function findGitRoot(cwd) {
