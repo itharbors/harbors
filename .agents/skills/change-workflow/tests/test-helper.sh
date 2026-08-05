@@ -17,6 +17,7 @@ FAIL_COUNT=0
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; return 1; }
 assert_contains() { case "$1" in *"$2"*) ;; *) fail "expected [$1] to contain [$2]" ;; esac; }
+assert_not_contains() { case "$1" in *"$2"*) fail "expected [$1] not to contain [$2]" ;; *) ;; esac; }
 assert_eq() { test "$1" = "$2" || fail "expected [$2], got [$1]"; }
 assert_ref_missing() { git -C "$1" show-ref --verify --quiet "$2" && fail "expected ref to be missing: $2" || true; }
 
@@ -32,7 +33,7 @@ run_case() {
 }
 new_fixture() {
   export PATH="$ORIGINAL_PATH" TMPDIR="$ORIGINAL_TMPDIR"
-  unset NPM_FAIL GH_AUTH_FAIL GH_OPEN_PR_COUNT GH_REPO_OWNER GH_VIEW_NUMBER GH_VIEW_BASE GH_VIEW_HEAD GH_VIEW_STATE GH_VIEW_URL GH_VIEW_HEAD_OID GH_CREATE_URL GIT_FAIL_PUSH_NUMBER
+  unset NPM_FAIL GH_AUTH_FAIL GH_OPEN_PR_COUNT GH_REPO_OWNER GH_VIEW_NUMBER GH_VIEW_BASE GH_VIEW_HEAD GH_VIEW_STATE GH_VIEW_URL GH_VIEW_HEAD_OID GH_CREATE_URL GIT_FAIL_PUSH_NUMBER GIT_CONFIG_GLOBAL
   FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/change-workflow.XXXXXX")
   FIXTURE_ROOT=$(cd "$FIXTURE_ROOT" && pwd -P)
   ORIGIN="$FIXTURE_ROOT/origin.git"
