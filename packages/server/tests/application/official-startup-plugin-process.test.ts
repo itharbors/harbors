@@ -1,4 +1,4 @@
-import { spawn as spawnChild, execFileSync } from 'node:child_process';
+import { spawn as spawnChild, execFileSync, type ChildProcess } from 'node:child_process';
 import { createHmac } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -26,12 +26,18 @@ const OFFICIAL_KITS = ['notifications', 'scheduler', 'agent-guard'] as const;
 const CONDITION_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 120_000;
 const OWNER_TOKEN = 'task-8-owner-auth-token';
+const HOST_SECRET_VALUES = Object.freeze({
+  HARBORS_APPLICATION_TOKEN: 'task-8-application-secret',
+  HARBORS_NOTIFICATION_OWNER_TOKEN: OWNER_TOKEN,
+  HARBORS_CREDENTIAL_TRANSPORT_SECRET: 'task-8-credential-secret',
+});
 const HOST_SECRET_KEYS = [
   'HARBORS_APPLICATION_TOKEN',
   'HARBORS_NOTIFICATION_PORT',
   'HARBORS_NOTIFICATION_OWNER_TOKEN',
   'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
 ] as const;
+const SHARED_STATE_BEFORE = snapshotSharedFrameworkState();
 
 interface OfficialKitBuild {
   slug: typeof OFFICIAL_KITS[number];
@@ -46,6 +52,24 @@ interface SpawnObservation {
   environment: NodeJS.ProcessEnv;
 }
 
+interface PausedFixture {
+  child: ChildProcess;
+  executable: string;
+  pid: number;
+  signals: string[];
+  ticks: number;
+}
+
+interface InstalledWatchdogClient {
+  pid: number | undefined;
+  update(entries: ReadonlyArray<{
+    pid: number;
+    processStartTime: number;
+    executableIdentity: string;
+  }>): Promise<void>;
+  shutdown(): Promise<void>;
+}
+
 interface OfficialPluginHarness {
   runtime: ApplicationRuntime;
   bootstraps: ApplicationBootstrap[];
@@ -55,36 +79,44 @@ interface OfficialPluginHarness {
   frameworkCwd: string;
   schedulerDataRoot: string;
   schedulerScript: string;
+  expectedEnvironment: Readonly<Record<string, string>>;
+  secretValues: readonly string[];
 }
 
 let buildRoot: string | undefined;
+let repositorySnapshotRoot: string | undefined;
 let emittedServerRoot: string | undefined;
 let officialBuilds: OfficialKitBuild[] = [];
-let temporaryNodeModulesDirectory: string | undefined;
 
 beforeAll(async () => {
-  buildRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'official-startup-plugin-build-'));
-  emittedServerRoot = path.join(buildRoot, 'server-emitted');
   try {
-    temporaryNodeModulesDirectory = ensureFrameworkNodeModules();
+    buildRoot = fs.realpathSync(fs.mkdtempSync(path.join(
+      os.tmpdir(), 'official-startup-plugin-build-',
+    )));
+    repositorySnapshotRoot = fs.realpathSync(fs.mkdtempSync(path.join(
+      os.tmpdir(), 'official-startup-plugin-repository-',
+    )));
+    copyCanonicalRepositorySnapshot(repositorySnapshotRoot);
+    execFileSync('npm', ['ci', '--ignore-scripts'], {
+      cwd: repositorySnapshotRoot,
+      env: { ...process.env, NPM_CONFIG_CACHE: path.join(buildRoot, 'npm-cache') },
+      stdio: 'pipe',
+    });
     execFileSync('npm', [
       'run', 'build',
       '-w', '@itharbors/kit-core',
       '-w', '@itharbors/kit-cli',
       '-w', '@itharbors/plugin-types',
       '-w', '@itharbors/host-security',
-    ], { cwd: REPOSITORY_ROOT, stdio: 'pipe' });
-    execFileSync(process.execPath, [
-      findTypeScriptCompiler(REPOSITORY_ROOT),
-      '-p', path.join(REPOSITORY_ROOT, 'packages/server/tsconfig.build.json'),
-      '--outDir', emittedServerRoot,
-    ], { cwd: REPOSITORY_ROOT, stdio: 'pipe' });
+      '-w', '@itharbors/server',
+    ], { cwd: repositorySnapshotRoot, stdio: 'pipe' });
+    emittedServerRoot = path.join(repositorySnapshotRoot, 'packages/server/dist');
 
     const kitMonorepoUrl = pathToFileURL(path.join(
-      REPOSITORY_ROOT, 'scripts/lib/kit-monorepo.mjs',
+      repositorySnapshotRoot, 'scripts/lib/kit-monorepo.mjs',
     )).href;
     const kitInstallUrl = pathToFileURL(path.join(
-      REPOSITORY_ROOT, 'scripts/lib/kit-install.mjs',
+      repositorySnapshotRoot, 'scripts/lib/kit-install.mjs',
     )).href;
     const { loadTrustedMarketKit } = await import(kitMonorepoUrl) as {
       loadTrustedMarketKit(options: {
@@ -98,48 +130,63 @@ beforeAll(async () => {
         cacheRoot: string;
       }): Promise<{ installRoot: string; runRoot: string }>;
     };
-    const cacheRoot = path.join(buildRoot, 'install-cache');
-    const artifactsRoot = path.join(buildRoot, 'artifacts');
-    fs.mkdirSync(artifactsRoot, { recursive: true });
-    const kitCli = path.join(REPOSITORY_ROOT, 'packages/kit-cli/dist/cli.js');
+    const cacheRoot = path.join(repositorySnapshotRoot, '.suite/install-cache');
+    const kitCli = path.join(repositorySnapshotRoot, 'packages/kit-cli/dist/cli.js');
     const completed: OfficialKitBuild[] = [];
     for (const slug of OFFICIAL_KITS) {
-      const descriptor = await loadTrustedMarketKit({ repositoryRoot: REPOSITORY_ROOT, slug });
+      const descriptor = await loadTrustedMarketKit({ repositoryRoot: repositorySnapshotRoot, slug });
       const install = await ensureKitInstall({ descriptor, cacheRoot });
-      const artifactPath = path.join(artifactsRoot, `${slug}.hkit`);
+      completed.push({
+        slug,
+        installRoot: install.installRoot,
+        artifactPath: path.join(install.runRoot, 'artifacts', `${slug}.hkit`),
+      });
+    }
+    for (const { installRoot, artifactPath } of completed) {
       for (const args of [
-        ['build', install.installRoot],
-        ['validate', install.installRoot],
-        ['pack', install.installRoot, '--output', artifactPath],
+        ['build', installRoot],
+        ['validate', installRoot],
+        ['pack', installRoot, '--output', artifactPath],
         ['inspect', artifactPath, '--json'],
       ]) {
         execFileSync(process.execPath, [kitCli, ...args], {
-          cwd: REPOSITORY_ROOT,
+          cwd: repositorySnapshotRoot,
           stdio: 'pipe',
         });
       }
-      completed.push({ slug, installRoot: install.installRoot, artifactPath });
     }
     officialBuilds = completed;
   } catch (error) {
-    fs.rmSync(buildRoot, { recursive: true, force: true });
-    removeTemporaryNodeModulesDirectory();
-    buildRoot = undefined;
-    emittedServerRoot = undefined;
-    officialBuilds = [];
-    throw error;
+    const cleanupErrors = await cleanupSuiteRoots();
+    throw cleanupErrors.length === 0
+      ? error
+      : new AggregateError([error, ...cleanupErrors], 'Official plugin suite setup cleanup failed');
   }
 }, 240_000);
 
-afterAll(() => {
-  if (buildRoot) fs.rmSync(buildRoot, { recursive: true, force: true });
-  removeTemporaryNodeModulesDirectory();
-  buildRoot = undefined;
-  emittedServerRoot = undefined;
-  officialBuilds = [];
+afterAll(async () => {
+  const errors = await cleanupSuiteRoots();
+  if (errors.length > 0) throw new AggregateError(errors, 'Official plugin suite cleanup failed');
 });
 
 describe('official startup plugins in isolated application processes', () => {
+  it('keeps shared Framework artifacts unchanged and uses one canonical suite repository', () => {
+    expect(snapshotSharedFrameworkState()).toEqual(SHARED_STATE_BEFORE);
+    expect(repositorySnapshotRoot).toBeDefined();
+    const snapshot = fs.realpathSync(repositorySnapshotRoot!);
+    const nodeModules = path.join(snapshot, 'node_modules');
+    expect(fs.lstatSync(nodeModules).isDirectory()).toBe(true);
+    expect(fs.lstatSync(nodeModules).isSymbolicLink()).toBe(false);
+    expect(isInside(fs.realpathSync(nodeModules), snapshot)).toBe(true);
+    expect(isInside(fs.realpathSync(requireEmittedServerRoot()), snapshot)).toBe(true);
+    for (const build of officialBuilds) {
+      expect(isInside(fs.realpathSync(build.installRoot), snapshot)).toBe(true);
+      expect(isInside(fs.realpathSync(build.artifactPath), snapshot)).toBe(true);
+      const injectedNodeModules = path.resolve(build.installRoot, '../..', 'node_modules');
+      expect(isInside(fs.realpathSync(injectedNodeModules), snapshot)).toBe(true);
+    }
+  });
+
   it('preserves published Kit behavior and replaces only a killed Agent Guard generation', async () => {
     expect(officialBuilds.map(({ slug }) => slug)).toEqual([...OFFICIAL_KITS]);
     expect(officialBuilds.every(({ artifactPath }) => (
@@ -147,6 +194,7 @@ describe('official startup plugins in isolated application processes', () => {
     ))).toBe(true);
 
     const harness = await createHarness();
+    let bodyError: unknown;
     let cleanupError: unknown;
     try {
       const initial = harness.runtime.getBootstrap();
@@ -158,7 +206,9 @@ describe('official startup plugins in isolated application processes', () => {
       expect(new Set([process.pid, ...initialStates.map(({ pid }) => pid)])).toHaveLength(4);
       expect(harness.spawns).toHaveLength(3);
       expect(harness.spawns.every(({ cwd }) => cwd === harness.frameworkCwd)).toBe(true);
-      assertSanitizedProductEnvironment(harness.spawns, harness.schedulerDataRoot);
+      assertSanitizedProductEnvironment(
+        harness.spawns, harness.expectedEnvironment, harness.secretValues,
+      );
 
       await expect(harness.runtime.request(NOTIFICATIONS, 'getSnapshot')).resolves.toEqual({
         notifications: [],
@@ -241,17 +291,133 @@ describe('official startup plugins in isolated application processes', () => {
         process.pid, notificationPid, schedulerPid, oldGuard.pid, recoveredGuard.pid,
       ])).toHaveLength(5);
       expect(harness.spawns).toHaveLength(4);
-      assertSanitizedProductEnvironment(harness.spawns, harness.schedulerDataRoot);
+      assertSanitizedProductEnvironment(
+        harness.spawns, harness.expectedEnvironment, harness.secretValues,
+      );
       await expect(harness.runtime.request(AGENT_GUARD, 'getSnapshot')).resolves.toMatchObject({
         schemaVersion: 1,
       });
-    } finally {
-      try {
-        await disposeHarness(harness);
-      } catch (error) {
-        cleanupError = error;
-      }
+    } catch (error) {
+      bodyError = error;
     }
+    try {
+      await disposeHarness(harness);
+    } catch (error) {
+      cleanupError = error;
+    }
+    if (bodyError && cleanupError) {
+      throw new AggregateError([bodyError, cleanupError], 'Official plugin acceptance and cleanup failed');
+    }
+    if (bodyError) throw bodyError;
+    if (cleanupError) throw cleanupError;
+  }, TEST_TIMEOUT_MS);
+
+  it('recovers only identity-verified paused agents when the installed watchdog sees EOF', async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(
+      os.tmpdir(), 'official-agent-guard-eof-',
+    )));
+    const fixtures: PausedFixture[] = [];
+    let watchdog: InstalledWatchdogClient | undefined;
+    let watchdogChild: ChildProcess | undefined;
+    let bodyError: unknown;
+    try {
+      const agentGuard = requireOfficialBuild('agent-guard');
+      const installedMain = path.join(
+        agentGuard.installRoot, 'plugins/agent-guard-background/main/dist',
+      );
+      const observerModule = await import(pathToFileURL(path.join(
+        installedMain, 'process-observer.js',
+      )).href) as {
+        observeProcesses(): Promise<Array<{
+          pid: number;
+          processStartTime: number;
+          executableIdentity: string;
+        }>>;
+      };
+      const watchdogModule = await import(pathToFileURL(path.join(
+        installedMain, 'watchdog.js',
+      )).href) as {
+        createWatchdogClient(options: { spawn: typeof spawnChild }): InstalledWatchdogClient;
+      };
+
+      for (const name of ['valid', 'wrong-start', 'wrong-executable']) {
+        fixtures.push(await spawnPausedFixture(root, name));
+      }
+      const snapshots = await observerModule.observeProcesses();
+      const observed = fixtures.map((fixture) => {
+        const snapshot = snapshots.find(({ pid }) => pid === fixture.pid);
+        if (!snapshot) throw new Error(`Installed observer missed fixture pid ${fixture.pid}`);
+        expect(snapshot.processStartTime).toBeGreaterThan(0);
+        expect(snapshot.executableIdentity).toBe(`path:${fixture.executable}`);
+        return snapshot;
+      });
+      const entries = [
+        observed[0]!,
+        { ...observed[1]!, processStartTime: observed[1]!.processStartTime + 1_000 },
+        {
+          ...observed[2]!,
+          executableIdentity: `${observed[2]!.executableIdentity}-mutated`,
+        },
+      ];
+
+      for (const fixture of fixtures) process.kill(fixture.pid, 'SIGSTOP');
+      await waitForProcessStates(fixtures.map(({ pid }) => pid), (state) => state.startsWith('T'));
+      const pausedTicks = await waitForTicksToStop(fixtures);
+
+      const protocolWrites: string[] = [];
+      const interceptedSpawn = ((
+        executable: string,
+        args: readonly string[],
+        options: Parameters<typeof spawnChild>[2],
+      ) => {
+        const child = spawnChild(executable, [...args], options);
+        watchdogChild = child;
+        const stdin = child.stdin;
+        if (!stdin) throw new Error('Installed watchdog stdin is unavailable');
+        type Write = (chunk: string | Uint8Array, ...args: unknown[]) => boolean;
+        const originalWrite = stdin.write.bind(stdin) as Write;
+        stdin.write = ((chunk: string | Uint8Array, ...args: unknown[]) => {
+          protocolWrites.push(Buffer.from(chunk).toString('utf8'));
+          return originalWrite(chunk, ...args);
+        }) as typeof stdin.write;
+        return child;
+      }) as typeof spawnChild;
+      watchdog = watchdogModule.createWatchdogClient({ spawn: interceptedSpawn });
+      if (!watchdogChild?.stdin) throw new Error('Installed watchdog process did not expose stdin');
+      await watchdog.update(entries);
+      const watchdogExit = waitForChildExit(watchdogChild);
+
+      // This EOF is the only simulated plugin-death action. Calling recover() would send R.
+      watchdogChild.stdin.end();
+      await watchdogExit;
+      await waitForProcessStates([fixtures[0]!.pid], (state) => !state.startsWith('T'));
+      await vi.waitFor(() => {
+        expect(fixtures[0]!.signals).toEqual(['SIGCONT']);
+        expect(fixtures[0]!.ticks).toBeGreaterThan(pausedTicks[0]!);
+      }, { timeout: CONDITION_TIMEOUT_MS, interval: 10 });
+      expect(processState(fixtures[0]!.pid)).not.toMatch(/^T/u);
+      expect(processState(fixtures[1]!.pid)).toMatch(/^T/u);
+      expect(processState(fixtures[2]!.pid)).toMatch(/^T/u);
+      expect(fixtures[1]!.signals).toEqual([]);
+      expect(fixtures[2]!.signals).toEqual([]);
+      assertUnexpectedEofProtocol(protocolWrites, entries.length);
+      expect(() => assertUnexpectedEofProtocol(
+        [...protocolWrites, 'R\n'], entries.length,
+      )).toThrow(/explicit recovery command/u);
+    } catch (error) {
+      bodyError = error;
+    }
+
+    let cleanupError: unknown;
+    try {
+      await cleanupPausedFixtures({ root, fixtures, watchdog, watchdogChild });
+    } catch (error) {
+      cleanupError = error;
+    }
+    if (bodyError && cleanupError) {
+      throw new AggregateError([bodyError, cleanupError], 'EOF acceptance and cleanup failed');
+    }
+    if (bodyError) throw bodyError;
     if (cleanupError) throw cleanupError;
   }, TEST_TIMEOUT_MS);
 });
@@ -261,23 +427,55 @@ async function createHarness(): Promise<OfficialPluginHarness> {
   const frameworkCwd = path.join(root, 'framework-cwd');
   const schedulerDataRoot = path.join(root, 'product-data');
   const schedulerScript = path.join(root, 'scheduled.mjs');
+  const home = path.join(root, 'home');
+  const temp = path.join(root, 'temp');
+  const sentinelBin = path.join(root, 'sentinel-bin');
   const codexHome = path.join(root, 'codex-home');
   fs.mkdirSync(frameworkCwd, { recursive: true });
   fs.mkdirSync(schedulerDataRoot, { recursive: true });
+  fs.mkdirSync(home, { recursive: true });
+  fs.mkdirSync(temp, { recursive: true });
+  fs.mkdirSync(sentinelBin, { recursive: true });
   fs.mkdirSync(codexHome, { recursive: true });
   fs.writeFileSync(schedulerScript, 'process.stdout.write("task-8");\n', { mode: 0o600 });
+  const marker = path.basename(root);
+  const expectedEnvironment = Object.freeze({
+    PATH: `${sentinelBin}${path.delimiter}${process.env.PATH ?? '/usr/bin:/bin'}`,
+    HOME: home,
+    USER: `${marker}-user`,
+    TMPDIR: temp,
+    LANG: `${marker}-LANG.UTF-8`,
+    LC_ALL: `${marker}-LC_ALL.UTF-8`,
+    CODEX_HOME: codexHome,
+    HARBORS_DATA_ROOT: schedulerDataRoot,
+    HARBORS_CREDENTIAL_MODE: 'local',
+    HARBORS_RUNTIME_PROFILE: `${marker}-product-config`,
+  });
+  expect(fs.statSync(expectedEnvironment.HOME).isDirectory()).toBe(true);
+  expect(fs.statSync(expectedEnvironment.CODEX_HOME).isDirectory()).toBe(true);
+  expect(execFileSync('/bin/sh', ['-c', 'command -v node'], {
+    encoding: 'utf8',
+    env: expectedEnvironment,
+  }).trim()).not.toBe('');
 
   let runtime: ApplicationRuntime | undefined;
   let notificationHost: Awaited<ReturnType<typeof createNotificationHost>> | undefined;
   const spawns: SpawnObservation[] = [];
   try {
     notificationHost = await createNotificationHost();
-    const assembly = officialAssembly(officialBuilds);
+    const secretValues = Object.freeze([
+      HOST_SECRET_VALUES.HARBORS_APPLICATION_TOKEN,
+      String(notificationHost.port),
+      HOST_SECRET_VALUES.HARBORS_NOTIFICATION_OWNER_TOKEN,
+      HOST_SECRET_VALUES.HARBORS_CREDENTIAL_TRANSPORT_SECRET,
+    ]);
+    const assembly = officialAssembly(officialBuilds, path.join(root, 'empty-catalog'));
     const catalog = await discoverApplicationPlugins({ assembly });
     expect(catalog.diagnostics).toEqual([]);
     expect(catalog.plugins.map(({ name }) => name).sort()).toEqual([
       AGENT_GUARD, NOTIFICATIONS, SCHEDULER,
     ].sort());
+    assertCatalogUsesOnlyIsolatedInstalls(catalog.plugins, officialBuilds);
     const activeRuntime = new ApplicationRuntime({
       plugins: catalog.plugins,
       diagnostics: catalog.diagnostics,
@@ -294,17 +492,12 @@ async function createHarness(): Promise<OfficialPluginHarness> {
         )).href),
         cwd: frameworkCwd,
         env: {
-          PATH: process.env.PATH,
-          HOME: root,
-          TMPDIR: os.tmpdir(),
-          LANG: 'en_US.UTF-8',
-          CODEX_HOME: codexHome,
-          HARBORS_DATA_ROOT: schedulerDataRoot,
-          HARBORS_CREDENTIAL_MODE: 'local',
-          HARBORS_APPLICATION_TOKEN: 'task-8-application-secret',
+          ...expectedEnvironment,
+          HARBORS_APPLICATION_TOKEN: HOST_SECRET_VALUES.HARBORS_APPLICATION_TOKEN,
           HARBORS_NOTIFICATION_PORT: String(notificationHost.port),
           HARBORS_NOTIFICATION_OWNER_TOKEN: OWNER_TOKEN,
-          HARBORS_CREDENTIAL_TRANSPORT_SECRET: 'task-8-credential-secret',
+          HARBORS_CREDENTIAL_TRANSPORT_SECRET:
+            HOST_SECRET_VALUES.HARBORS_CREDENTIAL_TRANSPORT_SECRET,
         },
       },
       notificationPort: notificationHost.port,
@@ -343,19 +536,22 @@ async function createHarness(): Promise<OfficialPluginHarness> {
       frameworkCwd,
       schedulerDataRoot,
       schedulerScript,
+      expectedEnvironment,
+      secretValues,
     };
   } catch (error) {
-    const cleanup = await Promise.allSettled([
+    const shutdown = await Promise.allSettled([
       runtime?.dispose() ?? Promise.resolve(),
       notificationHost?.close() ?? Promise.resolve(),
     ]);
     const pids = uniquePids(spawns);
-    try {
-      await waitForProcessesToExit(pids, 'failed-startup official plugin children');
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true });
-    }
-    const cleanupErrors = cleanup.flatMap((result) => (
+    const exit = await Promise.allSettled([
+      ensureProcessesExit(pids, 'failed-startup official plugin children'),
+    ]);
+    const removal = await Promise.allSettled([
+      Promise.resolve().then(() => fs.rmSync(root, { recursive: true, force: true })),
+    ]);
+    const cleanupErrors = [...shutdown, ...exit, ...removal].flatMap((result) => (
       result.status === 'rejected' ? [result.reason] : []
     ));
     if (cleanupErrors.length > 0) {
@@ -366,26 +562,37 @@ async function createHarness(): Promise<OfficialPluginHarness> {
 }
 
 async function disposeHarness(harness: OfficialPluginHarness): Promise<void> {
-  const cleanup = await Promise.allSettled([
+  const shutdown = await Promise.allSettled([
     harness.runtime.dispose(),
     harness.notificationHost.close(),
   ]);
   const pids = uniquePids(harness.spawns);
-  try {
-    await waitForProcessesToExit(pids, 'all official application plugin children');
-  } finally {
-    fs.rmSync(harness.root, { recursive: true, force: true });
-  }
-  const errors = cleanup.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+  const exit = await Promise.allSettled([
+    ensureProcessesExit(pids, 'all official application plugin children'),
+  ]);
+  const removal = await Promise.allSettled([
+    Promise.resolve().then(() => fs.rmSync(harness.root, { recursive: true, force: true })),
+  ]);
+  const errors = [...shutdown, ...exit, ...removal].flatMap((result) => (
+    result.status === 'rejected' ? [result.reason] : []
+  ));
   if (errors.length > 0) throw new AggregateError(errors, 'Official plugin cleanup failed');
 }
 
-function officialAssembly(builds: OfficialKitBuild[]): AssemblyConfig {
+function officialAssembly(builds: OfficialKitBuild[], emptyCatalogRoot: string): AssemblyConfig {
+  const builtinPluginsDir = path.join(emptyCatalogRoot, 'builtin-plugins');
+  const pluginsDir = path.join(emptyCatalogRoot, 'plugins');
+  const builtinKitsDir = path.join(emptyCatalogRoot, 'builtin-kits');
+  const kitsDir = path.join(emptyCatalogRoot, 'kits');
+  for (const directory of [builtinPluginsDir, pluginsDir, builtinKitsDir, kitsDir]) {
+    fs.mkdirSync(directory, { recursive: true });
+    expect(fs.readdirSync(directory)).toEqual([]);
+  }
   return {
-    builtinPluginsDir: path.join(REPOSITORY_ROOT, 'plugins'),
-    pluginsDir: path.join(REPOSITORY_ROOT, 'plugins'),
-    builtinKitsDir: path.join(REPOSITORY_ROOT, 'kits'),
-    kitsDir: path.join(REPOSITORY_ROOT, 'kits'),
+    builtinPluginsDir,
+    pluginsDir,
+    builtinKitsDir,
+    kitsDir,
     kitSources: builds.map(({ installRoot }) => ({
       directory: installRoot,
       source: 'explicit' as const,
@@ -422,18 +629,37 @@ async function waitForBootstrap(
 
 function assertSanitizedProductEnvironment(
   spawns: SpawnObservation[],
-  schedulerDataRoot: string,
+  expectedEnvironment: Readonly<Record<string, string>>,
+  secretValues: readonly string[],
 ): void {
   for (const observation of spawns) {
-    if (observation.environment.HARBORS_DATA_ROOT !== schedulerDataRoot) {
-      throw new Error(`Official plugin ${observation.plugin} lost HARBORS_DATA_ROOT`);
-    }
+    expect(observation.environment).toEqual(expectedEnvironment);
     if (HOST_SECRET_KEYS.some((key) => Object.hasOwn(observation.environment, key))) {
       throw new Error(`Official plugin ${observation.plugin} received a host-only secret environment key`);
     }
-    if (Object.values(observation.environment).includes(OWNER_TOKEN)) {
-      throw new Error(`Official plugin ${observation.plugin} received the notification owner token`);
+    const receivedValues = new Set(Object.values(observation.environment));
+    if (secretValues.some((secret) => receivedValues.has(secret))) {
+      throw new Error(`Official plugin ${observation.plugin} received a host-only secret environment value`);
     }
+  }
+}
+
+function assertCatalogUsesOnlyIsolatedInstalls(
+  plugins: Awaited<ReturnType<typeof discoverApplicationPlugins>>['plugins'],
+  builds: OfficialKitBuild[],
+): void {
+  const slugByPlugin: Readonly<Record<string, OfficialKitBuild['slug']>> = {
+    [NOTIFICATIONS]: 'notifications',
+    [SCHEDULER]: 'scheduler',
+    [AGENT_GUARD]: 'agent-guard',
+  };
+  for (const plugin of plugins) {
+    const slug = slugByPlugin[plugin.name];
+    const build = builds.find((candidate) => candidate.slug === slug);
+    if (!build) throw new Error(`Missing isolated install for ${plugin.name}`);
+    const pluginPath = fs.realpathSync(plugin.path);
+    const installPlugins = fs.realpathSync(path.join(build.installRoot, 'plugins'));
+    expect(isInside(pluginPath, installPlugins), `${plugin.name} fell back outside its install`).toBe(true);
   }
 }
 
@@ -447,6 +673,15 @@ async function waitForProcessesToExit(pids: number[], description: string): Prom
   }, { timeout: CONDITION_TIMEOUT_MS, interval: 10 });
 }
 
+async function ensureProcessesExit(pids: number[], description: string): Promise<void> {
+  try {
+    await waitForProcessesToExit(pids, description);
+  } catch {
+    for (const pid of pids) signalIfAlive(pid, 'SIGKILL');
+    await waitForProcessesToExit(pids, `forced ${description}`);
+  }
+}
+
 function processIsGone(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -454,6 +689,162 @@ function processIsGone(pid: number): boolean {
   } catch (error) {
     return (error as NodeJS.ErrnoException).code === 'ESRCH';
   }
+}
+
+function requireOfficialBuild(slug: OfficialKitBuild['slug']): OfficialKitBuild {
+  const build = officialBuilds.find((candidate) => candidate.slug === slug);
+  if (!build) throw new Error(`Official Kit build is unavailable: ${slug}`);
+  return build;
+}
+
+async function spawnPausedFixture(root: string, name: string): Promise<PausedFixture> {
+  const fixtureRoot = path.join(root, name);
+  const executable = path.join(fixtureRoot, 'codex');
+  const script = path.join(fixtureRoot, 'fixture.mjs');
+  fs.mkdirSync(fixtureRoot, { recursive: true });
+  fs.copyFileSync(process.execPath, executable);
+  fs.chmodSync(executable, 0o700);
+  fs.writeFileSync(script, [
+    "const send = (message) => process.send?.(message);",
+    "process.on('SIGCONT', () => send({ type: 'signal', signal: 'SIGCONT' }));",
+    "process.on('SIGTERM', () => { send({ type: 'signal', signal: 'SIGTERM' }); process.exit(0); });",
+    "setInterval(() => send({ type: 'tick' }), 25).unref();",
+    "send({ type: 'ready' });",
+    "setInterval(() => undefined, 1_000);",
+    '',
+  ].join('\n'), { mode: 0o600 });
+  const child = spawnChild(executable, [script], {
+    cwd: fixtureRoot,
+    detached: true,
+    stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+  });
+  if (!child.pid) throw new Error(`Paused fixture did not start: ${name}`);
+  const fixture: PausedFixture = {
+    child,
+    executable,
+    pid: child.pid,
+    signals: [],
+    ticks: 0,
+  };
+  let ready = false;
+  let spawnError: unknown;
+  child.once('error', (error) => { spawnError = error; });
+  child.on('message', (message: unknown) => {
+    if (!message || typeof message !== 'object') return;
+    const event = message as { type?: unknown; signal?: unknown };
+    if (event.type === 'ready') ready = true;
+    if (event.type === 'tick') fixture.ticks += 1;
+    if (event.type === 'signal' && typeof event.signal === 'string') {
+      fixture.signals.push(event.signal);
+    }
+  });
+  try {
+    await vi.waitFor(() => {
+      if (spawnError) throw spawnError;
+      expect(ready).toBe(true);
+      expect(fixture.ticks).toBeGreaterThan(0);
+    }, { timeout: CONDITION_TIMEOUT_MS, interval: 10 });
+  } catch (error) {
+    signalIfAlive(fixture.pid, 'SIGCONT');
+    signalIfAlive(fixture.pid, 'SIGKILL');
+    const cleanup = await Promise.allSettled([waitForChildExit(child)]);
+    const cleanupErrors = cleanup.flatMap((result) => (
+      result.status === 'rejected' ? [result.reason] : []
+    ));
+    throw cleanupErrors.length === 0
+      ? error
+      : new AggregateError([error, ...cleanupErrors], `Paused fixture ${name} cleanup failed`);
+  }
+  return fixture;
+}
+
+function processState(pid: number): string {
+  return execFileSync('/bin/ps', ['-p', String(pid), '-o', 'state='], {
+    encoding: 'utf8',
+  }).trim();
+}
+
+async function waitForProcessStates(
+  pids: readonly number[],
+  predicate: (state: string) => boolean,
+): Promise<void> {
+  await vi.waitFor(() => {
+    for (const pid of pids) expect(predicate(processState(pid))).toBe(true);
+  }, { timeout: CONDITION_TIMEOUT_MS, interval: 10 });
+}
+
+function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise<void>((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', () => resolve());
+  });
+}
+
+function assertUnexpectedEofProtocol(writes: readonly string[], entryCount: number): void {
+  const lines = writes.join('').split('\n').filter(Boolean);
+  if (lines.includes('R')) throw new Error('EOF acceptance used an explicit recovery command');
+  if (lines.includes('S')) throw new Error('EOF acceptance used a clean shutdown command');
+  expect(lines[0]).toBe('B');
+  expect(lines.at(-1)).toBe('C');
+  expect(lines.filter((line) => line.startsWith('E\t'))).toHaveLength(entryCount);
+}
+
+async function cleanupPausedFixtures(options: {
+  root: string;
+  fixtures: readonly PausedFixture[];
+  watchdog: InstalledWatchdogClient | undefined;
+  watchdogChild: ChildProcess | undefined;
+}): Promise<void> {
+  const shutdownResults = await Promise.allSettled([
+    Promise.resolve().then(() => options.watchdog?.shutdown()),
+    ...options.fixtures.map(async ({ pid }) => {
+      signalIfAlive(pid, 'SIGCONT');
+      signalIfAlive(pid, 'SIGTERM');
+    }),
+  ]);
+  const pids = [
+    ...options.fixtures.map(({ pid }) => pid),
+    ...(options.watchdogChild?.pid ? [options.watchdogChild.pid] : []),
+  ];
+  const exitResults = await Promise.allSettled([
+    waitForProcessesToExit(pids, 'EOF watchdog and paused fixtures'),
+  ]);
+  if (exitResults.some((result) => result.status === 'rejected')) {
+    for (const pid of pids) signalIfAlive(pid, 'SIGKILL');
+  }
+  const finalExitResults = await Promise.allSettled([
+    waitForProcessesToExit(pids, 'forced EOF watchdog and paused fixtures'),
+  ]);
+  const removalResults = await Promise.allSettled([
+    Promise.resolve().then(() => fs.rmSync(options.root, { recursive: true, force: true })),
+  ]);
+  const errors = [...shutdownResults, ...finalExitResults, ...removalResults].flatMap((result) => (
+    result.status === 'rejected' ? [result.reason] : []
+  ));
+  if (errors.length > 0) throw new AggregateError(errors, 'EOF fixture cleanup failed');
+}
+
+function signalIfAlive(pid: number, signal: NodeJS.Signals): void {
+  try {
+    process.kill(pid, signal);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function waitForTicksToStop(fixtures: readonly PausedFixture[]): Promise<number[]> {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    const before = fixtures.map(({ ticks }) => ticks);
+    await delay(75);
+    const after = fixtures.map(({ ticks }) => ticks);
+    if (after.every((ticks, index) => ticks === before[index])) return after;
+  }
+  throw new Error('Paused fixtures continued producing ticks');
 }
 
 async function createNotificationHost(): Promise<{
@@ -529,42 +920,77 @@ function requireEmittedServerRoot(): string {
   return emittedServerRoot;
 }
 
-function findTypeScriptCompiler(from: string): string {
-  let directory = path.resolve(from);
-  while (true) {
-    const candidate = path.join(directory, 'node_modules/typescript/bin/tsc');
-    if (fs.existsSync(candidate)) return candidate;
-    const parent = path.dirname(directory);
-    if (parent === directory) throw new Error('Cannot locate the TypeScript compiler');
-    directory = parent;
+function copyCanonicalRepositorySnapshot(snapshotRoot: string): void {
+  for (const relative of ['package.json', 'package-lock.json', 'tsconfig.json']) {
+    fs.copyFileSync(path.join(REPOSITORY_ROOT, relative), path.join(snapshotRoot, relative));
   }
+  for (const relative of ['packages', 'plugins', 'scripts', 'registry']) {
+    copySnapshotTree(relative, snapshotRoot);
+  }
+  for (const slug of OFFICIAL_KITS) copySnapshotTree(path.join('kits', slug), snapshotRoot);
 }
 
-function ensureFrameworkNodeModules(): string | undefined {
-  const localNodeModules = path.join(REPOSITORY_ROOT, 'node_modules');
-  if (fs.existsSync(localNodeModules)) return undefined;
-  const compiler = findTypeScriptCompiler(REPOSITORY_ROOT);
-  const sharedNodeModules = path.resolve(path.dirname(compiler), '../..');
-  fs.mkdirSync(localNodeModules);
-  try {
-    for (const entry of fs.readdirSync(sharedNodeModules, { withFileTypes: true })) {
-      const source = path.join(sharedNodeModules, entry.name);
-      const destination = path.join(localNodeModules, entry.name);
-      fs.symlinkSync(source, destination, entry.isDirectory() ? 'dir' : 'file');
+function copySnapshotTree(relative: string, snapshotRoot: string): void {
+  const source = path.join(REPOSITORY_ROOT, relative);
+  const destination = path.join(snapshotRoot, relative);
+  fs.mkdirSync(path.dirname(destination), { recursive: true });
+  fs.cpSync(source, destination, {
+    recursive: true,
+    verbatimSymlinks: true,
+    filter: (candidate) => {
+      const name = path.basename(candidate);
+      return ![
+        'node_modules', 'dist', 'build', 'coverage', '.cache', '.build', 'reports',
+      ].includes(name);
+    },
+  });
+}
+
+async function cleanupSuiteRoots(): Promise<unknown[]> {
+  const roots = [repositorySnapshotRoot, buildRoot].filter((root): root is string => Boolean(root));
+  repositorySnapshotRoot = undefined;
+  buildRoot = undefined;
+  emittedServerRoot = undefined;
+  officialBuilds = [];
+  const results = await Promise.allSettled(roots.map(async (root) => {
+    fs.rmSync(root, { recursive: true, force: true });
+  }));
+  return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
+}
+
+function snapshotSharedFrameworkState(): Record<string, string[]> {
+  return Object.fromEntries([
+    'node_modules',
+    'packages/kit-core/dist',
+    'packages/kit-cli/dist',
+    'packages/plugin-types/dist',
+    'packages/host-security/dist',
+    'packages/server/dist',
+  ].map((relative) => {
+    const target = path.join(REPOSITORY_ROOT, relative);
+    if (!fs.existsSync(target)) return [relative, ['missing']];
+    const info = fs.lstatSync(target);
+    if (!info.isDirectory() || info.isSymbolicLink()) {
+      return [relative, [`${info.mode}:${info.size}:${info.mtimeMs}`]];
     }
-  } catch (error) {
-    fs.rmSync(localNodeModules, { recursive: true, force: true });
-    throw error;
-  }
-  return localNodeModules;
+    const entries: string[] = [];
+    const visit = (directory: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const entryPath = path.join(directory, entry.name);
+        const entryInfo = fs.lstatSync(entryPath);
+        const name = path.relative(target, entryPath);
+        entries.push(`${name}:${entryInfo.mode}:${entryInfo.size}:${entryInfo.mtimeMs}`);
+        if (entry.isDirectory() && !entry.isSymbolicLink()) visit(entryPath);
+      }
+    };
+    visit(target);
+    return [relative, entries.sort()];
+  }));
 }
 
-function removeTemporaryNodeModulesDirectory(): void {
-  const directory = temporaryNodeModulesDirectory;
-  temporaryNodeModulesDirectory = undefined;
-  if (!directory) return;
-  const info = fs.lstatSync(directory, { throwIfNoEntry: false });
-  if (info?.isDirectory() && !info.isSymbolicLink()) {
-    fs.rmSync(directory, { recursive: true, force: true });
-  }
+function isInside(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (relative !== '..'
+    && !relative.startsWith(`..${path.sep}`)
+    && !path.isAbsolute(relative));
 }
