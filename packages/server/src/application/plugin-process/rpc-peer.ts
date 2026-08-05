@@ -4,7 +4,7 @@ import {
   type PluginProcessErrorPayload,
   type PluginProcessResponse,
   parsePluginProcessEnvelope,
-} from './protocol';
+} from './protocol.js';
 
 const DEFAULT_MAX_PENDING = 256;
 

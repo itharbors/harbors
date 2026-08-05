@@ -4,5 +4,5 @@
     "rootDir": "./src",
     "noEmit": false
   },
-  "include": ["src"]
+  "include": ["src/**/*.ts"]
 }
