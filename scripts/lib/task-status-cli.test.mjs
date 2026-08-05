@@ -219,6 +219,51 @@ test('ready-for-pr rejects non-empty Markdown that does not meet the contract', 
   assert.equal(runCli(fixture.path, ['check', taskId, '--ready-for-pr']).status, 1);
 });
 
+test('check rejects Task and summary sections whose only body is an HTML comment', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskDirectory = join(fixture.path, `docs/tasks/${taskId}`);
+  const taskPath = join(taskDirectory, 'task.md');
+
+  writeFileSync(taskPath, validTaskMarkdown(taskId)
+    .replace('说明实施约束。', '<!--\n多行注释不是章节正文。\n-->\n   '));
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+
+  writeFileSync(taskPath, validTaskMarkdown(taskId));
+  writeFileSync(join(taskDirectory, 'summary.md'), validSummaryMarkdown()
+    .replace('说明主要改动。', '<!-- 注释不是章节正文 -->\n\t'));
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
+test('check applies CommonMark fence length and indentation rules before finding headings', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskPath = join(fixture.path, `docs/tasks/${taskId}/task.md`);
+
+  writeFileSync(taskPath, validTaskMarkdown(taskId)
+    .replace('\n## 需求变更\n\n说明当前没有需求变更。\n', '\n````md\n```\n## 需求变更\n````\n'));
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+
+  writeFileSync(taskPath, `${validTaskMarkdown(taskId)}\n    \`\`\`md\n## 目标\n    \`\`\`\n`);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
+test('check ignores metadata inside a correctly delimited fenced code block', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskPath = join(fixture.path, `docs/tasks/${taskId}/task.md`);
+  const fencedMetadata = '\n````md\n```\nTask ID: `2026-08-04-safe-login`\nType: `feature`\n````\n';
+
+  writeFileSync(taskPath, `${validTaskMarkdown(taskId)}${fencedMetadata}`);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 0);
+
+  writeFileSync(taskPath, fencedMetadata);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
 test('resolve verifies the branch type and rejects multiple changed task statuses', (t) => {
   const fixture = createGitFixture();
   t.after(() => fixture[Symbol.dispose]());

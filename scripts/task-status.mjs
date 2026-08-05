@@ -204,15 +204,30 @@ function markdownLinesOutsideCodeFences(content) {
   const lines = [];
   let fence = null;
   for (const line of content.split(/\r?\n/u)) {
-    const marker = /^\s*(`{3,}|~{3,})/u.exec(line)?.[1];
-    if (marker) {
-      if (!fence) fence = marker[0];
-      else if (marker[0] === fence) fence = null;
+    if (fence) {
+      if (isClosingFence(line, fence)) fence = null;
       continue;
     }
-    if (!fence) lines.push(line);
+    const openingFence = openingFenceMarker(line);
+    if (openingFence) {
+      fence = openingFence;
+      continue;
+    }
+    lines.push(line);
   }
   return lines;
+}
+
+function openingFenceMarker(line) {
+  const marker = /^( {0,3})(`{3,}|~{3,})/u.exec(line)?.[2];
+  return marker ? { character: marker[0], length: marker.length } : null;
+}
+
+function isClosingFence(line, openingFence) {
+  const marker = /^( {0,3})(`+|~+)([\t ]*)$/u.exec(line)?.[2];
+  return marker !== undefined
+    && marker[0] === openingFence.character
+    && marker.length >= openingFence.length;
 }
 
 function validateExactMetadata(lines, label, value) {
@@ -236,10 +251,14 @@ function validateRequiredSections(lines, headings, name) {
     }
     const start = matches[0].index + 1;
     const next = sections.find((section) => section.index >= start)?.index ?? lines.length;
-    if (!lines.slice(start, next).some((line) => line.trim() !== '')) {
+    if (!hasSubstantiveMarkdownContent(lines.slice(start, next))) {
       throw new TaskStatusError(`${name} heading \`${heading}\` must have non-empty content`);
     }
   }
+}
+
+function hasSubstantiveMarkdownContent(lines) {
+  return lines.join('\n').replace(/<!--[\s\S]*?-->/gu, '').trim() !== '';
 }
 
 function escapeRegExp(value) {
