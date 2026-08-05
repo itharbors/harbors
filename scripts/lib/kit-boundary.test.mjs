@@ -289,7 +289,7 @@ test('validates the exact three real Task files with Git name-status and modes',
     await mkdir(taskDirectory, { recursive: true });
     await Promise.all([
       writeFile(path.join(taskDirectory, 'task.md'), '# Task\n'),
-      writeFile(path.join(taskDirectory, 'status.json'), '{}\n'),
+      writeFile(path.join(taskDirectory, 'status.json'), '{"task":"fixture"}\n'),
       writeFile(path.join(taskDirectory, 'summary.md'), '# Summary\n'),
     ]);
     const head = await commitAll(repositoryRoot, 'add Task files');
@@ -300,6 +300,101 @@ test('validates the exact three real Task files with Git name-status and modes',
         `docs/tasks/${taskId}/summary.md`,
         `docs/tasks/${taskId}/task.md`,
       ] },
+    );
+  });
+});
+
+test('real CLI rejects an unchanged Kit source copied into the current Task boundary', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'copy detection fixture\n';
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'template.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Kit template');
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(path.join(taskDirectory, 'summary.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy Kit template into Task');
+
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [cli, 'sqlite', '--task', taskId, '--base', base, '--head', head],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+      ),
+      /rename or copy must stay within one allowed boundary/u,
+    );
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{
+        status: 'C100',
+        paths: ['kits/sqlite/template.md', `docs/tasks/${taskId}/summary.md`],
+      }],
+    );
+  });
+});
+
+test('real CLI rejects an unchanged current Task source copied into the Kit boundary', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'reverse copy detection fixture\n';
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(path.join(taskDirectory, 'summary.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Task summary');
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'copied.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy Task summary into Kit');
+
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [cli, 'sqlite', '--task', taskId, '--base', base, '--head', head],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+      ),
+      /rename or copy must stay within one allowed boundary/u,
+    );
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{
+        status: 'C100',
+        paths: [`docs/tasks/${taskId}/summary.md`, 'kits/sqlite/copied.md'],
+      }],
+    );
+  });
+});
+
+test('real same-boundary copies remain allowed inside a Kit and inside the current Task', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'same Kit copy\n';
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'template.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Kit copy source');
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'copied.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy inside Kit');
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{ status: 'C100', paths: ['kits/sqlite/template.md', 'kits/sqlite/copied.md'] }],
+    );
+    assert.deepEqual(
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      { paths: ['kits/sqlite/template.md', 'kits/sqlite/copied.md'] },
+    );
+  });
+
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'same Task copy\n';
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(path.join(taskDirectory, 'task.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Task copy source');
+    await writeFile(path.join(taskDirectory, 'summary.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy inside Task');
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{
+        status: 'C100',
+        paths: [`docs/tasks/${taskId}/task.md`, `docs/tasks/${taskId}/summary.md`],
+      }],
+    );
+    assert.deepEqual(
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      { paths: [`docs/tasks/${taskId}/task.md`, `docs/tasks/${taskId}/summary.md`] },
     );
   });
 });

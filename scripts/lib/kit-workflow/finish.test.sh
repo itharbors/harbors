@@ -139,8 +139,27 @@ test_finish_recovers_exact_staged_status_and_rejects_other_dirty_state() {
   unset GIT_FAIL_STATUS_COMMIT
   assert_contains "$output" 'simulated status commit failure'
   assert_eq "$(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all)" "M  docs/tasks/$TASK_ID/status.json"
+  recovery_head=$(git -C "$WORKTREE" rev-parse HEAD)
+  recovery_author=$(git -C "$WORKTREE" log -1 --format='%an <%ae>')
+  recovery_pushes=$(wc -l < "$PUSH_LOG" | tr -d ' ')
+  recovery_creates=$(wc -l < "$GH_CREATE_LOG" | tr -d ' ')
+  recovery_edits=$(wc -l < "$GH_EDIT_LOG" | tr -d ' ')
+  git -C "$WORKTREE" config --local user.name 'Wrong Recovery Author'
+  git -C "$WORKTREE" config --local user.email 'wrong-recovery@example.com'
+  if output=$("$FINISH" sqlite '拒绝错误身份恢复' "$BODY" 2>&1); then fail 'wrong recovery identity succeeded'; fi
+  assert_contains "$output" 'Git user.name must be VisualSJ'
+  assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$recovery_head"
+  assert_eq "$(git -C "$WORKTREE" log -1 --format='%an <%ae>')" "$recovery_author"
+  assert_eq "$(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all)" "M  docs/tasks/$TASK_ID/status.json"
+  assert_eq "$(wc -l < "$PUSH_LOG" | tr -d ' ')" "$recovery_pushes"
+  assert_eq "$(wc -l < "$GH_CREATE_LOG" | tr -d ' ')" "$recovery_creates"
+  assert_eq "$(wc -l < "$GH_EDIT_LOG" | tr -d ' ')" "$recovery_edits"
+  git -C "$WORKTREE" config --local user.name 'VisualSJ'
+  git -C "$WORKTREE" config --local user.email 'devhacker520@hotmail.com'
   output=$("$FINISH" sqlite '恢复变更' "$BODY")
   assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+  assert_eq "$(wc -l < "$GH_CREATE_LOG" | tr -d ' ')" "$recovery_creates"
+  assert_eq "$(wc -l < "$GH_EDIT_LOG" | tr -d ' ')" 1
 
   prepare_change feature
   export GIT_FAIL_STATUS_COMMIT=1

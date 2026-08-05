@@ -289,7 +289,17 @@ export async function readChangedPathRecords({ repositoryRoot, base, head }) {
   const baseCommit = await resolveRevision({ repositoryRoot, revision: base });
   const headCommit = await resolveRevision({ repositoryRoot, revision: head });
   const output = await runGit(
-    ['diff', '--name-status', '-z', '--find-renames', baseCommit, headCommit, '--'],
+    [
+      'diff',
+      '--name-status',
+      '-z',
+      '--find-renames',
+      '--find-copies',
+      '--find-copies-harder',
+      baseCommit,
+      headCommit,
+      '--',
+    ],
     repositoryRoot,
   );
   return parseDiffNameStatus(output);

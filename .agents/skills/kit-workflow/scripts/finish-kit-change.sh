@@ -186,6 +186,7 @@ trap cleanup_temporary_files EXIT
 # already-created PR before committing the exact staged status, so boundary can
 # continue to require an index identical to HEAD.
 if test "$worktree_mode" = staged-status-recovery; then
+  kit_workflow_validate_identity "$repo_root"
   command -v gh >/dev/null 2>&1 || kit_workflow_fail 'gh is not installed; install GitHub CLI before finishing'
   gh auth status >/dev/null 2>&1 || kit_workflow_fail 'gh is not authenticated; run gh auth login'
   owner=$(cd "$repo_root" && gh repo view --json nameWithOwner --jq .nameWithOwner)
