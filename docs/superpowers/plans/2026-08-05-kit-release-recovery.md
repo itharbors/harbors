@@ -380,7 +380,7 @@
     '- npm run test:kit-publish' \
     '- npm run test:kit-release-intent' \
     '- npm run test:preflight' > "$pr_body"
-  /Users/bytedance/Project/harbors/.agents/skills/change-workflow/scripts/finish-change.sh \
+  .agents/skills/change-workflow/scripts/finish-change.sh \
     '支持 Kit 不可变发布恢复' \
     "$pr_body"
   ```
