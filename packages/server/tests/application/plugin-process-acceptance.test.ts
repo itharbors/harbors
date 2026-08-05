@@ -1,10 +1,11 @@
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createApp } from '../../src/app';
 import type { AssemblyConfig } from '../../src/assembly/config';
 import { ApplicationRuntime } from '../../src/application/runtime';
@@ -24,6 +25,32 @@ const CRASHING = '@acceptance/crashing';
 const MENU_ID = 'acceptance-crashing/manual';
 const CONDITION_TIMEOUT_MS = 8_000;
 const TEST_TIMEOUT_MS = 30_000;
+const SERVER_ROOT = path.resolve(import.meta.dirname, '../..');
+let emittedServerRoot: string | undefined;
+
+beforeAll(() => {
+  emittedServerRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'application-plugin-acceptance-emitted-'));
+  try {
+    execFileSync(process.execPath, [
+      findTypeScriptCompiler(SERVER_ROOT),
+      '-p',
+      path.join(SERVER_ROOT, 'tsconfig.build.json'),
+      '--outDir',
+      emittedServerRoot,
+    ], {
+      cwd: path.resolve(SERVER_ROOT, '../..'),
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    fs.rmSync(emittedServerRoot, { recursive: true, force: true });
+    emittedServerRoot = undefined;
+    throw error;
+  }
+});
+
+afterAll(() => {
+  if (emittedServerRoot) fs.rmSync(emittedServerRoot, { recursive: true, force: true });
+});
 
 interface PingResult {
   pid: number;
@@ -40,11 +67,22 @@ interface AcceptanceHarness {
   server: http.Server;
   baseUrl: string;
   bootstraps: ApplicationBootstrap[];
-  childPids: Set<number>;
-  publishedChildPids: Set<number>;
+  spawnLedger: SpawnObservation[];
+  publishedLedger: PublishedObservation[];
   restartGaps: RestartGapObservation[];
   storageRoot: string;
   closeApp(): void;
+}
+
+interface SpawnObservation {
+  plugin: string;
+  pid: number | undefined;
+}
+
+interface PublishedObservation {
+  plugin: string;
+  generation: string;
+  pid: number;
 }
 
 interface RestartGapObservation {
@@ -65,8 +103,8 @@ const runnerModes = [
   {
     name: 'built dist',
     resolve: () => resolveApplicationPluginRunner(pathToFileURL(path.resolve(
-      import.meta.dirname,
-      '../../dist/application/plugin-process/spawn.js',
+      requireEmittedServerRoot(),
+      'application/plugin-process/spawn.js',
     )).href),
   },
 ] as const;
@@ -183,13 +221,19 @@ describe.each(runnerModes)('application plugin process acceptance ($name runner)
         await expect(harness.runtime.request(CRASHING, 'lateOldGeneration')).rejects.toThrow(/No request route/u);
       }
 
-      expect(harness.childPids.size).toBe(5);
-      expect(harness.childPids.has(process.pid)).toBe(false);
-      expect(harness.childPids.has(healthyFirst.pid)).toBe(true);
-      expect(harness.childPids.has(crashingPid)).toBe(true);
-      expect([...harness.publishedChildPids].sort((left, right) => left - right)).toEqual(
-        [...harness.childPids].sort((left, right) => left - right),
-      );
+      expect(harness.spawnLedger).toHaveLength(5);
+      expect(harness.spawnLedger.every((entry) => entry.pid !== undefined)).toBe(true);
+      expect(new Set(harness.spawnLedger.map((entry) => entry.pid)).size).toBe(5);
+      expect(harness.spawnLedger.some((entry) => entry.pid === process.pid)).toBe(false);
+      expect(harness.spawnLedger).toContainEqual({ plugin: HEALTHY, pid: healthyFirst.pid });
+      expect(harness.spawnLedger).toContainEqual({ plugin: CRASHING, pid: crashingPid });
+      expect(harness.publishedLedger).toEqual([
+        { plugin: HEALTHY, generation: 'generation-1', pid: harness.spawnLedger[0]!.pid },
+        { plugin: CRASHING, generation: 'generation-1', pid: harness.spawnLedger[1]!.pid },
+        { plugin: CRASHING, generation: 'generation-2', pid: harness.spawnLedger[2]!.pid },
+        { plugin: CRASHING, generation: 'generation-3', pid: harness.spawnLedger[3]!.pid },
+        { plugin: CRASHING, generation: 'generation-4', pid: harness.spawnLedger[4]!.pid },
+      ]);
       expect(harness.bootstraps.some((bootstrap) => (
         bootstrap.phase === 'degraded'
         && pluginState(bootstrap, CRASHING).status === 'restarting'
@@ -202,7 +246,7 @@ describe.each(runnerModes)('application plugin process acceptance ($name runner)
       harness.closeApp();
       try {
         await waitForCondition(
-          () => [...harness.childPids].every((pid) => processIsGone(pid)),
+          () => uniqueSpawnPids(harness.spawnLedger).every((pid) => processIsGone(pid)),
           'all application plugin children to exit',
         );
       } finally {
@@ -222,112 +266,144 @@ async function createAcceptanceHarness(
   runner: ResolvedApplicationPluginRunner,
 ): Promise<AcceptanceHarness> {
   const storageRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'application-plugin-acceptance-'));
-  const childPids = new Set<number>();
-  const publishedChildPids = new Set<number>();
+  let runtime: ApplicationRuntime | undefined;
+  let server: http.Server | undefined;
+  let closeApp = (): void => undefined;
+  const spawnLedger: SpawnObservation[] = [];
+  const publishedLedger: PublishedObservation[] = [];
+  const publishedGenerations = new Set<string>();
   const restartGaps: RestartGapObservation[] = [];
   const observedRestartGaps = new Set<string>();
   let baseUrl: string | undefined;
-  const plugins: ApplicationPluginSpec[] = [
-    fixturePlugin('healthy', HEALTHY),
-    fixturePlugin('crashing', CRASHING),
-  ];
-  const runtime = new ApplicationRuntime({
-    plugins,
-    hostMode: 'web',
-    pluginPathRoots: {
-      applicationData: storageRoot,
-      data: path.join(storageRoot, 'data'),
-      cache: path.join(storageRoot, 'cache'),
-      temp: path.join(storageRoot, 'temp'),
-    },
-    processRuntime: {
-      runner,
-      cwd: path.resolve(import.meta.dirname, '../../../..'),
-    },
-    createPluginSupervisor: (options) => {
-      if (!options.process) throw new Error('Acceptance process runtime is missing');
-      return createApplicationPluginSupervisor({
-        ...options,
-        process: options.process,
-        spawn: (spawnOptions) => {
-          const child = spawnApplicationPluginProcess(spawnOptions);
-          if (child.pid === undefined) throw new Error('Acceptance child pid is missing');
-          childPids.add(child.pid);
-          return child;
-        },
-      });
-    },
-  });
-  const bootstraps: ApplicationBootstrap[] = [];
-  runtime.subscribe((event) => {
-    const bootstrap = structuredClone(event.bootstrap);
-    bootstraps.push(bootstrap);
-    for (const plugin of bootstrap.plugins) {
-      if (plugin.pid !== undefined) publishedChildPids.add(plugin.pid);
-    }
-    const crashingState = pluginState(bootstrap, CRASHING);
-    if (crashingState.status !== 'restarting' || !crashingState.generation) return;
-    const gapKey = `${crashingState.generation}:${crashingState.restartCount}`;
-    if (observedRestartGaps.has(gapKey)) return;
-    observedRestartGaps.add(gapKey);
-    restartGaps.push({
-      bootstrap,
-      menuMissing: menuIsMissing(runtime),
-      staticRouteMissing: routeIsMissing(runtime.request(CRASHING, 'ping')),
-      manualRouteMissing: routeIsMissing(runtime.request(CRASHING, 'manualPing')),
-      lateRouteMissing: routeIsMissing(runtime.request(CRASHING, 'lateOldGeneration')),
-      healthOkay: baseUrl ? healthIsOkay(baseUrl) : Promise.resolve(false),
-      healthyPing: ping(runtime, HEALTHY).catch(() => undefined),
-    });
-  });
-
-  const channel = new SSEChannel();
-  const app = createApp(fakeSessionManager(), channel, {
-    assembly: fakeAssembly(),
-    applicationRuntime: runtime,
-    pluginPathRoots: {
-      applicationData: storageRoot,
-      data: path.join(storageRoot, 'data'),
-      cache: path.join(storageRoot, 'cache'),
-      temp: path.join(storageRoot, 'temp'),
-    },
-  });
-  const server = http.createServer((request, response) => {
-    void app.handleRequest(request, response);
-  });
   try {
-    await runtime.start();
-    await new Promise<void>((resolve, reject) => {
-      server.once('error', reject);
-      server.listen(0, '127.0.0.1', resolve);
+    const plugins: ApplicationPluginSpec[] = [
+      fixturePlugin('healthy', HEALTHY),
+      fixturePlugin('crashing', CRASHING),
+    ];
+    const activeRuntime = new ApplicationRuntime({
+      plugins,
+      hostMode: 'web',
+      pluginPathRoots: {
+        applicationData: storageRoot,
+        data: path.join(storageRoot, 'data'),
+        cache: path.join(storageRoot, 'cache'),
+        temp: path.join(storageRoot, 'temp'),
+      },
+      processRuntime: {
+        runner,
+        cwd: path.resolve(import.meta.dirname, '../../../..'),
+      },
+      createPluginSupervisor: (options) => {
+        if (!options.process) throw new Error('Acceptance process runtime is missing');
+        return createApplicationPluginSupervisor({
+          ...options,
+          process: options.process,
+          spawn: (spawnOptions) => {
+            const child = spawnApplicationPluginProcess(spawnOptions);
+            spawnLedger.push({ plugin: options.plugin, pid: child.pid });
+            return child;
+          },
+        });
+      },
     });
-  } catch (error) {
-    await Promise.allSettled([runtime.dispose(), closeServer(server)]);
-    channel.closeAll();
-    app.stopDisconnectHandling();
-    await waitForCondition(
-      () => [...childPids].every((pid) => processIsGone(pid)),
-      'failed-startup application plugin children to exit',
-    );
-    fs.rmSync(storageRoot, { recursive: true, force: true });
-    throw error;
-  }
-  const port = (server.address() as AddressInfo).port;
-  baseUrl = `http://127.0.0.1:${port}`;
-  return {
-    runtime,
-    server,
-    baseUrl,
-    bootstraps,
-    childPids,
-    publishedChildPids,
-    restartGaps,
-    storageRoot,
-    closeApp() {
+    runtime = activeRuntime;
+    const bootstraps: ApplicationBootstrap[] = [];
+    activeRuntime.subscribe((event) => {
+      const bootstrap = structuredClone(event.bootstrap);
+      bootstraps.push(bootstrap);
+      for (const plugin of bootstrap.plugins) {
+        if (plugin.pid === undefined || !plugin.generation) continue;
+        const key = `${plugin.name}:${plugin.generation}`;
+        if (publishedGenerations.has(key)) continue;
+        publishedGenerations.add(key);
+        publishedLedger.push({ plugin: plugin.name, generation: plugin.generation, pid: plugin.pid });
+      }
+      const crashingState = pluginState(bootstrap, CRASHING);
+      if (crashingState.status !== 'restarting' || !crashingState.generation) return;
+      const gapKey = `${crashingState.generation}:${crashingState.restartCount}`;
+      if (observedRestartGaps.has(gapKey)) return;
+      observedRestartGaps.add(gapKey);
+      restartGaps.push({
+        bootstrap,
+        menuMissing: menuIsMissing(activeRuntime),
+        staticRouteMissing: routeIsMissing(activeRuntime.request(CRASHING, 'ping')),
+        manualRouteMissing: routeIsMissing(activeRuntime.request(CRASHING, 'manualPing')),
+        lateRouteMissing: routeIsMissing(activeRuntime.request(CRASHING, 'lateOldGeneration')),
+        healthOkay: baseUrl ? healthIsOkay(baseUrl) : Promise.resolve(false),
+        healthyPing: ping(activeRuntime, HEALTHY).catch(() => undefined),
+      });
+    });
+
+    const channel = new SSEChannel();
+    const app = createApp(fakeSessionManager(), channel, {
+      assembly: fakeAssembly(),
+      applicationRuntime: activeRuntime,
+      pluginPathRoots: {
+        applicationData: storageRoot,
+        data: path.join(storageRoot, 'data'),
+        cache: path.join(storageRoot, 'cache'),
+        temp: path.join(storageRoot, 'temp'),
+      },
+    });
+    closeApp = () => {
       channel.closeAll();
       app.stopDisconnectHandling();
-    },
-  };
+    };
+    const activeServer = http.createServer((request, response) => {
+      void app.handleRequest(request, response);
+    });
+    server = activeServer;
+    await activeRuntime.start();
+    await new Promise<void>((resolve, reject) => {
+      activeServer.once('error', reject);
+      activeServer.listen(0, '127.0.0.1', resolve);
+    });
+    const port = (activeServer.address() as AddressInfo).port;
+    baseUrl = `http://127.0.0.1:${port}`;
+    return {
+      runtime: activeRuntime,
+      server: activeServer,
+      baseUrl,
+      bootstraps,
+      spawnLedger,
+      publishedLedger,
+      restartGaps,
+      storageRoot,
+      closeApp,
+    };
+  } catch (error) {
+    const cleanupErrors: unknown[] = [];
+    const cleanup = await Promise.allSettled([
+      runtime?.dispose() ?? Promise.resolve(),
+      server ? closeServer(server) : Promise.resolve(),
+    ]);
+    cleanupErrors.push(...cleanup.flatMap((result) => (
+      result.status === 'rejected' ? [result.reason] : []
+    )));
+    try {
+      closeApp();
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    }
+    try {
+      await waitForCondition(
+        () => uniqueSpawnPids(spawnLedger).every((pid) => processIsGone(pid)),
+        'failed-startup application plugin children to exit',
+      );
+    } catch (cleanupError) {
+      cleanupErrors.push(cleanupError);
+    } finally {
+      try {
+        fs.rmSync(storageRoot, { recursive: true, force: true });
+      } catch (cleanupError) {
+        cleanupErrors.push(cleanupError);
+      }
+    }
+    if (cleanupErrors.length > 0) {
+      throw new AggregateError([error, ...cleanupErrors], 'Acceptance harness setup and cleanup failed');
+    }
+    throw error;
+  }
 }
 
 function fixturePlugin(directory: string, name: string): ApplicationPluginSpec {
@@ -447,4 +523,24 @@ function closeServer(server: http.Server): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve());
   });
+}
+
+function uniqueSpawnPids(ledger: SpawnObservation[]): number[] {
+  return [...new Set(ledger.flatMap((entry) => entry.pid === undefined ? [] : [entry.pid]))];
+}
+
+function requireEmittedServerRoot(): string {
+  if (!emittedServerRoot) throw new Error('Fresh emitted server is unavailable');
+  return emittedServerRoot;
+}
+
+function findTypeScriptCompiler(from: string): string {
+  let directory = path.resolve(from);
+  while (true) {
+    const candidate = path.join(directory, 'node_modules/typescript/bin/tsc');
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(directory);
+    if (parent === directory) throw new Error('Cannot locate the TypeScript compiler');
+    directory = parent;
+  }
 }
