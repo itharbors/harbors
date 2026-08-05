@@ -32,7 +32,7 @@ function runPrepare(kitArtifact, outputDirectory, {
     '--repository', 'example/harbors',
     '--commit', commit,
     '--workflow', 'example/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/demo/v1.2.3',
-    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
     '--ref', 'refs/tags/kit/demo/v1.2.3',
     '--tag', 'kit/demo/v1.2.3',
     '--label', 'Demo Kit',
@@ -50,7 +50,7 @@ function runDirectoryPrepare(kitDirectory, outputDirectory, { tag = 'kit/demo/v1
     '--repository', 'example/harbors',
     '--commit', commit,
     '--workflow', `example/harbors/.github/workflows/publish-kit.yml@refs/tags/${tag}`,
-    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
     '--ref', `refs/tags/${tag}`,
     '--tag', tag,
     '--label', 'Demo Kit',
@@ -84,7 +84,7 @@ test('prepare copies the checked Kit byte-for-byte and writes its publication me
     assert.equal(release.assets[0].sha256, outputs.ARTIFACT_SHA256);
     assert.equal(
       release.source.signerWorkflow,
-      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
     );
     assert.equal(entry.releaseManifestUrl.endsWith('/release.json'), true);
     assert.equal(sbom.spdxVersion, 'SPDX-2.3');
@@ -100,7 +100,7 @@ test('prepare copies the checked Kit byte-for-byte and writes its publication me
   }
 });
 
-test('prepare supports the immutable v2 directory contract without weakening publication output guarantees', async () => {
+test('prepare supports the legacy directory input contract without weakening publication output guarantees', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-cli-v2-'));
   const sourceDirectory = path.join(root, 'source');
   const outputDirectory = path.join(root, 'release');
