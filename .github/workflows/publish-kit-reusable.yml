@@ -2,6 +2,11 @@ name: Publish Kit reusable
 
 on:
   workflow_call:
+    inputs:
+      release-tag:
+        description: Exact immutable Kit release Tag
+        required: true
+        type: string
 
 # GitHub Release immutability must be enabled as a repository setting before activation.
 # This workflow rejects existing Releases and never attempts to change that setting.
@@ -12,6 +17,8 @@ jobs:
     permissions:
       contents: read
     outputs:
+      release-ref: ${{ steps.identity.outputs.release-ref }}
+      release-commit: ${{ steps.source.outputs.release-commit }}
       slug: ${{ steps.policy.outputs.slug }}
       version: ${{ steps.policy.outputs.version }}
       channel: ${{ steps.policy.outputs.channel }}
@@ -21,20 +28,39 @@ jobs:
       summary: ${{ steps.policy.outputs.summary }}
       tag: ${{ steps.policy.outputs.tag }}
     steps:
+      - name: Resolve exact Kit Tag
+        id: identity
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.release-tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^kit/[a-z0-9]+(-[a-z0-9]+)*/v[0-9A-Za-z.-]+$ ]]; then
+            echo "Publication requires an exact canonical Kit Tag" >&2
+            exit 1
+          fi
+          echo "release-ref=refs/tags/$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+
       - name: Checkout exact Kit Tag
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ steps.identity.outputs.release-ref }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Require Tag Commit on main
+        id: source
         shell: bash
+        env:
+          RELEASE_REF: ${{ steps.identity.outputs.release-ref }}
         run: |
           set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_REF")" = commit
+          release_commit="$(git rev-parse --verify "$RELEASE_REF^{commit}")"
           git fetch --no-tags origin main
           git rev-parse --verify origin/main
-          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+          git merge-base --is-ancestor "$release_commit" origin/main
+          echo "release-commit=$release_commit" >> "$GITHUB_OUTPUT"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -55,6 +81,9 @@ jobs:
       - name: Validate Tag and official Kit policy
         id: policy
         shell: bash
+        env:
+          RELEASE_REF: ${{ steps.identity.outputs.release-ref }}
+          RELEASE_TAG: ${{ inputs.release-tag }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
@@ -62,7 +91,7 @@ jobs:
           import semver from 'semver';
           import { loadTrustedMarketKit } from './scripts/lib/kit-monorepo.mjs';
 
-          const match = /^refs\/tags\/kit\/([a-z0-9][a-z0-9-]*)\/v(.+)$/u.exec(process.env.GITHUB_REF);
+          const match = /^refs\/tags\/kit\/([a-z0-9][a-z0-9-]*)\/v(.+)$/u.exec(process.env.RELEASE_REF);
           if (!match) throw new Error('Publication requires exact refs/tags/kit/{slug}/v{version}');
           const [, slug, version] = match;
           if (semver.valid(version) !== version || version.includes('+')) {
@@ -86,7 +115,7 @@ jobs:
             'kit-id': kit.id,
             label: kit.label,
             summary: kit.summary,
-            tag: process.env.GITHUB_REF.slice('refs/tags/'.length),
+            tag: process.env.RELEASE_TAG,
           };
           const unsafeOutput = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
           for (const [key, value] of Object.entries(values)) {
@@ -112,12 +141,14 @@ jobs:
       KIT_ID: ${{ needs.context.outputs.kit-id }}
       EXPECTED_CHANNEL: ${{ needs.context.outputs.channel }}
       EXPECTED_VERSION: ${{ needs.context.outputs.version }}
+      RELEASE_COMMIT: ${{ needs.context.outputs.release-commit }}
+      RELEASE_REF: ${{ needs.context.outputs.release-ref }}
       RELEASE_TAG: ${{ needs.context.outputs.tag }}
     steps:
       - name: Checkout exact Kit Tag
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.ref }}
+          ref: ${{ needs.context.outputs.release-ref }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -187,10 +218,10 @@ jobs:
             --kit-version "$EXPECTED_VERSION" \
             --kit-channel "$EXPECTED_CHANNEL" \
             --repository "$GITHUB_REPOSITORY" \
-            --commit "$GITHUB_SHA" \
-            --workflow "$GITHUB_WORKFLOW_REF" \
-            --signer-workflow itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2 \
-            --ref "$GITHUB_REF" \
+            --commit "$RELEASE_COMMIT" \
+            --workflow "$GITHUB_REPOSITORY/.github/workflows/publish-kit.yml@$RELEASE_REF" \
+            --signer-workflow itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3 \
+            --ref "$RELEASE_REF" \
             --tag "$RELEASE_TAG" \
             --label "$KIT_LABEL" \
             --summary "$KIT_SUMMARY" \
@@ -291,6 +322,27 @@ jobs:
           name: kit-publication
           path: ${{ runner.temp }}/kit-release
 
+      - name: Require missing Preview Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.context.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_error="$RUNNER_TEMP/release.err"
+          set +e
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >/dev/null 2>"$release_error"
+          release_status=$?
+          set -e
+          if [[ "$release_status" -eq 0 ]]; then
+            echo "Release already exists: $TAG" >&2
+            exit 1
+          fi
+          if ! grep -Fq '(HTTP 404)' "$release_error"; then
+            cat "$release_error" >&2
+            exit "$release_status"
+          fi
+
       - name: Attest Kit and Release manifest
         uses: actions/attest@v4
         with:
@@ -305,14 +357,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           KIT_LABEL: ${{ needs.context.outputs.label }}
+          RELEASE_COMMIT: ${{ needs.context.outputs.release-commit }}
           TAG: ${{ needs.context.outputs.tag }}
           VERSION: ${{ needs.context.outputs.version }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Preview Release already exists: $TAG" >&2
-            exit 1
-          fi
           gh release create "$TAG" \
             "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" \
             "$RUNNER_TEMP/kit-release/release.json" \
@@ -321,7 +370,7 @@ jobs:
             --verify-tag \
             --prerelease \
             --title "$KIT_LABEL $VERSION Preview" \
-            --notes "Automated immutable Kit Preview from $GITHUB_SHA."
+            --notes "Automated immutable Kit Preview from $RELEASE_COMMIT."
 
   publish-stable:
     if: needs.context.outputs.channel == 'stable'
@@ -340,6 +389,27 @@ jobs:
           name: kit-publication
           path: ${{ runner.temp }}/kit-release
 
+      - name: Require missing Stable Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.context.outputs.tag }}
+        run: |
+          set -euo pipefail
+          release_error="$RUNNER_TEMP/release.err"
+          set +e
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" >/dev/null 2>"$release_error"
+          release_status=$?
+          set -e
+          if [[ "$release_status" -eq 0 ]]; then
+            echo "Release already exists: $TAG" >&2
+            exit 1
+          fi
+          if ! grep -Fq '(HTTP 404)' "$release_error"; then
+            cat "$release_error" >&2
+            exit "$release_status"
+          fi
+
       - name: Attest Kit and Release manifest
         uses: actions/attest@v4
         with:
@@ -354,14 +424,11 @@ jobs:
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           KIT_LABEL: ${{ needs.context.outputs.label }}
+          RELEASE_COMMIT: ${{ needs.context.outputs.release-commit }}
           TAG: ${{ needs.context.outputs.tag }}
           VERSION: ${{ needs.context.outputs.version }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Stable Release already exists: $TAG" >&2
-            exit 1
-          fi
           gh release create "$TAG" \
             "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" \
             "$RUNNER_TEMP/kit-release/release.json" \
@@ -369,7 +436,7 @@ jobs:
             "$RUNNER_TEMP/kit-release/registry-entry.json" \
             --verify-tag \
             --title "$KIT_LABEL $VERSION" \
-            --notes "Reviewed immutable Kit Release from $GITHUB_SHA."
+            --notes "Reviewed immutable Kit Release from $RELEASE_COMMIT."
 
   publish-registry:
     needs: [publish-preview, publish-stable]
@@ -379,5 +446,5 @@ jobs:
       attestations: read
       pages: write
       id-token: write
-    uses: itharbors/harbors/.github/workflows/publish-kit-registry.yml@kit-publish-v2
+    uses: itharbors/harbors/.github/workflows/publish-kit-registry.yml@kit-publish-v3
     secrets: inherit
