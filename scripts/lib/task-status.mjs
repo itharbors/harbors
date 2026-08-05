@@ -178,6 +178,7 @@ function isCalendarDate(value) {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value ?? '');
   if (!match) return false;
   const [year, month, day] = match.slice(1).map(Number);
+  if (year === 0) return false;
   const date = new Date(0);
   date.setUTCHours(0, 0, 0, 0);
   date.setUTCFullYear(year, month - 1, day);

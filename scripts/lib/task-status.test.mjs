@@ -54,6 +54,10 @@ test('rejects malformed status structure and an invalid stage progression', () =
     /invalid task id/u,
   );
   assert.throws(
+    () => validateTaskStatus({ ...value, taskId: '0000-01-01-safe-login' }),
+    /invalid task id/u,
+  );
+  assert.throws(
     () => validateTaskStatus({ ...value, updatedAt: 'tomorrow' }, { expectedTaskId: taskId }),
     /valid date-time/u,
   );
@@ -218,6 +222,7 @@ test('rejects invalid transitions and malformed pull requests', () => {
 test('Schema rejects impossible Task dates and unsafe PR numbers', () => {
   const taskIdPattern = new RegExp(taskStatusSchema.properties.taskId.pattern, 'u');
   assert.equal(taskIdPattern.test('2026-02-31-safe-login'), false);
+  assert.equal(taskIdPattern.test('0000-01-01-safe-login'), false);
   assert.equal(taskIdPattern.test('2024-02-29-safe-login'), true);
   assert.equal(taskIdPattern.test('2025-02-29-safe-login'), false);
   assert.equal(taskStatusSchema.properties.pullRequest.oneOf[1].properties.number.maximum, Number.MAX_SAFE_INTEGER);

@@ -59,6 +59,7 @@ test('init rejects invalid slug and calendar date as usage errors', (t) => {
 
   assert.equal(runCli(fixture.path, ['init', 'feature', 'Safe_Login']).status, 2);
   assert.equal(runCli(fixture.path, ['init', 'feature', 'safe-login', '--date', '2026-02-30']).status, 2);
+  assert.equal(runCli(fixture.path, ['init', 'feature', 'safe-login', '--date', '0000-01-01']).status, 2);
 });
 
 test('init derives the default Task date from the local calendar', (t) => {
