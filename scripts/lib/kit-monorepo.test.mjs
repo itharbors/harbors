@@ -35,6 +35,7 @@ test('loads the trusted market Kit set from one strict policy', async () => {
   assert.deepEqual(policy.signerWorkflows, [
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
   ]);
 });
 
@@ -113,9 +114,9 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
     assert.equal(kit.packageJson.name, kit.id);
     assert.equal(
       kit.manifest.version,
-      slug === 'mysql'
+      ['agent-guard', 'mysql'].includes(slug)
         ? '0.1.0-preview.3'
-        : ['agent-guard', 'csv', 'sqlite'].includes(slug)
+        : ['csv', 'sqlite'].includes(slug)
           ? '0.1.0-preview.2'
           : '0.1.0-preview.1',
     );
