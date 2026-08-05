@@ -47,9 +47,12 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   let unsubscribeRpc: (() => void) | undefined;
   let initializationStarted = false;
   let initialized = false;
+  let loadStarted = false;
+  let stopping = false;
   let terminal = false;
   let exited = false;
   let definition: PluginDefinition | undefined;
+  let unloadPromise: Promise<void> | undefined;
   let runtimeController: RunnerRuntimeController | undefined;
   const importModule = options.importModule ?? ((entryPath: string) => import(entryPath));
 
@@ -86,12 +89,13 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   });
 
   async function handleRequest(request: PluginProcessRequest): Promise<void> {
-    if (!rpc || terminal) return;
+    if (!rpc || stopping || terminal) return;
+    const terminalRequest = request.method === 'unload' || request.method === 'shutdown';
     try {
       const payload = await dispatch(request.method, request.payload);
       if (terminal) return;
-      rpc.respond(request.requestId, { ok: true, payload });
-      if (request.method === 'unload' || request.method === 'shutdown') finish(false);
+      rpc.respond(request.requestId, { ok: true, payload: payload === undefined ? null : payload });
+      if (terminalRequest) finish(false);
     } catch (input) {
       if (terminal) return;
       const error = toError(input);
@@ -99,6 +103,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
         ok: false,
         error: { code: 'APPLICATION_PLUGIN_RUNNER_ERROR', message: error.message },
       });
+      if (terminalRequest) finish(true);
     }
   }
 
@@ -109,8 +114,17 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
       case 'invoke': {
         assertInitialized();
         const invocation = assertInvokePayload(payload);
-        const implementation = definition?.methods?.[invocation.method];
-        if (!implementation) throw new Error(`Application plugin method "${invocation.method}" is not defined`);
+        if (invocation.target === 'handler') {
+          return runtimeController?.invokeHandler(invocation.handlerId, invocation.args);
+        }
+        const methods = definition?.methods;
+        if (!methods || !Object.hasOwn(methods, invocation.method)) {
+          throw new Error(`Application plugin method "${invocation.method}" is not defined`);
+        }
+        const implementation = methods[invocation.method];
+        if (typeof implementation !== 'function') {
+          throw new Error(`Application plugin method "${invocation.method}" is not defined`);
+        }
         return implementation(...invocation.args);
       }
       case 'attach': {
@@ -131,11 +145,16 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
         return null;
       case 'unload':
         assertInitialized();
-        await definition?.lifecycle?.unload?.();
+        stopping = true;
+        runtimeController?.close();
+        await requestUnload();
         rpc?.emit('unloaded', null);
         return null;
       case 'shutdown':
         assertNullPayload(payload);
+        stopping = true;
+        runtimeController?.close();
+        await requestUnload();
         return null;
       default:
         throw new Error(`Application plugin runner operation "${method}" is not supported`);
@@ -154,6 +173,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
       rpc: rpc!,
       fatal: (error) => { void fatal(error); },
     });
+    loadStarted = true;
     let loadError: Error | undefined;
     try {
       await definition.lifecycle?.load?.(runtimeController.runtime);
@@ -180,6 +200,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   async function fatal(input: unknown): Promise<void> {
     if (terminal) return;
     terminal = true;
+    stopping = true;
     const error = toError(input);
     try {
       rpc?.emit('fatal', { message: error.message });
@@ -197,10 +218,10 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   }
 
   async function unloadWithTimeout(): Promise<void> {
-    if (!initialized || !definition?.lifecycle?.unload) return;
+    if (!loadStarted || !definition) return;
     let timer: unknown;
     await Promise.race([
-      Promise.resolve().then(() => definition?.lifecycle?.unload?.()).catch(() => undefined),
+      requestUnload().catch(() => undefined),
       new Promise<void>((resolve) => {
         timer = options.timers.setTimeout(resolve, UNLOAD_TIMEOUT_MS);
       }),
@@ -208,9 +229,18 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     if (timer !== undefined) options.timers.clearTimeout(timer);
   }
 
+  function requestUnload(): Promise<void> {
+    if (!loadStarted || !definition) return Promise.resolve();
+    unloadPromise ??= Promise.resolve()
+      .then(() => definition?.lifecycle?.unload?.())
+      .then(() => undefined);
+    return unloadPromise;
+  }
+
   function finish(failed: boolean): void {
     if (exited) return;
     terminal = true;
+    stopping = true;
     exited = true;
     runtimeController?.close();
     rpc?.close(new Error(failed ? 'Application plugin runner failed' : 'Application plugin runner stopped'));
@@ -293,12 +323,23 @@ function assertInitializePayload(input: unknown): InitializeApplicationPluginPay
   return input as unknown as InitializeApplicationPluginPayload;
 }
 
-function assertInvokePayload(input: unknown): { method: string; args: unknown[] } {
-  if (!isRecord(input) || !hasExactKeys(input, ['method', 'args'])
-    || !isNonEmptyString(input.method) || !Array.isArray(input.args)) {
+type InvokePayload =
+  | { target: 'method'; method: string; args: unknown[] }
+  | { target: 'handler'; handlerId: string; args: unknown[] };
+
+function assertInvokePayload(input: unknown): InvokePayload {
+  if (!isRecord(input) || !Array.isArray(input.args)) {
     throw new TypeError('Application plugin invoke payload is invalid');
   }
-  return input as { method: string; args: unknown[] };
+  if (input.target === 'method' && hasExactKeys(input, ['target', 'method', 'args'])
+    && isNonEmptyString(input.method)) {
+    return input as InvokePayload;
+  }
+  if (input.target === 'handler' && hasExactKeys(input, ['target', 'handlerId', 'args'])
+    && isNonEmptyString(input.handlerId)) {
+    return input as InvokePayload;
+  }
+  throw new TypeError('Application plugin invoke payload is invalid');
 }
 
 function assertAttachPayload(input: unknown): { pluginName: string; contribute: Record<string, unknown> } {
