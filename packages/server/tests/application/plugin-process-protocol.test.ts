@@ -43,6 +43,13 @@ describe('plugin process protocol', () => {
     expect(assertPluginProcessPayload(payload)).toEqual(payload);
   });
 
+  it('accepts a shared-reference payload that is not cyclic', () => {
+    const shared = { value: 'safe' };
+    const payload = { first: shared, second: shared };
+
+    expect(assertPluginProcessPayload(payload)).toBe(payload);
+  });
+
   it('rejects a cyclic payload', () => {
     const payload: { self?: unknown } = {};
     payload.self = payload;
@@ -59,10 +66,53 @@ describe('plugin process protocol', () => {
     expect(() => assertPluginProcessPayload(payload)).toThrow();
   });
 
+  it('accepts a payload at depth 32', () => {
+    let payload: unknown = 'leaf';
+    for (let index = 0; index < 32; index += 1) {
+      payload = { value: payload };
+    }
+
+    expect(assertPluginProcessPayload(payload)).toEqual(payload);
+  });
+
+  it.each([
+    ['an Array subclass', new (class Payload extends Array<unknown> {})('safe')],
+    ['an array with a replaced prototype', Object.setPrototypeOf(['safe'], {} as object)],
+    ['an array hole', new Array(1)],
+    ['a non-enumerable numeric array property', (() => {
+      const payload: string[] = [];
+      Object.defineProperty(payload, '0', { value: 'safe', enumerable: false });
+      return payload;
+    })()],
+  ])('rejects %s', (_reason, payload) => {
+    expect(() => assertPluginProcessPayload(payload)).toThrow();
+  });
+
+  it('rejects an array accessor without invoking it', () => {
+    let getterCalled = false;
+    const payload: string[] = [];
+    Object.defineProperty(payload, '0', {
+      enumerable: true,
+      get() {
+        getterCalled = true;
+        return 'unsafe';
+      },
+    });
+
+    expect(() => assertPluginProcessPayload(payload)).toThrow();
+    expect(getterCalled).toBe(false);
+  });
+
   it('rejects a serialized payload larger than 1 MiB', () => {
     const payload = 'a'.repeat(1024 * 1024);
 
     expect(() => assertPluginProcessPayload(payload)).toThrow();
+  });
+
+  it('accepts a serialized payload exactly 1 MiB', () => {
+    const payload = 'a'.repeat((1024 * 1024) - 2);
+
+    expect(assertPluginProcessPayload(payload)).toBe(payload);
   });
 });
 
@@ -150,6 +200,26 @@ describe('plugin process RPC peer', () => {
     });
   });
 
+  it('does not settle a request from malformed failure responses', async () => {
+    let receive: (input: unknown) => void = () => undefined;
+    const peer = createPluginProcessRpcPeer({
+      generation: 'gen-1',
+      send: () => undefined,
+      subscribe: (listener: (input: unknown) => void) => {
+        receive = listener;
+        return () => undefined;
+      },
+    });
+    const pending = peer.request('invoke', null);
+    const error = { code: 'APPLICATION_PLUGIN_UNAVAILABLE', message: 'Plugin exited' };
+
+    receive({ protocol: 1, generation: 'gen-1', kind: 'response', requestId: '1', ok: false, error: { ...error, stack: 'remote stack' } });
+    receive({ protocol: 1, generation: 'gen-1', kind: 'response', requestId: '1', ok: false, error: { ...error, extra: true } });
+    receive({ protocol: 1, generation: 'gen-1', kind: 'response', requestId: '1', ok: true, payload: 'pong' });
+
+    await expect(pending).resolves.toBe('pong');
+  });
+
   it('rejects the 257th pending request', async () => {
     const peer = createPluginProcessRpcPeer({
       generation: 'gen-1',
@@ -177,5 +247,25 @@ describe('plugin process RPC peer', () => {
 
     await expect(pending).rejects.toBe(error);
     await expect(peer.request('invoke', null)).rejects.toBe(error);
+  });
+
+  it('settles pending requests when unsubscribe throws and closes only once', async () => {
+    const unsubscribe = vi.fn(() => {
+      throw new Error('unsubscribe failed');
+    });
+    const peer = createPluginProcessRpcPeer({
+      generation: 'gen-1',
+      send: () => undefined,
+      subscribe: () => unsubscribe,
+    });
+    const error = new Error('APPLICATION_PLUGIN_UNAVAILABLE');
+    const pending = peer.request('invoke', null);
+
+    expect(() => peer.close(error)).not.toThrow();
+    expect(() => peer.close(new Error('different error'))).not.toThrow();
+
+    await expect(pending).rejects.toBe(error);
+    await expect(peer.request('invoke', null)).rejects.toBe(error);
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
 });

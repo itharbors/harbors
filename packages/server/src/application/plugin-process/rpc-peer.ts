@@ -123,11 +123,16 @@ export function createPluginProcessRpcPeer(options: CreatePluginProcessRpcPeerOp
         return;
       }
       terminalError = error;
-      unsubscribe();
-      for (const request of pending.values()) {
-        request.reject(error);
+      try {
+        unsubscribe();
+      } catch {
+        // Closing must retain its terminal error even if transport teardown fails.
+      } finally {
+        for (const request of pending.values()) {
+          request.reject(error);
+        }
+        pending.clear();
       }
-      pending.clear();
     },
   };
 }

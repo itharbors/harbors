@@ -129,20 +129,27 @@ function walkPayload(input: unknown, depth: number, seen: WeakSet<object>): void
     throw new TypeError('Plugin process payload cannot contain cycles');
   }
   seen.add(input);
-
-  if (Array.isArray(input)) {
-    validateArray(input, depth, seen);
-    return;
-  }
-  if (!isPlainObject(input)) {
-    throw new TypeError('Plugin process payload objects must have a plain or null prototype');
-  }
-  for (const key of ownEnumerableDataKeys(input)) {
-    walkPayload(input[key], depth + 1, seen);
+  try {
+    if (Array.isArray(input)) {
+      validateArray(input, depth, seen);
+      return;
+    }
+    if (!isPlainObject(input)) {
+      throw new TypeError('Plugin process payload objects must have a plain or null prototype');
+    }
+    for (const key of ownEnumerableDataKeys(input)) {
+      const descriptor = Object.getOwnPropertyDescriptor(input, key);
+      walkPayload(descriptor?.value, depth + 1, seen);
+    }
+  } finally {
+    seen.delete(input);
   }
 }
 
 function validateArray(input: unknown[], depth: number, seen: WeakSet<object>): void {
+  if (Object.getPrototypeOf(input) !== Array.prototype) {
+    throw new TypeError('Plugin process payload arrays must have the Array prototype');
+  }
   const keys = Reflect.ownKeys(input);
   for (const key of keys) {
     if (key === 'length') {
@@ -153,10 +160,14 @@ function validateArray(input: unknown[], depth: number, seen: WeakSet<object>): 
     }
   }
   for (let index = 0; index < input.length; index += 1) {
-    if (!Object.hasOwn(input, index)) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, String(index));
+    if (!descriptor) {
       throw new TypeError('Plugin process payload arrays cannot contain holes');
     }
-    walkPayload(input[index], depth + 1, seen);
+    if (!descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('Plugin process payload arrays must have enumerable value entries');
+    }
+    walkPayload(descriptor.value, depth + 1, seen);
   }
 }
 
