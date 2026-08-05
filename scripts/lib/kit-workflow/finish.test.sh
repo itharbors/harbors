@@ -170,6 +170,26 @@ test_finish_recovers_exact_staged_status_and_rejects_other_dirty_state() {
   assert_contains "$output" 'working tree is not clean'
 }
 
+test_finish_rejects_forged_staged_pr_replacement() {
+  prepare_change feature
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 1 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
+  old_head=$(git -C "$WORKTREE" rev-parse HEAD)
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 2 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  export GH_REPLACEMENT_MODE=1 GH_OLD_PR_STATE=OPEN GH_OPEN_PR_COUNT=1
+  export GH_LIST_URL=https://github.com/example/repo/pull/2
+
+  if output=$("$FINISH" sqlite '拒绝伪造 PR 替换恢复' "$BODY" 2>&1); then fail 'forged staged PR replacement succeeded'; fi
+
+  assert_contains "$output" 'not closed and unmerged'
+  assert_contains "$(cat "$GH_LOG")" 'pr view 1'
+  assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$old_head"
+  assert_eq "$(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all)" "M  docs/tasks/$TASK_ID/status.json"
+  test ! -s "$PUSH_LOG" || fail 'forged staged replacement pushed'
+}
+
 test_finish_rejects_recorded_pr_conflict_and_multiple_prs() {
   prepare_change feature
   (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 2 >/dev/null)
@@ -450,6 +470,7 @@ run_finish_tests() {
   run_case 'finish reuses open PR and reruns without empty commit' test_finish_reuses_open_pr_and_reruns_without_empty_commit
   run_case 'finish recovers after second push failure' test_finish_recovers_after_second_push_failure
   run_case 'finish recovers exact staged status and rejects other dirt' test_finish_recovers_exact_staged_status_and_rejects_other_dirty_state
+  run_case 'finish rejects forged staged PR replacement' test_finish_rejects_forged_staged_pr_replacement
   run_case 'finish rejects PR number conflicts and multiple PRs' test_finish_rejects_recorded_pr_conflict_and_multiple_prs
   run_case 'finish handles fork and closed PR recovery safely' test_finish_ignores_fork_pr_and_replaces_closed_recorded_pr
   run_case 'finish preserves and refreshes summary SHA safely' test_finish_summary_sha_is_stable_refreshes_and_does_not_trust_title

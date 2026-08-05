@@ -33,7 +33,7 @@ run_case() {
 }
 new_fixture() {
   export PATH="$ORIGINAL_PATH" TMPDIR="$ORIGINAL_TMPDIR"
-  unset NPM_FAIL GH_AUTH_FAIL GH_OPEN_PR_COUNT GH_REPO_OWNER GH_LIST_URL GH_VIEW_NUMBER GH_VIEW_BASE GH_VIEW_HEAD GH_VIEW_STATE GH_VIEW_URL GH_VIEW_HEAD_OID GH_VIEW_CROSS_REPOSITORY GH_VIEW_HEAD_OWNER GH_VIEW_MERGED_AT GH_FORK_URL GH_REPLACEMENT_MODE GH_CREATE_URL GIT_FAIL_PUSH_NUMBER GIT_CONFIG_GLOBAL
+  unset NPM_FAIL GH_AUTH_FAIL GH_OPEN_PR_COUNT GH_REPO_OWNER GH_LIST_URL GH_VIEW_NUMBER GH_VIEW_BASE GH_VIEW_HEAD GH_VIEW_STATE GH_VIEW_URL GH_VIEW_HEAD_OID GH_VIEW_CROSS_REPOSITORY GH_VIEW_HEAD_OWNER GH_VIEW_MERGED_AT GH_FORK_URL GH_REPLACEMENT_MODE GH_OLD_PR_STATE GH_OLD_PR_MERGED_AT GH_CREATE_URL GIT_FAIL_PUSH_NUMBER GIT_CONFIG_GLOBAL
   FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/change-workflow.XXXXXX")
   FIXTURE_ROOT=$(cd "$FIXTURE_ROOT" && pwd -P)
   ORIGIN="$FIXTURE_ROOT/origin.git"
@@ -166,7 +166,7 @@ case "$1 $2" in
     merged_at=${GH_VIEW_MERGED_AT-}
     if test "${GH_REPLACEMENT_MODE:-0}" = 1; then
       case "$target" in
-        1|*/pull/1) number=1; state=CLOSED; url=https://github.com/example/repo/pull/1; merged_at='' ;;
+        1|*/pull/1) number=1; state=${GH_OLD_PR_STATE-CLOSED}; url=https://github.com/example/repo/pull/1; merged_at=${GH_OLD_PR_MERGED_AT-} ;;
         2|*/pull/2) number=2; state=OPEN; url=https://github.com/example/repo/pull/2; merged_at='' ;;
       esac
     fi

@@ -31,7 +31,7 @@ Task 类型为 `feature`、`bug`、`optimize`、`docs`、`refactor`、`test`、`
 
 ## CLI
 
-在仓库根目录运行下列命令。所有命令都会打印 Task ID，非零退出表示校验或转换未通过。
+在仓库根目录运行下列命令。除 `init` 外，以下是各 action 的独立用法示例，不是一组可按顺序整段执行的命令。所有命令都会打印 Task ID，非零退出表示校验或转换未通过；`complete` 与 `skip` 是同一进行中阶段的两种互斥终态。
 
 ```bash
 node scripts/task-status.mjs init feature safe-login --date 2026-08-04

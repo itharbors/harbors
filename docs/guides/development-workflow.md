@@ -54,8 +54,9 @@ ADR 或设计文档。
 ```bash
 npm run task:status -- complete <task-id> design
 npm run task:status -- start <task-id> implementation
+# 对进行中的 implementation，默认完成；若确认无需实施，用下一行注释中的 skip 替代 complete
 npm run task:status -- complete <task-id> implementation
-npm run task:status -- skip <task-id> implementation
+# npm run task:status -- skip <task-id> implementation
 npm run task:status -- start <task-id> verification
 npm run task:status -- block <task-id> verification
 npm run task:status -- resume <task-id> verification

@@ -181,6 +181,26 @@ test_finish_recovers_staged_status_after_commit_identity_failure() {
   assert_eq "$(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all)" ''
 }
 
+test_finish_rejects_forged_staged_pr_replacement() {
+  prepare_change feature
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 1 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
+  old_head=$(git -C "$WORKTREE" rev-parse HEAD)
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 2 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  export GH_REPLACEMENT_MODE=1 GH_OLD_PR_STATE=OPEN GH_OPEN_PR_COUNT=1
+  export GH_LIST_URL=https://github.com/example/repo/pull/2
+
+  if output=$("$FINISH" '拒绝伪造 PR 替换恢复' "$BODY" 2>&1); then fail 'forged staged PR replacement succeeded'; fi
+
+  assert_contains "$output" 'not closed and unmerged'
+  assert_contains "$(cat "$GH_LOG")" 'pr view 1'
+  assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$old_head"
+  assert_eq "$(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all)" "M  docs/tasks/$TASK_ID/status.json"
+  test ! -s "$PUSH_LOG" || fail 'forged staged replacement pushed'
+}
+
 test_finish_recovery_rejects_unrelated_worktree_changes() {
   for mode in staged unstaged untracked; do
     prepare_change feature
@@ -431,6 +451,7 @@ run_finish_tests() {
   run_case 'finish reuses open PR and reruns without empty commit' test_finish_reuses_open_pr_and_reruns_without_empty_commit
   run_case 'finish recovers after second push failure' test_finish_recovers_after_second_push_failure
   run_case 'finish recovers staged status after commit identity failure' test_finish_recovers_staged_status_after_commit_identity_failure
+  run_case 'finish rejects forged staged PR replacement' test_finish_rejects_forged_staged_pr_replacement
   run_case 'finish recovery rejects unrelated worktree changes' test_finish_recovery_rejects_unrelated_worktree_changes
   run_case 'finish rejects recorded PR number conflict before writes' test_finish_rejects_recorded_pr_number_conflict_before_writes
   run_case 'finish rejects Task heading with closing hashes' test_finish_rejects_task_heading_with_closing_hashes

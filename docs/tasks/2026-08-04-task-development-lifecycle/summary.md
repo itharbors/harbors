@@ -9,10 +9,11 @@
 - Schema 与纯 domain：已提供严格 JSON Schema 和无文件 I/O 的状态领域模型，覆盖真实日历 Task ID、合法阶段序列、受控 `skip` 动作及 JavaScript 安全正整数 PR 约束。
 - 结构化 status：`status.json` 只保存 Task 身份、类型、更新时间、五阶段状态和稳定 PR 编号，不接受主观进度或自由文本。
 - 过程材料默认不提交：`.work/` 已纳入忽略规则，用于本地 spec、plan、调研和临时交接；跨环境仍需要的长期事实须升级为正式档案或文档。
-- Framework：`change-workflow` 的 start 自动建档，finish 在首次网络写入前执行 Task 门禁，并支持不可变 summary 链接、同仓库 PR 复用、closed/unmerged PR 替换、编号回写、二次 push 与失败恢复。
+- Framework：`change-workflow` 的 start 自动建档，finish 在首次网络写入前执行 Task 门禁，并支持不可变 summary 链接、同仓库 PR 复用、closed/unmerged PR 替换、编号回写、二次 push 与失败恢复；暂存状态恢复发生编号替换时，还会从 `HEAD` 读取旧编号并先证明旧 PR 已关闭且未合并。
 - Kit：`kit-workflow` 复用统一 Task CLI；boundary 只额外允许当前 Task 的三份正式文件，finish/CI 使用精确 PR 仓库、head/base/head 事实执行身份与边界校验，同时保留 Kit 身份、版本、打包和发布边界。
 - PR 前 summary：CLI 校验 `task.md` 与包含九个唯一非空章节的 `summary.md`，全部内部阶段终态后 `--ready-for-pr` 才放行。
 - PR 号回写：finish 验证 PR 编号、base/head、状态、URL、head SHA、cross-repository、head owner 与 mergedAt 后才用 `set-pr` 记录安全正整数编号，精确提交 `status.json` 并二次普通 push，确保 PR 最新 head 包含该事实。
+- 日期边界：Task 日期使用真实公历且年份从 0001 开始；Kit boundary 与 Schema、domain、CLI 对 0000 和 0001–0099 的判断保持一致。
 - 派生完成与会话归档：完成状态只由内部终态、PR 编号、GitHub merged、最新 head required checks 和 `main` 三文件共同派生；仅全部成立后归档会话，合并后不制造额外归档 commit。
 
 ## 主要改动
@@ -36,8 +37,9 @@
 ## 验证结果
 
 - `npm run test:task-status`：exit 0，33/33 通过，0 failed/cancelled/skipped。
-- `npm run test:change-workflow`：exit 0，31/31 通过，覆盖 fork 排除、closed/unmerged 替换及 merged 拒绝。
-- `npm run test:kit-workflow`：exit 0，30/30 通过，覆盖与 Framework 相同的 PR 安全恢复边界。
+- `npm run test:change-workflow`：exit 0，32/32 通过，覆盖 fork 排除、closed/unmerged 替换、merged 拒绝及伪造暂存替换拒绝。
+- `npm run test:kit-workflow`：exit 0，31/31 通过，覆盖与 Framework 相同的 PR 安全恢复边界。
+- `node --test scripts/lib/kit-boundary.test.mjs`：exit 0，26/26 通过，覆盖 0001 合法与 0000 非法的日期边界。
 - `node --test scripts/lib/kit-docs.test.mjs`：exit 0，12/12 通过，0 failed/cancelled/skipped，0.13s。
 - `npm run check:preflight`：exit 0，Kit architecture boundary 返回 OK，preflight dot reporter 166 项全绿。
 - 审查修复后的精确 head 尚待重新运行 `npm run check`；初版 head 的历史全量通过不作为本次修复的最终证据。

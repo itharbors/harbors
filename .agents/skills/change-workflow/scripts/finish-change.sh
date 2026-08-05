@@ -82,6 +82,11 @@ read_task_pr_number() {
   node -e 'const status = require(process.argv[1]); process.stdout.write(status.pullRequest === null ? "" : String(status.pullRequest.number));' "$1"
 }
 
+read_committed_task_pr_number() {
+  git -C "$repo_root" show "HEAD:$1" \
+    | node -e 'const { readFileSync } = require("node:fs"); const status = JSON.parse(readFileSync(0, "utf8")); process.stdout.write(status.pullRequest === null ? "" : String(status.pullRequest.number));'
+}
+
 is_staged_automatic_status_writeback() {
   node -e '
     const { execFileSync } = require("node:child_process");
@@ -198,6 +203,14 @@ gh auth status >/dev/null 2>&1 || fail 'gh is not authenticated; run gh auth log
 owner=$(cd "$repo_root" && gh repo view --json nameWithOwner --jq .nameWithOwner)
 [[ "$owner" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || fail 'gh repo view returned an invalid nameWithOwner'
 repo_owner=${owner%%/*}
+if test "$worktree_mode" = staged-status-recovery; then
+  previous_pr=$(read_committed_task_pr_number "$status_path")
+  test -z "$previous_pr" || [[ "$previous_pr" =~ ^[1-9][0-9]*$ ]] \
+    || fail 'committed Task status contains an invalid PR number'
+  if test -n "$previous_pr" && test "$previous_pr" != "$recorded_pr"; then
+    verify_recorded_pr_is_closed_unmerged "$previous_pr"
+  fi
+fi
 pr_candidates=$(cd "$repo_root" && gh pr list --state open --head "$branch" --json url --jq '.[].url')
 pr_urls=()
 while IFS= read -r candidate; do

@@ -115,7 +115,11 @@ test('rejects invalid slugs, Task IDs, records, statuses, and path counts', () =
       /invalid Kit slug/u,
     );
   }
-  for (const invalidTaskId of ['', 'finish-case', '2026-8-05-finish-case', '2026-02-31-finish-case', '2026-08-05', '2026-08-05-finish/case', '.', '..', null]) {
+  assert.deepEqual(
+    validateKitChangePaths({ slug: 'sqlite', taskId: '0001-01-01-valid-task', records: [] }),
+    { paths: [] },
+  );
+  for (const invalidTaskId of ['', 'finish-case', '0000-01-01-finish-case', '2026-8-05-finish-case', '2026-02-31-finish-case', '2026-08-05', '2026-08-05-finish/case', '.', '..', null]) {
     assert.throws(
       () => validateKitChangePaths({ slug: 'sqlite', taskId: invalidTaskId, records: [] }),
       /invalid Task ID/u,
