@@ -30,7 +30,7 @@ function validEnvironment(application = '/Applications/ITHARBORS.app') {
   };
 }
 
-test('requires absolute packaged paths and loopback configuration', () => {
+test('requires absolute packaged paths and wildcard desktop configuration', () => {
   const valid = validEnvironment();
   const parsed = parseDesktopFrameworkEnvironment(valid);
 
@@ -53,7 +53,7 @@ test('requires absolute packaged paths and loopback configuration', () => {
     ],
     notificationPort: 17896,
     applicationControlToken: 'application-secret',
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 0,
   });
   assert.equal(Object.isFrozen(parsed), true);

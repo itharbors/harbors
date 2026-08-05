@@ -19,6 +19,25 @@ describe('resolveCredentialMode', () => {
     })).toBe('local');
   });
 
+  it('keeps desktop credentials local when the desktop host listens on every IPv4 interface', () => {
+    expect(resolveCredentialMode({
+      hostMode: 'desktop',
+      requested: 'local',
+      bindHost: '0.0.0.0',
+    })).toBe('local');
+  });
+
+  it.each([undefined, '::', 'localhost', '192.0.2.10'])(
+    'rejects desktop local mode without an explicit loopback or wildcard bind (%s)',
+    (bindHost) => {
+      expect(() => resolveCredentialMode({
+        hostMode: 'desktop',
+        requested: 'local',
+        bindHost,
+      })).toThrow(/explicit/i);
+    },
+  );
+
   it.each([undefined, '0.0.0.0', '::', 'localhost', '192.0.2.10'])(
     'rejects local mode without an explicit IP loopback bind (%s)',
     (bindHost) => {
