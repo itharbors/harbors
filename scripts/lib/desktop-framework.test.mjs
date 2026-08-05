@@ -102,6 +102,34 @@ test('forwards only generic plugin storage roots to the desktop server', async (
   );
 });
 
+test('forwards the injected application plugin process runtime through server options', async () => {
+  let serverOptions;
+  const applicationPluginProcess = Object.freeze({
+    runner: Object.freeze({
+      executable: '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS',
+      args: Object.freeze(['/Applications/ITHARBORS.app/Contents/Resources/runner.js']),
+      runtimeMode: 'electron-run-as-node',
+    }),
+    cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
+    env: Object.freeze({ PATH: '/usr/bin' }),
+  });
+
+  await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    applicationPluginProcess,
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: (options) => {
+      serverOptions = options;
+      return { start: async () => 43123, stop: async () => undefined };
+    },
+    send: () => undefined,
+    subscribeShutdown: () => () => undefined,
+    exit: () => undefined,
+  });
+
+  assert.equal(serverOptions.applicationPluginProcess, applicationPluginProcess);
+});
+
 test('rejects malformed installed Kits, notification ports, and application tokens', () => {
   const valid = validEnvironment();
   for (const kitSources of [
@@ -235,6 +263,38 @@ test('finalizes a normal shutdown by stopping once, detaching listeners, and exi
   assert.equal(shutdownUnsubscriptions, 1);
   assert.deepEqual(exits, [{ failed: false }]);
   assert.deepEqual(messages, [{ type: 'ready', port: 43123 }]);
+});
+
+test('awaits Framework disposal before reporting desktop shutdown complete', async () => {
+  const exits = [];
+  let finishStop;
+  let markStopStarted;
+  const stopStarted = new Promise((resolve) => { markStopStarted = resolve; });
+  let shutdown;
+  await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: () => ({
+      start: async () => 43123,
+      stop: () => new Promise((resolve) => {
+        finishStop = resolve;
+        markStopStarted();
+      }),
+    }),
+    send: () => undefined,
+    subscribeShutdown: (handler) => {
+      shutdown = handler;
+      return () => undefined;
+    },
+    exit: (options) => exits.push(options),
+  });
+
+  const stopped = shutdown();
+  await stopStarted;
+  assert.deepEqual(exits, []);
+  finishStop();
+  await stopped;
+  assert.deepEqual(exits, [{ failed: false }]);
 });
 
 test('treats a rejected startup as normal shutdown when IPC shutdown begins while startup is pending', async () => {

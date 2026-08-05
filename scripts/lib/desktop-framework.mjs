@@ -98,6 +98,7 @@ function isServerStoppingError(error) {
 
 export async function runDesktopFrameworkProcess({
   env,
+  applicationPluginProcess,
   createAssembly,
   createServer,
   send,
@@ -165,6 +166,7 @@ export async function runDesktopFrameworkProcess({
       port: environment.port,
       applicationHostMode: 'desktop',
       applicationControlToken: environment.applicationControlToken,
+      applicationPluginProcess,
     });
     controller = createFrameworkProcessController({
       send,

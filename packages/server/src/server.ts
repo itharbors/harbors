@@ -24,6 +24,7 @@ import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
 import type { PluginPathRoots } from './framework/plugin/paths';
 import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
+import type { ApplicationPluginProcessRuntimeOptions } from './application/plugin-process/spawn';
 
 type CredentialVaultRuntime = Pick<CredentialVault, 'bind' | 'capability' | 'recover' | 'close'>;
 
@@ -37,6 +38,7 @@ export interface ServerOptions {
   credentialMode?: string;
   credentialVault?: CredentialVaultRuntime;
   applicationControlToken?: string;
+  applicationPluginProcess?: ApplicationPluginProcessRuntimeOptions;
   notificationPort?: number;
   pluginPathRoots: PluginPathRoots;
   clientAssetsRoot?: string;
