@@ -11,7 +11,19 @@
 | `docs/architecture` | 当前行为、模型、不变量、失败边界 | 跟随实现变化 |
 | `docs/guides` | 可执行任务步骤 | 跟随命令、目录与工具变化 |
 | `docs/decisions` | 重要设计取舍及历史上下文 | 新 ADR 取代旧 ADR，不覆盖历史 |
+| `docs/tasks/<task-id>` | Task 正式档案：需求、客观状态、收口总结 | 三份文件提交；过程材料不提交 |
 | `docs/superpowers` | 文档/实施过程记录 | 不进入产品文档主导航 |
+
+## Task 正式档案与过程材料
+
+每个 Task 只有 `task.md`、`status.json`、`summary.md` 三份正式档案进入 Git；当前 Task 的
+`.work/` 默认被忽略、不提交，用于 spec、plan、research、短期验证输出和同机交接记录。过程材料
+不会因为写得完整就自动成为正式 docs，也不能用 final summary 代替正式文档维护。
+
+当 spec、plan 或 research 形成跨需求长期有效的架构、安全、迁移或维护规则时，必须把结论升级到
+正式 guide、reference、ADR 或设计文档，并按文档地图补充索引。不能只留在 `.work/` 或 final
+summary 中。跨环境仍需使用的客观事实也应整理到 `task.md`、`summary.md` 或对应正式文档；不要把
+主观自由文本塞入 `status.json`。
 
 ## 代码变化到文档的映射
 

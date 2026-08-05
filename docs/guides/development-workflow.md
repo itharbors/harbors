@@ -3,6 +3,138 @@
 本指南以仓库根目录为工作目录，覆盖当前 workspace 的安装、启动、构建、测试和排查。
 架构背景见[系统架构](../architecture/system-overview.md)。
 
+## Task 驱动的六阶段开发
+
+所有可交付的 Framework 或 Kit 变更都使用一个 [Task 档案](../tasks/README.md)，依次经过以下
+六个阶段。Task 的三份正式文件是需求快照 `task.md`、机器状态 `status.json` 和收口总结
+`summary.md`；本机过程材料放在默认不提交的 `.work/`。
+
+### 1. 需求确认与分类
+
+开始实现前确认背景、目标、范围、非目标、验收标准和约束，再选择一种类型：`feature`、`bug`、
+`optimize`、`docs`、`refactor`、`test` 或 `chore`。类型同时决定分支和提交标签；不能用期限、
+负责人授权或已经投入的时间代替需求确认与 Task 建档。
+
+### 2. Task 建档
+
+从 primary checkout 运行适合变更对象的 start workflow。Framework 变更使用：
+
+```bash
+bash .agents/skills/change-workflow/scripts/start-change.sh feature safe-login
+```
+
+独立 Kit 变更使用：
+
+```bash
+bash .agents/skills/kit-workflow/scripts/start-kit-change.sh <name> feature safe-login
+```
+
+两种 start 脚本都会基于 `origin/main` 创建隔离分支与 worktree，并自动运行 Task init，输出
+`TASK_ID=` 和 `TASK_DIR=`。进入输出的 worktree 后立即把已确认需求完整写入 `task.md`。如果代码
+已经存在而分支上没有 Task，必须先补建并填写，再继续或 finish；可在该 worktree 运行真实 CLI：
+
+```bash
+npm run task:status -- init feature safe-login
+```
+
+### 3. 设计与计划
+
+spec、plan、research、短期验证输出和同机 handoff 默认放在当前 Task 的 `.work/`，不提交到 Git。
+这些材料若形成跨需求长期有效的架构、安全、迁移或维护规则，必须升级到正式 guide、reference、
+ADR 或设计文档。
+
+### 4. 实现与验证
+
+`status.json` 只由 Task CLI 管理 schema 字段，只保存阶段、更新时间、PR 编号等客观结构化事实，
+不保存主观判断或自由文本。原因猜测、风险判断、交接说明、备选方案、下一步建议不得写入 status；同机过程判断
+写入明确命名的 `.work/` 文件，需要长期或跨环境保留的事实按上节升级。
+
+初始 Task 已将 requirements 标记为完成并进入 design。按实际工作运行状态命令：
+
+```bash
+npm run task:status -- complete <task-id> design
+npm run task:status -- start <task-id> implementation
+# 对进行中的 implementation，默认完成；若确认无需实施，用下一行注释中的 skip 替代 complete
+npm run task:status -- complete <task-id> implementation
+# npm run task:status -- skip <task-id> implementation
+npm run task:status -- start <task-id> verification
+npm run task:status -- block <task-id> verification
+npm run task:status -- resume <task-id> verification
+npm run task:status -- complete <task-id> verification
+npm run task:status -- start <task-id> consolidation
+npm run task:status -- check <task-id>
+```
+
+每次验证保留实际命令和结果。Task CLI 的聚焦测试与仓库快速预检是：
+
+```bash
+npm run test:task-status
+npm run test:preflight
+npm run check:preflight
+```
+
+`npm run test:preflight` 运行紧凑的关键测试；`npm run check:preflight` 先增加全仓 Kit 架构审计。
+它们提供快速反馈，不替代 finish 所运行的最终门禁。
+
+### 5. 收口与 PR
+
+先更新完整 `summary.md`，写明验收完成情况、实际改动、决定、验证、影响、风险和遗留。`summary.md`
+完整且内部 stages 终态后，必须通过 `--ready-for-pr` ready gate：
+
+```bash
+npm run task:status -- complete <task-id> consolidation
+npm run task:status -- check <task-id> --ready-for-pr
+```
+
+提交全部变更、保持 worktree clean，并在仓库外准备包含 `## Summary` 和 `## Testing` 的 body 文件。
+Framework 和 Kit 分别使用现有 finish 脚本：
+
+```bash
+bash .agents/skills/change-workflow/scripts/finish-change.sh \
+  "添加安全登录" /absolute/path/to/pr-body.md
+
+bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
+  <name> "添加安全登录" /absolute/path/to/pr-body.md
+```
+
+finish 会重新执行 ready gate 和各自边界检查，只创建或恢复当前仓库拥有且 base/head 身份一致的 open PR；同名 fork PR 不会被编辑或记录。已记录 PR 关闭且未合并时可安全替换并更新编号，已合并或身份不符时 fail closed。finish 在 PR body 添加指向 pre-PR
+commit 上 `summary.md` 的不可变链接，回写 PR 编号，自动提交该 status 变化并二次 push。第一次调用在
+PR 创建后失败时，修复外部原因后重跑相同 finish 命令；它只恢复已验证的 open PR 和精确的自动
+status 写回状态，不把其他 dirty changes 当作可恢复状态。
+
+审查若要求实质代码或行为变更，不能直接沿用旧验证和 summary。按受影响范围回退
+implementation、verification 或 consolidation，例如：
+
+```bash
+npm run task:status -- rewind <task-id> implementation
+```
+
+之后重新实现、验证、更新 `summary.md`、完成各 stages，并再次运行 ready gate 与 finish。
+
+### 6. 合并确认与会话归档
+
+`PR_URL=` 或 PR 已创建只代表收口已提交，不代表 Task/任务完成。完成是派生事实，必须同时满足：
+
+- 所有内部 stages 终态；
+- `status.json` 已记录 PR 号；
+- GitHub PR 状态为 merged；
+- PR latest head commit 的 repository-required checks 成功；
+- `task.md`、`status.json`、`summary.md` 三份正式文件都已在 `main`。
+
+全部成立后才能宣布需求完成并归档当前 Codex 会话。不要为了会话归档制造 merge 后 commit；用户
+要求“完成”也不授权 Agent 主动 merge PR。
+
+## Task 恢复与交接
+
+同机跨会话恢复时，先读 `task.md` 和 `status.json`，再读 `.work/` 中必要的 plan、research、handoff，
+最后核对 Git branch/status/log/diff。本地恢复完成之后才查询 GitHub 的 PR open/merged/checks 实时
+事实；GitHub 是这些状态的权威源，不把易变状态复制进 `status.json`。status 只帮助定位阶段，恢复时
+不猜测，也不重做已有证据证明完成的工作。
+
+跨机或跨环境交接不能依赖 `.work/`。把已验证且长期有效的客观事实升级到 `task.md`、`summary.md`
+或正式 docs。未验证的主观猜测必须明确标注，并使用经授权的非 status 交接渠道，不得伪装成结构化
+事实。
+
 ## 环境准备
 
 - Node.js 22.12 或更高版本；

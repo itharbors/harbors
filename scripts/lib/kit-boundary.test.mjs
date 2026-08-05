@@ -26,6 +26,7 @@ import {
 const execFileAsync = promisify(execFile);
 const cli = fileURLToPath(new URL('../check-kit-boundary.mjs', import.meta.url));
 const objectName = 'a'.repeat(40);
+const taskId = '2026-08-05-finish-case';
 
 function nulRecords(values) {
   return Buffer.from(`${values.join(String.fromCharCode(0))}${String.fromCharCode(0)}`);
@@ -34,12 +35,16 @@ function nulRecords(values) {
 test('accepts in-boundary add, modify, delete, rename, and copy records', () => {
   assert.deepEqual(validateKitChangePaths({
     slug: 'sqlite',
+    taskId,
     records: [
       { status: 'A', paths: ['kits/sqlite/new.ts'] },
       { status: 'M', paths: ['kits/sqlite/package.json'] },
       { status: 'D', paths: ['kits/sqlite/old.ts'] },
       { status: 'R100', paths: ['kits/sqlite/from.ts', 'kits/sqlite/to.ts'] },
       { status: 'C075', paths: ['kits/sqlite/source.ts', 'kits/sqlite/copy.ts'] },
+      { status: 'A', paths: [`docs/tasks/${taskId}/task.md`] },
+      { status: 'M', paths: [`docs/tasks/${taskId}/status.json`] },
+      { status: 'A', paths: [`docs/tasks/${taskId}/summary.md`] },
     ],
   }), {
     paths: [
@@ -50,6 +55,9 @@ test('accepts in-boundary add, modify, delete, rename, and copy records', () => 
       'kits/sqlite/to.ts',
       'kits/sqlite/source.ts',
       'kits/sqlite/copy.ts',
+      `docs/tasks/${taskId}/task.md`,
+      `docs/tasks/${taskId}/status.json`,
+      `docs/tasks/${taskId}/summary.md`,
     ],
   });
 });
@@ -57,6 +65,7 @@ test('accepts in-boundary add, modify, delete, rename, and copy records', () => 
 test('accepts spaces inside the exact Kit boundary', () => {
   assert.deepEqual(validateKitChangePaths({
     slug: 'sqlite',
+    taskId,
     records: [{ status: 'A', paths: ['kits/sqlite/with space.txt'] }],
   }), { paths: ['kits/sqlite/with space.txt'] });
 });
@@ -67,7 +76,7 @@ test('rejects either side of a rename outside the exact Kit boundary', () => {
     ['kits/mysql/a.ts', 'kits/sqlite/a.ts'],
   ]) {
     assert.throws(
-      () => validateKitChangePaths({ slug: 'sqlite', records: [{ status: 'R100', paths }] }),
+      () => validateKitChangePaths({ slug: 'sqlite', taskId, records: [{ status: 'R100', paths }] }),
       /outside kits\/sqlite/u,
     );
   }
@@ -90,6 +99,7 @@ test('rejects other Kits, root files, and deceptive path forms', () => {
     assert.throws(
       () => validateKitChangePaths({
         slug: 'sqlite',
+        taskId,
         records: [{ status: 'M', paths: [changedPath] }],
       }),
       /outside kits\/sqlite|unsafe path/u,
@@ -98,21 +108,32 @@ test('rejects other Kits, root files, and deceptive path forms', () => {
   }
 });
 
-test('rejects invalid slugs, records, statuses, and path counts', () => {
+test('rejects invalid slugs, Task IDs, records, statuses, and path counts', () => {
   for (const slug of ['', 'SQLite', '-sqlite', 'sqlite-', 'sql--ite', '../sqlite', null]) {
     assert.throws(
-      () => validateKitChangePaths({ slug, records: [] }),
+      () => validateKitChangePaths({ slug, taskId, records: [] }),
       /invalid Kit slug/u,
     );
   }
+  assert.deepEqual(
+    validateKitChangePaths({ slug: 'sqlite', taskId: '0001-01-01-valid-task', records: [] }),
+    { paths: [] },
+  );
+  for (const invalidTaskId of ['', 'finish-case', '0000-01-01-finish-case', '2026-8-05-finish-case', '2026-02-31-finish-case', '2026-08-05', '2026-08-05-finish/case', '.', '..', null]) {
+    assert.throws(
+      () => validateKitChangePaths({ slug: 'sqlite', taskId: invalidTaskId, records: [] }),
+      /invalid Task ID/u,
+    );
+  }
   assert.throws(
-    () => validateKitChangePaths({ slug: 'sqlite', records: null }),
+    () => validateKitChangePaths({ slug: 'sqlite', taskId, records: null }),
     /records must be an array/u,
   );
   for (const status of ['X', 'R101', 'R99', 'C999', 'MM']) {
     assert.throws(
       () => validateKitChangePaths({
         slug: 'sqlite',
+        taskId,
         records: [{ status, paths: ['kits/sqlite/a.ts'] }],
       }),
       /invalid change status/u,
@@ -121,10 +142,43 @@ test('rejects invalid slugs, records, statuses, and path counts', () => {
   assert.throws(
     () => validateKitChangePaths({
       slug: 'sqlite',
+      taskId,
       records: [{ status: 'R100', paths: ['kits/sqlite/a.ts'] }],
     }),
     /must have 2 path/u,
   );
+});
+
+test('rejects every non-exact Task path and cross-boundary rename or copy', () => {
+  const rejectedPaths = [
+    'docs/tasks/2026-08-05-other/status.json',
+    `docs/tasks/${taskId}/README.md`,
+    `docs/tasks/${taskId}/extra.md`,
+    `docs/tasks/${taskId}/.work/notes.md`,
+    `docs/tasks/${taskId}/subdir/task.md`,
+  ];
+  for (const changedPath of rejectedPaths) {
+    assert.throws(
+      () => validateKitChangePaths({
+        slug: 'sqlite',
+        taskId,
+        records: [{ status: 'A', paths: [changedPath] }],
+      }),
+      /outside the declared Kit and Task boundary/u,
+      changedPath,
+    );
+  }
+  for (const [status, paths] of [
+    ['R100', [`docs/tasks/${taskId}/task.md`, 'kits/sqlite/task.md']],
+    ['R100', ['kits/sqlite/task.md', `docs/tasks/${taskId}/task.md`]],
+    ['C100', [`docs/tasks/${taskId}/summary.md`, 'kits/sqlite/summary.md']],
+    ['C100', ['kits/sqlite/summary.md', `docs/tasks/${taskId}/summary.md`]],
+  ]) {
+    assert.throws(
+      () => validateKitChangePaths({ slug: 'sqlite', taskId, records: [{ status, paths }] }),
+      /rename or copy must stay within one allowed boundary/u,
+    );
+  }
 });
 
 test('parses NUL-delimited name-status output including both rename paths', () => {
@@ -227,8 +281,124 @@ test('reads and validates a real in-boundary modification', async () => {
       [{ status: 'M', paths: ['kits/sqlite/package.json'] }],
     );
     assert.deepEqual(
-      await validateKitChange({ repositoryRoot, slug: 'sqlite', base, head }),
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
       { paths: ['kits/sqlite/package.json'] },
+    );
+  });
+});
+
+test('validates the exact three real Task files with Git name-status and modes', async () => {
+  await withRepository(async ({ base, repositoryRoot }) => {
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(taskDirectory, 'task.md'), '# Task\n'),
+      writeFile(path.join(taskDirectory, 'status.json'), '{"task":"fixture"}\n'),
+      writeFile(path.join(taskDirectory, 'summary.md'), '# Summary\n'),
+    ]);
+    const head = await commitAll(repositoryRoot, 'add Task files');
+    assert.deepEqual(
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      { paths: [
+        `docs/tasks/${taskId}/status.json`,
+        `docs/tasks/${taskId}/summary.md`,
+        `docs/tasks/${taskId}/task.md`,
+      ] },
+    );
+  });
+});
+
+test('real CLI rejects an unchanged Kit source copied into the current Task boundary', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'copy detection fixture\n';
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'template.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Kit template');
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(path.join(taskDirectory, 'summary.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy Kit template into Task');
+
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [cli, 'sqlite', '--task', taskId, '--base', base, '--head', head],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+      ),
+      /rename or copy must stay within one allowed boundary/u,
+    );
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{
+        status: 'C100',
+        paths: ['kits/sqlite/template.md', `docs/tasks/${taskId}/summary.md`],
+      }],
+    );
+  });
+});
+
+test('real CLI rejects an unchanged current Task source copied into the Kit boundary', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'reverse copy detection fixture\n';
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(path.join(taskDirectory, 'summary.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Task summary');
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'copied.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy Task summary into Kit');
+
+    await assert.rejects(
+      execFileAsync(
+        process.execPath,
+        [cli, 'sqlite', '--task', taskId, '--base', base, '--head', head],
+        { cwd: repositoryRoot, encoding: 'utf8' },
+      ),
+      /rename or copy must stay within one allowed boundary/u,
+    );
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{
+        status: 'C100',
+        paths: [`docs/tasks/${taskId}/summary.md`, 'kits/sqlite/copied.md'],
+      }],
+    );
+  });
+});
+
+test('real same-boundary copies remain allowed inside a Kit and inside the current Task', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'same Kit copy\n';
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'template.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Kit copy source');
+    await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'copied.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy inside Kit');
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{ status: 'C100', paths: ['kits/sqlite/template.md', 'kits/sqlite/copied.md'] }],
+    );
+    assert.deepEqual(
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      { paths: ['kits/sqlite/template.md', 'kits/sqlite/copied.md'] },
+    );
+  });
+
+  await withRepository(async ({ repositoryRoot }) => {
+    const content = 'same Task copy\n';
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(path.join(taskDirectory, 'task.md'), content);
+    const base = await commitAll(repositoryRoot, 'add Task copy source');
+    await writeFile(path.join(taskDirectory, 'summary.md'), content);
+    const head = await commitAll(repositoryRoot, 'copy inside Task');
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{
+        status: 'C100',
+        paths: [`docs/tasks/${taskId}/task.md`, `docs/tasks/${taskId}/summary.md`],
+      }],
+    );
+    assert.deepEqual(
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      { paths: [`docs/tasks/${taskId}/task.md`, `docs/tasks/${taskId}/summary.md`] },
     );
   });
 });
@@ -240,13 +410,13 @@ test('allows a real deletion and an in-boundary rename with absent source modes'
     await git(repositoryRoot, 'mv', 'kits/sqlite/old.ts', 'kits/sqlite/new.ts');
     const renamed = await commitAll(repositoryRoot, 'rename');
     assert.deepEqual(
-      await validateKitChange({ repositoryRoot, slug: 'sqlite', base: withOld, head: renamed }),
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base: withOld, head: renamed }),
       { paths: ['kits/sqlite/old.ts', 'kits/sqlite/new.ts'] },
     );
     await rm(path.join(repositoryRoot, 'kits', 'sqlite', 'new.ts'));
     const deleted = await commitAll(repositoryRoot, 'delete');
     assert.deepEqual(
-      await validateKitChange({ repositoryRoot, slug: 'sqlite', base: renamed, head: deleted }),
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base: renamed, head: deleted }),
       { paths: ['kits/sqlite/new.ts'] },
     );
     assert.match(base, /^[0-9a-f]{40}$/u);
@@ -258,7 +428,7 @@ test('rejects a real out-of-boundary commit', async () => {
     await writeFile(path.join(repositoryRoot, 'package-lock.json'), '{}\n');
     const head = await commitAll(repositoryRoot, 'root change');
     await assert.rejects(
-      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head }),
+      validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
       /outside kits\/sqlite/u,
     );
   });
@@ -269,7 +439,7 @@ test('rejects real symlink and gitlink modes inside a Kit', async () => {
     await symlink('package.json', path.join(repositoryRoot, 'kits', 'sqlite', 'link'));
     const symlinkHead = await commitAll(repositoryRoot, 'symlink');
     await assert.rejects(
-      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head: symlinkHead }),
+      validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head: symlinkHead }),
       /disallowed file mode.*120000/u,
     );
   });
@@ -284,8 +454,21 @@ test('rejects real symlink and gitlink modes inside a Kit', async () => {
     await git(repositoryRoot, 'commit', '-qm', 'gitlink');
     const head = await git(repositoryRoot, 'rev-parse', 'HEAD');
     await assert.rejects(
-      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head }),
+      validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
       /disallowed file mode.*160000/u,
+    );
+  });
+});
+
+test('does not relax unsafe modes for exact Task files', async () => {
+  await withRepository(async ({ base, repositoryRoot }) => {
+    const taskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(taskDirectory, { recursive: true });
+    await symlink('elsewhere', path.join(taskDirectory, 'summary.md'));
+    const head = await commitAll(repositoryRoot, 'Task symlink');
+    await assert.rejects(
+      validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      /disallowed file mode.*120000/u,
     );
   });
 });
@@ -296,7 +479,7 @@ test('rejects a requested unsafe head when the checkout and index remain at a sa
     const unsafeHead = await commitAll(repositoryRoot, 'unsafe head');
     await git(repositoryRoot, 'reset', '--hard', base);
     await assert.rejects(
-      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head: unsafeHead }),
+      validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head: unsafeHead }),
       /head revision must resolve to the checked-out HEAD/u,
     );
   });
@@ -307,7 +490,7 @@ test('rejects an index that does not match the checked-out head', async () => {
     await writeFile(path.join(repositoryRoot, 'kits', 'sqlite', 'staged.ts'), 'staged\n');
     await git(repositoryRoot, 'add', 'kits/sqlite/staged.ts');
     await assert.rejects(
-      validateKitChange({ repositoryRoot, slug: 'sqlite', base, head: 'HEAD' }),
+      validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head: 'HEAD' }),
       /index must match the checked-out HEAD/u,
     );
   });
@@ -344,7 +527,7 @@ test('CLI emits exact success output and passes its repository root', async () =
   const capture = captureIo();
   const calls = [];
   const status = await runCheckKitBoundaryCli(
-    ['sqlite', '--base', 'base', '--head', 'head'],
+    ['sqlite', '--task', taskId, '--base', 'base', '--head', 'head'],
     capture.io,
     {
       repositoryRoot: '/repository',
@@ -356,9 +539,10 @@ test('CLI emits exact success output and passes its repository root', async () =
   );
   assert.equal(status, 0);
   assert.deepEqual(calls, [{
-    repositoryRoot: '/repository',
-    slug: 'sqlite',
-    base: 'base',
+      repositoryRoot: '/repository',
+      slug: 'sqlite',
+      taskId,
+      base: 'base',
     head: 'head',
   }]);
   assert.deepEqual(capture.output(), {
@@ -369,7 +553,15 @@ test('CLI emits exact success output and passes its repository root', async () =
 
 test('CLI rejects usage before validation and sanitizes operational errors', async () => {
   let calls = 0;
-  for (const args of [[], ['SQLite', '--base', 'a', '--head', 'b'], ['sqlite', '--head', 'a', '--base', 'b']]) {
+  for (const args of [
+    [],
+    ['SQLite', '--task', taskId, '--base', 'a', '--head', 'b'],
+    ['sqlite', '--base', 'a', '--task', taskId, '--head', 'b'],
+    ['sqlite', '--task', taskId, '--task', taskId, '--base', 'a', '--head', 'b'],
+    ['sqlite', '--task', taskId, '--base', 'a', '--head', 'b', 'extra'],
+    ['sqlite', '--task', taskId, '--base', 'a', '--unknown', 'b'],
+    ['sqlite', '--task', 'bad/task', '--base', 'a', '--head', 'b'],
+  ]) {
     const capture = captureIo();
     const status = await runCheckKitBoundaryCli(args, capture.io, {
       repositoryRoot: '/repository',
@@ -382,7 +574,7 @@ test('CLI rejects usage before validation and sanitizes operational errors', asy
 
   const capture = captureIo();
   const status = await runCheckKitBoundaryCli(
-    ['sqlite', '--base', 'a', '--head', 'b'],
+    ['sqlite', '--task', taskId, '--base', 'a', '--head', 'b'],
     capture.io,
     {
       repositoryRoot: '/repository',
@@ -401,7 +593,7 @@ test('real CLI validates process.cwd and emits deterministic output', async () =
     const head = await commitAll(repositoryRoot, 'change');
     const result = await execFileAsync(
       process.execPath,
-      [cli, 'sqlite', '--base', base, '--head', head],
+      [cli, 'sqlite', '--task', taskId, '--base', base, '--head', head],
       { cwd: repositoryRoot, encoding: 'utf8' },
     );
     assert.equal(result.stdout, 'BOUNDARY_KIT=sqlite\nBOUNDARY_FILES=1\n');

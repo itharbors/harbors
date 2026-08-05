@@ -37,6 +37,8 @@ fi
 git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_commit"
 (cd "$worktree_path" && npm ci)
 kit_workflow_validate_product "$worktree_path" "$kit"
+task_id=$(cd "$worktree_path" && node scripts/task-status.mjs init "$change_type" "$slug")
+task_dir="$worktree_path/docs/tasks/$task_id"
 command -v gh >/dev/null 2>&1 || printf 'warning: gh is not installed; it is required to finish and create a PR\n' >&2
-printf 'KIT=%s\nTARGET_BRANCH=%s\nBRANCH=%s\nWORKTREE_PATH=%s\nBASE_COMMIT=%s\n' \
-  "$kit" "$target_branch" "$branch" "$worktree_path" "$base_commit"
+printf 'KIT=%s\nTARGET_BRANCH=%s\nBRANCH=%s\nWORKTREE_PATH=%s\nBASE_COMMIT=%s\nTASK_ID=%s\nTASK_DIR=%s\n' \
+  "$kit" "$target_branch" "$branch" "$worktree_path" "$base_commit" "$task_id" "$task_dir"

@@ -1,6 +1,8 @@
 import { spawn } from 'node:child_process';
 
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
+const TASK_ID_PATTERN = /^(\d{4})-(\d{2})-(\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+const TASK_FILE_NAMES = new Set(['task.md', 'status.json', 'summary.md']);
 const SIMPLE_STATUS_PATTERN = /^[AMDT]$/u;
 const SCORED_STATUS_PATTERN = /^([RC])([0-9]{3})$/u;
 // C0 controls (U+0000-U+001F), DEL (U+007F), C1 controls (U+0080-U+009F),
@@ -44,6 +46,23 @@ export function isValidKitSlug(slug) {
   return typeof slug === 'string' && SLUG_PATTERN.test(slug);
 }
 
+export function isValidTaskId(taskId) {
+  if (typeof taskId !== 'string') return false;
+  const match = TASK_ID_PATTERN.exec(taskId);
+  if (!match) return false;
+  const [, yearText, monthText, dayText] = match;
+  const year = Number(yearText);
+  const month = Number(monthText);
+  const day = Number(dayText);
+  if (year === 0) return false;
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year
+    && date.getUTCMonth() === month - 1
+    && date.getUTCDate() === day;
+}
+
 function isValidStatus(status) {
   if (typeof status !== 'string') return false;
   if (SIMPLE_STATUS_PATTERN.test(status)) return true;
@@ -69,9 +88,27 @@ function isWithinKitBoundary(slug, path) {
   return segments.length >= 3 && segments[0] === 'kits' && segments[1] === slug;
 }
 
-export function validateKitChangePaths({ slug, records }) {
+function isWithinTaskBoundary(taskId, path) {
+  const segments = path.split('/');
+  return segments.length === 4
+    && segments[0] === 'docs'
+    && segments[1] === 'tasks'
+    && segments[2] === taskId
+    && TASK_FILE_NAMES.has(segments[3]);
+}
+
+function boundaryKind(slug, taskId, path) {
+  if (isWithinKitBoundary(slug, path)) return 'kit';
+  if (isWithinTaskBoundary(taskId, path)) return 'task';
+  return null;
+}
+
+export function validateKitChangePaths({ slug, taskId, records }) {
   if (!isValidKitSlug(slug)) {
     throw new Error(`invalid Kit slug: ${String(slug)}`);
+  }
+  if (!isValidTaskId(taskId)) {
+    throw new Error(`invalid Task ID: ${String(taskId)}`);
   }
   if (!Array.isArray(records)) {
     throw new Error('change records must be an array');
@@ -93,14 +130,23 @@ export function validateKitChangePaths({ slug, records }) {
     if (recordPaths.length !== expectedPathCount) {
       throw new Error(`change record for status ${status} must have ${expectedPathCount} path(s)`);
     }
+    const boundaries = [];
     for (const candidate of recordPaths) {
       if (!isSafeRepositoryPath(candidate)) {
         throw new Error(`unsafe path in Kit change: ${String(candidate)}`);
       }
-      if (!isWithinKitBoundary(slug, candidate)) {
+      const kind = boundaryKind(slug, taskId, candidate);
+      if (kind === null) {
+        if (candidate.startsWith('docs/tasks/')) {
+          throw new Error(`change outside the declared Kit and Task boundary: ${candidate}`);
+        }
         throw new Error(`change outside kits/${slug}: ${candidate}`);
       }
+      boundaries.push(kind);
       paths.push(candidate);
+    }
+    if (isRenameOrCopy && boundaries[0] !== boundaries[1]) {
+      throw new Error('rename or copy must stay within one allowed boundary');
     }
   }
   return Object.freeze({ paths: Object.freeze(paths) });
@@ -246,7 +292,17 @@ export async function readChangedPathRecords({ repositoryRoot, base, head }) {
   const baseCommit = await resolveRevision({ repositoryRoot, revision: base });
   const headCommit = await resolveRevision({ repositoryRoot, revision: head });
   const output = await runGit(
-    ['diff', '--name-status', '-z', '--find-renames', baseCommit, headCommit, '--'],
+    [
+      'diff',
+      '--name-status',
+      '-z',
+      '--find-renames',
+      '--find-copies',
+      '--find-copies-harder',
+      baseCommit,
+      headCommit,
+      '--',
+    ],
     repositoryRoot,
   );
   return parseDiffNameStatus(output);
@@ -263,13 +319,16 @@ export async function readIndexModes({ repositoryRoot, paths }) {
   return parseLsFilesStageOutput(output);
 }
 
-export async function validateKitChange({ repositoryRoot, slug, base, head }) {
+export async function validateKitChange({ repositoryRoot, slug, taskId, base, head }) {
   if (!isValidKitSlug(slug)) {
     throw new Error(`invalid Kit slug: ${String(slug)}`);
   }
+  if (!isValidTaskId(taskId)) {
+    throw new Error(`invalid Task ID: ${String(taskId)}`);
+  }
   await assertHeadAndIndexMatch({ repositoryRoot, head });
   const records = await readChangedPathRecords({ repositoryRoot, base, head });
-  const { paths } = validateKitChangePaths({ slug, records });
+  const { paths } = validateKitChangePaths({ slug, taskId, records });
   const modes = await readIndexModes({ repositoryRoot, paths });
   for (const record of records) {
     const requiredPaths = record.status === 'D'

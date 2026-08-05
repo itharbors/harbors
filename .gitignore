@@ -19,3 +19,4 @@ tsconfig.tsbuildinfo
 /.cache/harbors-build/
 /packages/native-credential-vault/build/
 /.cache/harbors-kit-installs/
+/docs/tasks/*/.work/
