@@ -31,6 +31,18 @@ const HOST_SECRET_KEYS = [
   'HARBORS_NOTIFICATION_OWNER_TOKEN',
   'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
 ] as const;
+const NPM_SANDBOX_ENVIRONMENT_KEYS = [
+  'HOME',
+  'TMPDIR',
+  'NPM_CONFIG_CACHE',
+  'NPM_CONFIG_LOGS_DIR',
+  'NPM_CONFIG_USERCONFIG',
+  'NPM_CONFIG_UPDATE_NOTIFIER',
+  'NPM_CONFIG_FUND',
+  'NPM_CONFIG_AUDIT',
+  'NPM_CONFIG_PROGRESS',
+  'NPM_CONFIG_COLOR',
+] as const;
 const VITEST_RUNNER_CACHE_EXCLUSION = 'packages/server/node_modules/.vite/vitest/results.json';
 const SHARED_STATE_BEFORE = snapshotHarnessControlledState();
 
@@ -51,6 +63,34 @@ interface OfficialKitBuild {
   slug: typeof OFFICIAL_KITS[number];
   installRoot: string;
   artifactPath: string;
+}
+
+interface NpmEnvironmentProof {
+  readonly HOME: string;
+  readonly TMPDIR: string;
+  readonly NPM_CONFIG_CACHE: string;
+  readonly NPM_CONFIG_LOGS_DIR: string;
+  readonly NPM_CONFIG_USERCONFIG: string;
+  readonly NPM_CONFIG_UPDATE_NOTIFIER: string;
+  readonly NPM_CONFIG_FUND: string;
+  readonly NPM_CONFIG_AUDIT: string;
+  readonly NPM_CONFIG_PROGRESS: string;
+  readonly NPM_CONFIG_COLOR: string;
+}
+
+interface NpmCommandObservation {
+  readonly label: string;
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+}
+
+interface SuiteNpmSandbox {
+  readonly cacheRoot: string;
+  readonly homeRoot: string;
+  readonly tempRoot: string;
+  readonly userConfigPath: string;
+  readonly environment: Readonly<NodeJS.ProcessEnv>;
+  readonly observations: NpmCommandObservation[];
+  installerEnvironment?: NpmEnvironmentProof;
 }
 
 interface SpawnObservation {
@@ -95,6 +135,7 @@ let repositorySnapshotRoot: string | undefined;
 let emittedServerRoot: string | undefined;
 let officialBuilds: OfficialKitBuild[] = [];
 let productRuntimeModules: ProductRuntimeModules | undefined;
+let suiteNpmSandbox: SuiteNpmSandbox | undefined;
 
 beforeAll(async () => {
   try {
@@ -102,66 +143,32 @@ beforeAll(async () => {
       os.tmpdir(), 'official-startup-plugin-repository-',
     )));
     copyCanonicalRepositorySnapshot(repositorySnapshotRoot);
-    execFileSync('npm', ['ci', '--ignore-scripts'], {
-      cwd: repositorySnapshotRoot,
-      env: {
-        ...process.env,
-        NPM_CONFIG_CACHE: path.join(repositorySnapshotRoot, '.suite/npm-cache'),
-      },
-      stdio: 'pipe',
-    });
-    execFileSync('npm', [
+    suiteNpmSandbox = createSuiteNpmSandbox(repositorySnapshotRoot);
+    runNpmSandboxed('initial npm ci', 'npm', ['ci', '--ignore-scripts']);
+    runNpmSandboxed('snapshot framework build', 'npm', [
       'run', 'build',
       '-w', '@itharbors/kit-core',
       '-w', '@itharbors/kit-cli',
       '-w', '@itharbors/plugin-types',
       '-w', '@itharbors/host-security',
       '-w', '@itharbors/server',
-    ], { cwd: repositorySnapshotRoot, stdio: 'pipe' });
+    ]);
     emittedServerRoot = path.join(repositorySnapshotRoot, 'packages/server/dist');
     productRuntimeModules = await loadProductRuntimeModules(emittedServerRoot);
 
-    const kitMonorepoUrl = pathToFileURL(path.join(
-      repositorySnapshotRoot, 'scripts/lib/kit-monorepo.mjs',
-    )).href;
-    const kitInstallUrl = pathToFileURL(path.join(
-      repositorySnapshotRoot, 'scripts/lib/kit-install.mjs',
-    )).href;
-    const { loadTrustedMarketKit } = await import(kitMonorepoUrl) as {
-      loadTrustedMarketKit(options: {
-        repositoryRoot: string;
-        slug: string;
-      }): Promise<Record<string, unknown> & { directory: string; slug: string }>;
-    };
-    const { ensureKitInstall } = await import(kitInstallUrl) as {
-      ensureKitInstall(options: {
-        descriptor: Record<string, unknown>;
-        cacheRoot: string;
-      }): Promise<{ installRoot: string; runRoot: string }>;
-    };
     const cacheRoot = path.join(repositorySnapshotRoot, '.suite/install-cache');
     const kitCli = path.join(repositorySnapshotRoot, 'packages/kit-cli/dist/cli.js');
-    const completed: OfficialKitBuild[] = [];
-    for (const slug of OFFICIAL_KITS) {
-      const descriptor = await loadTrustedMarketKit({ repositoryRoot: repositorySnapshotRoot, slug });
-      const install = await ensureKitInstall({ descriptor, cacheRoot });
-      completed.push({
-        slug,
-        installRoot: install.installRoot,
-        artifactPath: path.join(install.runRoot, 'artifacts', `${slug}.hkit`),
-      });
-    }
-    for (const { installRoot, artifactPath } of completed) {
+    const completed = runInstallerHarness(repositorySnapshotRoot, cacheRoot);
+    for (const { slug, installRoot, artifactPath } of completed) {
       for (const args of [
         ['build', installRoot],
         ['validate', installRoot],
         ['pack', installRoot, '--output', artifactPath],
         ['inspect', artifactPath, '--json'],
       ]) {
-        execFileSync(process.execPath, [kitCli, ...args], {
-          cwd: repositorySnapshotRoot,
-          stdio: 'pipe',
-        });
+        runNpmSandboxed(`kit CLI ${args[0]} ${slug}`, process.execPath, [
+          kitCli, ...args,
+        ]);
       }
     }
     officialBuilds = completed;
@@ -198,6 +205,7 @@ describe('official startup plugins in isolated application processes', () => {
     expect(fs.lstatSync(nodeModules).isSymbolicLink()).toBe(false);
     expect(isInside(fs.realpathSync(nodeModules), snapshot)).toBe(true);
     expect(fs.existsSync(path.join(snapshot, VITEST_RUNNER_CACHE_EXCLUSION))).toBe(false);
+    assertSuiteNpmIsolation(snapshot);
     expect(isInside(fs.realpathSync(requireEmittedServerRoot()), snapshot)).toBe(true);
     const product = requireProductRuntimeModules();
     for (const modulePath of [...product.modulePaths, ...product.transitiveModulePaths]) {
@@ -1032,6 +1040,215 @@ async function loadProductRuntimeModules(serverRoot: string): Promise<ProductRun
   });
 }
 
+function createSuiteNpmSandbox(snapshotRoot: string): SuiteNpmSandbox {
+  const cacheRoot = path.join(snapshotRoot, '.suite/npm-cache');
+  const homeRoot = path.join(snapshotRoot, '.suite/npm-home');
+  const tempRoot = path.join(snapshotRoot, '.suite/npm-tmp');
+  const userConfigPath = path.join(snapshotRoot, '.suite/npm-userconfig');
+  for (const directory of [cacheRoot, homeRoot, tempRoot]) {
+    fs.mkdirSync(directory, { recursive: true });
+  }
+  fs.writeFileSync(userConfigPath, [
+    'update-notifier=false',
+    'fund=false',
+    'audit=false',
+    'progress=false',
+    'color=false',
+    '',
+  ].join('\n'), { mode: 0o600 });
+
+  const controlledKeys = new Set<string>(NPM_SANDBOX_ENVIRONMENT_KEYS);
+  const inheritedEnvironment = Object.fromEntries(Object.entries(process.env).filter(
+    ([key, value]) => value !== undefined && !controlledKeys.has(key.toUpperCase()),
+  ));
+  const environment = Object.freeze({
+    ...inheritedEnvironment,
+    PWD: snapshotRoot,
+    INIT_CWD: snapshotRoot,
+    HOME: fs.realpathSync(homeRoot),
+    TMPDIR: fs.realpathSync(tempRoot),
+    NPM_CONFIG_CACHE: fs.realpathSync(cacheRoot),
+    NPM_CONFIG_LOGS_DIR: path.join(fs.realpathSync(cacheRoot), '_logs'),
+    NPM_CONFIG_USERCONFIG: fs.realpathSync(userConfigPath),
+    NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+    NPM_CONFIG_FUND: 'false',
+    NPM_CONFIG_AUDIT: 'false',
+    NPM_CONFIG_PROGRESS: 'false',
+    NPM_CONFIG_COLOR: 'false',
+  });
+  return {
+    cacheRoot: fs.realpathSync(cacheRoot),
+    homeRoot: fs.realpathSync(homeRoot),
+    tempRoot: fs.realpathSync(tempRoot),
+    userConfigPath: fs.realpathSync(userConfigPath),
+    environment,
+    observations: [],
+  };
+}
+
+function runNpmSandboxed(label: string, executable: string, args: readonly string[]): Buffer {
+  const sandbox = requireSuiteNpmSandbox();
+  sandbox.observations.push({ label, environment: sandbox.environment });
+  return execFileSync(executable, [...args], {
+    cwd: requireRepositorySnapshotRoot(),
+    env: sandbox.environment,
+    stdio: 'pipe',
+  });
+}
+
+function runInstallerHarness(snapshotRoot: string, cacheRoot: string): OfficialKitBuild[] {
+  const harnessPath = path.join(snapshotRoot, '.suite/npm-install-harness.mjs');
+  const resultPath = path.join(snapshotRoot, '.suite/npm-install-result.json');
+  fs.writeFileSync(harnessPath, [
+    "import fs from 'node:fs';",
+    "import path from 'node:path';",
+    "import { pathToFileURL } from 'node:url';",
+    '',
+    'const [repositoryRoot, cacheRoot, resultPath, ...slugs] = process.argv.slice(2);',
+    "if (!repositoryRoot || !cacheRoot || !resultPath || slugs.length === 0) throw new Error('Invalid installer harness input');",
+    "const monorepo = await import(pathToFileURL(path.join(repositoryRoot, 'scripts/lib/kit-monorepo.mjs')).href);",
+    "const installer = await import(pathToFileURL(path.join(repositoryRoot, 'scripts/lib/kit-install.mjs')).href);",
+    'const builds = [];',
+    'for (const slug of slugs) {',
+    '  const descriptor = await monorepo.loadTrustedMarketKit({ repositoryRoot, slug });',
+    '  const install = await installer.ensureKitInstall({ descriptor, cacheRoot });',
+    '  builds.push({',
+    '    slug,',
+    '    installRoot: install.installRoot,',
+    "    artifactPath: path.join(install.runRoot, 'artifacts', `${slug}.hkit`),",
+    '  });',
+    '}',
+    `const environmentKeys = ${JSON.stringify(NPM_SANDBOX_ENVIRONMENT_KEYS)};`,
+    'const environment = Object.fromEntries(environmentKeys.map((key) => [key, process.env[key]]));',
+    'fs.writeFileSync(resultPath, JSON.stringify({ builds, environment }), { mode: 0o600 });',
+    '',
+  ].join('\n'), { mode: 0o600 });
+  runNpmSandboxed('official Kit installer child', process.execPath, [
+    harnessPath,
+    snapshotRoot,
+    cacheRoot,
+    resultPath,
+    ...OFFICIAL_KITS,
+  ]);
+  const result = JSON.parse(fs.readFileSync(resultPath, 'utf8')) as {
+    builds?: Array<Partial<OfficialKitBuild>>;
+    environment?: Partial<NpmEnvironmentProof>;
+  };
+  if (!Array.isArray(result.builds) || result.builds.length !== OFFICIAL_KITS.length) {
+    throw new Error('Official Kit installer harness returned invalid builds');
+  }
+  const builds = result.builds.map((build, index): OfficialKitBuild => {
+    const expectedSlug = OFFICIAL_KITS[index];
+    if (build.slug !== expectedSlug
+      || typeof build.installRoot !== 'string'
+      || typeof build.artifactPath !== 'string') {
+      throw new Error(`Official Kit installer harness returned invalid build ${String(index)}`);
+    }
+    return {
+      slug: expectedSlug,
+      installRoot: fs.realpathSync(build.installRoot),
+      artifactPath: build.artifactPath,
+    };
+  });
+  requireSuiteNpmSandbox().installerEnvironment = parseNpmEnvironmentProof(result.environment);
+  return builds;
+}
+
+function parseNpmEnvironmentProof(
+  candidate: Partial<NpmEnvironmentProof> | undefined,
+): NpmEnvironmentProof {
+  if (!candidate) throw new Error('Official Kit installer harness omitted its environment proof');
+  const entries = NPM_SANDBOX_ENVIRONMENT_KEYS.map((key) => {
+    const value = candidate[key];
+    if (typeof value !== 'string') {
+      throw new Error(`Official Kit installer harness omitted environment key ${key}`);
+    }
+    return [key, value] as const;
+  });
+  return Object.freeze(Object.fromEntries(entries)) as unknown as NpmEnvironmentProof;
+}
+
+function assertSuiteNpmIsolation(snapshotRoot: string): void {
+  const sandbox = requireSuiteNpmSandbox();
+  expect(Object.isFrozen(sandbox.environment)).toBe(true);
+  for (const target of [
+    sandbox.cacheRoot,
+    sandbox.homeRoot,
+    sandbox.tempRoot,
+    sandbox.userConfigPath,
+  ]) {
+    expect(isInside(fs.realpathSync(target), snapshotRoot), target).toBe(true);
+    expect(isInside(fs.realpathSync(target), fs.realpathSync(REPOSITORY_ROOT)), target).toBe(false);
+  }
+  expect(fs.lstatSync(sandbox.userConfigPath).isFile()).toBe(true);
+  expect(fs.lstatSync(sandbox.userConfigPath).isSymbolicLink()).toBe(false);
+  expect(fs.readFileSync(sandbox.userConfigPath, 'utf8')).toBe([
+    'update-notifier=false',
+    'fund=false',
+    'audit=false',
+    'progress=false',
+    'color=false',
+    '',
+  ].join('\n'));
+  expect(npmEnvironmentProof(sandbox.environment)).toEqual({
+    HOME: sandbox.homeRoot,
+    TMPDIR: sandbox.tempRoot,
+    NPM_CONFIG_CACHE: sandbox.cacheRoot,
+    NPM_CONFIG_LOGS_DIR: path.join(sandbox.cacheRoot, '_logs'),
+    NPM_CONFIG_USERCONFIG: sandbox.userConfigPath,
+    NPM_CONFIG_UPDATE_NOTIFIER: 'false',
+    NPM_CONFIG_FUND: 'false',
+    NPM_CONFIG_AUDIT: 'false',
+    NPM_CONFIG_PROGRESS: 'false',
+    NPM_CONFIG_COLOR: 'false',
+  });
+  expect(sandbox.installerEnvironment).toEqual(npmEnvironmentProof(sandbox.environment));
+  expect(sandbox.observations.map(({ label }) => label)).toEqual([
+    'initial npm ci',
+    'snapshot framework build',
+    'official Kit installer child',
+    ...OFFICIAL_KITS.flatMap((slug) => [
+      `kit CLI build ${slug}`,
+      `kit CLI validate ${slug}`,
+      `kit CLI pack ${slug}`,
+      `kit CLI inspect ${slug}`,
+    ]),
+  ]);
+  for (const observation of sandbox.observations) {
+    expect(observation.environment, observation.label).toBe(sandbox.environment);
+  }
+  assertNpmLogsBelongToSnapshot(sandbox.cacheRoot, snapshotRoot);
+}
+
+function npmEnvironmentProof(environment: Readonly<NodeJS.ProcessEnv>): NpmEnvironmentProof {
+  return parseNpmEnvironmentProof(environment);
+}
+
+function assertNpmLogsBelongToSnapshot(cacheRoot: string, snapshotRoot: string): void {
+  const logsRoot = path.join(cacheRoot, '_logs');
+  const logs = fs.existsSync(logsRoot)
+    ? fs.readdirSync(logsRoot).filter((entry) => entry.endsWith('.log'))
+    : [];
+  expect(logs.length).toBeGreaterThan(0);
+  const expectedSnapshotName = path.basename(snapshotRoot);
+  for (const entry of logs) {
+    const logPath = fs.realpathSync(path.join(logsRoot, entry));
+    expect(isInside(logPath, cacheRoot), logPath).toBe(true);
+    const contents = fs.readFileSync(logPath, 'utf8');
+    const referencedSnapshots = [...contents.matchAll(
+      /official-startup-plugin-repository-[A-Za-z0-9_-]+/gu,
+    )].map((match) => match[0]);
+    expect(contents, entry).not.toContain(fs.realpathSync(REPOSITORY_ROOT));
+    expect(referencedSnapshots.length, entry).toBeGreaterThan(0);
+    expect(new Set(referencedSnapshots), entry).toEqual(new Set([expectedSnapshotName]));
+  }
+}
+
+function requireSuiteNpmSandbox(): SuiteNpmSandbox {
+  if (!suiteNpmSandbox) throw new Error('Suite npm sandbox is unavailable');
+  return suiteNpmSandbox;
+}
+
 function copyCanonicalRepositorySnapshot(snapshotRoot: string): void {
   for (const relative of ['package.json', 'package-lock.json', 'tsconfig.json']) {
     fs.copyFileSync(path.join(REPOSITORY_ROOT, relative), path.join(snapshotRoot, relative));
@@ -1064,6 +1281,7 @@ async function cleanupSuiteRoots(): Promise<unknown[]> {
   emittedServerRoot = undefined;
   officialBuilds = [];
   productRuntimeModules = undefined;
+  suiteNpmSandbox = undefined;
   const results = await Promise.allSettled(roots.map(async (root) => {
     fs.rmSync(root, { recursive: true, force: true });
   }));
