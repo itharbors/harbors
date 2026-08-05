@@ -49,14 +49,29 @@ export function createWatchdogClient(options: WatchdogClientOptions) {
     env: { PATH: '/usr/bin:/bin' },
   });
   child.unref();
-  child.stdin?.on('error', () => undefined);
   const schedule = options.scheduleInterval ?? setInterval;
   const clear = options.clearScheduledInterval ?? clearInterval;
-  const timer = schedule(() => {
-    void send(child, 'H\n').catch(() => clear(timer));
+  let terminalError: Error | undefined;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const markUnavailable = (error: unknown) => {
+    terminalError ??= error instanceof Error ? error : new Error(String(error));
+    if (timer) clear(timer);
+  };
+  const sendRequired = async (message: string) => {
+    if (terminalError) throw terminalError;
+    try {
+      await send(child, message);
+    } catch (error) {
+      markUnavailable(error);
+      throw terminalError;
+    }
+  };
+  timer = schedule(() => {
+    void sendRequired('H\n').catch(() => undefined);
   }, 2_000);
   timer.unref?.();
-  child.once('exit', () => clear(timer));
+  child.stdin?.on('error', markUnavailable);
+  child.once('exit', () => markUnavailable(watchdogUnavailableError()));
   let closed = false;
   return {
     pid: child.pid,
@@ -65,30 +80,36 @@ export function createWatchdogClient(options: WatchdogClientOptions) {
         const identity = Buffer.from(entry.executableIdentity, 'utf8').toString('base64');
         return `E\t${entry.pid}\t${entry.processStartTime}\t${identity}\n`;
       });
-      return send(child, `B\n${lines.join('')}C\n`);
+      return sendRequired(`B\n${lines.join('')}C\n`);
     },
     async recover() {
       if (closed) return;
       closed = true;
-      clear(timer);
-      await send(child, 'R\n');
+      if (timer) clear(timer);
+      await sendRequired('R\n');
       child.stdin?.end();
     },
     async shutdown() {
       if (closed) return;
       closed = true;
-      clear(timer);
-      await send(child, 'S\n');
+      if (timer) clear(timer);
+      await sendRequired('S\n');
       child.stdin?.end();
     },
   };
 }
 
 function send(child: ChildProcess, message: string): Promise<void> {
-  if (!child.stdin || child.stdin.destroyed || !child.stdin.writable) return Promise.resolve();
+  if (!child.stdin || child.stdin.destroyed || !child.stdin.writable) {
+    return Promise.reject(watchdogUnavailableError());
+  }
   return new Promise((resolve, reject) => {
     child.stdin!.write(message, (error) => error ? reject(error) : resolve());
   });
+}
+
+function watchdogUnavailableError(): Error & { code: 'WATCHDOG_UNAVAILABLE' } {
+  return Object.assign(new Error('Watchdog pipe is unavailable'), { code: 'WATCHDOG_UNAVAILABLE' as const });
 }
 
 const WATCHDOG_SCRIPT = String.raw`
