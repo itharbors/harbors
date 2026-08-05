@@ -627,8 +627,8 @@ export class ApplicationPluginSupervisor {
   private requestTermination(record: GenerationRecord): void {
     if (record.final || record.terminationSent || record.killSent || !record.child) return;
     record.terminationSent = true;
-    record.child.terminate();
     this.scheduleTerminationKill(record);
+    try { record.child.terminate(); } catch { /* Escalation remains armed. */ }
   }
 
   private scheduleTerminationKill(record: GenerationRecord): void {
@@ -638,7 +638,7 @@ export class ApplicationPluginSupervisor {
       this.terminationTimerHandle = undefined;
       if (this.current !== record || record.final || record.killSent) return;
       record.killSent = true;
-      record.child?.kill();
+      try { record.child?.kill(); } catch { /* Final exit still owns lifecycle completion. */ }
     }, KILL_TIMEOUT_MS);
     this.terminationTimerHandle = handle;
   }

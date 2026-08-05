@@ -374,6 +374,101 @@ describe('ApplicationPluginSupervisor', () => {
     }
   });
 
+  it('keeps one kill deadline and retry pending when terminate throws synchronously', async () => {
+    vi.useFakeTimers();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => { unhandledRejections.push(reason); };
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      const harness = createHarness({ throwOnTerminate: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+
+      const retried = harness.supervisor.retry();
+      let retrySettled = false;
+      void retried.then(() => { retrySettled = true; }, () => { retrySettled = true; });
+      await vi.advanceTimersByTimeAsync(1_000);
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(retrySettled).toBe(false);
+      expect(unhandledRejections).toEqual([]);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await flushMicrotasks();
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      await expect(retried).resolves.toBeUndefined();
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+      vi.useRealTimers();
+    }
+  });
+
+  it('isolates a throwing kill once and keeps stop pending until final exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ throwOnKill: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      const stopped = harness.supervisor.stop();
+      let stopSettled = false;
+      void stopped.then(() => { stopSettled = true; }, () => { stopSettled = true; });
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(stopSettled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(stopSettled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await expect(stopped).resolves.toBeUndefined();
+      expect(harness.supervisor.getState().status).toBe('stopped');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('clears the prearmed kill when terminate synchronously reports final exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ exitOnTerminate: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      const retried = harness.supervisor.retry();
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      await expect(retried).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      expect(harness.supervisor.getState().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('hands off stop requested from a runtime-command callback without self-waiting', async () => {
     vi.useFakeTimers();
     try {
@@ -1160,6 +1255,9 @@ interface HarnessOptions {
   childOutput?: { stdout: string; stderr: string };
   preSpawnError?: boolean;
   exitOnKill?: boolean;
+  exitOnTerminate?: boolean;
+  throwOnKill?: boolean;
+  throwOnTerminate?: boolean;
   throwOnMessageSubscription?: number;
 }
 
@@ -1188,6 +1286,9 @@ function createHarness(options: HarnessOptions = {}) {
     spawn: () => {
       const child = new FakeChild(4_000 + children.length, options.childOutput, {
         exitOnKill: options.exitOnKill ?? false,
+        exitOnTerminate: options.exitOnTerminate ?? false,
+        throwOnKill: options.throwOnKill ?? false,
+        throwOnTerminate: options.throwOnTerminate ?? false,
         throwOnMessageSubscription: options.throwOnMessageSubscription,
       });
       children.push(child);
@@ -1215,7 +1316,7 @@ class FakeChild implements ApplicationPluginChild {
   readonly sent: PluginProcessEnvelope[] = [];
   readonly stdoutTail: string;
   readonly stderrTail: string;
-  readonly terminate = vi.fn(() => true);
+  readonly terminate: ReturnType<typeof vi.fn>;
   readonly kill: ReturnType<typeof vi.fn>;
   generation = '';
   private readonly messageListeners = new Set<(message: unknown) => void>();
@@ -1227,11 +1328,25 @@ class FakeChild implements ApplicationPluginChild {
   constructor(
     readonly pid: number,
     output = { stdout: '', stderr: '' },
-    private readonly options: { exitOnKill: boolean; throwOnMessageSubscription?: number } = { exitOnKill: false },
+    private readonly options: {
+      exitOnKill: boolean;
+      exitOnTerminate: boolean;
+      throwOnKill: boolean;
+      throwOnTerminate: boolean;
+      throwOnMessageSubscription?: number;
+    } = { exitOnKill: false, exitOnTerminate: false, throwOnKill: false, throwOnTerminate: false },
   ) {
     this.stdoutTail = output.stdout;
     this.stderrTail = output.stderr;
+    this.terminate = vi.fn(() => {
+      if (this.options.throwOnTerminate) throw new Error('terminate failed');
+      if (this.options.exitOnTerminate) {
+        this.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGTERM', error: null });
+      }
+      return true;
+    });
     this.kill = vi.fn(() => {
+      if (this.options.throwOnKill) throw new Error('kill failed');
       if (this.options.exitOnKill) {
         this.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
       }
