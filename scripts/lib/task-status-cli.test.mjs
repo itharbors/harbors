@@ -264,6 +264,40 @@ test('check ignores metadata inside a correctly delimited fenced code block', (t
   assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
 });
 
+test('check accepts Task and summary ATX level-two headings indented by up to three spaces', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskDirectory = join(fixture.path, `docs/tasks/${taskId}`);
+  const taskMarkdown = [
+    ['背景与问题', ' '],
+    ['目标', '  '],
+    ['范围', '   '],
+    ['非目标', ' '],
+    ['验收标准', '  '],
+    ['约束', '   '],
+    ['需求变更', ' '],
+  ].reduce((content, [heading, indent]) => content.replace(`## ${heading}`, `${indent}## ${heading}`), validTaskMarkdown(taskId));
+  const summaryMarkdown = validSummaryMarkdown().replace('## 最终结论', '   ## 最终结论');
+
+  writeFileSync(join(taskDirectory, 'task.md'), taskMarkdown);
+  writeFileSync(join(taskDirectory, 'summary.md'), summaryMarkdown);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 0);
+});
+
+test('check does not treat four-space-indented text as an ATX level-two heading', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskPath = join(fixture.path, `docs/tasks/${taskId}/task.md`);
+
+  writeFileSync(taskPath, `${validTaskMarkdown(taskId)}\n    ## 目标\n`);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 0);
+
+  writeFileSync(taskPath, validTaskMarkdown(taskId).replace('## 需求变更', '    ## 需求变更'));
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
 test('resolve verifies the branch type and rejects multiple changed task statuses', (t) => {
   const fixture = createGitFixture();
   t.after(() => fixture[Symbol.dispose]());

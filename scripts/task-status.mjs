@@ -242,7 +242,7 @@ function validateExactMetadata(lines, label, value) {
 
 function validateRequiredSections(lines, headings, name) {
   const sections = lines
-    .map((line, index) => ({ heading: /^##\s+(.+?)\s*$/u.exec(line)?.[1], index }))
+    .map((line, index) => ({ heading: /^ {0,3}##\s+(.+?)\s*$/u.exec(line)?.[1], index }))
     .filter(({ heading }) => heading !== undefined);
   for (const heading of headings) {
     const matches = sections.filter((section) => section.heading === heading);
