@@ -1,3 +1,5 @@
+import { types as utilTypes } from 'node:util';
+
 export const PLUGIN_PROCESS_PROTOCOL = 1 as const;
 
 const MAX_PAYLOAD_DEPTH = 32;
@@ -59,6 +61,7 @@ export function assertPluginProcessPayload<T>(input: T): T {
 }
 
 export function parsePluginProcessEnvelope(input: unknown, expectedGeneration: string): PluginProcessEnvelope {
+  assertNotProxy(input, 'Plugin process envelope');
   if (!isPlainObject(input)) {
     throw new TypeError('Plugin process envelope must be a plain object');
   }
@@ -125,6 +128,7 @@ function walkPayload(input: unknown, depth: number, seen: WeakSet<object>): void
   if (typeof input !== 'object') {
     throw new TypeError('Plugin process payload must be structured-clone-compatible');
   }
+  assertNotProxy(input, 'Plugin process payload');
   if (seen.has(input)) {
     throw new TypeError('Plugin process payload cannot contain cycles');
   }
@@ -216,6 +220,17 @@ function ownEnumerableDataKeys(input: Record<string, unknown>): string[] {
 
 function isNonEmptyString(input: unknown): input is string {
   return typeof input === 'string' && input.length > 0;
+}
+
+function assertNotProxy(input: unknown, label: string): void {
+  if (input === null || (typeof input !== 'object' && typeof input !== 'function')) return;
+  let proxy = true;
+  try {
+    proxy = utilTypes.isProxy(input);
+  } catch {
+    // If native classification ever fails, do not inspect the value further.
+  }
+  if (proxy) throw new TypeError(`${label} cannot be a Proxy`);
 }
 
 function isArrayIndex(key: string, length: number): boolean {

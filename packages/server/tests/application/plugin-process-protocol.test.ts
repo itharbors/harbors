@@ -66,6 +66,20 @@ describe('plugin process protocol', () => {
     expect(() => assertPluginProcessPayload(payload)).toThrow();
   });
 
+  it('rejects hostile proxies without invoking their traps', () => {
+    let trapCount = 0;
+    const hostile = new Proxy({ value: 'unsafe' }, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+
+    expect(() => assertPluginProcessPayload({ nested: hostile })).toThrow(/proxy/i);
+    expect(() => parsePluginProcessEnvelope(hostile, 'gen-1')).toThrow(/proxy/i);
+    expect(trapCount).toBe(0);
+  });
+
   it('accepts a payload at depth 32', () => {
     let payload: unknown = 'leaf';
     for (let index = 0; index < 32; index += 1) {
@@ -233,6 +247,32 @@ describe('plugin process RPC peer', () => {
     receive({ protocol: 1, generation: 'gen-1', kind: 'response', requestId: '1', ok: true, payload: 'pong' });
 
     await expect(pending).resolves.toBe('pong');
+  });
+
+  it('ignores a hostile proxy response without invoking its traps', async () => {
+    let receive: (input: unknown) => void = () => undefined;
+    const peer = createPluginProcessRpcPeer({
+      generation: 'gen-1',
+      send: () => undefined,
+      subscribe: (listener) => {
+        receive = listener;
+        return () => undefined;
+      },
+    });
+    const pending = peer.request('invoke', null);
+    let trapCount = 0;
+    const hostile = new Proxy({}, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+
+    expect(() => receive(hostile)).not.toThrow();
+    expect(trapCount).toBe(0);
+
+    peer.close(new Error('closed'));
+    await expect(pending).rejects.toThrow('closed');
   });
 
   it('rejects the 257th pending request', async () => {

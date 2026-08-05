@@ -1,3 +1,4 @@
+import { types as utilTypes } from 'node:util';
 import type { PluginDefinition } from '../../framework/plugin/types';
 import {
   type PluginProcessEnvelope,
@@ -89,6 +90,10 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
 
   const unsubscribeHost = options.transport.subscribe((input) => {
     if (!generation) {
+      if (isProxyValue(input)) {
+        void fatal(new Error('Application plugin IPC initial envelope is invalid'));
+        return;
+      }
       const candidateGeneration = safelyReadGeneration(input);
       if (!candidateGeneration) {
         void fatal(new Error('Application plugin IPC initial envelope is invalid'));
@@ -108,6 +113,10 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
       return;
     }
 
+    if (isProxyValue(input)) {
+      void fatal(new Error('Application plugin IPC envelope is invalid'));
+      return;
+    }
     let envelope: PluginProcessEnvelope;
     try {
       envelope = parsePluginProcessEnvelope(input, generation);
@@ -239,9 +248,9 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     } catch {
       // The IPC channel may already be gone; terminal cleanup must continue.
     }
-    rpc?.close(error);
-    runtimeController?.close();
-    unsubscribeHost();
+    try { rpc?.close(error); } catch { /* Terminal cleanup continues below. */ }
+    try { runtimeController?.close(); } catch { /* Terminal cleanup continues below. */ }
+    try { unsubscribeHost(); } catch { /* Terminal cleanup continues below. */ }
     try {
       await unloadWithTimeout();
     } finally {
@@ -273,9 +282,13 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     if (finishPromise) return finishPromise;
     terminal = true;
     stopping = true;
-    runtimeController?.close();
-    rpc?.close(new Error(failed ? 'Application plugin runner failed' : 'Application plugin runner stopped'));
-    unsubscribeHost();
+    try { runtimeController?.close(); } catch { failed = true; }
+    try {
+      rpc?.close(new Error(failed ? 'Application plugin runner failed' : 'Application plugin runner stopped'));
+    } catch {
+      failed = true;
+    }
+    try { unsubscribeHost(); } catch { failed = true; }
     finishPromise = (async () => {
       let finalFailed = failed;
       await flushSends();
@@ -424,7 +437,7 @@ function assertNullPayload(input: unknown): void {
 
 function safelyReadGeneration(input: unknown): string | undefined {
   try {
-    if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    if (input === null || typeof input !== 'object' || isProxyValue(input) || Array.isArray(input)) return undefined;
     const descriptor = Object.getOwnPropertyDescriptor(input, 'generation');
     if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) return undefined;
     return isNonEmptyString(descriptor.value) ? descriptor.value : undefined;
@@ -460,5 +473,30 @@ function isNonEmptyString(input: unknown): input is string {
 }
 
 function toError(input: unknown): Error {
-  return input instanceof Error ? input : new Error(String(input));
+  const fallback = 'Application plugin runner failed';
+  let message = fallback;
+  try {
+    if (typeof input === 'string') {
+      message = input;
+    } else if (typeof input === 'number' || typeof input === 'boolean' || typeof input === 'bigint') {
+      message = String(input);
+    } else if (input !== null && (typeof input === 'object' || typeof input === 'function') && !isProxyValue(input)) {
+      const descriptor = Object.getOwnPropertyDescriptor(input, 'message');
+      if (descriptor && Object.hasOwn(descriptor, 'value') && typeof descriptor.value === 'string') {
+        message = descriptor.value;
+      }
+    }
+  } catch {
+    message = fallback;
+  }
+  return new Error((message || fallback).slice(0, 1024));
+}
+
+function isProxyValue(input: unknown): boolean {
+  if (input === null || (typeof input !== 'object' && typeof input !== 'function')) return false;
+  try {
+    return utilTypes.isProxy(input);
+  } catch {
+    return true;
+  }
 }

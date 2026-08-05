@@ -548,6 +548,55 @@ describe('application plugin process runner', () => {
     expect(harness.exits).toEqual([{ failed: true }]);
   });
 
+  it('fails closed on a hostile proxy envelope without invoking any proxy traps', async () => {
+    const entryPath = await pluginEntry(`
+      globalThis.editor.plugin.define({ lifecycle: {
+        unload() { globalThis.runnerTestState = (globalThis.runnerTestState || 0) + 1; },
+      } });
+    `);
+    const harness = createHarness();
+    await harness.request('initialize', initializePayload(entryPath));
+    let trapCount = 0;
+    const hostile = new Proxy({ generation: 'stale-generation' }, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+
+    harness.deliver(hostile);
+    await vi.waitFor(() => expect(harness.exits).toEqual([{ failed: true }]));
+
+    expect(trapCount).toBe(0);
+    expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toBe(1);
+    expect(harness.sent.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal'))
+      .toEqual([expect.objectContaining({ payload: { message: 'Application plugin IPC envelope is invalid' } })]);
+  });
+
+  it('fails closed on an unclassifiable generation accessor without invoking it', async () => {
+    const entryPath = await pluginEntry(`globalThis.editor.plugin.define({});`);
+    const harness = createHarness();
+    await harness.request('initialize', initializePayload(entryPath));
+    let getterCount = 0;
+    const envelope = {
+      protocol: 1,
+      kind: 'request',
+      requestId: 'accessor-generation',
+      method: 'invoke',
+      payload: null,
+    } as Record<string, unknown>;
+    Object.defineProperty(envelope, 'generation', {
+      enumerable: true,
+      get() { getterCount += 1; return 'stale-generation'; },
+    });
+
+    harness.deliver(envelope);
+    await vi.waitFor(() => expect(harness.exits).toEqual([{ failed: true }]));
+
+    expect(getterCount).toBe(0);
+    expect(harness.sent.filter((candidate) => candidate.kind === 'event' && candidate.event === 'fatal')).toHaveLength(1);
+  });
+
   it('caps best-effort fatal unload at exactly ten seconds', async () => {
     const entryPath = await pluginEntry(`
       globalThis.editor.plugin.define({ lifecycle: {
@@ -711,6 +760,38 @@ describe('application plugin process runner', () => {
 
     expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal'))
       .toEqual([expect.objectContaining({ payload: { message } })]);
+    expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
+    await expect(run.marker()).resolves.toBe('unload\n');
+    expect(run.stderr()).toBe('');
+  });
+
+  it.each([
+    ['an uncaught hostile proxy', `setTimeout(() => { throw hostile; }, 50);`],
+    ['a hostile proxy rejection', `setTimeout(() => { void Promise.reject(hostile); }, 50);`],
+  ])('forks the emitted runner and contains %s', async (_case, faultSource) => {
+    const fixture = await forkFixture(`
+      import { appendFileSync } from 'node:fs';
+      const hostile = new Proxy({}, {
+        get() { throw new Error('get trap'); },
+        getOwnPropertyDescriptor() { throw new Error('descriptor trap'); },
+        getPrototypeOf() { throw new Error('prototype trap'); },
+        ownKeys() { throw new Error('keys trap'); },
+      });
+      globalThis.editor.plugin.define({ lifecycle: {
+        load() { ${faultSource} },
+        unload() {
+          appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload\\n');
+          return new Promise((resolve) => setTimeout(resolve, 20));
+        },
+      } });
+    `);
+    const run = startEmittedRunner(fixture.entryPath);
+
+    await run.initialized;
+    const exited = await exitWithin(run.exited, 2_000);
+
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal'))
+      .toEqual([expect.objectContaining({ payload: { message: 'Application plugin runner failed' } })]);
     expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
     await expect(run.marker()).resolves.toBe('unload\n');
     expect(run.stderr()).toBe('');
@@ -922,7 +1003,7 @@ function createHarness(options: HarnessOptions = {}) {
       return () => listeners.delete(listener);
     },
   };
-  function deliver(envelope: PluginProcessEnvelope) {
+  function deliver(envelope: unknown) {
     for (const listener of [...listeners]) listener(envelope);
   }
   const runner = runApplicationPluginRunner({
