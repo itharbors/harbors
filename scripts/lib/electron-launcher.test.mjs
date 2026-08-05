@@ -863,7 +863,7 @@ test('merges global application and focused-session menu trees by id', () => {
   }]);
 });
 
-test('wires the loopback Host, toast queue and desktop cleanup into Electron', async () => {
+test('wires the wildcard web Host, loopback notification Host and desktop cleanup into Electron', async () => {
   const source = await readFile(new URL('../electron.mjs', import.meta.url), 'utf8');
 
   assert.match(source, /createNotificationHost/);
@@ -892,7 +892,7 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
       2,
     );
   }
-  assert.match(source, /HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/);
+  assert.match(source, /HARBORS_BIND_HOST:\s*'0\.0\.0\.0'/);
   assert.equal(
     [...source.matchAll(/HARBORS_DATA_ROOT:\s*desktopPaths\.dataRoot/g)].length,
     2,
@@ -902,7 +902,7 @@ test('wires the loopback Host, toast queue and desktop cleanup into Electron', a
     2,
   );
   assert.equal(
-    [...source.matchAll(/HARBORS_BIND_HOST:\s*'127\.0\.0\.1'/g)].length,
+    [...source.matchAll(/HARBORS_BIND_HOST:\s*'0\.0\.0\.0'/g)].length,
     2,
   );
   assert.match(source, /const kitStoreRoot = desktopPaths\.kitStoreRoot/);
