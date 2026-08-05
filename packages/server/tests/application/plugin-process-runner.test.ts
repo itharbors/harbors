@@ -50,6 +50,7 @@ afterEach(async () => {
   delete (globalThis as { editor?: unknown }).editor;
   delete (globalThis as { runnerTestState?: unknown }).runnerTestState;
   delete (globalThis as { runnerHandlerCalls?: unknown }).runnerHandlerCalls;
+  delete (globalThis as { runnerLateMutation?: unknown }).runnerLateMutation;
   delete (globalThis as { runnerUnloadReleases?: unknown }).runnerUnloadReleases;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
 });
@@ -219,6 +220,34 @@ describe('application plugin process runner', () => {
       (command.payload as { operation?: string }).operation === 'register-request')).toHaveLength(1);
   });
 
+  it('does not retain invalid dynamic registrations or consume their handler IDs', async () => {
+    const entryPath = await pluginEntry(`
+      globalThis.editor.plugin.define({ lifecycle: {
+        load(runtime) {
+          try { runtime.message.registerRequest('', 'echo', () => 'invalid', 'browser'); } catch {}
+          try { runtime.message.registerBroadcast('', '*', null, 'server'); } catch {}
+          try { runtime.message.registerBroadcast('', '*', () => 'invalid', 'server', ['panel.open']); } catch {}
+          runtime.message.registerRequest('', 'echo', () => 'valid-request', 'server');
+          runtime.message.registerBroadcast('', '*', () => 'valid-broadcast', 'server');
+        },
+      } });
+    `);
+    const harness = createHarness();
+
+    await harness.request('initialize', initializePayload(entryPath));
+
+    expect(harness.runtimeCommands.map((command) => command.payload)).toEqual([
+      expect.objectContaining({ operation: 'register-request', name: 'echo', handlerId: 'handler-1' }),
+      expect.objectContaining({ operation: 'register-broadcast', topic: '*', handlerId: 'handler-2' }),
+    ]);
+    await expect(harness.request('invoke', {
+      target: 'handler', handlerId: 'handler-1', args: [],
+    })).resolves.toBe('valid-request');
+    await expect(harness.request('invoke', {
+      target: 'handler', handlerId: 'handler-2', args: [],
+    })).resolves.toBe('valid-broadcast');
+  });
+
   it('invokes only own callable definition methods', async () => {
     const entryPath = await pluginEntry(`
       const methods = Object.create({ inherited() { return 'unsafe'; } });
@@ -344,6 +373,54 @@ describe('application plugin process runner', () => {
 
     harness.respondToRuntimeCommand(harness.runtimeCommands[1], null);
     await expect(outcome).resolves.toMatchObject({ error: { message: 'list failed' } });
+  });
+
+  it('rejects late runtime mutations locally after lifecycle load rejects', async () => {
+    const entryPath = await pluginEntry(`
+      globalThis.editor.plugin.define({ lifecycle: {
+        load(runtime) {
+          globalThis.runnerLateMutation = () => {
+            runtime.service.register('too-late', { value: 1 });
+            try { runtime.message.registerRequest('', 'too-late', () => 'late'); }
+            catch (error) { globalThis.runnerTestState = error.message; }
+          };
+          throw new Error('load rejected');
+        },
+      } });
+    `);
+    const harness = createHarness();
+
+    await expect(harness.request('initialize', initializePayload(entryPath))).rejects.toThrow('load rejected');
+    (globalThis as { runnerLateMutation?: () => void }).runnerLateMutation?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(harness.runtimeCommands).toEqual([]);
+    expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toMatch(/runtime is terminal/i);
+  });
+
+  it('rejects late runtime mutations locally after a load command rejects', async () => {
+    const entryPath = await pluginEntry(`
+      globalThis.editor.plugin.define({ lifecycle: {
+        load(runtime) {
+          globalThis.runnerLateMutation = () => runtime.service.register('too-late', { value: 2 });
+          runtime.menu.attach('', { menu: [] });
+        },
+      } });
+    `);
+    const harness = createHarness({ autoRespondRuntimeCommands: false });
+    const initialization = harness.request('initialize', initializePayload(entryPath));
+    const outcome = initialization.then(
+      (value) => ({ value }),
+      (error: Error) => ({ error }),
+    );
+    await vi.waitFor(() => expect(harness.runtimeCommands).toHaveLength(1));
+    harness.rejectRuntimeCommand(harness.runtimeCommands[0], 'attach rejected');
+    await expect(outcome).resolves.toMatchObject({ error: { message: 'attach rejected' } });
+
+    (globalThis as { runnerLateMutation?: () => void }).runnerLateMutation?.();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(harness.runtimeCommands).toHaveLength(1);
   });
 
   it('proxies notifications through host RPC only when capability is granted', async () => {
@@ -536,6 +613,29 @@ describe('application plugin process runner', () => {
 
     expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toBe(1);
     expect(harness.exits).toEqual([{ failed: true }]);
+  });
+
+  it('seals runtime mutations before explicit lifecycle unload begins', async () => {
+    const entryPath = await pluginEntry(`
+      let runtime;
+      globalThis.editor.plugin.define({ lifecycle: {
+        load(value) {
+          runtime = value;
+          globalThis.runnerLateMutation = () => runtime.message.broadcast('late', { value: 3 });
+        },
+        unload() {
+          runtime.service.unregister('cleanup');
+          globalThis.runnerLateMutation();
+        },
+      } });
+    `);
+    const harness = createHarness();
+    await harness.request('initialize', initializePayload(entryPath));
+
+    await expect(harness.request('unload', null)).resolves.toBe(null);
+
+    expect(harness.runtimeCommands).toEqual([]);
+    expect(harness.exits).toEqual([{ failed: false }]);
   });
 
   it('shares one unload call between explicit unload and a concurrent fatal error', async () => {

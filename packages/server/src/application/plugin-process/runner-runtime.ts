@@ -66,7 +66,17 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
   const requestHandlers = new Map<string, string>();
   const broadcastHandlers = new Map<string, string>();
 
+  const enterTerminal = (): void => {
+    phase = 'terminal';
+    handlers.clear();
+    requestHandlers.clear();
+    broadcastHandlers.clear();
+  };
+
   const requestCommand = (command: RuntimeCommand): Promise<unknown> => {
+    if (phase === 'terminal') {
+      return Promise.reject(new Error(`Application plugin "${options.pluginName}" runtime is terminal`));
+    }
     const request = options.rpc.request('runtime-command', command);
     const observed = request.catch((input) => {
       const error = toError(input);
@@ -87,12 +97,19 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
   const enqueueCommand = (command: RuntimeCommand): void => {
     void requestCommand(command).catch(() => undefined);
   };
+  const assertHandlerRegistryOpen = (): void => {
+    if (phase === 'terminal') {
+      throw new Error(`Application plugin "${options.pluginName}" runtime is terminal`);
+    }
+  };
   const owner = (requestedOwner: string): string => {
     if (!requestedOwner || requestedOwner === options.pluginName) return options.pluginName;
     throw new Error(`Plugin "${options.pluginName}" cannot register as "${requestedOwner}"`);
   };
   const route = (location: 'server' | 'browser' | undefined, methods: string[] | undefined): 'server' => {
-    if ((location && location !== 'server') || methods?.some((method) => method.startsWith('panel.'))) {
+    const validMethods = methods === undefined || (Array.isArray(methods)
+      && methods.every((method) => typeof method === 'string' && !method.startsWith('panel.')));
+    if ((location !== undefined && location !== 'server') || !validMethods) {
       throw new Error(`Application plugin "${options.pluginName}" can register only server message routes`);
     }
     return 'server';
@@ -139,17 +156,19 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
         location?: 'server' | 'browser',
         methods?: string[],
       ) => {
+        assertHandlerRegistryOpen();
         const resolvedOwner = owner(requestedOwner);
+        const resolvedLocation = route(location, methods);
+        if (typeof handler !== 'function') throw new TypeError(`Request handler "${name}" must be a function`);
         const key = routeKey(resolvedOwner, name);
         if (requestHandlers.has(key)) throw new Error(`Request handler "${name}" is already registered`);
-        if (typeof handler !== 'function') throw new TypeError(`Request handler "${name}" must be a function`);
         const handlerId = `handler-${nextHandlerId}`;
         nextHandlerId += 1;
         requestHandlers.set(key, handlerId);
         handlers.set(handlerId, handler);
         enqueueCommand({
           target: 'message', operation: 'register-request', owner: resolvedOwner, name, handlerId,
-          location: route(location, methods), ...(methods ? { methods: [...methods] } : {}),
+          location: resolvedLocation, ...(methods ? { methods: [...methods] } : {}),
         });
       },
       registerBroadcast: (
@@ -159,20 +178,23 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
         location?: 'server' | 'browser',
         methods?: string[],
       ) => {
+        assertHandlerRegistryOpen();
         const resolvedOwner = owner(requestedOwner);
+        const resolvedLocation = route(location, methods);
+        if (typeof handler !== 'function') throw new TypeError(`Broadcast handler "${topic}" must be a function`);
         const key = routeKey(resolvedOwner, topic);
         if (broadcastHandlers.has(key)) throw new Error(`Broadcast handler "${topic}" is already registered`);
-        if (typeof handler !== 'function') throw new TypeError(`Broadcast handler "${topic}" must be a function`);
         const handlerId = `handler-${nextHandlerId}`;
         nextHandlerId += 1;
         broadcastHandlers.set(key, handlerId);
         handlers.set(handlerId, handler);
         enqueueCommand({
           target: 'message', operation: 'register-broadcast', owner: resolvedOwner, topic, handlerId,
-          location: route(location, methods), ...(methods ? { methods: [...methods] } : {}),
+          location: resolvedLocation, ...(methods ? { methods: [...methods] } : {}),
         });
       },
       unregisterRequest: (requestedOwner: string, name: string) => {
+        assertHandlerRegistryOpen();
         const resolvedOwner = owner(requestedOwner);
         const key = routeKey(resolvedOwner, name);
         const handlerId = requestHandlers.get(key);
@@ -181,6 +203,7 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
         enqueueCommand({ target: 'message', operation: 'unregister-request', owner: resolvedOwner, name });
       },
       unregisterBroadcast: (requestedOwner: string, topic: string) => {
+        assertHandlerRegistryOpen();
         const resolvedOwner = owner(requestedOwner);
         const key = routeKey(resolvedOwner, topic);
         const handlerId = broadcastHandlers.get(key);
@@ -208,7 +231,7 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
       while (pendingCommands.size > 0) {
         await Promise.all([...pendingCommands]);
       }
-      if (!activate) phase = 'terminal';
+      if (!activate || loadCommandError) enterTerminal();
       if (loadCommandError) throw loadCommandError;
       if (activate) phase = 'running';
     },
@@ -224,10 +247,7 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
       serviceSnapshot = freezeClone(snapshot.serviceSnapshot);
     },
     close() {
-      phase = 'terminal';
-      handlers.clear();
-      requestHandlers.clear();
-      broadcastHandlers.clear();
+      enterTerminal();
     },
   };
 }
