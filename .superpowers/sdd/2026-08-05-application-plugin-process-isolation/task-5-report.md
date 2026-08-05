@@ -65,3 +65,48 @@ No Task 5 focused or Task 1–4 regression failed in that run.
 - The stable-diff pass found missing production caller configuration. Web and Electron defaults now reach the source/built and staged runner contracts respectively without weakening direct-runtime missing-config degradation.
 - The public-schema consumer pass found and fixed the remaining `error` to `errorCode` migration mismatch.
 - Final stable-diff re-review: ready, with zero Critical, Important, or Minor findings.
+
+## Fix round 1
+
+### RED evidence
+
+1. Desktop Framework coverage first asserted that the parsed notification port reaches `createServer`; the test received `undefined` until `notificationPort` was added to the server options. The owner authentication token remains host-only and is still represented in plugin initialization by a capability boolean.
+2. Two cross-plugin lifecycle races failed first: an existing observer that became unavailable during reverse attach stopped the newly started subject, and a non-unavailable observer implementation error was also charged to that subject. Observer failures are now attributed to the observer's captured generation; an unavailable/replaced observer is left for its own restart reconciliation.
+3. A deferred reverse attach followed by owner cleanup and another generation restart failed first with `detach, attach` completing before the old attach was released. Each ordered plugin pair now has one transition chain, producing `old attach, detach, replacement attach` while mandatory owner cleanup remains non-blocking.
+4. Supervisor tests first failed typecheck because `start()` returned no definition and `getDefinition()` did not exist. Exact-shape initialize results are now cloned, validated, and frozen before the Supervisor publishes `running`. A Runtime fake then reproduced a manifest declaring `run` while the child definition omitted it; startup incorrectly returned `ready` until static contribution attachment gained method validation and generation rollback.
+5. Terminal-lifecycle tests first reproduced all three resurrection paths: dispose before start allowed a later ready startup, start after stopped returned the cached ready bootstrap, and dispose during a gated startup left the public phase at `starting`. Runtime now synchronously latches terminal intent, makes the concurrent startup observe `stopping`, drains all created supervisors, and rejects later start/retry calls with stable `APPLICATION_RUNTIME_UNAVAILABLE`.
+6. Follow-up transition audit reproduced a replacement attach that was queued behind detach but not yet visible to a second owner cleanup. It completed after cleanup and left a stale active attachment. Attach intent is now generation-reserved before entering the ordered-pair chain, so cleanup can cancel or append detachment even before the RPC begins.
+7. Independent review reproduced a direct-leg unavailable error cancelling the observer's Supervisor-owned automatic restart, and a reverse attach's ordinary late error failing its observer after the subject had already changed generation. Both directions now classify results against the captured observer and attached generations; unavailable or stale results never trigger explicit failure.
+8. A retry gated inside `supervisor.retry()` first resolved a `stopping` bootstrap when disposal won. Retry now rechecks terminal intent after rejection, successful retry, definition validation, lifecycle reconciliation, and before returning.
+9. A bootstrap listener disposing synchronously from the first `starting` event reproduced an orphan: `disposeInternal()` observed no assigned `startPromise`, completed empty cleanup, and the original startup later created a Supervisor. `start()` now publishes its Promise before executing `startInternal`, and every startup boundary stops creating work once terminal intent is latched.
+10. A never-settling lifecycle attach first kept its ordered plugin pair locked after 30 seconds of simulated time. Lifecycle attach is now bounded at 30 seconds; timeout is attributed to and stops the observer generation, which closes the RPC/process before a replacement generation can attach.
+11. Second-pass review showed that a timeout race alone was insufficient: if the subject changed generation, the stale result classifier ignored the timeout, and even a current-pair timeout unlocked the transition before observer stop completed. New tests first left the observer running or exposed replacement work after 30 seconds. Timeout handling now stops the original observer generation inside the same transition before its tail can release, regardless of attached-generation drift.
+12. A never-settling detach first kept replacement attach queued indefinitely. Detach now uses the same 30-second bound and in-transition observer stop, preserving mandatory cleanup's non-blocking API while ensuring later generations cannot inherit a live stale RPC.
+13. Concurrent and reentrant startup tests were tightened to require the in-flight `start()` itself to reject with `APPLICATION_RUNTIME_UNAVAILABLE` when disposal wins. `dispose()` treats that self-induced terminal rejection as expected, completes cleanup, and still propagates unrelated startup/cleanup failures.
+
+### Implementation decisions
+
+- Desktop startup forwards only the notification port required to construct the host capability. The notification owner proof/token is not included in child initialization payloads.
+- Direct `subject.attach(other)` remains the subject generation's responsibility. Reverse `observer.attach(subject)` captures the observer generation: unavailable or replaced observers do not fail the subject, while other same-generation errors fail and clean up the observer only.
+- Lifecycle bookkeeping stores both observer and attached generations. Attach, detach, and replacement attach share a non-rejecting per-pair tail; the externally awaited transition still preserves the original error for correct owner attribution.
+- The runner's initialize result is exposed as immutable `{ lifecycle, methods }` metadata. Supervisor accepts only the exact canonical shape with a strictly sorted, unique, non-empty method list. Runtime requires every manifest request/broadcast target method before registering menu/message contributions.
+- `dispose()` records terminal intent and publishes `stopping` synchronously. It then waits for any in-progress startup, stops all supervisors created by it in reverse order, and publishes `stopped`; cached startup state can no longer bypass the terminal latch.
+- Startup Promise publication is reentrancy-safe: `startInternal()` begins from a queued microtask only after `startPromise` is assigned, then checks the terminal latch after every user-observable or asynchronous preparation/start boundary.
+- Both lifecycle directions classify attach results against the exact observer/attached generation pair. Attach intent is reserved before queue entry, pair transitions are serialized, and a 30-second attach bound fails/stops the responsible observer instead of leaving cleanup and replacement generations permanently blocked.
+- Attach and detach timeouts terminate the still-owning observer generation from inside the ordered-pair transition. The transition tail is released only after Supervisor stop has closed the old RPC/process, so an attached-generation change cannot turn a timeout into a stale late mutation.
+
+### Verification
+
+- Focused Supervisor and Application process integration: 77/77 passed with server typecheck.
+- Task 1–5 application/process regression set: 209/209 passed across 10 test files with server typecheck.
+- Desktop Framework and Application runtime client: 18/18 passed.
+- Server build: `npm run build -w packages/server` passed.
+- Diff hygiene: `git diff --check` passed.
+- Full server suite was attempted again: typecheck passed; 40/56 files passed, with 473 tests passed, 130 failed, and 34 skipped. The 18-test increase over the pre-fix run is entirely the new fix-round coverage. All failures remain attributable to the same two workspace blockers: native SQLite ABI 148 versus active Node ABI 127, or missing builtin panel/menu dist entries.
+
+### Independent review
+
+- The first fix-round review reproduced five Important issues around notification wiring, attach attribution/ordering, definition validation, and terminal disposal; each received a focused RED regression and fix.
+- The second pass found the assignment-before-callback orphan, both-side generation attribution gaps, retry/dispose reentrancy, and unbounded lifecycle transitions. These were reproduced before Promise publication, terminal checkpoints, pair-generation checks, and bounded operations were added.
+- The timeout re-review required observer termination to occur inside the ordered-pair transition and extended the same guarantee to detach. Stale-subject attach timeout and hung-detach regressions now prove the old observer generation is stopped before the pair tail releases.
+- Final review: ready, with zero Critical, Important, or Minor findings.

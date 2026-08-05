@@ -15,6 +15,7 @@ import {
   type SpawnApplicationPluginProcessOptions,
 } from './spawn.js';
 import type {
+  ApplicationPluginDefinitionMetadata,
   ApplicationPluginRuntimeSnapshot,
   InitializeApplicationPluginPayload,
   RuntimeCommand,
@@ -80,7 +81,8 @@ interface TimerRegistration {
 
 interface GenerationRecord {
   readonly generation: string;
-  readonly startup: Deferred<void>;
+  readonly startup: Deferred<ApplicationPluginDefinitionMetadata>;
+  definition?: ApplicationPluginDefinitionMetadata;
   child?: ApplicationPluginChild;
   rpc?: PluginProcessRpcPeer;
   unsubscribeMessage?: () => void;
@@ -138,9 +140,11 @@ export class ApplicationPluginSupervisor {
     this.now = options.now ?? Date.now;
   }
 
-  start(): Promise<void> {
+  start(): Promise<ApplicationPluginDefinitionMetadata> {
     if (this.state.status !== 'pending') {
-      if (this.state.status === 'running') return Promise.resolve();
+      if (this.state.status === 'running' && this.current?.definition) {
+        return Promise.resolve(this.current.definition);
+      }
       return Promise.reject(this.unavailableError());
     }
     return this.startGeneration();
@@ -281,18 +285,22 @@ export class ApplicationPluginSupervisor {
     return this.state;
   }
 
+  getDefinition(): ApplicationPluginDefinitionMetadata | undefined {
+    return this.state.status === 'running' ? this.current?.definition : undefined;
+  }
+
   subscribe(listener: (state: ApplicationPluginProcessState) => void): () => void {
     this.listeners.add(listener);
     return () => { this.listeners.delete(listener); };
   }
 
-  private startGeneration(): Promise<void> {
+  private startGeneration(): Promise<ApplicationPluginDefinitionMetadata> {
     if (this.mode !== 'active' || this.current) return Promise.reject(this.unavailableError());
     this.generationCounter += 1;
     const generation = `generation-${this.generationCounter}`;
     const record: GenerationRecord = {
       generation,
-      startup: deferred<void>(),
+      startup: deferred<ApplicationPluginDefinitionMetadata>(),
       available: false,
       final: false,
       finalExit: deferred<void>(),
@@ -352,10 +360,16 @@ export class ApplicationPluginSupervisor {
       this.beginFailure(record);
       return record.startup.promise;
     }
-    void record.rpc.request('initialize', payload).then(
-      () => this.markRunning(record),
-      () => this.beginFailure(record),
-    );
+    void record.rpc.request('initialize', payload).then((input) => {
+      let definition: ApplicationPluginDefinitionMetadata;
+      try {
+        definition = freezeDefinitionMetadata(input);
+      } catch {
+        this.beginFailure(record);
+        return;
+      }
+      this.markRunning(record, definition);
+    }, () => this.beginFailure(record));
     return record.startup.promise;
   }
 
@@ -527,10 +541,14 @@ export class ApplicationPluginSupervisor {
     void record.failureTask.catch(() => undefined);
   }
 
-  private markRunning(record: GenerationRecord): void {
+  private markRunning(
+    record: GenerationRecord,
+    definition: ApplicationPluginDefinitionMetadata,
+  ): void {
     if (this.current !== record || !record.available || record.failureStarted || this.mode !== 'active') return;
     this.clearLifecycleTimer();
     this.runningSince = this.now();
+    record.definition = definition;
     this.publish({
       status: 'running',
       generation: record.generation,
@@ -540,7 +558,7 @@ export class ApplicationPluginSupervisor {
       error: null,
       retryAfterMs: null,
     });
-    record.startup.resolve();
+    record.startup.resolve(definition);
   }
 
   private clearOwner(record: GenerationRecord): Promise<void> {
@@ -724,6 +742,29 @@ function freezeState(state: ApplicationPluginProcessState): ApplicationPluginPro
     ? Object.freeze({ code: state.error.code, message: state.error.message })
     : null;
   return Object.freeze({ ...state, error });
+}
+
+function freezeDefinitionMetadata(input: unknown): ApplicationPluginDefinitionMetadata {
+  assertPluginProcessPayload(input);
+  const definition = structuredClone(input);
+  if (!isRecord(definition)) throw new TypeError('Application plugin definition metadata is invalid');
+  const keys = Object.keys(definition);
+  if (keys.length !== 2 || !keys.includes('lifecycle') || !keys.includes('methods')
+    || typeof definition.lifecycle !== 'boolean' || !Array.isArray(definition.methods)) {
+    throw new TypeError('Application plugin definition metadata is invalid');
+  }
+  const methods = definition.methods;
+  if (methods.some((method, index) => (
+    typeof method !== 'string'
+    || method.length === 0
+    || (index > 0 && methods[index - 1]! >= method)
+  ))) {
+    throw new TypeError('Application plugin definition methods are invalid');
+  }
+  return Object.freeze({
+    lifecycle: definition.lifecycle,
+    methods: Object.freeze([...methods] as string[]),
+  });
 }
 
 function createUnavailableError(

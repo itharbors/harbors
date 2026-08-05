@@ -31,9 +31,13 @@ describe('ApplicationPluginSupervisor', () => {
       const started = harness.supervisor.start();
       expect(states).toEqual(['starting']);
       await initialize(harness.children[0]!);
-      await started;
+      const definition = await started;
 
       expect(states).toEqual(['starting', 'running']);
+      expect(definition).toEqual({ lifecycle: true, methods: ['ping'] });
+      expect(harness.supervisor.getDefinition()).toBe(definition);
+      expect(Object.isFrozen(definition)).toBe(true);
+      expect(Object.isFrozen(definition.methods)).toBe(true);
       expect(harness.supervisor.getState()).toMatchObject({
         status: 'running', pid: 4_000, restartCount: 0, error: null, retryAfterMs: null,
       });
@@ -89,6 +93,31 @@ describe('ApplicationPluginSupervisor', () => {
       expect(harness.children[0]!.sent).toContainEqual(expect.objectContaining({
         kind: 'response', requestId: '1', ok: true, payload: { handled: true },
       }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rejects initialize definition metadata unless its exact canonical shape is valid', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const invalid of [
+        { lifecycle: true, methods: ['ping'], extra: true },
+        { lifecycle: 'yes', methods: ['ping'] },
+        { lifecycle: true, methods: ['ping', 'ping'] },
+        { lifecycle: true, methods: ['zeta', 'alpha'] },
+        { lifecycle: true, methods: [''] },
+      ]) {
+        const harness = createHarness();
+        const started = harness.supervisor.start();
+        await flushMicrotasks();
+        harness.children[0]!.respondToLast(invalid);
+        await flushMicrotasks();
+
+        await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
+        expect(harness.supervisor.getDefinition()).toBeUndefined();
+        expect(harness.supervisor.getState().status).toBe('restarting');
+      }
     } finally {
       vi.useRealTimers();
     }
@@ -1046,7 +1075,7 @@ describe('ApplicationPluginSupervisor', () => {
         throwOnMessageSubscription: 2,
         onTimer: (milliseconds) => scheduled.push(milliseconds),
       });
-      let started!: Promise<void>;
+      let started!: Promise<unknown>;
       expect(() => { started = harness.supervisor.start(); }).not.toThrow();
       await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
       await flushMicrotasks();

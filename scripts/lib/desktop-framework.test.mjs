@@ -92,6 +92,7 @@ test('forwards only generic plugin storage roots to the desktop server', async (
 
   assert.equal(port, 43123);
   assert.equal('agentGuardDataDir' in serverOptions, false);
+  assert.equal(serverOptions.notificationPort, 17896);
   assert.deepEqual(
     serverOptions.pluginPathRoots,
     {

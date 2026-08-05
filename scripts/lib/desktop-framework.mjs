@@ -190,6 +190,7 @@ export async function runDesktopFrameworkProcess({
       port: environment.port,
       applicationHostMode: 'desktop',
       applicationControlToken: environment.applicationControlToken,
+      notificationPort: environment.notificationPort,
       applicationPluginProcess: resolvedApplicationPluginProcess,
     });
     controller = createFrameworkProcessController({

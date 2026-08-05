@@ -22,6 +22,11 @@ export interface ApplicationPluginRuntimeSnapshot {
   serviceSnapshot: Record<string, unknown>;
 }
 
+export interface ApplicationPluginDefinitionMetadata {
+  readonly lifecycle: boolean;
+  readonly methods: readonly string[];
+}
+
 export type RuntimeCommand =
   | { target: 'plugin'; operation: 'call'; plugin: string; method: string; args: unknown[] }
   | { target: 'menu'; operation: 'attach'; owner: string; contribute: ContributeData }

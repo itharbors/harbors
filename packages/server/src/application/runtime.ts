@@ -10,7 +10,12 @@ import type {
   CredentialMode,
 } from '@itharbors/plugin-types';
 import { createNotificationCapability } from './notification-capability';
-import type { ApplicationPluginRuntimeSnapshot, InitializeApplicationPluginPayload, RuntimeCommand } from './plugin-process/runner-runtime';
+import type {
+  ApplicationPluginDefinitionMetadata,
+  ApplicationPluginRuntimeSnapshot,
+  InitializeApplicationPluginPayload,
+  RuntimeCommand,
+} from './plugin-process/runner-runtime';
 import type { ApplicationPluginProcessRuntimeOptions } from './plugin-process/spawn';
 import {
   createApplicationPluginSupervisor,
@@ -32,6 +37,7 @@ const PROCESS_NOT_CONFIGURED = 'APPLICATION_PLUGIN_PROCESS_NOT_CONFIGURED';
 const PROCESS_FAILED = 'APPLICATION_PLUGIN_PROCESS_FAILED';
 const MANIFEST_INVALID = 'APPLICATION_PLUGIN_MANIFEST_INVALID';
 const CONTRIBUTION_INVALID = 'APPLICATION_PLUGIN_CONTRIBUTION_INVALID';
+const LIFECYCLE_OPERATION_TIMEOUT_MS = 30_000;
 
 export type ApplicationPluginSupervisorController = Pick<
   ApplicationPluginSupervisor,
@@ -44,6 +50,7 @@ export type ApplicationPluginSupervisorController = Pick<
   | 'detach'
   | 'updateRuntimeSnapshot'
   | 'getState'
+  | 'getDefinition'
   | 'subscribe'
 >;
 
@@ -86,6 +93,11 @@ interface SnapshotDelivery {
   latest?: ApplicationPluginRuntimeSnapshot;
 }
 
+interface LifecycleAttachment {
+  readonly observerGeneration: string;
+  readonly attachedGeneration: string;
+}
+
 export class ApplicationRuntime {
   private phase: ApplicationPhase = 'starting';
   private readonly manifestRegistry = new PluginModule();
@@ -100,14 +112,16 @@ export class ApplicationRuntime {
   private readonly supervisors = new Map<string, ApplicationPluginSupervisorController>();
   private readonly supervisorOrder: string[] = [];
   private readonly staticAttached = new Set<string>();
-  private readonly lifecycleAttachments = new Set<string>();
-  private readonly lifecycleDetachments = new Map<string, Promise<void>>();
+  private readonly lifecycleAttachments = new Map<string, LifecycleAttachment>();
+  private readonly lifecycleTransitions = new Map<string, Promise<void>>();
   private readonly lifecycleTransitioning = new Set<string>();
   private readonly snapshotDeliveries = new Map<string, SnapshotDelivery>();
   private readonly clearingOwners = new Set<string>();
   private readonly failingFromSnapshot = new Set<string>();
+  private readonly definitionFailures = new Map<string, Promise<void>>();
   private startPromise: Promise<ApplicationBootstrap> | undefined;
   private disposePromise: Promise<void> | undefined;
+  private terminalIntent = false;
   private credentialStatus: CredentialCapabilitySnapshot;
   private readonly credentialMode: CredentialMode;
   private readonly credentialStatusLoader: ApplicationRuntimeOptions['credentialStatusLoader'];
@@ -141,7 +155,10 @@ export class ApplicationRuntime {
   }
 
   start(): Promise<ApplicationBootstrap> {
-    if (!this.startPromise) this.startPromise = this.startInternal();
+    if (this.terminalIntent) return Promise.reject(createApplicationRuntimeUnavailableError());
+    if (!this.startPromise) {
+      this.startPromise = Promise.resolve().then(() => this.startInternal());
+    }
     return this.startPromise;
   }
 
@@ -180,7 +197,9 @@ export class ApplicationRuntime {
   }
 
   async retryPlugin(name: string): Promise<ApplicationBootstrap> {
+    if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
     await this.start();
+    if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
     this.assertAvailable();
     const supervisor = this.supervisors.get(name);
     if (!supervisor) throw createStableUnavailableError(name);
@@ -189,37 +208,58 @@ export class ApplicationRuntime {
       try {
         await supervisor.retry();
       } catch {
+        if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
         return this.getBootstrap();
       }
+      if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
+      await this.definitionFailures.get(name);
+      if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
+      if (supervisor.getState().status !== 'running') return this.getBootstrap();
       try {
         await this.attachPluginLifecycle(name);
       } catch {
         await this.failRunningPlugin(name, CONTRIBUTION_INVALID);
       }
+      if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
     } finally {
       this.lifecycleTransitioning.delete(name);
     }
     this.refreshPhase();
     this.emit();
+    if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
     return this.getBootstrap();
   }
 
   dispose(): Promise<void> {
-    if (!this.disposePromise) this.disposePromise = this.disposeInternal();
+    if (!this.disposePromise) {
+      this.terminalIntent = true;
+      if (this.phase !== 'stopped') {
+        this.phase = 'stopping';
+        this.emit();
+      }
+      this.disposePromise = this.disposeInternal();
+    }
     return this.disposePromise;
   }
 
   private async startInternal(): Promise<ApplicationBootstrap> {
+    this.assertNotTerminal();
     this.phase = 'starting';
     this.emit();
+    this.assertNotTerminal();
     await this.loadCredentialStatus();
+    this.assertNotTerminal();
     await this.loadCatalog();
+    this.assertNotTerminal();
     await this.preparePlugins();
     for (const spec of this.pluginSpecs) {
+      if (this.terminalIntent) break;
       if (this.prepared.has(spec.name)) await this.startPlugin(spec.name);
     }
+    this.assertNotTerminal();
     this.startupComplete = true;
     for (const name of this.supervisorOrder) {
+      if (this.terminalIntent) break;
       if (this.supervisors.get(name)?.getState().status !== 'running') continue;
       try {
         await this.attachPluginLifecycle(name);
@@ -227,9 +267,15 @@ export class ApplicationRuntime {
         await this.failRunningPlugin(name, CONTRIBUTION_INVALID);
       }
     }
+    this.assertNotTerminal();
     this.refreshPhase();
     this.emit();
+    this.assertNotTerminal();
     return this.getBootstrap();
+  }
+
+  private assertNotTerminal(): void {
+    if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
   }
 
   private async loadCredentialStatus(): Promise<void> {
@@ -326,6 +372,8 @@ export class ApplicationRuntime {
         }
         return;
       }
+      await this.definitionFailures.get(name);
+      if (supervisor.getState().status !== 'running') return;
       try {
         await this.attachPluginLifecycle(name);
       } catch {
@@ -455,9 +503,14 @@ export class ApplicationRuntime {
     applyProcessState(state, processState);
     if (processState.status === 'running') {
       try {
+        this.assertDefinitionSupportsContributions(
+          name,
+          this.prepared.get(name)?.contribute,
+          this.supervisors.get(name)?.getDefinition(),
+        );
         this.attachContributions(name, this.prepared.get(name)?.contribute);
       } catch {
-        void this.failRunningPlugin(name, CONTRIBUTION_INVALID);
+        void this.failInvalidDefinition(name);
         return;
       }
       if (this.startupComplete && !this.lifecycleTransitioning.has(name)) {
@@ -467,6 +520,35 @@ export class ApplicationRuntime {
     }
     if (this.startupComplete) this.refreshPhase();
     this.emit();
+  }
+
+  private assertDefinitionSupportsContributions(
+    pluginName: string,
+    contribute: ContributeData | undefined,
+    definition: ApplicationPluginDefinitionMetadata | undefined,
+  ): void {
+    if (!definition) throw new TypeError(`Application plugin "${pluginName}" has no definition metadata`);
+    const methods = new Set(definition.methods);
+    const declaredMethods = [
+      ...Object.values(contribute?.message?.request ?? {}).flat(),
+      ...Object.values(contribute?.message?.broadcast ?? {}).flat(),
+    ];
+    for (const method of declaredMethods) {
+      if (!methods.has(method)) {
+        throw new TypeError(`Application plugin "${pluginName}" does not define method "${method}"`);
+      }
+    }
+  }
+
+  private failInvalidDefinition(name: string): Promise<void> {
+    const existing = this.definitionFailures.get(name);
+    if (existing) return existing;
+    const failure = this.failRunningPlugin(name, CONTRIBUTION_INVALID)
+      .finally(() => {
+        if (this.definitionFailures.get(name) === failure) this.definitionFailures.delete(name);
+      });
+    this.definitionFailures.set(name, failure);
+    return failure;
   }
 
   private attachContributions(pluginName: string, contribute: ContributeData | undefined): void {
@@ -517,15 +599,22 @@ export class ApplicationRuntime {
   private async clearOwner(owner: string): Promise<void> {
     this.clearingOwners.add(owner);
     try {
-      for (const key of [...this.lifecycleAttachments]) {
+      for (const [key, attachment] of [...this.lifecycleAttachments]) {
         const [observer, attached] = key.split('\0');
         if (observer !== owner && attached === owner) {
           const supervisor = this.supervisors.get(observer!);
-          if (supervisor?.getState().status === 'running') {
-            this.queueLifecycleDetachment(key, supervisor, owner);
-          }
+          if (supervisor) this.queueLifecycleDetachment(
+            key,
+            observer!,
+            supervisor,
+            owner,
+            attachment,
+          );
         }
-        if (observer === owner || attached === owner) this.lifecycleAttachments.delete(key);
+        if ((observer === owner || attached === owner)
+          && this.lifecycleAttachments.get(key) === attachment) {
+          this.lifecycleAttachments.delete(key);
+        }
       }
       this.staticAttached.delete(owner);
       this.menu.detach(owner);
@@ -546,9 +635,69 @@ export class ApplicationRuntime {
       const other = this.supervisors.get(otherName);
       if (other?.getState().status !== 'running') continue;
       const otherContribute = this.prepared.get(otherName)?.contribute;
-      if (otherContribute) await this.attachPluginTo(name, otherName, otherContribute);
-      if (contribute) await this.attachPluginTo(otherName, name, contribute);
+      if (otherContribute) await this.attachFromNewObserver(name, otherName, otherContribute);
+      if (contribute) await this.attachToExistingObserver(otherName, name, contribute);
     }
+  }
+
+  private async attachFromNewObserver(
+    observer: string,
+    attached: string,
+    contribute: ContributeData,
+  ): Promise<void> {
+    const observerSupervisor = this.requireSupervisor(observer);
+    const attachedSupervisor = this.requireSupervisor(attached);
+    const observerGeneration = observerSupervisor.getState().generation;
+    const attachedGeneration = attachedSupervisor.getState().generation;
+    try {
+      await this.attachPluginTo(observer, attached, contribute);
+    } catch (error) {
+      if (isApplicationPluginUnavailable(error)
+        || !this.isCurrentLifecyclePair(
+          observerSupervisor,
+          observerGeneration,
+          attachedSupervisor,
+          attachedGeneration,
+        )) return;
+      throw error;
+    }
+  }
+
+  private async attachToExistingObserver(
+    observer: string,
+    attached: string,
+    contribute: ContributeData,
+  ): Promise<void> {
+    const supervisor = this.requireSupervisor(observer);
+    const attachedSupervisor = this.requireSupervisor(attached);
+    const observerGeneration = supervisor.getState().generation;
+    const attachedGeneration = attachedSupervisor.getState().generation;
+    try {
+      await this.attachPluginTo(observer, attached, contribute);
+    } catch (error) {
+      if (isApplicationPluginUnavailable(error)
+        || !this.isCurrentLifecyclePair(
+          supervisor,
+          observerGeneration,
+          attachedSupervisor,
+          attachedGeneration,
+        )) return;
+      await this.failRunningPlugin(observer, CONTRIBUTION_INVALID);
+    }
+  }
+
+  private isCurrentLifecyclePair(
+    observer: ApplicationPluginSupervisorController,
+    observerGeneration: string | null,
+    attached: ApplicationPluginSupervisorController,
+    attachedGeneration: string | null,
+  ): boolean {
+    const observerState = observer.getState();
+    const attachedState = attached.getState();
+    return observerState.status === 'running'
+      && attachedState.status === 'running'
+      && observerState.generation === observerGeneration
+      && attachedState.generation === attachedGeneration;
   }
 
   private async attachPluginTo(
@@ -557,34 +706,86 @@ export class ApplicationRuntime {
     contribute: ContributeData,
   ): Promise<void> {
     const key = `${observer}\0${attached}`;
-    const pendingDetachment = this.lifecycleDetachments.get(key);
-    if (pendingDetachment) await pendingDetachment;
-    if (this.requireSupervisor(observer).getState().status !== 'running'
-      || this.requireSupervisor(attached).getState().status !== 'running') return;
-    if (this.lifecycleAttachments.has(key)) return;
-    this.lifecycleAttachments.add(key);
-    try {
-      await this.requireSupervisor(observer).attach(attached, contribute);
-    } catch (error) {
-      this.lifecycleAttachments.delete(key);
-      throw error;
+    const observerSupervisor = this.requireSupervisor(observer);
+    const attachedSupervisor = this.requireSupervisor(attached);
+    const observerState = observerSupervisor.getState();
+    const attachedState = attachedSupervisor.getState();
+    if (observerState.status !== 'running' || attachedState.status !== 'running'
+      || !observerState.generation || !attachedState.generation) return;
+    const expected: LifecycleAttachment = {
+      observerGeneration: observerState.generation,
+      attachedGeneration: attachedState.generation,
+    };
+    const existing = this.lifecycleAttachments.get(key);
+    if (existing?.observerGeneration === expected.observerGeneration
+      && existing.attachedGeneration === expected.attachedGeneration) {
+      await this.lifecycleTransitions.get(key);
+      return;
     }
+    const attachment = { ...expected };
+    this.lifecycleAttachments.set(key, attachment);
+    await this.queueLifecycleTransition(key, async () => {
+      const currentObserver = observerSupervisor.getState();
+      const currentAttached = attachedSupervisor.getState();
+      if (this.lifecycleAttachments.get(key) !== attachment) return;
+      if (currentObserver.status !== 'running' || currentAttached.status !== 'running'
+        || currentObserver.generation !== expected.observerGeneration
+        || currentAttached.generation !== expected.attachedGeneration) {
+        this.lifecycleAttachments.delete(key);
+        return;
+      }
+      try {
+        await withLifecycleOperationTimeout(observerSupervisor.attach(attached, contribute), 'attach');
+      } catch (error) {
+        if (isLifecycleOperationTimeout(error)) {
+          const currentObserver = observerSupervisor.getState();
+          if (currentObserver.status === 'running'
+            && currentObserver.generation === expected.observerGeneration) {
+            await this.failRunningPlugin(observer, CONTRIBUTION_INVALID);
+          }
+        }
+        if (this.lifecycleAttachments.get(key) === attachment) {
+          this.lifecycleAttachments.delete(key);
+        }
+        throw error;
+      }
+    });
   }
 
   private queueLifecycleDetachment(
     key: string,
+    observer: string,
     supervisor: ApplicationPluginSupervisorController,
     attached: string,
+    attachment: LifecycleAttachment,
   ): void {
-    const previous = this.lifecycleDetachments.get(key);
-    const pending = (previous ?? Promise.resolve())
-      .catch(() => undefined)
-      .then(() => supervisor.detach(attached))
-      .catch(() => undefined);
-    this.lifecycleDetachments.set(key, pending);
-    void pending.then(() => {
-      if (this.lifecycleDetachments.get(key) === pending) this.lifecycleDetachments.delete(key);
+    void this.queueLifecycleTransition(key, async () => {
+      const state = supervisor.getState();
+      if (state.status !== 'running' || state.generation !== attachment.observerGeneration) return;
+      try {
+        await withLifecycleOperationTimeout(supervisor.detach(attached), 'detach');
+      } catch (error) {
+        if (isLifecycleOperationTimeout(error)) {
+          const current = supervisor.getState();
+          if (current.status === 'running'
+            && current.generation === attachment.observerGeneration) {
+            await this.failRunningPlugin(observer, CONTRIBUTION_INVALID);
+          }
+        }
+        // A different plugin cannot block mandatory owner cleanup.
+      }
     });
+  }
+
+  private queueLifecycleTransition<T>(key: string, transition: () => Promise<T>): Promise<T> {
+    const previous = this.lifecycleTransitions.get(key) ?? Promise.resolve();
+    const result = previous.then(transition);
+    const tail = result.then(() => undefined, () => undefined);
+    this.lifecycleTransitions.set(key, tail);
+    void tail.then(() => {
+      if (this.lifecycleTransitions.get(key) === tail) this.lifecycleTransitions.delete(key);
+    });
+    return result;
   }
 
   private async failRunningPlugin(name: string, errorCode: string): Promise<void> {
@@ -692,10 +893,12 @@ export class ApplicationRuntime {
 
   private async disposeInternal(): Promise<void> {
     if (this.phase === 'stopped') return;
-    await this.startPromise;
-    this.phase = 'stopping';
-    this.emit();
     const errors: unknown[] = [];
+    try {
+      await this.startPromise;
+    } catch (error) {
+      if (!isApplicationRuntimeUnavailable(error)) errors.push(error);
+    }
     for (const name of [...this.supervisorOrder].reverse()) {
       try {
         await this.supervisors.get(name)?.stop();
@@ -832,6 +1035,43 @@ function createStableUnavailableError(plugin: string): Error & {
   });
   delete error.stack;
   return Object.freeze(error);
+}
+
+function createApplicationRuntimeUnavailableError(): Error & {
+  readonly code: 'APPLICATION_RUNTIME_UNAVAILABLE';
+} {
+  const error = Object.assign(new Error('Application runtime is unavailable'), {
+    code: 'APPLICATION_RUNTIME_UNAVAILABLE' as const,
+  });
+  delete error.stack;
+  return Object.freeze(error);
+}
+
+function withLifecycleOperationTimeout(
+  operation: Promise<void>,
+  operationName: 'attach' | 'detach',
+): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      reject(Object.assign(new Error(`Application plugin lifecycle ${operationName} timed out`), {
+        code: 'APPLICATION_PLUGIN_LIFECYCLE_TIMEOUT' as const,
+      }));
+    }, LIFECYCLE_OPERATION_TIMEOUT_MS);
+  });
+  return Promise.race([operation, expired]).finally(() => {
+    if (timeout) clearTimeout(timeout);
+  });
+}
+
+function isLifecycleOperationTimeout(error: unknown): boolean {
+  return typeof error === 'object' && error !== null
+    && 'code' in error && error.code === 'APPLICATION_PLUGIN_LIFECYCLE_TIMEOUT';
+}
+
+function isApplicationRuntimeUnavailable(error: unknown): boolean {
+  return typeof error === 'object' && error !== null
+    && 'code' in error && error.code === 'APPLICATION_RUNTIME_UNAVAILABLE';
 }
 
 function isApplicationPluginUnavailable(error: unknown): boolean {
