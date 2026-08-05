@@ -150,6 +150,10 @@ export class ApplicationPluginSupervisor {
     return this.request('invoke', { target: 'method', method, args });
   }
 
+  invokeHandler(handlerId: string, args: unknown[]): Promise<unknown> {
+    return this.request('invoke', { target: 'handler', handlerId, args });
+  }
+
   attach(pluginName: string, contribute: ContributeData): Promise<void> {
     return this.request('attach', { pluginName, contribute }).then(() => undefined);
   }

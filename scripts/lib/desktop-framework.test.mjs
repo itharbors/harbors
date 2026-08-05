@@ -77,8 +77,9 @@ test('requires absolute packaged paths and wildcard desktop configuration', () =
 
 test('forwards only generic plugin storage roots to the desktop server', async () => {
   let serverOptions;
+  const env = validEnvironment();
   const port = await runDesktopFrameworkProcess({
-    env: validEnvironment(),
+    env,
     createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
     createServer: (options) => {
       serverOptions = options;
@@ -100,6 +101,17 @@ test('forwards only generic plugin storage roots to the desktop server', async (
       temp: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
     },
   );
+  assert.deepEqual(serverOptions.applicationPluginProcess, {
+    runner: {
+      executable: process.execPath,
+      args: [
+        '/Applications/ITHARBORS.app/Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js',
+      ],
+      runtimeMode: 'electron-run-as-node',
+    },
+    cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
+    env,
+  });
 });
 
 test('forwards the injected application plugin process runtime through server options', async () => {

@@ -47,6 +47,28 @@ function parseNotificationPort(value) {
   return port;
 }
 
+function createDesktopApplicationPluginProcess(environment, env) {
+  return Object.freeze({
+    runner: Object.freeze({
+      executable: process.execPath,
+      args: Object.freeze([
+        path.join(
+          environment.runtimeRoot,
+          'packages',
+          'server',
+          'dist',
+          'application',
+          'plugin-process',
+          'runner.js',
+        ),
+      ]),
+      runtimeMode: 'electron-run-as-node',
+    }),
+    cwd: environment.runtimeRoot,
+    env,
+  });
+}
+
 export function parseDesktopFrameworkEnvironment(env) {
   const applicationControlToken = env.HARBORS_APPLICATION_TOKEN;
   if (typeof applicationControlToken !== 'string' || applicationControlToken.trim().length === 0) {
@@ -149,6 +171,8 @@ export async function runDesktopFrameworkProcess({
 
   try {
     const environment = parseDesktopFrameworkEnvironment(env);
+    const resolvedApplicationPluginProcess = applicationPluginProcess
+      ?? createDesktopApplicationPluginProcess(environment, env);
     const assembly = createAssembly(environment.runtimeRoot, {
       kitSources: environment.kitSources,
     });
@@ -166,7 +190,7 @@ export async function runDesktopFrameworkProcess({
       port: environment.port,
       applicationHostMode: 'desktop',
       applicationControlToken: environment.applicationControlToken,
-      applicationPluginProcess,
+      applicationPluginProcess: resolvedApplicationPluginProcess,
     });
     controller = createFrameworkProcessController({
       send,

@@ -45,6 +45,13 @@ describe('ApplicationPluginSupervisor', () => {
         method: 'invoke', payload: { target: 'method', method: 'ping', args: ['hello'] },
       });
 
+      const invokeHandler = harness.supervisor.invokeHandler('handler-7', ['event']);
+      harness.children[0]!.respondToLast({ handled: true });
+      await expect(invokeHandler).resolves.toEqual({ handled: true });
+      expect(harness.children[0]!.lastRequest()).toMatchObject({
+        method: 'invoke', payload: { target: 'handler', handlerId: 'handler-7', args: ['event'] },
+      });
+
       const attach = harness.supervisor.attach('consumer', { menus: [] });
       harness.children[0]!.respondToLast(null);
       await attach;

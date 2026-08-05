@@ -1,5 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { PassThrough } from 'node:stream';
+import path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import {
   resolveApplicationPluginRunner,
@@ -28,6 +29,15 @@ function fakeChildProcess() {
 }
 
 describe('application plugin process runner resolution', () => {
+  it('anchors production default resolution to the spawn module itself', () => {
+    const resolved = resolveApplicationPluginRunner();
+
+    expect(resolved.args.at(-1)).toBe(
+      path.resolve(import.meta.dirname, '../../src/application/plugin-process/runner.ts'),
+    );
+    expect(resolved.runtimeMode).toBe('node');
+  });
+
   it('uses the local tsx loader for the source runner', () => {
     const resolved = resolveApplicationPluginRunner(
       'file:///workspace/harbors/packages/server/src/application/plugin-process/spawn.ts',

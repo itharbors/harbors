@@ -133,6 +133,7 @@ export function createServer(options: ServerOptions) {
     hostMode: applicationHostMode,
     catalogLoader: () => discoverApplicationPlugins({ assembly }),
     pluginPathRoots,
+    processRuntime: options.applicationPluginProcess,
     notificationPort: options.notificationPort,
     notificationOwnerAuthToken: options.applicationControlToken,
     credentialMode,

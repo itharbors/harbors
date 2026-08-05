@@ -107,7 +107,7 @@ export interface SpawnApplicationPluginProcessOptions extends ApplicationPluginP
   spawn?: ApplicationPluginSpawn;
 }
 
-export function resolveApplicationPluginRunner(importMetaUrl: string): ResolvedApplicationPluginRunner {
+export function resolveApplicationPluginRunner(importMetaUrl: string = import.meta.url): ResolvedApplicationPluginRunner {
   const moduleUrl = new URL(importMetaUrl);
   if (moduleUrl.protocol !== 'file:') {
     throw new TypeError('Application plugin runner module URL must use the file protocol');

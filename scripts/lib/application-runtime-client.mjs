@@ -61,7 +61,7 @@ export async function validateInstalledKitRuntime(
     : undefined;
   if (failedPlugin) {
     throw new Error(
-      `Kit ${kitId} startup plugin ${String(failedPlugin.name)} failed: ${String(failedPlugin.error)}`,
+      `Kit ${kitId} startup plugin ${String(failedPlugin.name)} failed: ${String(failedPlugin.errorCode)}`,
     );
   }
   const diagnostic = Array.isArray(bootstrap?.diagnostics)

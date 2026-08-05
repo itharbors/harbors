@@ -2,6 +2,7 @@ import path from 'node:path';
 import { createServer, parseKitSources } from './server';
 import { startServerUntilShutdown } from './process-lifecycle';
 import { captureApplicationHostSecrets } from './application/host-environment';
+import { resolveApplicationPluginRunner } from './application/plugin-process/spawn';
 
 const APPLICATION_HOST_SECRETS = captureApplicationHostSecrets(process.env);
 
@@ -23,6 +24,11 @@ const { start, stop } = createServer({
   credentialMode: process.env.HARBORS_CREDENTIAL_MODE,
   applicationControlToken: APPLICATION_HOST_SECRETS.applicationControlToken,
   notificationPort: APPLICATION_HOST_SECRETS.notificationPort,
+  applicationPluginProcess: {
+    runner: resolveApplicationPluginRunner(),
+    cwd: process.cwd(),
+    env: process.env,
+  },
   pluginPathRoots: {
     applicationData: APPLICATION_DATA_ROOT,
     data: process.env.HARBORS_PLUGIN_DATA_ROOT
