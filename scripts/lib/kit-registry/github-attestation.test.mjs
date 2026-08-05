@@ -12,6 +12,7 @@ const commit = '0123456789abcdef0123456789abcdef01234567';
 const repository = 'example/kit-demo';
 const workflow = 'example/kit-demo/.github/workflows/publish-kit.yml@refs/tags/v1.2.3';
 const signerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1';
+const recoverySignerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
 const subjectName = 'kit-demo-1.2.3-any-any.hkit';
 const attestationUrl = `https://api.github.com/repos/${repository}/attestations/sha256:${digest}`;
 const bundleUrl = 'https://objects.githubusercontent.com/github-production-repository-file/bundle.json';
@@ -38,6 +39,33 @@ function statement(overrides = {}) {
     },
     ...overrides,
   };
+}
+
+function mainRecoveryStatement({
+  workflowRepository = repository,
+  workflowRef = 'refs/heads/main',
+  workflowPath = '.github/workflows/publish-kit.yml',
+  dependencyRepository = repository,
+  dependencyRef = workflowRef,
+  dependencyCommit = 'f'.repeat(40),
+} = {}) {
+  return statement({
+    predicate: {
+      buildDefinition: {
+        externalParameters: {
+          workflow: {
+            repository: `https://github.com/${workflowRepository}`,
+            ref: workflowRef,
+            path: workflowPath,
+          },
+        },
+        resolvedDependencies: [{
+          uri: `git+https://github.com/${dependencyRepository}@${dependencyRef}`,
+          digest: { gitCommit: dependencyCommit },
+        }],
+      },
+    },
+  });
 }
 
 function bundle({ payloadType = 'application/vnd.in-toto+json', payload = statement() } = {}) {
@@ -415,25 +443,9 @@ test('uses the production Sigstore verifier by default and never accepts an unsi
   );
 });
 
-test('rejects automatic main-dispatch provenance but accepts a v3-signed product-Tag predicate', async () => {
+test('accepts automatic main-dispatch provenance only for the immutable v4 recovery signer', async () => {
   const v3Signer = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3';
-  const automaticMainStatement = statement({
-    predicate: {
-      buildDefinition: {
-        externalParameters: {
-          workflow: {
-            repository: `https://github.com/${repository}`,
-            ref: 'refs/heads/main',
-            path: '.github/workflows/publish-kit.yml',
-          },
-        },
-        resolvedDependencies: [{
-          uri: `git+https://github.com/${repository}@refs/heads/main`,
-          digest: { gitCommit: 'f'.repeat(40) },
-        }],
-      },
-    },
-  });
+  const automaticMainStatement = mainRecoveryStatement();
   await assert.rejects(
     createVerifier({ bundleValue: bundle({ payload: automaticMainStatement }) })
       .verifier.verify(expected({ signerWorkflow: v3Signer })),
@@ -441,15 +453,40 @@ test('rejects automatic main-dispatch provenance but accepts a v3-signed product
   );
 
   const verificationOptions = [];
-  const customProductTag = createVerifier({
-    bundleValue: bundle({ payload: statement() }),
+  const recovery = createVerifier({
+    bundleValue: bundle({ payload: automaticMainStatement }),
     verifyBundle: async (_bundle, options) => verificationOptions.push(options),
   });
-  assert.equal((await customProductTag.verifier.verify(expected({ signerWorkflow: v3Signer }))).verified, true);
+  assert.equal((await recovery.verifier.verify(expected({ signerWorkflow: recoverySignerWorkflow }))).verified, true);
   assert.equal(
     verificationOptions[0].certificateIdentityURI,
-    `https://github.com/${v3Signer}`,
+    `https://github.com/${recoverySignerWorkflow}`,
   );
+});
+
+test('v4 keeps accepting product-Tag execution provenance for ordinary Tag-triggered publication', async () => {
+  const { verifier } = createVerifier();
+  assert.equal((await verifier.verify(expected({ signerWorkflow: recoverySignerWorkflow }))).verified, true);
+});
+
+test('rejects malformed or widened v4 main recovery execution claims', async (t) => {
+  const cases = [
+    ['branch', mainRecoveryStatement({ workflowRef: 'refs/heads/release' })],
+    ['workflow path', mainRecoveryStatement({ workflowPath: '.github/workflows/other.yml' })],
+    ['workflow repository', mainRecoveryStatement({ workflowRepository: 'example/other' })],
+    ['dependency repository', mainRecoveryStatement({ dependencyRepository: 'example/other' })],
+    ['dependency ref', mainRecoveryStatement({ dependencyRef: 'refs/tags/v1.2.3' })],
+    ['dependency commit', mainRecoveryStatement({ dependencyCommit: 'not-a-commit' })],
+  ];
+  for (const [name, payload] of cases) {
+    await t.test(name, async () => {
+      await assert.rejects(
+        createVerifier({ bundleValue: bundle({ payload }) })
+          .verifier.verify(expected({ signerWorkflow: recoverySignerWorkflow })),
+        (error) => error.code === 'PROVENANCE_FAILED',
+      );
+    });
+  }
 });
 
 test('rejects invalid DSSE and mismatched subject, repository, commit, or workflow claims', async (t) => {

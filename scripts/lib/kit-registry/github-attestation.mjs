@@ -9,6 +9,8 @@ const DEFAULT_MAX_BUNDLE_BYTES = 5 * 1024 * 1024;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
 const REPOSITORY_PART_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/;
+const V4_RECOVERY_SIGNER_IDENTITY = 'https://github.com/itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
+const KIT_PUBLISH_WORKFLOW_PATH = '.github/workflows/publish-kit.yml';
 const ELECTRON_CRYPTO_VERIFY_COMPAT = Symbol.for('itharbors.electronCryptoVerifyCompat');
 const require = createRequire(import.meta.url);
 
@@ -299,19 +301,36 @@ function assertStatement(statement, expected) {
 
   const definition = statement.predicate?.buildDefinition;
   const externalWorkflow = definition?.externalParameters?.workflow;
-  if (
-    externalWorkflow?.repository !== `https://github.com/${expected.repository}`
-    || externalWorkflow.path !== expected.workflow.path
-    || externalWorkflow.ref !== expected.workflow.ref
-  ) {
+  const productWorkflowMatches = (
+    externalWorkflow?.repository === `https://github.com/${expected.repository}`
+    && externalWorkflow.path === expected.workflow.path
+    && externalWorkflow.ref === expected.workflow.ref
+  );
+  const productDependencyUri = `git+https://github.com/${expected.repository}@${expected.workflow.ref}`;
+  const productCommitMatches = Array.isArray(definition?.resolvedDependencies)
+    && definition.resolvedDependencies.some((dependency) => (
+      dependency?.uri === productDependencyUri && dependency?.digest?.gitCommit === expected.commit
+    ));
+  if (productWorkflowMatches && productCommitMatches) return;
+
+  const mainRef = 'refs/heads/main';
+  const recoveryWorkflowMatches = (
+    expected.signerWorkflow.identity === V4_RECOVERY_SIGNER_IDENTITY
+    && expected.workflow.path === KIT_PUBLISH_WORKFLOW_PATH
+    && externalWorkflow?.repository === `https://github.com/${expected.repository}`
+    && externalWorkflow.path === KIT_PUBLISH_WORKFLOW_PATH
+    && externalWorkflow.ref === mainRef
+  );
+  const recoveryDependencyUri = `git+https://github.com/${expected.repository}@${mainRef}`;
+  const recoveryCommitMatches = Array.isArray(definition?.resolvedDependencies)
+    && definition.resolvedDependencies.some((dependency) => (
+      dependency?.uri === recoveryDependencyUri
+      && typeof dependency?.digest?.gitCommit === 'string'
+      && COMMIT_PATTERN.test(dependency.digest.gitCommit)
+    ));
+  if (!recoveryWorkflowMatches || !recoveryCommitMatches) {
     throw new Error('Workflow source does not match');
   }
-  const dependencyUri = `git+https://github.com/${expected.repository}@${expected.workflow.ref}`;
-  const commitMatches = Array.isArray(definition?.resolvedDependencies)
-    && definition.resolvedDependencies.some((dependency) => (
-      dependency?.uri === dependencyUri && dependency?.digest?.gitCommit === expected.commit
-    ));
-  if (!commitMatches) throw new Error('Source commit does not match');
 }
 
 export class GitHubArtifactAttestationVerifier {
