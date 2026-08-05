@@ -33,6 +33,8 @@ if git -C "$repo_root" worktree list --porcelain | grep -Fqx "worktree $worktree
 fi
 
 git -C "$repo_root" worktree add -b "$branch" "$worktree_path" "$base_commit"
+task_id=$(cd "$worktree_path" && node scripts/task-status.mjs init "$change_type" "$slug")
+task_dir=$(cd "$worktree_path/docs/tasks/$task_id" && pwd -P)
 command -v gh >/dev/null 2>&1 || printf 'warning: gh is not installed; it is required to finish and create a PR\n' >&2
-printf 'WORKTREE_PATH=%s\nBRANCH=%s\nCHANGE_TYPE=%s\nBASE_COMMIT=%s\n' \
-  "$worktree_path" "$branch" "$change_type" "$base_commit"
+printf 'WORKTREE_PATH=%s\nBRANCH=%s\nCHANGE_TYPE=%s\nBASE_COMMIT=%s\nTASK_ID=%s\nTASK_DIR=%s\n' \
+  "$worktree_path" "$branch" "$change_type" "$base_commit" "$task_id" "$task_dir"
