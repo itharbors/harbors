@@ -78,6 +78,7 @@ describe('application server lifecycle', () => {
         menu: { tree: [], warnings: [] },
       })),
       request: vi.fn(),
+      retryPlugin: vi.fn(),
       triggerMenu: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => { events.push('application:dispose'); }),
@@ -129,6 +130,7 @@ describe('application server lifecycle', () => {
         menu: { tree: [], warnings: [] },
       })),
       request: vi.fn(),
+      retryPlugin: vi.fn(),
       triggerMenu: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => { events.push('application:dispose'); }),
@@ -197,6 +199,7 @@ describe('application server lifecycle', () => {
           menu: { tree: [], warnings: [] },
         })),
         request: vi.fn(),
+        retryPlugin: vi.fn(),
         triggerMenu: vi.fn(),
         subscribe: vi.fn(() => () => undefined),
         dispose: vi.fn(async () => undefined),
@@ -266,6 +269,15 @@ describe('application server lifecycle', () => {
       },
       body: JSON.stringify({ menuId: 'install' }),
     });
+    const retry = await fetch(`http://127.0.0.1:${port}/api/application/plugin/retry`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-harbors-application-token': 'launch-secret',
+      },
+      body: JSON.stringify({ plugin: '@scope/missing' }),
+    });
+    const retryBody = await retry.json();
     await Promise.all([server.stop(), server.stop()]);
 
     expect(address.address).toBe('0.0.0.0');
@@ -274,6 +286,8 @@ describe('application server lifecycle', () => {
     expect(credentialVault.close).toHaveBeenCalledOnce();
     expect(unauthorized.status).toBe(403);
     expect(authorized.status).toBe(404);
+    expect(retry.status).toBe(404);
+    expect(retryBody).toMatchObject({ error: { code: 'APPLICATION_PLUGIN_NOT_FOUND' } });
   });
 
   it('rejects local credentials before listening when the bind is not explicit loopback', () => {
@@ -333,6 +347,7 @@ describe('application server lifecycle', () => {
         menu: { tree: [], warnings: [] },
       })),
       request: vi.fn(),
+      retryPlugin: vi.fn(),
       triggerMenu: vi.fn(),
       subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => undefined),

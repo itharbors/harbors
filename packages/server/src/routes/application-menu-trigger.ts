@@ -39,7 +39,7 @@ export function createApplicationMenuTriggerRouter(
   };
 }
 
-function authorizeApplicationMutation(req: IncomingMessage, expectedToken: string | undefined): void {
+export function authorizeApplicationMutation(req: IncomingMessage, expectedToken: string | undefined): void {
   if (req.headers.origin !== undefined) {
     throw new HttpError(403, 'BROWSER_ORIGIN_FORBIDDEN', 'Browser-originated application mutations are forbidden');
   }

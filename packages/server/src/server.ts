@@ -45,7 +45,7 @@ export interface ServerOptions {
   host?: string;
   applicationRuntime?: Pick<
     ApplicationRuntime,
-    'start' | 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe' | 'dispose'
+    'start' | 'getBootstrap' | 'request' | 'retryPlugin' | 'triggerMenu' | 'subscribe' | 'dispose'
   >;
 }
 
