@@ -469,6 +469,116 @@ describe('ApplicationPluginSupervisor', () => {
     }
   });
 
+  it('fails closed once when the kill timer cannot arm and retry waits for final exit', async () => {
+    vi.useFakeTimers();
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => { unhandledRejections.push(reason); };
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      const harness = createHarness({
+        throwOnTerminationTimer: true,
+        throwOnTerminate: true,
+        throwOnKill: true,
+      });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      const retried = harness.supervisor.retry();
+      let retrySettled = false;
+      void retried.then(() => { retrySettled = true; }, () => { retrySettled = true; });
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(retrySettled).toBe(false);
+      expect(unhandledRejections).toEqual([]);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await flushMicrotasks();
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      await expect(retried).resolves.toBeUndefined();
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandledRejection);
+      vi.useRealTimers();
+    }
+  });
+
+  it('isolates a kill-timer setup failure in the stop callback and skips kill after synchronous final exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ throwOnTerminationTimer: true, exitOnTerminate: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      const stopped = harness.supervisor.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await expect(stopped).resolves.toBeUndefined();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      expect(harness.supervisor.getState().status).toBe('stopped');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails closed immediately when the kill timer returns no handle', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ omitTerminationTimerHandle: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles retry when clearing a prearmed kill timer throws on synchronous final exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ exitOnTerminate: true, throwOnTerminationTimerClear: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      const retried = harness.supervisor.retry();
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      await expect(retried).resolves.toBeUndefined();
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      expect(harness.supervisor.getState().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('hands off stop requested from a runtime-command callback without self-waiting', async () => {
     vi.useFakeTimers();
     try {
@@ -1258,11 +1368,15 @@ interface HarnessOptions {
   exitOnTerminate?: boolean;
   throwOnKill?: boolean;
   throwOnTerminate?: boolean;
+  omitTerminationTimerHandle?: boolean;
+  throwOnTerminationTimer?: boolean;
+  throwOnTerminationTimerClear?: boolean;
   throwOnMessageSubscription?: number;
 }
 
 function createHarness(options: HarnessOptions = {}) {
   const children: FakeChild[] = [];
+  const terminationTimerHandles = new Set<unknown>();
   const runtimeCommands: RuntimeCommand[] = [];
   const clearOwner = vi.fn(options.clearOwner ?? (() => undefined));
   const handleRuntimeCommand = vi.fn(options.handleRuntimeCommand ?? (async (_plugin, command) => {
@@ -1303,9 +1417,21 @@ function createHarness(options: HarnessOptions = {}) {
     timers: {
       setTimeout(callback, milliseconds) {
         options.onTimer?.(milliseconds);
-        return timers.setTimeout(callback, milliseconds);
+        if (options.throwOnTerminationTimer && milliseconds === 2_000) {
+          throw new Error('termination timer setup failed');
+        }
+        const handle = timers.setTimeout(callback, milliseconds);
+        if (milliseconds === 2_000) terminationTimerHandles.add(handle);
+        if (options.omitTerminationTimerHandle && milliseconds === 2_000) return undefined;
+        return handle;
       },
-      clearTimeout: timers.clearTimeout,
+      clearTimeout(handle) {
+        if (options.throwOnTerminationTimerClear && terminationTimerHandles.delete(handle)) {
+          throw new Error('termination timer clear failed');
+        }
+        terminationTimerHandles.delete(handle);
+        timers.clearTimeout(handle);
+      },
     },
     now: options.now ?? (() => Date.now()),
   });

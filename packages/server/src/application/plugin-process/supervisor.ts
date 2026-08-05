@@ -74,6 +74,10 @@ interface HostCallbackToken {
   active: boolean;
 }
 
+interface TimerRegistration {
+  handle?: unknown;
+}
+
 interface GenerationRecord {
   readonly generation: string;
   readonly startup: Deferred<void>;
@@ -120,7 +124,7 @@ export class ApplicationPluginSupervisor {
   private runningSince: number | null = null;
   private lastFailureAt: number | null = null;
   private lifecycleTimerHandle?: unknown;
-  private terminationTimerHandle?: unknown;
+  private terminationTimer?: TimerRegistration;
   private stopTask?: Promise<void>;
   private retryTask?: Promise<void>;
   private ownerCleanupBlocked = false;
@@ -627,26 +631,44 @@ export class ApplicationPluginSupervisor {
   private requestTermination(record: GenerationRecord): void {
     if (record.final || record.terminationSent || record.killSent || !record.child) return;
     record.terminationSent = true;
-    this.scheduleTerminationKill(record);
-    try { record.child.terminate(); } catch { /* Escalation remains armed. */ }
+    const killArmed = this.scheduleTerminationKill(record);
+    try { record.child.terminate(); } catch { /* Armed or fail-closed kill still owns escalation. */ }
+    if (!killArmed && !record.final) this.requestKill(record);
   }
 
-  private scheduleTerminationKill(record: GenerationRecord): void {
-    if (record.final || record.killSent || this.terminationTimerHandle !== undefined) return;
-    const handle = this.timers.setTimeout(() => {
-      if (this.terminationTimerHandle !== handle) return;
-      this.terminationTimerHandle = undefined;
-      if (this.current !== record || record.final || record.killSent) return;
-      record.killSent = true;
-      try { record.child?.kill(); } catch { /* Final exit still owns lifecycle completion. */ }
-    }, KILL_TIMEOUT_MS);
-    this.terminationTimerHandle = handle;
+  private scheduleTerminationKill(record: GenerationRecord): boolean {
+    if (record.final || record.killSent) return false;
+    if (this.terminationTimer) return true;
+    const registration: TimerRegistration = {};
+    this.terminationTimer = registration;
+    try {
+      registration.handle = this.timers.setTimeout(() => {
+        if (this.terminationTimer !== registration) return;
+        this.terminationTimer = undefined;
+        this.requestKill(record);
+      }, KILL_TIMEOUT_MS);
+    } catch {
+      if (this.terminationTimer === registration) this.terminationTimer = undefined;
+      return false;
+    }
+    if (registration.handle === undefined) {
+      if (this.terminationTimer === registration) this.terminationTimer = undefined;
+      return false;
+    }
+    return this.terminationTimer === registration;
+  }
+
+  private requestKill(record: GenerationRecord): void {
+    if (this.current !== record || record.final || record.killSent) return;
+    record.killSent = true;
+    try { record.child?.kill(); } catch { /* Final exit still owns lifecycle completion. */ }
   }
 
   private clearTerminationTimer(): void {
-    if (this.terminationTimerHandle === undefined) return;
-    this.timers.clearTimeout(this.terminationTimerHandle);
-    this.terminationTimerHandle = undefined;
+    const registration = this.terminationTimer;
+    if (!registration) return;
+    this.terminationTimer = undefined;
+    try { this.timers.clearTimeout(registration.handle); } catch { /* Final exit invalidates the callback. */ }
   }
 
   private publish(next: ApplicationPluginProcessState): void {
