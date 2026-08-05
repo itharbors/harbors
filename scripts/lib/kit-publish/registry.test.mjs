@@ -20,6 +20,8 @@ const repository = 'itharbors/harbors';
 const repositoryRoot = fileURLToPath(new URL('../../../', import.meta.url));
 const publishSignerV1 = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1';
 const publishSignerV2 = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
+const publishSignerV3 = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3';
+const publishSignerV4 = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
 
 function manifest(channel = 'stable') {
   return {
@@ -290,9 +292,9 @@ test('rejects duplicate entry tuples, source Tags, and Release manifest URLs', (
   }
 });
 
-test('trusts only immutable v1 or v2 signer releases with Tag-based caller workflows', () => {
+test('trusts only immutable v1 through v4 signer releases with Tag-based caller workflows', () => {
   const preview = entry('preview');
-  for (const signerWorkflow of [publishSignerV1, publishSignerV2]) {
+  for (const signerWorkflow of [publishSignerV1, publishSignerV2, publishSignerV3, publishSignerV4]) {
     assert.doesNotThrow(() => buildKitRegistryIndex({
       entries: [preview],
       releasesByUrl: new Map([[preview.releaseManifestUrl, release('preview', {
@@ -303,7 +305,7 @@ test('trusts only immutable v1 or v2 signer releases with Tag-based caller workf
     }));
   }
   for (const signerWorkflow of [
-    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
+    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v5',
     'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/heads/main',
   ]) {
     assert.throws(() => buildKitRegistryIndex({
@@ -439,7 +441,7 @@ test('requires revocation evidence to meet the immutable Release trust contract'
     {
       source: {
         ...base.source,
-        signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
+        signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v5',
       },
     },
     {

@@ -278,8 +278,8 @@ export async function runKitPublishCli(
   const allowed = command === 'prepare'
     ? [PREPARE_ARTIFACT_OPTIONS, PREPARE_DIRECTORY_OPTIONS]
     : command === 'aggregate'
-      ? [AGGREGATE_OPTIONS]
-      : null;
+        ? [AGGREGATE_OPTIONS]
+        : null;
   if (!allowed) {
     io.stderr.write(USAGE);
     return 2;
@@ -297,11 +297,11 @@ export async function runKitPublishCli(
     const outputs = command === 'prepare'
       ? await prepare(options)
       : await aggregate(
-        options,
-        aggregateImplementation,
-        environment,
-        createProvenanceVerifier,
-      );
+          options,
+          aggregateImplementation,
+          environment,
+          createProvenanceVerifier,
+        );
     io.stdout.write(`${Object.entries(outputs).map(([key, value]) => `${key}=${value}`).join('\n')}\n`);
     return 0;
   } catch (error) {

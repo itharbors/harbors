@@ -44,8 +44,9 @@ ID，也只能得到 not-found。插件卸载后 facade 立即撤销。浏览器
 
 Web 默认 `off`。只有显式 `HARBORS_CREDENTIAL_MODE=local` 且
 `HARBORS_BIND_HOST=127.0.0.1` 或 `::1` 才能启用；非法或非 loopback 组合在 Gateway、Client 和
-Server 监听前拒绝。Electron 固定传入 `local + 127.0.0.1`。`multi-user`、远程凭据和多用户共享
-凭据尚未实现，不存在向这些模式降级的 fallback。
+Server 监听前拒绝。Electron 控制的桌面宿主固定传入 `local + 0.0.0.0`，让工具网页既可通过
+loopback 也可通过本机网卡地址打开；该桌面模式不复用普通 Web 的公开部署凭据约束。`multi-user`、
+远程凭据和多用户共享凭据尚未实现，不存在向这些模式降级的 fallback。
 
 SQLite 只保存标签、MySQL 非秘密连接元数据、opaque ID、scope hash、secret reference 和事务
 状态；密码由当前 OS 用户的原生凭据后端保存。Vault 使用 `pending → active → deleting` 与 durable
@@ -213,7 +214,8 @@ Server 启动时创建一个无 Session 的 ApplicationRuntime，收集完整 Ca
 
 两个读取接口只公开启动状态和菜单快照。菜单触发属于桌面控制面：Electron 每次启动生成随机
 令牌并通过请求头提交，Server 拒绝无令牌、带浏览器 `Origin` 或非 JSON 的写请求；Electron
-启动的 Gateway 与 Server 同时只绑定 `127.0.0.1`。
+启动的网页 Host 绑定 `0.0.0.0`，Notification Host 等仅供本机进程调用的服务继续绑定
+`127.0.0.1`。
 
 启动插件失败会按 owner 回滚并令 phase 变为 `degraded`，不会创建 Session 或阻止普通 Kit。
 应用退出时先停止接收新请求，再按逆序卸载启动插件；Electron 等待 Framework 完成退出后才

@@ -8,7 +8,7 @@ import {
 
 const commit = '0123456789abcdef0123456789abcdef01234567';
 const previewTag = 'kit/mysql/v1.3.0-preview.1';
-const publishSignerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2';
+const publishSignerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
 
 const stableManifest = {
   schemaVersion: 1,
@@ -128,7 +128,7 @@ test('rejects channel-specific SemVer, Tag, source workflow, and signer mismatch
     ['workflow repository', { workflow: 'other/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/mysql/v1.2.3' }],
     ['workflow path', { workflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit/mysql/v1.2.3' }],
     ['workflow ref', { workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/heads/main' }],
-    ['signer workflow', { signerWorkflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit-publish-v2' }],
+    ['signer workflow', { signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v5' }],
     ['repository casing', { repository: 'ITHARBORS/harbors' }],
     ['digest', { sha256: 'A'.repeat(64) }],
   ]) {
