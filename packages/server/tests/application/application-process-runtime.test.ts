@@ -385,6 +385,116 @@ describe('ApplicationRuntime process integration', () => {
     });
   });
 
+  it('publishes one shared dispose promise before a stopping listener reenters without a guard', async () => {
+    const plugin = createPlugin('reentrant-dispose', '@scope/reentrant-dispose');
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([plugin], harness);
+    await runtime.start();
+    const reentrant: Promise<void>[] = [];
+    let stoppingEvents = 0;
+    runtime.subscribe((event) => {
+      if (event.bootstrap.phase === 'stopping') {
+        stoppingEvents += 1;
+        reentrant.push(runtime.dispose());
+      }
+    });
+
+    const disposing = runtime.dispose();
+    const concurrent = runtime.dispose();
+
+    expect(stoppingEvents).toBe(1);
+    expect(reentrant).toHaveLength(1);
+    expect(reentrant[0]).toBe(disposing);
+    expect(concurrent).toBe(disposing);
+    await disposing;
+    expect(harness.stopOrder).toEqual([plugin.name]);
+    expect(runtime.getBootstrap().phase).toBe('stopped');
+  });
+
+  it('shares one dispose promise across multiple stopping listeners and concurrent callers', async () => {
+    const plugin = createPlugin('concurrent-dispose', '@scope/concurrent-dispose');
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([plugin], harness);
+    await runtime.start();
+    const fromListeners: Promise<void>[] = [];
+    for (let index = 0; index < 3; index += 1) {
+      runtime.subscribe((event) => {
+        if (event.bootstrap.phase === 'stopping') fromListeners.push(runtime.dispose());
+      });
+    }
+
+    const disposing = runtime.dispose();
+    const concurrent = [runtime.dispose(), runtime.dispose(), runtime.dispose()];
+
+    expect(fromListeners).toHaveLength(3);
+    expect([...fromListeners, ...concurrent].every((promise) => promise === disposing)).toBe(true);
+    await disposing;
+    expect(harness.stopOrder).toEqual([plugin.name]);
+  });
+
+  it('shares one cleanup rejection without an unhandled internal dispose task', async () => {
+    const plugin = createPlugin('rejecting-dispose', '@scope/rejecting-dispose');
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([plugin], harness);
+    await runtime.start();
+    const expected = new Error('fake stop rejected');
+    harness.supervisors.get(plugin.name)!.stopError = expected;
+    let reentrant: Promise<void> | undefined;
+    runtime.subscribe((event) => {
+      if (event.bootstrap.phase === 'stopping') reentrant = runtime.dispose();
+    });
+    const unhandled: unknown[] = [];
+    const onUnhandled = (error: unknown) => { unhandled.push(error); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const disposing = runtime.dispose();
+      const concurrent = runtime.dispose();
+      expect(reentrant).toBe(disposing);
+      expect(concurrent).toBe(disposing);
+
+      const errors = await Promise.all([
+        disposing.catch((error: unknown) => error),
+        concurrent.catch((error: unknown) => error),
+        reentrant!.catch((error: unknown) => error),
+      ]);
+      expect(errors).toEqual([expected, expected, expected]);
+      await flushEventLoop();
+      expect(unhandled).toEqual([]);
+      expect(harness.stopOrder).toEqual([plugin.name]);
+      expect(runtime.getBootstrap().phase).toBe('stopped');
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+
+  it('routes a synchronous cleanup executor exception through the shared dispose promise', async () => {
+    const plugin = createPlugin('throwing-dispose', '@scope/throwing-dispose');
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([plugin], harness);
+    await runtime.start();
+    const expected = new Error('fake cleanup executor threw');
+    const runtimeInternals = runtime as unknown as {
+      disposeInternal(): Promise<void>;
+    };
+    runtimeInternals.disposeInternal = () => { throw expected; };
+    let reentrant: Promise<void> | undefined;
+    runtime.subscribe((event) => {
+      if (event.bootstrap.phase === 'stopping') reentrant = runtime.dispose();
+    });
+
+    const disposing = runtime.dispose();
+    const concurrent = runtime.dispose();
+
+    expect(reentrant).toBe(disposing);
+    expect(concurrent).toBe(disposing);
+    const errors = await Promise.all([
+      disposing.catch((error: unknown) => error),
+      concurrent.catch((error: unknown) => error),
+      reentrant!.catch((error: unknown) => error),
+    ]);
+    expect(errors).toEqual([expected, expected, expected]);
+  });
+
   it('latches dispose during startup and stops every supervisor created by that startup', async () => {
     const first = createPlugin('dispose-during-start-first', '@scope/dispose-during-start-first');
     const second = createPlugin('dispose-during-start-second', '@scope/dispose-during-start-second');
@@ -1029,6 +1139,7 @@ class FakeSupervisor {
   readonly rejectHandlerIds = new Set<string>();
   blockSnapshotUpdates = false;
   blockDetachments = false;
+  stopError: Error | undefined;
   private nextSnapshotGate: Deferred<void> | undefined;
   private nextDetachmentGate: Deferred<void> | undefined;
   private nextAttachmentGate: {
@@ -1088,6 +1199,7 @@ class FakeSupervisor {
     this.harness.stopOrder.push(this.options.plugin);
     this.available = false;
     this.publish({ status: 'stopping' });
+    if (this.stopError) throw this.stopError;
     await this.options.host.clearOwner(this.options.plugin);
     this.publish({ status: 'stopped', pid: null });
   }

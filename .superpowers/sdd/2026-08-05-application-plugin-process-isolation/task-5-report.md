@@ -110,3 +110,32 @@ No Task 5 focused or Task 1–4 regression failed in that run.
 - The second pass found the assignment-before-callback orphan, both-side generation attribution gaps, retry/dispose reentrancy, and unbounded lifecycle transitions. These were reproduced before Promise publication, terminal checkpoints, pair-generation checks, and bounded operations were added.
 - The timeout re-review required observer termination to occur inside the ordered-pair transition and extended the same guarantee to detach. Stale-subject attach timeout and hung-detach regressions now prove the old observer generation is stopped before the pair tail releases.
 - Final review: ready, with zero Critical, Important, or Minor findings.
+
+## Fix round 2
+
+### RED evidence
+
+1. An unguarded bootstrap listener that called `dispose()` again for every `stopping` event recursively re-entered before `disposePromise` was assigned. The focused regression observed 2,035 stopping events instead of one and spawned duplicate cleanup tasks.
+2. Three stopping listeners plus concurrent callers received different promises and recursively produced 6,102 listener callbacks instead of three.
+3. When Supervisor cleanup rejected, reentrant callers did not share the outer rejection and Vitest reported 3,308 unhandled rejections from duplicate internal disposal tasks.
+4. The first deferred implementation removed the reentrancy window but added one scheduling hop. An existing lifecycle timing regression failed until cleanup execution began directly after publication of the shared promise and stopping event.
+
+### Implementation decisions
+
+- `dispose()` remains an ordinary method so callers receive the exact stored Promise object rather than an async-wrapper Promise.
+- The first caller creates and stores one deferred Promise before terminal intent, phase mutation, event emission, or observer callbacks. Every simultaneous or reentrant call returns that same object immediately.
+- Mandatory cleanup starts only after promise publication and is invoked once. Its fulfillment or rejection settles the shared deferred, with both branches attached to the internal task so it cannot produce a separate unhandled rejection.
+- Synchronous cleanup-executor exceptions are caught and routed through the same deferred rejection. Existing synchronous `stopping` publication and dispose-before-start/start-during-dispose semantics are preserved.
+
+### Verification
+
+- Focused Supervisor and Application process integration: 81/81 passed with server typecheck.
+- Task 1–5 application/process regression set: 213/213 passed across 10 test files with server typecheck.
+- Desktop Framework and Application runtime client: 18/18 passed.
+- Server build: `npm run build -w packages/server` passed.
+- Diff hygiene: `git diff --check` passed.
+
+### Independent review
+
+- Final read-only review confirmed promise publication precedes all terminal state changes and callbacks, every caller receives the exact shared Promise, and cleanup is invoked once with synchronous and asynchronous failures routed to the deferred.
+- Ready, with zero Critical, Important, or Minor findings.

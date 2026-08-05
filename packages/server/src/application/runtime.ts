@@ -231,15 +231,25 @@ export class ApplicationRuntime {
   }
 
   dispose(): Promise<void> {
-    if (!this.disposePromise) {
-      this.terminalIntent = true;
+    if (this.disposePromise) return this.disposePromise;
+    const completion = deferred<void>();
+    this.disposePromise = completion.promise;
+    this.terminalIntent = true;
+    try {
       if (this.phase !== 'stopped') {
         this.phase = 'stopping';
         this.emit();
       }
-      this.disposePromise = this.disposeInternal();
+    } catch (error) {
+      completion.reject(error);
+      return completion.promise;
     }
-    return this.disposePromise;
+    try {
+      void this.disposeInternal().then(completion.resolve, completion.reject);
+    } catch (error) {
+      completion.reject(error);
+    }
+    return completion.promise;
   }
 
   private async startInternal(): Promise<ApplicationBootstrap> {
@@ -1035,6 +1045,22 @@ function createStableUnavailableError(plugin: string): Error & {
   });
   delete error.stack;
   return Object.freeze(error);
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T | PromiseLike<T>): void;
+  reject(error: unknown): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>['resolve'];
+  let reject!: Deferred<T>['reject'];
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise;
+    reject = rejectPromise;
+  });
+  return { promise, resolve, reject };
 }
 
 function createApplicationRuntimeUnavailableError(): Error & {
