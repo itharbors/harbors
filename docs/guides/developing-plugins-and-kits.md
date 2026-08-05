@@ -331,8 +331,8 @@ secret 不会进入插件 argv/env，但这不是通用 secret detector，也不
 
 ### 官方 Kit 与 runner 兼容
 
-官方 Notifications、Scheduler 和 Agent Guard 的现有 startup plugin package 继续走同一 manifest
-与 runtime facade，不需要为进程化复制一份实现。为兼容 Scheduler 已发布行为，
+当前所有已发布的官方 startup plugin package 继续走同一 manifest 与 runtime facade，不需要为
+进程化复制一份实现。为兼容 Scheduler 已发布行为，
 `HARBORS_DATA_ROOT` 目前因未列入移除键而与 `PATH`、locale 等父环境一起保留；它不得承载敏感值。
 新代码仍应优先使用 `ctx.paths`，不要把 `HARBORS_DATA_ROOT` 当成新的通用插件 API，也不要把 host
 token 或云凭据塞入未登记的自定义环境变量。
