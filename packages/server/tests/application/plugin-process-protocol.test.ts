@@ -171,6 +171,21 @@ describe('plugin process RPC peer', () => {
     });
   });
 
+  it('does not emit events or responses after close', () => {
+    const send = vi.fn();
+    const peer = createPluginProcessRpcPeer({
+      generation: 'gen-1',
+      send,
+      subscribe: () => () => undefined,
+    });
+
+    peer.close(new Error('closed'));
+    peer.emit('unloaded', null);
+    peer.respond('late', { ok: true, payload: null });
+
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it('normalizes a remote error without accepting a remote stack', async () => {
     let receive: (input: unknown) => void = () => undefined;
     const peer = createPluginProcessRpcPeer({

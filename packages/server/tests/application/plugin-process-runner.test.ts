@@ -50,6 +50,8 @@ afterEach(async () => {
   delete (globalThis as { editor?: unknown }).editor;
   delete (globalThis as { runnerTestState?: unknown }).runnerTestState;
   delete (globalThis as { runnerHandlerCalls?: unknown }).runnerHandlerCalls;
+  delete (globalThis as { runnerLateAsync?: unknown }).runnerLateAsync;
+  delete (globalThis as { runnerFireLateAsync?: unknown }).runnerFireLateAsync;
   delete (globalThis as { runnerLateMutation?: unknown }).runnerLateMutation;
   delete (globalThis as { runnerUnloadReleases?: unknown }).runnerUnloadReleases;
   await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { force: true, recursive: true })));
@@ -106,7 +108,7 @@ describe('application plugin process runner', () => {
     expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toEqual([
       'loaded', 'attach:other', 'detach:other', 'unloaded',
     ]);
-    expect(harness.exits).toEqual([{ failed: false }]);
+    await vi.waitFor(() => expect(harness.exits).toEqual([{ failed: false }]));
     delete (globalThis as { editor?: unknown }).editor;
   });
 
@@ -384,6 +386,8 @@ describe('application plugin process runner', () => {
             try { runtime.message.registerRequest('', 'too-late', () => 'late'); }
             catch (error) { globalThis.runnerTestState = error.message; }
           };
+          globalThis.runnerLateAsync = () => runtime.host.notifications.list();
+          globalThis.runnerFireLateAsync = () => { void runtime.host.notifications.list(); };
           throw new Error('load rejected');
         },
       } });
@@ -392,10 +396,13 @@ describe('application plugin process runner', () => {
 
     await expect(harness.request('initialize', initializePayload(entryPath))).rejects.toThrow('load rejected');
     (globalThis as { runnerLateMutation?: () => void }).runnerLateMutation?.();
+    (globalThis as { runnerFireLateAsync?: () => void }).runnerFireLateAsync?.();
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(harness.runtimeCommands).toEqual([]);
     expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toMatch(/runtime is terminal/i);
+    await expect((globalThis as { runnerLateAsync?: () => Promise<unknown> }).runnerLateAsync?.())
+      .rejects.toThrow(/runtime is terminal/i);
   });
 
   it('rejects late runtime mutations locally after a load command rejects', async () => {
@@ -403,6 +410,8 @@ describe('application plugin process runner', () => {
       globalThis.editor.plugin.define({ lifecycle: {
         load(runtime) {
           globalThis.runnerLateMutation = () => runtime.service.register('too-late', { value: 2 });
+          globalThis.runnerLateAsync = () => runtime.message.request('other', 'late');
+          globalThis.runnerFireLateAsync = () => { void runtime.message.request('other', 'late'); };
           runtime.menu.attach('', { menu: [] });
         },
       } });
@@ -418,9 +427,12 @@ describe('application plugin process runner', () => {
     await expect(outcome).resolves.toMatchObject({ error: { message: 'attach rejected' } });
 
     (globalThis as { runnerLateMutation?: () => void }).runnerLateMutation?.();
+    (globalThis as { runnerFireLateAsync?: () => void }).runnerFireLateAsync?.();
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(harness.runtimeCommands).toHaveLength(1);
+    await expect((globalThis as { runnerLateAsync?: () => Promise<unknown> }).runnerLateAsync?.())
+      .rejects.toThrow(/runtime is terminal/i);
   });
 
   it('proxies notifications through host RPC only when capability is granted', async () => {
@@ -626,6 +638,7 @@ describe('application plugin process runner', () => {
         unload() {
           runtime.service.unregister('cleanup');
           globalThis.runnerLateMutation();
+          void runtime.host.notifications.list();
         },
       } });
     `);
@@ -635,6 +648,7 @@ describe('application plugin process runner', () => {
     await expect(harness.request('unload', null)).resolves.toBe(null);
 
     expect(harness.runtimeCommands).toEqual([]);
+    await new Promise((resolve) => setImmediate(resolve));
     expect(harness.exits).toEqual([{ failed: false }]);
   });
 
@@ -672,6 +686,7 @@ describe('application plugin process runner', () => {
     await fatal;
 
     expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toBe(1);
+    expect(harness.sent.filter((envelope) => envelope.kind === 'event' && envelope.event === 'unloaded')).toEqual([]);
     expect(harness.exits).toEqual([{ failed: true }]);
   });
 
@@ -717,6 +732,121 @@ describe('application plugin process runner', () => {
     expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
     await expect(run.marker()).resolves.toBe('unload\n');
     expect(run.stderr()).toBe('');
+  });
+
+  it('forks the emitted runner and seals async runtime calls during normal unload', async () => {
+    const fixture = await forkFixture(`
+      import { appendFileSync } from 'node:fs';
+      let runtime;
+      globalThis.editor.plugin.define({ lifecycle: {
+        load(value) { runtime = value; },
+        unload() {
+          void runtime.host.notifications.list();
+          appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload\\n');
+        },
+      } });
+    `);
+    const run = startEmittedRunner(fixture.entryPath);
+    await run.initialized;
+
+    const response = await run.request('unload-normal', 'unload', null);
+    const exited = await run.exited;
+
+    expect(response).toMatchObject({ kind: 'response', ok: true, payload: null });
+    expect(run.messages.filter((envelope) => envelope.kind === 'request' && envelope.method === 'runtime-command'))
+      .toEqual([]);
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'unloaded'))
+      .toHaveLength(1);
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal')).toEqual([]);
+    expect(exited).toMatchObject({ code: 0, signal: null, count: 1 });
+    await expect(run.marker()).resolves.toBe('unload\n');
+  });
+
+  it('flushes a backpressured large response and unload terminal envelopes before emitted runner exit', async () => {
+    const fixture = await forkFixture(`
+      globalThis.editor.plugin.define({
+        methods: { large() { return 'x'.repeat(800 * 1024); } },
+      });
+    `);
+    const run = startEmittedRunner(fixture.entryPath);
+    await run.initialized;
+
+    const large = run.request('large-response', 'invoke', {
+      target: 'method', method: 'large', args: [],
+    });
+    const unload = run.request('unload-after-large', 'unload', null);
+    const [largeResponse, unloadResponse, exited] = await Promise.all([large, unload, run.exited]);
+
+    expect(largeResponse).toMatchObject({ kind: 'response', ok: true });
+    expect(largeResponse.kind === 'response' && largeResponse.ok && (largeResponse.payload as string).length)
+      .toBe(800 * 1024);
+    expect(unloadResponse).toMatchObject({ kind: 'response', ok: true, payload: null });
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'unloaded'))
+      .toHaveLength(1);
+    expect(exited).toMatchObject({ code: 0, signal: null, count: 1 });
+  });
+
+  it('fails closed on an invalid initial envelope with a safely readable generation', async () => {
+    const fixture = await forkFixture(`globalThis.editor.plugin.define({});`);
+    const run = startEmittedRunner(fixture.entryPath, { initialize: false });
+
+    run.send({
+      protocol: 1, generation: 'invalid-initial', kind: 'request', requestId: 'bad-initial',
+      method: 'initialize', payload: null, extra: true,
+    });
+    const exited = await exitWithin(run.exited, 2_000);
+
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal'))
+      .toEqual([expect.objectContaining({ generation: 'invalid-initial' })]);
+    expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
+  });
+
+  it.each([
+    ['request', {
+      protocol: 1, generation: 'fork-generation', kind: 'request', requestId: 'malformed-request',
+      method: 'invoke', payload: null, extra: true,
+    }],
+    ['response', {
+      protocol: 1, generation: 'fork-generation', kind: 'response', requestId: 'malformed-response',
+      ok: true, payload: null, extra: true,
+    }],
+    ['event', {
+      protocol: 1, generation: 'fork-generation', kind: 'event', event: 'malformed-event',
+      payload: null, extra: true,
+    }],
+  ])('fails closed on a malformed current-generation %s envelope', async (_kind, malformed) => {
+    const fixture = await forkFixture(`
+      import { appendFileSync } from 'node:fs';
+      globalThis.editor.plugin.define({ lifecycle: {
+        unload() { appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload\\n'); },
+      } });
+    `);
+    const run = startEmittedRunner(fixture.entryPath);
+    await run.initialized;
+
+    run.send(malformed);
+    const exited = await exitWithin(run.exited, 2_000);
+
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal')).toHaveLength(1);
+    expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
+    await expect(run.marker()).resolves.toBe('unload\n');
+  });
+
+  it('ignores a clearly stale malformed envelope in the emitted runner', async () => {
+    const fixture = await forkFixture(`globalThis.editor.plugin.define({});`);
+    const run = startEmittedRunner(fixture.entryPath);
+    await run.initialized;
+
+    run.send({
+      protocol: 1, generation: 'stale-generation', kind: 'request', requestId: 'stale-malformed',
+      method: 'invoke', payload: null, extra: true,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(run.child.exitCode).toBeNull();
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal')).toEqual([]);
+
+    await run.request('stale-shutdown', 'unload', null);
+    await expect(run.exited).resolves.toMatchObject({ code: 0, signal: null, count: 1 });
   });
 
   it('forks the emitted runner and applies the fatal unload timeout after SIGTERM', async () => {
@@ -872,7 +1002,7 @@ async function forkFixture(source: string): Promise<{ entryPath: string; markerP
   return { entryPath, markerPath };
 }
 
-function startEmittedRunner(entryPath: string) {
+function startEmittedRunner(entryPath: string, options: { initialize?: boolean } = {}) {
   const child = fork(emittedRunnerPath, [], {
     execArgv: [],
     serialization: 'advanced',
@@ -893,33 +1023,60 @@ function startEmittedRunner(entryPath: string) {
       resolve({ code, signal, count: exitCount });
     });
   });
-  const initialized = waitForChildEnvelope(
-    child,
-    messages,
-    (envelope) => envelope.kind === 'response' && envelope.requestId === 'initialize-1',
-  ).then((envelope) => {
-    if (envelope.kind !== 'response' || !envelope.ok) {
-      throw new Error(envelope.kind === 'response' ? envelope.error.message : 'Runner initialization failed');
-    }
-    return envelope.payload;
-  });
-  child.send({
-    protocol: 1,
-    generation: 'fork-generation',
-    kind: 'request',
-    requestId: 'initialize-1',
-    method: 'initialize',
-    payload: initializePayload(entryPath),
-  });
+  const initialized = options.initialize === false
+    ? Promise.resolve(undefined)
+    : sendChildRequest(child, messages, 'initialize-1', 'initialize', initializePayload(entryPath))
+      .then((envelope) => {
+        if (envelope.kind !== 'response' || !envelope.ok) {
+          throw new Error(envelope.kind === 'response' ? envelope.error.message : 'Runner initialization failed');
+        }
+        return envelope.payload;
+      });
   const markerPath = path.join(path.dirname(entryPath), 'unload.log');
   return {
     child,
     exited,
     initialized,
     messages,
+    request: (requestId: string, method: string, payload: unknown) =>
+      sendChildRequest(child, messages, requestId, method, payload),
+    send: (input: unknown) => child.send(input as Parameters<ChildProcess['send']>[0]),
     marker: () => readFile(markerPath, 'utf8'),
     stderr: () => stderrOutput,
   };
+}
+
+function sendChildRequest(
+  child: ChildProcess,
+  messages: PluginProcessEnvelope[],
+  requestId: string,
+  method: string,
+  payload: unknown,
+): Promise<PluginProcessEnvelope> {
+  const response = waitForChildEnvelope(
+    child,
+    messages,
+    (envelope) => envelope.kind === 'response' && envelope.requestId === requestId,
+  );
+  child.send({
+    protocol: 1,
+    generation: 'fork-generation',
+    kind: 'request',
+    requestId,
+    method,
+    payload,
+  });
+  return response;
+}
+
+function exitWithin<T>(exit: Promise<T>, milliseconds: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error('Timed out waiting for emitted runner exit')), milliseconds);
+    void exit.then(
+      (value) => { clearTimeout(timeout); resolve(value); },
+      (error) => { clearTimeout(timeout); reject(error); },
+    );
+  });
 }
 
 function waitForChildEnvelope(

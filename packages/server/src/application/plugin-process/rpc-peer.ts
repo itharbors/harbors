@@ -90,6 +90,7 @@ export function createPluginProcessRpcPeer(options: CreatePluginProcessRpcPeerOp
       }
     },
     respond(requestId, response) {
+      if (terminalError) return;
       const envelope = response.ok
         ? {
           protocol: PLUGIN_PROCESS_PROTOCOL,
@@ -110,6 +111,7 @@ export function createPluginProcessRpcPeer(options: CreatePluginProcessRpcPeerOp
       options.send(parsePluginProcessEnvelope(envelope, options.generation));
     },
     emit(event, payload) {
+      if (terminalError) return;
       options.send(parsePluginProcessEnvelope({
         protocol: PLUGIN_PROCESS_PROTOCOL,
         generation: options.generation,

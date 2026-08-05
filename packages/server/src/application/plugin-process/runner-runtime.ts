@@ -75,7 +75,9 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
 
   const requestCommand = (command: RuntimeCommand): Promise<unknown> => {
     if (phase === 'terminal') {
-      return Promise.reject(new Error(`Application plugin "${options.pluginName}" runtime is terminal`));
+      const rejection = Promise.reject(new Error(`Application plugin "${options.pluginName}" runtime is terminal`));
+      void rejection.catch(() => undefined);
+      return rejection;
     }
     const request = options.rpc.request('runtime-command', command);
     const observed = request.catch((input) => {

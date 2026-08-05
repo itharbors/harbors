@@ -1,6 +1,5 @@
 import type { PluginDefinition } from '../../framework/plugin/types';
 import {
-  PLUGIN_PROCESS_PROTOCOL,
   type PluginProcessEnvelope,
   type PluginProcessRequest,
   parsePluginProcessEnvelope,
@@ -16,8 +15,9 @@ import {
 const UNLOAD_TIMEOUT_MS = 10_000;
 
 export interface ApplicationPluginRunnerTransport {
-  send(envelope: PluginProcessEnvelope): void;
+  send(envelope: PluginProcessEnvelope): void | Promise<void>;
   subscribe(listener: (input: unknown) => void): () => void;
+  close?(): void | Promise<void>;
 }
 
 export interface ApplicationPluginRunnerTimers {
@@ -50,32 +50,61 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   let loadStarted = false;
   let stopping = false;
   let terminal = false;
-  let exited = false;
+  let finishPromise: Promise<void> | undefined;
+  let sendError: Error | undefined;
   let definition: PluginDefinition | undefined;
   let unloadPromise: Promise<void> | undefined;
   let runtimeController: RunnerRuntimeController | undefined;
+  const pendingSends = new Set<Promise<void>>();
   const importModule = options.importModule ?? ((entryPath: string) => import(entryPath));
+
+  const queueSend = (envelope: PluginProcessEnvelope): void => {
+    let result: void | Promise<void>;
+    try {
+      result = options.transport.send(envelope);
+    } catch (input) {
+      recordSendError(input);
+      return;
+    }
+    if (result === undefined) return;
+    const settlement = Promise.resolve(result).then(
+      () => undefined,
+      (input) => { recordSendError(input); },
+    );
+    pendingSends.add(settlement);
+    void settlement.then(() => pendingSends.delete(settlement));
+  };
+
+  const bindGeneration = (value: string): void => {
+    generation = value;
+    rpc = createPluginProcessRpcPeer({
+      generation: value,
+      send: queueSend,
+      subscribe: (listener) => {
+        unsubscribeRpc = options.transport.subscribe(listener);
+        return () => unsubscribeRpc?.();
+      },
+    });
+  };
 
   const unsubscribeHost = options.transport.subscribe((input) => {
     if (!generation) {
-      let envelope: PluginProcessEnvelope;
-      try {
-        const candidateGeneration = readBootstrapGeneration(input);
-        envelope = parsePluginProcessEnvelope(input, candidateGeneration);
-      } catch {
+      const candidateGeneration = safelyReadGeneration(input);
+      if (!candidateGeneration) {
+        void fatal(new Error('Application plugin IPC initial envelope is invalid'));
         return;
       }
-      if (envelope.kind !== 'request' || envelope.method !== 'initialize') return;
-      generation = envelope.generation;
-      rpc = createPluginProcessRpcPeer({
-        generation,
-        send: (outbound) => options.transport.send(outbound),
-        subscribe: (listener) => {
-          unsubscribeRpc = options.transport.subscribe(listener);
-          return () => unsubscribeRpc?.();
-        },
-      });
-      void handleRequest(envelope);
+      bindGeneration(candidateGeneration);
+      try {
+        const envelope = parsePluginProcessEnvelope(input, candidateGeneration);
+        if (envelope.kind !== 'request' || envelope.method !== 'initialize') {
+          void fatal(new Error('Application plugin runner requires initialize as its first request'));
+          return;
+        }
+        void handleRequest(envelope);
+      } catch {
+        void fatal(new Error('Application plugin IPC initial envelope is invalid'));
+      }
       return;
     }
 
@@ -83,6 +112,9 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     try {
       envelope = parsePluginProcessEnvelope(input, generation);
     } catch {
+      const candidateGeneration = safelyReadGeneration(input);
+      if (candidateGeneration && candidateGeneration !== generation) return;
+      void fatal(new Error('Application plugin IPC envelope is invalid'));
       return;
     }
     if (envelope.kind === 'request') void handleRequest(envelope);
@@ -95,7 +127,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
       const payload = await dispatch(request.method, request.payload);
       if (terminal) return;
       rpc.respond(request.requestId, { ok: true, payload: payload === undefined ? null : payload });
-      if (terminalRequest) finish(false);
+      if (terminalRequest) await finish(false);
     } catch (input) {
       if (terminal) return;
       const error = toError(input);
@@ -103,7 +135,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
         ok: false,
         error: { code: 'APPLICATION_PLUGIN_RUNNER_ERROR', message: error.message },
       });
-      if (terminalRequest) finish(true);
+      if (terminalRequest) await finish(true);
     }
   }
 
@@ -148,7 +180,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
         stopping = true;
         runtimeController?.close();
         await requestUnload();
-        rpc?.emit('unloaded', null);
+        if (!terminal) rpc?.emit('unloaded', null);
         return null;
       case 'shutdown':
         assertNullPayload(payload);
@@ -213,7 +245,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     try {
       await unloadWithTimeout();
     } finally {
-      finish(true);
+      await finish(true);
     }
   }
 
@@ -237,15 +269,36 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     return unloadPromise;
   }
 
-  function finish(failed: boolean): void {
-    if (exited) return;
+  function finish(failed: boolean): Promise<void> {
+    if (finishPromise) return finishPromise;
     terminal = true;
     stopping = true;
-    exited = true;
     runtimeController?.close();
     rpc?.close(new Error(failed ? 'Application plugin runner failed' : 'Application plugin runner stopped'));
     unsubscribeHost();
-    options.exit({ failed });
+    finishPromise = (async () => {
+      let finalFailed = failed;
+      await flushSends();
+      if (sendError) finalFailed = true;
+      try {
+        await options.transport.close?.();
+      } catch {
+        finalFailed = true;
+      }
+      options.exit({ failed: finalFailed });
+    })();
+    return finishPromise;
+  }
+
+  async function flushSends(): Promise<void> {
+    while (pendingSends.size > 0) {
+      await Promise.all([...pendingSends]);
+    }
+  }
+
+  function recordSendError(input: unknown): void {
+    sendError ??= toError(input);
+    if (!terminal) void fatal(sendError);
   }
 
   return { fatal, disconnect: () => fatal(new Error('Application plugin IPC parent disconnected')) };
@@ -369,12 +422,15 @@ function assertNullPayload(input: unknown): void {
   if (input !== null) throw new TypeError('Application plugin shutdown payload must be null');
 }
 
-function readBootstrapGeneration(input: unknown): string {
-  if (!isRecord(input) || input.protocol !== PLUGIN_PROCESS_PROTOCOL || input.kind !== 'request'
-    || input.method !== 'initialize' || !isNonEmptyString(input.generation)) {
-    throw new TypeError('Application plugin runner requires initialize as its first request');
+function safelyReadGeneration(input: unknown): string | undefined {
+  try {
+    if (input === null || typeof input !== 'object' || Array.isArray(input)) return undefined;
+    const descriptor = Object.getOwnPropertyDescriptor(input, 'generation');
+    if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) return undefined;
+    return isNonEmptyString(descriptor.value) ? descriptor.value : undefined;
+  } catch {
+    return undefined;
   }
-  return input.generation;
 }
 
 function isPluginSnapshot(input: unknown): input is Array<{ name: string; path: string }> {
