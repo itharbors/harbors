@@ -9,7 +9,7 @@ const REPOSITORY_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?\/[a-z0-9](?:
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const KIT_ID_PATTERN = /^@([a-z0-9][a-z0-9._-]*)\/(kit-([a-z0-9]+(?:-[a-z0-9]+)*))$/u;
-const PUBLISH_SIGNER_WORKFLOW = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3';
+const PUBLISH_SIGNER_WORKFLOW = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
 
 function deepFreeze(value) {
   if (value && typeof value === 'object' && !Object.isFrozen(value)) {

@@ -26,6 +26,7 @@ const PUBLISH_SIGNER_WORKFLOWS = new Set([
   'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
   'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
   'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
+  'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4',
 ]);
 
 function deepFreeze(value) {

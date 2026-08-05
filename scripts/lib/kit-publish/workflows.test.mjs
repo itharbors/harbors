@@ -19,14 +19,14 @@ function jobBlock(workflow, name) {
   return next === -1 ? remainder : remainder.slice(0, next);
 }
 
-test('mainline caller normalizes exact Kit Tags for automatic publication and main recovery through immutable v3 workflows', async () => {
+test('mainline caller normalizes exact Kit Tags for automatic publication and main recovery through immutable v4 workflows', async () => {
   const workflow = await read('.github/workflows/publish-kit.yml');
   assert.match(workflow, /^on:\n  push:\n    tags:\n      - ['"]kit\/\*\/v\*['"]\n  workflow_dispatch:\n    inputs:\n      release-tag:[\s\S]*required:\s*true[\s\S]*request-id:[\s\S]*required:\s*true/mu);
   assert.doesNotMatch(workflow, /^\s+(branches:|pull_request:)/mu);
   assert.match(workflow, /^run-name:\s*Publish Kit \$\{\{ inputs\['release-tag'\] \|\| github\.ref_name \}\} \$\{\{ inputs\['request-id'\] \|\| github\.run_id \}\}$/mu);
   assert.match(
     workflow,
-    /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@kit-publish-v3/u,
+    /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@kit-publish-v4/u,
   );
   assert.match(workflow, /secrets:\s*inherit/u);
   const context = jobBlock(workflow, 'context');
@@ -90,14 +90,14 @@ test('mainline caller refreshes Registry through one correlated main dispatch af
   assert.doesNotMatch(refresh, /actions\/deploy-pages|pages:\s*write|id-token:\s*write/u);
 });
 
-test('publisher context validates product Tag identity with immutable v3 control-plane code', async () => {
+test('publisher context validates product Tag identity with immutable v4 control-plane code', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   const context = jobBlock(workflow, 'context');
   assert.match(workflow, /^on:\n  workflow_call:\n    inputs:\n      release-tag:\n        description:\s*.+\n        required:\s*true\n        type:\s*string$/mu);
   assert.match(context, /runs-on:\s*ubuntu-latest/u);
   assert.match(context, /RELEASE_TAG:\s*\$\{\{ inputs\.release-tag \}\}/u);
   assert.match(context, /release-ref=refs\/tags\/\$RELEASE_TAG/u);
-  assert.match(context, /actions\/checkout@v6[\s\S]*ref:\s*refs\/tags\/kit-publish-v3[\s\S]*path:\s*publisher/u);
+  assert.match(context, /actions\/checkout@v6[\s\S]*ref:\s*refs\/tags\/kit-publish-v4[\s\S]*path:\s*publisher/u);
   assert.match(context, /actions\/checkout@v6[\s\S]*ref:\s*\$\{\{ steps\.identity\.outputs\.release-ref \}\}[\s\S]*path:\s*source[\s\S]*fetch-depth:\s*0/u);
   assert.match(context, /git cat-file -t "\$RELEASE_REF"/u);
   assert.match(context, /git fetch --no-tags origin main/u);
@@ -144,12 +144,12 @@ test('selected product Tag builds one checked artifact without executing its his
   assert.match(prepare, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-checked-artifact[\s\S]*retention-days:\s*1/u);
 });
 
-test('immutable v3 packages the checked artifact and emits product-Tag provenance', async () => {
+test('immutable v4 packages the checked artifact and leaves provenance to the GitHub execution', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   const packageJob = jobBlock(workflow, 'package');
   assert.match(packageJob, /needs:\s*\[context, prepare\]/u);
   assert.match(packageJob, /runs-on:\s*ubuntu-latest/u);
-  assert.match(packageJob, /actions\/checkout@v6[\s\S]*ref:\s*refs\/tags\/kit-publish-v3/u);
+  assert.match(packageJob, /actions\/checkout@v6[\s\S]*ref:\s*refs\/tags\/kit-publish-v4/u);
   assert.match(packageJob, /actions\/download-artifact@v8[\s\S]*name:\s*kit-checked-artifact/u);
   assert.match(
     packageJob,
@@ -157,12 +157,11 @@ test('immutable v3 packages the checked artifact and emits product-Tag provenanc
   );
   assert.match(packageJob, /--commit "\$RELEASE_COMMIT"/u);
   assert.match(packageJob, /--workflow "\$GITHUB_REPOSITORY\/\.github\/workflows\/publish-kit\.yml@\$RELEASE_REF"/u);
-  assert.match(packageJob, /--signer-workflow itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@refs\/tags\/kit-publish-v3/u);
+  assert.match(packageJob, /--signer-workflow itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@refs\/tags\/kit-publish-v4/u);
   assert.match(packageJob, /--ref "\$RELEASE_REF"/u);
   assert.doesNotMatch(packageJob, /\$GITHUB_SHA|\$GITHUB_REF|\$GITHUB_WORKFLOW_REF|--kit-directory/u);
-  assert.match(packageJob, /node scripts\/kit-publish\.mjs provenance[\s\S]*--release-manifest "\$RUNNER_TEMP\/kit-release\/release\.json"[\s\S]*--output "\$RUNNER_TEMP\/kit-provenance\/provenance\.json"/u);
+  assert.doesNotMatch(packageJob, /kit-publish\.mjs provenance|kit-provenance|predicate-path/u);
   assert.match(packageJob, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-publication[\s\S]*retention-days:\s*1/u);
-  assert.match(packageJob, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-provenance[\s\S]*retention-days:\s*1/u);
 });
 
 test('Preview and Stable Releases are non-clobbering, attested, and upload only the publication quartet', async () => {
@@ -173,11 +172,11 @@ test('Preview and Stable Releases are non-clobbering, attested, and upload only 
   ]) {
     const publish = jobBlock(workflow, name);
     assert.match(publish, /actions\/download-artifact@v8[\s\S]*name:\s*kit-publication/u);
-    assert.match(publish, /actions\/download-artifact@v8[\s\S]*name:\s*kit-provenance/u);
+    assert.doesNotMatch(publish, /kit-provenance|predicate-type|predicate-path/u);
     assert.match(publish, /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$TAG"/u);
     assert.match(publish, /HTTP 404/u);
     assert.ok(publish.indexOf('Require missing') < publish.indexOf('actions/attest@v4'));
-    assert.match(publish, /actions\/attest@v4[\s\S]*artifact-name[\s\S]*release\.json[\s\S]*predicate-type:\s*https:\/\/slsa\.dev\/provenance\/v1[\s\S]*predicate-path:\s*\$\{\{ runner\.temp \}\}\/kit-provenance\/provenance\.json/u);
+    assert.match(publish, /actions\/attest@v4[\s\S]*subject-path:[\s\S]*artifact-name[\s\S]*release\.json/u);
     assert.match(publish, /GH_REPO:\s*\$\{\{ github\.repository \}\}/u);
     assert.match(publish, /Release already exists:[\s\S]*exit 1[\s\S]*gh release create "\$TAG"/u);
     assert.match(publish, /--verify-tag/u);
@@ -215,7 +214,7 @@ test('publisher deploys Registry only after exactly one release job succeeds', a
   }
   assert.match(
     registry,
-    /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-registry\.yml@kit-publish-v3/u,
+    /uses:\s*itharbors\/harbors\/\.github\/workflows\/publish-kit-registry\.yml@kit-publish-v4/u,
   );
   assert.match(registry, /secrets:\s*inherit/u);
 });
