@@ -161,7 +161,7 @@ ApplicationPluginRuntime 中异步能力直接映射为 RPC：
 
 Service value 必须可 structured-clone。Framework 在每个 generation 启动前下发当前 service snapshot，并在 owner 变化后广播新 snapshot。该模型保持同步读取 API，但跨插件变更是按 host 确认顺序更新的快照，不允许插件依赖同一 JavaScript tick 内的跨进程可见性。
 
-第一阶段三个官方 startup plugin 只依赖 `paths`、`host.mode`、notifications 和 definition methods；它们不依赖跨插件 service 对象或同步函数传递。Scheduler 必须从 `runtime.paths.data` 读取 owner data，不再从 `HARBORS_DATA_ROOT` 拼接 Kit 私有路径。
+第一阶段三个官方 startup plugin 只依赖 `paths`、`host.mode`、notifications、既有非敏感产品环境和 definition methods；它们不依赖跨插件 service 对象或同步函数传递。进程隔离对现有已发布 Kit 制品透明，不要求为了进入子进程而修改 Kit。Scheduler 继续兼容当前 `HARBORS_DATA_ROOT`，后续改用 `runtime.paths.data` 时必须在 Framework 支持合并后单独走 Scheduler Kit workflow 与版本发布。
 
 ## 生命周期与故障状态机
 
@@ -235,7 +235,7 @@ Agent Guard 的 detached watchdog 仍是暂停恢复的最后防线，不能依�
 ## 安全与资源边界
 
 - Host 从已验证 spec 绑定 plugin identity、entry、paths 和 permissions；Runner 提交的 owner 字段被忽略或拒绝。
-- 子进程继承维持现有功能所需的 `PATH`、用户目录和运行时环境，但移除 Framework application token、credential transport secret、notification owner token 和其他 host-only secret。
+- 子进程继承维持现有制品兼容所需的 `PATH`、用户目录、`HARBORS_DATA_ROOT` 和其他非敏感运行时环境，但移除 Framework application token、credential transport secret、notification owner token 和其他 host-only secret。
 - Notification capability 只通过 host RPC 暴露；child 不获得 Notification Host owner token。
 - 子进程 stdio 不继承终端。Framework 为每个 generation 保留最多 64 KiB stdout 和 64 KiB stderr 尾部，并使用 plugin name 前缀写本机日志。
 - 每个 generation 仅可访问自己的 runtime paths facade；路径由 host 解析后下发并冻结。
@@ -291,9 +291,9 @@ Application bootstrap 和事件流展示每个插件的 process-isolated 状态�
 
 ### 官方 Kit
 
-- Notifications、Scheduler、Agent Guard startup plugin 均在独立 pid 运行；
-- Notification capability 通过 host RPC 工作；Scheduler 使用 owner runtime data path；
-- Agent Guard child 被强制终止时 detached watchdog 恢复已暂停 fixture，新 generation 从 ledger 恢复；
+- 当前已发布的 Notifications、Scheduler、Agent Guard startup plugin 无需重打包即可在独立 pid 运行；
+- Notification capability 通过 host RPC 工作；Scheduler 保持当前数据目录行为；
+- Agent Guard child 被强制终止时不影响 Framework；现有 Kit smoke 必须继续证明 detached watchdog 在 stdin 关闭后恢复已暂停 fixture，新 generation 继续使用同一持久化 ledger 规则；
 - 每个受影响 Kit 的官方 `kit:check` 通过。
 
 ### Host 验收
@@ -304,6 +304,6 @@ Application bootstrap 和事件流展示每个插件的 process-isolated 状态�
 
 ## 交付边界
 
-本功能完成必须同时具备：协议校验、Runner、Supervisor、ApplicationRuntime 接入、三个官方 startup plugin 迁移、自动重启与熔断、显式 retry control、bootstrap 状态、真实故障集成测试、Web 验收和 Electron 验收。只捕获 `uncaughtException`、只重启整个 Framework、只隔离 Agent Guard 或保留 application plugin 的静默进程内 fallback 都不算完成。
+本功能完成必须同时具备：协议校验、Runner、Supervisor、ApplicationRuntime 接入、三个现有官方 startup plugin 的透明进程隔离、自动重启与熔断、显式 retry control、bootstrap 状态、真实故障集成测试、Web 验收和 Electron 验收。只捕获 `uncaughtException`、只重启整个 Framework、只隔离 Agent Guard 或保留 application plugin 的静默进程内 fallback 都不算完成。
 
 后续迁移 Session plugin 时复用 envelope、Runner、Supervisor 和 generation 语义，但另行设计 Session capability、Panel/Window 代理、credentials lease 与 Kit switch 事务；不得在本阶段用未验证的通用抽象提前改变 Session 行为。
