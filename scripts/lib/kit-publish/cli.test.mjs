@@ -32,7 +32,7 @@ function runPrepare(kitArtifact, outputDirectory, {
     '--repository', 'example/harbors',
     '--commit', commit,
     '--workflow', 'example/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/demo/v1.2.3',
-    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
     '--ref', 'refs/tags/kit/demo/v1.2.3',
     '--tag', 'kit/demo/v1.2.3',
     '--label', 'Demo Kit',
@@ -50,11 +50,20 @@ function runDirectoryPrepare(kitDirectory, outputDirectory, { tag = 'kit/demo/v1
     '--repository', 'example/harbors',
     '--commit', commit,
     '--workflow', `example/harbors/.github/workflows/publish-kit.yml@refs/tags/${tag}`,
-    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
     '--ref', `refs/tags/${tag}`,
     '--tag', tag,
     '--label', 'Demo Kit',
     '--summary', 'A deterministic publication fixture',
+  ], { encoding: 'utf8' });
+}
+
+function runProvenance(releaseManifest, output) {
+  return spawnSync(process.execPath, [
+    cli,
+    'provenance',
+    '--release-manifest', releaseManifest,
+    '--output', output,
   ], { encoding: 'utf8' });
 }
 
@@ -84,7 +93,7 @@ test('prepare copies the checked Kit byte-for-byte and writes its publication me
     assert.equal(release.assets[0].sha256, outputs.ARTIFACT_SHA256);
     assert.equal(
       release.source.signerWorkflow,
-      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+      'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
     );
     assert.equal(entry.releaseManifestUrl.endsWith('/release.json'), true);
     assert.equal(sbom.spdxVersion, 'SPDX-2.3');
@@ -100,7 +109,7 @@ test('prepare copies the checked Kit byte-for-byte and writes its publication me
   }
 });
 
-test('prepare supports the immutable v2 directory contract without weakening publication output guarantees', async () => {
+test('prepare supports the legacy directory input contract without weakening publication output guarantees', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-cli-v2-'));
   const sourceDirectory = path.join(root, 'source');
   const outputDirectory = path.join(root, 'release');
@@ -140,6 +149,38 @@ test('prepare supports the immutable v2 directory contract without weakening pub
     assert.equal(invalid.status, 1);
     assert.match(invalid.stderr, /requires Tag kit\/demo\/v1\.2\.3/u);
     await assert.rejects(access(failedOutput));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('provenance writes the product Tag claims required by Registry verification exactly once', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-provenance-'));
+  const artifact = path.join(root, 'kit-demo-1.2.3-any-any.hkit');
+  const outputDirectory = path.join(root, 'release');
+  const provenance = path.join(root, 'provenance.json');
+  try {
+    await packKit({ directory: fixture, output: artifact });
+    const prepared = runPrepare(artifact, outputDirectory);
+    assert.equal(prepared.status, 0, prepared.stderr);
+
+    const result = runProvenance(path.join(outputDirectory, 'release.json'), provenance);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, 'PREDICATE=provenance.json\n');
+    const predicate = JSON.parse(await readFile(provenance, 'utf8'));
+    assert.deepEqual(predicate.buildDefinition.externalParameters.workflow, {
+      repository: 'https://github.com/example/harbors',
+      path: '.github/workflows/publish-kit.yml',
+      ref: 'refs/tags/kit/demo/v1.2.3',
+    });
+    assert.deepEqual(predicate.buildDefinition.resolvedDependencies, [{
+      uri: 'git+https://github.com/example/harbors@refs/tags/kit/demo/v1.2.3',
+      digest: { gitCommit: commit },
+    }]);
+
+    const replay = runProvenance(path.join(outputDirectory, 'release.json'), provenance);
+    assert.equal(replay.status, 1);
+    assert.match(replay.stderr, /^ERROR=/u);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

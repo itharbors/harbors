@@ -25,6 +25,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const PUBLISH_SIGNER_WORKFLOWS = new Set([
   'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
   'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
+  'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
 ]);
 
 function deepFreeze(value) {
