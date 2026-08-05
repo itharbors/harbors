@@ -1,5 +1,5 @@
 import { spawn as spawnChild, execFileSync, type ChildProcess } from 'node:child_process';
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -7,16 +7,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { discoverApplicationPlugins } from '../../src/application/catalog';
-import {
-  spawnApplicationPluginProcess,
-  resolveApplicationPluginRunner,
-  type SpawnApplicationPluginProcessOptions,
-} from '../../src/application/plugin-process/spawn';
-import { createApplicationPluginSupervisor } from '../../src/application/plugin-process/supervisor';
-import { ApplicationRuntime } from '../../src/application/runtime';
+import type { SpawnApplicationPluginProcessOptions } from '../../src/application/plugin-process/spawn';
+import type { ApplicationRuntime } from '../../src/application/runtime';
 import type { AssemblyConfig } from '../../src/assembly/config';
-import type { ApplicationBootstrap } from '../../src/application/types';
+import type { ApplicationBootstrap, ApplicationPluginSpec } from '../../src/application/types';
 
 const REPOSITORY_ROOT = path.resolve(import.meta.dirname, '../../../..');
 const NOTIFICATIONS = '@itharbors/notification-background';
@@ -37,7 +31,21 @@ const HOST_SECRET_KEYS = [
   'HARBORS_NOTIFICATION_OWNER_TOKEN',
   'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
 ] as const;
-const SHARED_STATE_BEFORE = snapshotSharedFrameworkState();
+const VITEST_RUNNER_CACHE_EXCLUSION = 'packages/server/node_modules/.vite/vitest/results.json';
+const SHARED_STATE_BEFORE = snapshotHarnessControlledState();
+
+interface ProductRuntimeModules {
+  modulePaths: readonly string[];
+  transitiveModulePaths: readonly string[];
+  discoverApplicationPlugins: typeof import('../../src/application/catalog')['discoverApplicationPlugins'];
+  spawnApplicationPluginProcess:
+    typeof import('../../src/application/plugin-process/spawn')['spawnApplicationPluginProcess'];
+  resolveApplicationPluginRunner:
+    typeof import('../../src/application/plugin-process/spawn')['resolveApplicationPluginRunner'];
+  createApplicationPluginSupervisor:
+    typeof import('../../src/application/plugin-process/supervisor')['createApplicationPluginSupervisor'];
+  ApplicationRuntime: typeof import('../../src/application/runtime')['ApplicationRuntime'];
+}
 
 interface OfficialKitBuild {
   slug: typeof OFFICIAL_KITS[number];
@@ -83,23 +91,23 @@ interface OfficialPluginHarness {
   secretValues: readonly string[];
 }
 
-let buildRoot: string | undefined;
 let repositorySnapshotRoot: string | undefined;
 let emittedServerRoot: string | undefined;
 let officialBuilds: OfficialKitBuild[] = [];
+let productRuntimeModules: ProductRuntimeModules | undefined;
 
 beforeAll(async () => {
   try {
-    buildRoot = fs.realpathSync(fs.mkdtempSync(path.join(
-      os.tmpdir(), 'official-startup-plugin-build-',
-    )));
     repositorySnapshotRoot = fs.realpathSync(fs.mkdtempSync(path.join(
       os.tmpdir(), 'official-startup-plugin-repository-',
     )));
     copyCanonicalRepositorySnapshot(repositorySnapshotRoot);
     execFileSync('npm', ['ci', '--ignore-scripts'], {
       cwd: repositorySnapshotRoot,
-      env: { ...process.env, NPM_CONFIG_CACHE: path.join(buildRoot, 'npm-cache') },
+      env: {
+        ...process.env,
+        NPM_CONFIG_CACHE: path.join(repositorySnapshotRoot, '.suite/npm-cache'),
+      },
       stdio: 'pipe',
     });
     execFileSync('npm', [
@@ -111,6 +119,7 @@ beforeAll(async () => {
       '-w', '@itharbors/server',
     ], { cwd: repositorySnapshotRoot, stdio: 'pipe' });
     emittedServerRoot = path.join(repositorySnapshotRoot, 'packages/server/dist');
+    productRuntimeModules = await loadProductRuntimeModules(emittedServerRoot);
 
     const kitMonorepoUrl = pathToFileURL(path.join(
       repositorySnapshotRoot, 'scripts/lib/kit-monorepo.mjs',
@@ -158,6 +167,11 @@ beforeAll(async () => {
     officialBuilds = completed;
   } catch (error) {
     const cleanupErrors = await cleanupSuiteRoots();
+    try {
+      expect(snapshotHarnessControlledState()).toEqual(SHARED_STATE_BEFORE);
+    } catch (sharedStateError) {
+      cleanupErrors.push(sharedStateError);
+    }
     throw cleanupErrors.length === 0
       ? error
       : new AggregateError([error, ...cleanupErrors], 'Official plugin suite setup cleanup failed');
@@ -166,19 +180,34 @@ beforeAll(async () => {
 
 afterAll(async () => {
   const errors = await cleanupSuiteRoots();
+  try {
+    expect(snapshotHarnessControlledState()).toEqual(SHARED_STATE_BEFORE);
+  } catch (error) {
+    errors.push(error);
+  }
   if (errors.length > 0) throw new AggregateError(errors, 'Official plugin suite cleanup failed');
 });
 
 describe('official startup plugins in isolated application processes', () => {
-  it('keeps shared Framework artifacts unchanged and uses one canonical suite repository', () => {
-    expect(snapshotSharedFrameworkState()).toEqual(SHARED_STATE_BEFORE);
+  it('keeps shared Framework artifacts unchanged and loads one canonical product graph', () => {
+    expect(snapshotHarnessControlledState()).toEqual(SHARED_STATE_BEFORE);
     expect(repositorySnapshotRoot).toBeDefined();
     const snapshot = fs.realpathSync(repositorySnapshotRoot!);
     const nodeModules = path.join(snapshot, 'node_modules');
     expect(fs.lstatSync(nodeModules).isDirectory()).toBe(true);
     expect(fs.lstatSync(nodeModules).isSymbolicLink()).toBe(false);
     expect(isInside(fs.realpathSync(nodeModules), snapshot)).toBe(true);
+    expect(fs.existsSync(path.join(snapshot, VITEST_RUNNER_CACHE_EXCLUSION))).toBe(false);
     expect(isInside(fs.realpathSync(requireEmittedServerRoot()), snapshot)).toBe(true);
+    const product = requireProductRuntimeModules();
+    for (const modulePath of [...product.modulePaths, ...product.transitiveModulePaths]) {
+      const canonicalModulePath = fs.realpathSync(modulePath);
+      expect(isInside(canonicalModulePath, snapshot), modulePath).toBe(true);
+      expect(isInside(canonicalModulePath, fs.realpathSync(REPOSITORY_ROOT)), modulePath).toBe(false);
+    }
+    const kitCoreLink = path.join(snapshot, 'node_modules/@itharbors/kit-core');
+    expect(fs.lstatSync(kitCoreLink).isSymbolicLink()).toBe(true);
+    expect(isInside(product.transitiveModulePaths[0]!, fs.realpathSync(kitCoreLink))).toBe(true);
     for (const build of officialBuilds) {
       expect(isInside(fs.realpathSync(build.installRoot), snapshot)).toBe(true);
       expect(isInside(fs.realpathSync(build.artifactPath), snapshot)).toBe(true);
@@ -314,7 +343,7 @@ describe('official startup plugins in isolated application processes', () => {
 
   it('recovers only identity-verified paused agents when the installed watchdog sees EOF', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(
-      os.tmpdir(), 'official-agent-guard-eof-',
+      requireRepositorySnapshotRoot(), '.suite/agent-guard-eof-',
     )));
     const fixtures: PausedFixture[] = [];
     let watchdog: InstalledWatchdogClient | undefined;
@@ -423,45 +452,49 @@ describe('official startup plugins in isolated application processes', () => {
 });
 
 async function createHarness(): Promise<OfficialPluginHarness> {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'official-startup-plugin-runtime-'));
-  const frameworkCwd = path.join(root, 'framework-cwd');
-  const schedulerDataRoot = path.join(root, 'product-data');
-  const schedulerScript = path.join(root, 'scheduled.mjs');
-  const home = path.join(root, 'home');
-  const temp = path.join(root, 'temp');
-  const sentinelBin = path.join(root, 'sentinel-bin');
-  const codexHome = path.join(root, 'codex-home');
-  fs.mkdirSync(frameworkCwd, { recursive: true });
-  fs.mkdirSync(schedulerDataRoot, { recursive: true });
-  fs.mkdirSync(home, { recursive: true });
-  fs.mkdirSync(temp, { recursive: true });
-  fs.mkdirSync(sentinelBin, { recursive: true });
-  fs.mkdirSync(codexHome, { recursive: true });
-  fs.writeFileSync(schedulerScript, 'process.stdout.write("task-8");\n', { mode: 0o600 });
-  const marker = path.basename(root);
-  const expectedEnvironment = Object.freeze({
-    PATH: `${sentinelBin}${path.delimiter}${process.env.PATH ?? '/usr/bin:/bin'}`,
-    HOME: home,
-    USER: `${marker}-user`,
-    TMPDIR: temp,
-    LANG: `${marker}-LANG.UTF-8`,
-    LC_ALL: `${marker}-LC_ALL.UTF-8`,
-    CODEX_HOME: codexHome,
-    HARBORS_DATA_ROOT: schedulerDataRoot,
-    HARBORS_CREDENTIAL_MODE: 'local',
-    HARBORS_RUNTIME_PROFILE: `${marker}-product-config`,
-  });
-  expect(fs.statSync(expectedEnvironment.HOME).isDirectory()).toBe(true);
-  expect(fs.statSync(expectedEnvironment.CODEX_HOME).isDirectory()).toBe(true);
-  expect(execFileSync('/bin/sh', ['-c', 'command -v node'], {
-    encoding: 'utf8',
-    env: expectedEnvironment,
-  }).trim()).not.toBe('');
-
+  let root: string | undefined;
   let runtime: ApplicationRuntime | undefined;
   let notificationHost: Awaited<ReturnType<typeof createNotificationHost>> | undefined;
   const spawns: SpawnObservation[] = [];
+  let result: OfficialPluginHarness | undefined;
+  let setupError: unknown;
   try {
+    root = fs.realpathSync(fs.mkdtempSync(path.join(
+      requireRepositorySnapshotRoot(), '.suite/application-runtime-',
+    )));
+    const frameworkCwd = path.join(root, 'framework-cwd');
+    const schedulerDataRoot = path.join(root, 'product-data');
+    const schedulerScript = path.join(root, 'scheduled.mjs');
+    const home = path.join(root, 'home');
+    const temp = path.join(root, 'temp');
+    const sentinelBin = path.join(root, 'sentinel-bin');
+    const codexHome = path.join(root, 'codex-home');
+    for (const directory of [
+      frameworkCwd, schedulerDataRoot, home, temp, sentinelBin, codexHome,
+    ]) {
+      fs.mkdirSync(directory, { recursive: true });
+    }
+    fs.writeFileSync(schedulerScript, 'process.stdout.write("task-8");\n', { mode: 0o600 });
+    const marker = path.basename(root);
+    const expectedEnvironment = Object.freeze({
+      PATH: `${sentinelBin}${path.delimiter}${process.env.PATH ?? '/usr/bin:/bin'}`,
+      HOME: home,
+      USER: `${marker}-user`,
+      TMPDIR: temp,
+      LANG: `${marker}-LANG.UTF-8`,
+      LC_ALL: `${marker}-LC_ALL.UTF-8`,
+      CODEX_HOME: codexHome,
+      HARBORS_DATA_ROOT: schedulerDataRoot,
+      HARBORS_CREDENTIAL_MODE: 'local',
+      HARBORS_RUNTIME_PROFILE: `${marker}-product-config`,
+    });
+    expect(fs.statSync(expectedEnvironment.HOME).isDirectory()).toBe(true);
+    expect(fs.statSync(expectedEnvironment.CODEX_HOME).isDirectory()).toBe(true);
+    expect(execFileSync('/bin/sh', ['-c', 'command -v node'], {
+      encoding: 'utf8',
+      env: expectedEnvironment,
+    }).trim()).not.toBe('');
+
     notificationHost = await createNotificationHost();
     const secretValues = Object.freeze([
       HOST_SECRET_VALUES.HARBORS_APPLICATION_TOKEN,
@@ -470,13 +503,14 @@ async function createHarness(): Promise<OfficialPluginHarness> {
       HOST_SECRET_VALUES.HARBORS_CREDENTIAL_TRANSPORT_SECRET,
     ]);
     const assembly = officialAssembly(officialBuilds, path.join(root, 'empty-catalog'));
-    const catalog = await discoverApplicationPlugins({ assembly });
+    const product = requireProductRuntimeModules();
+    const catalog = await product.discoverApplicationPlugins({ assembly });
     expect(catalog.diagnostics).toEqual([]);
     expect(catalog.plugins.map(({ name }) => name).sort()).toEqual([
       AGENT_GUARD, NOTIFICATIONS, SCHEDULER,
     ].sort());
     assertCatalogUsesOnlyIsolatedInstalls(catalog.plugins, officialBuilds);
-    const activeRuntime = new ApplicationRuntime({
+    const activeRuntime = new product.ApplicationRuntime({
       plugins: catalog.plugins,
       diagnostics: catalog.diagnostics,
       hostMode: 'desktop',
@@ -487,7 +521,7 @@ async function createHarness(): Promise<OfficialPluginHarness> {
         temp: path.join(root, 'plugins/temp'),
       },
       processRuntime: {
-        runner: resolveApplicationPluginRunner(pathToFileURL(path.join(
+        runner: product.resolveApplicationPluginRunner(pathToFileURL(path.join(
           requireEmittedServerRoot(), 'application/plugin-process/spawn.js',
         )).href),
         cwd: frameworkCwd,
@@ -504,10 +538,10 @@ async function createHarness(): Promise<OfficialPluginHarness> {
       notificationOwnerAuthToken: OWNER_TOKEN,
       createPluginSupervisor: (options) => {
         if (!options.process) throw new Error('Official plugin process runtime is missing');
-        return createApplicationPluginSupervisor({
+        return product.createApplicationPluginSupervisor({
           ...options,
           process: options.process,
-          spawn: (spawnOptions) => spawnApplicationPluginProcess({
+          spawn: (spawnOptions) => product.spawnApplicationPluginProcess({
             ...spawnOptions,
             spawn: ((executable, args, childOptions) => {
               const child = spawnChild(executable, [...args], childOptions);
@@ -527,7 +561,7 @@ async function createHarness(): Promise<OfficialPluginHarness> {
     const bootstraps: ApplicationBootstrap[] = [];
     activeRuntime.subscribe(({ bootstrap }) => bootstraps.push(structuredClone(bootstrap)));
     await activeRuntime.start();
-    return {
+    result = {
       runtime: activeRuntime,
       bootstraps,
       spawns,
@@ -540,43 +574,58 @@ async function createHarness(): Promise<OfficialPluginHarness> {
       secretValues,
     };
   } catch (error) {
-    const shutdown = await Promise.allSettled([
-      runtime?.dispose() ?? Promise.resolve(),
-      notificationHost?.close() ?? Promise.resolve(),
-    ]);
-    const pids = uniquePids(spawns);
-    const exit = await Promise.allSettled([
-      ensureProcessesExit(pids, 'failed-startup official plugin children'),
-    ]);
-    const removal = await Promise.allSettled([
-      Promise.resolve().then(() => fs.rmSync(root, { recursive: true, force: true })),
-    ]);
-    const cleanupErrors = [...shutdown, ...exit, ...removal].flatMap((result) => (
-      result.status === 'rejected' ? [result.reason] : []
-    ));
-    if (cleanupErrors.length > 0) {
-      throw new AggregateError([error, ...cleanupErrors], 'Official plugin setup cleanup failed');
+    setupError = error;
+  } finally {
+    if (!result) {
+      const cleanupErrors = await cleanupHarnessResources({
+        runtime,
+        notificationHost,
+        spawns,
+        root,
+        processDescription: 'failed-startup official plugin children',
+      });
+      if (cleanupErrors.length > 0) {
+        setupError = new AggregateError(
+          [...(setupError === undefined ? [] : [setupError]), ...cleanupErrors],
+          'Official plugin setup cleanup failed',
+        );
+      }
     }
-    throw error;
   }
+  if (setupError) throw setupError;
+  if (!result) throw new Error('Official plugin harness setup produced no result');
+  return result;
 }
 
 async function disposeHarness(harness: OfficialPluginHarness): Promise<void> {
-  const shutdown = await Promise.allSettled([
-    harness.runtime.dispose(),
-    harness.notificationHost.close(),
-  ]);
-  const pids = uniquePids(harness.spawns);
-  const exit = await Promise.allSettled([
-    ensureProcessesExit(pids, 'all official application plugin children'),
-  ]);
-  const removal = await Promise.allSettled([
-    Promise.resolve().then(() => fs.rmSync(harness.root, { recursive: true, force: true })),
-  ]);
-  const errors = [...shutdown, ...exit, ...removal].flatMap((result) => (
-    result.status === 'rejected' ? [result.reason] : []
-  ));
+  const errors = await cleanupHarnessResources({
+    runtime: harness.runtime,
+    notificationHost: harness.notificationHost,
+    spawns: harness.spawns,
+    root: harness.root,
+    processDescription: 'all official application plugin children',
+  });
   if (errors.length > 0) throw new AggregateError(errors, 'Official plugin cleanup failed');
+}
+
+async function cleanupHarnessResources(options: {
+  runtime: ApplicationRuntime | undefined;
+  notificationHost: Awaited<ReturnType<typeof createNotificationHost>> | undefined;
+  spawns: readonly SpawnObservation[];
+  root: string | undefined;
+  processDescription: string;
+}): Promise<unknown[]> {
+  const shutdown = await Promise.allSettled([
+    Promise.resolve().then(() => options.runtime?.dispose()),
+    Promise.resolve().then(() => options.notificationHost?.close()),
+  ]);
+  const processErrors = await terminateObservedProcesses(
+    uniquePids(options.spawns), options.processDescription,
+  );
+  const removal = await Promise.allSettled(options.root ? [
+    Promise.resolve().then(() => fs.rmSync(options.root!, { recursive: true, force: true })),
+  ] : []);
+  return [...settledErrors(shutdown), ...processErrors, ...settledErrors(removal)];
 }
 
 function officialAssembly(builds: OfficialKitBuild[], emptyCatalogRoot: string): AssemblyConfig {
@@ -645,7 +694,7 @@ function assertSanitizedProductEnvironment(
 }
 
 function assertCatalogUsesOnlyIsolatedInstalls(
-  plugins: Awaited<ReturnType<typeof discoverApplicationPlugins>>['plugins'],
+  plugins: ApplicationPluginSpec[],
   builds: OfficialKitBuild[],
 ): void {
   const slugByPlugin: Readonly<Record<string, OfficialKitBuild['slug']>> = {
@@ -663,7 +712,7 @@ function assertCatalogUsesOnlyIsolatedInstalls(
   }
 }
 
-function uniquePids(spawns: SpawnObservation[]): number[] {
+function uniquePids(spawns: readonly SpawnObservation[]): number[] {
   return [...new Set(spawns.flatMap(({ pid }) => pid === undefined ? [] : [pid]))];
 }
 
@@ -673,13 +722,23 @@ async function waitForProcessesToExit(pids: number[], description: string): Prom
   }, { timeout: CONDITION_TIMEOUT_MS, interval: 10 });
 }
 
-async function ensureProcessesExit(pids: number[], description: string): Promise<void> {
-  try {
-    await waitForProcessesToExit(pids, description);
-  } catch {
-    for (const pid of pids) signalIfAlive(pid, 'SIGKILL');
-    await waitForProcessesToExit(pids, `forced ${description}`);
-  }
+async function terminateObservedProcesses(
+  pids: number[],
+  description: string,
+): Promise<unknown[]> {
+  const initialExit = await Promise.allSettled([waitForProcessesToExit(pids, description)]);
+  if (initialExit[0]?.status === 'fulfilled') return [];
+  const forcedSignals = await Promise.allSettled(pids.map((pid) => (
+    Promise.resolve().then(() => signalIfAlive(pid, 'SIGKILL'))
+  )));
+  const forcedExit = await Promise.allSettled([
+    waitForProcessesToExit(pids, `forced ${description}`),
+  ]);
+  return [...settledErrors(forcedSignals), ...settledErrors(forcedExit)];
+}
+
+function settledErrors(results: readonly PromiseSettledResult<unknown>[]): unknown[] {
+  return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
 }
 
 function processIsGone(pid: number): boolean {
@@ -745,12 +804,12 @@ async function spawnPausedFixture(root: string, name: string): Promise<PausedFix
       expect(fixture.ticks).toBeGreaterThan(0);
     }, { timeout: CONDITION_TIMEOUT_MS, interval: 10 });
   } catch (error) {
-    signalIfAlive(fixture.pid, 'SIGCONT');
-    signalIfAlive(fixture.pid, 'SIGKILL');
+    const signals = await Promise.allSettled([
+      Promise.resolve().then(() => signalIfAlive(fixture.pid, 'SIGCONT')),
+      Promise.resolve().then(() => signalIfAlive(fixture.pid, 'SIGKILL')),
+    ]);
     const cleanup = await Promise.allSettled([waitForChildExit(child)]);
-    const cleanupErrors = cleanup.flatMap((result) => (
-      result.status === 'rejected' ? [result.reason] : []
-    ));
+    const cleanupErrors = [...settledErrors(signals), ...settledErrors(cleanup)];
     throw cleanupErrors.length === 0
       ? error
       : new AggregateError([error, ...cleanupErrors], `Paused fixture ${name} cleanup failed`);
@@ -796,13 +855,15 @@ async function cleanupPausedFixtures(options: {
   watchdog: InstalledWatchdogClient | undefined;
   watchdogChild: ChildProcess | undefined;
 }): Promise<void> {
-  const shutdownResults = await Promise.allSettled([
+  const watchdogResults = await Promise.allSettled([
     Promise.resolve().then(() => options.watchdog?.shutdown()),
-    ...options.fixtures.map(async ({ pid }) => {
-      signalIfAlive(pid, 'SIGCONT');
-      signalIfAlive(pid, 'SIGTERM');
-    }),
   ]);
+  const continueResults = await Promise.allSettled(options.fixtures.map(({ pid }) => (
+    Promise.resolve().then(() => signalIfAlive(pid, 'SIGCONT'))
+  )));
+  const terminateResults = await Promise.allSettled(options.fixtures.map(({ pid }) => (
+    Promise.resolve().then(() => signalIfAlive(pid, 'SIGTERM'))
+  )));
   const pids = [
     ...options.fixtures.map(({ pid }) => pid),
     ...(options.watchdogChild?.pid ? [options.watchdogChild.pid] : []),
@@ -810,18 +871,25 @@ async function cleanupPausedFixtures(options: {
   const exitResults = await Promise.allSettled([
     waitForProcessesToExit(pids, 'EOF watchdog and paused fixtures'),
   ]);
-  if (exitResults.some((result) => result.status === 'rejected')) {
-    for (const pid of pids) signalIfAlive(pid, 'SIGKILL');
-  }
+  const forcedSignalResults = exitResults.some((result) => result.status === 'rejected')
+    ? await Promise.allSettled(pids.map((pid) => (
+      Promise.resolve().then(() => signalIfAlive(pid, 'SIGKILL'))
+    )))
+    : [];
   const finalExitResults = await Promise.allSettled([
     waitForProcessesToExit(pids, 'forced EOF watchdog and paused fixtures'),
   ]);
   const removalResults = await Promise.allSettled([
     Promise.resolve().then(() => fs.rmSync(options.root, { recursive: true, force: true })),
   ]);
-  const errors = [...shutdownResults, ...finalExitResults, ...removalResults].flatMap((result) => (
-    result.status === 'rejected' ? [result.reason] : []
-  ));
+  const errors = settledErrors([
+    ...watchdogResults,
+    ...continueResults,
+    ...terminateResults,
+    ...forcedSignalResults,
+    ...finalExitResults,
+    ...removalResults,
+  ]);
   if (errors.length > 0) throw new AggregateError(errors, 'EOF fixture cleanup failed');
 }
 
@@ -920,6 +988,50 @@ function requireEmittedServerRoot(): string {
   return emittedServerRoot;
 }
 
+function requireRepositorySnapshotRoot(): string {
+  if (!repositorySnapshotRoot) throw new Error('Canonical repository snapshot is unavailable');
+  return repositorySnapshotRoot;
+}
+
+function requireProductRuntimeModules(): ProductRuntimeModules {
+  if (!productRuntimeModules) throw new Error('Snapshot product runtime modules are unavailable');
+  return productRuntimeModules;
+}
+
+async function loadProductRuntimeModules(serverRoot: string): Promise<ProductRuntimeModules> {
+  const modulePaths = [
+    path.join(serverRoot, 'application/catalog.js'),
+    path.join(serverRoot, 'application/plugin-process/spawn.js'),
+    path.join(serverRoot, 'application/plugin-process/supervisor.js'),
+    path.join(serverRoot, 'application/runtime.js'),
+  ].map((modulePath) => fs.realpathSync(modulePath));
+  const [catalog, spawn, supervisor, runtime] = await Promise.all([
+    import(pathToFileURL(modulePaths[0]!).href) as Promise<typeof import('../../src/application/catalog')>,
+    import(pathToFileURL(modulePaths[1]!).href) as Promise<
+      typeof import('../../src/application/plugin-process/spawn')
+    >,
+    import(pathToFileURL(modulePaths[2]!).href) as Promise<
+      typeof import('../../src/application/plugin-process/supervisor')
+    >,
+    import(pathToFileURL(modulePaths[3]!).href) as Promise<typeof import('../../src/application/runtime')>,
+  ]);
+  const transitiveModulePaths = [
+    fs.realpathSync(path.join(
+      path.resolve(serverRoot, '../../..'),
+      'node_modules/@itharbors/kit-core/dist/index.js',
+    )),
+  ];
+  return Object.freeze({
+    modulePaths: Object.freeze(modulePaths),
+    transitiveModulePaths: Object.freeze(transitiveModulePaths),
+    discoverApplicationPlugins: catalog.discoverApplicationPlugins,
+    spawnApplicationPluginProcess: spawn.spawnApplicationPluginProcess,
+    resolveApplicationPluginRunner: spawn.resolveApplicationPluginRunner,
+    createApplicationPluginSupervisor: supervisor.createApplicationPluginSupervisor,
+    ApplicationRuntime: runtime.ApplicationRuntime,
+  });
+}
+
 function copyCanonicalRepositorySnapshot(snapshotRoot: string): void {
   for (const relative of ['package.json', 'package-lock.json', 'tsconfig.json']) {
     fs.copyFileSync(path.join(REPOSITORY_ROOT, relative), path.join(snapshotRoot, relative));
@@ -947,41 +1059,56 @@ function copySnapshotTree(relative: string, snapshotRoot: string): void {
 }
 
 async function cleanupSuiteRoots(): Promise<unknown[]> {
-  const roots = [repositorySnapshotRoot, buildRoot].filter((root): root is string => Boolean(root));
+  const roots = [repositorySnapshotRoot].filter((root): root is string => Boolean(root));
   repositorySnapshotRoot = undefined;
-  buildRoot = undefined;
   emittedServerRoot = undefined;
   officialBuilds = [];
+  productRuntimeModules = undefined;
   const results = await Promise.allSettled(roots.map(async (root) => {
     fs.rmSync(root, { recursive: true, force: true });
   }));
   return results.flatMap((result) => result.status === 'rejected' ? [result.reason] : []);
 }
 
-function snapshotSharedFrameworkState(): Record<string, string[]> {
+function snapshotHarnessControlledState(): Record<string, string[]> {
   return Object.fromEntries([
     'node_modules',
+    'packages/server/node_modules',
     'packages/kit-core/dist',
     'packages/kit-cli/dist',
     'packages/plugin-types/dist',
     'packages/host-security/dist',
     'packages/server/dist',
+    'kits/notifications',
+    'kits/scheduler',
+    'kits/agent-guard',
   ].map((relative) => {
     const target = path.join(REPOSITORY_ROOT, relative);
     if (!fs.existsSync(target)) return [relative, ['missing']];
-    const info = fs.lstatSync(target);
-    if (!info.isDirectory() || info.isSymbolicLink()) {
-      return [relative, [`${info.mode}:${info.size}:${info.mtimeMs}`]];
-    }
     const entries: string[] = [];
-    const visit = (directory: string): void => {
-      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-        const entryPath = path.join(directory, entry.name);
-        const entryInfo = fs.lstatSync(entryPath);
-        const name = path.relative(target, entryPath);
-        entries.push(`${name}:${entryInfo.mode}:${entryInfo.size}:${entryInfo.mtimeMs}`);
-        if (entry.isDirectory() && !entry.isSymbolicLink()) visit(entryPath);
+    const visit = (entryPath: string): void => {
+      const repositoryRelative = path.relative(REPOSITORY_ROOT, entryPath);
+      if (repositoryRelative === VITEST_RUNNER_CACHE_EXCLUSION) return;
+      const info = fs.lstatSync(entryPath);
+      const name = path.relative(target, entryPath) || '.';
+      const mode = (info.mode & 0o7777).toString(8);
+      if (info.isSymbolicLink()) {
+        entries.push(`l:${name}:${mode}:${fs.readlinkSync(entryPath)}`);
+        return;
       }
+      if (info.isDirectory()) {
+        entries.push(`d:${name}:${mode}`);
+        for (const entry of fs.readdirSync(entryPath, { withFileTypes: true })) {
+          visit(path.join(entryPath, entry.name));
+        }
+        return;
+      }
+      if (info.isFile()) {
+        const digest = createHash('sha256').update(fs.readFileSync(entryPath)).digest('hex');
+        entries.push(`f:${name}:${mode}:${digest}`);
+        return;
+      }
+      entries.push(`s:${name}:${mode}`);
     };
     visit(target);
     return [relative, entries.sort()];
