@@ -49,9 +49,12 @@ export function createWatchdogClient(options: WatchdogClientOptions) {
     env: { PATH: '/usr/bin:/bin' },
   });
   child.unref();
+  child.stdin?.on('error', () => undefined);
   const schedule = options.scheduleInterval ?? setInterval;
   const clear = options.clearScheduledInterval ?? clearInterval;
-  const timer = schedule(() => { void send(child, 'H\n'); }, 2_000);
+  const timer = schedule(() => {
+    void send(child, 'H\n').catch(() => clear(timer));
+  }, 2_000);
   timer.unref?.();
   child.once('exit', () => clear(timer));
   let closed = false;
