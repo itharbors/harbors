@@ -316,6 +316,64 @@ describe('ApplicationPluginSupervisor', () => {
     }
   });
 
+  it.each([
+    ['fixed', 100, 100],
+    ['moved backward', 100, -10_000],
+    ['jumped forward', 100, 1_000_000_000],
+  ] as const)('kills after exactly two timer seconds when now() is %s', async (_case, initialNow, finalNow) => {
+    vi.useFakeTimers();
+    try {
+      let wallClock: number = initialNow;
+      const harness = createHarness({ now: () => wallClock });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      wallClock = finalNow;
+
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('starts an independent two-second escalation timer for a replacement generation', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ exitOnKill: true, now: () => 100 });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+
+      harness.children[1]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(harness.children[1]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.children[1]!.kill).toHaveBeenCalledTimes(1);
+      expect(harness.children).toHaveLength(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('hands off stop requested from a runtime-command callback without self-waiting', async () => {
     vi.useFakeTimers();
     try {
@@ -538,8 +596,9 @@ describe('ApplicationPluginSupervisor', () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
     try {
+      let wallClock = 100;
       const cleanup = deferred<void>();
-      const harness = createHarness({ clearOwner: () => cleanup.promise });
+      const harness = createHarness({ clearOwner: () => cleanup.promise, now: () => wallClock });
       const started = harness.supervisor.start();
       await initialize(harness.children[0]!);
       await started;
@@ -550,6 +609,7 @@ describe('ApplicationPluginSupervisor', () => {
       expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
 
       await vi.advanceTimersByTimeAsync(1_000);
+      wallClock = -10_000;
       cleanup.resolve();
       await flushMicrotasks();
       expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
@@ -1096,6 +1156,7 @@ interface HarnessOptions {
   handleRuntimeCommand?: ApplicationPluginSupervisorHost['handleRuntimeCommand'];
   onStateChanged?: ApplicationPluginSupervisorHost['onStateChanged'];
   onTimer?: (milliseconds: number) => void;
+  now?: () => number;
   childOutput?: { stdout: string; stderr: string };
   preSpawnError?: boolean;
   exitOnKill?: boolean;
@@ -1145,7 +1206,7 @@ function createHarness(options: HarnessOptions = {}) {
       },
       clearTimeout: timers.clearTimeout,
     },
-    now: () => Date.now(),
+    now: options.now ?? (() => Date.now()),
   });
   return { supervisor, children, runtimeCommands, clearOwner, handleRuntimeCommand };
 }

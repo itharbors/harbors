@@ -88,8 +88,7 @@ interface GenerationRecord {
   failureTask?: Promise<void>;
   cleanupTask?: Promise<void>;
   restartDelay?: Deferred<void>;
-  terminationSentAt?: number;
-  killDeadline?: number;
+  terminationSent: boolean;
   killSent: boolean;
   readonly pendingHostCommands: Set<Promise<void>>;
   readonly pendingIncomingRequestIds: Set<string>;
@@ -290,6 +289,7 @@ export class ApplicationPluginSupervisor {
       final: false,
       finalExit: deferred<void>(),
       failureStarted: false,
+      terminationSent: false,
       killSent: false,
       pendingHostCommands: new Set(),
       pendingIncomingRequestIds: new Set(),
@@ -625,37 +625,21 @@ export class ApplicationPluginSupervisor {
   }
 
   private requestTermination(record: GenerationRecord): void {
-    if (record.final || record.killSent || !record.child) return;
-    const requestedAt = this.now();
-    if (record.terminationSentAt === undefined) {
-      record.terminationSentAt = requestedAt;
-      record.child.terminate();
-    }
-    const requestedDeadline = requestedAt + KILL_TIMEOUT_MS;
-    if (record.killDeadline === undefined || requestedDeadline < record.killDeadline) {
-      record.killDeadline = requestedDeadline;
-      this.scheduleTerminationKill(record);
-    } else if (this.terminationTimerHandle === undefined) {
-      this.scheduleTerminationKill(record);
-    }
+    if (record.final || record.terminationSent || record.killSent || !record.child) return;
+    record.terminationSent = true;
+    record.child.terminate();
+    this.scheduleTerminationKill(record);
   }
 
   private scheduleTerminationKill(record: GenerationRecord): void {
-    const deadline = record.killDeadline;
-    if (deadline === undefined || record.final || record.killSent) return;
-    this.clearTerminationTimer();
-    const milliseconds = Math.max(0, deadline - this.now());
+    if (record.final || record.killSent || this.terminationTimerHandle !== undefined) return;
     const handle = this.timers.setTimeout(() => {
       if (this.terminationTimerHandle !== handle) return;
       this.terminationTimerHandle = undefined;
       if (this.current !== record || record.final || record.killSent) return;
-      if (this.now() < deadline) {
-        this.scheduleTerminationKill(record);
-        return;
-      }
       record.killSent = true;
       record.child?.kill();
-    }, milliseconds);
+    }, KILL_TIMEOUT_MS);
     this.terminationTimerHandle = handle;
   }
 
