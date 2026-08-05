@@ -12,6 +12,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["requirements", "design", "implementation", "verification", "consolidation"],
+      "allOf": [{ "$ref": "#/$defs/stageSequence" }],
       "properties": {
         "requirements": { "$ref": "#/$defs/stage" },
         "design": { "$ref": "#/$defs/stage" },
@@ -33,6 +34,111 @@
     }
   },
   "$defs": {
-    "stage": { "enum": ["pending", "in_progress", "completed", "blocked", "skipped"] }
+    "stage": { "enum": ["pending", "in_progress", "completed", "blocked", "skipped"] },
+    "terminalStage": { "enum": ["completed", "skipped"] },
+    "activeOrBlockedStage": { "enum": ["in_progress", "blocked"] },
+    "stageSequence": {
+      "oneOf": [
+        {
+          "properties": {
+            "requirements": { "const": "pending" },
+            "design": { "const": "pending" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "const": "pending" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/terminalStage" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/terminalStage" },
+            "consolidation": { "$ref": "#/$defs/terminalStage" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "design": { "const": "pending" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/terminalStage" },
+            "consolidation": { "$ref": "#/$defs/activeOrBlockedStage" }
+          }
+        }
+      ]
+    }
   }
 }

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 import {
@@ -12,6 +13,7 @@ import {
 
 const now = '2026-08-04T10:00:00+08:00';
 const taskId = '2026-08-04-safe-login';
+const taskStatusSchema = JSON.parse(readFileSync(new URL('../../docs/tasks/status.schema.json', import.meta.url)));
 
 test('creates the canonical initial Task status', () => {
   assert.deepEqual(createInitialTaskStatus({ taskId, type: 'feature', now }), {
@@ -81,6 +83,90 @@ test('returns a canonical clone and exposes frozen domain enumerations', () => {
   assert.equal(Object.isFrozen(TASK_STAGE_STATES), true);
 });
 
+test('keeps JSON Schema stage sequences consistent with runtime validation', () => {
+  const sequences = [
+    {
+      name: 'rejects multiple active stages',
+      stages: ['completed', 'in_progress', 'in_progress', 'pending', 'pending'],
+      valid: false,
+    },
+    {
+      name: 'rejects a terminal stage after activity',
+      stages: ['completed', 'in_progress', 'completed', 'pending', 'pending'],
+      valid: false,
+    },
+    {
+      name: 'accepts no terminal stages before work begins',
+      stages: ['pending', 'pending', 'pending', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts one terminal stage before the next stage starts',
+      stages: ['completed', 'pending', 'pending', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts two terminal stages before the next stage starts',
+      stages: ['completed', 'skipped', 'pending', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts three terminal stages before the next stage starts',
+      stages: ['completed', 'skipped', 'completed', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts four terminal stages before the next stage starts',
+      stages: ['completed', 'skipped', 'completed', 'completed', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts work on the first stage',
+      stages: ['in_progress', 'pending', 'pending', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts the canonical initial sequence',
+      stages: ['completed', 'in_progress', 'pending', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts one blocked stage after a terminal prefix',
+      stages: ['completed', 'skipped', 'blocked', 'pending', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts work during verification',
+      stages: ['completed', 'skipped', 'completed', 'in_progress', 'pending'],
+      valid: true,
+    },
+    {
+      name: 'accepts work during consolidation',
+      stages: ['completed', 'skipped', 'completed', 'completed', 'in_progress'],
+      valid: true,
+    },
+    {
+      name: 'accepts an all-terminal sequence',
+      stages: ['completed', 'skipped', 'completed', 'completed', 'skipped'],
+      valid: true,
+    },
+  ];
+
+  for (const { name, stages, valid } of sequences) {
+    const status = {
+      ...createInitialTaskStatus({ taskId, type: 'feature', now }),
+      stages: Object.fromEntries(TASK_STAGES.map((stage, index) => [stage, stages[index]])),
+    };
+
+    assert.equal(schemaAccepts(taskStatusSchema.properties.stages, status.stages), valid, `${name}: Schema`);
+    if (valid) {
+      assert.doesNotThrow(() => validateTaskStatus(status, { expectedTaskId: taskId }), `${name}: runtime`);
+    } else {
+      assert.throws(() => validateTaskStatus(status, { expectedTaskId: taskId }), `${name}: runtime`);
+    }
+  }
+});
+
 test('advances, blocks, resumes, rewinds, and records a PR without free text', () => {
   let value = createInitialTaskStatus({ taskId, type: 'feature', now });
   value = applyTaskStatusAction(value, { kind: 'complete', stage: 'design' }, { now });
@@ -119,3 +205,38 @@ test('rejects invalid transitions and malformed pull requests', () => {
     /unknown field: pullRequest\.url/u,
   );
 });
+
+function schemaAccepts(schema, value) {
+  if ('$ref' in schema) {
+    return schemaAccepts(resolveSchemaReference(schema.$ref), value);
+  }
+  if ('const' in schema && value !== schema.const) {
+    return false;
+  }
+  if ('enum' in schema && !schema.enum.includes(value)) {
+    return false;
+  }
+  if (schema.type === 'object' && (value === null || typeof value !== 'object' || Array.isArray(value))) {
+    return false;
+  }
+  if (schema.required && !schema.required.every((key) => Object.hasOwn(value, key))) {
+    return false;
+  }
+  if (schema.additionalProperties === false && schema.properties
+    && Object.keys(value).some((key) => !Object.hasOwn(schema.properties, key))) {
+    return false;
+  }
+  if (schema.properties && !Object.entries(schema.properties)
+    .every(([key, propertySchema]) => !Object.hasOwn(value, key) || schemaAccepts(propertySchema, value[key]))) {
+    return false;
+  }
+  if (schema.allOf && !schema.allOf.every((subschema) => schemaAccepts(subschema, value))) {
+    return false;
+  }
+  return !schema.oneOf || schema.oneOf.filter((subschema) => schemaAccepts(subschema, value)).length === 1;
+}
+
+function resolveSchemaReference(reference) {
+  assert.match(reference, /^#\//u, 'test schema helper only supports local references');
+  return reference.slice(2).split('/').reduce((schema, segment) => schema[segment], taskStatusSchema);
+}
