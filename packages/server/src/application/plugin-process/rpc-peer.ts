@@ -15,13 +15,13 @@ export type PluginProcessRpcResponse = Pick<Extract<PluginProcessResponse, { ok:
 export interface PluginProcessRpcPeer {
   request(method: string, payload: unknown): Promise<unknown>;
   respond(requestId: string, response: PluginProcessRpcResponse): void;
-  emit(event: string, payload: unknown): void;
+  emit(event: string, payload: unknown): void | Promise<void>;
   close(error: Error): void;
 }
 
 export interface CreatePluginProcessRpcPeerOptions {
   generation: string;
-  send(envelope: PluginProcessEnvelope): void;
+  send(envelope: PluginProcessEnvelope): void | Promise<void>;
   subscribe(listener: (input: unknown) => void): () => void;
   maxPending?: number;
 }
@@ -113,7 +113,7 @@ export function createPluginProcessRpcPeer(options: CreatePluginProcessRpcPeerOp
     },
     emit(event, payload) {
       if (terminalError) return;
-      options.send(parsePluginProcessEnvelope({
+      return options.send(parsePluginProcessEnvelope({
         protocol: PLUGIN_PROCESS_PROTOCOL,
         generation: options.generation,
         kind: 'event',

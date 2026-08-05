@@ -483,6 +483,37 @@ describe('application plugin process runner', () => {
     ]);
   });
 
+  it('returns only own service snapshot entries', async () => {
+    const entryPath = await pluginEntry(`
+      let runtime;
+      globalThis.editor.plugin.define({
+        lifecycle: { load(value) { runtime = value; } },
+        methods: {
+          services() {
+            return {
+              ready: runtime.service.get('ready'),
+              missing: runtime.service.get('missing') === undefined,
+              toString: runtime.service.get('toString') === undefined,
+              constructor: runtime.service.get('constructor') === undefined,
+              proto: runtime.service.get('__proto__') === undefined,
+            };
+          },
+        },
+      });
+    `);
+    const harness = createHarness();
+
+    await harness.request('initialize', initializePayload(entryPath));
+
+    await expect(harness.request('invoke', { target: 'method', method: 'services', args: [] })).resolves.toEqual({
+      ready: true,
+      missing: true,
+      toString: true,
+      constructor: true,
+      proto: true,
+    });
+  });
+
   it('rejects a second initialize and never imports an overridden entry', async () => {
     const firstEntry = await pluginEntry(`globalThis.editor.plugin.define({ methods: { source() { return 'first'; } } });`);
     const secondEntry = await pluginEntry(`globalThis.editor.plugin.define({ methods: { source() { return 'second'; } } });`);
@@ -579,6 +610,50 @@ describe('application plugin process runner', () => {
       event: 'fatal',
       payload: { message: 'runner exploded' },
     }));
+    expect(harness.exits).toEqual([{ failed: true }]);
+  });
+
+  it.each([
+    ['synchronously', (failure: unknown) => { throw failure; }],
+    ['asynchronously', (failure: unknown) => Promise.reject(failure)],
+  ])('stops initialization when the defined event send fails %s', async (_timing, failSend) => {
+    let trapCount = 0;
+    const hostile = new Proxy({}, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+    const entryPath = await pluginEntry(`
+      globalThis.runnerTestState = { loads: 0, unloads: 0 };
+      globalThis.editor.plugin.define({ lifecycle: {
+        load(runtime) {
+          globalThis.runnerTestState.loads += 1;
+          runtime.service.register('post-terminal', true);
+        },
+        unload() { globalThis.runnerTestState.unloads += 1; },
+      } });
+    `);
+    const harness = createHarness({
+      transportSend: (envelope) => envelope.kind === 'event' && envelope.event === 'defined'
+        ? failSend(hostile)
+        : undefined,
+    });
+
+    harness.deliver({
+      protocol: 1,
+      generation: 'gen-1',
+      kind: 'request',
+      requestId: 'initialize-terminal-send',
+      method: 'initialize',
+      payload: initializePayload(entryPath),
+    });
+    await vi.waitFor(() => expect(harness.exits).toEqual([{ failed: true }]));
+
+    expect(trapCount).toBe(0);
+    expect((globalThis as { runnerTestState?: unknown }).runnerTestState).toEqual({ loads: 0, unloads: 0 });
+    expect(harness.runtimeCommands).toEqual([]);
+    expect(harness.responsesFor('initialize-terminal-send')).toEqual([]);
     expect(harness.exits).toEqual([{ failed: true }]);
   });
 
@@ -1111,6 +1186,7 @@ interface HarnessOptions {
   importModule?: (entryPath: string) => Promise<unknown>;
   runtimeCommandError?: Error;
   runtimeCommandResult?: unknown;
+  transportSend?: (envelope: PluginProcessEnvelope) => void | Promise<void>;
   timers?: {
     setTimeout(callback: () => void, milliseconds: number): unknown;
     clearTimeout(handle: unknown): void;
@@ -1145,6 +1221,7 @@ function createHarness(options: HarnessOptions = {}) {
           });
         }
       }
+      return options.transportSend?.(envelope);
     },
     subscribe(listener) {
       listeners.add(listener);

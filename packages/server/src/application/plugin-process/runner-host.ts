@@ -59,7 +59,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   const pendingSends = new Set<Promise<void>>();
   const importModule = options.importModule ?? ((entryPath: string) => import(entryPath));
 
-  const queueSend = (envelope: PluginProcessEnvelope): void => {
+  const queueSend = (envelope: PluginProcessEnvelope): void | Promise<void> => {
     let result: void | Promise<void>;
     try {
       result = options.transport.send(envelope);
@@ -74,6 +74,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     );
     pendingSends.add(settlement);
     void settlement.then(() => pendingSends.delete(settlement));
+    return settlement;
   };
 
   const bindGeneration = (value: string): void => {
@@ -206,8 +207,10 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     if (initializationStarted) throw new Error('Application plugin runner is already initialized');
     initializationStarted = true;
     definition = await captureDefinition(payload.entryPath, importModule);
+    assertInitializationActive();
     const methods = Object.keys(definition.methods ?? {}).sort();
-    rpc?.emit('defined', { lifecycle: Boolean(definition.lifecycle), methods });
+    await rpc?.emit('defined', { lifecycle: Boolean(definition.lifecycle), methods });
+    assertInitializationActive();
     runtimeController = createRunnerRuntime({
       pluginName: payload.pluginName,
       runtime: payload.runtime,
@@ -221,17 +224,26 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     } catch (input) {
       loadError = normalizePluginProcessError(input);
     }
+    assertInitializationActive();
     let commandError: Error | undefined;
     try {
       await runtimeController.finishLoading(loadError === undefined);
     } catch (input) {
       commandError = normalizePluginProcessError(input);
     }
+    assertInitializationActive();
     if (loadError) throw loadError;
     if (commandError) throw commandError;
+    await rpc?.emit('loaded', { methods });
+    assertInitializationActive();
     initialized = true;
-    rpc?.emit('loaded', { methods });
     return { lifecycle: Boolean(definition.lifecycle), methods };
+  }
+
+  function assertInitializationActive(): void {
+    if (terminal) {
+      throw sendError ?? new Error('Application plugin runner stopped during initialization');
+    }
   }
 
   function assertInitialized(): void {

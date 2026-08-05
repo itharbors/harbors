@@ -224,7 +224,9 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
         enqueueCommand({ target: 'service', operation: 'register', owner: options.pluginName, name, value }),
       unregister: (name: string) =>
         enqueueCommand({ target: 'service', operation: 'unregister', owner: options.pluginName, name }),
-      get: <T = unknown>(name: string): T | undefined => serviceSnapshot[name] as T | undefined,
+      get: <T = unknown>(name: string): T | undefined => Object.hasOwn(serviceSnapshot, name)
+        ? serviceSnapshot[name] as T | undefined
+        : undefined,
     }),
   }) as ApplicationPluginRuntime;
 
