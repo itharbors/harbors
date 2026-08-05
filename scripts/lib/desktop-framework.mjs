@@ -63,7 +63,7 @@ export function parseDesktopFrameworkEnvironment(env) {
     kitSources: parseKitSources(env.HARBORS_KIT_SOURCES),
     notificationPort: parseNotificationPort(env.HARBORS_NOTIFICATION_PORT),
     applicationControlToken,
-    host: '127.0.0.1',
+    host: '0.0.0.0',
     port: 0,
   });
 }

@@ -233,10 +233,18 @@ describe('application server lifecycle', () => {
     }
   });
 
-  it('binds the desktop control plane to loopback and protects application mutations', async () => {
+  it('binds the desktop web Host to every IPv4 interface and protects application mutations', async () => {
+    const credentialVault = {
+      recover: vi.fn(async () => undefined),
+      capability: vi.fn(() => ({ mode: 'local' as const, status: 'available' as const })),
+      bind: vi.fn(),
+      close: vi.fn(async () => undefined),
+    };
     const server = createServer({
       assembly: testAssembly,
-      host: '127.0.0.1',
+      applicationHostMode: 'desktop',
+      host: '0.0.0.0',
+      credentialVault,
       applicationControlToken: 'launch-secret',
       applicationRuntime: new ApplicationRuntime({
         plugins: [], hostMode: 'desktop', pluginPathRoots: createTestPluginPathRoots(),
@@ -260,7 +268,10 @@ describe('application server lifecycle', () => {
     });
     await Promise.all([server.stop(), server.stop()]);
 
-    expect(address.address).toBe('127.0.0.1');
+    expect(address.address).toBe('0.0.0.0');
+    expect(server.credentialMode).toBe('local');
+    expect(credentialVault.recover).toHaveBeenCalledOnce();
+    expect(credentialVault.close).toHaveBeenCalledOnce();
     expect(unauthorized.status).toBe(403);
     expect(authorized.status).toBe(404);
   });
