@@ -1,9 +1,10 @@
+import { AsyncLocalStorage } from 'node:async_hooks';
 import type { ContributeData } from '../../framework/plugin/types';
 import { isPluginProcessProxy } from './error.js';
 import {
+  assertPluginProcessPayload,
   parsePluginProcessEnvelope,
   type PluginProcessEnvelope,
-  type PluginProcessRequest,
 } from './protocol.js';
 import { createPluginProcessRpcPeer, type PluginProcessRpcPeer } from './rpc-peer.js';
 import {
@@ -34,6 +35,7 @@ const STOP_TIMEOUT_MS = 10_000;
 const KILL_TIMEOUT_MS = 2_000;
 const FAILURE_WINDOW_MS = 60_000;
 const STABLE_RUNNING_MS = 5 * 60_000;
+const MAX_PENDING_RUNTIME_COMMANDS = 256;
 const RESTART_DELAYS_MS = [250, 1_000, 4_000] as const;
 
 const FAILED_STATE_ERROR = Object.freeze({
@@ -83,6 +85,8 @@ interface GenerationRecord {
   cleanupTask?: Promise<void>;
   restartDelay?: Deferred<void>;
   readonly pendingHostCommands: Set<Promise<void>>;
+  readonly pendingIncomingRequestIds: Set<string>;
+  lastIncomingRequestId: number;
 }
 
 type SupervisorMode = 'active' | 'replacing' | 'stopping' | 'stopped';
@@ -92,6 +96,7 @@ export class ApplicationPluginSupervisor {
   private readonly spawn: (options: SpawnApplicationPluginProcessOptions) => ApplicationPluginChild;
   private readonly timers: ApplicationPluginSupervisorTimers;
   private readonly now: () => number;
+  private readonly hostCallbackContext = new AsyncLocalStorage<boolean>();
   private state: ApplicationPluginProcessState = freezeState({
     status: 'pending',
     generation: null,
@@ -108,7 +113,8 @@ export class ApplicationPluginSupervisor {
   private automaticRestarts = 0;
   private runningSince: number | null = null;
   private lastFailureAt: number | null = null;
-  private timerHandle?: unknown;
+  private lifecycleTimerHandle?: unknown;
+  private terminationTimerHandle?: unknown;
   private stopTask?: Promise<void>;
   private retryTask?: Promise<void>;
   private ownerCleanupBlocked = false;
@@ -125,7 +131,7 @@ export class ApplicationPluginSupervisor {
   start(): Promise<void> {
     if (this.state.status !== 'pending') {
       if (this.state.status === 'running') return Promise.resolve();
-      return Promise.reject(unavailableError());
+      return Promise.reject(this.unavailableError());
     }
     return this.startGeneration();
   }
@@ -147,12 +153,17 @@ export class ApplicationPluginSupervisor {
   }
 
   retry(): Promise<void> {
+    const task = this.retryLifecycle();
+    return this.hostCallbackContext.getStore() ? handoff(task) : task;
+  }
+
+  private retryLifecycle(): Promise<void> {
     if (this.retryTask) return this.retryTask;
-    if (this.mode === 'stopping' || this.mode === 'stopped') return Promise.reject(unavailableError());
+    if (this.mode === 'stopping' || this.mode === 'stopped') return Promise.reject(this.unavailableError());
     const completion = deferred<void>();
     this.retryTask = completion.promise;
     this.mode = 'replacing';
-    this.clearTimer();
+    this.clearLifecycleTimer();
     this.current?.restartDelay?.resolve();
     this.failureTimestamps = [];
     this.automaticRestarts = 0;
@@ -164,7 +175,7 @@ export class ApplicationPluginSupervisor {
         await record.failureTask;
       } else if (record) {
         record.available = false;
-        record.rpc?.close(unavailableError());
+        record.rpc?.close(this.unavailableError());
         await this.drainHostCommands(record);
         let cleanupFailed = false;
         try {
@@ -186,17 +197,17 @@ export class ApplicationPluginSupervisor {
             this.mode = 'active';
             this.publishCleanupFailure();
           }
-          throw unavailableError();
+          throw this.unavailableError();
         }
       }
-      if (this.mode !== 'replacing') throw unavailableError();
+      if (this.mode !== 'replacing') throw this.unavailableError();
       if (this.ownerCleanupBlocked) {
         try {
           await this.clearOwnerWithoutRecord();
           this.ownerCleanupBlocked = false;
         } catch {
           this.publishCleanupFailure();
-          throw unavailableError();
+          throw this.unavailableError();
         }
       }
       this.mode = 'active';
@@ -206,12 +217,18 @@ export class ApplicationPluginSupervisor {
   }
 
   stop(): Promise<void> {
+    const task = this.stopLifecycle();
+    return this.hostCallbackContext.getStore() ? handoff(task) : task;
+  }
+
+  private stopLifecycle(): Promise<void> {
     if (this.stopTask) return this.stopTask;
     if (this.mode === 'stopped') return Promise.resolve();
     const completion = deferred<void>();
     this.stopTask = completion.promise;
+    const stopMethod = this.state.status === 'starting' ? 'shutdown' : 'unload';
     this.mode = 'stopping';
-    this.clearTimer();
+    this.clearLifecycleTimer();
     this.current?.restartDelay?.resolve();
     this.publish({
       status: 'stopping',
@@ -228,16 +245,16 @@ export class ApplicationPluginSupervisor {
         if (record && !record.final) {
           record.final = true;
           record.finalExit.resolve();
-          record.startup.reject(stoppedError());
+          record.startup.reject(this.unavailableError());
         }
         await this.completeStop(record);
         return;
       }
-      void record.rpc?.request('unload', null).catch(() => undefined);
+      void record.rpc?.request(stopMethod, null).catch(() => undefined);
       record.available = false;
-      this.setTimer(() => {
+      this.setLifecycleTimer(() => {
         record.child?.terminate();
-        this.setTimer(() => { record.child?.kill(); }, KILL_TIMEOUT_MS);
+        this.setTerminationTimer(() => { record.child?.kill(); }, KILL_TIMEOUT_MS);
       }, STOP_TIMEOUT_MS);
       await record.finalExit.promise;
       await this.completeStop(record);
@@ -255,7 +272,7 @@ export class ApplicationPluginSupervisor {
   }
 
   private startGeneration(): Promise<void> {
-    if (this.mode !== 'active' || this.current) return Promise.reject(unavailableError());
+    if (this.mode !== 'active' || this.current) return Promise.reject(this.unavailableError());
     this.generationCounter += 1;
     const generation = `generation-${this.generationCounter}`;
     const record: GenerationRecord = {
@@ -266,6 +283,8 @@ export class ApplicationPluginSupervisor {
       finalExit: deferred<void>(),
       failureStarted: false,
       pendingHostCommands: new Set(),
+      pendingIncomingRequestIds: new Set(),
+      lastIncomingRequestId: 0,
     };
     this.current = record;
     this.publish({
@@ -273,7 +292,7 @@ export class ApplicationPluginSupervisor {
       lastFailureAt: this.lastFailureAt, error: null, retryAfterMs: null,
     });
     if (this.mode !== 'active' || this.current !== record) {
-      record.startup.reject(stoppedError());
+      record.startup.reject(this.unavailableError());
       return record.startup.promise;
     }
 
@@ -294,14 +313,20 @@ export class ApplicationPluginSupervisor {
     }
     if (record.failureStarted) return record.startup.promise;
 
-    record.rpc = createPluginProcessRpcPeer({
-      generation,
-      send: (envelope) => this.send(record, envelope),
-      subscribe: (listener) => record.child!.subscribeMessage(listener),
-    });
-    record.unsubscribeMessage = record.child.subscribeMessage((message) => this.onMessage(record, message));
+    try {
+      record.rpc = createPluginProcessRpcPeer({
+        generation,
+        send: (envelope) => this.send(record, envelope),
+        subscribe: (listener) => record.child!.subscribeMessage(listener),
+      });
+      record.unsubscribeMessage = record.child.subscribeMessage((message) => this.onMessage(record, message));
+    } catch {
+      record.rpc?.close(this.unavailableError());
+      this.beginFailure(record);
+      return record.startup.promise;
+    }
     record.available = true;
-    this.setTimer(() => this.beginFailure(record), LOAD_TIMEOUT_MS);
+    this.setLifecycleTimer(() => this.beginFailure(record), LOAD_TIMEOUT_MS);
 
     let payload: InitializeApplicationPluginPayload;
     try {
@@ -320,9 +345,22 @@ export class ApplicationPluginSupervisor {
   private request(method: string, payload: unknown): Promise<unknown> {
     const record = this.current;
     if (this.mode !== 'active' || this.state.status !== 'running' || !record?.available || !record.rpc) {
-      return Promise.reject(unavailableError());
+      return Promise.reject(this.unavailableError());
     }
     return record.rpc.request(method, payload);
+  }
+
+  private unavailableError(): Error & {
+    readonly code: 'APPLICATION_PLUGIN_UNAVAILABLE';
+    readonly plugin: string;
+    readonly retryable: boolean;
+    readonly retryAfterMs?: number;
+  } {
+    return createUnavailableError(
+      this.options.plugin,
+      this.mode !== 'stopping' && this.mode !== 'stopped',
+      this.state.retryAfterMs ?? undefined,
+    );
   }
 
   private send(record: GenerationRecord, envelope: PluginProcessEnvelope): void {
@@ -350,32 +388,56 @@ export class ApplicationPluginSupervisor {
         this.beginFailure(record);
         return;
       }
-      const operation = this.handleRuntimeCommand(record, envelope);
+      let command: RuntimeCommand;
+      try {
+        command = cloneRuntimeCommand(envelope.payload);
+        enterIncomingRuntimeCommand(record, envelope.requestId);
+      } catch {
+        this.beginFailure(record);
+        return;
+      }
+      const operation = this.handleRuntimeCommand(record, envelope.requestId, command);
       record.pendingHostCommands.add(operation);
       void operation.then(
-        () => record.pendingHostCommands.delete(operation),
-        () => record.pendingHostCommands.delete(operation),
+        () => this.releaseIncomingRuntimeCommand(record, envelope.requestId, operation),
+        () => this.releaseIncomingRuntimeCommand(record, envelope.requestId, operation),
       );
     }
   }
 
-  private async handleRuntimeCommand(record: GenerationRecord, request: PluginProcessRequest): Promise<void> {
+  private async handleRuntimeCommand(
+    record: GenerationRecord,
+    requestId: string,
+    command: RuntimeCommand,
+  ): Promise<void> {
+    // Let the caller register this operation before host code can reenter lifecycle methods.
+    await Promise.resolve();
     try {
-      const result = await this.options.host.handleRuntimeCommand(
-        this.options.plugin,
-        request.payload as RuntimeCommand,
+      const result = await this.hostCallbackContext.run(
+        true,
+        () => this.options.host.handleRuntimeCommand(this.options.plugin, command),
       );
       if (this.current !== record || !record.available || this.mode !== 'active') return;
-      record.rpc?.respond(request.requestId, { ok: true, payload: result === undefined ? null : result });
+      record.rpc?.respond(requestId, { ok: true, payload: result === undefined ? null : result });
     } catch {
       this.beginFailure(record);
     }
+  }
+
+  private releaseIncomingRuntimeCommand(
+    record: GenerationRecord,
+    requestId: string,
+    operation: Promise<void>,
+  ): void {
+    record.pendingIncomingRequestIds.delete(requestId);
+    record.pendingHostCommands.delete(operation);
   }
 
   private onTerminal(record: GenerationRecord, terminal: ApplicationPluginChildTerminal): void {
     if (this.current !== record) return;
     if (terminal.final && !record.final) {
       record.final = true;
+      this.clearTerminationTimer();
       record.finalExit.resolve();
     }
     if (this.mode === 'stopping' || this.mode === 'replacing') {
@@ -391,9 +453,9 @@ export class ApplicationPluginSupervisor {
     if (this.current !== record || record.failureStarted || this.mode !== 'active') return;
     record.failureStarted = true;
     record.available = false;
-    this.clearTimer();
-    record.rpc?.close(unavailableError());
-    record.startup.reject(unavailableError());
+    this.clearLifecycleTimer();
+    record.rpc?.close(this.unavailableError());
+    record.startup.reject(this.unavailableError());
 
     const failureAt = this.now();
     if (this.runningSince !== null && failureAt - this.runningSince >= STABLE_RUNNING_MS) {
@@ -430,14 +492,17 @@ export class ApplicationPluginSupervisor {
           retryAfterMs: fused ? null : retryAfterMs,
         });
       }
-      if (!record.final) record.child?.terminate();
+      if (!record.final) {
+        record.child?.terminate();
+        this.setTerminationTimer(() => { record.child?.kill(); }, KILL_TIMEOUT_MS);
+      }
       if (this.mode !== 'active' || fused || retryAfterMs === null) {
         await record.finalExit.promise;
         this.releaseRecord(record);
         return;
       }
       record.restartDelay = deferred<void>();
-      this.setTimer(() => record.restartDelay?.resolve(), retryAfterMs);
+      this.setLifecycleTimer(() => record.restartDelay?.resolve(), retryAfterMs);
       await Promise.all([record.finalExit.promise, record.restartDelay.promise]);
       this.releaseRecord(record);
       if (this.mode !== 'active' || this.current) return;
@@ -449,7 +514,7 @@ export class ApplicationPluginSupervisor {
 
   private markRunning(record: GenerationRecord): void {
     if (this.current !== record || !record.available || record.failureStarted || this.mode !== 'active') return;
-    this.clearTimer();
+    this.clearLifecycleTimer();
     this.runningSince = this.now();
     this.publish({
       status: 'running',
@@ -465,14 +530,20 @@ export class ApplicationPluginSupervisor {
 
   private clearOwner(record: GenerationRecord): Promise<void> {
     record.cleanupTask ??= Promise.resolve()
-      .then(() => this.options.host.clearOwner(this.options.plugin))
+      .then(() => this.hostCallbackContext.run(
+        true,
+        () => this.options.host.clearOwner(this.options.plugin),
+      ))
       .then(() => undefined);
     return record.cleanupTask;
   }
 
   private clearOwnerWithoutRecord(): Promise<void> {
     return Promise.resolve()
-      .then(() => this.options.host.clearOwner(this.options.plugin))
+      .then(() => this.hostCallbackContext.run(
+        true,
+        () => this.options.host.clearOwner(this.options.plugin),
+      ))
       .then(() => undefined);
   }
 
@@ -483,12 +554,13 @@ export class ApplicationPluginSupervisor {
   }
 
   private async completeStop(record?: GenerationRecord): Promise<void> {
-    this.clearTimer();
+    this.clearLifecycleTimer();
+    this.clearTerminationTimer();
     let cleanupFailed = false;
     if (record) {
       record.available = false;
-      record.rpc?.close(stoppedError());
-      record.startup.reject(stoppedError());
+      record.rpc?.close(this.unavailableError());
+      record.startup.reject(this.unavailableError());
       await this.drainHostCommands(record);
       try {
         await this.clearOwner(record);
@@ -525,31 +597,54 @@ export class ApplicationPluginSupervisor {
   private releaseRecord(record: GenerationRecord): void {
     try { record.unsubscribeMessage?.(); } catch { /* Generation is already terminal. */ }
     try { record.unsubscribeExit?.(); } catch { /* Generation is already terminal. */ }
-    if (this.current === record) this.current = undefined;
+    if (this.current === record) {
+      this.clearTerminationTimer();
+      this.current = undefined;
+    }
   }
 
-  private setTimer(callback: () => void, milliseconds: number): void {
-    this.clearTimer();
+  private setLifecycleTimer(callback: () => void, milliseconds: number): void {
+    this.clearLifecycleTimer();
     const handle = this.timers.setTimeout(() => {
-      if (this.timerHandle !== handle) return;
-      this.timerHandle = undefined;
+      if (this.lifecycleTimerHandle !== handle) return;
+      this.lifecycleTimerHandle = undefined;
       callback();
     }, milliseconds);
-    this.timerHandle = handle;
+    this.lifecycleTimerHandle = handle;
   }
 
-  private clearTimer(): void {
-    if (this.timerHandle === undefined) return;
-    this.timers.clearTimeout(this.timerHandle);
-    this.timerHandle = undefined;
+  private clearLifecycleTimer(): void {
+    if (this.lifecycleTimerHandle === undefined) return;
+    this.timers.clearTimeout(this.lifecycleTimerHandle);
+    this.lifecycleTimerHandle = undefined;
+  }
+
+  private setTerminationTimer(callback: () => void, milliseconds: number): void {
+    this.clearTerminationTimer();
+    const handle = this.timers.setTimeout(() => {
+      if (this.terminationTimerHandle !== handle) return;
+      this.terminationTimerHandle = undefined;
+      callback();
+    }, milliseconds);
+    this.terminationTimerHandle = handle;
+  }
+
+  private clearTerminationTimer(): void {
+    if (this.terminationTimerHandle === undefined) return;
+    this.timers.clearTimeout(this.terminationTimerHandle);
+    this.terminationTimerHandle = undefined;
   }
 
   private publish(next: ApplicationPluginProcessState): void {
     const state = freezeState(next);
     this.state = state;
-    try { this.options.host.onStateChanged(state); } catch { /* State observers cannot break supervision. */ }
+    try {
+      observeThenable(this.options.host.onStateChanged(state));
+    } catch { /* State observers cannot break supervision. */ }
     for (const listener of [...this.listeners]) {
-      try { listener(state); } catch { /* State observers cannot break supervision. */ }
+      try {
+        observeThenable(listener(state));
+      } catch { /* State observers cannot break supervision. */ }
     }
   }
 }
@@ -567,16 +662,158 @@ function freezeState(state: ApplicationPluginProcessState): ApplicationPluginPro
   return Object.freeze({ ...state, error });
 }
 
-function unavailableError(): Error & { code: string } {
-  return Object.assign(new Error('Application plugin process is unavailable'), {
-    code: 'APPLICATION_PLUGIN_PROCESS_UNAVAILABLE',
+function createUnavailableError(
+  plugin: string,
+  retryable: boolean,
+  retryAfterMs?: number,
+): Error & {
+  readonly code: 'APPLICATION_PLUGIN_UNAVAILABLE';
+  readonly plugin: string;
+  readonly retryable: boolean;
+  readonly retryAfterMs?: number;
+} {
+  const error = Object.assign(new Error('Application plugin is unavailable'), {
+    code: 'APPLICATION_PLUGIN_UNAVAILABLE' as const,
+    plugin,
+    retryable,
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   });
+  delete error.stack;
+  return Object.freeze(error);
 }
 
-function stoppedError(): Error & { code: string } {
-  return Object.assign(new Error('Application plugin process stopped'), {
-    code: 'APPLICATION_PLUGIN_PROCESS_STOPPED',
-  });
+function handoff(task: Promise<void>): Promise<void> {
+  void task.catch(() => undefined);
+  return Promise.resolve();
+}
+
+function observeThenable(input: unknown): void {
+  try {
+    void Promise.resolve(input).catch(() => undefined);
+  } catch {
+    // Hostile thenables are isolated like synchronous observer failures.
+  }
+}
+
+function enterIncomingRuntimeCommand(record: GenerationRecord, requestId: string): void {
+  if (!/^[1-9]\d*$/u.test(requestId)) throw new TypeError('Runtime command request id is invalid');
+  const numericRequestId = Number(requestId);
+  if (!Number.isSafeInteger(numericRequestId)
+    || numericRequestId <= record.lastIncomingRequestId
+    || record.pendingIncomingRequestIds.has(requestId)) {
+    throw new TypeError('Runtime command request id is not monotonic');
+  }
+  if (record.pendingIncomingRequestIds.size >= MAX_PENDING_RUNTIME_COMMANDS) {
+    throw new Error('Runtime command pending limit exceeded');
+  }
+  record.lastIncomingRequestId = numericRequestId;
+  record.pendingIncomingRequestIds.add(requestId);
+}
+
+function cloneRuntimeCommand(input: unknown): RuntimeCommand {
+  assertPluginProcessPayload(input);
+  const command = structuredClone(input);
+  if (!isRecord(command) || typeof command.target !== 'string' || typeof command.operation !== 'string') {
+    throw new TypeError('Runtime command is invalid');
+  }
+  switch (`${command.target}:${command.operation}`) {
+    case 'plugin:call':
+      assertExactCommand(command, ['target', 'operation', 'plugin', 'method', 'args']);
+      assertStrings(command, ['plugin', 'method']);
+      assertArray(command.args);
+      break;
+    case 'menu:attach':
+      assertExactCommand(command, ['target', 'operation', 'owner', 'contribute']);
+      assertStrings(command, ['owner']);
+      if (!isRecord(command.contribute)) throw new TypeError('Runtime command contribute is invalid');
+      break;
+    case 'menu:detach':
+      assertExactCommand(command, ['target', 'operation', 'owner']);
+      assertStrings(command, ['owner']);
+      break;
+    case 'message:register-request':
+      assertRouteRegistration(command, 'name');
+      break;
+    case 'message:register-broadcast':
+      assertRouteRegistration(command, 'topic');
+      break;
+    case 'message:unregister-request':
+      assertExactCommand(command, ['target', 'operation', 'owner', 'name']);
+      assertStrings(command, ['owner', 'name']);
+      break;
+    case 'message:unregister-broadcast':
+      assertExactCommand(command, ['target', 'operation', 'owner', 'topic']);
+      assertStrings(command, ['owner', 'topic']);
+      break;
+    case 'message:request':
+      assertExactCommand(command, ['target', 'operation', 'plugin', 'name', 'args']);
+      assertStrings(command, ['plugin', 'name']);
+      assertArray(command.args);
+      break;
+    case 'message:broadcast':
+      assertExactCommand(command, ['target', 'operation', 'topic', 'args']);
+      assertStrings(command, ['topic']);
+      assertArray(command.args);
+      break;
+    case 'service:register':
+      assertExactCommand(command, ['target', 'operation', 'owner', 'name', 'value']);
+      assertStrings(command, ['owner', 'name']);
+      break;
+    case 'service:unregister':
+      assertExactCommand(command, ['target', 'operation', 'owner', 'name']);
+      assertStrings(command, ['owner', 'name']);
+      break;
+    case 'notifications:create':
+      assertExactCommand(command, ['target', 'operation', 'input']);
+      break;
+    case 'notifications:list':
+    case 'notifications:mark-all-read':
+      assertExactCommand(command, ['target', 'operation']);
+      break;
+    case 'notifications:mark-read':
+    case 'notifications:remove':
+      assertExactCommand(command, ['target', 'operation', 'id']);
+      assertStrings(command, ['id']);
+      break;
+    default:
+      throw new TypeError('Runtime command target or operation is invalid');
+  }
+  return command as unknown as RuntimeCommand;
+}
+
+function assertRouteRegistration(command: Record<string, unknown>, routeField: 'name' | 'topic'): void {
+  const required = ['target', 'operation', 'owner', routeField, 'handlerId', 'location'];
+  const keys = Object.keys(command);
+  const expected = command.methods === undefined ? required : [...required, 'methods'];
+  assertExactCommand(command, expected);
+  assertStrings(command, ['owner', routeField, 'handlerId']);
+  if (command.location !== 'server') throw new TypeError('Runtime command location is invalid');
+  if (command.methods !== undefined && (!Array.isArray(command.methods)
+    || command.methods.some((method) => typeof method !== 'string'))) {
+    throw new TypeError('Runtime command methods are invalid');
+  }
+  if (keys.length !== expected.length) throw new TypeError('Runtime command fields are invalid');
+}
+
+function assertExactCommand(command: Record<string, unknown>, expected: string[]): void {
+  const keys = Object.keys(command);
+  if (keys.length !== expected.length || expected.some((key) => !keys.includes(key))) {
+    throw new TypeError('Runtime command fields are invalid');
+  }
+}
+
+function assertStrings(command: Record<string, unknown>, fields: string[]): void {
+  if (fields.some((field) => typeof command[field] !== 'string' || command[field].length === 0)) {
+    throw new TypeError('Runtime command string field is invalid');
+  }
+}
+
+function assertArray(input: unknown): asserts input is unknown[] {
+  if (!Array.isArray(input)) throw new TypeError('Runtime command array field is invalid');
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return input !== null && typeof input === 'object' && !Array.isArray(input);
 }
 
 function deferred<T>(): Deferred<T> {

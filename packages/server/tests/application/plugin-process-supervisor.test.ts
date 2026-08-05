@@ -71,11 +71,15 @@ describe('ApplicationPluginSupervisor', () => {
       const command: RuntimeCommand = {
         target: 'plugin', operation: 'call', plugin: 'other', method: 'hello', args: [],
       };
-      harness.children[0]!.requestHost('runtime-command', command, 'host-1');
+      harness.children[0]!.requestHost('runtime-command', command, '1');
+      command.args.push('mutated-after-send');
       await flushMicrotasks();
-      expect(harness.runtimeCommands).toEqual([command]);
+      expect(harness.runtimeCommands).toEqual([{
+        target: 'plugin', operation: 'call', plugin: 'other', method: 'hello', args: [],
+      }]);
+      expect(harness.runtimeCommands[0]).not.toBe(command);
       expect(harness.children[0]!.sent).toContainEqual(expect.objectContaining({
-        kind: 'response', requestId: 'host-1', ok: true, payload: { handled: true },
+        kind: 'response', requestId: '1', ok: true, payload: { handled: true },
       }));
     } finally {
       vi.useRealTimers();
@@ -101,13 +105,13 @@ describe('ApplicationPluginSupervisor', () => {
       const pending = harness.supervisor.invoke('never-returns', []);
       harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
 
-      await expect(pending).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_PROCESS_UNAVAILABLE' });
+      await expect(pending).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
       expect(order).toEqual(['clear-owner']);
       expect(harness.children[0]!.terminate).not.toHaveBeenCalled();
       cleanup.resolve();
       await flushMicrotasks();
 
-      expect(order).toEqual(['clear-owner', 'state:restarting', 'timer:250']);
+      expect(order).toEqual(['clear-owner', 'state:restarting', 'timer:2000', 'timer:250']);
       expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(250);
       expect(harness.children).toHaveLength(1);
@@ -115,7 +119,7 @@ describe('ApplicationPluginSupervisor', () => {
       harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
       await flushMicrotasks();
       expect(order).toEqual([
-        'clear-owner', 'state:restarting', 'timer:250', 'state:starting', 'timer:30000',
+        'clear-owner', 'state:restarting', 'timer:2000', 'timer:250', 'state:starting', 'timer:30000',
       ]);
       expect(harness.children).toHaveLength(2);
       expect(harness.clearOwner).toHaveBeenCalledTimes(1);
@@ -244,6 +248,299 @@ describe('ApplicationPluginSupervisor', () => {
     }
   });
 
+  it('uses shutdown while initialization is still starting', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const started = harness.supervisor.start();
+      void started.catch(() => undefined);
+
+      const stopped = harness.supervisor.stop();
+      expect(harness.children[0]!.lastRequest()).toMatchObject({ method: 'shutdown', payload: null });
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 0, signal: null, error: null });
+      await stopped;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('kills an unexpected-failure child after two seconds and restarts only after final exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ exitOnKill: true });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      expect(harness.children).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await flushMicrotasks();
+
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(harness.children).toHaveLength(2);
+      expect(harness.supervisor.getState().status).toBe('starting');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands off stop requested from a runtime-command callback without self-waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      const harness = createHarness({ handleRuntimeCommand: async () => supervisor.stop() });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.requestHost('runtime-command', { target: 'notifications', operation: 'list' }, '1');
+      await flushMicrotasks();
+      expect(supervisor.getState().status).toBe('stopping');
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 0, signal: null, error: null });
+      await flushMicrotasks();
+      expect(supervisor.getState().status).toBe('stopped');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands off retry requested from a runtime-command callback without self-waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      const gate = deferred<void>();
+      const order: string[] = [];
+      const harness = createHarness({
+        handleRuntimeCommand: async () => {
+          order.push('command-start');
+          await supervisor.retry();
+          order.push('retry-handed-off');
+          await gate.promise;
+          order.push('command-end');
+          return null;
+        },
+        clearOwner: () => { order.push('clear-owner'); },
+      });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.requestHost('runtime-command', { target: 'notifications', operation: 'list' }, '1');
+      await flushMicrotasks();
+      expect(order).toEqual(['command-start', 'retry-handed-off']);
+      gate.resolve();
+      await flushMicrotasks();
+      expect(order).toEqual(['command-start', 'retry-handed-off', 'command-end', 'clear-owner']);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 0, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      expect(supervisor.getState().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands off stop requested from clearOwner without cleanup self-waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      const harness = createHarness({ clearOwner: () => supervisor.stop() });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+      await flushMicrotasks();
+      expect(supervisor.getState().status).toBe('stopped');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('hands off retry requested from clearOwner without cleanup self-waiting', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      const harness = createHarness({ clearOwner: () => supervisor.retry() });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      expect(supervisor.getState().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['extra fields', { target: 'notifications', operation: 'list', extra: true }],
+    ['an unknown operation', { target: 'notifications', operation: 'unknown' }],
+  ])('rejects a runtime command with %s before invoking the host', async (_case, command) => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.requestHost('runtime-command', command, '1');
+      await flushMicrotasks();
+      expect(harness.runtimeCommands).toEqual([]);
+      expect(harness.supervisor.getState().status).toBe('restarting');
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    ['duplicate', ['1', '1']],
+    ['backward', ['2', '1']],
+  ] as const)('fails a %s runtime-command request id without invoking it twice', async (_case, requestIds) => {
+    vi.useFakeTimers();
+    try {
+      const gate = deferred<void>();
+      const harness = createHarness({ handleRuntimeCommand: async () => gate.promise });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      for (const requestId of requestIds) {
+        harness.children[0]!.requestHost(
+          'runtime-command', { target: 'notifications', operation: 'list' }, requestId,
+        );
+      }
+      await flushMicrotasks();
+      expect(harness.handleRuntimeCommand).toHaveBeenCalledTimes(1);
+      await expect(harness.supervisor.invoke('after-sequence-fault', [])).rejects.toMatchObject({
+        code: 'APPLICATION_PLUGIN_UNAVAILABLE',
+      });
+      gate.resolve();
+      await flushMicrotasks();
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('fails the 257th pending runtime command without invoking the host', async () => {
+    vi.useFakeTimers();
+    try {
+      const gate = deferred<void>();
+      const harness = createHarness({ handleRuntimeCommand: async () => gate.promise });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      for (let requestId = 1; requestId <= 257; requestId += 1) {
+        harness.children[0]!.requestHost(
+          'runtime-command', { target: 'notifications', operation: 'list' }, String(requestId),
+        );
+      }
+      await flushMicrotasks();
+      expect(harness.handleRuntimeCommand).toHaveBeenCalledTimes(256);
+      await expect(harness.supervisor.invoke('after-capacity-fault', [])).rejects.toMatchObject({
+        code: 'APPLICATION_PLUGIN_UNAVAILABLE',
+      });
+      gate.resolve();
+      await flushMicrotasks();
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns a frozen sanitized unavailable error with plugin and retry metadata', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness({ childOutput: { stdout: 'secret tail', stderr: 'private stack' } });
+      const error = await harness.supervisor.invoke('before-start', []).catch((input) => input);
+      expect(error).toMatchObject({
+        code: 'APPLICATION_PLUGIN_UNAVAILABLE', plugin: 'fixture', retryable: true,
+      });
+      expect(Object.isFrozen(error)).toBe(true);
+      expect((error as { stack?: unknown }).stack).toBeUndefined();
+      expect(JSON.stringify(error)).not.toMatch(/secret|stack/i);
+
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+      await flushMicrotasks();
+      await expect(harness.supervisor.invoke('during-backoff', [])).rejects.toMatchObject({
+        code: 'APPLICATION_PLUGIN_UNAVAILABLE', plugin: 'fixture', retryable: true, retryAfterMs: 250,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('observes rejected thenables from state callbacks without disrupting supervision', async () => {
+    vi.useFakeTimers();
+    try {
+      let hostThenObserved = 0;
+      let listenerThenObserved = 0;
+      const rejectedThenable = (observe: () => void) => ({
+        then(_resolve: (value: unknown) => void, reject: (error: Error) => void) {
+          observe();
+          reject(new Error('observer rejected'));
+        },
+      });
+      const harness = createHarness({
+        onStateChanged: () => rejectedThenable(() => { hostThenObserved += 1; }) as never,
+      });
+      harness.supervisor.subscribe(
+        () => rejectedThenable(() => { listenerThenObserved += 1; }) as never,
+      );
+
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+      await flushMicrotasks();
+      expect(hostThenObserved).toBe(2);
+      expect(listenerThenObserved).toBe(2);
+      expect(harness.supervisor.getState().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('rolls back a partial message subscription setup through the failure path', async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduled: number[] = [];
+      const harness = createHarness({
+        throwOnMessageSubscription: 2,
+        onTimer: (milliseconds) => scheduled.push(milliseconds),
+      });
+      let started!: Promise<void>;
+      expect(() => { started = harness.supervisor.start(); }).not.toThrow();
+      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
+      await flushMicrotasks();
+      expect(harness.children[0]!.activeMessageSubscriptions).toBe(0);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(scheduled).not.toContain(30_000);
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('is reentrant when a state observer stops from stopping', async () => {
     vi.useFakeTimers();
     try {
@@ -273,7 +570,7 @@ describe('ApplicationPluginSupervisor', () => {
       });
 
       const started = harness.supervisor.start();
-      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_PROCESS_STOPPED' });
+      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
       await stopped;
       expect(harness.children).toHaveLength(0);
       expect(harness.supervisor.getState().status).toBe('stopped');
@@ -385,7 +682,7 @@ describe('ApplicationPluginSupervisor', () => {
       await flushMicrotasks();
       expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
       harness.children[0]!.terminal({ kind: 'exit', final: true, code: 0, signal: null, error: null });
-      await expect(failedRetry).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_PROCESS_UNAVAILABLE' });
+      await expect(failedRetry).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
       expect(harness.supervisor.getState()).toMatchObject({ status: 'failed', retryAfterMs: null });
 
       const successfulRetry = harness.supervisor.retry();
@@ -418,7 +715,7 @@ describe('ApplicationPluginSupervisor', () => {
       await started;
       harness.children[0]!.requestHost('runtime-command', {
         target: 'notifications', operation: 'list',
-      }, 'in-flight');
+      }, '1');
       await flushMicrotasks();
 
       harness.children[0]!.terminal({ kind: 'exit', final: true, code: 1, signal: null, error: null });
@@ -453,7 +750,7 @@ describe('ApplicationPluginSupervisor', () => {
         } else {
           harness.children[0]!.requestHost('runtime-command', {
             target: 'notifications', operation: 'list',
-          }, 'host-failure');
+          }, '1');
         }
         await flushMicrotasks();
 
@@ -488,7 +785,7 @@ describe('ApplicationPluginSupervisor', () => {
         error: { code: 'APPLICATION_PLUGIN_PROCESS_FAILED', message: 'Application plugin process failed' },
       });
       expect(JSON.stringify(state)).not.toMatch(/secret|stack/i);
-      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_PROCESS_UNAVAILABLE' });
+      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
     } finally {
       vi.useRealTimers();
     }
@@ -524,7 +821,7 @@ describe('ApplicationPluginSupervisor', () => {
     try {
       const harness = createHarness({ preSpawnError: true });
       const started = harness.supervisor.start();
-      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_PROCESS_UNAVAILABLE' });
+      await expect(started).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
       await flushMicrotasks();
       expect(harness.supervisor.getState().status).toBe('restarting');
       expect(harness.children[0]!.terminate).not.toHaveBeenCalled();
@@ -555,18 +852,21 @@ interface HarnessOptions {
   onTimer?: (milliseconds: number) => void;
   childOutput?: { stdout: string; stderr: string };
   preSpawnError?: boolean;
+  exitOnKill?: boolean;
+  throwOnMessageSubscription?: number;
 }
 
 function createHarness(options: HarnessOptions = {}) {
   const children: FakeChild[] = [];
   const runtimeCommands: RuntimeCommand[] = [];
   const clearOwner = vi.fn(options.clearOwner ?? (() => undefined));
+  const handleRuntimeCommand = vi.fn(options.handleRuntimeCommand ?? (async (_plugin, command) => {
+    runtimeCommands.push(command);
+    return { handled: true };
+  }));
   const host: ApplicationPluginSupervisorHost = {
     initializePayload: () => initializePayload(),
-    handleRuntimeCommand: options.handleRuntimeCommand ?? (async (_plugin, command) => {
-      runtimeCommands.push(command);
-      return { handled: true };
-    }),
+    handleRuntimeCommand,
     clearOwner,
     onStateChanged: options.onStateChanged ?? (() => undefined),
   };
@@ -579,7 +879,10 @@ function createHarness(options: HarnessOptions = {}) {
     },
     host,
     spawn: () => {
-      const child = new FakeChild(4_000 + children.length, options.childOutput);
+      const child = new FakeChild(4_000 + children.length, options.childOutput, {
+        exitOnKill: options.exitOnKill ?? false,
+        throwOnMessageSubscription: options.throwOnMessageSubscription,
+      });
       children.push(child);
       if (options.preSpawnError && children.length === 1) {
         child.terminal({
@@ -598,7 +901,7 @@ function createHarness(options: HarnessOptions = {}) {
     },
     now: () => Date.now(),
   });
-  return { supervisor, children, runtimeCommands, clearOwner };
+  return { supervisor, children, runtimeCommands, clearOwner, handleRuntimeCommand };
 }
 
 class FakeChild implements ApplicationPluginChild {
@@ -606,16 +909,27 @@ class FakeChild implements ApplicationPluginChild {
   readonly stdoutTail: string;
   readonly stderrTail: string;
   readonly terminate = vi.fn(() => true);
-  readonly kill = vi.fn(() => true);
+  readonly kill: ReturnType<typeof vi.fn>;
   generation = '';
   private readonly messageListeners = new Set<(message: unknown) => void>();
   private readonly allMessageListeners: Array<(message: unknown) => void> = [];
   private readonly terminalListeners = new Set<(terminal: ApplicationPluginChildTerminal) => void>();
   private readonly terminalHistory: ApplicationPluginChildTerminal[] = [];
+  private messageSubscriptionCount = 0;
 
-  constructor(readonly pid: number, output = { stdout: '', stderr: '' }) {
+  constructor(
+    readonly pid: number,
+    output = { stdout: '', stderr: '' },
+    private readonly options: { exitOnKill: boolean; throwOnMessageSubscription?: number } = { exitOnKill: false },
+  ) {
     this.stdoutTail = output.stdout;
     this.stderrTail = output.stderr;
+    this.kill = vi.fn(() => {
+      if (this.options.exitOnKill) {
+        this.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      }
+      return true;
+    });
   }
 
   async send(message: unknown): Promise<void> {
@@ -625,9 +939,17 @@ class FakeChild implements ApplicationPluginChild {
   }
 
   subscribeMessage(listener: (message: unknown) => void): () => void {
+    this.messageSubscriptionCount += 1;
+    if (this.messageSubscriptionCount === this.options.throwOnMessageSubscription) {
+      throw new Error('message subscription failed');
+    }
     this.messageListeners.add(listener);
     this.allMessageListeners.push(listener);
     return () => this.messageListeners.delete(listener);
+  }
+
+  get activeMessageSubscriptions(): number {
+    return this.messageListeners.size;
   }
 
   subscribeExit(listener: (terminal: ApplicationPluginChildTerminal) => void): () => void {
@@ -710,5 +1032,5 @@ function deferred<T>() {
 }
 
 async function flushMicrotasks(): Promise<void> {
-  for (let index = 0; index < 8; index += 1) await Promise.resolve();
+  for (let index = 0; index < 24; index += 1) await Promise.resolve();
 }
