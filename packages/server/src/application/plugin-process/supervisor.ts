@@ -70,6 +70,10 @@ interface Deferred<T> {
   reject(error: unknown): void;
 }
 
+interface HostCallbackToken {
+  active: boolean;
+}
+
 interface GenerationRecord {
   readonly generation: string;
   readonly startup: Deferred<void>;
@@ -84,6 +88,9 @@ interface GenerationRecord {
   failureTask?: Promise<void>;
   cleanupTask?: Promise<void>;
   restartDelay?: Deferred<void>;
+  terminationSentAt?: number;
+  killDeadline?: number;
+  killSent: boolean;
   readonly pendingHostCommands: Set<Promise<void>>;
   readonly pendingIncomingRequestIds: Set<string>;
   lastIncomingRequestId: number;
@@ -96,7 +103,7 @@ export class ApplicationPluginSupervisor {
   private readonly spawn: (options: SpawnApplicationPluginProcessOptions) => ApplicationPluginChild;
   private readonly timers: ApplicationPluginSupervisorTimers;
   private readonly now: () => number;
-  private readonly hostCallbackContext = new AsyncLocalStorage<boolean>();
+  private readonly hostCallbackContext = new AsyncLocalStorage<HostCallbackToken>();
   private state: ApplicationPluginProcessState = freezeState({
     status: 'pending',
     generation: null,
@@ -154,7 +161,8 @@ export class ApplicationPluginSupervisor {
 
   retry(): Promise<void> {
     const task = this.retryLifecycle();
-    return this.hostCallbackContext.getStore() ? handoff(task) : task;
+    const token = this.hostCallbackContext.getStore();
+    return token?.active ? handoff(task, token) : task;
   }
 
   private retryLifecycle(): Promise<void> {
@@ -185,7 +193,7 @@ export class ApplicationPluginSupervisor {
           cleanupFailed = true;
           this.ownerCleanupBlocked = true;
         }
-        if (!record.final) record.child?.terminate();
+        if (!record.final) this.requestTermination(record);
         if (!record.child) {
           record.final = true;
           record.finalExit.resolve();
@@ -218,7 +226,8 @@ export class ApplicationPluginSupervisor {
 
   stop(): Promise<void> {
     const task = this.stopLifecycle();
-    return this.hostCallbackContext.getStore() ? handoff(task) : task;
+    const token = this.hostCallbackContext.getStore();
+    return token?.active ? handoff(task, token) : task;
   }
 
   private stopLifecycle(): Promise<void> {
@@ -253,8 +262,7 @@ export class ApplicationPluginSupervisor {
       void record.rpc?.request(stopMethod, null).catch(() => undefined);
       record.available = false;
       this.setLifecycleTimer(() => {
-        record.child?.terminate();
-        this.setTerminationTimer(() => { record.child?.kill(); }, KILL_TIMEOUT_MS);
+        this.requestTermination(record);
       }, STOP_TIMEOUT_MS);
       await record.finalExit.promise;
       await this.completeStop(record);
@@ -282,6 +290,7 @@ export class ApplicationPluginSupervisor {
       final: false,
       finalExit: deferred<void>(),
       failureStarted: false,
+      killSent: false,
       pendingHostCommands: new Set(),
       pendingIncomingRequestIds: new Set(),
       lastIncomingRequestId: 0,
@@ -413,8 +422,7 @@ export class ApplicationPluginSupervisor {
     // Let the caller register this operation before host code can reenter lifecycle methods.
     await Promise.resolve();
     try {
-      const result = await this.hostCallbackContext.run(
-        true,
+      const result = await this.runHostCallback(
         () => this.options.host.handleRuntimeCommand(this.options.plugin, command),
       );
       if (this.current !== record || !record.available || this.mode !== 'active') return;
@@ -442,7 +450,7 @@ export class ApplicationPluginSupervisor {
     }
     if (this.mode === 'stopping' || this.mode === 'replacing') {
       record.available = false;
-      if (!terminal.final) record.child?.terminate();
+      if (!terminal.final) this.requestTermination(record);
       return;
     }
     if (record.failureStarted) return;
@@ -493,8 +501,7 @@ export class ApplicationPluginSupervisor {
         });
       }
       if (!record.final) {
-        record.child?.terminate();
-        this.setTerminationTimer(() => { record.child?.kill(); }, KILL_TIMEOUT_MS);
+        this.requestTermination(record);
       }
       if (this.mode !== 'active' || fused || retryAfterMs === null) {
         await record.finalExit.promise;
@@ -530,8 +537,7 @@ export class ApplicationPluginSupervisor {
 
   private clearOwner(record: GenerationRecord): Promise<void> {
     record.cleanupTask ??= Promise.resolve()
-      .then(() => this.hostCallbackContext.run(
-        true,
+      .then(() => this.runHostCallback(
         () => this.options.host.clearOwner(this.options.plugin),
       ))
       .then(() => undefined);
@@ -540,8 +546,7 @@ export class ApplicationPluginSupervisor {
 
   private clearOwnerWithoutRecord(): Promise<void> {
     return Promise.resolve()
-      .then(() => this.hostCallbackContext.run(
-        true,
+      .then(() => this.runHostCallback(
         () => this.options.host.clearOwner(this.options.plugin),
       ))
       .then(() => undefined);
@@ -619,12 +624,37 @@ export class ApplicationPluginSupervisor {
     this.lifecycleTimerHandle = undefined;
   }
 
-  private setTerminationTimer(callback: () => void, milliseconds: number): void {
+  private requestTermination(record: GenerationRecord): void {
+    if (record.final || record.killSent || !record.child) return;
+    const requestedAt = this.now();
+    if (record.terminationSentAt === undefined) {
+      record.terminationSentAt = requestedAt;
+      record.child.terminate();
+    }
+    const requestedDeadline = requestedAt + KILL_TIMEOUT_MS;
+    if (record.killDeadline === undefined || requestedDeadline < record.killDeadline) {
+      record.killDeadline = requestedDeadline;
+      this.scheduleTerminationKill(record);
+    } else if (this.terminationTimerHandle === undefined) {
+      this.scheduleTerminationKill(record);
+    }
+  }
+
+  private scheduleTerminationKill(record: GenerationRecord): void {
+    const deadline = record.killDeadline;
+    if (deadline === undefined || record.final || record.killSent) return;
     this.clearTerminationTimer();
+    const milliseconds = Math.max(0, deadline - this.now());
     const handle = this.timers.setTimeout(() => {
       if (this.terminationTimerHandle !== handle) return;
       this.terminationTimerHandle = undefined;
-      callback();
+      if (this.current !== record || record.final || record.killSent) return;
+      if (this.now() < deadline) {
+        this.scheduleTerminationKill(record);
+        return;
+      }
+      record.killSent = true;
+      record.child?.kill();
     }, milliseconds);
     this.terminationTimerHandle = handle;
   }
@@ -645,6 +675,30 @@ export class ApplicationPluginSupervisor {
       try {
         observeThenable(listener(state));
       } catch { /* State observers cannot break supervision. */ }
+    }
+  }
+
+  private runHostCallback<T>(callback: () => T | Promise<T>): Promise<T> {
+    const token: HostCallbackToken = { active: true };
+    try {
+      const result = this.hostCallbackContext.run(token, callback);
+      if (!isThenable(result)) {
+        token.active = false;
+        return Promise.resolve(result);
+      }
+      return Promise.resolve(result).then(
+        (value) => {
+          token.active = false;
+          return value;
+        },
+        (error: unknown) => {
+          token.active = false;
+          throw error;
+        },
+      );
+    } catch (error) {
+      token.active = false;
+      return Promise.reject(error);
     }
   }
 }
@@ -682,9 +736,13 @@ function createUnavailableError(
   return Object.freeze(error);
 }
 
-function handoff(task: Promise<void>): Promise<void> {
+function handoff(task: Promise<void>, token: HostCallbackToken): Promise<void> {
   void task.catch(() => undefined);
-  return Promise.resolve();
+  return Promise.resolve().then(() => token.active ? undefined : task);
+}
+
+function isThenable(input: unknown): input is Promise<unknown> {
+  return (typeof input === 'object' && input !== null) && typeof (input as PromiseLike<unknown>).then === 'function';
 }
 
 function observeThenable(input: unknown): void {

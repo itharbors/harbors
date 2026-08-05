@@ -1,3 +1,4 @@
+import { setTimeout as setNativeTimeout } from 'node:timers';
 import { describe, expect, it, vi } from 'vitest';
 import {
   ApplicationPluginSupervisor,
@@ -217,6 +218,32 @@ describe('ApplicationPluginSupervisor', () => {
     }
   });
 
+  it('escalates an explicit retry once and still waits for final child exit', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness();
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      const retried = harness.supervisor.retry();
+      await flushMicrotasks();
+      let settled = false;
+      void retried.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await flushMicrotasks();
+      expect(harness.children).toHaveLength(2);
+      await initialize(harness.children[1]!);
+      await expect(retried).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('sends unload, escalates at 10 and 12 seconds, and never restarts an intentional stop', async () => {
     vi.useFakeTimers();
     try {
@@ -319,6 +346,7 @@ describe('ApplicationPluginSupervisor', () => {
       const harness = createHarness({
         handleRuntimeCommand: async () => {
           order.push('command-start');
+          await Promise.resolve();
           await supervisor.retry();
           order.push('retry-handed-off');
           await gate.promise;
@@ -344,6 +372,224 @@ describe('ApplicationPluginSupervisor', () => {
       expect(harness.children).toHaveLength(2);
       await initialize(harness.children[1]!);
       expect(supervisor.getState().status).toBe('running');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns the real stop task to a timer descendant after its runtime callback settles', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      let descendantStop: Promise<void> | undefined;
+      const descendantStarted = deferred<void>();
+      const cleanup = deferred<void>();
+      const harness = createHarness({
+        handleRuntimeCommand: async () => {
+          setNativeTimeout(() => {
+            descendantStop = supervisor.stop();
+            descendantStarted.resolve();
+          }, 0);
+          return null;
+        },
+        clearOwner: () => cleanup.promise,
+      });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.requestHost('runtime-command', { target: 'notifications', operation: 'list' }, '1');
+      await flushMicrotasks();
+      await descendantStarted.promise;
+      expect(descendantStop).toBeDefined();
+
+      let settled = false;
+      void descendantStop!.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(12_000);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await flushMicrotasks();
+      expect(settled).toBe(false);
+      cleanup.resolve();
+      await expect(descendantStop).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates retry rejection to a timer descendant after its runtime callback settles', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      let descendantRetry: Promise<void> | undefined;
+      const descendantStarted = deferred<void>();
+      const harness = createHarness({
+        handleRuntimeCommand: async () => {
+          setNativeTimeout(() => {
+            descendantRetry = supervisor.retry();
+            descendantStarted.resolve();
+          }, 0);
+          return null;
+        },
+        clearOwner: () => { throw new Error('cleanup failed'); },
+      });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.requestHost('runtime-command', { target: 'notifications', operation: 'list' }, '1');
+      await flushMicrotasks();
+      await descendantStarted.promise;
+      expect(descendantRetry).toBeDefined();
+
+      let settled = false;
+      void descendantRetry!.then(() => { settled = true; }, () => { settled = true; });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 0, signal: null, error: null });
+      await expect(descendantRetry).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('propagates retry rejection to a queued Promise descendant after callback settlement', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      let descendantRetry: Promise<void> | undefined;
+      const descendantStarted = deferred<void>();
+      const harness = createHarness({
+        handleRuntimeCommand: async () => {
+          void Promise.resolve().then(() => {
+            descendantRetry = supervisor.retry();
+            descendantStarted.resolve();
+          });
+          return null;
+        },
+        clearOwner: () => { throw new Error('cleanup failed'); },
+      });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.requestHost('runtime-command', { target: 'notifications', operation: 'list' }, '1');
+      await descendantStarted.promise;
+      expect(descendantRetry).toBeDefined();
+
+      let settled = false;
+      void descendantRetry!.then(() => { settled = true; }, () => { settled = true; });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: 0, signal: null, error: null });
+      await expect(descendantRetry).rejects.toMatchObject({ code: 'APPLICATION_PLUGIN_UNAVAILABLE' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('returns the real stop task to a timer descendant after clearOwner settles', async () => {
+    vi.useFakeTimers();
+    try {
+      let supervisor!: ApplicationPluginSupervisor;
+      let descendantStop: Promise<void> | undefined;
+      const descendantStarted = deferred<void>();
+      const harness = createHarness({
+        clearOwner: () => {
+          setNativeTimeout(() => {
+            descendantStop = supervisor.stop();
+            descendantStarted.resolve();
+          }, 0);
+        },
+      });
+      supervisor = harness.supervisor;
+      const started = supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      await descendantStarted.promise;
+      expect(descendantStop).toBeDefined();
+
+      let settled = false;
+      void descendantStop!.then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+      expect(settled).toBe(false);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await expect(descendantStop).resolves.toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a stop kill deadline when a slower failure cleanup resumes later', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const cleanup = deferred<void>();
+      const harness = createHarness({ clearOwner: () => cleanup.promise });
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      const stopped = harness.supervisor.stop();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(1_000);
+      cleanup.resolve();
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(999);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await stopped;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps an earlier failure kill deadline when stop starts afterward', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const harness = createHarness();
+      const started = harness.supervisor.start();
+      await initialize(harness.children[0]!);
+      await started;
+
+      harness.children[0]!.terminal({ kind: 'disconnect', final: false, code: null, signal: null, error: null });
+      await flushMicrotasks();
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1_000);
+      const stopped = harness.supervisor.stop();
+      await vi.advanceTimersByTimeAsync(999);
+      expect(harness.children[0]!.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(harness.children[0]!.terminate).toHaveBeenCalledTimes(1);
+      expect(harness.children[0]!.kill).toHaveBeenCalledTimes(1);
+
+      harness.children[0]!.terminal({ kind: 'exit', final: true, code: null, signal: 'SIGKILL', error: null });
+      await stopped;
     } finally {
       vi.useRealTimers();
     }
