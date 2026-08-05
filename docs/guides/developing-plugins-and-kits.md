@@ -290,6 +290,52 @@ Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser me
 应用菜单的 HTTP 触发接口是 Electron 内部控制面，要求每次启动生成的令牌，不能作为普通网页
 或外部工具 API 使用。
 
+每个唯一的 Application 启动插件在独立 OS 进程中运行；多个 Kit 声明同一 package name 时共享
+同一 Supervisor/process。这个迁移只覆盖 `startup.plugins`，普通 `plugin` 仍在 Session Editor
+所在的 Framework 进程内运行。子进程中的 definition、lifecycle、方法和 handler 不会复制到 Host，
+跨边界只传 method/handler id 与结构化数据。
+
+### 跨进程数据与 service
+
+IPC 使用 generation-scoped protocol v1 和 advanced serialization，但公开 payload 仍只接受普通
+对象/数组、有限数值、字符串、布尔值与 `null`：最大 1 MiB、最多 32 层、最多 256 个 pending
+request。不要传函数、class instance、Proxy、accessor、symbol、稀疏数组或循环引用。
+
+`service.register(name, value)` 会经过 `structuredClone` 与同一 IPC 校验，所以 value 不能包含函数
+或循环引用。`service.get()` 读取的是异步下发、深冻结的 snapshot；register/unregister 不提供同步
+read-your-write，慢插件只会收敛到最新 snapshot。需要确认另一个插件已经处理某次变更时，用
+`message.request` 或 `plugin.callPlugin` 的 Promise 返回值，不要轮询 service 当共享内存。
+
+### 故障、清理与恢复
+
+公开进程状态为 `pending`、`starting`、`running`、`restarting`、`failed`、`stopping`、`stopped`。
+initialize/load 最长 30 秒，正常 unload/shutdown 最长 10 秒；随后 Host 发送 `SIGTERM`，2 秒未退出
+再发 `SIGKILL`。前三次自动重启依次 backoff 250 ms、1 s、4 s；滚动 60 秒内第 4 次失败熔断，
+连续运行 5 分钟重置预算。
+
+失败时 Host 固定撤销 lifecycle attachment，清静态 attach，再按 menu、message、service 顺序清理
+owner，最后广播新 snapshot。`failed` 可由 Electron 内部控制面调用
+`POST /api/application/plugin/retry` 恢复；请求必须带 application token、使用 JSON 且 body 只有
+canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒绝。
+
+该进程边界是 crash containment，不是权限 sandbox。插件仍是受信 Node.js 代码，以同一 OS 账号
+运行并继承 Framework 明确保留的非秘密环境、cwd 和该账号的文件系统权限。Application token、
+Notification owner token 与 credential transport secret 不会进入插件 argv/env；新插件应优先使用
+`ctx.paths.data/cache/temp/legacyData`，不能把环境过滤理解成文件访问隔离。
+
+### 官方 Kit 与 runner 兼容
+
+官方 Notifications、Scheduler 和 Agent Guard 的现有 startup plugin package 继续走同一 manifest
+与 runtime facade，不需要为进程化复制一份实现。为兼容 Scheduler 已发布行为，非秘密
+`HARBORS_DATA_ROOT` 会与 `PATH`、locale 等产品环境一起保留；新代码仍应优先使用 `ctx.paths`，不要
+把 `HARBORS_DATA_ROOT` 当成新的通用插件 API，也不要把 host token 塞入自定义环境变量规避过滤。
+
+Web/source 开发从当前 Server 源码解析 `runner.ts` 并使用仓库 `tsx` loader；编译 Server 使用同目录
+`runner.js`。packaged Electron 使用自己的 executable 配合 `ELECTRON_RUN_AS_NODE=1`，并从
+`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js` 启动。执行
+`npm run desktop:prepare` 会先构建 Server，再把本次 runner 放入 desktop runtime staging；不要依赖
+手工生成或历史残留的 `packages/server/dist`。
+
 ### layout
 
 ```json

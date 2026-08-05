@@ -412,6 +412,11 @@ export function validateDesktopKitDescriptors(descriptors) {
 async function runtimeEntries(repositoryRoot, policy) {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
+    {
+      source: 'packages/server/dist/application/plugin-process',
+      destination: 'packages/server/dist/application/plugin-process',
+      recursive: true,
+    },
   ];
   for (const plugin of FRAMEWORK_PLUGINS) {
     entries.push(

@@ -69,6 +69,11 @@ import 'yauzl';
 export const main = true;
 `);
   await write(root, 'packages/desktop/src/framework.mjs', 'export const framework = true;\n');
+  await write(
+    root,
+    'packages/server/dist/application/plugin-process/runner.js',
+    'export const runner = "current-fixture-runner";\n',
+  );
   await write(root, 'packages/client/dist/index.html', '<script src="/assets/index.js"></script>');
   await write(root, 'packages/client/dist/assets/index.js', 'export const client = true;\n');
   for (const plugin of ['config', 'menu', 'message', 'panel']) {
@@ -581,6 +586,13 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   assert.deepEqual(await topLevel(path.join(outputRoot, 'kits')), ['default']);
   assert.equal(existsSync(path.join(outputRoot, 'client', 'assets', 'index.js')), true);
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'package.json')), true);
+  assert.equal(
+    await readFile(
+      path.join(outputRoot, 'packages/server/dist/application/plugin-process/runner.js'),
+      'utf8',
+    ),
+    'export const runner = "current-fixture-runner";\n',
+  );
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'log', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'package.json')), true);

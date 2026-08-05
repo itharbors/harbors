@@ -77,7 +77,12 @@ test('requires absolute packaged paths and wildcard desktop configuration', () =
 
 test('forwards only generic plugin storage roots to the desktop server', async () => {
   let serverOptions;
-  const env = validEnvironment();
+  const env = {
+    ...validEnvironment(),
+    HARBORS_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS',
+    HARBORS_NOTIFICATION_OWNER_TOKEN: 'notification-secret',
+    HARBORS_CREDENTIAL_TRANSPORT_SECRET: 'credential-secret',
+  };
   const port = await runDesktopFrameworkProcess({
     env,
     createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
@@ -111,8 +116,21 @@ test('forwards only generic plugin storage roots to the desktop server', async (
       runtimeMode: 'electron-run-as-node',
     },
     cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
-    env,
+    env: {
+      HARBORS_RUNTIME_ROOT: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
+      HARBORS_CLIENT_ASSETS_ROOT: '/Applications/ITHARBORS.app/Contents/Resources/runtime/client',
+      HARBORS_DB_PATH: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
+      HARBORS_PLUGIN_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
+      HARBORS_PLUGIN_CACHE_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
+      HARBORS_PLUGIN_TEMP_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
+      HARBORS_KIT_SOURCES: env.HARBORS_KIT_SOURCES,
+      HARBORS_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS',
+      ELECTRON_RUN_AS_NODE: '1',
+    },
   });
+  const childSpec = serverOptions.applicationPluginProcess;
+  assert.doesNotMatch(JSON.stringify(childSpec.runner.args), /application-secret|notification-secret|credential-secret/u);
+  assert.doesNotMatch(JSON.stringify(childSpec.env), /application-secret|notification-secret|credential-secret/u);
 });
 
 test('forwards the injected application plugin process runtime through server options', async () => {

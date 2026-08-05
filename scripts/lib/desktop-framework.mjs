@@ -1,6 +1,12 @@
 import path from 'node:path';
 
 const SERVER_STOPPING_ERROR_CODE = 'HARBORS_SERVER_STOPPING';
+const APPLICATION_PLUGIN_SECRET_ENVIRONMENT_KEYS = Object.freeze([
+  'HARBORS_APPLICATION_TOKEN',
+  'HARBORS_NOTIFICATION_PORT',
+  'HARBORS_NOTIFICATION_OWNER_TOKEN',
+  'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
+]);
 
 function requireAbsolutePath(env, name) {
   const value = env[name];
@@ -48,6 +54,8 @@ function parseNotificationPort(value) {
 }
 
 function createDesktopApplicationPluginProcess(environment, env) {
+  const childEnvironment = { ...env, ELECTRON_RUN_AS_NODE: '1' };
+  for (const key of APPLICATION_PLUGIN_SECRET_ENVIRONMENT_KEYS) delete childEnvironment[key];
   return Object.freeze({
     runner: Object.freeze({
       executable: process.execPath,
@@ -65,7 +73,7 @@ function createDesktopApplicationPluginProcess(environment, env) {
       runtimeMode: 'electron-run-as-node',
     }),
     cwd: environment.runtimeRoot,
-    env,
+    env: Object.freeze(childEnvironment),
   });
 }
 
