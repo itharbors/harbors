@@ -2,7 +2,7 @@
 
 ## 最终结论
 
-本 Task 的初版实现曾通过全量门禁，但 whole-branch 安全审查发现 PR 仓库身份、关闭 PR 替换、Git ref 参数、日期与 Markdown/状态校验等反例，因此已按规范回退到实现与验证阶段。审查修复及聚焦回归现已完成，当前仍需在修复后的精确 head 上重新执行 full gate 和独立复审；在这些证据形成前不宣称 ready-for-pr，更不代表生命周期完成或允许归档当前 Codex 会话。
+本 Task 已完成需求快照、设计、实施、全量验证和 PR 前归总。whole-branch 安全审查发现的 PR 仓库身份、关闭 PR 替换、Git ref 参数、日期与 Markdown/状态校验等反例均已通过失败用例复现并修复；修复后的精确实现 head 已通过 full gate 和独立复审，当前达到 ready-for-pr。ready-for-pr 只允许进入 PR 创建阶段，不代表 PR 已合并、Task 生命周期派生完成或允许归档当前 Codex 会话。
 
 ## 需求完成情况
 
@@ -42,7 +42,8 @@
 - `node --test scripts/lib/kit-boundary.test.mjs`：exit 0，26/26 通过，覆盖 0001 合法与 0000 非法的日期边界。
 - `node --test scripts/lib/kit-docs.test.mjs`：exit 0，12/12 通过，0 failed/cancelled/skipped，0.13s。
 - `npm run check:preflight`：exit 0，Kit architecture boundary 返回 OK，preflight dot reporter 166 项全绿。
-- 审查修复后的精确 head 尚待重新运行 `npm run check`；初版 head 的历史全量通过不作为本次修复的最终证据。
+- `npm run check`：在提交标题规范化前的精确实现 head `d61cd3c2179f1fb50353a11035c8fc4872ec31f3` 上 exit 0；规范化后对应实现 head `64137ae` 与其 tree SHA 均为 `6a093d58a7904b07aeef8d89890020a8e208490c`，文件内容逐字节一致；build、Framework tests、全部 workflow、九个 Kit matrix 检查和 Framework plugin 检查全部通过。
+- 独立 whole-branch 复审：原范围 `origin/main...d61cd3c2179f1fb50353a11035c8fc4872ec31f3`，结论 PASS，无剩余 Important、Minor 或整体质量问题；额外验证 Task/Kit boundary/docs 71/71、0000–9999 日期枚举 0 mismatch，以及伪造与合法 staged PR 替换恢复路径。此后仅将一条错误的 `[Bug]` 提交标题规范化为 `[Feature]`；对应实现 tree 完全相同，旧、新归档除本段为记录规范化事实而更新的 `summary.md` 外内容相同。
 
 ## 影响与风险
 
