@@ -61,6 +61,26 @@ test('init rejects invalid slug and calendar date as usage errors', (t) => {
   assert.equal(runCli(fixture.path, ['init', 'feature', 'safe-login', '--date', '2026-02-30']).status, 2);
 });
 
+test('init derives the default Task date from the local calendar', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const originalTimezone = process.env.TZ;
+  t.after(() => {
+    if (originalTimezone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTimezone;
+  });
+  process.env.TZ = 'Asia/Shanghai';
+  const output = { value: '', write(value) { this.value += value; } };
+
+  const taskId = runTaskStatusCli(['init', 'feature', 'timezone-case'], { stdout: output }, {
+    rootDir: fixture.path,
+    now: () => '2026-08-04T16:30:00.000Z',
+  });
+
+  assert.equal(taskId, '2026-08-05-timezone-case');
+  assert.equal(output.value, '2026-08-05-timezone-case\n');
+});
+
 test('init rejects a directory outside a Git repository', (t) => {
   const fixture = createFixture();
   t.after(() => fixture[Symbol.dispose]());
@@ -113,6 +133,19 @@ test('state commands persist valid transitions and leave a file unchanged on an 
   assert.equal(invalid.status, 1);
   assert.equal(readFileSync(statusPath, 'utf8'), beforeInvalidTransition);
   assert.equal(JSON.parse(readFileSync(statusPath, 'utf8')).stages.implementation, 'in_progress');
+});
+
+test('skip makes an active stage terminal through the supported CLI', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+
+  assert.equal(runCli(fixture.path, ['complete', taskId, 'design']).status, 0);
+  assert.equal(runCli(fixture.path, ['start', taskId, 'implementation']).status, 0);
+  assert.equal(runCli(fixture.path, ['skip', taskId, 'implementation']).status, 0);
+
+  const status = JSON.parse(readFileSync(join(fixture.path, `docs/tasks/${taskId}/status.json`), 'utf8'));
+  assert.equal(status.stages.implementation, 'skipped');
 });
 
 test('set-pr accepts a positive number only after every stage is terminal', (t) => {
@@ -250,6 +283,21 @@ test('check applies CommonMark fence length and indentation rules before finding
   assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
 });
 
+test('check rejects duplicate headings and metadata hidden by invalid backtick fence openers', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  const taskId = initializeTask(fixture.path);
+  const taskDirectory = join(fixture.path, `docs/tasks/${taskId}`);
+  const invalidFence = '\n```markdown`invalid\n## 目标\nTask ID: `2026-08-04-safe-login`\n```\n';
+
+  writeFileSync(join(taskDirectory, 'task.md'), `${validTaskMarkdown(taskId)}${invalidFence}`);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+
+  writeFileSync(join(taskDirectory, 'task.md'), validTaskMarkdown(taskId));
+  writeFileSync(join(taskDirectory, 'summary.md'), `${validSummaryMarkdown()}\n\`\`\`md\`invalid\n## 最终结论\n\`\`\`\n`);
+  assert.equal(runCli(fixture.path, ['check', taskId]).status, 1);
+});
+
 test('check ignores metadata inside a correctly delimited fenced code block', (t) => {
   const fixture = createGitFixture();
   t.after(() => fixture[Symbol.dispose]());
@@ -320,6 +368,18 @@ test('resolve verifies the branch type and rejects multiple changed task statuse
   assert.equal(secondTaskId, '2026-08-05-second-task');
 });
 
+test('resolve rejects a Git option as BASE_REF without filesystem side effects', (t) => {
+  const fixture = createGitFixture();
+  t.after(() => fixture[Symbol.dispose]());
+  execFileSync('git', ['checkout', '--quiet', '-b', 'feature/safe-login'], { cwd: fixture.path });
+  const sideEffect = join(fixture.path, 'git-diff-output');
+
+  const result = runCli(fixture.path, ['resolve', 'feature/safe-login', `--output=${sideEffect}`]);
+
+  assert.equal(result.status, 1);
+  assert.equal(readdirSync(fixture.path).some((entry) => entry.startsWith('git-diff-output')), false);
+});
+
 function runCli(cwd, args) {
   const result = spawnSync(process.execPath, [cliPath.pathname, ...args], {
     cwd,
@@ -355,7 +415,7 @@ function validTaskMarkdown(taskId, type = 'feature') {
 }
 
 function validSummaryMarkdown() {
-  return '# Summary\n\n## 最终结论\n\n说明最终结论。\n\n## 需求完成情况\n\n说明需求完成情况。\n\n## 主要改动\n\n说明主要改动。\n\n## 关键决定\n\n说明关键决定。\n\n## 验证结果\n\n说明验证结果。\n\n## 影响与风险\n\n说明影响与风险。\n\n## 偏差与遗留\n\n说明偏差与遗留。\n\n## 后续关注\n\n说明后续关注。\n';
+  return '# Summary\n\n## 最终结论\n\n说明最终结论。\n\n## 需求完成情况\n\n说明需求完成情况。\n\n## 主要改动\n\n说明主要改动。\n\n## 关键决定\n\n说明关键决定。\n\n## 验证结果\n\n说明验证结果。\n\n## 影响与风险\n\n说明影响与风险。\n\n## 偏差与遗留\n\n说明偏差与遗留。\n\n## 后续关注\n\n说明后续关注。\n\n## 相关正式文档\n\n说明需要长期保留的正式文档。\n';
 }
 
 function commitAll(cwd, message) {

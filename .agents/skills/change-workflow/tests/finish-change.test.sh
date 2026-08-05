@@ -224,7 +224,7 @@ test_finish_rejects_recorded_pr_number_conflict_before_writes() {
 
   if output=$("$FINISH" '拒绝 PR 编号冲突' "$BODY" 2>&1); then fail 'recorded PR number conflict succeeded'; fi
 
-  assert_contains "$output" 'recorded Task PR number does not match'
+  assert_contains "$output" 'recorded Task PR'
   assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$before_head"
   assert_eq "$(git -C "$WORKTREE" show "HEAD:docs/tasks/$TASK_ID/status.json")" "$before_status"
   assert_eq "$(git -C "$WORKTREE" status --porcelain=v1 --untracked-files=all)" ''
@@ -313,8 +313,45 @@ test_finish_rejects_multiple_open_prs_without_creating() {
   test ! -s "$GH_EDIT_LOG" || fail 'edited PR with multiple open candidates'
 }
 
+test_finish_ignores_fork_pr_with_same_branch_before_mutation() {
+  prepare_change feature
+  export GH_OPEN_PR_COUNT=1
+  export GH_FORK_URL=https://github.com/fork-owner/repo/pull/9
+  export GH_LIST_URL=$GH_FORK_URL
+
+  output=$(GH_CREATE_URL=https://github.com/example/repo/pull/1 "$FINISH" '忽略 fork PR' "$BODY")
+
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+  assert_eq "$(wc -l < "$GH_CREATE_LOG" | tr -d ' ')" 1
+  test ! -s "$GH_EDIT_LOG" || fail 'edited a fork PR'
+  assert_eq "$($REAL_NODE -p "require('$TASK_DIR/status.json').pullRequest.number")" 1
+}
+
+test_finish_replaces_a_closed_unmerged_recorded_pr() {
+  prepare_change feature
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 1 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
+  export GH_REPLACEMENT_MODE=1 GH_CREATE_URL=https://github.com/example/repo/pull/2
+
+  output=$("$FINISH" '替换关闭 PR' "$BODY")
+
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/2'
+  assert_eq "$($REAL_NODE -p "require('$TASK_DIR/status.json').pullRequest.number")" 2
+  assert_eq "$(wc -l < "$GH_CREATE_LOG" | tr -d ' ')" 1
+
+  prepare_change feature
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 1 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
+  export GH_VIEW_STATE=CLOSED GH_VIEW_MERGED_AT=2026-08-05T00:00:00Z
+  if output=$("$FINISH" '拒绝替换已合并 PR' "$BODY" 2>&1); then fail 'merged PR replacement succeeded'; fi
+  assert_contains "$output" 'not closed and unmerged'
+  test ! -s "$PUSH_LOG" || fail 'merged PR replacement pushed'
+}
+
 test_finish_rejects_invalid_pr_verification() {
-  for field in number base head state url head_oid; do
+  for field in number base head state url head_oid cross_repository head_owner; do
     prepare_change feature
     case "$field" in
       number) export GH_VIEW_NUMBER=0 ;;
@@ -323,6 +360,8 @@ test_finish_rejects_invalid_pr_verification() {
       state) export GH_VIEW_STATE=CLOSED ;;
       url) export GH_VIEW_URL='' ;;
       head_oid) export GH_VIEW_HEAD_OID='' ;;
+      cross_repository) export GH_VIEW_CROSS_REPOSITORY=true ;;
+      head_owner) export GH_VIEW_HEAD_OWNER=fork-owner ;;
     esac
     if output=$("$FINISH" '完成验证变更' "$BODY" 2>&1); then fail "invalid $field succeeded"; fi
     case "$output" in *PR_URL=*) fail "invalid $field reported PR_URL" ;; esac
@@ -401,6 +440,8 @@ run_finish_tests() {
   run_case 'finish refreshes summary URL after substantive commit' test_finish_refreshes_summary_url_after_substantive_commit
   run_case 'finish does not trust status commit title alone for summary URL' test_finish_does_not_trust_status_commit_title_alone_for_summary_url
   run_case 'finish rejects multiple open PRs without creating' test_finish_rejects_multiple_open_prs_without_creating
+  run_case 'finish ignores fork PRs before mutation' test_finish_ignores_fork_pr_with_same_branch_before_mutation
+  run_case 'finish replaces a closed unmerged PR' test_finish_replaces_a_closed_unmerged_recorded_pr
   run_case 'finish rejects invalid PR verification' test_finish_rejects_invalid_pr_verification
   run_case 'finish preserves context summary and label guards' test_finish_preserves_context_summary_and_label_guards
   run_case 'finish preserves supporting labels and check gate' test_finish_preserves_supporting_commit_labels_and_check_gate

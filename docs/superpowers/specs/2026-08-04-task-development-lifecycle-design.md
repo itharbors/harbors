@@ -113,7 +113,7 @@ docs/tasks/YYYY-MM-DD-<slug>/
 }
 ```
 
-`pullRequest` 只允许 `null` 或只包含正整数编号的对象：
+`pullRequest` 只允许 `null` 或只包含 JavaScript 安全正整数编号的对象：
 
 ```json
 {
@@ -144,6 +144,7 @@ docs/tasks/YYYY-MM-DD-<slug>/
 5. 只有所有阶段进入终态后才能创建 PR，也只有保持全部终态才允许合并。
 6. 每次有效状态变化都自动更新 `updatedAt`。
 7. Task 建档由目录和两个初始文件的存在表示，不重复增加 `task_setup` 阶段。
+8. `skipped` 只能通过 CLI 对 `in_progress` 阶段执行 `skip` 形成，不能靠手改 JSON 绕过阶段入口。
 
 验证失败时，`implementation` 恢复为 `in_progress`，`verification` 和 `consolidation` 重置为
 `pending`。PR 审查导致行为、范围、关键决定、验证证据或风险发生实质变化时，按照实际影响
@@ -243,8 +244,9 @@ spec、plan、调研、排查笔记和临时验证记录是开发工具，不默
 4. 校验 Task 文件、状态和代码一致；
 5. 完成收口提交，将 `consolidation` 设为 `completed`；
 6. 取得包含最新版 `summary.md` 的 head SHA；
-7. 创建 PR，PR body 使用 `summary.md` 的精简内容，并链接该 SHA 下的不可变文件地址；
-8. 将 PR 正整数编号写入 `status.json`，提交并推送到同一 PR。
+7. 创建或恢复 PR 前验证 base/head、当前仓库 owner、`isCrossRepository=false` 与 head owner；同名 fork PR 不得被编辑或记录；
+8. 创建 PR，PR body 使用 `summary.md` 的精简内容，并链接该 SHA 下的不可变文件地址；
+9. 将 PR 安全正整数编号写入 `status.json`，提交并推送到同一 PR。已记录 PR 只有在 GitHub 证明其 closed 且 unmerged 时才可替换，并更新为当前 PR 编号。
 
 不可变链接格式为：
 

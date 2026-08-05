@@ -33,7 +33,7 @@ run_case() {
 }
 new_fixture() {
   export PATH="$ORIGINAL_PATH" TMPDIR="$ORIGINAL_TMPDIR"
-  unset NPM_FAIL GH_AUTH_FAIL GH_OPEN_PR_COUNT GH_REPO_OWNER GH_VIEW_NUMBER GH_VIEW_BASE GH_VIEW_HEAD GH_VIEW_STATE GH_VIEW_URL GH_VIEW_HEAD_OID GH_CREATE_URL GIT_FAIL_PUSH_NUMBER GIT_CONFIG_GLOBAL
+  unset NPM_FAIL GH_AUTH_FAIL GH_OPEN_PR_COUNT GH_REPO_OWNER GH_LIST_URL GH_VIEW_NUMBER GH_VIEW_BASE GH_VIEW_HEAD GH_VIEW_STATE GH_VIEW_URL GH_VIEW_HEAD_OID GH_VIEW_CROSS_REPOSITORY GH_VIEW_HEAD_OWNER GH_VIEW_MERGED_AT GH_FORK_URL GH_REPLACEMENT_MODE GH_CREATE_URL GIT_FAIL_PUSH_NUMBER GIT_CONFIG_GLOBAL
   FIXTURE_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/change-workflow.XXXXXX")
   FIXTURE_ROOT=$(cd "$FIXTURE_ROOT" && pwd -P)
   ORIGIN="$FIXTURE_ROOT/origin.git"
@@ -135,7 +135,7 @@ case "$1 $2" in
     test ! -f "$GH_CREATED" || count=1
     case "$count" in
       0) ;;
-      1) printf '%s\n' "${GH_VIEW_URL-https://github.com/example/repo/pull/1}" ;;
+      1) printf '%s\n' "${GH_LIST_URL-${GH_VIEW_URL-https://github.com/example/repo/pull/1}}" ;;
       2) printf '%s\n%s\n' 'https://github.com/example/repo/pull/1' 'https://github.com/example/repo/pull/2' ;;
       *) exit 2 ;;
     esac
@@ -153,13 +153,28 @@ case "$1 $2" in
     printf '%s\n' "$*" >> "$GH_EDIT_LOG"
     ;;
   'pr view')
+    target=${3:-}
     number=${GH_VIEW_NUMBER-1}
     base=${GH_VIEW_BASE-main}
     head=${GH_VIEW_HEAD-$(git branch --show-current)}
     state=${GH_VIEW_STATE-OPEN}
-    url=${GH_VIEW_URL-https://github.com/example/repo/pull/1}
+    case "$target" in https://*) default_url=$target ;; *) default_url=https://github.com/example/repo/pull/1 ;; esac
+    url=${GH_VIEW_URL-$default_url}
     head_oid=${GH_VIEW_HEAD_OID-$(git rev-parse HEAD)}
-    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$number" "$base" "$head" "$state" "$url" "$head_oid"
+    cross_repository=${GH_VIEW_CROSS_REPOSITORY-false}
+    head_owner=${GH_VIEW_HEAD_OWNER-example}
+    merged_at=${GH_VIEW_MERGED_AT-}
+    if test "${GH_REPLACEMENT_MODE:-0}" = 1; then
+      case "$target" in
+        1|*/pull/1) number=1; state=CLOSED; url=https://github.com/example/repo/pull/1; merged_at='' ;;
+        2|*/pull/2) number=2; state=OPEN; url=https://github.com/example/repo/pull/2; merged_at='' ;;
+      esac
+    fi
+    if test -n "${GH_FORK_URL:-}" && test "$target" = "$GH_FORK_URL"; then
+      cross_repository=true
+      head_owner=fork-owner
+    fi
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$number" "$base" "$head" "$state" "$url" "$head_oid" "$cross_repository" "$head_owner" "$merged_at"
     ;;
   *) exit 2 ;;
 esac
@@ -243,6 +258,10 @@ EOF
 无。
 
 ## 后续关注
+
+无。
+
+## 相关正式文档
 
 无。
 EOF

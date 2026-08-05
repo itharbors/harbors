@@ -9,7 +9,8 @@ const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const DATE_PATTERN = /^(\d{4})-(\d{2})-(\d{2})$/u;
 
 export function runTaskStatusCli(args, io = process, options = {}) {
-  const now = options.now?.() ?? new Date().toISOString();
+  const nowValue = options.now?.() ?? new Date();
+  const now = nowValue instanceof Date ? nowValue.toISOString() : nowValue;
   const rootDir = options.rootDir ? resolve(options.rootDir) : findGitRoot(options.cwd ?? process.cwd());
   const root = realpathSync(rootDir);
 
@@ -18,6 +19,7 @@ export function runTaskStatusCli(args, io = process, options = {}) {
       return initializeTask(args, io, root, now);
     case 'start':
     case 'complete':
+    case 'skip':
     case 'block':
     case 'resume':
     case 'rewind':
@@ -29,7 +31,7 @@ export function runTaskStatusCli(args, io = process, options = {}) {
     case 'resolve':
       return resolveTask(args, io, root);
     default:
-      throw new UsageError('usage: task-status init|start|complete|block|resume|rewind|set-pr|check|resolve');
+      throw new UsageError('usage: task-status init|start|complete|skip|block|resume|rewind|set-pr|check|resolve');
   }
 }
 
@@ -85,7 +87,14 @@ function resolveTask(args, io, root) {
   const { type, slug } = parseTaskBranch(branch);
   let changedFiles;
   try {
-    changedFiles = execFileSync('git', ['diff', '--name-only', `${baseRef}...HEAD`, '--', 'docs/tasks'], {
+    const baseSha = execFileSync('git', ['rev-parse', '--verify', '--end-of-options', `${baseRef}^{commit}`], {
+      cwd: root,
+      encoding: 'utf8',
+    }).trim();
+    if (!/^([0-9a-f]{40}|[0-9a-f]{64})$/u.test(baseSha)) {
+      throw new Error('invalid base SHA');
+    }
+    changedFiles = execFileSync('git', ['diff', '--name-only', `${baseSha}...HEAD`, '--', 'docs/tasks'], {
       cwd: root,
       encoding: 'utf8',
     }).trim().split('\n').filter(Boolean);
@@ -117,7 +126,7 @@ function parseInitArgs(args, now) {
   if (!SLUG_PATTERN.test(slug ?? '')) {
     throw new UsageError('slug must be lowercase kebab-case');
   }
-  const date = args.length === 5 ? suppliedDate : now.slice(0, 10);
+  const date = args.length === 5 ? suppliedDate : localCalendarDate(now);
   if ((args.length === 5 && flag !== '--date') || !isCalendarDate(date)) {
     throw new UsageError('date must be a real YYYY-MM-DD calendar date');
   }
@@ -186,7 +195,7 @@ function assertTaskDocuments(root, taskDirectory, status) {
 }
 
 const TASK_SECTION_HEADINGS = Object.freeze(['背景与问题', '目标', '范围', '非目标', '验收标准', '约束', '需求变更']);
-const SUMMARY_SECTION_HEADINGS = Object.freeze(['最终结论', '需求完成情况', '主要改动', '关键决定', '验证结果', '影响与风险', '偏差与遗留', '后续关注']);
+const SUMMARY_SECTION_HEADINGS = Object.freeze(['最终结论', '需求完成情况', '主要改动', '关键决定', '验证结果', '影响与风险', '偏差与遗留', '后续关注', '相关正式文档']);
 
 export function validateTaskMarkdown(content, { taskId, type }) {
   const lines = markdownLinesOutsideCodeFences(content);
@@ -219,8 +228,12 @@ function markdownLinesOutsideCodeFences(content) {
 }
 
 function openingFenceMarker(line) {
-  const marker = /^( {0,3})(`{3,}|~{3,})/u.exec(line)?.[2];
-  return marker ? { character: marker[0], length: marker.length } : null;
+  const match = /^( {0,3})(`{3,}|~{3,})/u.exec(line);
+  if (!match) return null;
+  const marker = match[2];
+  const info = line.slice(match[0].length);
+  if (marker[0] === '`' && info.includes('`')) return null;
+  return { character: marker[0], length: marker.length };
 }
 
 function isClosingFence(line, openingFence) {
@@ -359,8 +372,19 @@ function isCalendarDate(value) {
   const match = DATE_PATTERN.exec(value ?? '');
   if (!match) return false;
   const [year, month, day] = match.slice(1).map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(year, month - 1, day);
   return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
+}
+
+function localCalendarDate(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) throw new UsageError('current time must be a valid date-time');
+  const year = String(date.getFullYear()).padStart(4, '0');
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
 }
 
 function atomicWrite(root, path, contents) {

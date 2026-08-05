@@ -177,7 +177,7 @@ test_finish_rejects_recorded_pr_conflict_and_multiple_prs() {
   git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
   export GH_OPEN_PR_COUNT=1 GH_VIEW_NUMBER=1
   if output=$("$FINISH" sqlite '拒绝冲突' "$BODY" 2>&1); then fail 'PR conflict succeeded'; fi
-  assert_contains "$output" 'recorded Task PR number does not match'
+  assert_contains "$output" 'recorded Task PR'
   test ! -s "$PUSH_LOG" || fail 'PR conflict pushed'
 
   prepare_change feature
@@ -191,8 +191,37 @@ test_finish_rejects_recorded_pr_conflict_and_multiple_prs() {
   git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
   git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
   if output=$("$FINISH" sqlite '拒绝丢失 PR' "$BODY" 2>&1); then fail 'recorded PR without open candidate succeeded'; fi
-  assert_contains "$output" 'recorded Task PR has no unique open pull request'
+  assert_contains "$output" 'recorded Task PR'
   test ! -s "$PUSH_LOG" || fail 'missing recorded PR pushed'
+}
+
+test_finish_ignores_fork_pr_and_replaces_closed_recorded_pr() {
+  prepare_change feature
+  export GH_OPEN_PR_COUNT=1
+  export GH_FORK_URL=https://github.com/fork-owner/repo/pull/9
+  export GH_LIST_URL=$GH_FORK_URL
+  output=$(GH_CREATE_URL=https://github.com/example/repo/pull/1 "$FINISH" sqlite '忽略 fork PR' "$BODY")
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+  assert_eq "$(wc -l < "$GH_CREATE_LOG" | tr -d ' ')" 1
+  test ! -s "$GH_EDIT_LOG" || fail 'edited a fork PR'
+
+  prepare_change feature
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 1 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
+  export GH_REPLACEMENT_MODE=1 GH_CREATE_URL=https://github.com/example/repo/pull/2
+  output=$("$FINISH" sqlite '替换关闭 PR' "$BODY")
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/2'
+  assert_eq "$($REAL_NODE -p "require('$TASK_DIR/status.json').pullRequest.number")" 2
+
+  prepare_change feature
+  (cd "$WORKTREE" && node scripts/task-status.mjs set-pr "$TASK_ID" 1 >/dev/null)
+  git -C "$WORKTREE" add "docs/tasks/$TASK_ID/status.json"
+  git -C "$WORKTREE" commit -m '[Feature] 记录 Task PR 编号' >/dev/null
+  export GH_VIEW_STATE=CLOSED GH_VIEW_MERGED_AT=2026-08-05T00:00:00Z
+  if output=$("$FINISH" sqlite '拒绝替换已合并 PR' "$BODY" 2>&1); then fail 'merged PR replacement succeeded'; fi
+  assert_contains "$output" 'not closed and unmerged'
+  test ! -s "$PUSH_LOG" || fail 'merged PR replacement pushed'
 }
 
 test_finish_summary_sha_is_stable_refreshes_and_does_not_trust_title() {
@@ -220,7 +249,7 @@ test_finish_summary_sha_is_stable_refreshes_and_does_not_trust_title() {
 }
 
 test_finish_rejects_invalid_pr_verification() {
-  for field in number base head state url head_oid; do
+  for field in number base head state url head_oid cross_repository head_owner; do
     prepare_change feature
     case "$field" in
       number) export GH_VIEW_NUMBER=0 ;;
@@ -229,6 +258,8 @@ test_finish_rejects_invalid_pr_verification() {
       state) export GH_VIEW_STATE=CLOSED ;;
       url) export GH_VIEW_URL='' ;;
       head_oid) export GH_VIEW_HEAD_OID='' ;;
+      cross_repository) export GH_VIEW_CROSS_REPOSITORY=true ;;
+      head_owner) export GH_VIEW_HEAD_OWNER=fork-owner ;;
     esac
     if output=$("$FINISH" sqlite '拒绝非法 PR' "$BODY" 2>&1); then fail "invalid $field succeeded"; fi
     case "$output" in *PR_URL=*) fail "invalid $field reported PR_URL" ;; esac
@@ -420,6 +451,7 @@ run_finish_tests() {
   run_case 'finish recovers after second push failure' test_finish_recovers_after_second_push_failure
   run_case 'finish recovers exact staged status and rejects other dirt' test_finish_recovers_exact_staged_status_and_rejects_other_dirty_state
   run_case 'finish rejects PR number conflicts and multiple PRs' test_finish_rejects_recorded_pr_conflict_and_multiple_prs
+  run_case 'finish handles fork and closed PR recovery safely' test_finish_ignores_fork_pr_and_replaces_closed_recorded_pr
   run_case 'finish preserves and refreshes summary SHA safely' test_finish_summary_sha_is_stable_refreshes_and_does_not_trust_title
   run_case 'finish rejects invalid PR verification' test_finish_rejects_invalid_pr_verification
   run_case 'finish requires remote head after second push' test_finish_requires_remote_head_to_match_after_second_push

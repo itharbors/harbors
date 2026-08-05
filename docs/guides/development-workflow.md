@@ -55,6 +55,7 @@ ADR 或设计文档。
 npm run task:status -- complete <task-id> design
 npm run task:status -- start <task-id> implementation
 npm run task:status -- complete <task-id> implementation
+npm run task:status -- skip <task-id> implementation
 npm run task:status -- start <task-id> verification
 npm run task:status -- block <task-id> verification
 npm run task:status -- resume <task-id> verification
@@ -95,7 +96,7 @@ bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
   <name> "添加安全登录" /absolute/path/to/pr-body.md
 ```
 
-finish 会重新执行 ready gate 和各自边界检查，创建或恢复 open PR，在 PR body 添加指向 pre-PR
+finish 会重新执行 ready gate 和各自边界检查，只创建或恢复当前仓库拥有且 base/head 身份一致的 open PR；同名 fork PR 不会被编辑或记录。已记录 PR 关闭且未合并时可安全替换并更新编号，已合并或身份不符时 fail closed。finish 在 PR body 添加指向 pre-PR
 commit 上 `summary.md` 的不可变链接，回写 PR 编号，自动提交该 status 变化并二次 push。第一次调用在
 PR 创建后失败时，修复外部原因后重跑相同 finish 命令；它只恢复已验证的 open PR 和精确的自动
 status 写回状态，不把其他 dirty changes 当作可恢复状态。

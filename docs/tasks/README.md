@@ -25,7 +25,7 @@ Task 类型为 `feature`、`bug`、`optimize`、`docs`、`refactor`、`test`、`
 5. 收口/PR：完成总结、通过 PR 前检查、创建 PR。
 6. 合并确认/会话归档：以 GitHub 与 main 的事实确认完成，再归档 Codex 会话。
 
-`status.json` 的五个内部 stages 是 `requirements`、`design`、`implementation`、`verification`、`consolidation`。可用 action 为 `start`、`complete`、`block`、`resume`、`rewind`、`set-pr`。前一阶段必须终态才能开始后一阶段；`complete` 只作用于进行中阶段；`block`/`resume` 在进行中与阻塞之间切换；`rewind` 使目标阶段重新进行并将其后阶段设回 pending；`set-pr` 只在所有内部阶段终态时记录正整数 PR 号。状态只记录这些结构化事实，不添加主观说明。
+`status.json` 的五个内部 stages 是 `requirements`、`design`、`implementation`、`verification`、`consolidation`。可用 action 为 `start`、`complete`、`skip`、`block`、`resume`、`rewind`、`set-pr`。前一阶段必须终态才能开始后一阶段；`complete` 和 `skip` 只作用于进行中阶段，并分别形成 completed、skipped 终态；`block`/`resume` 在进行中与阻塞之间切换；`rewind` 使目标阶段重新进行并将其后阶段设回 pending；`set-pr` 只在所有内部阶段终态时记录安全正整数 PR 号。状态只记录这些结构化事实，不添加主观说明。
 
 审查导致实质变更时，使用 `rewind` 回退 `implementation`、`verification` 或 `consolidation` 的适当阶段，重新实施、验证和更新总结；不要保留过时的总结来表示新代码。
 
@@ -37,6 +37,7 @@ Task 类型为 `feature`、`bug`、`optimize`、`docs`、`refactor`、`test`、`
 node scripts/task-status.mjs init feature safe-login --date 2026-08-04
 node scripts/task-status.mjs start 2026-08-04-safe-login implementation
 node scripts/task-status.mjs complete 2026-08-04-safe-login implementation
+node scripts/task-status.mjs skip 2026-08-04-safe-login implementation
 node scripts/task-status.mjs block 2026-08-04-safe-login verification
 node scripts/task-status.mjs resume 2026-08-04-safe-login verification
 node scripts/task-status.mjs rewind 2026-08-04-safe-login implementation
@@ -51,7 +52,7 @@ node scripts/task-status.mjs resolve feature/safe-login origin/main --ready-for-
 
 ## PR、合并与完成
 
-创建 PR 前，在当前 pre-PR head 上完成并提交 `summary.md`，PR body 链接该不可变 SHA 上的 summary URL。创建 PR 后记录 PR 号并再次 push，使 `status.json` 的 PR 事实可追溯。
+创建 PR 前，在当前 pre-PR head 上完成并提交 `summary.md`，PR body 链接该不可变 SHA 上的 summary URL。创建 PR 后记录 PR 号并再次 push，使 `status.json` 的 PR 事实可追溯。finish 只复用当前仓库拥有、base/head 身份一致的 open PR；同名 fork PR 不得被编辑或记录。已记录 PR 若关闭且未合并，可以创建或采用经过同样身份校验的替代 PR，并将编号更新为当前 PR；已合并或身份不符的旧 PR 不得自动替换。
 
 “完成”是派生事实，必须同时满足：内部 stages 终态、已记录 PR 号、GitHub 显示 merged、最新 head 的 required checks 成功，以及三份 Task 正式文件已在 main。仅在这些事实成立后归档 Codex 会话；不要为了“归档”制造合并后的 commit。
 
@@ -128,4 +129,8 @@ Type: `feature`
 ## 后续关注
 
 说明合并后需要观察的客观信号，或明确写“当前没有额外关注项”。
+
+## 相关正式文档
+
+链接本 Task 产生或依赖、需要长期保留的设计、guide、ADR 等正式文档；没有时明确写“无”。
 ```

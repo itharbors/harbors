@@ -39,18 +39,27 @@ parse_pr_verification() {
   local verification=$1 separator=$'\034' parsed extra
   [[ "$verification" != *$'\n'* && "$verification" != *$'\r'* ]] || return 1
   parsed=${verification//$'\t'/$separator}
-  IFS=$separator read -r actual_number actual_base actual_head actual_state actual_url actual_head_oid extra \
+  IFS=$separator read -r actual_number actual_base actual_head actual_state actual_url actual_head_oid actual_cross_repository actual_head_owner actual_merged_at extra \
     <<< "${parsed}${separator}__END__"
   test "$extra" = '__END__'
 }
 
-validate_pr_fields() {
+validate_pr_shape() {
   [[ "$actual_number" =~ ^[1-9][0-9]*$ ]] || kit_workflow_fail "pull request has invalid number: $actual_number"
   test "$actual_base" = main || kit_workflow_fail "pull request has unexpected base: $actual_base"
   test "$actual_head" = "$branch" || kit_workflow_fail "pull request has unexpected head: $actual_head"
-  test "$actual_state" = OPEN || kit_workflow_fail "pull request is not open: $actual_state"
   test -n "$actual_url" || kit_workflow_fail 'pull request URL is empty'
   [[ "$actual_head_oid" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || kit_workflow_fail 'pull request headRefOid is invalid'
+  case "$actual_cross_repository" in true|false) ;; *) kit_workflow_fail 'pull request cross-repository flag is invalid' ;; esac
+  test -n "$actual_head_owner" || kit_workflow_fail 'pull request head repository owner is empty'
+}
+
+validate_canonical_open_pr() {
+  validate_pr_shape
+  test "$actual_cross_repository" = false || kit_workflow_fail 'pull request head belongs to a fork'
+  test "$actual_head_owner" = "$repo_owner" || kit_workflow_fail "pull request has unexpected head repository owner: $actual_head_owner"
+  test "$actual_state" = OPEN || kit_workflow_fail "pull request is not open: $actual_state"
+  test -z "$actual_merged_at" || kit_workflow_fail 'open pull request unexpectedly has mergedAt'
 }
 
 read_task_pr_number() {
@@ -64,7 +73,7 @@ is_staged_automatic_status_writeback() {
     const [root, path, expected] = process.argv.slice(1);
     const before = JSON.parse(execFileSync("git", ["-C", root, "show", `HEAD:${path}`], { encoding: "utf8" }));
     const after = JSON.parse(readFileSync(`${root}/${path}`, "utf8"));
-    if (before.pullRequest !== null || after.pullRequest?.number !== Number(expected)) process.exit(1);
+    if (before.pullRequest?.number === Number(expected) || after.pullRequest?.number !== Number(expected)) process.exit(1);
     before.updatedAt = after.updatedAt;
     before.pullRequest = after.pullRequest;
     if (JSON.stringify(before) !== JSON.stringify(after)) process.exit(1);
@@ -90,7 +99,7 @@ summary_head_for_pr() {
     const read = (ref) => JSON.parse(execFileSync("git", ["-C", root, "show", `${ref}:${path}`], { encoding: "utf8" }));
     const before = read(beforeRef);
     const after = read(afterRef);
-    if (before.pullRequest !== null || after.pullRequest?.number !== Number(expected)) process.exit(1);
+    if (before.pullRequest?.number === Number(expected) || after.pullRequest?.number !== Number(expected)) process.exit(1);
     before.updatedAt = after.updatedAt;
     before.pullRequest = after.pullRequest;
     if (JSON.stringify(before) !== JSON.stringify(after)) process.exit(1);
@@ -111,16 +120,39 @@ load_open_pr_candidates() {
   pr_candidates=$(cd "$repo_root" && gh pr list --state open --head "$branch" --json url --jq '.[].url')
   pr_urls=()
   while IFS= read -r candidate; do
-    test -z "$candidate" || pr_urls+=("$candidate")
+    test -z "$candidate" && continue
+    load_pr_verification "$candidate"
+    validate_pr_shape
+    test "$actual_url" = "$candidate" || kit_workflow_fail 'pull request URL verification failed'
+    test "$actual_state" = OPEN && test -z "$actual_merged_at" || kit_workflow_fail 'listed pull request is not open'
+    if test "$actual_cross_repository" = true; then continue; fi
+    test "$actual_head_owner" = "$repo_owner" || kit_workflow_fail "pull request has unexpected head repository owner: $actual_head_owner"
+    pr_urls+=("$actual_url")
   done <<< "$pr_candidates"
 }
 
-verify_open_pr() {
+load_pr_verification() {
   local requested_url=$1 verification
-  verification=$(cd "$repo_root" && gh pr view "$requested_url" --json number,baseRefName,headRefName,state,url,headRefOid --jq '[.number,.baseRefName,.headRefName,.state,.url,.headRefOid] | @tsv')
+  verification=$(cd "$repo_root" && gh pr view "$requested_url" --json number,baseRefName,headRefName,state,url,headRefOid,isCrossRepository,headRepositoryOwner,mergedAt --jq '[.number,.baseRefName,.headRefName,.state,.url,.headRefOid,.isCrossRepository,(.headRepositoryOwner.login // ""),(.mergedAt // "")] | @tsv')
   parse_pr_verification "$verification" || kit_workflow_fail 'could not parse pull request verification'
-  validate_pr_fields
+}
+
+verify_open_pr() {
+  local requested_url=$1
+  load_pr_verification "$requested_url"
+  validate_canonical_open_pr
   test "$actual_url" = "$requested_url" || kit_workflow_fail 'pull request URL verification failed'
+}
+
+verify_recorded_pr_is_closed_unmerged() {
+  local expected=$1
+  load_pr_verification "$expected"
+  validate_pr_shape
+  test "$actual_cross_repository" = false || kit_workflow_fail 'recorded Task PR belongs to a fork'
+  test "$actual_head_owner" = "$repo_owner" || kit_workflow_fail "recorded Task PR has unexpected head repository owner: $actual_head_owner"
+  test "$actual_number" = "$expected" || kit_workflow_fail 'recorded Task PR number verification failed'
+  test "$actual_state" = CLOSED && test -z "$actual_merged_at" \
+    || kit_workflow_fail 'recorded Task PR is not closed and unmerged'
 }
 
 test "$#" -eq 3 || kit_workflow_fail 'usage: finish-kit-change.sh <kit> <summary> <pr-body-file>'
@@ -191,6 +223,7 @@ if test "$worktree_mode" = staged-status-recovery; then
   gh auth status >/dev/null 2>&1 || kit_workflow_fail 'gh is not authenticated; run gh auth login'
   owner=$(cd "$repo_root" && gh repo view --json nameWithOwner --jq .nameWithOwner)
   [[ "$owner" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || kit_workflow_fail 'gh repo view returned an invalid nameWithOwner'
+  repo_owner=${owner%%/*}
   load_open_pr_candidates
   test "${#pr_urls[@]}" -eq 1 || kit_workflow_fail 'recorded Task PR has no unique open pull request'
   existing_pr=1
@@ -226,10 +259,11 @@ if test "$worktree_mode" = clean; then
   gh auth status >/dev/null 2>&1 || kit_workflow_fail 'gh is not authenticated; run gh auth login'
   owner=$(cd "$repo_root" && gh repo view --json nameWithOwner --jq .nameWithOwner)
   [[ "$owner" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || kit_workflow_fail 'gh repo view returned an invalid nameWithOwner'
+  repo_owner=${owner%%/*}
   load_open_pr_candidates
   case "${#pr_urls[@]}" in
     0)
-      test -z "$recorded_pr" || kit_workflow_fail 'recorded Task PR has no unique open pull request'
+      if test -n "$recorded_pr"; then verify_recorded_pr_is_closed_unmerged "$recorded_pr"; fi
       existing_pr=0
       head_sha=$current_head
       ;;
@@ -238,7 +272,8 @@ if test "$worktree_mode" = clean; then
       pr_url=${pr_urls[0]}
       verify_open_pr "$pr_url"
       if test -n "$recorded_pr" && test "$recorded_pr" != "$actual_number"; then
-        kit_workflow_fail "recorded Task PR number does not match the open pull request: $recorded_pr != $actual_number"
+        verify_recorded_pr_is_closed_unmerged "$recorded_pr"
+        verify_open_pr "$pr_url"
       fi
       expected_pr_number=$actual_number
       head_sha=$(summary_head_for_pr "$current_head" "$actual_number")
@@ -263,10 +298,12 @@ if test "$existing_pr" -eq 0; then
   verify_open_pr "$pr_url"
   expected_pr_number=$actual_number
 else
+  verify_open_pr "$pr_url"
+  test "$actual_number" = "$expected_pr_number" || kit_workflow_fail 'pull request number changed before edit'
   (cd "$repo_root" && gh pr edit "$pr_url" --body-file "$generated_body_file" >/dev/null)
 fi
 
-if test -z "$recorded_pr"; then
+if test "$recorded_pr" != "$actual_number"; then
   (cd "$repo_root" && node scripts/task-status.mjs set-pr "$task_id" "$actual_number" >/dev/null)
   recorded_pr=$actual_number
 fi
@@ -279,11 +316,13 @@ fi
 local_head=$(git -C "$repo_root" rev-parse HEAD)
 head_verified=0
 for attempt in 1 2 3; do
-  verification=$(cd "$repo_root" && gh pr view "$pr_url" --json number,baseRefName,headRefName,state,url,headRefOid --jq '[.number,.baseRefName,.headRefName,.state,.url,.headRefOid] | @tsv')
+  verification=$(cd "$repo_root" && gh pr view "$pr_url" --json number,baseRefName,headRefName,state,url,headRefOid,isCrossRepository,headRepositoryOwner,mergedAt --jq '[.number,.baseRefName,.headRefName,.state,.url,.headRefOid,.isCrossRepository,(.headRepositoryOwner.login // ""),(.mergedAt // "")] | @tsv')
   if parse_pr_verification "$verification"; then
     if test "$actual_number" = "$expected_pr_number" && test "$actual_base" = "$target_branch" \
       && test "$actual_head" = "$branch" && test "$actual_state" = OPEN \
-      && test -n "$actual_url" && test "$actual_url" = "$pr_url" && test "$actual_head_oid" = "$local_head"; then
+      && test -n "$actual_url" && test "$actual_url" = "$pr_url" && test "$actual_head_oid" = "$local_head" \
+      && test "$actual_cross_repository" = false && test "$actual_head_owner" = "$repo_owner" \
+      && test -z "$actual_merged_at"; then
       head_verified=1
       break
     fi

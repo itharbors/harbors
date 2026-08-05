@@ -34,6 +34,9 @@ export function validateTaskStatus(value, { expectedTaskId } = {}) {
   if (typeof value.taskId !== 'string' || !TASK_ID_PATTERN.test(value.taskId)) {
     throw new Error('invalid task id; expected YYYY-MM-DD-slug');
   }
+  if (!isCalendarDate(value.taskId.slice(0, 10))) {
+    throw new Error('invalid task id; expected a real YYYY-MM-DD calendar date');
+  }
   if (expectedTaskId !== undefined && value.taskId !== expectedTaskId) {
     throw new Error('Task id does not match directory');
   }
@@ -75,6 +78,11 @@ export function applyTaskStatusAction(status, action, { now } = {}) {
         throw new Error(`stage ${action.stage} must be in_progress to complete`);
       }
       next.stages[action.stage] = 'completed';
+    } else if (action.kind === 'skip') {
+      if (currentState !== 'in_progress') {
+        throw new Error(`stage ${action.stage} must be in_progress to skip`);
+      }
+      next.stages[action.stage] = 'skipped';
     } else if (action.kind === 'block') {
       if (currentState !== 'in_progress') {
         throw new Error(`stage ${action.stage} must be in_progress to block`);
@@ -140,8 +148,8 @@ function validatePullRequest(pullRequest) {
   }
   assertPlainObject(pullRequest, 'pullRequest');
   assertExactKeys(pullRequest, ['number'], 'pullRequest');
-  if (!Number.isInteger(pullRequest.number) || pullRequest.number < 1) {
-    throw new Error('pull request number must be a positive integer');
+  if (!Number.isSafeInteger(pullRequest.number) || pullRequest.number < 1) {
+    throw new Error('pull request number must be a safe positive integer');
   }
 }
 
@@ -152,18 +160,28 @@ function validateAction(action) {
   }
   if (action.kind === 'set-pr') {
     assertExactKeys(action, ['kind', 'number'], 'action');
-    if (!Number.isInteger(action.number) || action.number < 1) {
-      throw new Error('pull request number must be a positive integer');
+    if (!Number.isSafeInteger(action.number) || action.number < 1) {
+      throw new Error('pull request number must be a safe positive integer');
     }
     return;
   }
-  if (!['start', 'complete', 'block', 'resume', 'rewind'].includes(action.kind)) {
+  if (!['start', 'complete', 'skip', 'block', 'resume', 'rewind'].includes(action.kind)) {
     throw new Error(`unknown action kind: ${action.kind}`);
   }
   assertExactKeys(action, ['kind', 'stage'], 'action');
   if (!TASK_STAGES.includes(action.stage)) {
     throw new Error(`invalid stage: ${String(action.stage)}`);
   }
+}
+
+function isCalendarDate(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value ?? '');
+  if (!match) return false;
+  const [year, month, day] = match.slice(1).map(Number);
+  const date = new Date(0);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCFullYear(year, month - 1, day);
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
 function assertPriorStagesAreTerminal(stages, stageIndex) {

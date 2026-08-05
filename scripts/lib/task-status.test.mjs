@@ -50,6 +50,10 @@ test('rejects malformed status structure and an invalid stage progression', () =
     /invalid task id/u,
   );
   assert.throws(
+    () => validateTaskStatus({ ...value, taskId: '2026-02-31-safe-login' }),
+    /invalid task id/u,
+  );
+  assert.throws(
     () => validateTaskStatus({ ...value, updatedAt: 'tomorrow' }, { expectedTaskId: taskId }),
     /valid date-time/u,
   );
@@ -174,8 +178,9 @@ test('advances, blocks, resumes, rewinds, and records a PR without free text', (
   value = applyTaskStatusAction(value, { kind: 'block', stage: 'implementation' }, { now });
   value = applyTaskStatusAction(value, { kind: 'resume', stage: 'implementation' }, { now });
   value = applyTaskStatusAction(value, { kind: 'rewind', stage: 'implementation' }, { now });
+  value = applyTaskStatusAction(value, { kind: 'skip', stage: 'implementation' }, { now });
 
-  assert.equal(value.stages.implementation, 'in_progress');
+  assert.equal(value.stages.implementation, 'skipped');
   assert.equal(value.stages.verification, 'pending');
   assert.equal(value.stages.consolidation, 'pending');
   assert.throws(
@@ -201,9 +206,21 @@ test('rejects invalid transitions and malformed pull requests', () => {
     /positive integer/u,
   );
   assert.throws(
+    () => validateTaskStatus({ ...value, pullRequest: { number: Number.MAX_SAFE_INTEGER + 1 } }, { expectedTaskId: taskId }),
+    /safe positive integer/u,
+  );
+  assert.throws(
     () => validateTaskStatus({ ...value, pullRequest: { number: 49, url: 'https://example.test/pr/49' } }, { expectedTaskId: taskId }),
     /unknown field: pullRequest\.url/u,
   );
+});
+
+test('Schema rejects impossible Task dates and unsafe PR numbers', () => {
+  const taskIdPattern = new RegExp(taskStatusSchema.properties.taskId.pattern, 'u');
+  assert.equal(taskIdPattern.test('2026-02-31-safe-login'), false);
+  assert.equal(taskIdPattern.test('2024-02-29-safe-login'), true);
+  assert.equal(taskIdPattern.test('2025-02-29-safe-login'), false);
+  assert.equal(taskStatusSchema.properties.pullRequest.oneOf[1].properties.number.maximum, Number.MAX_SAFE_INTEGER);
 });
 
 function schemaAccepts(schema, value) {
