@@ -1,5 +1,5 @@
-import { types as utilTypes } from 'node:util';
 import type { PluginDefinition } from '../../framework/plugin/types';
+import { isPluginProcessProxy, normalizePluginProcessError } from './error.js';
 import {
   type PluginProcessEnvelope,
   type PluginProcessRequest,
@@ -90,7 +90,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
 
   const unsubscribeHost = options.transport.subscribe((input) => {
     if (!generation) {
-      if (isProxyValue(input)) {
+      if (isPluginProcessProxy(input)) {
         void fatal(new Error('Application plugin IPC initial envelope is invalid'));
         return;
       }
@@ -113,7 +113,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
       return;
     }
 
-    if (isProxyValue(input)) {
+    if (isPluginProcessProxy(input)) {
       void fatal(new Error('Application plugin IPC envelope is invalid'));
       return;
     }
@@ -139,7 +139,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
       if (terminalRequest) await finish(false);
     } catch (input) {
       if (terminal) return;
-      const error = toError(input);
+      const error = normalizePluginProcessError(input);
       rpc.respond(request.requestId, {
         ok: false,
         error: { code: 'APPLICATION_PLUGIN_RUNNER_ERROR', message: error.message },
@@ -219,13 +219,13 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     try {
       await definition.lifecycle?.load?.(runtimeController.runtime);
     } catch (input) {
-      loadError = toError(input);
+      loadError = normalizePluginProcessError(input);
     }
     let commandError: Error | undefined;
     try {
       await runtimeController.finishLoading(loadError === undefined);
     } catch (input) {
-      commandError = toError(input);
+      commandError = normalizePluginProcessError(input);
     }
     if (loadError) throw loadError;
     if (commandError) throw commandError;
@@ -242,7 +242,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
     if (terminal) return;
     terminal = true;
     stopping = true;
-    const error = toError(input);
+    const error = normalizePluginProcessError(input);
     try {
       rpc?.emit('fatal', { message: error.message });
     } catch {
@@ -310,7 +310,7 @@ export function runApplicationPluginRunner(options: RunApplicationPluginRunnerOp
   }
 
   function recordSendError(input: unknown): void {
-    sendError ??= toError(input);
+    sendError ??= normalizePluginProcessError(input);
     if (!terminal) void fatal(sendError);
   }
 
@@ -437,7 +437,7 @@ function assertNullPayload(input: unknown): void {
 
 function safelyReadGeneration(input: unknown): string | undefined {
   try {
-    if (input === null || typeof input !== 'object' || isProxyValue(input) || Array.isArray(input)) return undefined;
+    if (input === null || typeof input !== 'object' || isPluginProcessProxy(input) || Array.isArray(input)) return undefined;
     const descriptor = Object.getOwnPropertyDescriptor(input, 'generation');
     if (!descriptor || !Object.hasOwn(descriptor, 'value') || !descriptor.enumerable) return undefined;
     return isNonEmptyString(descriptor.value) ? descriptor.value : undefined;
@@ -470,33 +470,4 @@ function hasExactKeys(input: Record<string, unknown>, expected: string[]): boole
 
 function isNonEmptyString(input: unknown): input is string {
   return typeof input === 'string' && input.length > 0;
-}
-
-function toError(input: unknown): Error {
-  const fallback = 'Application plugin runner failed';
-  let message = fallback;
-  try {
-    if (typeof input === 'string') {
-      message = input;
-    } else if (typeof input === 'number' || typeof input === 'boolean' || typeof input === 'bigint') {
-      message = String(input);
-    } else if (input !== null && (typeof input === 'object' || typeof input === 'function') && !isProxyValue(input)) {
-      const descriptor = Object.getOwnPropertyDescriptor(input, 'message');
-      if (descriptor && Object.hasOwn(descriptor, 'value') && typeof descriptor.value === 'string') {
-        message = descriptor.value;
-      }
-    }
-  } catch {
-    message = fallback;
-  }
-  return new Error((message || fallback).slice(0, 1024));
-}
-
-function isProxyValue(input: unknown): boolean {
-  if (input === null || (typeof input !== 'object' && typeof input !== 'function')) return false;
-  try {
-    return utilTypes.isProxy(input);
-  } catch {
-    return true;
-  }
 }

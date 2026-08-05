@@ -275,6 +275,26 @@ describe('plugin process RPC peer', () => {
     await expect(pending).rejects.toThrow('closed');
   });
 
+  it('normalizes a hostile synchronous send failure without invoking its traps', async () => {
+    let trapCount = 0;
+    const hostile = new Proxy({}, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+    const peer = createPluginProcessRpcPeer({
+      generation: 'gen-1',
+      send: () => { throw hostile; },
+      subscribe: () => () => undefined,
+    });
+
+    await expect(peer.request('invoke', null)).rejects.toMatchObject({
+      message: 'Application plugin runner failed',
+    });
+    expect(trapCount).toBe(0);
+  });
+
   it('rejects the 257th pending request', async () => {
     const peer = createPluginProcessRpcPeer({
       generation: 'gen-1',

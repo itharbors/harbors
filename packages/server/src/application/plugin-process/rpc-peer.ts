@@ -5,6 +5,7 @@ import {
   type PluginProcessResponse,
   parsePluginProcessEnvelope,
 } from './protocol.js';
+import { normalizePluginProcessError } from './error.js';
 
 const DEFAULT_MAX_PENDING = 256;
 
@@ -82,11 +83,11 @@ export function createPluginProcessRpcPeer(options: CreatePluginProcessRpcPeerOp
             options.send(envelope);
           } catch (error) {
             pending.delete(requestId);
-            reject(toError(error));
+            reject(normalizePluginProcessError(error));
           }
         });
       } catch (error) {
-        return Promise.reject(toError(error));
+        return Promise.reject(normalizePluginProcessError(error));
       }
     },
     respond(requestId, response) {
@@ -146,8 +147,4 @@ function normalizeRemoteError(payload: PluginProcessErrorPayload): Error & Plugi
     ...(payload.retryAfterMs === undefined ? {} : { retryAfterMs: payload.retryAfterMs }),
   });
   return error;
-}
-
-function toError(input: unknown): Error {
-  return input instanceof Error ? input : new Error(String(input));
 }

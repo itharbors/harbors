@@ -1,5 +1,6 @@
 import { runApplicationPluginRunner } from './runner-host.js';
 import type { PluginProcessEnvelope } from './protocol.js';
+import { normalizePluginProcessError } from './error.js';
 
 const IPC_SEND_TIMEOUT_MS = 2_000;
 
@@ -37,7 +38,7 @@ const runner = runApplicationPluginRunner({
         try {
           process.send(envelope, complete);
         } catch (error) {
-          complete(error instanceof Error ? error : new Error(String(error)));
+          complete(normalizePluginProcessError(error));
         }
       });
     },
@@ -56,8 +57,8 @@ const runner = runApplicationPluginRunner({
   },
 });
 
-process.once('uncaughtException', (error) => { void runner.fatal(error); });
-process.once('unhandledRejection', (reason) => { void runner.fatal(reason); });
-process.once('disconnect', () => { void runner.disconnect(); });
-process.once('SIGINT', () => { void runner.fatal(new Error('Application plugin runner received SIGINT')); });
-process.once('SIGTERM', () => { void runner.fatal(new Error('Application plugin runner received SIGTERM')); });
+process.on('uncaughtException', (error) => { void runner.fatal(error); });
+process.on('unhandledRejection', (reason) => { void runner.fatal(reason); });
+process.on('disconnect', () => { void runner.disconnect(); });
+process.on('SIGINT', () => { void runner.fatal(new Error('Application plugin runner received SIGINT')); });
+process.on('SIGTERM', () => { void runner.fatal(new Error('Application plugin runner received SIGTERM')); });

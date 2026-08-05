@@ -9,6 +9,8 @@ import {
   runApplicationPluginRunner,
   type ApplicationPluginRunnerTransport,
 } from '../../src/application/plugin-process/runner-host';
+import { createRunnerRuntime } from '../../src/application/plugin-process/runner-runtime';
+import type { PluginProcessRpcPeer } from '../../src/application/plugin-process/rpc-peer';
 import type { PluginProcessEnvelope, PluginProcessRequest } from '../../src/application/plugin-process/protocol';
 
 const temporaryDirectories: string[] = [];
@@ -530,6 +532,38 @@ describe('application plugin process runner', () => {
     }));
   });
 
+  it('normalizes a hostile post-load RPC rejection before reporting one fatal error', async () => {
+    let trapCount = 0;
+    const hostile = new Proxy({}, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+    const fatalErrors: Error[] = [];
+    const rpc: PluginProcessRpcPeer = {
+      request: () => Promise.reject(hostile),
+      respond: () => undefined,
+      emit: () => undefined,
+      close: () => undefined,
+    };
+    const controller = createRunnerRuntime({
+      pluginName: 'fixture-plugin',
+      runtime: initializePayload('/unused').runtime,
+      rpc,
+      fatal: (error) => fatalErrors.push(error),
+    });
+    await controller.finishLoading();
+
+    await expect(controller.runtime.plugin.callPlugin('other', 'ping')).rejects.toMatchObject({
+      message: 'Application plugin runner failed',
+    });
+
+    expect(trapCount).toBe(0);
+    expect(fatalErrors).toHaveLength(1);
+    expect(fatalErrors[0]).toMatchObject({ message: 'Application plugin runner failed' });
+  });
+
   it('reports an uncaught timer failure and runs terminal exit only once', async () => {
     const entryPath = await pluginEntry(`globalThis.editor.plugin.define({});`);
     const harness = createHarness();
@@ -595,6 +629,60 @@ describe('application plugin process runner', () => {
 
     expect(getterCount).toBe(0);
     expect(harness.sent.filter((candidate) => candidate.kind === 'event' && candidate.event === 'fatal')).toHaveLength(1);
+  });
+
+  it('fails closed on a current failure response with a nested hostile error without invoking traps', async () => {
+    const entryPath = await pluginEntry(`globalThis.editor.plugin.define({});`);
+    const harness = createHarness();
+    await harness.request('initialize', initializePayload(entryPath));
+    let trapCount = 0;
+    const hostileError = new Proxy({}, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+
+    harness.deliver({
+      protocol: 1,
+      generation: 'gen-1',
+      kind: 'response',
+      requestId: 'nested-hostile-current',
+      ok: false,
+      error: hostileError,
+    });
+    await vi.waitFor(() => expect(harness.exits).toEqual([{ failed: true }]));
+
+    expect(trapCount).toBe(0);
+    expect(harness.sent.filter((candidate) => candidate.kind === 'event' && candidate.event === 'fatal')).toHaveLength(1);
+  });
+
+  it('ignores a stale failure response with a nested hostile error without invoking traps', async () => {
+    const entryPath = await pluginEntry(`globalThis.editor.plugin.define({});`);
+    const harness = createHarness();
+    await harness.request('initialize', initializePayload(entryPath));
+    let trapCount = 0;
+    const hostileError = new Proxy({}, {
+      get() { trapCount += 1; throw new Error('get trap'); },
+      getOwnPropertyDescriptor() { trapCount += 1; throw new Error('descriptor trap'); },
+      getPrototypeOf() { trapCount += 1; throw new Error('prototype trap'); },
+      ownKeys() { trapCount += 1; throw new Error('keys trap'); },
+    });
+
+    harness.deliver({
+      protocol: 1,
+      generation: 'stale-generation',
+      kind: 'response',
+      requestId: 'nested-hostile-stale',
+      ok: false,
+      error: hostileError,
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    expect(trapCount).toBe(0);
+    expect(harness.exits).toEqual([]);
+    await harness.request('unload', null);
+    await vi.waitFor(() => expect(harness.exits).toEqual([{ failed: false }]));
   });
 
   it('caps best-effort fatal unload at exactly ten seconds', async () => {
@@ -794,6 +882,66 @@ describe('application plugin process runner', () => {
       .toEqual([expect.objectContaining({ payload: { message: 'Application plugin runner failed' } })]);
     expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
     await expect(run.marker()).resolves.toBe('unload\n');
+    expect(run.stderr()).toBe('');
+  });
+
+  it('keeps handling repeated uncaught exceptions while fatal unload is pending', async () => {
+    const fixture = await forkFixture(`
+      import { appendFileSync } from 'node:fs';
+      globalThis.editor.plugin.define({ lifecycle: {
+        load() {
+          setTimeout(() => { throw new Error('first repeated fault'); }, 50);
+          setTimeout(() => { throw new Error('second repeated fault'); }, 100);
+        },
+        unload() {
+          appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload-started\\n');
+          return new Promise((resolve) => setTimeout(() => {
+            appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload-completed\\n');
+            resolve();
+          }, 250));
+        },
+      } });
+    `);
+    const run = startEmittedRunner(fixture.entryPath);
+
+    await run.initialized;
+    const exited = await exitWithin(run.exited, 2_000);
+
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal'))
+      .toEqual([expect.objectContaining({ payload: { message: 'first repeated fault' } })]);
+    await expect(run.marker()).resolves.toBe('unload-started\nunload-completed\n');
+    expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
+    expect(run.stderr()).toBe('');
+  });
+
+  it('keeps handling repeated SIGTERM while fatal unload is pending', async () => {
+    const fixture = await forkFixture(`
+      import { appendFileSync } from 'node:fs';
+      globalThis.editor.plugin.define({ lifecycle: {
+        unload() {
+          appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload-started\\n');
+          return new Promise((resolve) => setTimeout(() => {
+            appendFileSync(${JSON.stringify('MARKER_PATH')}, 'unload-completed\\n');
+            resolve();
+          }, 250));
+        },
+      } });
+    `);
+    const run = startEmittedRunner(fixture.entryPath);
+    await run.initialized;
+
+    run.child.kill('SIGTERM');
+    await waitForChildEnvelope(
+      run.child,
+      run.messages,
+      (envelope) => envelope.kind === 'event' && envelope.event === 'fatal',
+    );
+    run.child.kill('SIGTERM');
+    const exited = await exitWithin(run.exited, 2_000);
+
+    expect(run.messages.filter((envelope) => envelope.kind === 'event' && envelope.event === 'fatal')).toHaveLength(1);
+    await expect(run.marker()).resolves.toBe('unload-started\nunload-completed\n');
+    expect(exited).toMatchObject({ code: 1, signal: null, count: 1 });
     expect(run.stderr()).toBe('');
   });
 

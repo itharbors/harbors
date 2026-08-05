@@ -1,6 +1,7 @@
 import type { ApplicationPluginRuntime } from '../../editor/types';
 import type { ContributeData, PluginInfo } from '../../framework/plugin/types';
 import type { PluginProcessRpcPeer } from './rpc-peer';
+import { normalizePluginProcessError } from './error.js';
 
 export interface InitializeApplicationPluginPayload {
   entryPath: string;
@@ -81,7 +82,7 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
     }
     const request = options.rpc.request('runtime-command', command);
     const observed = request.catch((input) => {
-      const error = toError(input);
+      const error = normalizePluginProcessError(input);
       if (phase === 'loading') {
         loadCommandError ??= error;
       } else if (phase === 'running') {
@@ -266,8 +267,4 @@ function deepFreeze<T>(input: T): T {
   if (input === null || typeof input !== 'object' || Object.isFrozen(input)) return input;
   for (const value of Object.values(input)) deepFreeze(value);
   return Object.freeze(input);
-}
-
-function toError(input: unknown): Error {
-  return input instanceof Error ? input : new Error(String(input));
 }

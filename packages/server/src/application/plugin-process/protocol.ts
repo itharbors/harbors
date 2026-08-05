@@ -1,4 +1,4 @@
-import { types as utilTypes } from 'node:util';
+import { isPluginProcessProxy } from './error.js';
 
 export const PLUGIN_PROCESS_PROTOCOL = 1 as const;
 
@@ -192,7 +192,7 @@ function isPluginProcessErrorPayload(input: unknown): input is PluginProcessErro
 }
 
 function isPlainObject(input: unknown): input is Record<string, unknown> {
-  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+  if (input === null || typeof input !== 'object' || isPluginProcessProxy(input) || Array.isArray(input)) {
     return false;
   }
   const prototype = Object.getPrototypeOf(input);
@@ -223,14 +223,7 @@ function isNonEmptyString(input: unknown): input is string {
 }
 
 function assertNotProxy(input: unknown, label: string): void {
-  if (input === null || (typeof input !== 'object' && typeof input !== 'function')) return;
-  let proxy = true;
-  try {
-    proxy = utilTypes.isProxy(input);
-  } catch {
-    // If native classification ever fails, do not inspect the value further.
-  }
-  if (proxy) throw new TypeError(`${label} cannot be a Proxy`);
+  if (isPluginProcessProxy(input)) throw new TypeError(`${label} cannot be a Proxy`);
 }
 
 function isArrayIndex(key: string, length: number): boolean {
