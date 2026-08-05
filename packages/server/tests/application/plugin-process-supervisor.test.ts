@@ -71,7 +71,13 @@ describe('ApplicationPluginSupervisor', () => {
       });
 
       const snapshot: ApplicationPluginRuntimeSnapshot = {
-        pluginSnapshot: [{ name: 'fixture', path: '/fixture' }],
+        pluginSnapshot: {
+          registered: [{
+            name: 'fixture', path: '/fixture', kind: 'external',
+            entry: './main/dist/index.js', capabilities: [],
+          }],
+          loaded: ['fixture'],
+        },
         menuSnapshot: { revision: 2 },
         serviceSnapshot: { clock: 'ready' },
       };
@@ -1597,7 +1603,13 @@ function initializePayload(): InitializeApplicationPluginPayload {
     runtime: {
       paths: { data: '/data', cache: '/cache', temp: '/temp', legacyData: [] },
       hostMode: 'web',
-      pluginSnapshot: [{ name: 'fixture', path: '/plugins/fixture' }],
+      pluginSnapshot: {
+        registered: [{
+          name: 'fixture', path: '/plugins/fixture', kind: 'external',
+          entry: './main/dist/index.js', capabilities: [],
+        }],
+        loaded: ['fixture'],
+      },
       menuSnapshot: {},
       serviceSnapshot: {},
       notificationCapability: true,

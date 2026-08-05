@@ -12,6 +12,7 @@ import type {
 import { createNotificationCapability } from './notification-capability';
 import type {
   ApplicationPluginDefinitionMetadata,
+  ApplicationPluginSnapshot,
   ApplicationPluginRuntimeSnapshot,
   InitializeApplicationPluginPayload,
   RuntimeCommand,
@@ -527,6 +528,8 @@ export class ApplicationRuntime {
         void this.attachPluginLifecycle(name)
           .catch(() => this.failRunningPlugin(name, CONTRIBUTION_INVALID));
       }
+    } else if (!this.terminalIntent) {
+      this.broadcastRuntimeSnapshot();
     }
     if (this.startupComplete) this.refreshPhase();
     this.emit();
@@ -869,10 +872,16 @@ export class ApplicationRuntime {
     };
   }
 
-  private pluginSnapshot(): Array<{ name: string; path: string }> {
-    return this.pluginSpecs
-      .filter((spec) => this.prepared.has(spec.name))
-      .map((spec) => ({ name: spec.name, path: spec.path }));
+  private pluginSnapshot(): ApplicationPluginSnapshot {
+    return {
+      registered: this.pluginSpecs.flatMap((spec) => {
+        const info = this.prepared.get(spec.name)?.info;
+        return info ? [pluginInfoSnapshot(info)] : [];
+      }),
+      loaded: this.pluginStates
+        .filter((state) => state.status === 'running' && this.prepared.has(state.name))
+        .map((state) => state.name),
+    };
   }
 
   private hasNotificationCapability(spec: ApplicationPluginSpec): boolean {
@@ -1004,6 +1013,18 @@ function setOptional<K extends 'generation' | 'pid' | 'lastFailureAt' | 'retryAf
 ): void {
   if (value === null || value === undefined) delete target[key];
   else target[key] = value;
+}
+
+function pluginInfoSnapshot(info: PluginInfo): PluginInfo {
+  return {
+    name: info.name,
+    path: info.path,
+    kind: info.kind,
+    entry: info.entry,
+    ...(info.capabilities ? { capabilities: [...info.capabilities] } : {}),
+    ...(info.assets ? { assets: structuredClone(info.assets) } : {}),
+    ...(info.contribute ? { contribute: structuredClone(info.contribute) } : {}),
+  };
 }
 
 function assertApplicationContributions(pluginName: string, contribute: ContributeData | undefined): void {

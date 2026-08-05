@@ -9,7 +9,10 @@ import {
   runApplicationPluginRunner,
   type ApplicationPluginRunnerTransport,
 } from '../../src/application/plugin-process/runner-host';
-import { createRunnerRuntime } from '../../src/application/plugin-process/runner-runtime';
+import {
+  createRunnerRuntime,
+  type ApplicationPluginSnapshot,
+} from '../../src/application/plugin-process/runner-runtime';
 import type { PluginProcessRpcPeer } from '../../src/application/plugin-process/rpc-peer';
 import type { PluginProcessEnvelope, PluginProcessRequest } from '../../src/application/plugin-process/protocol';
 
@@ -473,7 +476,13 @@ describe('application plugin process runner', () => {
     await harness.request('initialize', initializePayload(entryPath));
 
     await harness.request('runtime-snapshot', {
-      pluginSnapshot: [{ name: 'new-plugin', path: '/new' }],
+      pluginSnapshot: {
+        registered: [{
+          name: 'new-plugin', path: '/new', kind: 'external',
+          entry: './main/dist/index.js', capabilities: [],
+        }],
+        loaded: ['new-plugin'],
+      },
       menuSnapshot: { tree: ['updated'] },
       serviceSnapshot: { revision: 2 },
     });
@@ -481,6 +490,76 @@ describe('application plugin process runner', () => {
     await expect(harness.request('invoke', { target: 'method', method: 'snapshot', args: [] })).resolves.toEqual([
       ['new-plugin'], { tree: ['updated'] }, 2,
     ]);
+  });
+
+  it('keeps registered paths and manifest info independent from loaded plugin names', () => {
+    const registeredOnly: ApplicationPluginSnapshot['registered'][number] = {
+      name: 'registered-only',
+      path: '/plugins/registered-only',
+      kind: 'external' as const,
+      entry: './main/dist/index.js',
+      capabilities: ['credentials'],
+      contribute: { message: { request: { status: ['status'] } } },
+    };
+    const controller = createRunnerRuntime({
+      pluginName: 'running-plugin',
+      runtime: {
+        ...initializePayload('/unused').runtime,
+        pluginSnapshot: {
+          registered: [
+            {
+              name: 'running-plugin', path: '/plugins/running-plugin', kind: 'external',
+              entry: './main/dist/index.js', capabilities: [],
+            },
+            registeredOnly,
+          ],
+          loaded: ['running-plugin'],
+        },
+      },
+      rpc: inertRpc(),
+      fatal: vi.fn(),
+    });
+
+    expect(() => controller.runtime.plugin.listRegistered()).not.toThrow();
+    expect(controller.runtime.plugin.listRegistered()).toEqual([
+      '/plugins/running-plugin',
+      '/plugins/registered-only',
+    ]);
+    expect(controller.runtime.plugin.listLoaded()).toEqual(['running-plugin']);
+    expect(controller.runtime.plugin.getInfo('registered-only')).toEqual(registeredOnly);
+    expect(controller.runtime.plugin.getInfo('/plugins/registered-only')).toEqual(registeredOnly);
+  });
+
+  it('refreshes loaded plugin names without filtering registered plugin info', () => {
+    const registered: ApplicationPluginSnapshot['registered'] = [
+      {
+        name: 'observer', path: '/plugins/observer', kind: 'external',
+        entry: './main/dist/index.js', capabilities: [],
+      },
+      {
+        name: 'sibling', path: '/plugins/sibling', kind: 'external',
+        entry: './main/dist/index.js', capabilities: [],
+      },
+    ];
+    const controller = createRunnerRuntime({
+      pluginName: 'observer',
+      runtime: {
+        ...initializePayload('/unused').runtime,
+        pluginSnapshot: { registered, loaded: ['observer', 'sibling'] },
+      },
+      rpc: inertRpc(),
+      fatal: vi.fn(),
+    });
+
+    controller.updateSnapshot({
+      pluginSnapshot: { registered, loaded: ['observer'] },
+      menuSnapshot: { tree: ['updated'] },
+      serviceSnapshot: {},
+    });
+
+    expect(() => controller.runtime.plugin.listLoaded()).not.toThrow();
+    expect(controller.runtime.plugin.listLoaded()).toEqual(['observer']);
+    expect(controller.runtime.plugin.getInfo('sibling')).toEqual(registered[1]);
   });
 
   it('returns only own service snapshot entries', async () => {
@@ -1283,11 +1362,26 @@ function initializePayload(entryPath: string) {
     runtime: {
       paths: { data: '/data', cache: '/cache', temp: '/temp', legacyData: ['/legacy'] },
       hostMode: 'web' as const,
-      pluginSnapshot: [{ name: 'fixture-plugin', path: '/fixture' }],
+      pluginSnapshot: {
+        registered: [{
+          name: 'fixture-plugin', path: '/fixture', kind: 'external' as const,
+          entry: './main/dist/index.js', capabilities: [],
+        }],
+        loaded: ['fixture-plugin'],
+      },
       menuSnapshot: { tree: ['initial'] },
       serviceSnapshot: { ready: true },
       notificationCapability: true,
     },
+  };
+}
+
+function inertRpc(): PluginProcessRpcPeer {
+  return {
+    request: () => Promise.resolve(null),
+    respond: () => undefined,
+    emit: () => undefined,
+    close: () => undefined,
   };
 }
 

@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { ApplicationPluginRuntime } from '../../editor/types';
 import type { ContributeData, PluginInfo } from '../../framework/plugin/types';
 import type { PluginProcessRpcPeer } from './rpc-peer';
@@ -9,15 +10,20 @@ export interface InitializeApplicationPluginPayload {
   runtime: {
     paths: { data: string; cache: string; temp: string; legacyData: string[] };
     hostMode: 'desktop' | 'web';
-    pluginSnapshot: Array<{ name: string; path: string }>;
+    pluginSnapshot: ApplicationPluginSnapshot;
     menuSnapshot: unknown;
     serviceSnapshot: Record<string, unknown>;
     notificationCapability: boolean;
   };
 }
 
+export interface ApplicationPluginSnapshot {
+  registered: PluginInfo[];
+  loaded: string[];
+}
+
 export interface ApplicationPluginRuntimeSnapshot {
-  pluginSnapshot: Array<{ name: string; path: string }>;
+  pluginSnapshot: ApplicationPluginSnapshot;
   menuSnapshot: unknown;
   serviceSnapshot: Record<string, unknown>;
 }
@@ -143,9 +149,14 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
     host: Object.freeze({ mode: options.runtime.hostMode, notifications }),
     plugin: Object.freeze({
       define: () => { throw new Error('Plugin definitions are captured only while importing a plugin'); },
-      getInfo: (name: string) => pluginSnapshot.find((plugin) => plugin.name === name) as PluginInfo | undefined,
-      listLoaded: () => pluginSnapshot.map((plugin) => plugin.name),
-      listRegistered: () => pluginSnapshot.map((plugin) => plugin.name),
+      getInfo: (name: string) => {
+        const resolvedPath = path.resolve(name);
+        return pluginSnapshot.registered.find((plugin) => (
+          plugin.name === name || plugin.path === resolvedPath
+        ));
+      },
+      listLoaded: () => [...pluginSnapshot.loaded],
+      listRegistered: () => pluginSnapshot.registered.map((plugin) => plugin.path),
       callPlugin: (plugin: string, method: string, ...args: unknown[]) =>
         requestCommand({ target: 'plugin', operation: 'call', plugin, method, args }),
     }),

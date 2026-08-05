@@ -1,4 +1,4 @@
-import type { PluginDefinition } from '../../framework/plugin/types';
+import type { PluginDefinition, PluginInfo } from '../../framework/plugin/types';
 import { isPluginProcessProxy, normalizePluginProcessError } from './error.js';
 import {
   type PluginProcessEnvelope,
@@ -8,6 +8,7 @@ import {
 import { createPluginProcessRpcPeer, type PluginProcessRpcPeer } from './rpc-peer.js';
 import {
   createRunnerRuntime,
+  type ApplicationPluginSnapshot,
   type ApplicationPluginRuntimeSnapshot,
   type InitializeApplicationPluginPayload,
   type RunnerRuntimeController,
@@ -458,9 +459,33 @@ function safelyReadGeneration(input: unknown): string | undefined {
   }
 }
 
-function isPluginSnapshot(input: unknown): input is Array<{ name: string; path: string }> {
-  return Array.isArray(input) && input.every((plugin) => isRecord(plugin)
-    && hasExactKeys(plugin, ['name', 'path']) && isNonEmptyString(plugin.name) && isNonEmptyString(plugin.path));
+function isPluginSnapshot(input: unknown): input is ApplicationPluginSnapshot {
+  if (!isRecord(input) || !hasExactKeys(input, ['registered', 'loaded'])
+    || !Array.isArray(input.registered) || !Array.isArray(input.loaded)
+    || !input.registered.every(isPluginInfo) || !input.loaded.every(isNonEmptyString)) {
+    return false;
+  }
+  const registeredNames = new Set(input.registered.map((plugin) => plugin.name));
+  return new Set(input.loaded).size === input.loaded.length
+    && input.loaded.every((name) => registeredNames.has(name));
+}
+
+function isPluginInfo(input: unknown): input is PluginInfo {
+  if (!isRecord(input) || !hasOnlyKeys(input, [
+    'name', 'path', 'kind', 'entry', 'capabilities', 'assets', 'contribute',
+  ]) || !Object.hasOwn(input, 'name') || !Object.hasOwn(input, 'path')
+    || !Object.hasOwn(input, 'kind') || !Object.hasOwn(input, 'entry')
+    || !isNonEmptyString(input.name) || !isNonEmptyString(input.path)
+    || (input.kind !== 'builtin' && input.kind !== 'external') || !isNonEmptyString(input.entry)
+    || (input.capabilities !== undefined && (!Array.isArray(input.capabilities)
+      || input.capabilities.some((capability) => capability !== 'credentials')))
+    || (input.assets !== undefined && (!isRecord(input.assets)
+      || !hasOnlyKeys(input.assets, ['public'])
+      || (input.assets.public !== undefined && !isStringArray(input.assets.public))))
+    || (input.contribute !== undefined && !isRecord(input.contribute))) {
+    return false;
+  }
+  return true;
 }
 
 function isStringArray(input: unknown): input is string[] {

@@ -15,6 +15,7 @@ import type { ApplicationPluginProcessRuntimeOptions } from '../../src/applicati
 import type { ApplicationPluginProcessState } from '../../src/application/plugin-process/types';
 import type {
   ApplicationPluginDefinitionMetadata,
+  ApplicationPluginRuntimeSnapshot,
   RuntimeCommand,
 } from '../../src/application/plugin-process/runner-runtime';
 import type { ApplicationPluginSpec } from '../../src/application/types';
@@ -80,10 +81,17 @@ describe('ApplicationRuntime process integration', () => {
     const firstPayload = harness.supervisors.get('@scope/first')!.initializePayloads[0]!;
     expect(firstPayload.entryPath).toBe(path.join(first.path, 'main', 'dist', 'index.js'));
     expect(path.isAbsolute(firstPayload.entryPath)).toBe(true);
-    expect(firstPayload.runtime.pluginSnapshot).toEqual([
-      { name: '@scope/first', path: first.path },
-      { name: '@scope/second', path: second.path },
-    ]);
+    expect(firstPayload.runtime.pluginSnapshot).toEqual({
+      registered: [
+        expect.objectContaining({
+          name: '@scope/first', path: first.path, kind: 'external', entry: './main/dist/index.js',
+        }),
+        expect.objectContaining({
+          name: '@scope/second', path: second.path, kind: 'external', entry: './main/dist/index.js',
+        }),
+      ],
+      loaded: [],
+    });
     expect(firstPayload.runtime.paths).toEqual({
       data: expect.stringMatching(/^\//u),
       cache: expect.stringMatching(/^\//u),
@@ -107,6 +115,53 @@ describe('ApplicationRuntime process integration', () => {
     await flushMicrotasks();
     expect(disposeSettled).toBe(true);
     await disposing;
+  });
+
+  it('projects registered manifests separately from sequentially running plugins during load', async () => {
+    const first = createPlugin('first-sequential', '@scope/first-sequential');
+    const second = createPlugin('second-sequential', '@scope/second-sequential');
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([first, second], harness);
+
+    await runtime.start();
+
+    const firstSnapshot = harness.supervisors.get(first.name)!.initializePayloads[0]!.runtime.pluginSnapshot;
+    const secondSnapshot = harness.supervisors.get(second.name)!.initializePayloads[0]!.runtime.pluginSnapshot;
+    expect(firstSnapshot.registered).toEqual([
+      expect.objectContaining({ name: first.name, path: first.path, entry: './main/dist/index.js' }),
+      expect.objectContaining({ name: second.name, path: second.path, entry: './main/dist/index.js' }),
+    ]);
+    expect(firstSnapshot.loaded).toEqual([]);
+    expect(secondSnapshot.loaded).toEqual([first.name]);
+
+    await runtime.dispose();
+  });
+
+  it('refreshes a running sibling snapshot when a peer leaves and re-enters running state', async () => {
+    const observer = createPlugin('snapshot-observer', '@scope/snapshot-observer');
+    const sibling = createPlugin('snapshot-sibling', '@scope/snapshot-sibling');
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([observer, sibling], harness);
+    await runtime.start();
+    await flushMicrotasks();
+    const observerSupervisor = harness.supervisors.get(observer.name)!;
+    const siblingSupervisor = harness.supervisors.get(sibling.name)!;
+
+    await siblingSupervisor.fail();
+    await vi.waitFor(() => {
+      const snapshot = observerSupervisor.snapshots.at(-1)?.pluginSnapshot;
+      expect(snapshot?.loaded).toEqual([observer.name]);
+    });
+    expect(observerSupervisor.snapshots.at(-1)?.pluginSnapshot.registered.map(({ name }) => name))
+      .toEqual([observer.name, sibling.name]);
+
+    await siblingSupervisor.completeRestart();
+    await vi.waitFor(() => {
+      const snapshot = observerSupervisor.snapshots.at(-1)?.pluginSnapshot;
+      expect(snapshot?.loaded).toEqual([observer.name, sibling.name]);
+    });
+
+    await runtime.dispose();
   });
 
   it('projects every runtime command with the child owner forced and refreshes snapshots', async () => {
@@ -1278,11 +1333,7 @@ class FakeSupervisor {
     });
   }
 
-  updateRuntimeSnapshot(snapshot: {
-    pluginSnapshot: Array<{ name: string; path: string }>;
-    menuSnapshot: unknown;
-    serviceSnapshot: Record<string, unknown>;
-  }): Promise<void> {
+  updateRuntimeSnapshot(snapshot: ApplicationPluginRuntimeSnapshot): Promise<void> {
     this.snapshots.push(structuredClone(snapshot));
     if (!this.available) {
       return Promise.reject(Object.assign(new Error('Application plugin is unavailable'), {
