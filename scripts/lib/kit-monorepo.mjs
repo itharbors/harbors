@@ -49,11 +49,11 @@ export async function loadKitPolicy({
   return Object.freeze({ ...raw, kits: Object.freeze(kits) });
 }
 
-export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
+export async function loadTrustedMarketKit({ repositoryRoot, policyFile, slug }) {
   if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {
     throw new Error(`Unknown official Kit slug: ${String(slug)}`);
   }
-  const policy = await loadKitPolicy({ repositoryRoot });
+  const policy = await loadKitPolicy({ repositoryRoot, policyFile });
   const policyEntry = policy.kits[slug];
   if (!policyEntry) {
     throw new Error(`Kit is not trusted for market publication: ${slug}`);

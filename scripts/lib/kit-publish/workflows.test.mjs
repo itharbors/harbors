@@ -90,20 +90,23 @@ test('mainline caller refreshes Registry through one correlated main dispatch af
   assert.doesNotMatch(refresh, /actions\/deploy-pages|pages:\s*write|id-token:\s*write/u);
 });
 
-test('publisher context validates exact Tag identity and trusted mainline policy without injectable outputs', async () => {
+test('publisher context validates product Tag identity with immutable v3 control-plane code', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   const context = jobBlock(workflow, 'context');
   assert.match(workflow, /^on:\n  workflow_call:\n    inputs:\n      release-tag:\n        description:\s*.+\n        required:\s*true\n        type:\s*string$/mu);
   assert.match(context, /runs-on:\s*ubuntu-latest/u);
   assert.match(context, /RELEASE_TAG:\s*\$\{\{ inputs\.release-tag \}\}/u);
   assert.match(context, /release-ref=refs\/tags\/\$RELEASE_TAG/u);
-  assert.match(context, /actions\/checkout@v6[\s\S]*ref:\s*\$\{\{ steps\.identity\.outputs\.release-ref \}\}[\s\S]*fetch-depth:\s*0/u);
+  assert.match(context, /actions\/checkout@v6[\s\S]*ref:\s*refs\/tags\/kit-publish-v3[\s\S]*path:\s*publisher/u);
+  assert.match(context, /actions\/checkout@v6[\s\S]*ref:\s*\$\{\{ steps\.identity\.outputs\.release-ref \}\}[\s\S]*path:\s*source[\s\S]*fetch-depth:\s*0/u);
   assert.match(context, /git cat-file -t "\$RELEASE_REF"/u);
   assert.match(context, /git fetch --no-tags origin main/u);
   assert.match(context, /git merge-base --is-ancestor "\$release_commit" origin\/main/u);
   assert.match(context, /release-commit=\$release_commit/u);
   assert.ok(context.includes('^refs\\/tags\\/kit\\/'));
   assert.match(context, /loadTrustedMarketKit/u);
+  assert.match(context, /repositoryRoot:\s*process\.env\.PRODUCT_SOURCE/u);
+  assert.match(context, /policyFile:\s*process\.env\.PUBLISHER_POLICY/u);
   assert.match(context, /semver\.valid/u);
   assert.match(context, /RELEASE_REF:\s*\$\{\{ steps\.identity\.outputs\.release-ref \}\}/u);
   assert.match(context, /RELEASE_TAG:\s*\$\{\{ inputs\.release-tag \}\}/u);
@@ -117,12 +120,12 @@ test('publisher context validates exact Tag identity and trusted mainline policy
   assert.doesNotMatch(context, /\bjq\b|fromJSON\(/u);
 });
 
-test('prepare uses the selected runner and one pinned check-prepare-inspect pipeline', async () => {
+test('selected product Tag builds one checked artifact without executing its historical publisher', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   const prepare = jobBlock(workflow, 'prepare');
   assert.match(prepare, /needs:\s*context/u);
   assert.match(prepare, /runs-on:\s*\$\{\{ needs\.context\.outputs\.runner \}\}/u);
-  assert.match(prepare, /actions\/checkout@v6[\s\S]*ref:\s*\$\{\{ needs\.context\.outputs\.release-ref \}\}/u);
+  assert.match(prepare, /actions\/checkout@v6[\s\S]*ref:\s*\$\{\{ needs\.context\.outputs\.release-ref \}\}[\s\S]*fetch-depth:\s*0/u);
   assert.match(prepare, /actions\/setup-node@v6[\s\S]*node-version:\s*22\.18\.0/u);
   assert.match(prepare, /npm install --global npm@10\.9\.3/u);
   assert.match(prepare, /run:\s*npm ci\s*$/mu);
@@ -136,20 +139,30 @@ test('prepare uses the selected runner and one pinned check-prepare-inspect pipe
     /readdirSync\(directory, \{ withFileTypes: true \}\)[\s\S]*name\.endsWith\('\.hkit'\)[\s\S]*artifacts\.length !== 1/u,
   );
   assert.match(prepare, /appendFileSync\(process\.env\.GITHUB_OUTPUT, `kit-artifact=\$\{artifact\}\\n`/u);
+  assert.doesNotMatch(prepare, /kit-publish\.mjs|--signer-workflow|release\.json/u);
+  assert.match(prepare, /packages\/kit-cli\/dist\/cli\.js inspect/u);
+  assert.match(prepare, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-checked-artifact[\s\S]*retention-days:\s*1/u);
+});
+
+test('immutable v3 packages the checked artifact and emits product-Tag provenance', async () => {
+  const workflow = await read('.github/workflows/publish-kit-reusable.yml');
+  const packageJob = jobBlock(workflow, 'package');
+  assert.match(packageJob, /needs:\s*\[context, prepare\]/u);
+  assert.match(packageJob, /runs-on:\s*ubuntu-latest/u);
+  assert.match(packageJob, /actions\/checkout@v6[\s\S]*ref:\s*refs\/tags\/kit-publish-v3/u);
+  assert.match(packageJob, /actions\/download-artifact@v8[\s\S]*name:\s*kit-checked-artifact/u);
   assert.match(
-    prepare,
+    packageJob,
     /node scripts\/kit-publish\.mjs prepare[\s\S]*--kit-artifact "\$KIT_ARTIFACT"[\s\S]*--kit-id "\$KIT_ID"[\s\S]*--kit-version "\$EXPECTED_VERSION"[\s\S]*--kit-channel "\$EXPECTED_CHANNEL"/u,
   );
-  assert.match(prepare, /--commit "\$RELEASE_COMMIT"/u);
-  assert.match(prepare, /--workflow "\$GITHUB_REPOSITORY\/\.github\/workflows\/publish-kit\.yml@\$RELEASE_REF"/u);
-  assert.match(prepare, /--signer-workflow itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@refs\/tags\/kit-publish-v3/u);
-  assert.match(prepare, /--ref "\$RELEASE_REF"/u);
-  assert.doesNotMatch(prepare, /\$GITHUB_SHA|\$GITHUB_REF|\$GITHUB_WORKFLOW_REF/u);
-  assert.doesNotMatch(prepare, /--kit-directory|kit-check\/\*|\.hkit\)/u);
-  assert.equal((prepare.match(/KIT_ARTIFACT:\s*\$\{\{ steps\.artifact\.outputs\.kit-artifact \}\}/gu) ?? []).length, 2);
-  assert.match(prepare, /packages\/kit-cli\/dist\/cli\.js inspect/u);
-  assert.match(prepare, /Tag, Kit manifest, package, and artifact versions must match/u);
-  assert.match(prepare, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-publication[\s\S]*retention-days:\s*1/u);
+  assert.match(packageJob, /--commit "\$RELEASE_COMMIT"/u);
+  assert.match(packageJob, /--workflow "\$GITHUB_REPOSITORY\/\.github\/workflows\/publish-kit\.yml@\$RELEASE_REF"/u);
+  assert.match(packageJob, /--signer-workflow itharbors\/harbors\/\.github\/workflows\/publish-kit-reusable\.yml@refs\/tags\/kit-publish-v3/u);
+  assert.match(packageJob, /--ref "\$RELEASE_REF"/u);
+  assert.doesNotMatch(packageJob, /\$GITHUB_SHA|\$GITHUB_REF|\$GITHUB_WORKFLOW_REF|--kit-directory/u);
+  assert.match(packageJob, /node scripts\/kit-publish\.mjs provenance[\s\S]*--release-manifest "\$RUNNER_TEMP\/kit-release\/release\.json"[\s\S]*--output "\$RUNNER_TEMP\/kit-provenance\/provenance\.json"/u);
+  assert.match(packageJob, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-publication[\s\S]*retention-days:\s*1/u);
+  assert.match(packageJob, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-provenance[\s\S]*retention-days:\s*1/u);
 });
 
 test('Preview and Stable Releases are non-clobbering, attested, and upload only the publication quartet', async () => {
@@ -159,11 +172,12 @@ test('Preview and Stable Releases are non-clobbering, attested, and upload only 
     ['publish-stable', /environment:\s*\n\s+name:\s*kit-stable/u],
   ]) {
     const publish = jobBlock(workflow, name);
-    assert.match(publish, /actions\/download-artifact@v8/u);
+    assert.match(publish, /actions\/download-artifact@v8[\s\S]*name:\s*kit-publication/u);
+    assert.match(publish, /actions\/download-artifact@v8[\s\S]*name:\s*kit-provenance/u);
     assert.match(publish, /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$TAG"/u);
     assert.match(publish, /HTTP 404/u);
     assert.ok(publish.indexOf('Require missing') < publish.indexOf('actions/attest@v4'));
-    assert.match(publish, /actions\/attest@v4[\s\S]*artifact-name[\s\S]*release\.json/u);
+    assert.match(publish, /actions\/attest@v4[\s\S]*artifact-name[\s\S]*release\.json[\s\S]*predicate-type:\s*https:\/\/slsa\.dev\/provenance\/v1[\s\S]*predicate-path:\s*\$\{\{ runner\.temp \}\}\/kit-provenance\/provenance\.json/u);
     assert.match(publish, /GH_REPO:\s*\$\{\{ github\.repository \}\}/u);
     assert.match(publish, /Release already exists:[\s\S]*exit 1[\s\S]*gh release create "\$TAG"/u);
     assert.match(publish, /--verify-tag/u);

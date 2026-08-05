@@ -57,17 +57,24 @@ GitHub Releases API：只有精确 Release 返回 404 才继续；Release 已存
 - `source-workflow`：`itharbors/harbors/.github/workflows/publish-kit.yml@<release-ref>`，表示产品发布契约，不能取恢复
   调用的 `GITHUB_WORKFLOW_REF`。
 
-prepare job 在 Kit 选择的 runner 上执行一次目标 `kit:check`，解析恰好一个 `.hkit`，随后调用
-`kit-publish.mjs prepare --kit-artifact`。发布四件套必须是：
+产品构建与发布控制面必须分离。prepare job 只在产品 Tag 检出目录中、使用 Kit 选择的 runner 执行一次目标
+`kit:check`，解析并上传恰好一个 `.hkit`；它不得执行产品 Tag 中的 `kit-publish.mjs`。独立 package job 只检出
+`kit-publish-v3`，下载已检查的 `.hkit`，再用 v3 的 `kit-publish.mjs prepare --kit-artifact` 生成发布四件套：
+
+context job 同样用 v3 的严格 loader 和 v3 自带的当前 Registry policy 校验产品 Tag 快照。旧产品 Tag 中的历史
+policy 只描述当时已存在的 signer，不能用来判断新的恢复发布器是否受信；Kit 描述、版本、lockfile 与构建内容仍
+全部从产品 Tag 读取。
 
 1. 经过检查的 `.hkit` 原始字节；
 2. `release.json`；
 3. `registry-entry.json`；
 4. `sbom.spdx.json`。
 
-prepared artifact 的摘要必须与 `kit:check` artifact 完全相同。Preview 与 Stable job 保持非覆盖语义，先拒绝已有
-Release，再为 `.hkit` 和 `release.json` 生成 GitHub attestation，最后一次性创建 Release。Registry 只在恰好一个
-渠道发布 job 成功后刷新。
+prepared artifact 的摘要必须与 `kit:check` artifact 完全相同。package job 还从已经校验的 `release.json` 生成
+SLSA v1 predicate，其中产品 workflow、Tag ref 与 Commit 均来自产品 Tag，而 builder 固定为不可变 v3 signer。
+Preview 与 Stable job 保持非覆盖语义，先拒绝已有 Release，再通过 `actions/attest@v4` 的 custom predicate 模式为
+`.hkit` 和 `release.json` 签名，最后一次性创建 Release。不能使用 action 的默认自动 provenance：main recovery 的
+OIDC 运行上下文是 `refs/heads/main`，会与产品 Tag 来源冲突。Registry 只在恰好一个渠道发布 job 成功后刷新。
 
 `publish-kit.yml` 固定调用 `publish-kit-reusable.yml@kit-publish-v3` 并传入权威 Tag。合并修复 PR 后，在同一经过
 评审的 merge Commit 创建不可变基础设施 Tag `kit-publish-v3`；不移动 `kit-publish-v1` 或 `kit-publish-v2`。
@@ -77,8 +84,9 @@ Release，再为 `.hkit` 和 `release.json` 生成 GitHub attestation，最后�
 新生成的 `release.json.source.signerWorkflow` 固定为
 `itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3`。Registry 信任列表新增 v3，
 同时保留 v1 和 v2，因此旧 Release 继续通过验证。Release source 的 workflow 字段仍记录产品 Tag 上的
-`publish-kit.yml` 规范身份，commit 字段记录产品 Tag 解析出的 Commit。前者描述被发布的产品入口，实际执行者则由
-attestation 和不可变的 `signerWorkflow` 共同证明。
+`publish-kit.yml` 规范身份，commit 字段记录产品 Tag 解析出的 Commit。custom SLSA predicate 重复绑定这两个产品
+来源字段；Sigstore 证书身份和 predicate 的 builder 则绑定不可变 `kit-publish-v3`。因此恢复调用者的 main ref/Commit
+既不会冒充产品来源，也不会削弱实际签名器校验。
 
 任何下列情况都必须在创建 attestation 或 Release 前终止：Tag 语法错误、Tag 不存在、Tag 与 Kit 版本不一致、
 Tag Commit 不属于 `main`、Kit 未列入 Registry policy、渠道与 SemVer 不一致、检查制品数量不为一、制品身份或摘要
@@ -98,8 +106,11 @@ attestation 可验证、Registry 最新 Preview 指向 `0.1.0-preview.3`，再�
 
 ## 测试
 
-- 工作流契约测试先失败，证明普通发布固定到 v3、调用时传入精确 Tag、恢复只允许 main、所有 checkout 使用产品
-  Tag、元数据使用 Tag Commit、Release 存在时拒绝以及发布链路消费 `--kit-artifact`。
+- 工作流契约测试先失败，证明普通发布固定到 v3、调用时传入精确 Tag、恢复只允许 main、产品构建 checkout 使用
+  产品 Tag、发布控制面 checkout 使用 `kit-publish-v3`、元数据使用 Tag Commit、Release 存在时拒绝以及发布链路
+  消费 `--kit-artifact`。
+- provenance 测试证明默认 main-dispatch provenance 会被 Registry 拒绝，而 v3 生成并签名的 custom predicate 精确
+  绑定产品 Tag ref/Commit；历史发布脚本不得参与 v3 打包。
 - Registry 单元测试先失败，证明 v3 signer 尚未受信；实现后同时验证 v1、v2、v3，拒绝 `main` 等可变 ref。
 - CLI 与发布元数据测试同步 signer 常量，继续验证四件套、摘要、Tag、版本和渠道不匹配时失败关闭。
 - 运行 `npm run test:kit-publish`、`npm run test:kit-release-intent` 和工作流相关预检；PR CI 必须全部通过。

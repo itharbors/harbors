@@ -4,7 +4,7 @@
 
 **Goal:** 发布受信的 `kit-publish-v3`，并在不移动 Agent Guard Preview 3 产品 Tag 的前提下补齐 Release、attestation 与 Registry。
 
-**Architecture:** `publish-kit.yml` 把 Tag push、Tag-ref dispatch 和受限的 main recovery dispatch 归一化成一个产品 Tag；`publish-kit-reusable.yml@kit-publish-v3` 始终从该 Tag 解析源码 Commit、消费 `kit:check` 的单一 `.hkit` 并签名发布。生成端只接受 v3 signer，读取端与 Registry policy 同时信任 v1、v2、v3，以保持历史 Release 兼容。
+**Architecture:** `publish-kit.yml` 把 Tag push、Tag-ref dispatch 和受限的 main recovery dispatch 归一化成一个产品 Tag；`publish-kit-reusable.yml@kit-publish-v3` 从该 Tag 解析源码 Commit。产品 Tag job 只运行 `kit:check` 并上传单一 `.hkit`，独立 v3 job 使用不可变发布代码生成四件套与产品 Tag SLSA predicate，再由发布 job 签名。生成端只接受 v3 signer，读取端与 Registry policy 同时信任 v1、v2、v3，以保持历史 Release 兼容。
 
 **Tech Stack:** GitHub Actions YAML、Node.js 22.18.0、`node:test`、GitHub CLI、Harbors Kit CLI/Registry 发布库。
 
@@ -13,7 +13,7 @@
 - 产品 Tag `kit/agent-guard/v0.1.0-preview.3` 必须保持指向 `ecbe04824e4ca10d2f695bcb12663caed8a91e32`。
 - 不删除、移动、覆盖或重建任何已有 Kit Tag 或 GitHub Release。
 - 恢复只允许从 `refs/heads/main` dispatch，并且只在精确 Release 返回 HTTP 404 时继续。
-- 所有构建、checkout、元数据 Commit 和产品 workflow identity 都来自 `refs/tags/{release-tag}`，不能来自恢复调用的 `GITHUB_SHA`、`GITHUB_REF` 或 `GITHUB_WORKFLOW_REF`。
+- 产品构建、元数据 Commit 和产品 workflow identity 都来自 `refs/tags/{release-tag}`；发布控制面与治理 policy 只从 `refs/tags/kit-publish-v3` checkout，不能执行产品 Tag 中的历史发布器或信任其过时 signer 列表，也不能使用恢复调用的 `GITHUB_SHA`、`GITHUB_REF` 或 `GITHUB_WORKFLOW_REF`。
 - 新生成的 `release.json.source.signerWorkflow` 必须精确等于 `itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3`。
 - Registry 必须继续信任 `kit-publish-v1`、`kit-publish-v2`，并新增 `kit-publish-v3`；`main` 等可变 signer ref 仍然拒绝。
 - Preview 与 Stable 都必须在 attestation 之前拒绝已有 Release，且禁止 `--clobber`、资产替换和 Release 删除。
@@ -25,11 +25,13 @@
 
 - `.github/workflows/publish-kit.yml`：把触发上下文解析为权威产品 Tag，限制 main recovery，检出产品 Tag，并调用不可变 v3 publisher。
 - `.github/workflows/publish-kit-reusable.yml`：定义 v3 的 `release-tag` 输入、Tag/Commit 身份、制品准备、非覆盖检查、attestation 与 Release。
+- `scripts/lib/kit-publish/provenance.mjs`：从 v3 `release.json` 生成绑定产品 Tag ref/Commit 的 SLSA v1 custom predicate。
 - `scripts/lib/kit-publish/metadata.mjs`：限制新生成发布元数据只能声明 v3 signer。
 - `scripts/lib/kit-publish/registry.mjs`：验证历史和新 Release 的不可变 signer allowlist。
 - `scripts/lib/kit-monorepo.mjs`：严格校验仓库 policy 只含经批准的 v1、v2、v3 signer。
 - `registry/policy.json`：Registry Release 扫描器的仓库级 signer allowlist。
 - `scripts/lib/kit-publish/{metadata,cli,registry,release-source,workflows}.test.mjs`：发布元数据、CLI、Registry、线上 Release 扫描和 workflow 静态契约测试。
+- `scripts/lib/kit-publish/provenance.test.mjs`、`scripts/lib/kit-registry/github-attestation.test.mjs`：验证恢复 provenance 与 Registry verifier 的实际契约。
 - `scripts/lib/kit-monorepo.test.mjs`：验证官方 policy 精确 signer 列表。
 
 ### Task 1: 建立 v3 元数据与 Registry 信任闭环

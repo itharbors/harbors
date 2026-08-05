@@ -145,6 +145,35 @@ test('loads the immutable v2 official Kit contract through the current trust pol
   );
 });
 
+test('validates a historical product snapshot through an explicit current publisher policy', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-historical-'));
+  try {
+    await cp(path.join(repositoryRoot, 'kits', 'agent-guard'), path.join(root, 'kits', 'agent-guard'), { recursive: true });
+    await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
+    const historicalPolicyFile = path.join(root, 'registry', 'policy.json');
+    const historicalPolicy = JSON.parse(await readFile(historicalPolicyFile, 'utf8'));
+    historicalPolicy.signerWorkflows = historicalPolicy.signerWorkflows.filter((value) => (
+      !value.endsWith('/kit-publish-v3')
+    ));
+    await writeFile(historicalPolicyFile, `${JSON.stringify(historicalPolicy, null, 2)}\n`);
+
+    await assert.rejects(
+      loadTrustedMarketKit({ repositoryRoot: root, slug: 'agent-guard' }),
+      /policy signer workflows are invalid/u,
+    );
+    const kit = await loadTrustedMarketKit({
+      repositoryRoot: root,
+      policyFile: path.join(repositoryRoot, 'registry', 'policy.json'),
+      slug: 'agent-guard',
+    });
+    assert.equal(kit.id, '@itharbors/kit-agent-guard');
+    assert.equal(path.basename(kit.directory), 'agent-guard');
+    assert.equal(path.basename(path.dirname(kit.directory)), 'kits');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('sources MySQL summary from the Kit descriptor rather than central policy', async () => {
   const kit = await loadTrustedMarketKit({ repositoryRoot, slug: 'mysql' });
   assert.equal(kit.summary, 'MySQL 数据库连接、浏览、编辑、关系图与 SQL 工作台');
