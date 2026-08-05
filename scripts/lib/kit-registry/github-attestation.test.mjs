@@ -415,6 +415,43 @@ test('uses the production Sigstore verifier by default and never accepts an unsi
   );
 });
 
+test('rejects automatic main-dispatch provenance but accepts a v3-signed product-Tag predicate', async () => {
+  const v3Signer = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3';
+  const automaticMainStatement = statement({
+    predicate: {
+      buildDefinition: {
+        externalParameters: {
+          workflow: {
+            repository: `https://github.com/${repository}`,
+            ref: 'refs/heads/main',
+            path: '.github/workflows/publish-kit.yml',
+          },
+        },
+        resolvedDependencies: [{
+          uri: `git+https://github.com/${repository}@refs/heads/main`,
+          digest: { gitCommit: 'f'.repeat(40) },
+        }],
+      },
+    },
+  });
+  await assert.rejects(
+    createVerifier({ bundleValue: bundle({ payload: automaticMainStatement }) })
+      .verifier.verify(expected({ signerWorkflow: v3Signer })),
+    (error) => error.code === 'PROVENANCE_FAILED',
+  );
+
+  const verificationOptions = [];
+  const customProductTag = createVerifier({
+    bundleValue: bundle({ payload: statement() }),
+    verifyBundle: async (_bundle, options) => verificationOptions.push(options),
+  });
+  assert.equal((await customProductTag.verifier.verify(expected({ signerWorkflow: v3Signer }))).verified, true);
+  assert.equal(
+    verificationOptions[0].certificateIdentityURI,
+    `https://github.com/${v3Signer}`,
+  );
+});
+
 test('rejects invalid DSSE and mismatched subject, repository, commit, or workflow claims', async (t) => {
   const cases = [
     ['payload type', bundle({ payloadType: 'application/json' })],

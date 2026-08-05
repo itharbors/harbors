@@ -75,7 +75,7 @@ test('checks MySQL with its exact affected build, test, pack, and inspect sequen
 test('checks Agent Guard with its macOS-only build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'agent-guard',
-    artifactName: 'kit-agent-guard-0.1.0-preview.2-darwin-arm64.hkit',
+    artifactName: 'kit-agent-guard-0.1.0-preview.3-darwin-arm64.hkit',
   });
 });
 

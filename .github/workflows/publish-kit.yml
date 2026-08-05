@@ -7,11 +7,11 @@ on:
   workflow_dispatch:
     inputs:
       release-tag:
-        description: Exact Kit release Tag used as the dispatch ref
+        description: Exact immutable Kit release Tag to publish
         required: true
         type: string
       request-id:
-        description: Correlation ID supplied by the automatic publisher
+        description: Correlation ID supplied by the release orchestrator
         required: true
         type: string
 
@@ -27,21 +27,73 @@ jobs:
     outputs:
       slug: ${{ steps.kit.outputs.slug }}
       runner: ${{ steps.kit.outputs.runner }}
+      release-tag: ${{ steps.release.outputs.release-tag }}
     steps:
-      - name: Require exact dispatched Tag identity
-        if: github.event_name == 'workflow_dispatch'
+      - name: Resolve exact release Tag
+        id: release
         shell: bash
         env:
           EXPECTED_TAG: ${{ inputs['release-tag'] }}
         run: |
           set -euo pipefail
-          test "$GITHUB_REF" = "refs/tags/$EXPECTED_TAG"
+          if [[ "$GITHUB_EVENT_NAME" == push ]]; then
+            release_tag="$GITHUB_REF_NAME"
+          elif [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then
+            release_tag="$EXPECTED_TAG"
+            if [[ "$GITHUB_REF" != "refs/tags/$release_tag" && "$GITHUB_REF" != refs/heads/main ]]; then
+              echo "Dispatch must run on the exact release Tag or main recovery" >&2
+              exit 1
+            fi
+          else
+            echo "Unsupported publication event: $GITHUB_EVENT_NAME" >&2
+            exit 1
+          fi
+          if [[ ! "$release_tag" =~ ^kit/[a-z0-9]+(-[a-z0-9]+)*/v[0-9A-Za-z.-]+$ ]]; then
+            echo "Publication requires an exact canonical Kit Tag" >&2
+            exit 1
+          fi
+          echo "release-tag=$release_tag" >> "$GITHUB_OUTPUT"
 
       - name: Checkout release Tag
         uses: actions/checkout@v6
         with:
+          ref: refs/tags/${{ steps.release.outputs.release-tag }}
           fetch-depth: 0
           persist-credentials: false
+
+      - name: Require lightweight Tag Commit on main
+        shell: bash
+        env:
+          RELEASE_REF: refs/tags/${{ steps.release.outputs.release-tag }}
+        run: |
+          set -euo pipefail
+          test "$(git cat-file -t "$RELEASE_REF")" = commit
+          release_commit="$(git rev-parse --verify "$RELEASE_REF^{commit}")"
+          git fetch --no-tags origin main
+          git rev-parse --verify origin/main
+          git merge-base --is-ancestor "$release_commit" origin/main
+
+      - name: Require missing Release for main recovery
+        if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.release.outputs.release-tag }}
+        run: |
+          set -euo pipefail
+          release_error="$RUNNER_TEMP/release.err"
+          set +e
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" >/dev/null 2>"$release_error"
+          release_status=$?
+          set -e
+          if [[ "$release_status" -eq 0 ]]; then
+            echo "Release already exists: $RELEASE_TAG" >&2
+            exit 1
+          fi
+          if ! grep -Fq '(HTTP 404)' "$release_error"; then
+            cat "$release_error" >&2
+            exit "$release_status"
+          fi
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -61,13 +113,15 @@ jobs:
       - name: Resolve trusted release Kit
         id: kit
         shell: bash
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.release-tag }}
         run: |
           set -euo pipefail
           node --input-type=module <<'NODE'
           import { appendFileSync } from 'node:fs';
           import { loadTrustedMarketKit } from './scripts/lib/kit-monorepo.mjs';
 
-          const match = /^refs\/tags\/kit\/([a-z0-9]+(?:-[a-z0-9]+)*)\/v.+$/u.exec(process.env.GITHUB_REF);
+          const match = /^kit\/([a-z0-9]+(?:-[a-z0-9]+)*)\/v.+$/u.exec(process.env.RELEASE_TAG);
           if (!match) throw new Error('Publication requires an exact canonical Kit Tag');
           const kit = await loadTrustedMarketKit({
             repositoryRoot: process.env.GITHUB_WORKSPACE,
@@ -85,6 +139,7 @@ jobs:
       - name: Checkout release Tag
         uses: actions/checkout@v6
         with:
+          ref: refs/tags/${{ needs.context.outputs.release-tag }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -108,13 +163,15 @@ jobs:
           node scripts/run-kit-matrix.mjs check "$KIT_NAME"
 
   publish:
-    needs: preflight
+    needs: [context, preflight]
     permissions:
       contents: write
       id-token: write
       attestations: write
       pages: write
-    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v2
+    uses: itharbors/harbors/.github/workflows/publish-kit-reusable.yml@kit-publish-v3
+    with:
+      release-tag: ${{ needs.context.outputs.release-tag }}
     secrets: inherit
 
   # deploy-pages keys deployments by GITHUB_SHA. A standalone main dispatch replaces
