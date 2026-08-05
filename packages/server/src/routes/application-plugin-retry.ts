@@ -23,8 +23,10 @@ export function createApplicationPluginRetryRouter(
     req: IncomingMessage,
     res: ServerResponse,
   ): Promise<void> {
-    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
-    if (pathname !== '/api/application/plugin/retry') {
+    const requestTarget = req.url || '/';
+    const queryStart = requestTarget.indexOf('?');
+    const requestPath = queryStart === -1 ? requestTarget : requestTarget.slice(0, queryStart);
+    if (requestPath !== '/api/application/plugin/retry') {
       throw new HttpError(404, 'NOT_FOUND', 'Not found');
     }
     if (req.method !== 'POST') {

@@ -126,6 +126,23 @@ describe('application routes', () => {
     expect(runtime.triggerMenu).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['short', 'x'],
+    ['long', 'x'.repeat(16 * 1024)],
+  ])('rejects a %s invalid token on the shared menu mutation authorization', async (_case, token) => {
+    const runtime = { triggerMenu: vi.fn() };
+    const router = createApplicationMenuTriggerRouter(runtime, { controlToken: 'launch-secret' });
+
+    await expect(router(request('POST', '/api/application/menu/trigger', { menuId: 'install' }, {
+      'content-type': 'application/json',
+      'x-harbors-application-token': token,
+    }), response().res)).rejects.toMatchObject({
+      status: 403,
+      code: 'APPLICATION_CONTROL_FORBIDDEN',
+    });
+    expect(runtime.triggerMenu).not.toHaveBeenCalled();
+  });
+
   it('streams an initial bootstrap and later application events', async () => {
     let listener: ((event: ApplicationEvent) => void) | undefined;
     const unsubscribe = vi.fn();

@@ -59,7 +59,9 @@ describe('application plugin retry route', () => {
 
   it.each([
     ['missing', undefined],
-    ['wrong', 'wrong-secret'],
+    ['short', 'x'],
+    ['long', 'x'.repeat(16 * 1024)],
+    ['array-valued', ['launch-secret']],
   ])('rejects a %s application mutation token', async (_case, token) => {
     const retryPlugin = vi.fn();
     const router = createApplicationPluginRetryRouter(
@@ -71,7 +73,7 @@ describe('application plugin retry route', () => {
       plugin: '@scope/failed',
     }, {
       'content-type': 'application/json',
-      ...(token ? { 'x-harbors-application-token': token } : {}),
+      ...(token !== undefined ? { 'x-harbors-application-token': token } : {}),
     }), response().res)).rejects.toMatchObject({ status: 403, code: 'APPLICATION_CONTROL_FORBIDDEN' });
     expect(retryPlugin).not.toHaveBeenCalled();
   });
@@ -303,13 +305,84 @@ describe('application plugin retry route', () => {
     });
     expect(retryPlugin).toHaveBeenCalledWith('@scope/missing');
   });
+
+  it.each([
+    ['literal dot segment', '/api/application/plugin/retry/../retry'],
+    ['percent-encoded dot segment', '/api/application/plugin/retry/%2e%2e/retry'],
+    ['double slash', '/api/application/plugin/retry//'],
+    ['trailing slash', '/api/application/plugin/retry/'],
+    ['encoded slash', '/api/application/plugin/retry%2Fretry'],
+    ['encoded backslash', '/api/application/plugin/retry%5Cretry'],
+    ['absolute form', 'http://localhost/api/application/plugin/retry'],
+  ])('rejects the %s request-target alias before Runtime dispatch', async (_case, target) => {
+    const retryPlugin = vi.fn(async () => readyBootstrap);
+    const app = retryApp(retryPlugin);
+    const result = response();
+
+    await app.handleRequest(request('POST', target, {
+      plugin: '@scope/running',
+    }, controlHeaders), result.res);
+
+    expect(result.res.statusCode).toBe(404);
+    expect(JSON.parse(result.text())).toMatchObject({ error: { code: 'NOT_FOUND' } });
+    expect(retryPlugin).not.toHaveBeenCalled();
+  });
+
+  it('allows a query without treating it as part of the fixed request path', async () => {
+    const retryPlugin = vi.fn(async () => readyBootstrap);
+    const app = retryApp(retryPlugin);
+    const result = response();
+
+    await app.handleRequest(request('POST', '/api/application/plugin/retry?source=diagnostics', {
+      plugin: '@scope/running',
+    }, controlHeaders), result.res);
+
+    expect(result.res.statusCode).toBe(200);
+    expect(JSON.parse(result.text())).toEqual(readyBootstrap);
+    expect(retryPlugin).toHaveBeenCalledWith('@scope/running');
+  });
+
+  it('returns 405 for the exact request path with a non-POST method', async () => {
+    const retryPlugin = vi.fn(async () => readyBootstrap);
+    const app = retryApp(retryPlugin);
+    const result = response();
+
+    await app.handleRequest(request('GET', '/api/application/plugin/retry?source=diagnostics'), result.res);
+
+    expect(result.res.statusCode).toBe(405);
+    expect(JSON.parse(result.text())).toMatchObject({ error: { code: 'METHOD_NOT_ALLOWED' } });
+    expect(retryPlugin).not.toHaveBeenCalled();
+  });
 });
+
+function retryApp(retryPlugin: (plugin: string) => Promise<ApplicationBootstrap>) {
+  return createApp(
+    { get: vi.fn(), getOrCreate: vi.fn(), destroy: vi.fn() } as never,
+    {
+      onSessionDisconnected: vi.fn(() => () => undefined),
+      broadcast: vi.fn(),
+      closeSession: vi.fn(),
+    } as never,
+    {
+      assembly: testAssembly,
+      applicationRuntime: {
+        getBootstrap: vi.fn(() => readyBootstrap),
+        request: vi.fn(),
+        retryPlugin,
+        triggerMenu: vi.fn(),
+        subscribe: vi.fn(() => () => undefined),
+      },
+      applicationControlToken: 'launch-secret',
+      pluginPathRoots: createTestPluginPathRoots(),
+    } as never,
+  );
+}
 
 function request(
   method: string,
   url: string,
   body?: unknown,
-  headers: Record<string, string> = {},
+  headers: Record<string, string | string[]> = {},
 ): IncomingMessage {
   const stream = new Readable({
     read() {

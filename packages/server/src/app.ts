@@ -201,7 +201,7 @@ export function createApp(
       await applicationMenuTriggerRouter(req, res);
       return;
     }
-    if (url.startsWith('/api/application/plugin/retry')) {
+    if (targetsApplicationPluginRetryRouter(url)) {
       await applicationPluginRetryRouter(req, res);
       return;
     }
@@ -331,3 +331,14 @@ const INDEX_HTML = `<!DOCTYPE html>
   <script type="module" src="/assets/index.js"></script>
 </body>
 </html>`;
+
+function targetsApplicationPluginRetryRouter(requestTarget: string): boolean {
+  const routePrefix = '/api/application/plugin/retry';
+  if (requestTarget.startsWith(routePrefix)) return true;
+  if (!/^https?:\/\//iu.test(requestTarget)) return false;
+  try {
+    return new URL(requestTarget).pathname.startsWith(routePrefix);
+  } catch {
+    return false;
+  }
+}
