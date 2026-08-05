@@ -12,9 +12,32 @@ test_start_uses_main_baseline_for_all_types() {
     assert_contains "$output" "WORKTREE_PATH=$worktree"
     assert_contains "$output" "BRANCH=kit-change/sqlite/$type/sample-change"
     assert_contains "$output" "BASE_COMMIT=$base"
+    task_id="$(date +%F)-sample-change"
+    task_dir="$worktree/docs/tasks/$task_id"
+    assert_contains "$output" "TASK_ID=$task_id"
+    assert_contains "$output" "TASK_DIR=$task_dir"
+    assert_eq "$(node -p "require('$task_dir/status.json').taskId")" "$task_id"
+    assert_eq "$(node -p "require('$task_dir/status.json').type")" "$type"
+    test -d "$task_dir/.work" || fail 'Task work directory is missing'
     assert_eq "$(git -C "$worktree" rev-parse HEAD)" "$base"
     assert_contains "$(cat "$NPM_LOG")" 'ci'
   done
+}
+
+test_start_preserves_worktree_when_task_init_fails() {
+  new_fixture
+  install_mocks
+  task_id="$(date +%F)-cli-failure"
+  mkdir -p "$REPO/docs/tasks/$task_id"
+  printf 'occupied\n' > "$REPO/docs/tasks/$task_id/existing.txt"
+  git -C "$REPO" add "docs/tasks/$task_id/existing.txt"
+  git -C "$REPO" commit -m '[Test] 添加冲突 Task 目录' >/dev/null
+  git -C "$REPO" push origin main >/dev/null 2>&1
+
+  if output=$("$START" sqlite feature cli-failure 2>&1); then fail 'Task init failure succeeded'; fi
+  worktree="$REPO/.worktrees/kit-sqlite-feature-cli-failure"
+  test -d "$worktree" || fail 'failed Task init removed the worktree'
+  assert_eq "$(git -C "$worktree" branch --show-current)" 'kit-change/sqlite/feature/cli-failure'
 }
 
 test_start_rejects_invalid_and_missing_kits() {
@@ -109,6 +132,7 @@ test_start_rejects_conflicts_and_linked_context() {
 
 run_start_tests() {
   run_case 'start uses main baseline for all types' test_start_uses_main_baseline_for_all_types
+  run_case 'start preserves worktree when Task init fails' test_start_preserves_worktree_when_task_init_fails
   run_case 'start rejects invalid and missing Kits' test_start_rejects_invalid_and_missing_kits
   run_case 'start rejects identity and product mismatch' test_start_rejects_identity_and_product_mismatch
   run_case 'start rejects conflicts and linked context' test_start_rejects_conflicts_and_linked_context

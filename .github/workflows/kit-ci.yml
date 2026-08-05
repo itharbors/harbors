@@ -18,24 +18,25 @@ jobs:
       - name: Checkout full comparison history
         uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           persist-credentials: false
 
       - name: Enforce declared Kit diff boundary
         shell: bash
         env:
-          HEAD_REF: ${{ github.head_ref }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if [[ ! "$HEAD_REF" =~ ^kit-change/([a-z0-9]+(-[a-z0-9]+)*)/(feature|bug|docs|refactor|optimize|test|chore)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
+          if [[ ! "$GITHUB_HEAD_REF" =~ ^kit-change/([a-z0-9]+(-[a-z0-9]+)*)/(feature|bug|docs|refactor|optimize|test|chore)/[a-z0-9]+(-[a-z0-9]+)*$ ]]; then
             echo 'Kit change branch name is not canonical' >&2
             exit 1
           fi
           declared_kit="${BASH_REMATCH[1]}"
           test -f "kits/$declared_kit/kit.json"
-          npm run kit:boundary -- "$declared_kit" --base "$BASE_SHA" --head "$HEAD_SHA"
+          task_id=$(node scripts/task-status.mjs resolve "$GITHUB_HEAD_REF" "$BASE_SHA" --ready-for-pr)
+          npm run kit:boundary -- "$declared_kit" --task "$task_id" --base "$BASE_SHA" --head "$HEAD_SHA"
 
   select:
     runs-on: ubuntu-latest

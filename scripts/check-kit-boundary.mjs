@@ -5,29 +5,34 @@ import { pathToFileURL } from 'node:url';
 
 import {
   isValidKitSlug,
+  isValidTaskId,
   sanitizeBoundaryError,
   validateKitChange,
 } from './lib/kit-boundary.mjs';
 
-const USAGE = 'Usage: node scripts/check-kit-boundary.mjs <kit-slug> --base <commit> --head <commit>\n';
+const USAGE = 'Usage: node scripts/check-kit-boundary.mjs KIT_SLUG --task TASK_ID --base BASE_COMMIT --head HEAD_COMMIT\n';
 
 export async function runCheckKitBoundaryCli(
   args,
   io = process,
   dependencies = { repositoryRoot: process.cwd(), validateKitChange },
 ) {
-  if (!Array.isArray(args) || args.length !== 5) {
+  if (!Array.isArray(args) || args.length !== 7) {
     io.stderr.write(USAGE);
     return 2;
   }
-  const [slug, baseFlag, base, headFlag, head] = args;
+  const [slug, taskFlag, taskId, baseFlag, base, headFlag, head] = args;
   if (
     typeof slug !== 'string'
+    || typeof taskFlag !== 'string'
+    || typeof taskId !== 'string'
     || typeof baseFlag !== 'string'
     || typeof base !== 'string'
     || typeof headFlag !== 'string'
     || typeof head !== 'string'
     || !isValidKitSlug(slug)
+    || !isValidTaskId(taskId)
+    || taskFlag !== '--task'
     || baseFlag !== '--base'
     || headFlag !== '--head'
   ) {
@@ -38,6 +43,7 @@ export async function runCheckKitBoundaryCli(
     const { paths } = await dependencies.validateKitChange({
       repositoryRoot: dependencies.repositoryRoot,
       slug,
+      taskId,
       base,
       head,
     });

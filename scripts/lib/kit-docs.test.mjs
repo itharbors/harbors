@@ -60,6 +60,43 @@ test('active Kit docs define one mainline development and automatic merge releas
   assert.match(development, /共享[^。]{0,80}(全部|所有)[^。]{0,30}Kit[^。]{0,20}CI/iu);
 });
 
+test('docs navigation and guides define the six-stage Task lifecycle using real commands', async () => {
+  const index = compact(await read('docs/README.md'));
+  const development = compact(await read('docs/guides/development-workflow.md'));
+  const maintenance = compact(await read('docs/guides/maintaining-docs.md'));
+
+  assert.match(index, /\[Task[^\]]*(?:档案|生命周期)[^\]]*\]\(\.\/tasks\/README\.md\)/u);
+  for (const stage of [
+    '需求确认与分类',
+    'Task 建档',
+    '设计与计划',
+    '实现与验证',
+    '收口与 PR',
+    '合并确认与会话归档',
+  ]) assert.ok(development.includes(stage), stage);
+  for (const expected of [
+    'feature', 'bug', 'optimize', 'docs', 'refactor', 'test', 'chore',
+    'task.md', 'status.json', 'summary.md', '.work/',
+    '同机', '跨机', 'rewind', 'PR_URL', 'merged', 'required checks', 'main', 'Codex 会话',
+    'npm run task:status --',
+    'npm run test:task-status',
+    'npm run test:preflight',
+    'start-change.sh',
+    'finish-change.sh',
+  ]) assert.ok(development.includes(expected), expected);
+  assert.match(development, /PR (?:已创建|已建)[^。]{0,100}(?:不代表|不是)[^。]{0,30}(?:需求|Task|任务)完成/u);
+  assert.match(development, /summary\.md[^。]{0,120}--ready-for-pr/iu);
+  assert.match(development, /PR[^。]{0,100}(?:回写|记录)[^。]{0,30}(?:编号|PR 号)[^。]{0,80}(?:二次|再次)[^。]{0,20}push/iu);
+  assert.match(development, /status\.json[^。]{0,120}(?:客观|结构化)[^。]{0,80}(?:主观|自由文本)/iu);
+
+  for (const expected of ['Task 正式档案', '.work/', 'spec', 'plan', 'research']) {
+    assert.ok(maintenance.includes(expected), expected);
+  }
+  assert.match(maintenance, /\.work\/[^。]{0,100}(?:默认|不)[^。]{0,30}(?:提交|跟踪)/u);
+  assert.match(maintenance, /(?:架构|安全|迁移|维护)[^。]{0,160}(?:guide|reference|ADR|设计文档)/iu);
+  assert.match(maintenance, /不能只留在[^。]{0,80}(?:\.work\/|summary)/u);
+});
+
 test('artifact and authoring guides document descriptor discovery and trusted Release discovery', async () => {
   const artifacts = compact(await read('docs/guides/kit-artifacts.md'));
   const authoring = compact(await read('docs/guides/developing-plugins-and-kits.md'));
