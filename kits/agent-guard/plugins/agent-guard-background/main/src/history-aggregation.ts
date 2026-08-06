@@ -104,8 +104,6 @@ export function aggregateUsageHistory(
   query: HistoryQueryInput,
 ): HistorySeries[] {
   const bucket = chooseBucket(query);
-  const filtered = deduplicateUsageEvents(events).filter((event) => matchesQuery(event, query));
-  const dimensions = uniqueDimensions(filtered);
   const definitions: Array<{ metric: HistoryMetric; unit: HistoryUnit; field: keyof UsageEventV1 }> = [
     { metric: 'input-tokens', unit: 'tokens', field: 'inputTokens' },
     { metric: 'output-tokens', unit: 'tokens', field: 'outputTokens' },
@@ -113,24 +111,62 @@ export function aggregateUsageHistory(
     { metric: 'requests', unit: 'requests', field: 'requests' },
     { metric: 'sessions', unit: 'sessions', field: 'sessions' },
   ];
-  return dimensions.flatMap((dimension) => definitions
-    .filter(({ field }) => filtered.some((event) => sameDimension(event, dimension) && event[field] !== null))
-    .map(({ metric, unit, field }): HistorySeries => ({
-      metric,
-      unit,
-      ...dimension,
-      points: buckets(query, bucket).map(({ start, end }) => ({
-        start,
-        end,
-        value: filtered
-          .filter((event) => sameDimension(event, dimension) && event.at >= start && event.at < end)
-          .reduce((sum, event) => sum + ((event[field] as number | null) ?? 0), 0),
-        coverage: 'complete',
-        coverageReason: null,
-        provenance: 'local-session',
-        quality: 'derived',
-      })),
-    })));
+  const ranges = buckets(query, bucket);
+  const size = bucketSizeMs(bucket);
+  const firstBucketStart = Math.floor(query.from / size) * size;
+  const seen = new Set<string>();
+  const dimensions = new Map<string, {
+    dimension: Dimension;
+    values: Map<HistoryMetric, number[]>;
+  }>();
+
+  for (const event of events) {
+    if (seen.has(event.eventDigest)) continue;
+    seen.add(event.eventDigest);
+    if (!matchesQuery(event, query)) continue;
+    const key = dimensionKey(event);
+    let accumulator = dimensions.get(key);
+    if (!accumulator) {
+      accumulator = {
+        dimension: { agent: event.agent, provider: event.provider, hostname: event.hostname },
+        values: new Map(),
+      };
+      dimensions.set(key, accumulator);
+    }
+    const inRange = event.at >= query.from && event.at < query.to;
+    const bucketIndex = inRange ? Math.floor((event.at - firstBucketStart) / size) : -1;
+    for (const { metric, field } of definitions) {
+      const value = event[field] as number | null;
+      if (value === null) continue;
+      let values = accumulator.values.get(metric);
+      if (!values) {
+        values = Array.from({ length: ranges.length }, () => 0);
+        accumulator.values.set(metric, values);
+      }
+      if (bucketIndex >= 0 && bucketIndex < values.length) values[bucketIndex] += value;
+    }
+  }
+
+  return [...dimensions.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([, accumulator]) => definitions.flatMap(({ metric, unit }) => {
+      const values = accumulator.values.get(metric);
+      if (!values) return [];
+      return [{
+        metric,
+        unit,
+        ...accumulator.dimension,
+        points: ranges.map(({ start, end }, index) => ({
+          start,
+          end,
+          value: values[index],
+          coverage: 'complete' as const,
+          coverageReason: null,
+          provenance: 'local-session' as const,
+          quality: 'derived' as const,
+        })),
+      }];
+    }));
 }
 
 function networkSeries(
@@ -245,12 +281,6 @@ function deduplicateNetworkSamples(samples: readonly NetworkHistorySampleV2[]): 
     const previous = result.get(key);
     if (!previous || sample.collectorEpoch > previous.collectorEpoch) result.set(key, sample);
   }
-  return [...result.values()];
-}
-
-function deduplicateUsageEvents(events: readonly UsageEventV1[]): UsageEventV1[] {
-  const result = new Map<string, UsageEventV1>();
-  for (const event of events) if (!result.has(event.eventDigest)) result.set(event.eventDigest, event);
   return [...result.values()];
 }
 

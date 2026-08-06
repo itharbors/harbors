@@ -88,6 +88,26 @@ describe('history aggregation', () => {
     expect(series(result, 'requests').unit).toBe('requests');
   });
 
+  it('aggregates large usage histories in one pass without rescanning every event per bucket', () => {
+    const historical = Array.from({ length: 25_000 }, (_, index) => usage({
+      at: START - MINUTE,
+      eventDigest: `historical-${index}`,
+    }));
+    const current = Array.from({ length: 5_000 }, (_, index) => usage({
+      at: START + index % (24 * 60) * MINUTE,
+      eventDigest: `current-${index}`,
+    }));
+
+    const result = aggregateUsageHistory([...historical, ...current], {
+      ...query('model-usage'),
+      to: START + 24 * 60 * MINUTE,
+    });
+
+    expect(series(result, 'input-tokens').points).toHaveLength(24 * 60);
+    expect(series(result, 'input-tokens').points.reduce((sum, point) => sum + (point.value ?? 0), 0)).toBe(50_000);
+    expect(series(result, 'requests').points.reduce((sum, point) => sum + (point.value ?? 0), 0)).toBe(5_000);
+  });
+
   it('treats an empty hostname list as all endpoints', () => {
     const network = aggregateNetworkHistory([sample()], [coverage()], {
       ...query(),
