@@ -65,10 +65,10 @@ describe('Agent Guard panel accessibility', () => {
     expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)[\s\S]*?progress[^}]*animation:\s*none/su);
   });
 
-  it('gives the SVG history axis explicit compact monospace type and frost fill', () => {
+  it('gives the HTML history axis explicit compact monospace type and frost color', () => {
     const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
     for (const selector of ['\\.history-axis-tick', '\\.history-axis-title']) {
-      expect(css).toMatch(new RegExp(`${selector}\\s*\\{[^}]*fill:\\s*var\\(--frost-300\\)`, 'su'));
+      expect(css).toMatch(new RegExp(`${selector}\\s*\\{[^}]*color:\\s*var\\(--frost-300\\)`, 'su'));
       expect(css).toMatch(new RegExp(`${selector}\\s*\\{[^}]*font:[^}]*(?:"SF Mono"|ui-monospace|monospace)`, 'su'));
     }
   });

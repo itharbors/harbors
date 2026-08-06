@@ -262,6 +262,9 @@ describe('Agent Guard panel', () => {
     expect(document.querySelectorAll('.history-axis-tick')).toHaveLength(5);
     expect(document.querySelector('.history-axis-title')?.textContent).toBe('时间（本地时区）');
     expect(document.querySelector('.history-chart svg')?.getAttribute('preserveAspectRatio')).toBe('none');
+    expect(document.querySelector('.history-chart svg')?.getAttribute('viewBox')).toBe('0 0 720 165');
+    expect(document.querySelector('.history-axis')?.querySelectorAll('.history-axis-tick')).toHaveLength(5);
+    expect(document.querySelector('.history-chart svg .history-axis-tick')).toBeNull();
     expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
 
     document.querySelector<HTMLButtonElement>('[data-action="history-domain-model-usage"]')!.click();

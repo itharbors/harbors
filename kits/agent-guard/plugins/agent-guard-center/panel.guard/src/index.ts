@@ -508,7 +508,7 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   const figure = document.createElement('figure');
   figure.className = 'history-chart';
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 720 220');
+  svg.setAttribute('viewBox', '0 0 720 165');
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.setAttribute('role', 'img');
   const series = mergeHistorySeriesByMetric(result);
@@ -538,29 +538,18 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     pathElement.dataset.values = item.points.map((point) => String(point.value)).join(',');
     svg.append(pathElement);
   }
+  const axis = document.createElement('div');
+  axis.className = 'history-axis';
   for (const tick of createHistoryAxisTicks(result.from, result.to, historyRange)) {
-    const position = result.to === result.from ? 0 : (tick.at - result.from) / (result.to - result.from);
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('class', 'history-axis-tick');
-    label.setAttribute('x', String(Math.min(1, Math.max(0, position)) * 700 + 10));
-    label.setAttribute('y', '187');
-    label.setAttribute('text-anchor', position === 0 ? 'start' : position === 1 ? 'end' : 'middle');
-    label.textContent = tick.label;
-    svg.append(label);
+    axis.append(textElement('span', 'history-axis-tick', tick.label));
   }
-  const axisTitle = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  axisTitle.setAttribute('class', 'history-axis-title');
-  axisTitle.setAttribute('x', '360');
-  axisTitle.setAttribute('y', '210');
-  axisTitle.setAttribute('text-anchor', 'middle');
-  axisTitle.textContent = '时间（本地时区）';
-  svg.append(axisTitle);
+  const axisTitle = textElement('span', 'history-axis-title', '时间（本地时区）');
   const legend = document.createElement('ul');
   legend.className = 'history-legend';
   for (const item of series) legend.append(textElement('li', '', historyMetricLabel(item.metric)));
   const caption = textElement('figcaption', 'sr-only', result.summary
     .map((item) => `${historyMetricLabel(item.metric)} ${formatHistoryValue(item.value, item.unit)}`).join('，'));
-  figure.append(svg, legend, caption);
+  figure.append(svg, axis, axisTitle, legend, caption);
   return figure;
 }
 
