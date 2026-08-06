@@ -77,8 +77,14 @@ test('requires absolute packaged paths and wildcard desktop configuration', () =
 
 test('forwards only generic plugin storage roots to the desktop server', async () => {
   let serverOptions;
+  const env = {
+    ...validEnvironment(),
+    HARBORS_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS',
+    HARBORS_NOTIFICATION_OWNER_TOKEN: 'notification-secret',
+    HARBORS_CREDENTIAL_TRANSPORT_SECRET: 'credential-secret',
+  };
   const port = await runDesktopFrameworkProcess({
-    env: validEnvironment(),
+    env,
     createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
     createServer: (options) => {
       serverOptions = options;
@@ -91,6 +97,7 @@ test('forwards only generic plugin storage roots to the desktop server', async (
 
   assert.equal(port, 43123);
   assert.equal('agentGuardDataDir' in serverOptions, false);
+  assert.equal(serverOptions.notificationPort, 17896);
   assert.deepEqual(
     serverOptions.pluginPathRoots,
     {
@@ -100,6 +107,58 @@ test('forwards only generic plugin storage roots to the desktop server', async (
       temp: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
     },
   );
+  assert.deepEqual(serverOptions.applicationPluginProcess, {
+    runner: {
+      executable: process.execPath,
+      args: [
+        '/Applications/ITHARBORS.app/Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js',
+      ],
+      runtimeMode: 'electron-run-as-node',
+    },
+    cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
+    env: {
+      HARBORS_RUNTIME_ROOT: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
+      HARBORS_CLIENT_ASSETS_ROOT: '/Applications/ITHARBORS.app/Contents/Resources/runtime/client',
+      HARBORS_DB_PATH: '/Users/me/Library/Application Support/ITHARBORS/framework.db',
+      HARBORS_PLUGIN_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/data',
+      HARBORS_PLUGIN_CACHE_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/cache',
+      HARBORS_PLUGIN_TEMP_ROOT: '/Users/me/Library/Application Support/ITHARBORS/plugins/temp',
+      HARBORS_KIT_SOURCES: env.HARBORS_KIT_SOURCES,
+      HARBORS_DATA_ROOT: '/Users/me/Library/Application Support/ITHARBORS',
+      ELECTRON_RUN_AS_NODE: '1',
+    },
+  });
+  const childSpec = serverOptions.applicationPluginProcess;
+  assert.doesNotMatch(JSON.stringify(childSpec.runner.args), /application-secret|notification-secret|credential-secret/u);
+  assert.doesNotMatch(JSON.stringify(childSpec.env), /application-secret|notification-secret|credential-secret/u);
+});
+
+test('forwards the injected application plugin process runtime through server options', async () => {
+  let serverOptions;
+  const applicationPluginProcess = Object.freeze({
+    runner: Object.freeze({
+      executable: '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS',
+      args: Object.freeze(['/Applications/ITHARBORS.app/Contents/Resources/runner.js']),
+      runtimeMode: 'electron-run-as-node',
+    }),
+    cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
+    env: Object.freeze({ PATH: '/usr/bin' }),
+  });
+
+  await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    applicationPluginProcess,
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: (options) => {
+      serverOptions = options;
+      return { start: async () => 43123, stop: async () => undefined };
+    },
+    send: () => undefined,
+    subscribeShutdown: () => () => undefined,
+    exit: () => undefined,
+  });
+
+  assert.equal(serverOptions.applicationPluginProcess, applicationPluginProcess);
 });
 
 test('rejects malformed installed Kits, notification ports, and application tokens', () => {
@@ -235,6 +294,38 @@ test('finalizes a normal shutdown by stopping once, detaching listeners, and exi
   assert.equal(shutdownUnsubscriptions, 1);
   assert.deepEqual(exits, [{ failed: false }]);
   assert.deepEqual(messages, [{ type: 'ready', port: 43123 }]);
+});
+
+test('awaits Framework disposal before reporting desktop shutdown complete', async () => {
+  const exits = [];
+  let finishStop;
+  let markStopStarted;
+  const stopStarted = new Promise((resolve) => { markStopStarted = resolve; });
+  let shutdown;
+  await runDesktopFrameworkProcess({
+    env: validEnvironment(),
+    createAssembly: (runtimeRoot, options) => ({ runtimeRoot, options }),
+    createServer: () => ({
+      start: async () => 43123,
+      stop: () => new Promise((resolve) => {
+        finishStop = resolve;
+        markStopStarted();
+      }),
+    }),
+    send: () => undefined,
+    subscribeShutdown: (handler) => {
+      shutdown = handler;
+      return () => undefined;
+    },
+    exit: (options) => exits.push(options),
+  });
+
+  const stopped = shutdown();
+  await stopStarted;
+  assert.deepEqual(exits, []);
+  finishStop();
+  await stopped;
+  assert.deepEqual(exits, [{ failed: false }]);
 });
 
 test('treats a rejected startup as normal shutdown when IPC shutdown begins while startup is pending', async () => {

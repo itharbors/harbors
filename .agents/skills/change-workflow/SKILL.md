@@ -31,7 +31,7 @@ Every deliverable change follows one Task through six stages. Keep the change is
 
 ## Develop and commit
 
-Confirm the branch before editing. Inspect `git status --short`, `git diff`, and `git diff --cached`; stage only relevant files and never use `git add .`. Every commit uses the label matching its branch, with a concise Chinese summary and no trailing period. A `bug/*` branch may use `[Docs]` or `[Test]` for supporting documentation-only or test-only commits; its implementation commits remain `[Bug]`.
+Confirm the current branch before editing. Run focused tests, inspect `git status --short`, `git diff`, and `git diff --cached`, stage only relevant files, and never use `git add .`. Label every commit by the change it actually contains, with a concise Chinese summary and no trailing period. The branch type determines the PR title and must appear on at least one commit; supporting fixes, tests, docs, refactors, optimizations, and chores use their truthful labels. `[Init]` remains initialization-only.
 
 ## Hard boundaries
 

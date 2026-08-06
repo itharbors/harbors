@@ -4,6 +4,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { ApplicationRuntime, type ApplicationRuntimeOptions } from '../../src/application/runtime';
 import type { ApplicationPluginSpec } from '../../src/application/types';
+import { createEditor } from '../../src/editor';
+import type { PluginRuntimeHost } from '../../src/editor/types';
+import { PluginModule } from '../../src/framework/plugin';
+import { testAssembly } from '../helpers/assembly';
 
 describe('ApplicationRuntime', () => {
   let root: string;
@@ -45,151 +49,6 @@ describe('ApplicationRuntime', () => {
     };
   }
 
-  it('loads application contributions without a Session and serves menu requests', async () => {
-    const plugin = createPlugin('background', '@scope/background', `
-      editor.plugin.define({
-        methods: {
-          ping() { return 'pong'; },
-        },
-      });
-    `, {
-      menu: [
-        { type: 'menu', id: 'tools', label: 'Tools' },
-        { type: 'menu', id: 'tools/ping', label: 'Ping', message: 'ping' },
-      ],
-      message: { request: { ping: ['ping'] } },
-    });
-    plugin.legacyDataDirectories = ['private-legacy-name'];
-    const runtime = new ApplicationRuntime({
-      plugins: [plugin],
-      hostMode: 'desktop',
-      pluginPathRoots: pluginPathRoots(),
-    });
-    const emitted: unknown[] = [];
-    runtime.subscribe((event) => emitted.push(event.bootstrap));
-
-    const bootstrap = await runtime.start();
-
-    expect(bootstrap.phase).toBe('ready');
-    expect(JSON.stringify(bootstrap.menu.tree)).toContain('tools/ping');
-    expect(bootstrap.plugins[0]).toEqual({
-      name: '@scope/background',
-      path: plugin.path,
-      kits: ['@scope/background-kit'],
-      status: 'running',
-    });
-    expect(JSON.stringify([bootstrap, ...emitted])).not.toContain('private-legacy-name');
-    await expect(runtime.request('@scope/background', 'ping')).resolves.toBe('pong');
-    await expect(runtime.triggerMenu('tools/ping')).resolves.toBe('pong');
-    await runtime.dispose();
-  });
-
-  it('rolls back a failed owner and continues in degraded mode', async () => {
-    const failing = createPlugin('failing', '@scope/failing', `
-      editor.plugin.define({
-        lifecycle: {
-          load(runtime) {
-            runtime.service.register('temporary', { leaked: true });
-            runtime.menu.attach('', {
-              menu: [
-                { type: 'menu', id: 'broken', label: 'Broken' },
-                { type: 'menu', id: 'broken/run', label: 'Run', message: 'run' },
-              ],
-            });
-            throw new Error('startup failed');
-          },
-        },
-        methods: {},
-      });
-    `);
-    const healthy = createPlugin('healthy', '@scope/healthy', `
-      editor.plugin.define({ methods: { status() { return 'healthy'; } } });
-    `, { message: { request: { status: ['status'] } } });
-    const runtime = new ApplicationRuntime({
-      plugins: [failing, healthy], hostMode: 'web', pluginPathRoots: pluginPathRoots(),
-    });
-
-    const bootstrap = await runtime.start();
-
-    expect(bootstrap.phase).toBe('degraded');
-    expect(bootstrap.plugins).toEqual([
-      expect.objectContaining({ name: '@scope/failing', status: 'failed', error: 'startup failed' }),
-      expect.objectContaining({ name: '@scope/healthy', status: 'running' }),
-    ]);
-    expect(JSON.stringify(bootstrap.menu.tree)).not.toContain('broken/run');
-    expect(runtime.getService('temporary')).toBeUndefined();
-    await expect(runtime.request('@scope/healthy', 'status')).resolves.toBe('healthy');
-    await runtime.dispose();
-  });
-
-  it('does not let a failing plugin reset a previously loaded owner menu', async () => {
-    const healthy = createPlugin('healthy-menu', '@scope/healthy-menu', `
-      editor.plugin.define({ methods: { ping() { return 'pong'; } } });
-    `, {
-      menu: [
-        { type: 'menu', id: 'healthy', label: 'Healthy' },
-        { type: 'menu', id: 'healthy/ping', label: 'Ping', message: 'ping' },
-      ],
-      message: { request: { ping: ['ping'] } },
-    });
-    const failing = createPlugin('resetter', '@scope/resetter', `
-      editor.plugin.define({
-        lifecycle: {
-          load(runtime) { runtime.menu.reset(); },
-        },
-        methods: {},
-      });
-    `);
-    const runtime = new ApplicationRuntime({
-      plugins: [healthy, failing], hostMode: 'desktop', pluginPathRoots: pluginPathRoots(),
-    });
-
-    const bootstrap = await runtime.start();
-
-    expect(bootstrap.phase).toBe('degraded');
-    expect(bootstrap.plugins[1]).toEqual(expect.objectContaining({ status: 'failed' }));
-    expect(JSON.stringify(bootstrap.menu.tree)).toContain('healthy/ping');
-    await expect(runtime.triggerMenu('healthy/ping')).resolves.toBe('pong');
-    await runtime.dispose();
-  });
-
-  it('unloads successful plugins in reverse order and emits phase changes', async () => {
-    const first = createPlugin('first', '@scope/first', `
-      editor.plugin.define({
-        lifecycle: {
-          load() { globalThis.__applicationEvents.push('load:first'); },
-          unload() { globalThis.__applicationEvents.push('unload:first'); },
-        },
-        methods: {},
-      });
-    `);
-    const second = createPlugin('second', '@scope/second', `
-      editor.plugin.define({
-        lifecycle: {
-          load() { globalThis.__applicationEvents.push('load:second'); },
-          unload() { globalThis.__applicationEvents.push('unload:second'); },
-        },
-        methods: {},
-      });
-    `);
-    const runtime = new ApplicationRuntime({
-      plugins: [first, second], hostMode: 'desktop', pluginPathRoots: pluginPathRoots(),
-    });
-    const phases: string[] = [];
-    runtime.subscribe((event) => phases.push(event.bootstrap.phase));
-
-    await runtime.start();
-    await runtime.dispose();
-
-    expect((globalThis as typeof globalThis & { __applicationEvents: string[] }).__applicationEvents).toEqual([
-      'load:first',
-      'load:second',
-      'unload:second',
-      'unload:first',
-    ]);
-    expect(phases).toEqual(expect.arrayContaining(['starting', 'ready', 'stopping', 'stopped']));
-  });
-
   it('rejects Session-only manifest contributions before importing the plugin', async () => {
     const invalid = createPlugin('invalid', '@scope/invalid', `
       globalThis.__applicationEvents.push('imported');
@@ -209,6 +68,39 @@ describe('ApplicationRuntime', () => {
     expect(bootstrap.plugins[0]).toEqual(expect.objectContaining({ status: 'failed' }));
     expect((globalThis as typeof globalThis & { __applicationEvents: string[] }).__applicationEvents).toEqual([]);
     await runtime.dispose();
+  });
+
+  it('keeps Session PluginModule imports and calls in process', async () => {
+    const sessionSpec = createPlugin('session', '@scope/session', `
+      editor.plugin.define({ methods: { ping(value) { return ['session', value]; } } });
+    `);
+    const editor = createEditor('session-plugin-module', {
+      assembly: testAssembly,
+      pluginPathRoots: pluginPathRoots(),
+    });
+    const host: PluginRuntimeHost = {
+      ...editor,
+      menu: {
+        attach: vi.fn(),
+        detach: vi.fn(),
+        setDefaults: vi.fn(),
+        clearDefaults: vi.fn(),
+        reset: vi.fn(),
+        getState: () => editor.menu.getState(),
+      },
+    };
+    const plugin = new PluginModule();
+
+    await plugin.register(sessionSpec.path, { kind: 'external' });
+    await plugin.load(sessionSpec.path, {
+      scope: 'session',
+      host,
+      paths: { roots: pluginPathRoots(), legacyDataDirectories: [] },
+    });
+
+    expect(plugin.callPlugin(sessionSpec.name, 'ping', 'value')).toEqual(['session', 'value']);
+    await plugin.unload(sessionSpec.path);
+    await editor.dispose();
   });
 
   it('publishes only a stable credential capability snapshot in bootstrap events', async () => {

@@ -12,6 +12,14 @@ import {
 import path from 'node:path';
 
 const FRAMEWORK_PLUGINS = Object.freeze(['config', 'menu', 'message', 'panel']);
+const APPLICATION_PLUGIN_PROCESS_RUNTIME_FILES = Object.freeze([
+  'error.js',
+  'protocol.js',
+  'rpc-peer.js',
+  'runner-host.js',
+  'runner-runtime.js',
+  'runner.js',
+]);
 
 // Unicode 16.0 CaseFolding.txt C + F records (default full case folding).
 // https://www.unicode.org/Public/16.0.0/ucd/CaseFolding.txt
@@ -412,6 +420,10 @@ export function validateDesktopKitDescriptors(descriptors) {
 async function runtimeEntries(repositoryRoot, policy) {
   const entries = [
     { source: 'packages/client/dist', destination: 'client', recursive: true },
+    ...APPLICATION_PLUGIN_PROCESS_RUNTIME_FILES.map((file) => ({
+      source: `packages/server/dist/application/plugin-process/${file}`,
+      destination: `packages/server/dist/application/plugin-process/${file}`,
+    })),
   ];
   for (const plugin of FRAMEWORK_PLUGINS) {
     entries.push(

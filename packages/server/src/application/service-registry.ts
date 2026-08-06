@@ -9,6 +9,7 @@ export class ApplicationServiceRegistry {
   register(owner: string, name: string, value: unknown): void {
     assertIdentifier(owner, 'Service owner');
     assertIdentifier(name, 'Service name');
+    structuredClone(value);
     const existing = this.registrations.get(name);
     if (existing) {
       throw new Error(`Service "${name}" is already registered by "${existing.owner}"`);
@@ -27,6 +28,12 @@ export class ApplicationServiceRegistry {
 
   get<T = unknown>(name: string): T | undefined {
     return this.registrations.get(name)?.value as T | undefined;
+  }
+
+  snapshot(): Record<string, unknown> {
+    return structuredClone(Object.fromEntries(
+      [...this.registrations].map(([name, registration]) => [name, registration.value]),
+    ));
   }
 
   clearOwner(owner: string): void {

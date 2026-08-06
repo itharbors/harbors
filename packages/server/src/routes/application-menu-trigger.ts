@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 import { HttpError } from '../http/errors';
 import { readJson } from '../http/json';
@@ -9,6 +9,8 @@ import { sendJson } from './utils';
 interface ApplicationMenuRuntime {
   triggerMenu(menuId: string): Promise<unknown>;
 }
+
+const APPLICATION_TOKEN_DIGEST_DOMAIN = 'harbors.application-token.v1\0';
 
 export function createApplicationMenuTriggerRouter(
   runtime: ApplicationMenuRuntime,
@@ -39,7 +41,7 @@ export function createApplicationMenuTriggerRouter(
   };
 }
 
-function authorizeApplicationMutation(req: IncomingMessage, expectedToken: string | undefined): void {
+export function authorizeApplicationMutation(req: IncomingMessage, expectedToken: string | undefined): void {
   if (req.headers.origin !== undefined) {
     throw new HttpError(403, 'BROWSER_ORIGIN_FORBIDDEN', 'Browser-originated application mutations are forbidden');
   }
@@ -58,9 +60,14 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
 }
 
 function tokensEqual(expected: string, supplied: string): boolean {
-  const expectedBytes = Buffer.from(expected);
-  const suppliedBytes = Buffer.from(supplied);
-  return expectedBytes.length === suppliedBytes.length && timingSafeEqual(expectedBytes, suppliedBytes);
+  return timingSafeEqual(tokenDigest(expected), tokenDigest(supplied));
+}
+
+function tokenDigest(token: string): Buffer {
+  return createHash('sha256')
+    .update(APPLICATION_TOKEN_DIGEST_DOMAIN, 'utf8')
+    .update(token, 'utf8')
+    .digest();
 }
 
 function isApplicationMenuInput(value: unknown): value is { menuId: string } {

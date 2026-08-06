@@ -1,6 +1,12 @@
 import path from 'node:path';
 
 const SERVER_STOPPING_ERROR_CODE = 'HARBORS_SERVER_STOPPING';
+const APPLICATION_PLUGIN_SECRET_ENVIRONMENT_KEYS = Object.freeze([
+  'HARBORS_APPLICATION_TOKEN',
+  'HARBORS_NOTIFICATION_PORT',
+  'HARBORS_NOTIFICATION_OWNER_TOKEN',
+  'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
+]);
 
 function requireAbsolutePath(env, name) {
   const value = env[name];
@@ -45,6 +51,30 @@ function parseNotificationPort(value) {
     throw new Error('HARBORS_NOTIFICATION_PORT must be an integer from 1 through 65535');
   }
   return port;
+}
+
+function createDesktopApplicationPluginProcess(environment, env) {
+  const childEnvironment = { ...env, ELECTRON_RUN_AS_NODE: '1' };
+  for (const key of APPLICATION_PLUGIN_SECRET_ENVIRONMENT_KEYS) delete childEnvironment[key];
+  return Object.freeze({
+    runner: Object.freeze({
+      executable: process.execPath,
+      args: Object.freeze([
+        path.join(
+          environment.runtimeRoot,
+          'packages',
+          'server',
+          'dist',
+          'application',
+          'plugin-process',
+          'runner.js',
+        ),
+      ]),
+      runtimeMode: 'electron-run-as-node',
+    }),
+    cwd: environment.runtimeRoot,
+    env: Object.freeze(childEnvironment),
+  });
 }
 
 export function parseDesktopFrameworkEnvironment(env) {
@@ -98,6 +128,7 @@ function isServerStoppingError(error) {
 
 export async function runDesktopFrameworkProcess({
   env,
+  applicationPluginProcess,
   createAssembly,
   createServer,
   send,
@@ -148,6 +179,8 @@ export async function runDesktopFrameworkProcess({
 
   try {
     const environment = parseDesktopFrameworkEnvironment(env);
+    const resolvedApplicationPluginProcess = applicationPluginProcess
+      ?? createDesktopApplicationPluginProcess(environment, env);
     const assembly = createAssembly(environment.runtimeRoot, {
       kitSources: environment.kitSources,
     });
@@ -165,6 +198,8 @@ export async function runDesktopFrameworkProcess({
       port: environment.port,
       applicationHostMode: 'desktop',
       applicationControlToken: environment.applicationControlToken,
+      notificationPort: environment.notificationPort,
+      applicationPluginProcess: resolvedApplicationPluginProcess,
     });
     controller = createFrameworkProcessController({
       send,

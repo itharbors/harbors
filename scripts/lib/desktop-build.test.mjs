@@ -24,6 +24,15 @@ import {
 import { prepareDesktopRuntime } from './desktop-prepare.mjs';
 import { discoverRepositoryKits } from './repository-kits.mjs';
 
+const PACKAGED_PLUGIN_PROCESS_FILES = Object.freeze([
+  'error.js',
+  'protocol.js',
+  'rpc-peer.js',
+  'runner-host.js',
+  'runner-runtime.js',
+  'runner.js',
+]);
+
 function defaultDescriptor() {
   return fixtureDescriptor('default', 'builtin', '@itharbors/kit-default', 'default');
 }
@@ -69,6 +78,16 @@ import 'yauzl';
 export const main = true;
 `);
   await write(root, 'packages/desktop/src/framework.mjs', 'export const framework = true;\n');
+  for (const [file, source] of Object.entries({
+    'error.js': 'export const error = true;\n',
+    'protocol.js': 'import "./error.js";\nexport const protocol = true;\n',
+    'rpc-peer.js': 'import "./protocol.js";\nimport "./error.js";\nexport const rpc = true;\n',
+    'runner-host.js': 'import "./error.js";\nimport "./protocol.js";\nimport "./rpc-peer.js";\nimport "./runner-runtime.js";\nexport const host = true;\n',
+    'runner-runtime.js': 'import "./error.js";\nexport const runtime = true;\n',
+    'runner.js': 'import "./runner-host.js";\nimport "./error.js";\nexport const runner = "current-fixture-runner";\n',
+  })) {
+    await write(root, `packages/server/dist/application/plugin-process/${file}`, source);
+  }
   await write(root, 'packages/client/dist/index.html', '<script src="/assets/index.js"></script>');
   await write(root, 'packages/client/dist/assets/index.js', 'export const client = true;\n');
   for (const plugin of ['config', 'menu', 'message', 'panel']) {
@@ -581,6 +600,17 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
   assert.deepEqual(await topLevel(path.join(outputRoot, 'kits')), ['default']);
   assert.equal(existsSync(path.join(outputRoot, 'client', 'assets', 'index.js')), true);
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'package.json')), true);
+  assert.equal(
+    await readFile(
+      path.join(outputRoot, 'packages/server/dist/application/plugin-process/runner.js'),
+      'utf8',
+    ),
+    'import "./runner-host.js";\nimport "./error.js";\nexport const runner = "current-fixture-runner";\n',
+  );
+  assert.deepEqual(
+    (await readdir(path.join(outputRoot, 'packages/server/dist/application/plugin-process'))).sort(),
+    PACKAGED_PLUGIN_PROCESS_FILES,
+  );
   assert.equal(existsSync(path.join(outputRoot, 'plugins', 'menu', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'log', 'main', 'src')), false);
   assert.equal(existsSync(path.join(outputRoot, 'kits', 'default', 'plugins', 'fixture-plugin', 'package.json')), true);
@@ -617,6 +647,27 @@ test('stages a deterministic minimum runtime and excludes product Kits', async (
     assert.match(mainBundle, new RegExp(`import ['"]${name}['"]`, 'u'));
   }
   assert.doesNotMatch(mainBundle, /node_modules\/@sigstore\//u);
+});
+
+test('fails desktop staging when any runner static dependency is missing', async (t) => {
+  for (const missing of PACKAGED_PLUGIN_PROCESS_FILES) {
+    await t.test(missing, async (t) => {
+      const repositoryRoot = await createRepositoryFixture(t);
+      await rm(path.join(
+        repositoryRoot,
+        'packages/server/dist/application/plugin-process',
+        missing,
+      ));
+
+      await assert.rejects(
+        buildDesktop({
+          repositoryRoot,
+          outputRoot: path.join(repositoryRoot, 'dist', `missing-${missing}`),
+        }),
+        new RegExp(`plugin-process/${missing.replace('.', '\\.')}`, 'u'),
+      );
+    });
+  }
 });
 
 test('keeps the native keyring behind an external Framework import', async (t) => {

@@ -1,0 +1,30 @@
+{
+  "name": "@acceptance/crashing",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "menu": [
+        {
+          "type": "menu",
+          "id": "acceptance-crashing",
+          "label": "Crashing fixture"
+        },
+        {
+          "type": "menu",
+          "id": "acceptance-crashing/manual",
+          "label": "Manual route",
+          "message": "manualPing"
+        }
+      ],
+      "message": {
+        "request": {
+          "ping": ["ping"],
+          "crashUncaught": ["crashUncaught"],
+          "crashRejection": ["crashRejection"],
+          "exit42": ["exit42"]
+        }
+      }
+    }
+  }
+}
