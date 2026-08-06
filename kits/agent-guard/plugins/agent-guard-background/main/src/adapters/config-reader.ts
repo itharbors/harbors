@@ -6,6 +6,9 @@ import type { AgentConfiguration, AgentId, SessionActivity } from '../types.js';
 
 type UnknownRecord = Record<string, unknown>;
 
+const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com';
+const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+
 function record(value: unknown): UnknownRecord | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
     ? value as UnknownRecord
@@ -67,17 +70,29 @@ export function readClaudeConfiguration(value: unknown): AgentConfiguration {
   const settings = record(value);
   if (!settings) throw new TypeError('Claude settings must be an object');
   const environment = record(settings.env);
-  const endpoint = safeEndpoint(environment?.ANTHROPIC_BASE_URL, 'https://api.anthropic.com');
+  const endpoint = safeEndpoint(environment?.ANTHROPIC_BASE_URL, ANTHROPIC_ENDPOINT);
   const model = typeof settings.model === 'string' && settings.model.length > 0
     ? settings.model
     : undefined;
   return {
     agent: 'claude',
-    provider: endpoint === 'https://api.anthropic.com' ? 'anthropic' : 'custom',
+    provider: endpoint === ANTHROPIC_ENDPOINT ? 'anthropic' : 'custom',
     endpoint,
     ...(model ? { model } : {}),
     hookExecutables: claudeHookExecutables(settings),
   };
+}
+
+export function readClaudeConfigurations(value: unknown): AgentConfiguration[] {
+  const primary = readClaudeConfiguration(value);
+  return uniqueConfigurations([
+    primary,
+    ...(primary.endpoint === ANTHROPIC_ENDPOINT ? [] : [{
+      ...primary,
+      provider: 'anthropic',
+      endpoint: ANTHROPIC_ENDPOINT,
+    }]),
+  ]);
 }
 
 function parseTomlString(value: string, context: string): string {
@@ -100,7 +115,12 @@ function assignExact(target: Map<string, string>, key: string, value: string): v
   target.set(key, value);
 }
 
-export function readCodexConfiguration(value: unknown): AgentConfiguration {
+interface ParsedCodexConfiguration {
+  top: Map<string, string>;
+  providers: Map<string, Map<string, string>>;
+}
+
+function parseCodexConfiguration(value: unknown): ParsedCodexConfiguration {
   if (typeof value !== 'string') throw new TypeError('Codex config must be TOML text');
   const top = new Map<string, string>();
   const providers = new Map<string, Map<string, string>>();
@@ -128,12 +148,17 @@ export function readCodexConfiguration(value: unknown): AgentConfiguration {
       providers.set(providerSection, provider);
     }
   }
+  return { top, providers };
+}
+
+export function readCodexConfiguration(value: unknown): AgentConfiguration {
+  const { top, providers } = parseCodexConfiguration(value);
   const provider = top.get('model_provider') ?? 'openai';
   const configuredEndpoint = providers.get(provider)?.get('base_url');
   if (provider !== 'openai' && !configuredEndpoint) {
     throw new TypeError(`Codex model provider "${provider}" is missing base_url`);
   }
-  const endpoint = safeEndpoint(configuredEndpoint, 'https://api.openai.com/v1');
+  const endpoint = safeEndpoint(configuredEndpoint, OPENAI_ENDPOINT);
   const model = top.get('model');
   return {
     agent: 'codex',
@@ -142,6 +167,43 @@ export function readCodexConfiguration(value: unknown): AgentConfiguration {
     ...(model ? { model } : {}),
     hookExecutables: [],
   };
+}
+
+export function readCodexConfigurations(value: unknown): AgentConfiguration[] {
+  const parsed = parseCodexConfiguration(value);
+  const primary = readCodexConfiguration(value);
+  const model = parsed.top.get('model');
+  const declared = [...parsed.providers].flatMap(([provider, fields]) => {
+    const configuredEndpoint = fields.get('base_url');
+    if (!configuredEndpoint) return [];
+    return [{
+      agent: 'codex' as const,
+      provider,
+      endpoint: safeEndpoint(configuredEndpoint, OPENAI_ENDPOINT),
+      ...(model ? { model } : {}),
+      hookExecutables: [],
+    }];
+  });
+  return uniqueConfigurations([
+    primary,
+    ...declared,
+    {
+      agent: 'codex',
+      provider: 'openai',
+      endpoint: OPENAI_ENDPOINT,
+      ...(model ? { model } : {}),
+      hookExecutables: [],
+    },
+  ]);
+}
+
+function uniqueConfigurations(values: readonly AgentConfiguration[]): AgentConfiguration[] {
+  const found = new Map<string, AgentConfiguration>();
+  for (const value of values) {
+    const key = value.endpoint.toLowerCase();
+    if (!found.has(key)) found.set(key, value);
+  }
+  return [...found.values()];
 }
 
 export async function readJsonFile(file: string): Promise<unknown> {

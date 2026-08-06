@@ -70,6 +70,22 @@ describe('process observer', () => {
     ]);
   });
 
+  it('keeps only exact known Claude and Codex background comm names', () => {
+    const rows = parsePsRows([
+      '  41     1    41 Wed Jul 30 12:34:56 2026 claude bg-pty-host',
+      '  42     1    42 Wed Jul 30 12:34:57 2026 claude bg-spare',
+      '  43     1    43 Wed Jul 30 12:34:58 2026 Codex (Renderer)',
+      '  44     1    44 Wed Jul 30 12:34:59 2026 Codex (Service)',
+      '  45     1    45 Wed Jul 30 12:35:00 2026 codex-code-mode-host',
+      '  46     1    46 Wed Jul 30 12:35:01 2026 claude unexpected-role',
+    ].join('\n'));
+
+    expect(rows.map((row) => row.executable)).toEqual([
+      'claude bg-pty-host', 'claude bg-spare', 'Codex (Renderer)',
+      'Codex (Service)', 'codex-code-mode-host',
+    ]);
+  });
+
   it('forces a stable locale when reading the macOS process table', async () => {
     const rows = await observeProcesses({
       execFile: async (_file, _args, options) => ({

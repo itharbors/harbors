@@ -314,6 +314,9 @@ function renderSnapshotWithState(snapshot: AgentGuardSnapshot, renderState: Rend
   workspace.append(createHeader(snapshot), createDashboardTabs(snapshot));
   const dashboardContent = document.createElement('div');
   dashboardContent.className = 'dashboard-content';
+  if (activeTab === 'overview' && snapshot.endpoints.length > 1) {
+    dashboardContent.classList.add('dashboard-content-scrollable');
+  }
   if (mutationError) dashboardContent.append(createOperationError(mutationError));
   const content = activeTab === 'overview'
     ? createOverviewPanel(snapshot)
@@ -846,10 +849,11 @@ function createRoute(endpoint: AgentEndpointSnapshot): HTMLElement {
   article.dataset.agent = endpoint.agent;
   const start = document.createElement('div');
   start.className = 'route-origin';
+  const provider = endpoint.provider === 'unknown' ? '来源待确认' : endpoint.provider;
   start.append(
     textElement('span', 'agent-mark', endpoint.agent === 'claude' ? 'CL' : 'CX'),
     textElement('strong', '', endpoint.agent === 'claude' ? 'Claude' : 'Codex'),
-    textElement('span', 'provider', endpoint.provider),
+    textElement('span', 'provider', provider),
   );
   const lane = document.createElement('div');
   lane.className = 'flow-lane';
@@ -858,7 +862,7 @@ function createRoute(endpoint: AgentEndpointSnapshot): HTMLElement {
   lane.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
   const destination = document.createElement('div');
   destination.className = 'route-destination';
-  destination.append(textElement('code', '', endpoint.hostname));
+  destination.append(textElement('code', '', endpoint.hostname === 'unknown' ? '远端待确认' : endpoint.hostname));
   const confidence = textElement('span', `confidence confidence-${endpoint.confidence}`, confidenceLabel(endpoint.confidence));
   confidence.dataset.confidence = endpoint.confidence;
   destination.append(confidence);

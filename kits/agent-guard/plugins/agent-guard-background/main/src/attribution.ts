@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 
 import type { AttributionConfidence } from '@itharbors/agent-guard-contracts';
 import type {
+  AgentId,
   AgentConfiguration,
   AgentProcessRole,
   ConnectionCounter,
@@ -14,6 +15,7 @@ export type AttributionEvidence =
   | 'DNS_ADDRESS_MATCH'
   | 'REVERSE_DNS_HINT'
   | 'SHARED_ADDRESS'
+  | 'ENDPOINT_UNRESOLVED'
   | 'DATA_INCOMPLETE';
 
 interface DnsRecord {
@@ -63,6 +65,56 @@ interface AttributionInput {
   salt: Uint8Array;
   reverseHostname?: string;
   complete?: boolean;
+}
+
+interface CandidateAttributionInput {
+  counter: ConnectionCounter;
+  processRole: AgentProcessRole;
+  agent: AgentId;
+  configurations: readonly AgentConfiguration[];
+  salt: Uint8Array;
+  complete?: boolean;
+}
+
+export function attributeConnectionFromConfigurations(
+  input: CandidateAttributionInput,
+  dns: DnsHistory,
+  now: number,
+): AttributedConnection {
+  const remoteHost = remoteHostname(input.counter.remoteAddress);
+  const matchingHostnames = new Set(dns.matchingHostnames(remoteHost, now));
+  const matching = new Map<string, AgentConfiguration>();
+  for (const configuration of input.configurations) {
+    if (configuration.agent !== input.agent) continue;
+    const hostname = new URL(configuration.endpoint).hostname.toLowerCase();
+    if (matchingHostnames.has(hostname) && !matching.has(hostname)) {
+      matching.set(hostname, configuration);
+    }
+  }
+  if (matching.size === 1) {
+    return attributeConnection({
+      counter: input.counter,
+      processRole: input.processRole,
+      configuration: [...matching.values()][0],
+      salt: input.salt,
+      complete: input.complete,
+    }, dns, now);
+  }
+  const evidence: AttributionEvidence[] = ['PROCESS_AGENT', 'ENDPOINT_UNRESOLVED'];
+  if (input.processRole === 'task' || input.processRole === 'hook') evidence.push('PROCESS_TASK');
+  if (matching.size > 1) evidence.push('SHARED_ADDRESS');
+  if (input.complete === false) evidence.push('DATA_INCOMPLETE');
+  return {
+    agent: input.agent,
+    provider: 'unknown',
+    displayHostname: 'unknown',
+    confidence: 'unknown',
+    evidence,
+    remoteAddress: input.counter.remoteAddress,
+    remoteDigest: digestRemoteAddress(input.counter.remoteAddress, input.salt),
+    processRole: input.processRole,
+    counter: input.counter,
+  };
 }
 
 export function attributeConnection(

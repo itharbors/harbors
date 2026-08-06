@@ -48,6 +48,9 @@ h2 { margin-bottom: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em
 #overview-panel,
 .dashboard-panel { display: grid; min-width: 0; }
 .dashboard-content { display: grid; grid-template-rows: auto minmax(0, 1fr); min-width: 0; min-height: 0; overflow: hidden; }
+.dashboard-content-scrollable { overflow-y: auto; }
+.dashboard-content-scrollable #overview-panel { height: auto; grid-template-rows: none; }
+.dashboard-content-scrollable .history-deck { overflow: visible; }
 #overview-panel { grid-row: 2; min-height: 0; grid-template-rows: auto minmax(0, 1fr); }
 #incidents-panel,
 #settings-panel { grid-row: 2; min-height: 0; overflow-y: auto; }

@@ -111,6 +111,26 @@ describe('Agent Guard panel', () => {
     panel.unmount();
   });
 
+  it('keeps an unresolved source separate without presenting a guessed provider', async () => {
+    const value = snapshot();
+    value.endpoints.push({
+      ...value.endpoints[0],
+      provider: 'unknown', hostname: 'unknown', confidence: 'unknown',
+    });
+    const request = vi.fn(async () => value);
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    const routes = [...document.querySelectorAll('.traffic-route')];
+    expect(routes).toHaveLength(2);
+    expect(document.querySelector('.dashboard-content-scrollable')).not.toBeNull();
+    expect(routes[1].textContent).toContain('来源待确认');
+    expect(routes[1].textContent).toContain('远端待确认');
+    expect(routes[1].textContent).not.toContain('openai');
+    expect(routes[1].textContent).not.toContain('anthropic');
+    panel.unmount();
+  });
+
   it('coalesces polling and stops all polling after unmount', async () => {
     vi.useFakeTimers();
     let release: (() => void) | undefined;

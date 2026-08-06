@@ -23,7 +23,7 @@ import {
 import { createClaudeAdapter } from './adapters/claude.js';
 import { createBackfillScheduler } from './backfill-scheduler.js';
 import { createCodexAdapter } from './adapters/codex.js';
-import { DnsHistory, attributeConnection } from './attribution.js';
+import { DnsHistory, attributeConnectionFromConfigurations } from './attribution.js';
 import { RollingBaseline } from './baseline.js';
 import { BoundedMap, BoundedSet } from './bounded-cache.js';
 import {
@@ -40,7 +40,7 @@ import { createIncidentNotifier } from './notifications.js';
 import { createAgentGuardStore, type PersistedIncidentV1, type PersistedMetricV1 } from './storage.js';
 import { createUsageBackfiller } from './usage-backfill.js';
 import { createWatchdogClient } from './watchdog.js';
-import type { AgentProcessRole, ProcessSnapshot } from './types.js';
+import type { AgentConfiguration, AgentProcessRole, ProcessSnapshot } from './types.js';
 
 interface CollectorLike {
   start(): void;
@@ -257,8 +257,8 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
   const adapters = [claude, codex] as const;
   const fallbackAdapters = [createClaudeAdapter(), createCodexAdapter()] as const;
   let configurations = await Promise.all(adapters.map(async (adapter, index) => {
-    try { return await adapter.discoverConfiguration(); }
-    catch { return fallbackAdapters[index].discoverConfiguration(); }
+    try { return await adapter.discoverConfigurations(); }
+    catch { return fallbackAdapters[index].discoverConfigurations(); }
   }));
   const store = await createAgentGuardStore({
     dataDir: options.dataDir,
@@ -317,10 +317,11 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
       const process = processMap.get(value.counter.pid);
       const classified = process && classify(process);
       if (!classified) return;
-      const attributed = attributeConnection({
+      const attributed = attributeConnectionFromConfigurations({
         counter: value.counter,
         processRole: classified.role,
-        configuration: configurations[classified.index],
+        agent: adapters[classified.index].id,
+        configurations: configurations[classified.index],
         salt,
       }, dns, Date.now());
       const counterKey = `${value.counter.pid}\0${value.counter.processStartTime}\0${value.counter.localAddress}\0${value.counter.remoteAddress}`;
@@ -428,8 +429,8 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
       codex: path.join(os.homedir(), '.codex', 'sessions'),
     },
     endpoints: {
-      claude: endpointIdentity(configurations[0]),
-      codex: endpointIdentity(configurations[1]),
+      claude: endpointIdentity(primaryConfiguration(configurations[0], 'claude')),
+      codex: endpointIdentity(primaryConfiguration(configurations[1], 'codex')),
     },
     salt,
   });
@@ -439,14 +440,14 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
     clearScheduledTimeout: (handle) => clearTimeout(handle),
   });
   const refreshConfigurations = async () => {
-    const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfiguration()));
+    const discovered = await Promise.allSettled(adapters.map((adapter) => adapter.discoverConfigurations()));
     configurations = configurations.map((current, index) => (
       discovered[index].status === 'fulfilled' ? discovered[index].value : current
     ));
   };
   const refreshDns = async () => {
     const now = Date.now();
-    for (const configuration of configurations) {
+    for (const configuration of configurations.flat()) {
       const hostname = new URL(configuration.endpoint).hostname;
       const results = await Promise.allSettled([resolve4(hostname), resolve6(hostname)]);
       const addresses = results.flatMap((result) => result.status === 'fulfilled' ? result.value : []);
@@ -578,12 +579,12 @@ export async function createDefaultAgentGuardService(options: DefaultAgentGuardS
         collectorEpoch: collectorState.epoch,
         status: coverageComplete ? 'complete' : 'partial',
         reason: coverageComplete ? null : collectorState.running ? 'collector-degraded' : 'collector-stopped',
-        endpoints: configurations.map((configuration) => ({
+        endpoints: configurations.flatMap((values) => values.map((configuration) => ({
           agent: configuration.agent,
           provider: configuration.provider,
           hostname: new URL(configuration.endpoint).hostname,
           enabled: true,
-        })),
+        }))),
       }]),
       store.history.appendNetworkSamples(persistedMetrics.map((metric) => ({
         schemaVersion: 2 as const,
@@ -698,6 +699,15 @@ function applyPolicyOverrides(policy: PolicyV1, overrides: Record<string, unknow
 
 function endpointIdentity(configuration: { provider: string; endpoint: string }) {
   return { provider: configuration.provider, hostname: new URL(configuration.endpoint).hostname };
+}
+
+function primaryConfiguration(
+  configurations: readonly AgentConfiguration[],
+  agent: AgentConfiguration['agent'],
+): AgentConfiguration {
+  const primary = configurations[0];
+  if (!primary || primary.agent !== agent) throw new TypeError(`Missing ${agent} configuration`);
+  return primary;
 }
 function collectDescendants(pid: number, processes: Map<number, ProcessSnapshot>): ProcessSnapshot[] {
   const found: ProcessSnapshot[] = [];

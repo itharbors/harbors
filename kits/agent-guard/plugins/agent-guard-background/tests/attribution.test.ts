@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { DnsHistory, attributeConnection, digestRemoteAddress } from '../main/src/attribution.js';
+import {
+  DnsHistory,
+  attributeConnection,
+  attributeConnectionFromConfigurations,
+  digestRemoteAddress,
+} from '../main/src/attribution.js';
 import type { ConnectionCounter } from '../main/src/types.js';
 
 describe('connection attribution', () => {
@@ -62,7 +67,57 @@ describe('connection attribution', () => {
     expect(digestRemoteAddress('203.0.113.10:443', Buffer.from('local-salt')))
       .toBe(digestRemoteAddress('203.0.113.10:443', Buffer.from('local-salt')));
   });
+
+  it('selects a unique configured source from multiple client endpoints', () => {
+    const dns = new DnsHistory();
+    dns.update('api.openai.com', ['203.0.113.20'], 10_000, 60_000);
+    dns.update('relay.example.test', ['203.0.113.10'], 10_000, 60_000);
+
+    expect(attributeConnectionFromConfigurations({
+      counter: connection(), processRole: 'task', agent: 'codex', salt: Buffer.from('local-salt'),
+      configurations: [
+        configuration('codex', 'openai', 'https://api.openai.com/v1'),
+        configuration('codex', 'relay', 'https://relay.example.test/v1'),
+      ],
+    }, dns, 20_000)).toMatchObject({
+      provider: 'relay', displayHostname: 'relay.example.test', confidence: 'confirmed',
+    });
+  });
+
+  it('does not apply a client default to an unmatched or ambiguous remote address', () => {
+    const configurations = [
+      configuration('claude', 'custom', 'https://relay.example.test'),
+      configuration('claude', 'anthropic', 'https://api.anthropic.com'),
+    ];
+    const unmatched = new DnsHistory();
+    unmatched.update('relay.example.test', ['203.0.113.20'], 10_000, 60_000);
+    const unknown = attributeConnectionFromConfigurations({
+      counter: connection(), processRole: 'task', agent: 'claude', configurations,
+      salt: Buffer.from('local-salt'),
+    }, unmatched, 20_000);
+    expect(unknown).toMatchObject({
+      provider: 'unknown', displayHostname: 'unknown', confidence: 'unknown',
+      evidence: ['PROCESS_AGENT', 'ENDPOINT_UNRESOLVED', 'PROCESS_TASK'],
+    });
+
+    const shared = new DnsHistory();
+    shared.update('relay.example.test', ['203.0.113.10'], 10_000, 60_000);
+    shared.update('api.anthropic.com', ['203.0.113.10'], 10_000, 60_000);
+    expect(attributeConnectionFromConfigurations({
+      counter: connection(), processRole: 'task', agent: 'claude', configurations,
+      salt: Buffer.from('local-salt'),
+    }, shared, 20_000)).toMatchObject({
+      provider: 'unknown', displayHostname: 'unknown', confidence: 'unknown',
+      evidence: ['PROCESS_AGENT', 'ENDPOINT_UNRESOLVED', 'PROCESS_TASK', 'SHARED_ADDRESS'],
+    });
+  });
 });
+
+function configuration(
+  agent: 'claude' | 'codex', provider: string, endpoint: string,
+) {
+  return { agent, provider, endpoint, hookExecutables: [] };
+}
 
 function connection(): ConnectionCounter {
   return {

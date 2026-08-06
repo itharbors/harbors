@@ -11,6 +11,7 @@ import type {
 import {
   discoverSessionMetadata,
   readCodexConfiguration,
+  readCodexConfigurations,
   readTextFile,
 } from './config-reader.js';
 
@@ -20,17 +21,19 @@ export interface CodexAdapterOptions {
 }
 
 export function createCodexAdapter(options: CodexAdapterOptions = {}): AgentAdapter {
+  const readConfigured = async () => {
+    if (!options.configPath) return '';
+    try {
+      return await readTextFile(options.configPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return '';
+      throw error;
+    }
+  };
   return {
     id: 'codex',
-    async discoverConfiguration() {
-      if (!options.configPath) return readCodexConfiguration('');
-      try {
-        return readCodexConfiguration(await readTextFile(options.configPath));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return readCodexConfiguration('');
-        throw error;
-      }
-    },
+    async discoverConfiguration() { return readCodexConfiguration(await readConfigured()); },
+    async discoverConfigurations() { return readCodexConfigurations(await readConfigured()); },
     classifyProcess: classifyCodexProcess,
     discoverSessionActivity: (sinceMs) => (
       discoverSessionMetadata('codex', options.sessionsDirectory, sinceMs)
@@ -44,8 +47,11 @@ export function createCodexAdapter(options: CodexAdapterOptions = {}): AgentAdap
 function classifyCodexProcess(process: ProcessSnapshot): AgentProcessRole | null {
   const executable = process.executable.toLowerCase();
   const basename = path.basename(executable);
-  const isCodex = basename === 'codex' || executable.includes('codex.app') || basename.includes('codex helper');
+  const isBareHelper = ['codex (renderer)', 'codex (service)', 'codex-code-mode-host'].includes(basename);
+  const isCodex = basename === 'codex' || isBareHelper
+    || executable.includes('codex.app') || basename.includes('codex helper');
   if (!isCodex) return null;
+  if (isBareHelper) return 'helper';
   if (basename.includes('helper') || process.commandMarkers.some((marker) => (
     ['renderer', 'helper', 'app-server'].includes(marker)
   ))) return 'host';
