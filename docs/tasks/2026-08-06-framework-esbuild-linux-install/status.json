@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "taskId": "2026-08-06-framework-esbuild-linux-install",
   "type": "bug",
-  "updatedAt": "2026-08-06T10:49:40.525Z",
+  "updatedAt": "2026-08-06T11:02:57.318Z",
   "stages": {
     "requirements": "completed",
     "design": "completed",
@@ -10,5 +10,7 @@
     "verification": "completed",
     "consolidation": "completed"
   },
-  "pullRequest": null
+  "pullRequest": {
+    "number": 60
+  }
 }
