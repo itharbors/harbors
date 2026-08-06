@@ -19,6 +19,7 @@ sequenceDiagram
     participant N as Notification Host
     participant K as KitCatalog/WorkspaceStore
     participant Web as scripts/dev.mjs (dev:web)
+    participant P as Application plugin processes
     participant U as User
     participant G as Gateway
     participant S as Server
@@ -31,7 +32,8 @@ sequenceDiagram
     Web->>G: npm run dev -w packages/gateway
     Web->>S: npm run dev -w packages/server
     Web->>C: npm run dev -w packages/client
-    S->>S: 加载全部 Kit 的 startup.plugins
+    S->>P: 每个唯一 startup plugin 启动一个 OS process
+    P-->>S: generation-scoped defined + loaded
     U->>E: 从 Tray 选择 Kit
     E->>E: 等待 Gateway ready
     E->>K: getOrCreate workspace
@@ -54,6 +56,46 @@ SessionManager；稳定路径 `/kits/<id>` 由 Server 精确匹配公开 id 后�
 开发 Notification Host 默认监听 `127.0.0.1:49383`，先于 Web 子进程启动，并通过
 `HARBORS_NOTIFICATION_PORT` 将实际端口传入子进程。它不属于 Gateway 路由；只启动
 `npm run dev:web` 时不会创建该 Host。稳定 Electron 保持监听 `127.0.0.1:48383`。`npm run kill` 的开发 Web 清理范围仅为 49380、49381 和 49382。
+
+### Application 启动插件隔离与恢复
+
+```mermaid
+sequenceDiagram
+    participant F as Framework / Supervisor
+    participant O as Owner registries
+    participant P as Plugin generation N
+    participant R as Plugin generation N+1
+    F->>P: advanced IPC initialize（protocol v1 + generation N）
+    P-->>F: definition metadata + loaded
+    F->>O: attach menu / message / lifecycle
+    P--xF: crash / disconnect / invalid current-generation IPC
+    F->>F: 拒绝 pending RPC，等待 host command 收敛
+    F->>O: lifecycle bookkeeping → menu → message → service → snapshot
+    F->>P: SIGTERM；2 秒后仍存活则 SIGKILL
+    alt 60 秒失败窗口尚未第 4 次
+        F->>F: 等待 250 ms / 1 s / 4 s
+        F->>R: 新 generation initialize
+    else 已熔断或 owner cleanup 失败
+        F->>F: failed，等待认证的显式 retry
+    end
+```
+
+Application 启动插件由 Catalog 跨 Kit 去重，每个唯一插件一个 OS 子进程；Session 插件仍在
+Framework 内按 Editor/Session 加载。单个插件失败时，Application bootstrap 进入 `degraded` 并
+公开 `pending`、`starting`、`running`、`restarting`、`failed`、`stopping`、`stopped` 中的当前
+状态，但不会公开 stderr、stack、token 或原始异常。健康 sibling、Session 与 `/api/health` 继续
+服务。连续运行 5 分钟重置失败预算；60 秒窗口内第 4 次失败停止自动重启，之后只能经带 Electron
+application token 的 `POST /api/application/plugin/retry` 明确恢复。
+
+Web/source runner 使用 `tsx` 加载当前 `runner.ts`，编译后的 Node Server 使用相邻 `runner.js`。
+packaged Electron 使用 `ELECTRON_RUN_AS_NODE=1` 和 staged
+`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js`。child env 先复制
+Framework 父环境，再删除权威固定 host secret 键和显式 `secretEnvironmentKeys`；固定 Application、
+Notification owner 与 credential transport secret 也不进入 runner argv。该机制既不是通用 secret
+detector，也不是 allowlist，未登记的自定义 token 或云凭据仍可能被继承。开发者不得把敏感值放在
+普通环境变量中；Framework 集成方必须通过 capture/`secretEnvironmentKeys` 登记新增 secret，或使用
+未来的窄化 capability。这仍只是秘密最小化和 crash containment，不是 OS 权限沙箱：插件使用
+Framework cwd，以同一 OS 账号运行，并拥有该账号的文件访问权。
 
 ## 2. Agent 桌面通知
 
@@ -212,6 +254,10 @@ Client 内部的 divider resize 与 tab drag 先在当前 DOM/布局控制器中
 | 新窗口被阻止 | 转为 Client 内浮层承载 |
 | 通知字段、method 或 body 非法 | Host 返回稳定的 4xx JSON 错误 |
 | Notification Host 未运行 | Skill 与通知中心明确报告服务不可用，不伪造成功 |
+| Application 插件单次故障 | 清 owner 后按 250 ms / 1 s / 4 s 自动重启，不影响健康 sibling |
+| 60 秒内第 4 次 Application 插件故障 | 熔断为 `failed`，等待认证显式 retry |
+| Application 插件 initialize/load 超过 30 秒 | 视为失败并进入同一清理/重启预算 |
+| Application 插件 stop/unload 超过 10 秒 | `SIGTERM`，2 秒仍未退出则 `SIGKILL` |
 
 ## 源码索引
 
@@ -228,3 +274,7 @@ Client 内部的 divider resize 与 tab drag 先在当前 DOM/布局控制器中
 - [Notification Host](../../scripts/lib/notification-host.mjs)
 - [桌面通知适配](../../scripts/lib/notification-desktop.mjs)
 - [通知 Skill CLI](../../.agents/skills/notify-user/scripts/notify.mjs)
+- [Application Runtime](../../packages/server/src/application/runtime.ts)
+- [Application 插件 Supervisor](../../packages/server/src/application/plugin-process/supervisor.ts)
+- [Application 插件进程适配](../../packages/server/src/application/plugin-process/spawn.ts)
+- [Application 插件重试路由](../../packages/server/src/routes/application-plugin-retry.ts)

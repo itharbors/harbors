@@ -160,7 +160,7 @@ test('rejects a failed startup plugin before opening a disposable session', asyn
         name: '@example/startup',
         kits: ['@example/kit-demo'],
         status: 'failed',
-        error: 'native import failed',
+        errorCode: 'APPLICATION_PLUGIN_PROCESS_FAILED',
       }],
     },
     {
@@ -170,7 +170,7 @@ test('rejects a failed startup plugin before opening a disposable session', asyn
       directory: '/kit-store/example/kit-demo/1.0.0',
     },
     { fetchImpl: async () => { fetches += 1; } },
-  ), /native import failed/);
+  ), /APPLICATION_PLUGIN_PROCESS_FAILED/);
   assert.equal(fetches, 0);
 });
 

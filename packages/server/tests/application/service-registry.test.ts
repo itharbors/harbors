@@ -26,4 +26,27 @@ describe('ApplicationServiceRegistry', () => {
     expect(registry.get('notification-client')).toBeUndefined();
     expect(registry.get('telemetry-client')).toEqual({ ready: true });
   });
+
+  it('returns a structured clone snapshot that cannot mutate registered values', () => {
+    const registry = new ApplicationServiceRegistry();
+    const value = { nested: { revision: 1 } };
+    registry.register('runtime', 'configuration', value);
+
+    const snapshot = registry.snapshot();
+    (snapshot.configuration as typeof value).nested.revision = 2;
+
+    expect(snapshot).toEqual({ configuration: { nested: { revision: 2 } } });
+    expect(registry.get('configuration')).toEqual({ nested: { revision: 1 } });
+  });
+
+  it('rejects non-cloneable values without reserving the service name', () => {
+    const registry = new ApplicationServiceRegistry();
+
+    expect(() => registry.register('runtime', 'configuration', { callback: () => undefined }))
+      .toThrow();
+    expect(registry.get('configuration')).toBeUndefined();
+
+    expect(() => registry.register('runtime', 'configuration', { ready: true })).not.toThrow();
+    expect(registry.snapshot()).toEqual({ configuration: { ready: true } });
+  });
 });

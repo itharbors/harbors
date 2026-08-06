@@ -402,9 +402,12 @@ test_finish_preserves_context_summary_and_label_guards() {
   prepare_change feature
   git -C "$WORKTREE" commit --amend -m '[Bug] 使用错误标签' >/dev/null
   if output=$("$FINISH" '完成变更' "$BODY" 2>&1); then fail 'wrong label succeeded'; fi
-  assert_contains "$output" 'commits must start with [Feature]'
+  assert_contains "$output" 'at least one [Feature] commit'
   test ! -s "$NPM_LOG" || fail 'npm ran after label failure'
-
+  prepare_change feature
+  git -C "$WORKTREE" commit --amend -m '[Init] 非初始化提交' >/dev/null
+  if output=$("$FINISH" '完成变更' "$BODY" 2>&1); then fail 'init label succeeded'; fi
+  assert_contains "$output" 'unsupported commit title'
   prepare_change docs
   printf 'dirty\n' > "$WORKTREE/dirty.txt"
   if output=$("$FINISH" '更新文档' "$BODY" 2>&1); then fail 'dirty succeeded'; fi
@@ -421,6 +424,27 @@ test_finish_preserves_supporting_commit_labels_and_check_gate() {
   git -C "$WORKTREE" commit -m '[Test] 补充回归测试' >/dev/null
   output=$("$FINISH" '完成缺陷修复' "$BODY")
   assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+
+  prepare_change feature
+  for entry in \
+    'Bug:修复开发中发现的缺陷:fix.txt' \
+    'Test:补充功能回归测试:regression.test' \
+    'Docs:完善功能使用说明:documentation.md' \
+    'Refactor:整理功能实现结构:refactor.txt' \
+    'Optimize:减少功能资源占用:optimize.txt' \
+    'Chore:维护功能构建配置:chore.txt'; do
+    IFS=: read -r label summary path <<EOF
+$entry
+EOF
+    printf '%s\n' "$summary" > "$WORKTREE/$path"
+    git -C "$WORKTREE" add "$path"
+    git -C "$WORKTREE" commit -m "[$label] $summary" >/dev/null
+  done
+
+  output=$("$FINISH" '完成功能开发' "$BODY")
+
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+  assert_contains "$(cat "$GH_LOG")" 'pr create --base main --head feature/finish-case --title [Feature] 完成功能开发'
 
   prepare_change refactor
   printf 'fix\n' > "$WORKTREE/fix.txt"

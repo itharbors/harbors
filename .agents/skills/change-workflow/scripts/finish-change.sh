@@ -182,18 +182,15 @@ else
   fail 'working tree is not clean'
 fi
 test "$(git -C "$repo_root" rev-list --count origin/main..HEAD)" -gt 0 || fail 'change branch has no commits over origin/main'
+primary_commit_found=0
 while IFS= read -r subject; do
   case "$subject" in
-    "[$label] "*) ;;
-    "[Docs] "*|"[Test] "*)
-      case "$change_type" in bug|refactor) ;; *) fail "commits must start with [$label]: $subject" ;; esac
-      ;;
-    "[Bug] "*)
-      test "$change_type" = refactor || fail "commits must start with [$label]: $subject"
-      ;;
-    *) fail "commits must start with [$label]: $subject" ;;
+    "[$label] "*) primary_commit_found=1 ;;
+    "[Feature] "*|"[Bug] "*|"[Docs] "*|"[Refactor] "*|"[Optimize] "*|"[Test] "*|"[Chore] "*) ;;
+    *) fail "unsupported commit title: $subject" ;;
   esac
 done < <(git -C "$repo_root" log --format=%s origin/main..HEAD)
+test "$primary_commit_found" -eq 1 || fail "change branch must contain at least one [$label] commit"
 
 (cd "$repo_root" && npm run check)
 current_head=$(git -C "$repo_root" rev-parse HEAD)

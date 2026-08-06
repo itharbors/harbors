@@ -25,14 +25,26 @@ export interface ApplicationDiagnostic {
 }
 
 export type ApplicationPhase = 'starting' | 'ready' | 'degraded' | 'stopping' | 'stopped';
-export type ApplicationPluginStatus = 'pending' | 'running' | 'failed' | 'stopped';
+export type ApplicationPluginStatus =
+  | 'pending'
+  | 'starting'
+  | 'running'
+  | 'restarting'
+  | 'failed'
+  | 'stopping'
+  | 'stopped';
 
 export interface ApplicationPluginState {
   name: string;
   path: string;
   kits: string[];
   status: ApplicationPluginStatus;
-  error?: string;
+  generation?: string;
+  pid?: number;
+  restartCount?: number;
+  lastFailureAt?: number;
+  errorCode?: string;
+  retryAfterMs?: number;
 }
 
 export interface ApplicationBootstrap {

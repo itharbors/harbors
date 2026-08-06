@@ -1,11 +1,14 @@
 import assert from 'node:assert/strict';
-import test from 'node:test';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import test, { after, before } from 'node:test';
 import {
   access,
   cp,
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rename,
   rm,
   symlink,
@@ -21,6 +24,43 @@ import {
   runDesktopPackage,
   verifyPackagedKeyring,
 } from './desktop-package-build.mjs';
+import { buildDesktop } from './desktop-build.mjs';
+import { runDesktopFrameworkProcess } from './desktop-framework.mjs';
+
+const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
+const PACKAGED_PLUGIN_PROCESS_FILES = Object.freeze([
+  'error.js',
+  'protocol.js',
+  'rpc-peer.js',
+  'runner-host.js',
+  'runner-runtime.js',
+  'runner.js',
+]);
+let freshServerBuildRoot;
+
+before(async () => {
+  freshServerBuildRoot = await mkdtemp(path.join(os.tmpdir(), 'harbors-desktop-server-build-'));
+  try {
+    execFileSync(process.execPath, [
+      findTypeScriptCompiler(repositoryRoot),
+      '-p',
+      path.join(repositoryRoot, 'packages/server/tsconfig.build.json'),
+      '--outDir',
+      freshServerBuildRoot,
+    ], {
+      cwd: repositoryRoot,
+      stdio: 'pipe',
+    });
+  } catch (error) {
+    await rm(freshServerBuildRoot, { recursive: true, force: true });
+    freshServerBuildRoot = undefined;
+    throw error;
+  }
+});
+
+after(async () => {
+  if (freshServerBuildRoot) await rm(freshServerBuildRoot, { recursive: true, force: true });
+});
 
 function commandRunner({ fail = {} } = {}) {
   const calls = [];
@@ -38,6 +78,71 @@ async function write(root, relative, contents = relative) {
   const filename = path.join(root, relative);
   await mkdir(path.dirname(filename), { recursive: true });
   await writeFile(filename, contents);
+}
+
+function findTypeScriptCompiler(from) {
+  let directory = path.resolve(from);
+  while (true) {
+    const candidate = path.join(directory, 'node_modules/typescript/bin/tsc');
+    if (existsSync(candidate)) return candidate;
+    const parent = path.dirname(directory);
+    if (parent === directory) throw new Error('Cannot locate the TypeScript compiler');
+    directory = parent;
+  }
+}
+
+async function createDesktopRuntimeFixture(t) {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'harbors-desktop-runtime-package-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  for (const relative of [
+    'scripts/electron-preload.cjs',
+    'scripts/notification-preload.cjs',
+    'scripts/kit-manager-preload.cjs',
+    'scripts/kit-manager-renderer.mjs',
+    'scripts/kit-manager.css',
+    'scripts/kit-manager.html',
+    'scripts/assets/tray-icon.png',
+    'scripts/assets/tray-icon@2x.png',
+  ]) await write(root, relative);
+  await write(root, 'scripts/electron.mjs', `
+import 'sigstore';
+import 'snappyjs';
+import 'yauzl';
+export const main = true;
+`);
+  await write(root, 'packages/desktop/src/framework.mjs', 'export const framework = true;\n');
+  await write(root, 'packages/client/dist/index.html', '<main></main>');
+  for (const plugin of ['config', 'menu', 'message', 'panel']) {
+    await write(root, `plugins/${plugin}/package.json`, JSON.stringify({ name: `@itharbors/${plugin}` }));
+    await write(root, `plugins/${plugin}/main/dist/index.js`, 'export default {};\n');
+  }
+  const emittedProcessRoot = path.join(freshServerBuildRoot, 'application/plugin-process');
+  const fixtureProcessRoot = path.join(
+    root,
+    'packages/server/dist/application/plugin-process',
+  );
+  await mkdir(path.dirname(fixtureProcessRoot), { recursive: true });
+  await cp(emittedProcessRoot, fixtureProcessRoot, { recursive: true });
+  return { root, emittedProcessRoot };
+}
+
+function collectStaticLocalJavaScriptClosure(sources, entry) {
+  const pending = [entry];
+  const visited = new Set();
+  const localImport = /^\s*import(?:\s+[^'"\n]*\s+from)?\s*['"](\.\/[^'"]+\.js)['"];?\s*$/gmu;
+
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (visited.has(current)) continue;
+    const source = sources.get(current);
+    if (source === undefined) throw new Error(`Missing static runner dependency: ${current}`);
+    visited.add(current);
+    for (const match of source.matchAll(localImport)) {
+      pending.push(path.posix.normalize(path.posix.join(path.posix.dirname(current), match[1])));
+    }
+  }
+
+  return [...visited].sort();
 }
 
 function packagedArtifactPaths(cwd) {
@@ -766,6 +871,79 @@ test('builder ships only the staged runtime and unpacks native modules', async (
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlements), entitlementsPath);
   assert.equal(path.resolve(repositoryRoot, config.mac.entitlementsInherit), entitlementsPath);
   await access(entitlementsPath);
+});
+
+test('stages exactly the fresh Server runner static dependency closure', async (t) => {
+  const fixture = await createDesktopRuntimeFixture(t);
+  const runtimeRoot = path.join(fixture.root, 'dist', 'desktop-runtime');
+  const staged = await buildDesktop({
+    repositoryRoot: fixture.root,
+    outputRoot: runtimeRoot,
+    descriptors: [],
+  });
+  let serverOptions;
+  await runDesktopFrameworkProcess({
+    env: {
+      HARBORS_RUNTIME_ROOT: runtimeRoot,
+      HARBORS_CLIENT_ASSETS_ROOT: path.join(runtimeRoot, 'client'),
+      HARBORS_DB_PATH: path.join(fixture.root, 'data', 'framework.db'),
+      HARBORS_PLUGIN_DATA_ROOT: path.join(fixture.root, 'data', 'plugins', 'data'),
+      HARBORS_PLUGIN_CACHE_ROOT: path.join(fixture.root, 'data', 'plugins', 'cache'),
+      HARBORS_PLUGIN_TEMP_ROOT: path.join(fixture.root, 'data', 'plugins', 'temp'),
+      HARBORS_KIT_SOURCES: '[]',
+      HARBORS_NOTIFICATION_PORT: '17896',
+      HARBORS_APPLICATION_TOKEN: 'application-secret',
+    },
+    createAssembly: () => ({}),
+    createServer: (options) => {
+      serverOptions = options;
+      return { start: async () => 43123, stop: async () => undefined };
+    },
+    send: () => undefined,
+    subscribeShutdown: () => () => undefined,
+    exit: () => undefined,
+  });
+
+  const relativeRunner = 'packages/server/dist/application/plugin-process/runner.js';
+  const stagedRunner = path.join(runtimeRoot, relativeRunner);
+  const stagedProcessRoot = path.dirname(stagedRunner);
+  const freshSources = new Map(await Promise.all(PACKAGED_PLUGIN_PROCESS_FILES.map(async (file) => [
+    file,
+    await readFile(path.join(fixture.emittedProcessRoot, file), 'utf8'),
+  ])));
+
+  assert.deepEqual(
+    collectStaticLocalJavaScriptClosure(freshSources, 'runner.js'),
+    PACKAGED_PLUGIN_PROCESS_FILES,
+  );
+  for (const missing of PACKAGED_PLUGIN_PROCESS_FILES.filter((file) => file !== 'runner.js')) {
+    const mutatedSources = new Map(freshSources);
+    mutatedSources.delete(missing);
+    assert.throws(
+      () => collectStaticLocalJavaScriptClosure(mutatedSources, 'runner.js'),
+      new RegExp(`Missing static runner dependency: ${missing.replace('.', '\\.')}`, 'u'),
+    );
+  }
+
+  assert.deepEqual((await readdir(stagedProcessRoot)).sort(), PACKAGED_PLUGIN_PROCESS_FILES);
+  assert.ok(staged.inventory.includes(relativeRunner));
+  assert.equal(serverOptions.applicationPluginProcess.runner.args.at(-1), stagedRunner);
+  for (const file of PACKAGED_PLUGIN_PROCESS_FILES) {
+    assert.deepEqual(
+      await readFile(path.join(stagedProcessRoot, file)),
+      await readFile(path.join(fixture.emittedProcessRoot, file)),
+    );
+  }
+  const smokeEnvironment = { ...process.env };
+  delete smokeEnvironment.ELECTRON_RUN_AS_NODE;
+  const smoke = spawnSync(process.execPath, [stagedRunner], {
+    cwd: runtimeRoot,
+    encoding: 'utf8',
+    env: smokeEnvironment,
+  });
+  assert.equal(smoke.status, 1);
+  assert.equal(smoke.signal, null);
+  assert.doesNotMatch(smoke.stderr, /ERR_MODULE_NOT_FOUND|Cannot find module/u);
 });
 
 test('desktop release documentation preserves operational safety boundaries', async () => {

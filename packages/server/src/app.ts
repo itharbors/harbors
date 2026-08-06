@@ -26,6 +26,7 @@ import type { ApplicationRuntime } from './application/runtime';
 import { createApplicationBootstrapRouter } from './routes/application-bootstrap';
 import { createApplicationEventsRouter } from './routes/application-events';
 import { createApplicationMenuTriggerRouter } from './routes/application-menu-trigger';
+import { createApplicationPluginRetryRouter } from './routes/application-plugin-retry';
 import { createKitCatalogRouter } from './routes/kit-catalog';
 import { createClientAssetRouter } from './routes/client-asset';
 import type { PluginPathRoots } from './framework/plugin/paths';
@@ -35,7 +36,10 @@ type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>
 
 export interface AppOptions {
   assembly: AssemblyConfig;
-  applicationRuntime: Pick<ApplicationRuntime, 'getBootstrap' | 'request' | 'triggerMenu' | 'subscribe'>;
+  applicationRuntime: Pick<
+    ApplicationRuntime,
+    'getBootstrap' | 'request' | 'retryPlugin' | 'triggerMenu' | 'subscribe'
+  >;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
   pluginPathRoots: PluginPathRoots;
@@ -152,6 +156,10 @@ export function createApp(
     appOptions.applicationRuntime,
     { controlToken: appOptions.applicationControlToken },
   );
+  const applicationPluginRetryRouter = createApplicationPluginRetryRouter(
+    appOptions.applicationRuntime,
+    { controlToken: appOptions.applicationControlToken },
+  );
   const kitCatalogRouter = createKitCatalogRouter(loadKitCatalog);
   const clientAssetRouter = appOptions.clientAssetsRoot
     ? createClientAssetRouter(appOptions.clientAssetsRoot)
@@ -191,6 +199,10 @@ export function createApp(
     }
     if (url.startsWith('/api/application/menu/trigger')) {
       await applicationMenuTriggerRouter(req, res);
+      return;
+    }
+    if (targetsApplicationPluginRetryRouter(url)) {
+      await applicationPluginRetryRouter(req, res);
       return;
     }
     if (url.startsWith('/api/bootstrap/')) {
@@ -319,3 +331,14 @@ const INDEX_HTML = `<!DOCTYPE html>
   <script type="module" src="/assets/index.js"></script>
 </body>
 </html>`;
+
+function targetsApplicationPluginRetryRouter(requestTarget: string): boolean {
+  const routePrefix = '/api/application/plugin/retry';
+  if (requestTarget.startsWith(routePrefix)) return true;
+  if (!/^https?:\/\//iu.test(requestTarget)) return false;
+  try {
+    return new URL(requestTarget).pathname.startsWith(routePrefix);
+  } catch {
+    return false;
+  }
+}
