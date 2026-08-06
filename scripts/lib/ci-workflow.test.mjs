@@ -94,6 +94,30 @@ test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
   assert.equal(lockedPackage?.optional, true);
 });
 
+test('CI locks the Linux x64 esbuild binary required by script-isolated Framework builds', async () => {
+  const [packageText, packageLockText] = await Promise.all([
+    readFile(packageUrl, 'utf8'),
+    readFile(packageLockUrl, 'utf8'),
+  ]);
+  const packageJson = JSON.parse(packageText);
+  const packageLock = JSON.parse(packageLockText);
+  const version = '0.28.0';
+  const packageName = '@esbuild/linux-x64';
+  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
+
+  assert.equal(packageJson.optionalDependencies?.[packageName], version);
+  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
+  assert.equal(lockedPackage?.version, version);
+  assert.equal(
+    lockedPackage?.resolved,
+    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
+  );
+  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
+  assert.deepEqual(lockedPackage?.os, ['linux']);
+  assert.deepEqual(lockedPackage?.cpu, ['x64']);
+  assert.equal(lockedPackage?.optional, true);
+});
+
 test('CI runs for every pull request change without repository-inaccurate path filters', async () => {
   const workflow = await readFile(workflowUrl, 'utf8');
   const triggers = parseWorkflowTriggers(workflow);
