@@ -863,9 +863,13 @@ async function cleanupPausedFixtures(options: {
   watchdog: InstalledWatchdogClient | undefined;
   watchdogChild: ChildProcess | undefined;
 }): Promise<void> {
-  const watchdogResults = await Promise.allSettled([
-    Promise.resolve().then(() => options.watchdog?.shutdown()),
-  ]);
+  const watchdogExited = options.watchdogChild !== undefined
+    && (options.watchdogChild.exitCode !== null || options.watchdogChild.signalCode !== null);
+  const watchdogResults = watchdogExited
+    ? []
+    : await Promise.allSettled([
+      Promise.resolve().then(() => options.watchdog?.shutdown()),
+    ]);
   const continueResults = await Promise.allSettled(options.fixtures.map(({ pid }) => (
     Promise.resolve().then(() => signalIfAlive(pid, 'SIGCONT'))
   )));

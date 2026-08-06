@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "taskId", "type", "updatedAt", "stages", "pullRequest"],
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "taskId": { "type": "string", "pattern": "^(?:(?:(?:[0-9]{2}(?:0[48]|[2468][048]|[13579][26])|(?:0[48]|[2468][048]|[13579][26])00)-02-29)|(?:(?!0000)[0-9]{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12][0-9]|3[01])|(?:0[469]|11)-(?:0[1-9]|[12][0-9]|30)|02-(?:0[1-9]|1[0-9]|2[0-8]))))-[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "type": { "enum": ["feature", "bug", "optimize", "docs", "refactor", "test", "chore"] },
+    "updatedAt": { "type": "string", "format": "date-time" },
+    "stages": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["requirements", "design", "implementation", "verification", "consolidation"],
+      "allOf": [{ "$ref": "#/$defs/stageSequence" }],
+      "properties": {
+        "requirements": { "$ref": "#/$defs/stage" },
+        "design": { "$ref": "#/$defs/stage" },
+        "implementation": { "$ref": "#/$defs/stage" },
+        "verification": { "$ref": "#/$defs/stage" },
+        "consolidation": { "$ref": "#/$defs/stage" }
+      }
+    },
+    "pullRequest": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["number"],
+          "properties": { "number": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 } }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "stage": { "enum": ["pending", "in_progress", "completed", "blocked", "skipped"] },
+    "terminalStage": { "enum": ["completed", "skipped"] },
+    "activeOrBlockedStage": { "enum": ["in_progress", "blocked"] },
+    "stageSequence": {
+      "oneOf": [
+        {
+          "properties": {
+            "requirements": { "const": "pending" },
+            "design": { "const": "pending" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "const": "pending" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/terminalStage" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/terminalStage" },
+            "consolidation": { "$ref": "#/$defs/terminalStage" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "design": { "const": "pending" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "implementation": { "const": "pending" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "verification": { "const": "pending" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/activeOrBlockedStage" },
+            "consolidation": { "const": "pending" }
+          }
+        },
+        {
+          "properties": {
+            "requirements": { "$ref": "#/$defs/terminalStage" },
+            "design": { "$ref": "#/$defs/terminalStage" },
+            "implementation": { "$ref": "#/$defs/terminalStage" },
+            "verification": { "$ref": "#/$defs/terminalStage" },
+            "consolidation": { "$ref": "#/$defs/activeOrBlockedStage" }
+          }
+        }
+      ]
+    }
+  }
+}

@@ -138,13 +138,21 @@ test('Kit CI selects event-specific full-history Git comparisons without path tr
 test('Kit change PRs enforce the branch-declared Kit boundary independently from the selected matrix', async () => {
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const boundary = workflowJob(workflow, 'kit-change-boundary');
+  const resolveCommand = 'task_id=$(node scripts/task-status.mjs resolve "$GITHUB_HEAD_REF" "$BASE_SHA" --ready-for-pr)';
+  const boundaryCommand = 'npm run kit:boundary -- "$declared_kit" --task "$task_id" --base "$BASE_SHA" --head "$HEAD_SHA"';
 
   assert.match(boundary, /if:\s*github\.event_name == 'pull_request' && startsWith\(github\.head_ref, 'kit-change\/'\)/u);
   assert.match(boundary, /fetch-depth:\s*0/u);
+  assert.match(boundary, /ref:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
   assert.match(boundary, /\^kit-change\/\(\[a-z0-9\]\+\(-\[a-z0-9\]\+\)\*\)\//u);
   assert.match(boundary, /declared_kit="\$\{BASH_REMATCH\[1\]\}"/u);
   assert.match(boundary, /test -f "kits\/\$declared_kit\/kit\.json"/u);
-  assert.match(boundary, /npm run kit:boundary -- "\$declared_kit" --base "\$BASE_SHA" --head "\$HEAD_SHA"/u);
+  assert.match(boundary, /BASE_SHA:\s*\$\{\{ github\.event\.pull_request\.base\.sha \}\}/u);
+  assert.match(boundary, /HEAD_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
+  assert.ok(boundary.includes(resolveCommand), 'Kit boundary must resolve the ready Task from the PR head branch');
+  assert.ok(boundary.includes(boundaryCommand), 'Kit boundary must receive the exact resolved Task ID');
+  assert.ok(boundary.indexOf(resolveCommand) < boundary.indexOf(boundaryCommand));
+  assert.doesNotMatch(boundary, /npm run kit:boundary -- "\$declared_kit" --base/u);
   assert.doesNotMatch(boundary, /matrix\.kit/u);
 });
 

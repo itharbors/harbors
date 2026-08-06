@@ -17,7 +17,8 @@
 1. [系统架构](./architecture/system-overview.md)：先建立进程、包和运行时模块的全局视图。
 2. [核心原则](./architecture/core-principles.md)：理解架构边界与不变量。
 3. [核心运行流程](./architecture/runtime-flows.md)：跟随会话、消息和窗口的端到端路径。
-4. [开发工作流](./guides/development-workflow.md)：启动、构建、测试和排查项目。
+4. [Task 档案与生命周期](./tasks/README.md)：了解需求快照、阶段状态、收口总结与完成判定。
+5. [开发工作流](./guides/development-workflow.md)：启动、构建、测试和排查项目。
 
 ### 维护框架
 
@@ -47,6 +48,7 @@
 | [插件运行时模型](./architecture/plugin-runtime-model.md) | 插件如何发现、注册、装载、贡献能力和卸载？ |
 | [布局模型](./architecture/layout-model.md) | Window、Panel、Tab、Split 和实例状态如何表达？ |
 | [UI 系统](./architecture/ui-system.md) | Web Components、主题、iframe 与 Electron 如何协作？ |
+| [Task 档案与生命周期](./tasks/README.md) | 可交付变更如何建档、推进、收口、确认完成与恢复？ |
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
 | [Kit 制品、Registry 与本地安装](./guides/kit-artifacts.md) | 如何校验、发现、下载和事务安装 Kit 制品？ |

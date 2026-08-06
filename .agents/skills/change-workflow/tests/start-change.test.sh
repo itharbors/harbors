@@ -10,8 +10,30 @@ test_start_supports_all_types() {
     assert_contains "$output" "BRANCH=$type/sample-change"
     assert_contains "$output" "CHANGE_TYPE=$type"
     assert_contains "$output" "BASE_COMMIT=$base"
+    task_id="$(date +%F)-sample-change"
+    task_dir="$worktree/docs/tasks/$task_id"
+    assert_contains "$output" "TASK_ID=$task_id"
+    assert_contains "$output" "TASK_DIR=$task_dir"
+    assert_eq "$(node -p "require('$task_dir/status.json').taskId")" "$task_id"
+    assert_eq "$(node -p "require('$task_dir/status.json').type")" "$type"
+    test -d "$task_dir/.work" || fail 'Task work directory is missing'
     assert_eq "$(git -C "$worktree" rev-parse HEAD)" "$base"
   done
+}
+
+test_start_preserves_worktree_when_task_init_fails() {
+  new_fixture
+  task_id="$(date +%F)-cli-failure"
+  mkdir -p "$REPO/docs/tasks/$task_id"
+  printf 'occupied\n' > "$REPO/docs/tasks/$task_id/existing.txt"
+  git -C "$REPO" add "docs/tasks/$task_id/existing.txt"
+  git -C "$REPO" commit -m '[Test] 添加冲突 Task 目录' >/dev/null
+  git -C "$REPO" push origin main >/dev/null 2>&1
+
+  if output=$("$START" feature cli-failure 2>&1); then fail 'Task init failure succeeded'; fi
+  worktree="$REPO/.worktrees/feature-cli-failure"
+  test -d "$worktree" || fail 'failed Task init removed the worktree'
+  assert_eq "$(git -C "$worktree" branch --show-current)" 'feature/cli-failure'
 }
 test_start_rejects_invalid_names() {
   new_fixture
@@ -96,6 +118,7 @@ test_start_rejects_linked_context() {
 
 run_start_tests() {
   run_case 'start supports all types' test_start_supports_all_types
+  run_case 'start preserves worktree when Task init fails' test_start_preserves_worktree_when_task_init_fails
   run_case 'start rejects invalid names' test_start_rejects_invalid_names
   run_case 'start ignores dirty and ahead main' test_start_ignores_dirty_and_ahead_main
   run_case 'start fetches behind or diverged main' test_start_fetches_remote_when_main_is_behind_or_diverged
