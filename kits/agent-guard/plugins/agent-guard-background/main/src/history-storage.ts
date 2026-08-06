@@ -384,20 +384,34 @@ function buildStatus(
   storageBytes: number,
   warnings: string[] = [],
 ): HistoryStorageStatus {
-  const timestamps = [
-    ...network.flatMap((item) => [item.intervalStart, item.intervalEnd]),
-    ...coverage.flatMap((item) => [item.start, item.end]),
-    ...usage.map((item) => item.at),
-  ];
+  let earliestAt: number | null = null;
+  let latestAt: number | null = null;
+  let lastBackfilledAt: number | null = null;
+  const include = (at: number) => {
+    earliestAt = earliestAt === null ? at : Math.min(earliestAt, at);
+    latestAt = latestAt === null ? at : Math.max(latestAt, at);
+  };
+  for (const item of network) {
+    include(item.intervalStart);
+    include(item.intervalEnd);
+  }
+  for (const item of coverage) {
+    include(item.start);
+    include(item.end);
+  }
+  for (const item of usage) {
+    include(item.at);
+    lastBackfilledAt = lastBackfilledAt === null ? item.at : Math.max(lastBackfilledAt, item.at);
+  }
   return {
     schemaVersion: 1,
     persistent,
     storageBytes,
-    earliestAt: timestamps.length === 0 ? null : Math.min(...timestamps),
-    latestAt: timestamps.length === 0 ? null : Math.max(...timestamps),
+    earliestAt,
+    latestAt,
     generation: manifest.generation,
     lastCompactedAt: manifest.lastCompactedAt,
-    lastBackfilledAt: usage.length === 0 ? null : Math.max(...usage.map((item) => item.at)),
+    lastBackfilledAt,
     settings,
     warnings,
   };
@@ -554,9 +568,16 @@ function rawBounds(
   usage: readonly UsageEventV1[],
   fallback: number,
 ): { from: number; to: number } {
-  const starts = [...network.map((item) => item.intervalStart), ...coverage.map((item) => item.start), ...usage.map((item) => item.at)];
-  const ends = [...network.map((item) => item.intervalEnd), ...coverage.map((item) => item.end), ...usage.map((item) => item.at + 1)];
-  return starts.length === 0 ? { from: fallback, to: fallback } : { from: Math.min(...starts), to: Math.max(...ends) };
+  let from: number | null = null;
+  let to: number | null = null;
+  const include = (start: number, end: number) => {
+    from = from === null ? start : Math.min(from, start);
+    to = to === null ? end : Math.max(to, end);
+  };
+  for (const item of network) include(item.intervalStart, item.intervalEnd);
+  for (const item of coverage) include(item.start, item.end);
+  for (const item of usage) include(item.at, item.at + 1);
+  return from === null || to === null ? { from: fallback, to: fallback } : { from, to };
 }
 
 function formatMonth(date: Date): string {

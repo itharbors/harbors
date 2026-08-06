@@ -104,6 +104,23 @@ describe('Agent Guard history storage', () => {
     expect((await store.history.status()).latestAt).toBe(START + 60_000);
   });
 
+  it('reports status for more history records than can be safely spread as function arguments', async () => {
+    const dataDir = path.join(temporaryRoot(), 'agent-guard');
+    const store = await createHistoryStore({ hostMode: 'desktop', dataDir });
+    const eventCount = 125_000;
+    const records = Array.from({ length: eventCount }, (_, index) => JSON.stringify(usage({
+      at: START + index,
+      eventDigest: `event-${index}`,
+    }))).join('\n');
+    fs.writeFileSync(path.join(dataDir, 'usage-raw-2026-08-01.ndjson'), `${records}\n`);
+
+    await expect(store.status()).resolves.toMatchObject({
+      earliestAt: START,
+      latestAt: START + eventCount - 1,
+      lastBackfilledAt: START + eventCount - 1,
+    });
+  });
+
   it('clears only history and preserves state, incidents, and the control ledger', async () => {
     const dataDir = path.join(temporaryRoot(), 'agent-guard');
     const store = await createAgentGuardStore({ dataDir, hostMode: 'desktop' });
