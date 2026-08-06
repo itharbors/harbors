@@ -49,3 +49,5 @@ Type: `bug`
 完整 ready gate 发现 `scripts/lib/kit-check.test.mjs` 和 `scripts/lib/kit-monorepo.test.mjs` 仍期待 Agent Guard `0.1.0-preview.4`，而 PR #59 合并后的正式版本为 `0.1.0-preview.6`。为恢复 `main` 的完整检查，在本 Task 中增加仅更新这些测试预期的收口修正，不修改 Agent Guard 产品代码。
 
 PR 首轮 Ubuntu CI 显示根 `@esbuild/linux-x64@0.28.0` 会被 Vite 内嵌的 esbuild 0.21.5 错误解析；需求扩展为同时锁定 Vite 与 Client workspace 各自版本匹配的 Linux x64 包，避免嵌套 esbuild 回退到根二进制。
+
+PR 第二轮 Ubuntu CI 已通过依赖安装与架构边界，但暴露两个既有的跨平台测试假设：Agent Guard 的已安装 watchdog 使用 macOS 专属的 `ps`、`date -j` 和 `base64 -D` 语义，却在 Linux 上执行其端到端恢复验收；另一个并发 Server 测试首次导入 Electron 时会延迟下载二进制，使共享状态快照误报 `node_modules/electron/dist` 和 `path.txt` 为隔离测试泄漏。需求继续收口为仅在 macOS 执行 watchdog 端到端恢复验收，并从共享状态不变性断言中排除这两个 Electron 官方延迟安装产物；官方 Kit 的隔离安装、构建和启动验收仍在 Ubuntu 完整运行。

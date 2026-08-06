@@ -16,6 +16,8 @@
 - 在根 `package-lock.json` 中锁定根 esbuild、Vite 内嵌 esbuild 和 Client workspace esbuild 各自版本匹配的 Linux x64 包实体。
 - 扩展 `scripts/lib/ci-workflow.test.mjs`，校验三个 esbuild 安装位置，防止 macOS 更新锁文件时再次丢失 Ubuntu 必需的平台包或让嵌套 esbuild 回退到错误版本的根二进制。
 - 将 Kit 检查和 monorepo 测试中的 Agent Guard 版本预期同步到 PR #59 已发布的 `0.1.0-preview.6`。
+- 将使用 macOS 专属 shell 命令的 Agent Guard watchdog 端到端恢复验收限定到 macOS；Linux 仍运行官方 Kit 隔离安装、构建、启动和进程监督验收。
+- 共享状态快照忽略 Electron 首次导入时生成的 `dist` 与 `path.txt`，避免并发测试的官方延迟安装行为被误判为隔离仓库污染。
 
 ## 关键决定
 
@@ -37,7 +39,7 @@
 
 ## 偏差与遗留
 
-首次完整 Framework 测试期间，另一并发测试延迟下载 Electron 二进制，触发共享 `node_modules` 快照多一个文件；Electron 下载完成后，官方 Kit 聚焦测试和第二次完整 Framework 测试均通过。PR 首轮 Ubuntu CI 进一步发现 Vite 内嵌 esbuild 会回退到版本不匹配的根二进制，因此锁文件和回归测试已扩展到全部三个 esbuild 安装位置。本机 Docker daemon 未运行，Linux x64 的最终行为由 PR 的 GitHub Ubuntu CI 节点验证。
+首次完整 Framework 测试期间，另一并发测试延迟下载 Electron 二进制，触发共享 `node_modules` 快照变化；该测试竞争已通过精准排除 Electron 自身的两个延迟安装产物消除。PR 首轮 Ubuntu CI 进一步发现 Vite 内嵌 esbuild 会回退到版本不匹配的根二进制，因此锁文件和回归测试已扩展到全部三个 esbuild 安装位置。第二轮 Ubuntu CI 已确认依赖安装通过，并进一步暴露 macOS watchdog 验收不应在 Linux 执行；现已按真实平台能力限定该子用例。本机 Docker daemon 未运行，Linux x64 的最终行为由 PR 的 GitHub Ubuntu CI 节点验证。
 
 ## 后续关注
 
