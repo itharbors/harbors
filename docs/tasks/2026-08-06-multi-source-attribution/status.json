@@ -1,1 +1,16 @@
-{"schemaVersion":1,"taskId":"2026-08-06-multi-source-attribution","type":"bug","updatedAt":"2026-08-06T08:11:18.381Z","stages":{"requirements":"completed","design":"completed","implementation":"completed","verification":"completed","consolidation":"completed"},"pullRequest":null}
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-06-multi-source-attribution",
+  "type": "bug",
+  "updatedAt": "2026-08-06T08:15:46.194Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": {
+    "number": 59
+  }
+}
