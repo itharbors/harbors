@@ -84,6 +84,22 @@ describe('connection attribution', () => {
     });
   });
 
+  it('recognizes the official ChatGPT route used by Codex app servers', () => {
+    const dns = new DnsHistory();
+    dns.update('api.openai.com', ['203.0.113.20'], 10_000, 60_000);
+    dns.update('chatgpt.com', ['203.0.113.10'], 10_000, 60_000);
+
+    expect(attributeConnectionFromConfigurations({
+      counter: connection(), processRole: 'task', agent: 'codex', salt: Buffer.from('local-salt'),
+      configurations: [
+        configuration('codex', 'openai', 'https://api.openai.com/v1'),
+        configuration('codex', 'openai', 'https://chatgpt.com'),
+      ],
+    }, dns, 20_000)).toMatchObject({
+      provider: 'openai', displayHostname: 'chatgpt.com', confidence: 'confirmed',
+    });
+  });
+
   it('does not apply a client default to an unmatched or ambiguous remote address', () => {
     const configurations = [
       configuration('claude', 'custom', 'https://relay.example.test'),

@@ -104,6 +104,7 @@ base_url = "https://relay.example.test/v1"
       { provider: 'relay', endpoint: 'https://relay.example.test/v1' },
       { provider: 'backup', endpoint: 'https://backup.example.test/v1' },
       { provider: 'openai', endpoint: 'https://api.openai.com/v1' },
+      { provider: 'openai', endpoint: 'https://chatgpt.com' },
     ]);
   });
 });

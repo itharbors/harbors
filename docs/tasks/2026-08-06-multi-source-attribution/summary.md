@@ -2,11 +2,12 @@
 
 ## 最终结论
 
-已修复 Agent Guard 将所有 Claude/Codex 进程套用单一全局服务来源的问题。实时流量现在仅在 DNS 证据唯一匹配时标注具体 provider/hostname，证据不足时明确显示来源待确认。Agent Guard 0.1.0-preview.6 的构建、204 项完整测试、Smoke 和 Web 验收均通过。
+已修复 Agent Guard 将所有 Claude/Codex 进程套用单一全局服务来源的问题。实时流量现在仅在 DNS 证据唯一匹配时标注具体 provider/hostname，证据不足时明确显示来源待确认。Agent Guard 0.1.0-preview.6 的构建、206 项完整测试、Smoke 和 Web 验收均通过。
 
 ## 需求完成情况
 
 - Codex 的活动 provider、所有已声明 provider 端点和 OpenAI 官方端点均可参与归因。
+- ChatGPT 桌面端内置 Codex 使用的 `chatgpt.com` 官方路由可与 `api.openai.com` 分开确认。
 - Claude 的自定义网关与 Anthropic 官方端点可同时参与归因。
 - 无匹配或共享地址歧义不会继续套用客户端默认 provider。
 - 已观测 Claude/Codex 后台进程进入精确白名单，且保持不可控制 helper 角色。
@@ -16,6 +17,7 @@
 
 - 将 Claude/Codex 客户端家族与模型服务来源拆成独立维度。
 - Claude 同时发现自定义网关与 Anthropic 官方端点；Codex 发现活动 provider、所有已声明 provider 端点及 OpenAI 官方端点。
+- 将 ChatGPT 桌面端内置 Codex 的 `chatgpt.com` 加入 OpenAI 官方候选端点，修复实机连接被错误降级为待确认的回归。
 - 实时连接只有在远端地址唯一匹配候选端点 DNS 证据时才标注 provider/hostname；无匹配和共享地址歧义统一归为未知来源，且不具备自动控制所需的确认置信度。
 - 将已观测到的 Claude/Codex 后台进程精确加入白名单并分类为不可控制的 helper，未放宽为模糊名称匹配。
 - 面板为未知来源显示“来源待确认 / 远端待确认”，多路由时改用纵向滚动布局，避免历史区域被裁剪。
@@ -31,12 +33,12 @@
 
 - `npm run build`（仓库根目录）通过。
 - `npm run build`（Agent Guard Kit）通过。
-- `npm test`（Agent Guard Kit）通过：29 个测试文件、204 项测试。
+- `npm test`（Agent Guard Kit）通过：29 个测试文件、206 项测试。
 - `npm run smoke`（Agent Guard Kit）通过。
 - `npm run dev:web` 浏览器验收通过：实时未知来源文案正确，总览/事件记录/设置键盘导航正常，1280px 与 960px 视口无横向溢出。
 - 浏览器验收发现并修复多路由压缩历史区域的问题，面板回归测试覆盖滚动布局。
 - 浏览器实测历史图表刻度为固定 10px、13px 渲染高度，轴标题为固定 10px、23px 渲染高度，不再随图表高度缩放；面板 41 项聚焦测试通过。
-- 浏览器使用真实 24 小时稀疏历史数据验收通过：两条单点序列均显示可见标记；完整 Kit 测试增至 205 项并全部通过。
+- 浏览器使用真实 24 小时稀疏历史数据验收通过：两条单点序列均显示可见标记；完整 Kit 测试增至 206 项并全部通过。
 
 ## 影响与风险
 

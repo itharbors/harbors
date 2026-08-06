@@ -8,6 +8,7 @@ type UnknownRecord = Record<string, unknown>;
 
 const ANTHROPIC_ENDPOINT = 'https://api.anthropic.com';
 const OPENAI_ENDPOINT = 'https://api.openai.com/v1';
+const CHATGPT_ENDPOINT = 'https://chatgpt.com';
 
 function record(value: unknown): UnknownRecord | undefined {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -191,6 +192,13 @@ export function readCodexConfigurations(value: unknown): AgentConfiguration[] {
       agent: 'codex',
       provider: 'openai',
       endpoint: OPENAI_ENDPOINT,
+      ...(model ? { model } : {}),
+      hookExecutables: [],
+    },
+    {
+      agent: 'codex',
+      provider: 'openai',
+      endpoint: CHATGPT_ENDPOINT,
       ...(model ? { model } : {}),
       hookExecutables: [],
     },
