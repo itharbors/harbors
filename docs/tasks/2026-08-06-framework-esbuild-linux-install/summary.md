@@ -15,6 +15,7 @@
 - 在根 `package.json` 中增加 `@esbuild/linux-x64@0.28.0` 可选依赖。
 - 在根 `package-lock.json` 中锁定公开 npm registry 的 Linux x64 包实体。
 - 扩展 `scripts/lib/ci-workflow.test.mjs`，防止 macOS 更新锁文件时再次丢失 Ubuntu 必需的平台包。
+- 将 Kit 检查测试中的 Agent Guard 产物预期同步到 PR #59 已发布的 `0.1.0-preview.6`。
 
 ## 关键决定
 
@@ -24,6 +25,7 @@
 
 - `npm ci`：通过。
 - `node --test scripts/lib/ci-workflow.test.mjs`：17/17 通过。
+- `node --test scripts/lib/kit-check.test.mjs scripts/lib/kit-matrix.test.mjs`：28/28 通过。
 - `npm run test -w packages/server -- tests/application/official-startup-plugin-process.test.ts`：3/3 通过。
 - `npm run test:framework`：完整 Framework 构建及测试通过；Server 59 个测试文件、686 个测试通过，Client 33 个测试文件、263 个测试通过，Kit Core 76 个测试通过，Kit CLI 58 个测试通过，Framework Node 测试 392 个通过。
 - `git diff --check`：通过。
