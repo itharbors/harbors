@@ -1,3 +1,5 @@
+import { EventEmitter } from 'node:events';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRecoveryWatchdog, createWatchdogClient } from '../main/src/watchdog.js';
@@ -39,7 +41,7 @@ describe('recovery watchdog', () => {
     const write = vi.fn((_message: unknown, callback?: (error: Error | null) => void) => callback?.(null));
     const end = vi.fn();
     const child = {
-      pid: 99, stdin: { destroyed: false, writable: true, write, end },
+      pid: 99, stdin: Object.assign(new EventEmitter(), { destroyed: false, writable: true, write, end }),
       unref: vi.fn(), once: vi.fn(),
     };
     const spawn = vi.fn(() => child as never);
@@ -57,5 +59,133 @@ describe('recovery watchdog', () => {
       'S\n',
     ]);
     expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports a watchdog pipe failure without emitting an unhandled stream error', async () => {
+    const pipe = new EventEmitter() as EventEmitter & {
+      destroyed: boolean;
+      writable: boolean;
+      write(message: string, callback: (error: Error | null) => void): boolean;
+      end(): void;
+    };
+    pipe.destroyed = false;
+    pipe.writable = true;
+    pipe.end = vi.fn();
+    pipe.write = vi.fn((_message, callback) => {
+      const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+      queueMicrotask(() => {
+        pipe.emit('error', error);
+        callback(error);
+      });
+      return false;
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 99,
+      stdin: pipe,
+      unref: vi.fn(),
+    });
+    const watchdog = createWatchdogClient({
+      spawn: vi.fn(() => child as never),
+      scheduleInterval: vi.fn(() => ({ unref: vi.fn() })) as never,
+      clearScheduledInterval: vi.fn(),
+    });
+
+    await expect(watchdog.update([])).rejects.toMatchObject({ code: 'EPIPE' });
+  });
+
+  it('rejects required updates when the watchdog pipe is already closed', async () => {
+    const pipe = Object.assign(new EventEmitter(), {
+      destroyed: true,
+      writable: false,
+      write: vi.fn(),
+      end: vi.fn(),
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 99,
+      stdin: pipe,
+      unref: vi.fn(),
+    });
+    const watchdog = createWatchdogClient({
+      spawn: vi.fn(() => child as never),
+      scheduleInterval: vi.fn(() => ({ unref: vi.fn() })) as never,
+      clearScheduledInterval: vi.fn(),
+    });
+
+    await expect(watchdog.update([])).rejects.toMatchObject({ code: 'WATCHDOG_UNAVAILABLE' });
+    expect(pipe.write).not.toHaveBeenCalled();
+  });
+
+  it('stops heartbeats when the watchdog pipe fails', async () => {
+    const pipe = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writable: true,
+      end: vi.fn(),
+      write: vi.fn((_message: string, callback: (error: Error | null) => void) => {
+        const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+        queueMicrotask(() => {
+          pipe.emit('error', error);
+          callback(error);
+        });
+        return false;
+      }),
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 99,
+      stdin: pipe,
+      unref: vi.fn(),
+    });
+    let heartbeat = () => undefined;
+    const timer = { unref: vi.fn() };
+    const clearScheduledInterval = vi.fn();
+    createWatchdogClient({
+      spawn: vi.fn(() => child as never),
+      scheduleInterval: vi.fn((callback) => {
+        heartbeat = callback as () => undefined;
+        return timer as never;
+      }) as never,
+      clearScheduledInterval: clearScheduledInterval as never,
+    });
+
+    heartbeat();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(clearScheduledInterval).toHaveBeenCalledWith(timer);
+  });
+
+  it('keeps a heartbeat pipe failure terminal for later required updates', async () => {
+    const pipe = Object.assign(new EventEmitter(), {
+      destroyed: false,
+      writable: true,
+      end: vi.fn(),
+      write: vi.fn((_message: string, callback: (error: Error | null) => void) => {
+        const error = Object.assign(new Error('write EPIPE'), { code: 'EPIPE' });
+        queueMicrotask(() => {
+          pipe.destroyed = true;
+          pipe.writable = false;
+          pipe.emit('error', error);
+          callback(error);
+        });
+        return false;
+      }),
+    });
+    const child = Object.assign(new EventEmitter(), {
+      pid: 99,
+      stdin: pipe,
+      unref: vi.fn(),
+    });
+    let heartbeat = () => undefined;
+    const watchdog = createWatchdogClient({
+      spawn: vi.fn(() => child as never),
+      scheduleInterval: vi.fn((callback) => {
+        heartbeat = callback as () => undefined;
+        return { unref: vi.fn() } as never;
+      }) as never,
+      clearScheduledInterval: vi.fn() as never,
+    });
+
+    heartbeat();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await expect(watchdog.update([])).rejects.toMatchObject({ code: 'EPIPE' });
   });
 });
