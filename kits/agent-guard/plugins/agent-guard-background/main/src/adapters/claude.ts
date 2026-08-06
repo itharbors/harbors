@@ -11,6 +11,7 @@ import type {
 import {
   discoverSessionMetadata,
   readClaudeConfiguration,
+  readClaudeConfigurations,
   readJsonFile,
 } from './config-reader.js';
 
@@ -20,17 +21,19 @@ export interface ClaudeAdapterOptions {
 }
 
 export function createClaudeAdapter(options: ClaudeAdapterOptions = {}): AgentAdapter {
+  const readConfigured = async () => {
+    if (!options.settingsPath) return {};
+    try {
+      return await readJsonFile(options.settingsPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return {};
+      throw error;
+    }
+  };
   return {
     id: 'claude',
-    async discoverConfiguration() {
-      if (!options.settingsPath) return readClaudeConfiguration({});
-      try {
-        return readClaudeConfiguration(await readJsonFile(options.settingsPath));
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return readClaudeConfiguration({});
-        throw error;
-      }
-    },
+    async discoverConfiguration() { return readClaudeConfiguration(await readConfigured()); },
+    async discoverConfigurations() { return readClaudeConfigurations(await readConfigured()); },
     classifyProcess: classifyClaudeProcess,
     discoverSessionActivity: (sinceMs) => (
       discoverSessionMetadata('claude', options.sessionsDirectory, sinceMs)
@@ -42,7 +45,9 @@ export function createClaudeAdapter(options: ClaudeAdapterOptions = {}): AgentAd
 }
 
 function classifyClaudeProcess(process: ProcessSnapshot): AgentProcessRole | null {
-  if (path.basename(process.executable).toLowerCase() !== 'claude') return null;
+  const basename = path.basename(process.executable).toLowerCase();
+  if (basename === 'claude bg-pty-host' || basename === 'claude bg-spare') return 'helper';
+  if (basename !== 'claude') return null;
   if (process.commandMarkers.includes('hook')) return 'hook';
   if (process.commandMarkers.includes('task') || process.parentRoleHint === 'host') return 'task';
   return 'host';

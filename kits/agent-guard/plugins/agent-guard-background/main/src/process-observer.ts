@@ -11,6 +11,10 @@ import type {
 
 const execFile = promisify(execFileCallback);
 const MAX_PS_OUTPUT_BYTES = 4 * 1024 * 1024;
+const CLAUDE_EXECUTABLES = new Set(['claude', 'claude bg-pty-host', 'claude bg-spare']);
+const CODEX_EXECUTABLES = new Set([
+  'codex', 'codex (renderer)', 'codex (service)', 'codex-code-mode-host',
+]);
 
 type ExecFileLike = (
   file: string,
@@ -87,13 +91,15 @@ function allowlistedMarkers(executable: string): string[] {
   const markers: string[] = [];
   if (/Codex Helper \(Renderer\)/iu.test(executable)) markers.push('renderer');
   if (/Codex Helper/iu.test(executable) && !markers.includes('renderer')) markers.push('helper');
+  if (path.basename(executable).toLowerCase() === 'codex (renderer)') markers.push('renderer');
+  if (path.basename(executable).toLowerCase() === 'codex (service)') markers.push('helper');
   return markers;
 }
 
 function isAgentExecutable(executable: string): boolean {
   const basename = path.basename(executable).toLowerCase();
-  return basename === 'claude'
-    || basename === 'codex'
+  return CLAUDE_EXECUTABLES.has(basename)
+    || CODEX_EXECUTABLES.has(basename)
     || basename === 'chatgpt'
     || executable.toLowerCase().includes('/codex.app/');
 }
