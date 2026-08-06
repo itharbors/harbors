@@ -230,6 +230,7 @@ describe('Agent Guard panel', () => {
     expect(document.querySelector('[data-action="history-agent-claude"]')).toBeNull();
     expect(document.querySelector('[data-action="history-agent-codex"]')).toBeNull();
     expect(document.querySelectorAll('.history-chart path')).toHaveLength(2);
+    expect(document.querySelectorAll('.history-point-marker')).toHaveLength(3);
     expect(document.querySelector('.route-metrics [data-metric="bytes-out"]')?.getAttribute('data-values')).toBeNull();
     expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')?.getAttribute('data-values')).toBe('3072,null');
     expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')?.getAttribute('data-values')).toBe('1536,0');
@@ -240,6 +241,23 @@ describe('Agent Guard panel', () => {
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(26_000);
     expect(request.mock.calls.filter((call) => call[1] === 'getTrafficHistory')).toHaveLength(2);
+    panel.unmount();
+  });
+
+  it('explains an empty history window instead of rendering an unexplained blank plot', async () => {
+    const empty = { ...historyResult(), series: [] };
+    const request = vi.fn(async (_plugin: string, method: string) => {
+      if (method === 'getSnapshot') return snapshot();
+      if (method === 'getTrafficHistory') return empty;
+      if (method === 'getHistoryStatus') return historyStatus();
+      throw new Error(`Unexpected ${method}`);
+    });
+    const panel = (await import('../panel.guard/src/index')).default;
+    await panel.mount({ message: { request } });
+
+    await vi.waitFor(() => expect(document.querySelector('.history-chart-empty')).not.toBeNull());
+    expect(document.querySelector('.history-chart-empty')?.textContent).toBe('当前时间范围暂无已采集数据');
+    expect(document.querySelectorAll('.history-point-marker')).toHaveLength(0);
     panel.unmount();
   });
 
@@ -716,9 +734,9 @@ describe('Agent Guard panel', () => {
 
     await vi.waitFor(() => expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')).not.toBeNull());
     expect(document.querySelector('.history-chart path[data-metric="bytes-in"]')?.getAttribute('d'))
-      .toBe('M10.0,92.5 L360.0,20.0');
+      .toBe('M10.0,87.5 L360.0,20.0');
     expect(document.querySelector('.history-chart path[data-metric="bytes-out"]')?.getAttribute('d'))
-      .toBe('M360.0,128.8');
+      .toBe('M360.0,121.3');
     panel.unmount();
   });
 

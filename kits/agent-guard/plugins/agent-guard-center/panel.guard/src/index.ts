@@ -519,6 +519,7 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   for (const [seriesIndex, item] of series.entries()) {
     let pathData = '';
     let previousPoint: HistoryPoint | null = null;
+    const plottedPoints: Array<{ x: number; y: number }> = [];
     for (const point of item.points) {
       if (point.value === null) {
         previousPoint = point;
@@ -526,9 +527,10 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
       }
       const position = (point.start - result.from) / (result.to - result.from);
       const x = Math.min(1, Math.max(0, position)) * 700 + 10;
-      const y = 165 - point.value / maximum * 145;
+      const y = 155 - point.value / maximum * 135;
       const contiguous = previousPoint?.value !== null && previousPoint?.end === point.start;
       pathData += `${contiguous ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `;
+      plottedPoints.push({ x, y });
       previousPoint = point;
     }
     const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -537,6 +539,18 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     pathElement.dataset.series = String(seriesIndex);
     pathElement.dataset.values = item.points.map((point) => String(point.value)).join(',');
     svg.append(pathElement);
+    if (plottedPoints.length <= 72) {
+      for (const point of plottedPoints) {
+        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        marker.setAttribute('class', 'history-point-marker');
+        marker.setAttribute('x1', String(point.x - 2));
+        marker.setAttribute('x2', String(point.x + 2));
+        marker.setAttribute('y1', String(point.y));
+        marker.setAttribute('y2', String(point.y));
+        marker.dataset.series = String(seriesIndex);
+        svg.append(marker);
+      }
+    }
   }
   const axis = document.createElement('div');
   axis.className = 'history-axis';
@@ -544,12 +558,17 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     axis.append(textElement('span', 'history-axis-tick', tick.label));
   }
   const axisTitle = textElement('span', 'history-axis-title', '时间（本地时区）');
+  const emptyState = values.length === 0
+    ? textElement('span', 'history-chart-empty', '当前时间范围暂无已采集数据')
+    : null;
   const legend = document.createElement('ul');
   legend.className = 'history-legend';
   for (const item of series) legend.append(textElement('li', '', historyMetricLabel(item.metric)));
   const caption = textElement('figcaption', 'sr-only', result.summary
     .map((item) => `${historyMetricLabel(item.metric)} ${formatHistoryValue(item.value, item.unit)}`).join('，'));
-  figure.append(svg, axis, axisTitle, legend, caption);
+  figure.append(svg);
+  if (emptyState) figure.append(emptyState);
+  figure.append(axis, axisTitle, legend, caption);
   return figure;
 }
 
