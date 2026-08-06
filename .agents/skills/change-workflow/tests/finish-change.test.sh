@@ -27,8 +27,12 @@ test_finish_rejects_state_and_label() {
   prepare_change feature
   git -C "$WORKTREE" commit --amend -m '[Bug] 使用错误标签' >/dev/null
   if output=$("$FINISH" '完成变更' "$BODY" 2>&1); then fail 'wrong label succeeded'; fi
-  assert_contains "$output" 'commits must start with [Feature]'
+  assert_contains "$output" 'at least one [Feature] commit'
   test ! -s "$NPM_LOG" || fail 'npm ran after label failure'
+  prepare_change feature
+  git -C "$WORKTREE" commit --amend -m '[Init] 非初始化提交' >/dev/null
+  if output=$("$FINISH" '完成变更' "$BODY" 2>&1); then fail 'init label succeeded'; fi
+  assert_contains "$output" 'unsupported commit title'
   prepare_change docs
   printf 'dirty\n' > "$WORKTREE/dirty.txt"
   if output=$("$FINISH" '更新文档' "$BODY" 2>&1); then fail 'dirty succeeded'; fi
@@ -48,6 +52,29 @@ test_bug_finish_accepts_supporting_docs_and_tests() {
 
   assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
   assert_contains "$(cat "$GH_LOG")" 'pr create --base main --head bug/finish-case --title [Bug] 完成缺陷修复'
+}
+
+test_feature_finish_accepts_truthful_supporting_labels() {
+  prepare_change feature
+  for entry in \
+    'Bug:修复开发中发现的缺陷:fix.txt' \
+    'Test:补充功能回归测试:regression.test' \
+    'Docs:完善功能使用说明:documentation.md' \
+    'Refactor:整理功能实现结构:refactor.txt' \
+    'Optimize:减少功能资源占用:optimize.txt' \
+    'Chore:维护功能构建配置:chore.txt'; do
+    IFS=: read -r label summary path <<EOF
+$entry
+EOF
+    printf '%s\n' "$summary" > "$WORKTREE/$path"
+    git -C "$WORKTREE" add "$path"
+    git -C "$WORKTREE" commit -m "[$label] $summary" >/dev/null
+  done
+
+  output=$("$FINISH" '完成功能开发' "$BODY")
+
+  assert_contains "$output" 'PR_URL=https://github.com/example/repo/pull/1'
+  assert_contains "$(cat "$GH_LOG")" 'pr create --base main --head feature/finish-case --title [Feature] 完成功能开发'
 }
 
 test_refactor_finish_accepts_supporting_bug_test_and_docs() {
@@ -87,6 +114,7 @@ run_finish_tests() {
   run_case 'finish rejects context and summary' test_finish_rejects_context_and_summary
   run_case 'finish rejects state and label' test_finish_rejects_state_and_label
   run_case 'bug finish accepts supporting docs and tests' test_bug_finish_accepts_supporting_docs_and_tests
+  run_case 'feature finish accepts truthful supporting labels' test_feature_finish_accepts_truthful_supporting_labels
   run_case 'refactor finish accepts supporting bug test and docs' test_refactor_finish_accepts_supporting_bug_test_and_docs
   run_case 'finish stops on checks and verification' test_finish_stops_on_checks_and_verification
 }

@@ -21,7 +21,7 @@ Choose a slug matching `^[a-z0-9]+(-[a-z0-9]+)*$`, run the start script from the
 
 ## Develop and commit
 
-Confirm the current branch before editing. Run focused tests, inspect `git status --short`, `git diff`, and `git diff --cached`, stage only relevant files, and never use `git add .`. Every commit uses the label matching its branch, with a concise Chinese summary and no trailing period. A `bug/*` branch may use `[Docs]` or `[Test]` for supporting documentation-only or test-only commits; its implementation commits remain `[Bug]`.
+Confirm the current branch before editing. Run focused tests, inspect `git status --short`, `git diff`, and `git diff --cached`, stage only relevant files, and never use `git add .`. Label every commit by the change it actually contains, with a concise Chinese summary and no trailing period. The branch type determines the PR title and must appear on at least one commit; supporting fixes, tests, docs, refactors, optimizations, and chores use their truthful labels. `[Init]` remains initialization-only.
 
 ## Finish and create a PR
 
