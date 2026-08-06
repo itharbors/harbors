@@ -13,13 +13,13 @@
 ## 主要改动
 
 - 在根 `package.json` 中增加 `@esbuild/linux-x64@0.28.0` 可选依赖。
-- 在根 `package-lock.json` 中锁定公开 npm registry 的 Linux x64 包实体。
-- 扩展 `scripts/lib/ci-workflow.test.mjs`，防止 macOS 更新锁文件时再次丢失 Ubuntu 必需的平台包。
+- 在根 `package-lock.json` 中锁定根 esbuild、Vite 内嵌 esbuild 和 Client workspace esbuild 各自版本匹配的 Linux x64 包实体。
+- 扩展 `scripts/lib/ci-workflow.test.mjs`，校验三个 esbuild 安装位置，防止 macOS 更新锁文件时再次丢失 Ubuntu 必需的平台包或让嵌套 esbuild 回退到错误版本的根二进制。
 - 将 Kit 检查和 monorepo 测试中的 Agent Guard 版本预期同步到 PR #59 已发布的 `0.1.0-preview.6`。
 
 ## 关键决定
 
-沿用仓库对 Rollup Linux 原生包的既有处理方式，显式固定 CI 目标平台依赖；不启用 esbuild 安装脚本，也不修改隔离安装器的安全边界。
+沿用仓库对 Rollup Linux 原生包的既有处理方式，显式固定 CI 目标平台依赖；同时为不同版本的嵌套 esbuild 保留各自平台包，避免 Node 模块解析回退到版本不匹配的根二进制。不修改隔离安装器的安全边界。
 
 ## 验证结果
 
@@ -37,7 +37,7 @@
 
 ## 偏差与遗留
 
-首次完整 Framework 测试期间，另一并发测试延迟下载 Electron 二进制，触发共享 `node_modules` 快照多一个文件；Electron 下载完成后，官方 Kit 聚焦测试和第二次完整 Framework 测试均通过。本机 Docker daemon 未运行，Linux x64 的最终行为由 PR 的 GitHub Ubuntu CI 节点验证。
+首次完整 Framework 测试期间，另一并发测试延迟下载 Electron 二进制，触发共享 `node_modules` 快照多一个文件；Electron 下载完成后，官方 Kit 聚焦测试和第二次完整 Framework 测试均通过。PR 首轮 Ubuntu CI 进一步发现 Vite 内嵌 esbuild 会回退到版本不匹配的根二进制，因此锁文件和回归测试已扩展到全部三个 esbuild 安装位置。本机 Docker daemon 未运行，Linux x64 的最终行为由 PR 的 GitHub Ubuntu CI 节点验证。
 
 ## 后续关注
 

@@ -15,7 +15,7 @@ Type: `bug`
 ## 目标
 
 - 找出隔离 Kit 安装/框架快照中丢失当前平台 esbuild 包的确定原因。
-- 修复安装或快照逻辑，使 Linux CI 能稳定构建所有官方 Kit。
+- 补齐根、Vite 嵌套和 Client workspace 三个 esbuild 版本的 Linux x64 包，使 Linux CI 能稳定安装依赖并构建所有官方 Kit。
 - 增加覆盖该依赖投影或平台可选依赖行为的回归测试。
 
 ## 范围
@@ -47,3 +47,5 @@ Type: `bug`
 ## 需求变更
 
 完整 ready gate 发现 `scripts/lib/kit-check.test.mjs` 和 `scripts/lib/kit-monorepo.test.mjs` 仍期待 Agent Guard `0.1.0-preview.4`，而 PR #59 合并后的正式版本为 `0.1.0-preview.6`。为恢复 `main` 的完整检查，在本 Task 中增加仅更新这些测试预期的收口修正，不修改 Agent Guard 产品代码。
+
+PR 首轮 Ubuntu CI 显示根 `@esbuild/linux-x64@0.28.0` 会被 Vite 内嵌的 esbuild 0.21.5 错误解析；需求扩展为同时锁定 Vite 与 Client workspace 各自版本匹配的 Linux x64 包，避免嵌套 esbuild 回退到根二进制。

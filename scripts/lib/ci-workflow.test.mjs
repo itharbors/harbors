@@ -92,6 +92,7 @@ test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
   assert.deepEqual(lockedPackage?.os, ['linux']);
   assert.deepEqual(lockedPackage?.cpu, ['x64']);
   assert.equal(lockedPackage?.optional, true);
+
 });
 
 test('CI locks the Linux x64 esbuild binary required by script-isolated Framework builds', async () => {
@@ -116,6 +117,23 @@ test('CI locks the Linux x64 esbuild binary required by script-isolated Framewor
   assert.deepEqual(lockedPackage?.os, ['linux']);
   assert.deepEqual(lockedPackage?.cpu, ['x64']);
   assert.equal(lockedPackage?.optional, true);
+
+  for (const [packagePath, nestedVersion] of [
+    ['node_modules/vite/node_modules/@esbuild/linux-x64', '0.21.5'],
+    ['packages/client/node_modules/@esbuild/linux-x64', '0.25.12'],
+  ]) {
+    const nestedPackage = packageLock.packages?.[packagePath];
+    assert.equal(nestedPackage?.version, nestedVersion, packagePath);
+    assert.equal(
+      nestedPackage?.resolved,
+      `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${nestedVersion}.tgz`,
+      packagePath,
+    );
+    assert.match(nestedPackage?.integrity ?? '', /^sha512-/u, packagePath);
+    assert.deepEqual(nestedPackage?.os, ['linux'], packagePath);
+    assert.deepEqual(nestedPackage?.cpu, ['x64'], packagePath);
+    assert.equal(nestedPackage?.optional, true, packagePath);
+  }
 });
 
 test('CI runs for every pull request change without repository-inaccurate path filters', async () => {
