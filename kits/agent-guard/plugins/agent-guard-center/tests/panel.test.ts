@@ -123,7 +123,7 @@ describe('Agent Guard panel', () => {
 
     const routes = [...document.querySelectorAll('.traffic-route')];
     expect(routes).toHaveLength(2);
-    expect(document.querySelector('.dashboard-content-scrollable')).not.toBeNull();
+    expect(document.querySelector('.dashboard-content-scrollable')).toBeNull();
     expect(routes[1].textContent).toContain('来源待确认');
     expect(routes[1].textContent).toContain('远端待确认');
     expect(routes[1].textContent).not.toContain('openai');

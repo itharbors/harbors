@@ -48,7 +48,9 @@ describe('Agent Guard panel accessibility', () => {
   it('reserves the active panel row after an inline operation error', () => {
     const css = fs.readFileSync(path.join(panelRoot, 'index.css'), 'utf8');
     expect(css).toMatch(/\.dashboard-content\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/su);
-    expect(css).toMatch(/#overview-panel\s*\{[^}]*min-height:\s*0[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)/su);
+    expect(css).toMatch(/#overview-panel\s*\{[^}]*min-height:\s*0[^}]*grid-template-rows:\s*fit-content\(50%\) minmax\(0,\s*1fr\)/su);
+    expect(css).toMatch(/\.traffic-deck\s*\{[^}]*display:\s*grid[^}]*grid-template-rows:\s*auto minmax\(0,\s*1fr\)[^}]*overflow:\s*hidden/su);
+    expect(css).toMatch(/\.route-list\s*\{[^}]*min-height:\s*0[^}]*overflow-y:\s*auto/su);
     expect(css).toMatch(/\.history-deck\s*\{[^}]*grid-template-rows:\s*auto auto auto minmax\(110px,\s*1fr\)/su);
   });
 

@@ -314,9 +314,6 @@ function renderSnapshotWithState(snapshot: AgentGuardSnapshot, renderState: Rend
   workspace.append(createHeader(snapshot), createDashboardTabs(snapshot));
   const dashboardContent = document.createElement('div');
   dashboardContent.className = 'dashboard-content';
-  if (activeTab === 'overview' && snapshot.endpoints.length > 1) {
-    dashboardContent.classList.add('dashboard-content-scrollable');
-  }
   if (mutationError) dashboardContent.append(createOperationError(mutationError));
   const content = activeTab === 'overview'
     ? createOverviewPanel(snapshot)
