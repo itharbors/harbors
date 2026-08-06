@@ -73,6 +73,7 @@ export interface ControlTargetCandidate {
 export interface AgentAdapter {
   id: AgentId;
   discoverConfiguration(): Promise<AgentConfiguration>;
+  discoverConfigurations(): Promise<AgentConfiguration[]>;
   classifyProcess(process: ProcessSnapshot): AgentProcessRole | null;
   discoverSessionActivity(sinceMs: number): Promise<SessionActivity[]>;
   selectSafeControlTarget(

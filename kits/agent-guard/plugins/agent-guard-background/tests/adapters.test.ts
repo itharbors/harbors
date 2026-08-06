@@ -22,6 +22,8 @@ describe('Claude and Codex adapters', () => {
       .toBe('host');
     expect(claude.classifyProcess(process({ executable: '/opt/bin/claude', commandMarkers: ['hook'] })))
       .toBe('hook');
+    expect(claude.classifyProcess(process({ executable: 'claude bg-pty-host' }))).toBe('helper');
+    expect(codex.classifyProcess(process({ executable: 'Codex (Service)' }))).toBe('helper');
     expect(codex.classifyProcess(process({
       executable: '/Applications/Codex.app/Contents/Frameworks/Codex Helper (Renderer).app/Contents/MacOS/Codex Helper (Renderer)',
       commandMarkers: ['renderer'],

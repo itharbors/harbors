@@ -505,7 +505,7 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   const figure = document.createElement('figure');
   figure.className = 'history-chart';
   const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 720 220');
+  svg.setAttribute('viewBox', '0 0 720 165');
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.setAttribute('role', 'img');
   const series = mergeHistorySeriesByMetric(result);
@@ -516,6 +516,7 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
   for (const [seriesIndex, item] of series.entries()) {
     let pathData = '';
     let previousPoint: HistoryPoint | null = null;
+    const plottedPoints: Array<{ x: number; y: number }> = [];
     for (const point of item.points) {
       if (point.value === null) {
         previousPoint = point;
@@ -523,9 +524,10 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
       }
       const position = (point.start - result.from) / (result.to - result.from);
       const x = Math.min(1, Math.max(0, position)) * 700 + 10;
-      const y = 165 - point.value / maximum * 145;
+      const y = 155 - point.value / maximum * 135;
       const contiguous = previousPoint?.value !== null && previousPoint?.end === point.start;
       pathData += `${contiguous ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)} `;
+      plottedPoints.push({ x, y });
       previousPoint = point;
     }
     const pathElement = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -534,30 +536,36 @@ function createHistoryChart(result: TrafficHistoryResult): HTMLElement {
     pathElement.dataset.series = String(seriesIndex);
     pathElement.dataset.values = item.points.map((point) => String(point.value)).join(',');
     svg.append(pathElement);
+    if (plottedPoints.length <= 72) {
+      for (const point of plottedPoints) {
+        const marker = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+        marker.setAttribute('class', 'history-point-marker');
+        marker.setAttribute('x1', String(point.x - 2));
+        marker.setAttribute('x2', String(point.x + 2));
+        marker.setAttribute('y1', String(point.y));
+        marker.setAttribute('y2', String(point.y));
+        marker.dataset.series = String(seriesIndex);
+        svg.append(marker);
+      }
+    }
   }
+  const axis = document.createElement('div');
+  axis.className = 'history-axis';
   for (const tick of createHistoryAxisTicks(result.from, result.to, historyRange)) {
-    const position = result.to === result.from ? 0 : (tick.at - result.from) / (result.to - result.from);
-    const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-    label.setAttribute('class', 'history-axis-tick');
-    label.setAttribute('x', String(Math.min(1, Math.max(0, position)) * 700 + 10));
-    label.setAttribute('y', '187');
-    label.setAttribute('text-anchor', position === 0 ? 'start' : position === 1 ? 'end' : 'middle');
-    label.textContent = tick.label;
-    svg.append(label);
+    axis.append(textElement('span', 'history-axis-tick', tick.label));
   }
-  const axisTitle = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-  axisTitle.setAttribute('class', 'history-axis-title');
-  axisTitle.setAttribute('x', '360');
-  axisTitle.setAttribute('y', '210');
-  axisTitle.setAttribute('text-anchor', 'middle');
-  axisTitle.textContent = '时间（本地时区）';
-  svg.append(axisTitle);
+  const axisTitle = textElement('span', 'history-axis-title', '时间（本地时区）');
+  const emptyState = values.length === 0
+    ? textElement('span', 'history-chart-empty', '当前时间范围暂无已采集数据')
+    : null;
   const legend = document.createElement('ul');
   legend.className = 'history-legend';
   for (const item of series) legend.append(textElement('li', '', historyMetricLabel(item.metric)));
   const caption = textElement('figcaption', 'sr-only', result.summary
     .map((item) => `${historyMetricLabel(item.metric)} ${formatHistoryValue(item.value, item.unit)}`).join('，'));
-  figure.append(svg, legend, caption);
+  figure.append(svg);
+  if (emptyState) figure.append(emptyState);
+  figure.append(axis, axisTitle, legend, caption);
   return figure;
 }
 
@@ -846,10 +854,11 @@ function createRoute(endpoint: AgentEndpointSnapshot): HTMLElement {
   article.dataset.agent = endpoint.agent;
   const start = document.createElement('div');
   start.className = 'route-origin';
+  const provider = endpoint.provider === 'unknown' ? '来源待确认' : endpoint.provider;
   start.append(
     textElement('span', 'agent-mark', endpoint.agent === 'claude' ? 'CL' : 'CX'),
     textElement('strong', '', endpoint.agent === 'claude' ? 'Claude' : 'Codex'),
-    textElement('span', 'provider', endpoint.provider),
+    textElement('span', 'provider', provider),
   );
   const lane = document.createElement('div');
   lane.className = 'flow-lane';
@@ -858,7 +867,7 @@ function createRoute(endpoint: AgentEndpointSnapshot): HTMLElement {
   lane.append(document.createElement('i'), document.createElement('i'), document.createElement('i'));
   const destination = document.createElement('div');
   destination.className = 'route-destination';
-  destination.append(textElement('code', '', endpoint.hostname));
+  destination.append(textElement('code', '', endpoint.hostname === 'unknown' ? '远端待确认' : endpoint.hostname));
   const confidence = textElement('span', `confidence confidence-${endpoint.confidence}`, confidenceLabel(endpoint.confidence));
   confidence.dataset.confidence = endpoint.confidence;
   destination.append(confidence);
