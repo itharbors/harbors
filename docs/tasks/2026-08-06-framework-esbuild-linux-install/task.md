@@ -23,7 +23,7 @@ Type: `bug`
 - `scripts/lib/kit-install.mjs` 及其聚焦测试。
 - 官方 Kit 隔离启动测试中与依赖安装、框架快照注入直接相关的测试代码。
 - 如确有必要，修正与上述逻辑直接相关的锁文件或 CI 配置。
-- 修正 PR #59 合并后仍引用 Agent Guard `0.1.0-preview.4` 的 Kit 检查测试预期。
+- 修正 PR #59 合并后仍引用 Agent Guard `0.1.0-preview.4` 的 Kit 检查与 monorepo 测试预期。
 
 ## 非目标
 
@@ -46,4 +46,4 @@ Type: `bug`
 
 ## 需求变更
 
-完整 ready gate 发现 `scripts/lib/kit-check.test.mjs` 仍期待 Agent Guard `0.1.0-preview.4`，而 PR #59 合并后的正式版本为 `0.1.0-preview.6`。为恢复 `main` 的完整检查，在本 Task 中增加仅更新该测试预期的收口修正，不修改 Agent Guard 产品代码。
+完整 ready gate 发现 `scripts/lib/kit-check.test.mjs` 和 `scripts/lib/kit-monorepo.test.mjs` 仍期待 Agent Guard `0.1.0-preview.4`，而 PR #59 合并后的正式版本为 `0.1.0-preview.6`。为恢复 `main` 的完整检查，在本 Task 中增加仅更新这些测试预期的收口修正，不修改 Agent Guard 产品代码。
