@@ -42,6 +42,8 @@ export interface KitPackageManifest {
 export interface ReleaseAsset {
   name: string;
   url: string;
+  /** Per-target provenance. Required when a Release contains multiple assets. */
+  attestationUrl?: string;
   sha256: string;
   size: number;
   manifest: KitPackageManifest;
@@ -58,6 +60,7 @@ export interface ReleaseManifest {
     commit: string;
     workflow: string;
     signerWorkflow: string;
+    /** Legacy single-asset provenance URL; mirrors the first asset for multi-target Releases. */
     attestationUrl: string;
   };
   assets: ReleaseAsset[];

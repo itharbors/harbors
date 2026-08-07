@@ -25,8 +25,15 @@ export interface ContributeData {
 
 export interface PluginInfo {
   name: string;
+  version: string;
   path: string;
   kind: 'builtin' | 'external';
+  source: {
+    scope: 'framework' | 'kit' | 'unmanaged';
+    kitId?: string;
+    kitVersion?: string;
+    artifactSha256?: string;
+  };
   assets?: PluginAssetsManifest;
   contribute?: ContributeData;
 }

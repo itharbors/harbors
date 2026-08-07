@@ -26,6 +26,7 @@ import {
 } from './desktop-package-build.mjs';
 import { buildDesktop } from './desktop-build.mjs';
 import { runDesktopFrameworkProcess } from './desktop-framework.mjs';
+import { createDesktopRuntimeManifest } from './desktop-runtime-manifest.mjs';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const PACKAGED_PLUGIN_PROCESS_FILES = Object.freeze([
@@ -279,6 +280,9 @@ export function migrateDatabase(database) {
     await write(source, entry, content);
   }
   await mkdir(resources, { recursive: true });
+  const runtimeRoot = path.join(resources, 'runtime');
+  await write(runtimeRoot, 'client/index.html', '<main>packaged runtime</main>');
+  await createDesktopRuntimeManifest(runtimeRoot);
   await createPackageWithOptions(source, path.join(resources, 'app.asar'), {
     unpack: '**/*.node',
   });
@@ -380,6 +384,23 @@ test('accepts a fixture package with only the externalized unpacked Darwin ARM64
     nativeFile: 'node_modules/@itharbors/native-credential-vault/build/Release/harbors_native_credential_vault.node',
   });
 });
+
+for (const [name, mutate] of [
+  ['a modified runtime file', (runtime) => writeFile(path.join(runtime, 'client/index.html'), 'tampered')],
+  ['an unexpected runtime file', (runtime) => writeFile(path.join(runtime, 'unexpected.js'), 'extra')],
+  ['a missing runtime file', (runtime) => rm(path.join(runtime, 'client/index.html'))],
+]) {
+  test(`rejects ${name} after electron-builder output`, async (t) => {
+    const cwd = await createPackagedKeyringFixture(t);
+    const runtime = path.join(packagedArtifactPaths(cwd).resources, 'runtime');
+    await mutate(runtime);
+
+    await assert.rejects(
+      runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+      /runtime verification failed.*(?:closure|checksum)/iu,
+    );
+  });
+}
 
 test('rejects a complete ITHARBORS.app symlink outside the trusted output directory', async (t) => {
   const cwd = await createPackagedKeyringFixture(t);
@@ -675,6 +696,43 @@ spawn(process.execPath, ['worker.mjs']);
   });
 
   await runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run });
+});
+
+test('accepts only the allowlisted application plugin process source in the Framework bundle', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, {
+    appTextEntries: {
+      'dist/framework.mjs': `
+export async function loadKeyring() {
+  return import('@itharbors/native-credential-vault');
+}
+// packages/server/src/application/plugin-process/spawn.ts
+import { spawn } from 'node:child_process';
+export const launchPlugin = () => spawn(process.execPath, ['runner.js']);
+`,
+    },
+  });
+
+  await runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run });
+});
+
+test('rejects child-process access from any other Framework source section', async (t) => {
+  const cwd = await createPackagedKeyringFixture(t, {
+    appTextEntries: {
+      'dist/framework.mjs': `
+export async function loadKeyring() {
+  return import('@itharbors/native-credential-vault');
+}
+// packages/server/src/credentials/vault.ts
+import { spawn } from 'node:child_process';
+export const launchFallback = () => spawn('helper');
+`,
+    },
+  });
+
+  await assert.rejects(
+    runDesktopPackage({ cwd, mode: 'dir', run: commandRunner().run }),
+    /forbidden credential fallback content/u,
+  );
 });
 
 test('rejects an app-owned JavaScript marker before a NUL byte', async (t) => {

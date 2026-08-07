@@ -216,6 +216,27 @@ jobs:
             echo "::error::Timed out waiting for packaged Framework health"
             exit 1
           fi
+          SMOKE_SESSION_ID="packaged-default-kit-smoke"
+          curl --fail --silent --max-time 20 \
+            -H 'content-type: application/json' \
+            --data "{\"sessionId\":\"$SMOKE_SESSION_ID\"}" \
+            "http://127.0.0.1:$port/api/session" \
+            > "$RUNNER_TEMP/smoke-session.json"
+          curl --fail --silent --max-time 20 \
+            "http://127.0.0.1:$port/api/bootstrap/$SMOKE_SESSION_ID" \
+            > "$RUNNER_TEMP/smoke-bootstrap.json"
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+
+          const bootstrap = JSON.parse(readFileSync(`${process.env.RUNNER_TEMP}/smoke-bootstrap.json`, 'utf8'));
+          if (
+            bootstrap.sessionId !== 'packaged-default-kit-smoke'
+            || typeof bootstrap.kitName !== 'string'
+            || bootstrap.kitName.length === 0
+            || !Array.isArray(bootstrap.panels)
+            || bootstrap.panels.length === 0
+          ) throw new Error('Packaged default Kit and plugin runtime did not bootstrap');
+          NODE
           kill "$APP_PID"
           wait "$APP_PID" 2>/dev/null || true
           APP_PID=""

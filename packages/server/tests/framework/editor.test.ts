@@ -528,6 +528,7 @@ describe('createEditor', () => {
     fs.mkdirSync(path.join(dir, 'panel', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name,
+      version: '1.0.0',
       main: './main/dist/index.js',
       'ce-editor': { contribute },
     }));

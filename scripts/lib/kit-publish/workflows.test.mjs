@@ -120,7 +120,7 @@ test('publisher context validates product Tag identity with immutable v4 control
   assert.doesNotMatch(context, /\bjq\b|fromJSON\(/u);
 });
 
-test('selected product Tag builds one checked artifact without executing its historical publisher', async () => {
+test('selected product Tag transfers every checked target without executing its historical publisher', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   const prepare = jobBlock(workflow, 'prepare');
   assert.match(prepare, /needs:\s*context/u);
@@ -136,9 +136,9 @@ test('selected product Tag builds one checked artifact without executing its his
   assert.match(prepare, /npm run kits:boundary -- "\$KIT_NAME"/u);
   assert.match(
     prepare,
-    /readdirSync\(directory, \{ withFileTypes: true \}\)[\s\S]*name\.endsWith\('\.hkit'\)[\s\S]*artifacts\.length !== 1/u,
+    /readdirSync\(directory, \{ withFileTypes: true \}\)[\s\S]*name\.endsWith\('\.hkit'\)[\s\S]*artifacts\.length === 0/u,
   );
-  assert.match(prepare, /appendFileSync\(process\.env\.GITHUB_OUTPUT, `kit-artifact=\$\{artifact\}\\n`/u);
+  assert.match(prepare, /kit-artifacts-directory=\$\{directory\}/u);
   assert.doesNotMatch(prepare, /kit-publish\.mjs|--signer-workflow|release\.json/u);
   assert.match(prepare, /packages\/kit-cli\/dist\/cli\.js inspect/u);
   assert.match(prepare, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-checked-artifact[\s\S]*retention-days:\s*1/u);
@@ -153,7 +153,7 @@ test('immutable v4 packages the checked artifact and leaves provenance to the Gi
   assert.match(packageJob, /actions\/download-artifact@v8[\s\S]*name:\s*kit-checked-artifact/u);
   assert.match(
     packageJob,
-    /node scripts\/kit-publish\.mjs prepare[\s\S]*--kit-artifact "\$KIT_ARTIFACT"[\s\S]*--kit-id "\$KIT_ID"[\s\S]*--kit-version "\$EXPECTED_VERSION"[\s\S]*--kit-channel "\$EXPECTED_CHANNEL"/u,
+    /node scripts\/kit-publish\.mjs prepare[\s\S]*--kit-artifacts-directory "\$KIT_ARTIFACTS_DIRECTORY"[\s\S]*--kit-id "\$KIT_ID"[\s\S]*--kit-version "\$EXPECTED_VERSION"[\s\S]*--kit-channel "\$EXPECTED_CHANNEL"/u,
   );
   assert.match(packageJob, /--commit "\$RELEASE_COMMIT"/u);
   assert.match(packageJob, /--workflow "\$GITHUB_REPOSITORY\/\.github\/workflows\/publish-kit\.yml@\$RELEASE_REF"/u);
@@ -164,7 +164,7 @@ test('immutable v4 packages the checked artifact and leaves provenance to the Gi
   assert.match(packageJob, /actions\/upload-artifact@v7[\s\S]*name:\s*kit-publication[\s\S]*retention-days:\s*1/u);
 });
 
-test('Preview and Stable Releases are non-clobbering, attested, and upload only the publication quartet', async () => {
+test('Preview and Stable Releases are non-clobbering and attest every target in the publication bundle', async () => {
   const workflow = await read('.github/workflows/publish-kit-reusable.yml');
   for (const [name, expected] of [
     ['publish-preview', /--prerelease/u],
@@ -176,7 +176,7 @@ test('Preview and Stable Releases are non-clobbering, attested, and upload only 
     assert.match(publish, /gh api "repos\/\$GITHUB_REPOSITORY\/releases\/tags\/\$TAG"/u);
     assert.match(publish, /HTTP 404/u);
     assert.ok(publish.indexOf('Require missing') < publish.indexOf('actions/attest@v4'));
-    assert.match(publish, /actions\/attest@v4[\s\S]*subject-path:[\s\S]*artifact-name[\s\S]*release\.json/u);
+    assert.match(publish, /actions\/attest@v4[\s\S]*subject-path:[\s\S]*\*\.hkit[\s\S]*release\.json/u);
     assert.match(publish, /GH_REPO:\s*\$\{\{ github\.repository \}\}/u);
     assert.match(publish, /Release already exists:[\s\S]*exit 1[\s\S]*gh release create "\$TAG"/u);
     assert.match(publish, /--verify-tag/u);
@@ -184,13 +184,7 @@ test('Preview and Stable Releases are non-clobbering, attested, and upload only 
     assert.match(publish, /--notes ".*\$RELEASE_COMMIT\."/u);
     assert.match(publish, expected);
     assert.doesNotMatch(publish, /--clobber|gh release upload/u);
-    const releaseFiles = publish.match(/"\$RUNNER_TEMP\/kit-release\/[^"]+"/gu) ?? [];
-    assert.deepEqual(releaseFiles, [
-      '"$RUNNER_TEMP/kit-release/$ARTIFACT_NAME"',
-      '"$RUNNER_TEMP/kit-release/release.json"',
-      '"$RUNNER_TEMP/kit-release/sbom.spdx.json"',
-      '"$RUNNER_TEMP/kit-release/registry-entry.json"',
-    ]);
+    assert.match(publish, /gh release create "\$TAG"[\s\S]*"\$RUNNER_TEMP"\/kit-release\/\*/u);
   }
   assert.match(jobBlock(workflow, 'publish-preview'), /--prerelease/u);
   for (const forbidden of [

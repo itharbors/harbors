@@ -401,6 +401,47 @@ test('returns deep-frozen entries and a read-only Map that remains usable by the
   }).kits.length, 1);
 });
 
+test('matches and verifies every target asset in one trusted Release', async () => {
+  const value = values();
+  const secondDigest = 'b'.repeat(64);
+  const secondName = 'kit-mysql-1.2.3-linux-x64.hkit';
+  value.release.assets[0].attestationUrl = value.release.source.attestationUrl;
+  value.release.assets.push({
+    ...value.release.assets[0],
+    name: secondName,
+    url: assetUrl(value.tag, secondName),
+    sha256: secondDigest,
+    attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${secondDigest}`,
+    manifest: {
+      ...value.release.assets[0].manifest,
+      target: { platform: 'linux', arch: 'x64' },
+    },
+  });
+  const record = releaseRecord(value, {
+    assets: [
+      ...releaseRecord(value).assets,
+      {
+        name: secondName,
+        digest: `sha256:${secondDigest}`,
+        browser_download_url: browserAssetUrl(value.tag, secondName),
+      },
+    ],
+  });
+  const verificationCalls = [];
+
+  const result = await discover({
+    pages: new Map([['1', [record]]]),
+    metadata: metadataFor(value),
+    verifierOptions: { calls: verificationCalls },
+  });
+
+  assert.equal(result.releasesByUrl.get(value.entry.releaseManifestUrl).assets.length, 2);
+  assert.deepEqual(verificationCalls.map((call) => call.subjectName), [
+    value.artifactName,
+    secondName,
+  ]);
+});
+
 test('times out stalled response bodies from fetch start and cancels their streams', async () => {
   let cancelled = false;
   const stalled = new Response(new ReadableStream({
@@ -718,7 +759,7 @@ test('rejects a trusted Release missing metadata or containing a non-unique Kit 
     await assert.rejects(discover({
       pages: new Map([['1', [record]]]),
       metadata: metadataFor(value),
-    }), /incomplete|exactly one/i);
+    }), /incomplete|asset set/i);
   }
 });
 

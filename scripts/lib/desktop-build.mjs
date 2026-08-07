@@ -1,5 +1,6 @@
 import { build as esbuild } from 'esbuild';
 import { validateKit } from '@itharbors/kit-cli';
+import { parsePluginPackageManifest } from '@itharbors/kit-core';
 import {
   copyFile,
   lstat,
@@ -10,6 +11,7 @@ import {
   rm,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { createDesktopRuntimeManifest } from './desktop-runtime-manifest.mjs';
 
 const FRAMEWORK_PLUGINS = Object.freeze(['config', 'menu', 'message', 'panel']);
 const APPLICATION_PLUGIN_PROCESS_RUNTIME_FILES = Object.freeze([
@@ -678,10 +680,8 @@ async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames
     const pluginRoot = `${pluginsRoot}/${plugin}`;
     const packageSource = `${pluginRoot}/package.json`;
     const packageFile = await checkedFile(repositoryRoot, packageSource, policy);
-    const manifest = await readJsonManifest(packageFile, `Desktop builtin plugin ${plugin}`);
-    if (typeof manifest?.name !== 'string' || manifest.name.length === 0) {
-      throw new Error(`Desktop builtin plugin ${plugin} must declare a package name`);
-    }
+    const rawManifest = await readJsonManifest(packageFile, `Desktop builtin plugin ${plugin}`);
+    const manifest = parsePluginPackageManifest(rawManifest);
     if (byName.has(manifest.name)) {
       throw new Error(`Desktop builtin Kit ${slug} has duplicate plugin package ${manifest.name}`);
     }
@@ -695,11 +695,7 @@ async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames
     const plugin = byName.get(name);
     if (!plugin) throw new Error(`Desktop builtin Kit ${slug} is missing declared plugin ${name}`);
     const { pluginRoot, packageSource, manifest } = plugin;
-    const panels = manifest?.['ce-editor']?.contribute?.panel;
-    if (panels !== undefined && (!panels || typeof panels !== 'object' || Array.isArray(panels))) {
-      throw new Error(`Desktop plugin panel contributions are malformed for ${name}`);
-    }
-    const panelEntries = Object.entries(panels ?? {})
+    const panelEntries = Object.entries(manifest.contribute.panel ?? {})
       .map(([panelName, panel]) => {
         if (!panel || typeof panel !== 'object' || Array.isArray(panel)) {
           throw new Error(`Desktop plugin panel ${panelName} is malformed for ${name}`);
@@ -712,7 +708,10 @@ async function builtinKitPluginEntries(repositoryRoot, slug, declaredPluginNames
     for (const entry of panelEntries) {
       entries.push(await builtDirectoryEntry(repositoryRoot, pluginRoot, entry, 'panel', policy));
     }
-    entries.push(...await pluginPublicEntries(repositoryRoot, pluginRoot, manifest, policy));
+    entries.push(...await pluginPublicEntries(repositoryRoot, pluginRoot, {
+      name: manifest.name,
+      'ce-editor': { assets: { public: manifest.assets.public } },
+    }, policy));
   }
   return entries;
 }
@@ -886,7 +885,12 @@ export async function stageBuiltinKit({
   return copyPlan(output, files);
 }
 
-export async function buildDesktop({ repositoryRoot, outputRoot, descriptors }) {
+export async function buildDesktop({
+  repositoryRoot,
+  outputRoot,
+  descriptors,
+  createRuntimeManifest = true,
+}) {
   const { root, output } = await canonicalRoots(repositoryRoot, outputRoot);
   const policy = createDescriptorPolicy(descriptors);
   const distRoot = path.join(root, 'dist');
@@ -935,5 +939,12 @@ export async function buildDesktop({ repositoryRoot, outputRoot, descriptors }) 
   });
   await copyPlan(desktopDist, desktopFiles);
   const inventory = await copyPlan(output, runtimeFiles);
-  return Object.freeze({ outputRoot: output, inventory });
+  if (createRuntimeManifest) await createDesktopRuntimeManifest(output);
+  return Object.freeze({
+    outputRoot: output,
+    inventory: Object.freeze([
+      ...inventory,
+      ...(createRuntimeManifest ? ['runtime-manifest.json'] : []),
+    ]),
+  });
 }
