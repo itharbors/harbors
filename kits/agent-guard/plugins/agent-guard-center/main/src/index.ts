@@ -20,6 +20,7 @@ editor.plugin.define({
     runHistoryBackfill: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'runHistoryBackfill', input),
     clearHistory: (input: unknown) => requireRuntime().application.request(BACKGROUND, 'clearHistory', input),
     openGuardPanel: () => requireRuntime().window.openPanel(PANEL),
+    openInBrowser: () => ({ type: 'open-current-url' }),
   },
 });
 
