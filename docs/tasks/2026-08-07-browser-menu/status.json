@@ -1,16 +1,1 @@
-{
-  "schemaVersion": 1,
-  "taskId": "2026-08-07-browser-menu",
-  "type": "feature",
-  "updatedAt": "2026-08-07T02:51:23.467Z",
-  "stages": {
-    "requirements": "completed",
-    "design": "completed",
-    "implementation": "completed",
-    "verification": "completed",
-    "consolidation": "completed"
-  },
-  "pullRequest": {
-    "number": 61
-  }
-}
+{"schemaVersion":1,"taskId":"2026-08-07-browser-menu","type":"feature","updatedAt":"2026-08-07T02:51:23.467Z","stages":{"requirements":"completed","design":"completed","implementation":"completed","verification":"completed","consolidation":"completed"},"pullRequest":{"number":61}}
