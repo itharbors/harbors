@@ -169,6 +169,11 @@ describe('parseKitPackageManifest', () => {
       target: { platform: 'darwin', arch: 'arm64' },
       permissions: ['native-code'],
     })).toThrow(/nodeAbi/i);
+    expect(() => parseKitPackageManifest({
+      ...kitManifest,
+      target: { platform: 'any', arch: 'any' },
+      permissions: ['native-code'],
+    })).toThrow(/concrete platform/i);
   });
 
   it('requires universal targets to use any-any without a node ABI', () => {
@@ -193,6 +198,51 @@ describe('parseReleaseManifest', () => {
       ...releaseManifest,
       assets: [releaseManifest.assets[0], { ...releaseManifest.assets[0] }],
     })).toThrow(/duplicate asset/i);
+  });
+
+  it('accepts unique target assets and rejects duplicate targets or permission drift', () => {
+    const nativeManifest = {
+      ...kitManifest,
+      target: { platform: 'darwin', arch: 'arm64', nodeAbi: '127' },
+    } as const;
+    const nativeAsset = {
+      ...releaseManifest.assets[0],
+      name: 'demo-1.2.3-darwin-arm64-abi127.hkit',
+      url: 'https://example.test/demo-1.2.3-darwin-arm64-abi127.hkit',
+      sha256: 'b'.repeat(64),
+      attestationUrl: `https://api.github.com/repos/example/demo/attestations/sha256:${'b'.repeat(64)}`,
+      manifest: nativeManifest,
+    };
+    expect(parseReleaseManifest({
+      ...releaseManifest,
+      assets: [{
+        ...releaseManifest.assets[0],
+        attestationUrl: releaseManifest.source.attestationUrl,
+      }, nativeAsset],
+    }).assets).toHaveLength(2);
+    expect(() => parseReleaseManifest({
+      ...releaseManifest,
+      assets: [{
+        ...releaseManifest.assets[0],
+        attestationUrl: releaseManifest.source.attestationUrl,
+      }, {
+        ...releaseManifest.assets[0],
+        name: 'renamed.hkit',
+        url: 'https://example.test/renamed.hkit',
+        sha256: 'c'.repeat(64),
+        attestationUrl: `https://api.github.com/repos/example/demo/attestations/sha256:${'c'.repeat(64)}`,
+      }],
+    })).toThrow(/duplicate asset target/i);
+    expect(() => parseReleaseManifest({
+      ...releaseManifest,
+      assets: [{
+        ...releaseManifest.assets[0],
+        attestationUrl: releaseManifest.source.attestationUrl,
+      }, {
+        ...nativeAsset,
+        manifest: { ...nativeManifest, permissions: ['filesystem'] },
+      }],
+    })).toThrow(/permissions/i);
   });
 
   it('rejects invalid whole-archive SHA-256 values', () => {

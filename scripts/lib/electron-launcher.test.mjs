@@ -140,13 +140,14 @@ test('creates an immutable Framework source snapshot from the resolved Catalog',
     name: '@itharbors/kit-default', directory: '/repo/kits/default', source: 'builtin',
   }, {
     name: '@example/kit-demo', directory: '/store/demo/1.0.0', source: 'installed',
+    artifactSha256: 'a'.repeat(64),
   }];
 
   const snapshot = createKitSourceSnapshot(catalog);
 
   assert.deepEqual(snapshot, [
     { directory: '/repo/kits/default', source: 'builtin' },
-    { directory: '/store/demo/1.0.0', source: 'installed' },
+    { directory: '/store/demo/1.0.0', source: 'installed', artifactSha256: 'a'.repeat(64) },
   ]);
   assert.equal(Object.isFrozen(snapshot), true);
   assert.equal(Object.isFrozen(snapshot[0]), true);

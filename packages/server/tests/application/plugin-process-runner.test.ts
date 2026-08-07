@@ -479,6 +479,7 @@ describe('application plugin process runner', () => {
       pluginSnapshot: {
         registered: [{
           name: 'new-plugin', path: '/new', kind: 'external',
+          version: '1.0.0', source: { scope: 'unmanaged' },
           entry: './main/dist/index.js', capabilities: [],
         }],
         loaded: ['new-plugin'],
@@ -495,8 +496,10 @@ describe('application plugin process runner', () => {
   it('keeps registered paths and manifest info independent from loaded plugin names', () => {
     const registeredOnly: ApplicationPluginSnapshot['registered'][number] = {
       name: 'registered-only',
+      version: '1.0.0',
       path: '/plugins/registered-only',
       kind: 'external' as const,
+      source: { scope: 'unmanaged' },
       entry: './main/dist/index.js',
       capabilities: ['credentials'],
       contribute: { message: { request: { status: ['status'] } } },
@@ -509,6 +512,7 @@ describe('application plugin process runner', () => {
           registered: [
             {
               name: 'running-plugin', path: '/plugins/running-plugin', kind: 'external',
+              version: '1.0.0', source: { scope: 'unmanaged' },
               entry: './main/dist/index.js', capabilities: [],
             },
             registeredOnly,
@@ -534,10 +538,12 @@ describe('application plugin process runner', () => {
     const registered: ApplicationPluginSnapshot['registered'] = [
       {
         name: 'observer', path: '/plugins/observer', kind: 'external',
+        version: '1.0.0', source: { scope: 'unmanaged' },
         entry: './main/dist/index.js', capabilities: [],
       },
       {
         name: 'sibling', path: '/plugins/sibling', kind: 'external',
+        version: '1.0.0', source: { scope: 'unmanaged' },
         entry: './main/dist/index.js', capabilities: [],
       },
     ];
@@ -1365,6 +1371,7 @@ function initializePayload(entryPath: string) {
       pluginSnapshot: {
         registered: [{
           name: 'fixture-plugin', path: '/fixture', kind: 'external' as const,
+          version: '1.0.0', source: { scope: 'unmanaged' as const },
           entry: './main/dist/index.js', capabilities: [],
         }],
         loaded: ['fixture-plugin'],

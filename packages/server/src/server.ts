@@ -78,15 +78,21 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
   return parsed.map((item: unknown) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)) throw new Error(message);
     const record = item as Record<string, unknown>;
-    if (Object.keys(record).sort().join(',') !== 'directory,source'
+    if (Object.keys(record).some((key) => !['artifactSha256', 'directory', 'source'].includes(key))
       || typeof record.directory !== 'string' || !path.isAbsolute(record.directory)
-      || typeof record.source !== 'string' || !KIT_SOURCE_KINDS.has(record.source as KitSourceKind)) {
+      || typeof record.source !== 'string' || !KIT_SOURCE_KINDS.has(record.source as KitSourceKind)
+      || (record.artifactSha256 !== undefined
+        && (typeof record.artifactSha256 !== 'string' || !/^[a-f0-9]{64}$/u.test(record.artifactSha256)))) {
       throw new Error(message);
     }
     const directory = path.resolve(record.directory);
     if (seen.has(directory)) throw new Error(message);
     seen.add(directory);
-    return { directory, source: record.source as KitSourceKind };
+    return {
+      directory,
+      source: record.source as KitSourceKind,
+      ...(typeof record.artifactSha256 === 'string' ? { artifactSha256: record.artifactSha256 } : {}),
+    };
   });
 }
 
@@ -313,6 +319,7 @@ function freezeAssemblySnapshot(assembly: AssemblyConfig): AssemblyConfig {
   const kitSources = Object.freeze(assembly.kitSources.map((source) => Object.freeze({
     directory: source.directory,
     source: source.source,
+    ...(source.artifactSha256 ? { artifactSha256: source.artifactSha256 } : {}),
   })));
   return Object.freeze({
     ...assembly,

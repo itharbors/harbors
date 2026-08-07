@@ -93,7 +93,28 @@ export function createKitPublicationMetadata(input) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     throw new TypeError('publication input is required');
   }
-  const manifest = parseKitPackageManifest(input.manifest);
+  const rawArtifacts = input.artifacts ?? [{
+    manifest: input.manifest,
+    sha256: input.sha256,
+    size: input.size,
+  }];
+  if (!Array.isArray(rawArtifacts) || rawArtifacts.length === 0) {
+    throw new TypeError('artifacts must be a non-empty array');
+  }
+  const artifacts = rawArtifacts.map((artifact, index) => {
+    if (!artifact || typeof artifact !== 'object' || Array.isArray(artifact)) {
+      throw new TypeError(`artifacts[${index}] must be an object`);
+    }
+    const manifest = parseKitPackageManifest(artifact.manifest);
+    if (typeof artifact.sha256 !== 'string' || !SHA256_PATTERN.test(artifact.sha256)) {
+      throw new TypeError(`artifacts[${index}].sha256 must be a lowercase 64-character digest`);
+    }
+    if (!Number.isSafeInteger(artifact.size) || artifact.size <= 0) {
+      throw new TypeError(`artifacts[${index}].size must be a positive integer`);
+    }
+    return { manifest, sha256: artifact.sha256, size: artifact.size };
+  });
+  const manifest = artifacts[0].manifest;
   const { publisher, slug } = publicationIdentity(manifest);
   const repository = validateRepository(input.repository, publisher);
   validateSource({
@@ -112,15 +133,20 @@ export function createKitPublicationMetadata(input) {
     tag: input.tag,
     version: manifest.version,
   });
-  if (typeof input.sha256 !== 'string' || !SHA256_PATTERN.test(input.sha256)) {
-    throw new TypeError('sha256 must be a lowercase 64-character digest');
-  }
-  if (!Number.isSafeInteger(input.size) || input.size <= 0) {
-    throw new TypeError('size must be a positive integer');
-  }
   const label = boundedText(input.label, 'label', 80);
   const summary = boundedText(input.summary, 'summary', 280);
-  const artifactName = deriveArtifactName(manifest);
+  const releaseAssets = artifacts.map((artifact) => {
+    const artifactName = deriveArtifactName(artifact.manifest);
+    return {
+      name: artifactName,
+      url: encodedReleaseUrl(repository, input.tag, artifactName),
+      attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${artifact.sha256}`,
+      sha256: artifact.sha256,
+      size: artifact.size,
+      manifest: artifact.manifest,
+    };
+  });
+  const artifactNames = releaseAssets.map(({ name }) => name);
   const releaseManifestUrl = encodedReleaseUrl(repository, input.tag, 'release.json');
   const release = parseReleaseManifest({
     schemaVersion: 1,
@@ -133,15 +159,9 @@ export function createKitPublicationMetadata(input) {
       commit: input.commit,
       workflow: input.workflow,
       signerWorkflow: input.signerWorkflow,
-      attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${input.sha256}`,
+      attestationUrl: releaseAssets[0].attestationUrl,
     },
-    assets: [{
-      name: artifactName,
-      url: encodedReleaseUrl(repository, input.tag, artifactName),
-      sha256: input.sha256,
-      size: input.size,
-      manifest,
-    }],
+    assets: releaseAssets,
   });
   const registryEntry = {
     schemaVersion: 1,
@@ -176,5 +196,10 @@ export function createKitPublicationMetadata(input) {
     revocations: [],
   });
 
-  return deepFreeze({ artifactName, release, registryEntry });
+  return deepFreeze({
+    artifactName: artifactNames[0],
+    artifactNames,
+    release,
+    registryEntry,
+  });
 }

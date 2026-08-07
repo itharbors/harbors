@@ -10,6 +10,7 @@ import path from 'node:path';
 import {
   normalizeArchivePath,
   parseKitPackageManifest,
+  parsePluginPackageManifest,
   type KitPackageManifest,
 } from '@itharbors/kit-core';
 
@@ -19,11 +20,21 @@ export interface PayloadFile {
   size: number;
 }
 
+export interface SoftwareComponent {
+  archiveDirectory: string;
+  dependencies: string[];
+  kind: 'kit' | 'plugin' | 'npm';
+  license: string | null;
+  name: string;
+  version: string;
+}
+
 export interface ValidatedKitProject {
   directory: string;
   manifest: KitPackageManifest;
   runtimeManifest: Record<string, unknown>;
   payload: PayloadFile[];
+  components: SoftwareComponent[];
   packageNames: string[];
 }
 
@@ -40,6 +51,11 @@ interface InstalledPackage {
   name: string;
   version: string;
   workspace: boolean;
+}
+
+interface ProductionDependencyResult {
+  components: SoftwareComponent[];
+  packageNames: string[];
 }
 
 interface DependencyRequest {
@@ -149,12 +165,12 @@ async function discoverPlugins(kitDirectory: string): Promise<PluginProject[]> {
       if ((error as Error).message.endsWith('file does not exist')) continue;
       throw error;
     }
-    const manifest = await readJson(packageFile, `Plugin ${entry.name} package.json`);
+    const rawManifest = await readJson(packageFile, `Plugin ${entry.name} package.json`);
     plugins.push({
       directory,
       archiveDirectory: `plugins/${entry.name}`,
-      manifest,
-      name: nonEmptyString(manifest.name, `Plugin ${entry.name} name`),
+      manifest: rawManifest,
+      name: nonEmptyString(rawManifest.name, `Plugin ${entry.name} name`),
     });
   }
   return plugins;
@@ -245,6 +261,16 @@ function dependencyRequests(
           && peerOptions.optional === true),
     };
   });
+}
+
+function declaredLicense(manifest: Record<string, any>): string | null {
+  return typeof manifest.license === 'string' && manifest.license.trim().length > 0
+    ? manifest.license.trim()
+    : null;
+}
+
+function declaredDependencyNames(manifest: Record<string, any>): string[] {
+  return dependencyRequests(manifest, '.').map(({ name }) => name);
 }
 
 async function findInstalledPackage(
@@ -351,13 +377,14 @@ async function collectProductionDependencies(
   runtimeManifest: Record<string, any>,
   plugins: PluginProject[],
   append: (absolutePath: string, archivePath: string) => Promise<void>,
-): Promise<string[]> {
+): Promise<ProductionDependencyResult> {
   const pending = [
     ...dependencyRequests(runtimeManifest, kitDirectory),
     ...plugins.flatMap((plugin) => dependencyRequests(plugin.manifest, plugin.directory)),
   ];
   const versions = new Map<string, string>();
   const packageNames = new Set<string>();
+  const installedPackages = new Map<string, InstalledPackage>();
 
   while (pending.length > 0) {
     const request = pending.shift()!;
@@ -381,6 +408,7 @@ async function collectProductionDependencies(
     }
     versions.set(installed.name, installed.version);
     packageNames.add(installed.name);
+    installedPackages.set(installed.name, installed);
 
     const archiveDirectory = `node_modules/${installed.name}`;
     if (installed.workspace) {
@@ -398,7 +426,19 @@ async function collectProductionDependencies(
     }
     pending.push(...dependencyRequests(installed.manifest, installed.directory));
   }
-  return [...packageNames];
+  return {
+    packageNames: [...packageNames],
+    components: [...installedPackages.values()].map((installed) => ({
+      archiveDirectory: `node_modules/${installed.name}`,
+      dependencies: declaredDependencyNames(installed.manifest)
+        .filter((name) => packageNames.has(name))
+        .sort((left, right) => left.localeCompare(right)),
+      kind: 'npm',
+      license: declaredLicense(installed.manifest),
+      name: installed.name,
+      version: installed.version,
+    })),
+  };
 }
 
 function isDistJavaScriptEntry(value: string): boolean {
@@ -497,14 +537,12 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
   }
 
   for (const plugin of plugins) {
+    const parsedPlugin = parsePluginPackageManifest(plugin.manifest);
     await append(
       path.join(plugin.directory, 'package.json'),
       `${plugin.archiveDirectory}/package.json`,
     );
-    const mainEntry = nonEmptyString(plugin.manifest.main, `Plugin ${plugin.name} main`);
-    if (!isDistJavaScriptEntry(mainEntry)) {
-      throw new Error(`Plugin ${plugin.name} main must point to a dist JavaScript entry`);
-    }
+    const mainEntry = parsedPlugin.main;
     const mainFile = path.resolve(plugin.directory, mainEntry);
     assertInside(plugin.directory, mainFile, `Plugin ${plugin.name} main`);
     await assertRegularFile(mainFile, `Plugin ${plugin.name} main`);
@@ -515,19 +553,8 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
       append,
     );
 
-    const ceEditor = objectValue(plugin.manifest['ce-editor'], `Plugin ${plugin.name} ce-editor`);
-    const contribute = ceEditor.contribute === undefined
-      ? {}
-      : objectValue(ceEditor.contribute, `Plugin ${plugin.name} contribute`);
-    const panels = contribute.panel === undefined
-      ? {}
-      : objectValue(contribute.panel, `Plugin ${plugin.name} panels`);
-    for (const [panelName, rawDefinition] of Object.entries(panels)) {
-      const definition = objectValue(rawDefinition, `Plugin ${plugin.name} panel ${panelName}`);
-      const panelEntry = nonEmptyString(
-        definition.entry,
-        `Plugin ${plugin.name} panel ${panelName} entry`,
-      );
+    for (const [panelName, definition] of Object.entries(parsedPlugin.contribute.panel ?? {})) {
+      const panelEntry = definition.entry;
       if (!isDistPanelEntry(panelEntry)) {
         throw new Error(`Plugin ${plugin.name} panel ${panelName} entry must point to a dist index.html file`);
       }
@@ -541,17 +568,7 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
       );
     }
 
-    const assets = ceEditor.assets === undefined
-      ? {}
-      : objectValue(ceEditor.assets, `Plugin ${plugin.name} assets`);
-    if (assets.public !== undefined && !Array.isArray(assets.public)) {
-      throw new Error(`Plugin ${plugin.name} public assets must be an array`);
-    }
-    for (const [index, rawPublicRoot] of (assets.public ?? []).entries()) {
-      const publicRoot = nonEmptyString(
-        rawPublicRoot,
-        `Plugin ${plugin.name} public asset root ${index}`,
-      );
+    for (const publicRoot of parsedPlugin.assets.public) {
       const publicDirectory = path.resolve(plugin.directory, publicRoot);
       assertInside(plugin.directory, publicDirectory, `Plugin ${plugin.name} public asset root`);
       const publicInfo = await lstat(publicDirectory);
@@ -572,7 +589,7 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
     kitDirectory,
     runtimeManifest,
   );
-  const dependencyPackageNames = await collectProductionDependencies(
+  const productionDependencies = await collectProductionDependencies(
     kitDirectory,
     dependencyInstallationRoot,
     runtimeManifest,
@@ -583,12 +600,44 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
   const payload = [...payloadByPath.values()].sort(
     (left, right) => left.archivePath.localeCompare(right.archivePath),
   );
+  const hasNativePayload = payload.some(({ archivePath }) => archivePath.endsWith('.node'));
+  if (hasNativePayload && !manifest.permissions.includes('native-code')) {
+    throw new Error('Kit payloads containing native .node modules require the native-code permission');
+  }
+  const componentNames = new Set([
+    manifest.id,
+    ...names,
+    ...productionDependencies.packageNames,
+  ]);
+  const components: SoftwareComponent[] = [
+    {
+      archiveDirectory: '',
+      dependencies: declaredDependencyNames(runtimeManifest)
+        .filter((name) => componentNames.has(name))
+        .sort((left, right) => left.localeCompare(right)),
+      kind: 'kit' as const,
+      license: declaredLicense(runtimeManifest),
+      name: manifest.id,
+      version: manifest.version,
+    },
+    ...plugins.map((plugin) => ({
+      archiveDirectory: plugin.archiveDirectory,
+      dependencies: declaredDependencyNames(plugin.manifest)
+        .filter((name) => componentNames.has(name))
+        .sort((left, right) => left.localeCompare(right)),
+      kind: 'plugin' as const,
+      license: declaredLicense(plugin.manifest),
+      name: plugin.name,
+      version: nonEmptyString(plugin.manifest.version, `Plugin ${plugin.name} version`),
+    })),
+    ...productionDependencies.components,
+  ].sort((left, right) => left.name.localeCompare(right.name));
   return {
     directory: kitDirectory,
     manifest,
     runtimeManifest,
     payload,
-    packageNames: [manifest.id, ...names, ...dependencyPackageNames]
-      .sort((left, right) => left.localeCompare(right)),
+    components,
+    packageNames: components.map(({ name }) => name),
   };
 }

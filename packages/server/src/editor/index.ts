@@ -305,9 +305,14 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const legacyDataDirectories = pkg.harbors === undefined
       ? []
       : [...parseRepositoryKitPackage(pkg.harbors).legacyDataDirectories];
+    const assemblySource = assembly.kitSources.find((source) => (
+      path.resolve(source.directory) === path.resolve(kitPath)
+    ));
 
     const descriptor: KitDescriptor = {
       name: pkg.name,
+      version: pkg.version,
+      artifactSha256: assemblySource?.artifactSha256,
       label: pkg.label,
       icon: pkg.icon,
       menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
@@ -406,7 +411,15 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const preparedPlugins: ActiveExternalPlugin[] = [];
     for (const pluginName of descriptor.plugins) {
       const pluginPath = await resolvePlugin(pluginName, pluginResolveContext(path.join(kitPath, 'plugins')));
-      await plugin.register(pluginPath, { kind: 'external' });
+      await plugin.register(pluginPath, {
+        kind: 'external',
+        source: {
+          scope: 'kit',
+          kitId: descriptor.name,
+          kitVersion: descriptor.version,
+          ...(descriptor.artifactSha256 ? { artifactSha256: descriptor.artifactSha256 } : {}),
+        },
+      });
       const info = plugin.getInfo(pluginPath);
       if (!info) throw new Error(`Plugin "${pluginName}" registration did not produce plugin info`);
       const credentials = options.credentialVault

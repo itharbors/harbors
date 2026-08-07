@@ -74,6 +74,7 @@ describe('ApplicationPluginSupervisor', () => {
         pluginSnapshot: {
           registered: [{
             name: 'fixture', path: '/fixture', kind: 'external',
+            version: '1.0.0', source: { scope: 'unmanaged' },
             entry: './main/dist/index.js', capabilities: [],
           }],
           loaded: ['fixture'],
@@ -1606,6 +1607,7 @@ function initializePayload(): InitializeApplicationPluginPayload {
       pluginSnapshot: {
         registered: [{
           name: 'fixture', path: '/plugins/fixture', kind: 'external',
+          version: '1.0.0', source: { scope: 'unmanaged' },
           entry: './main/dist/index.js', capabilities: [],
         }],
         loaded: ['fixture'],

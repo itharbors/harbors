@@ -96,7 +96,7 @@ test('checks Skill Manager through its Kit-local build, test, pack, and inspect 
 test('checks Scheduler through its Kit-local build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
     slug: 'scheduler',
-    artifactName: 'kit-scheduler-0.1.0-preview.1-any-any.hkit',
+    artifactName: 'kit-scheduler-0.1.0-preview.2-any-any.hkit',
   });
 });
 

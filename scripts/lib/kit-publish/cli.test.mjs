@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access, cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
+import { access, cp, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -38,6 +38,26 @@ function runPrepare(kitArtifact, outputDirectory, {
     '--label', 'Demo Kit',
     '--summary', 'A deterministic publication fixture',
     ...extra,
+  ], { encoding: 'utf8' });
+}
+
+function runMultiPrepare(artifactsDirectory, outputDirectory) {
+  return spawnSync(process.execPath, [
+    cli,
+    'prepare',
+    '--kit-artifacts-directory', artifactsDirectory,
+    '--output-directory', outputDirectory,
+    '--kit-id', '@example/kit-demo',
+    '--kit-version', '1.2.3',
+    '--kit-channel', 'stable',
+    '--repository', 'example/harbors',
+    '--commit', commit,
+    '--workflow', 'example/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/demo/v1.2.3',
+    '--signer-workflow', 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4',
+    '--ref', 'refs/tags/kit/demo/v1.2.3',
+    '--tag', 'kit/demo/v1.2.3',
+    '--label', 'Demo Kit',
+    '--summary', 'A deterministic multi-target fixture',
   ], { encoding: 'utf8' });
 }
 
@@ -95,6 +115,41 @@ test('prepare copies the checked Kit byte-for-byte and writes its publication me
     const replay = runPrepare(artifact, outputDirectory);
     assert.equal(replay.status, 1);
     assert.match(replay.stderr, /^ERROR=/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('prepare publishes every unique target with its own SBOM and attestation identity', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-cli-multi-'));
+  const sourceDirectory = path.join(root, 'source');
+  const artifactsDirectory = path.join(root, 'artifacts');
+  const outputDirectory = path.join(root, 'release');
+  try {
+    await cp(fixture, sourceDirectory, { recursive: true });
+    await mkdir(artifactsDirectory, { recursive: true });
+    for (const [platform, arch] of [['darwin', 'arm64'], ['linux', 'x64']]) {
+      const manifestFile = path.join(sourceDirectory, 'kit.json');
+      const manifest = JSON.parse(await readFile(manifestFile, 'utf8'));
+      manifest.permissions = [...new Set([...manifest.permissions, 'native-code'])];
+      manifest.target = { platform, arch, nodeAbi: '127' };
+      await writeFile(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
+      await packKit({
+        directory: sourceDirectory,
+        output: path.join(artifactsDirectory, `kit-demo-1.2.3-${platform}-${arch}-abi127.hkit`),
+      });
+    }
+
+    const result = runMultiPrepare(artifactsDirectory, outputDirectory);
+    assert.equal(result.status, 0, result.stderr);
+    const release = JSON.parse(await readFile(path.join(outputDirectory, 'release.json'), 'utf8'));
+    assert.equal(release.assets.length, 2);
+    assert.equal(new Set(release.assets.map((asset) => asset.attestationUrl)).size, 2);
+    assert.deepEqual((await readdir(outputDirectory)).filter((name) => name.endsWith('.hkit')).sort(), [
+      'kit-demo-1.2.3-darwin-arm64-abi127.hkit',
+      'kit-demo-1.2.3-linux-x64-abi127.hkit',
+    ]);
+    assert.equal((await readdir(outputDirectory)).filter((name) => name.endsWith('.spdx.json')).length, 2);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

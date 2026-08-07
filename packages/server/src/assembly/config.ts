@@ -16,6 +16,7 @@ export type KitSourceKind = 'builtin' | 'installed' | 'development' | 'explicit'
 export interface AssemblyKitSource {
   directory: string;
   source: KitSourceKind;
+  artifactSha256?: string;
 }
 
 export interface AssemblyConfigOverride extends Partial<AssemblyConfig> {}
@@ -76,5 +77,6 @@ function cloneKitSources(value: AssemblyKitSource[]): AssemblyKitSource[] {
   return value.map((item) => ({
     directory: path.resolve(item.directory),
     source: item.source,
+    ...(item.artifactSha256 ? { artifactSha256: item.artifactSha256 } : {}),
   }));
 }

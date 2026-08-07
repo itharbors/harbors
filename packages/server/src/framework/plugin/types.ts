@@ -30,12 +30,21 @@ export interface ContributeData {
 
 export interface PluginInfo {
   name: string;
+  version: string;
   path: string;
   kind: PluginKind;
+  source: PluginSourceIdentity;
   entry: string;
   capabilities?: PluginCapability[];
   assets?: PluginAssetsManifest;
   contribute?: ContributeData;
+}
+
+export interface PluginSourceIdentity {
+  scope: 'framework' | 'kit' | 'unmanaged';
+  kitId?: string;
+  kitVersion?: string;
+  artifactSha256?: string;
 }
 
 export interface PluginLifecycle {
