@@ -207,7 +207,7 @@ test('prepare rejects unknown, duplicate, and missing arguments before writing',
   }
 });
 
-test('aggregate writes one canonical Pages index with an injected clock value', async () => {
+test('aggregate writes a canonical Pages index and verified attestation bundles', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-publish-aggregate-'));
   const output = path.join(root, 'index.v1.json');
   const stdout = [];
@@ -218,8 +218,16 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
     kits: [],
     revocations: [],
   };
+  const attestationDigest = 'a'.repeat(64);
+  const attestationBundle = {
+    mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
+  };
+  const site = {
+    index,
+    attestationBundlesByDigest: new Map([[attestationDigest, attestationBundle]]),
+  };
   const calls = [];
-  const verifier = Object.freeze({ verify: async () => undefined });
+  const verifier = Object.freeze({ verifyWithBundle: async () => undefined });
   const factoryCalls = [];
   try {
     const code = await runKitPublishCli([
@@ -236,7 +244,7 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
     }, {
       aggregateKitRegistry: async (input) => {
         calls.push(input);
-        return index;
+        return site;
       },
       createProvenanceVerifier: (input) => {
         factoryCalls.push(input);
@@ -256,7 +264,11 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
       provenanceVerifier: verifier,
     }]);
     assert.deepEqual(JSON.parse(await readFile(output, 'utf8')), index);
-    assert.match(stdout.join(''), /KITS=0\nREVOCATIONS=0/u);
+    assert.deepEqual(
+      JSON.parse(await readFile(path.join(root, 'attestations', 'sha256', `${attestationDigest}.json`), 'utf8')),
+      attestationBundle,
+    );
+    assert.match(stdout.join(''), /KITS=0\nREVOCATIONS=0\nATTESTATION_BUNDLES=1/u);
 
     const replay = await runKitPublishCli([
       'aggregate',
@@ -269,7 +281,7 @@ test('aggregate writes one canonical Pages index with an injected clock value', 
     ], {
       stdout: { write: () => undefined },
       stderr: { write: (value) => stderr.push(value) },
-    }, { aggregateKitRegistry: async () => index, env: { GITHUB_TOKEN: 'test-token' } });
+    }, { aggregateKitRegistry: async () => site, env: { GITHUB_TOKEN: 'test-token' } });
     assert.equal(replay, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -296,10 +308,13 @@ test('aggregate production dependencies construct the GitHub provenance verifier
       aggregateKitRegistry: async (input) => {
         provenanceVerifier = input.provenanceVerifier;
         return {
-          schemaVersion: 1,
-          generatedAt: '2026-07-24T00:00:00.000Z',
-          kits: [],
-          revocations: [],
+          index: {
+            schemaVersion: 1,
+            generatedAt: '2026-07-24T00:00:00.000Z',
+            kits: [],
+            revocations: [],
+          },
+          attestationBundlesByDigest: new Map(),
         };
       },
       env: { GITHUB_TOKEN: 'production-token' },
@@ -333,7 +348,7 @@ test('aggregate fails before requests or output writes when its GitHub token is 
       aggregateKitRegistry: async () => { calls += 1; },
       createProvenanceVerifier: () => {
         factoryCalls += 1;
-        return { verify: async () => undefined };
+        return { verifyWithBundle: async () => undefined };
       },
       env: {},
     });

@@ -252,7 +252,7 @@ async function aggregate(options, implementation, environment, createProvenanceV
     throw new Error('GitHub token is required');
   }
   const provenanceVerifier = createProvenanceVerifier({ githubToken });
-  const index = await implementation({
+  const site = await implementation({
     repositoryRoot: options['repository-root'],
     repository: options.repository,
     policyFile: options['policy-file'],
@@ -261,11 +261,34 @@ async function aggregate(options, implementation, environment, createProvenanceV
     githubToken,
     provenanceVerifier,
   });
-  await writeFile(path.resolve(options.output), canonicalJson(index), { flag: 'wx', mode: 0o600 });
+  if (
+    !site
+    || typeof site !== 'object'
+    || !site.index
+    || !(site.attestationBundlesByDigest instanceof Map)
+  ) throw new Error('Registry aggregate did not return an index and attestation bundles');
+  const output = path.resolve(options.output);
+  const bundleDirectory = path.join(path.dirname(output), 'attestations', 'sha256');
+  await mkdir(bundleDirectory, { recursive: true, mode: 0o700 });
+  for (const [digest, bundle] of [...site.attestationBundlesByDigest].sort(([left], [right]) => (
+    left.localeCompare(right)
+  ))) {
+    if (!/^[a-f0-9]{64}$/u.test(digest)) throw new Error('Attestation bundle digest is invalid');
+    if (!bundle || typeof bundle !== 'object' || Array.isArray(bundle)) {
+      throw new Error(`Attestation bundle ${digest} is invalid`);
+    }
+    await writeFile(
+      path.join(bundleDirectory, `${digest}.json`),
+      canonicalJson(bundle),
+      { flag: 'wx', mode: 0o600 },
+    );
+  }
+  await writeFile(output, canonicalJson(site.index), { flag: 'wx', mode: 0o600 });
   return {
     INDEX: 'index.v1.json',
-    KITS: index.kits.length,
-    REVOCATIONS: index.revocations.length,
+    KITS: site.index.kits.length,
+    REVOCATIONS: site.index.revocations.length,
+    ATTESTATION_BUNDLES: site.attestationBundlesByDigest.size,
   };
 }
 

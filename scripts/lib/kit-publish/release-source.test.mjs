@@ -159,10 +159,13 @@ function releaseFetch({ pages, metadata = new Map(), refs = new Map(), calls = [
 
 function verifier({ fail = false, calls = [], claims } = {}) {
   return {
-    verify: async (expected) => {
+    verifyWithBundle: async (expected) => {
       calls.push(expected);
       if (fail) throw new Error('attestation failed');
-      return claims ? claims(expected) : { ...expected, verified: true };
+      return {
+        claims: claims ? claims(expected) : { ...expected, verified: true },
+        bundle: { mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json' },
+      };
     },
   };
 }
@@ -374,6 +377,11 @@ test('returns deep-frozen entries and a read-only Map that remains usable by the
     assert.throws(() => facade.clear(), TypeError);
   });
   assert.equal(result.releasesByUrl.size, 1);
+  assert.equal(result.attestationBundlesByDigest instanceof Map, true);
+  assert.equal(result.attestationBundlesByDigest.size, 1);
+  assert.equal(Object.isFrozen(result.attestationBundlesByDigest.get(digest)), true);
+  assert.throws(() => result.attestationBundlesByDigest.set('b'.repeat(64), {}), TypeError);
+  assert.throws(() => result.attestationBundlesByDigest.delete(digest), TypeError);
   assert.throws(() => { result.releasesByUrl.extra = true; }, TypeError);
   assert.throws(() => Object.defineProperty(result.releasesByUrl, 'extra', { value: true }), TypeError);
   assert.throws(() => Object.setPrototypeOf(result.releasesByUrl, null), TypeError);

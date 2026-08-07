@@ -5,7 +5,6 @@ import {
   assertResolvedRegistryAsset,
   KitReleaseResolver,
 } from './resolver.mjs';
-import { GitHubAttestationError } from './github-attestation.mjs';
 
 const sha256 = 'a'.repeat(64);
 const commit = '0123456789abcdef0123456789abcdef01234567';
@@ -402,32 +401,16 @@ test('allows an exact trusted workflow file across cryptographically verified re
   assert.equal(resolved.source.workflow, workflow);
 });
 
-test('preserves only a typed GitHub attestation rate limit for Kit Manager', async () => {
-  const limited = new GitHubAttestationError(
-    'ATTESTATION_RATE_LIMITED',
-    'GitHub verification rate limit reached. Retry after 2026-07-28T12:27:57.000Z.',
-  );
+test('does not expose provenance fetch or verification internals to Kit Manager', async () => {
   const resolver = createResolver({
-    verifier: { verify: async () => { throw limited; } },
-  });
-  await assert.rejects(
-    resolver.resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
-    (error) => (
-      error.code === 'ATTESTATION_RATE_LIMITED'
-      && error.message === limited.message
-      && error.cause === limited
-    ),
-  );
-
-  const generic = createResolver({
     verifier: {
       verify: async () => {
-        throw Object.assign(new Error('secret'), { code: 'ATTESTATION_RATE_LIMITED' });
+        throw Object.assign(new Error('secret Registry response'), { code: 'BUNDLE_FETCH_FAILED' });
       },
     },
   });
   await assert.rejects(
-    generic.resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
+    resolver.resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),
     (error) => error.code === 'PROVENANCE_FAILED' && !error.message.includes('secret'),
   );
 });

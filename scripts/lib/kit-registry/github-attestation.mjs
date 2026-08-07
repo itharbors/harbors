@@ -333,6 +333,104 @@ function assertStatement(statement, expected) {
   }
 }
 
+function verificationOptions(expected) {
+  return {
+    certificateIssuer: GITHUB_OIDC_ISSUER,
+    certificateIdentityURI: expected.signerWorkflow.identity,
+    ctLogThreshold: 1,
+    tlogThreshold: 1,
+  };
+}
+
+async function verifyAttestationBundle(bundle, expected, rawExpected, verifyBundle) {
+  await verifyBundle(bundle, verificationOptions(expected));
+  assertStatement(decodeStatement(bundle), expected);
+  return Object.freeze({
+    verified: true,
+    attestationUrl: rawExpected.attestationUrl,
+    subjectName: expected.subjectName,
+    subjectSha256: expected.subjectSha256,
+    repository: expected.repository,
+    commit: expected.commit,
+    workflow: rawExpected.workflow,
+    signerWorkflow: rawExpected.signerWorkflow,
+  });
+}
+
+function validatedRegistryUrl(registryUrl) {
+  let parsed;
+  try {
+    parsed = new URL(registryUrl);
+  } catch {
+    throw new TypeError('registryUrl must be an absolute HTTPS URL');
+  }
+  if (
+    parsed.protocol !== 'https:'
+    || parsed.username
+    || parsed.password
+    || parsed.hash
+  ) throw new TypeError('registryUrl must be an absolute HTTPS URL without credentials or fragments');
+  return parsed.href;
+}
+
+function registryBundleUrl(registryUrl, sha256) {
+  return new URL(`attestations/sha256/${assertSha256(sha256)}.json`, registryUrl).href;
+}
+
+export class RegistryArtifactAttestationVerifier {
+  #registryUrl;
+  #fetch;
+  #verifyBundle;
+  #timeoutMs;
+  #maxBundleBytes;
+
+  constructor({
+    registryUrl,
+    fetchImpl = globalThis.fetch,
+    verifyBundle = defaultVerifyBundle,
+    timeoutMs = DEFAULT_TIMEOUT_MS,
+    maxBundleBytes = DEFAULT_MAX_BUNDLE_BYTES,
+  } = {}) {
+    if (typeof fetchImpl !== 'function') throw new TypeError('fetch implementation is required');
+    if (typeof verifyBundle !== 'function') throw new TypeError('verifyBundle is required');
+    this.#registryUrl = validatedRegistryUrl(registryUrl);
+    this.#fetch = fetchImpl;
+    this.#verifyBundle = verifyBundle;
+    this.#timeoutMs = positiveInteger(timeoutMs, 'timeoutMs');
+    this.#maxBundleBytes = positiveInteger(maxBundleBytes, 'maxBundleBytes');
+  }
+
+  async verify(rawExpected) {
+    const expected = validateExpected(rawExpected);
+    const bundle = await fetchJson({
+      fetchImpl: this.#fetch,
+      url: registryBundleUrl(this.#registryUrl, expected.subjectSha256),
+      init: {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+        redirect: 'error',
+      },
+      timeoutMs: this.#timeoutMs,
+      maxBytes: this.#maxBundleBytes,
+      codes: {
+        fetch: 'BUNDLE_FETCH_FAILED',
+        tooLarge: 'BUNDLE_TOO_LARGE',
+        invalid: 'BUNDLE_INVALID',
+      },
+      label: 'Registry Sigstore bundle',
+    });
+    try {
+      return await verifyAttestationBundle(bundle, expected, rawExpected, this.#verifyBundle);
+    } catch (error) {
+      throw new GitHubAttestationError(
+        'PROVENANCE_FAILED',
+        'Registry Sigstore bundle did not match the Kit release',
+        { cause: error },
+      );
+    }
+  }
+}
+
 export class GitHubArtifactAttestationVerifier {
   #fetch;
   #githubToken;
@@ -359,7 +457,7 @@ export class GitHubArtifactAttestationVerifier {
     this.#maxBundleBytes = positiveInteger(maxBundleBytes, 'maxBundleBytes');
   }
 
-  async verify(rawExpected) {
+  async #verifiedBundle(rawExpected) {
     const expected = validateExpected(rawExpected);
     const api = new URL(expected.derivedUrl);
     api.searchParams.set('predicate_type', 'provenance');
@@ -388,13 +486,6 @@ export class GitHubArtifactAttestationVerifier {
       label: 'GitHub attestation API',
     });
     const bundleUrls = parseApiResponse(response);
-    const verificationOptions = {
-      certificateIssuer: GITHUB_OIDC_ISSUER,
-      certificateIdentityURI: expected.signerWorkflow.identity,
-      ctLogThreshold: 1,
-      tlogThreshold: 1,
-    };
-
     for (const rawBundleUrl of bundleUrls) {
       try {
         const parsed = new URL(rawBundleUrl);
@@ -412,18 +503,13 @@ export class GitHubArtifactAttestationVerifier {
           },
           label: 'Sigstore bundle',
         });
-        await this.#verifyBundle(bundle, verificationOptions);
-        assertStatement(decodeStatement(bundle), expected);
-        return Object.freeze({
-          verified: true,
-          attestationUrl: rawExpected.attestationUrl,
-          subjectName: expected.subjectName,
-          subjectSha256: expected.subjectSha256,
-          repository: expected.repository,
-          commit: expected.commit,
-          workflow: rawExpected.workflow,
-          signerWorkflow: rawExpected.signerWorkflow,
-        });
+        const claims = await verifyAttestationBundle(
+          bundle,
+          expected,
+          rawExpected,
+          this.#verifyBundle,
+        );
+        return Object.freeze({ claims, bundle });
       } catch {
         // A query may return several attestations. Trust only a fully matching bundle.
       }
@@ -432,5 +518,13 @@ export class GitHubArtifactAttestationVerifier {
       'PROVENANCE_FAILED',
       'No valid GitHub artifact attestation matched',
     );
+  }
+
+  async verify(rawExpected) {
+    return (await this.#verifiedBundle(rawExpected)).claims;
+  }
+
+  async verifyWithBundle(rawExpected) {
+    return this.#verifiedBundle(rawExpected);
   }
 }

@@ -74,10 +74,13 @@ reusable signer workflow 和 attestation URL。所有协议 URL 必须是 HTTPS�
 
 `KitReleaseResolver` 只接受当前快照中的 `id + version + channel`，逐层核对 Registry、Release、
 资产 manifest、权限集合、publisher policy、revocation 和来源证明 claims。Renderer 不能提供
-URL、路径、摘要或发布者身份。生产 `GitHubArtifactAttestationVerifier` 从仓库与 SHA-256 派生
-唯一 GitHub API URL，使用 `sigstore@3.1.0` 验证 GitHub Actions OIDC issuer、精确 reusable
-signer workflow certificate identity、CT/Rekor transparency log，再核对 DSSE in-toto/SLSA
-subject、repository、Commit 和 caller workflow。任何一步失败都不会降级为可信安装。
+URL、路径、摘要或发布者身份。Registry 聚合器从仓库与 SHA-256 派生唯一 GitHub API URL，在受控
+发布环境中发现并验证 Artifact Attestation，然后将匹配的 Sigstore bundle 按制品 SHA-256 发布到
+Registry Pages。生产 `RegistryArtifactAttestationVerifier` 从当前 Registry URL 和已校验摘要派生
+唯一 bundle URL，不调用 GitHub API，也不携带 GitHub 凭据；它继续使用 `sigstore@3.1.0` 验证
+GitHub Actions OIDC issuer、精确
+reusable signer workflow certificate identity、CT/Rekor transparency log，再核对 DSSE
+in-toto/SLSA subject、repository、Commit 和 caller workflow。任何一步失败都不会降级为可信安装。
 
 GitHub Release 的下载端点会跳转到资产 CDN。Resolver、Registry 聚合器和 Downloader 只允许
 规范的 `https://github.com/<owner>/<repo>/releases/download/...` 初始 URL，并只跟随到 GitHub
@@ -138,16 +141,10 @@ previous 快捷按钮。下载和制品校验期间，Kit 所在行展示不定�
 `HARBORS_KIT_PUBLISHER_POLICIES_JSON` 和 `HARBORS_KIT_AUTO_UPDATE_PUBLISHERS` 覆盖配置；非法或
 非 HTTPS 配置会 fail closed。
 
-Kit 安装默认使用 GitHub 匿名 API 容量获取 artifact attestation。开发或受控走查遇到匿名限流时，
-可把现有 GitHub CLI 凭据仅传给当前 Electron 进程：
-
-```bash
-HARBORS_KIT_GITHUB_TOKEN="$(gh auth token)" npm run electron
-```
-
-该 token 不会持久化，也不会进入 Kit Manager 配置、快照、日志或错误；它只发送到由受信仓库与
-artifact digest 推导出的 canonical GitHub attestation API 请求，不会发送到 Registry、Release、
-bundle 或 Kit artifact 下载地址。
+Kit 安装从 Registry 的 `attestations/sha256/<digest>.json` 获取来源证明 bundle；路径只由当前
+Registry URL 和 Release 中经过 schema 校验的制品摘要派生。安装与更新不要求 GitHub 登录，且不会
+向 Registry、Release、bundle 或 Kit artifact 下载请求发送认证头。Registry 聚合工作流仍使用其
+仓库级 GitHub Actions Token 扫描 Release 和发现证明，这一认证边界不进入终端用户进程。
 
 ## GitHub 自动发布
 

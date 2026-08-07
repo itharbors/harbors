@@ -2,7 +2,7 @@ import { KitRegistryManager } from './kit-registry/manager.mjs';
 import { KitRegistryCache } from './kit-registry/cache.mjs';
 import { KitRegistryClient } from './kit-registry/client.mjs';
 import { KitReleaseResolver } from './kit-registry/resolver.mjs';
-import { GitHubArtifactAttestationVerifier } from './kit-registry/github-attestation.mjs';
+import { RegistryArtifactAttestationVerifier } from './kit-registry/github-attestation.mjs';
 import { KitArtifactDownloader } from './kit-registry/downloader.mjs';
 import { KitAuditLog } from './kit-registry/audit.mjs';
 import { InstalledKitStore } from './kit-store/state.mjs';
@@ -163,9 +163,9 @@ export function createKitManagerService({
     fetchImpl,
     now,
   });
-  const provenanceVerifier = new GitHubArtifactAttestationVerifier({
+  const provenanceVerifier = new RegistryArtifactAttestationVerifier({
+    registryUrl: config.registryUrl,
     fetchImpl,
-    githubToken: env.HARBORS_KIT_GITHUB_TOKEN,
   });
   const resolver = new KitReleaseResolver({
     snapshotProvider: client,

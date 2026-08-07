@@ -500,14 +500,19 @@ test('discovers trusted Releases and supplements only missing revocation evidenc
   }));
   try {
     const requests = [];
-    const index = await aggregateKitRegistry({
+    const site = await aggregateKitRegistry({
       repositoryRoot: root,
       repository,
       policyFile: path.join(repositoryRoot, 'registry/policy.json'),
       revocationsFile,
       generatedAt: '2026-07-23T12:00:00.000Z',
       githubToken: 'token',
-      provenanceVerifier: { verify: async (expected) => ({ ...expected, verified: true }) },
+      provenanceVerifier: {
+        verifyWithBundle: async (expected) => ({
+          claims: { ...expected, verified: true },
+          bundle: { mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json' },
+        }),
+      },
       fetchImpl: async (url, init) => {
         requests.push({ url, init });
         const request = new URL(url);
@@ -540,9 +545,13 @@ test('discovers trusted Releases and supplements only missing revocation evidenc
         return new Response('not found', { status: 404 });
       },
     });
-    assert.equal(index.kits.length, 1);
-    assert.equal(index.revocations.length, 1);
-    assert.equal(index.kits[0].channels.stable.version, stable.version);
+    assert.equal(site.index.kits.length, 1);
+    assert.equal(site.index.revocations.length, 1);
+    assert.equal(site.index.kits[0].channels.stable.version, stable.version);
+    assert.equal(site.attestationBundlesByDigest.size, 1);
+    assert.deepEqual(site.attestationBundlesByDigest.get(digest), {
+      mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
+    });
     assert.equal(requests.some(({ url }) => url === revoked.releaseManifestUrl), true);
     assert.equal(requests.every(({ init }) => init.headers.Authorization === 'Bearer token' || init.headers.Authorization === undefined), true);
   } finally {
