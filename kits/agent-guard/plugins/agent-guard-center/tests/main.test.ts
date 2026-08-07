@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 describe('Agent Guard center main', () => {
@@ -26,6 +27,7 @@ describe('Agent Guard center main', () => {
     await definition.methods.runHistoryBackfill({ reason: 'manual' });
     await definition.methods.clearHistory({ confirmation: 'clear-history' });
     definition.methods.openGuardPanel();
+    expect(definition.methods.openInBrowser()).toEqual({ type: 'open-current-url' });
 
     expect(application.request.mock.calls).toEqual([
       ['@itharbors/agent-guard-background', 'getSnapshot'],
@@ -39,5 +41,27 @@ describe('Agent Guard center main', () => {
       ['@itharbors/agent-guard-background', 'clearHistory', { confirmation: 'clear-history' }],
     ]);
     expect(openPanel).toHaveBeenCalledWith('@itharbors/agent-guard-center.guard');
+  });
+
+  it('contributes a menu action that opens the current Agent Guard page in a browser', () => {
+    const manifest = JSON.parse(readFileSync(
+      new URL('../package.json', import.meta.url),
+      'utf8',
+    )) as {
+      'ce-editor': { contribute: {
+        menu: Array<Record<string, unknown>>;
+        message: { request: Record<string, string[]> };
+      } };
+    };
+
+    expect(manifest['ce-editor'].contribute.menu).toContainEqual({
+      type: 'menu',
+      id: 'file/open-current-page-in-browser',
+      message: 'openInBrowser',
+      order: 910,
+      label: '在浏览器中打开',
+    });
+    expect(manifest['ce-editor'].contribute.message.request.openInBrowser)
+      .toEqual(['openInBrowser']);
   });
 });

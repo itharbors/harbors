@@ -28,7 +28,8 @@
           "updateHistorySettings": ["updateHistorySettings"],
           "runHistoryBackfill": ["runHistoryBackfill"],
           "clearHistory": ["clearHistory"],
-          "openGuardPanel": ["openGuardPanel"]
+          "openGuardPanel": ["openGuardPanel"],
+          "openInBrowser": ["openInBrowser"]
         }
       },
       "menu": [
@@ -38,6 +39,13 @@
           "message": "openGuardPanel",
           "order": 900,
           "label": "Agent Guard"
+        },
+        {
+          "type": "menu",
+          "id": "file/open-current-page-in-browser",
+          "message": "openInBrowser",
+          "order": 910,
+          "label": "在浏览器中打开"
         }
       ]
     }
