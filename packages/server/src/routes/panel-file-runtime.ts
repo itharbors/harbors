@@ -28,10 +28,17 @@ type PanelFileRuntimeFactory = (
 // browser runtime. Keeping the source explicit prevents development loaders from
 // leaking build-only helpers into Function#toString output.
 export const PANEL_FILE_RUNTIME_FACTORY_SOURCE = String.raw`function createPanelFileRuntime(windowObject, documentObject) {
-  function localFileError() {
-    const error = new Error('该功能只能读取运行 Harbors 的本机文件，请在桌面版中使用。');
-    error.code = 'LOCAL_FILE_PATH_UNAVAILABLE';
+  function fileRuntimeError(code, message) {
+    const error = new Error(message);
+    error.code = code;
     return error;
+  }
+
+  function desktopFileError() {
+    return fileRuntimeError(
+      'LOCAL_FILE_PATH_UNAVAILABLE',
+      '浏览器模式暂不支持新建或写回本机文件，请在桌面版中使用。',
+    );
   }
 
   function getPathBridge() {
@@ -46,15 +53,50 @@ export const PANEL_FILE_RUNTIME_FACTORY_SOURCE = String.raw`function createPanel
   }
 
   function resolveLocalFilePath(file, bridge = getPathBridge()) {
-    if (!bridge || typeof bridge.getPathForFile !== 'function') throw localFileError();
+    if (!bridge || typeof bridge.getPathForFile !== 'function') throw desktopFileError();
     let filePath;
     try {
       filePath = bridge.getPathForFile(file);
     } catch {
-      throw localFileError();
+      throw desktopFileError();
     }
-    if (typeof filePath !== 'string' || filePath.length === 0) throw localFileError();
+    if (typeof filePath !== 'string' || filePath.length === 0) throw desktopFileError();
     return filePath;
+  }
+
+  async function stageLocalWebFile(file) {
+    const search = windowObject.location && typeof windowObject.location.search === 'string'
+      ? windowObject.location.search
+      : '';
+    const sessionId = new URLSearchParams(search).get('sessionId') || '';
+    if (!sessionId || typeof windowObject.fetch !== 'function') {
+      throw fileRuntimeError('LOCAL_FILE_SESSION_UNAVAILABLE', '当前页面无法建立本机文件会话。');
+    }
+    const response = await windowObject.fetch(
+      '/api/local-file/open/' + encodeURIComponent(sessionId) + '?name=' + encodeURIComponent(file.name),
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: file,
+      },
+    );
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      // Normalize non-JSON proxy and transport responses below.
+    }
+    if (!response.ok) {
+      const remote = payload && typeof payload === 'object' ? payload.error : null;
+      throw fileRuntimeError(
+        remote && typeof remote.code === 'string' ? remote.code : 'LOCAL_FILE_UPLOAD_FAILED',
+        remote && typeof remote.message === 'string' ? remote.message : '无法读取所选文件。',
+      );
+    }
+    if (!payload || typeof payload.path !== 'string' || payload.path.length === 0) {
+      throw fileRuntimeError('LOCAL_FILE_UPLOAD_FAILED', '本机文件服务返回了无效路径。');
+    }
+    return payload.path;
   }
 
   function buildSavePickerTypes(accept) {
@@ -85,14 +127,17 @@ export const PANEL_FILE_RUNTIME_FACTORY_SOURCE = String.raw`function createPanel
           input.remove();
           callback();
         };
-        input.addEventListener('change', () => {
+        input.addEventListener('change', async () => {
           const file = input.files?.[0];
           if (!file) {
             finish(() => resolve(null));
             return;
           }
           try {
-            const filePath = resolveLocalFilePath(file);
+            const bridge = getPathBridge();
+            const filePath = bridge === undefined
+              ? await stageLocalWebFile(file)
+              : resolveLocalFilePath(file, bridge);
             finish(() => resolve(filePath));
           } catch (error) {
             finish(() => reject(error));
@@ -113,7 +158,7 @@ export const PANEL_FILE_RUNTIME_FACTORY_SOURCE = String.raw`function createPanel
 
     async saveLocal(options = {}) {
       const bridge = getPathBridge();
-      if (!bridge || typeof bridge.getPathForFile !== 'function') throw localFileError();
+      if (!bridge || typeof bridge.getPathForFile !== 'function') throw desktopFileError();
       if (typeof windowObject.showSaveFilePicker !== 'function') {
         throw new Error('当前浏览器不支持保存文件选择器。');
       }

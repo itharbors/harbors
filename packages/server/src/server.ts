@@ -146,6 +146,7 @@ export function createServer(options: ServerOptions) {
     handleRequest,
     registry,
     editorMap,
+    localWebFiles,
     stopDisconnectHandling,
     prepareKitCatalog,
   } = createApp(manager, channel, {
@@ -235,6 +236,11 @@ export function createServer(options: ServerOptions) {
     }
     try {
       await applicationRuntime.dispose();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      await localWebFiles.dispose();
     } catch (error) {
       errors.push(error);
     }
