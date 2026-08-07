@@ -92,6 +92,48 @@ test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
   assert.deepEqual(lockedPackage?.os, ['linux']);
   assert.deepEqual(lockedPackage?.cpu, ['x64']);
   assert.equal(lockedPackage?.optional, true);
+
+});
+
+test('CI locks the Linux x64 esbuild binary required by script-isolated Framework builds', async () => {
+  const [packageText, packageLockText] = await Promise.all([
+    readFile(packageUrl, 'utf8'),
+    readFile(packageLockUrl, 'utf8'),
+  ]);
+  const packageJson = JSON.parse(packageText);
+  const packageLock = JSON.parse(packageLockText);
+  const version = '0.28.0';
+  const packageName = '@esbuild/linux-x64';
+  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
+
+  assert.equal(packageJson.optionalDependencies?.[packageName], version);
+  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
+  assert.equal(lockedPackage?.version, version);
+  assert.equal(
+    lockedPackage?.resolved,
+    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
+  );
+  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
+  assert.deepEqual(lockedPackage?.os, ['linux']);
+  assert.deepEqual(lockedPackage?.cpu, ['x64']);
+  assert.equal(lockedPackage?.optional, true);
+
+  for (const [packagePath, nestedVersion] of [
+    ['node_modules/vite/node_modules/@esbuild/linux-x64', '0.21.5'],
+    ['packages/client/node_modules/@esbuild/linux-x64', '0.25.12'],
+  ]) {
+    const nestedPackage = packageLock.packages?.[packagePath];
+    assert.equal(nestedPackage?.version, nestedVersion, packagePath);
+    assert.equal(
+      nestedPackage?.resolved,
+      `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${nestedVersion}.tgz`,
+      packagePath,
+    );
+    assert.match(nestedPackage?.integrity ?? '', /^sha512-/u, packagePath);
+    assert.deepEqual(nestedPackage?.os, ['linux'], packagePath);
+    assert.deepEqual(nestedPackage?.cpu, ['x64'], packagePath);
+    assert.equal(nestedPackage?.optional, true, packagePath);
+  }
 });
 
 test('CI runs for every pull request change without repository-inaccurate path filters', async () => {
