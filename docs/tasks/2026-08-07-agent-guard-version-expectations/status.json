@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "taskId": "2026-08-07-agent-guard-version-expectations",
   "type": "bug",
-  "updatedAt": "2026-08-07T04:45:52.285Z",
+  "updatedAt": "2026-08-07T04:57:35.147Z",
   "stages": {
     "requirements": "completed",
     "design": "skipped",
@@ -10,5 +10,7 @@
     "verification": "completed",
     "consolidation": "completed"
   },
-  "pullRequest": null
+  "pullRequest": {
+    "number": 64
+  }
 }
