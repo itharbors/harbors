@@ -5,6 +5,7 @@ import {
   createDefaultBundleVerifier,
   deriveGitHubAttestationUrl,
   GitHubArtifactAttestationVerifier,
+  RegistryArtifactAttestationVerifier,
 } from './github-attestation.mjs';
 
 const digest = 'a'.repeat(64);
@@ -271,6 +272,62 @@ test('sends an optional GitHub token only to the attestation API', async () => {
   await verifier.verify(expected());
   assert.equal(requests[0].init.headers.Authorization, 'Bearer github-token');
   assert.deepEqual(requests[1].init.headers, { Accept: 'application/json' });
+});
+
+test('returns the verified bundle to the authenticated Registry publisher', async () => {
+  const bundleValue = bundle();
+  const { verifier } = createVerifier({ bundleValue });
+  const verified = await verifier.verifyWithBundle(expected());
+  assert.equal(verified.claims.verified, true);
+  assert.deepEqual(verified.bundle, bundleValue);
+});
+
+test('verifies a deterministic Registry bundle without GitHub API requests or credentials', async () => {
+  const requests = [];
+  const checks = [];
+  const verifier = new RegistryArtifactAttestationVerifier({
+    registryUrl: 'https://registry.example.test/catalog/index.v1.json',
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      return jsonResponse(bundle());
+    },
+    verifyBundle: async (value, options) => checks.push({ value, options }),
+  });
+
+  assert.equal((await verifier.verify(expected())).verified, true);
+  assert.deepEqual(requests.map(({ url }) => url), [
+    `https://registry.example.test/catalog/attestations/sha256/${digest}.json`,
+  ]);
+  assert.deepEqual(requests[0].init.headers, { Accept: 'application/json' });
+  assert.equal(requests[0].init.redirect, 'error');
+  assert.equal(Object.hasOwn(requests[0].init.headers, 'Authorization'), false);
+  assert.equal(checks.length, 1);
+});
+
+test('fails closed for missing, oversized, or mismatched Registry bundles', async () => {
+  const missing = new RegistryArtifactAttestationVerifier({
+    registryUrl: 'https://registry.example.test/index.v1.json',
+    fetchImpl: async () => new Response('missing', { status: 404 }),
+    verifyBundle: async () => undefined,
+  });
+  await assert.rejects(missing.verify(expected()), (error) => error.code === 'BUNDLE_FETCH_FAILED');
+
+  const oversized = new RegistryArtifactAttestationVerifier({
+    registryUrl: 'https://registry.example.test/index.v1.json',
+    maxBundleBytes: 64,
+    fetchImpl: async () => new Response('{}', { headers: { 'content-length': '65' } }),
+    verifyBundle: async () => undefined,
+  });
+  await assert.rejects(oversized.verify(expected()), (error) => error.code === 'BUNDLE_TOO_LARGE');
+
+  const mismatched = new RegistryArtifactAttestationVerifier({
+    registryUrl: 'https://registry.example.test/index.v1.json',
+    fetchImpl: async () => jsonResponse(bundle({
+      payload: statement({ subject: [{ name: 'other.hkit', digest: { sha256: digest } }] }),
+    })),
+    verifyBundle: async () => undefined,
+  });
+  await assert.rejects(mismatched.verify(expected()), (error) => error.code === 'PROVENANCE_FAILED');
 });
 
 test('accepts GitHub raw Snappy attestation bundles', async () => {
