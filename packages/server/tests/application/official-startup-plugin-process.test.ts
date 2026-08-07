@@ -44,6 +44,11 @@ const NPM_SANDBOX_ENVIRONMENT_KEYS = [
   'NPM_CONFIG_COLOR',
 ] as const;
 const VITEST_RUNNER_CACHE_EXCLUSION = 'packages/server/node_modules/.vite/vitest/results.json';
+const LAZY_ELECTRON_INSTALL_EXCLUSIONS = [
+  'node_modules/electron/dist',
+  'node_modules/electron/path.txt',
+] as const;
+const macOSIt = process.platform === 'darwin' ? it : it.skip;
 const SHARED_STATE_BEFORE = snapshotHarnessControlledState();
 
 interface ProductRuntimeModules {
@@ -349,7 +354,7 @@ describe('official startup plugins in isolated application processes', () => {
     if (cleanupError) throw cleanupError;
   }, TEST_TIMEOUT_MS);
 
-  it('recovers only identity-verified paused agents when the installed watchdog sees EOF', async () => {
+  macOSIt('recovers only identity-verified paused agents when the installed watchdog sees EOF', async () => {
     const root = fs.realpathSync(fs.mkdtempSync(path.join(
       requireRepositorySnapshotRoot(), '.suite/agent-guard-eof-',
     )));
@@ -1311,6 +1316,9 @@ function snapshotHarnessControlledState(): Record<string, string[]> {
     const visit = (entryPath: string): void => {
       const repositoryRelative = path.relative(REPOSITORY_ROOT, entryPath);
       if (repositoryRelative === VITEST_RUNNER_CACHE_EXCLUSION) return;
+      if (LAZY_ELECTRON_INSTALL_EXCLUSIONS.some((excluded) => (
+        repositoryRelative === excluded || repositoryRelative.startsWith(`${excluded}${path.sep}`)
+      ))) return;
       const info = fs.lstatSync(entryPath);
       const name = path.relative(target, entryPath) || '.';
       const mode = (info.mode & 0o7777).toString(8);
