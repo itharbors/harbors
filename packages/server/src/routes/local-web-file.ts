@@ -8,8 +8,6 @@ import type { SessionManager } from '../session/manager';
 import { HttpError } from '../http/errors';
 import { sendJson } from '../http/json';
 
-export const MAX_LOCAL_WEB_FILE_BYTES = 2 * 1024 * 1024 * 1024;
-
 export interface LocalWebFileStoreOptions {
   rootDirectory: string;
   maxBytes?: number;
@@ -21,13 +19,13 @@ export interface StagedLocalWebFile {
 }
 
 export class LocalWebFileStore {
-  private readonly maxBytes: number;
+  private readonly maxBytes: number | undefined;
   private runtimeRootPromise: Promise<string> | undefined;
   private readonly sessionDirectories = new Map<string, Promise<string>>();
   private readonly pending = new Map<string, Set<Promise<unknown>>>();
 
   constructor(private readonly options: LocalWebFileStoreOptions) {
-    this.maxBytes = options.maxBytes ?? MAX_LOCAL_WEB_FILE_BYTES;
+    this.maxBytes = options.maxBytes;
   }
 
   stage(
@@ -70,7 +68,9 @@ export class LocalWebFileStore {
     fileName: string,
     request: IncomingMessage,
   ): Promise<StagedLocalWebFile> {
-    assertContentLength(request.headers['content-length'], this.maxBytes);
+    if (this.maxBytes !== undefined) {
+      assertContentLength(request.headers['content-length'], this.maxBytes);
+    }
     const sessionDirectory = await this.getSessionDirectory(sessionId);
     const uploadDirectory = await fs.mkdtemp(path.join(sessionDirectory, 'file-'));
     const safeName = sanitizeFileName(fileName);
@@ -81,7 +81,7 @@ export class LocalWebFileStore {
       transform: (chunk: Buffer | string, encoding, callback) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding);
         size += buffer.length;
-        if (size > this.maxBytes) {
+        if (this.maxBytes !== undefined && size > this.maxBytes) {
           callback(fileTooLarge(this.maxBytes));
           return;
         }
