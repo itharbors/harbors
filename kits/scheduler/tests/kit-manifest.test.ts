@@ -10,7 +10,7 @@ describe('Scheduler Kit assembly', () => {
     const layout = await readJson('layout.json');
 
     expect(packageJson.name).toBe('@itharbors/kit-scheduler');
-    expect(packageJson.version).toBe('0.1.0-preview.1');
+    expect(packageJson.version).toBe('0.1.0-preview.2');
     expect(packageJson['ce-editor'].kit.menuRoot).toEqual({
       id: 'scheduler',
       label: 'Scheduler',
@@ -49,7 +49,7 @@ describe('Scheduler Kit assembly', () => {
     expect(kit.permissions).toEqual([
       'application-startup',
       'filesystem',
-      'native-code',
+      'process-control',
     ]);
   });
 

@@ -34,7 +34,7 @@ npm run test --prefix kits/scheduler
 
 ## Permissions
 
-`application-startup`、`filesystem`、`native-code`。
+`application-startup`、`filesystem`、`process-control`。
 
 ## Platform
 
@@ -44,7 +44,7 @@ npm run test --prefix kits/scheduler
 
 调度功能、依赖与测试均由本目录拥有。
 
-执行过程不经过 shell，工作目录为脚本所在目录，环境变量继承 Harbors 进程。脚本拥有当前用户对本机文件和网络的权限；安装 Kit 时应认真审阅 `filesystem` 与 `native-code` 权限。这里的 `native-code` 是 Registry v1 对本地代码执行能力的保守高风险声明。
+执行过程不经过 shell，工作目录为脚本所在目录，环境变量继承 Harbors 进程。脚本拥有当前用户对本机文件和网络的权限；安装 Kit 时应认真审阅 `filesystem` 与 `process-control` 风险声明。Scheduler 只启动当前 Node.js 可执行文件来运行用户选择的脚本，不携带 `.node` 原生二进制，因此不声明 `native-code`。
 
 每次运行的 stdout 和 stderr 分别保留末尾 64 KiB。Harbors 退出时先发送 `SIGTERM`，5 秒后仍未退出才发送 `SIGKILL`。
 
