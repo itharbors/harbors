@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
 import { extractFile, listPackage, statFile } from '@electron/asar';
+import { verifyDesktopRuntimeManifest } from './desktop-runtime-manifest.mjs';
 
 export const DESKTOP_ELECTRON_VERSION = '43.2.0';
 export const DESKTOP_ARCH = 'arm64';
@@ -12,8 +13,9 @@ const DESKTOP_KEYRING_MANIFEST = 'node_modules/@itharbors/native-credential-vaul
 const DESKTOP_KEYRING_MAIN = 'node_modules/@itharbors/native-credential-vault/index.cjs';
 const DESKTOP_KEYRING_LOADER = 'node_modules/@itharbors/native-credential-vault/lib/loader.cjs';
 const APP_OWNED_ENTRY = /^(?:dist|packages\/server\/dist)\//u;
-const STRICT_CREDENTIAL_ENTRY = /^(?:dist\/(?:framework\.mjs|credentials(?:\/.*)?\.[cm]?js)|packages\/server\/dist\/credentials(?:\/.*)?\.[cm]?js)$/iu;
+const STRICT_CREDENTIAL_ENTRY = /^(?:dist\/credentials(?:\/.*)?\.[cm]?js|packages\/server\/dist\/credentials(?:\/.*)?\.[cm]?js)$/iu;
 const SELECTED_KEYRING_ENTRY = /^node_modules\/@itharbors\/native-credential-vault\//u;
+const FRAMEWORK_PROCESS_SOURCE = 'packages/server/src/application/plugin-process/spawn.ts';
 const CREDENTIAL_FALLBACK_MARKERS = Object.freeze([
   Object.freeze({ label: 'Linux secret-tool helper', pattern: /\bsecret-tool\b/iu }),
   Object.freeze({
@@ -250,6 +252,20 @@ function assertNoCredentialFallback(
   }
 }
 
+function assertFrameworkProcessBoundary(entry, content) {
+  let source;
+  for (const line of content.split(/\r?\n/u)) {
+    const marker = /^\/\/ (.+)$/u.exec(line);
+    if (marker) source = marker[1];
+    const processMarker = STRICT_PROCESS_MARKERS.find(({ pattern }) => pattern.test(line));
+    if (processMarker && source !== FRAMEWORK_PROCESS_SOURCE) {
+      throw new Error(
+        `Packaged keyring verification failed: forbidden credential fallback content in ${entry} (${processMarker.label})`,
+      );
+    }
+  }
+}
+
 export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
   const outputReal = await assertTrustedOutputRoot(outputDirectory);
   const appPackageReal = await assertTrustedChildDirectory({
@@ -278,6 +294,16 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
     label: 'Resources',
     outputReal,
   });
+  const runtime = path.join(resources, 'runtime');
+  await assertTrustedChildDirectory({
+    parent: resources,
+    parentReal: resourcesReal,
+    child: runtime,
+    basename: 'runtime',
+    label: 'desktop runtime',
+    outputReal,
+  });
+  await verifyDesktopRuntimeManifest(runtime);
   const archive = path.join(resources, 'app.asar');
   await assertTrustedChildFile({
     parent: resources,
@@ -367,7 +393,8 @@ export async function verifyPackagedKeyring({ outputDirectory, appPackage }) {
   if (!/import\(["']@itharbors\/native-credential-vault["']\)/u.test(frameworkBundle)) {
     throw new Error('Packaged keyring verification failed: external import is missing');
   }
-  assertNoCredentialFallback(frameworkEntry, frameworkBundle, { strictProcessSource: true });
+  assertFrameworkProcessBoundary(frameworkEntry, frameworkBundle);
+  assertNoCredentialFallback(frameworkEntry, frameworkBundle);
 
   const credentialPackages = [...new Set(entries.flatMap((entry) => {
     if (/^node_modules\/@itharbors\/native-credential-vault(?:\/|$)/u.test(entry)) {

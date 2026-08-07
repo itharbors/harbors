@@ -6,6 +6,7 @@ import { buildDesktop, stageBuiltinKit, validateDesktopKitDescriptors } from './
 import { ensureKitInstall } from './kit-install.mjs';
 import { runCheckedCommand } from './kit-check.mjs';
 import { discoverRepositoryBuiltinKits, loadRepositoryKit } from './repository-kits.mjs';
+import { createDesktopRuntimeManifest } from './desktop-runtime-manifest.mjs';
 
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
@@ -122,7 +123,12 @@ export async function prepareDesktopRuntime({
     const distRoot = path.dirname(outputRoot);
     await mkdir(distRoot, { recursive: true });
     aggregateRoot = await mkdtemp(path.join(distRoot, '.desktop-runtime-'));
-    await buildFramework({ repositoryRoot, outputRoot: aggregateRoot, descriptors: [] });
+    await buildFramework({
+      repositoryRoot,
+      outputRoot: aggregateRoot,
+      descriptors: [],
+      createRuntimeManifest: false,
+    });
     for (const item of prepared) {
       const stagedRoot = path.join(item.workingRepositoryRoot, 'dist', 'desktop-kit-runtime');
       await stageKit({
@@ -136,6 +142,7 @@ export async function prepareDesktopRuntime({
         { recursive: true, force: false, errorOnExist: true },
       );
     }
+    await createDesktopRuntimeManifest(aggregateRoot);
     await transactionalReplace({ aggregateRoot, outputRoot, renamePath, removeDirectory });
     aggregateRoot = undefined;
     return Object.freeze({ outputRoot, builtinKitIds: Object.freeze(builtin.map((item) => item.id)) });

@@ -193,27 +193,25 @@ jobs:
           const directory = `${process.env.RUNNER_TEMP}/kit-check`;
           const artifacts = readdirSync(directory, { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name.endsWith('.hkit'));
-          if (artifacts.length !== 1) {
-            throw new Error('Targeted Kit check must produce exactly one .hkit');
+          if (artifacts.length === 0) {
+            throw new Error('Targeted Kit check must produce at least one .hkit');
           }
-          const artifact = path.join(directory, artifacts[0].name);
-          appendFileSync(process.env.GITHUB_OUTPUT, `kit-artifact=${artifact}\n`, 'utf8');
+          appendFileSync(process.env.GITHUB_OUTPUT, `kit-artifacts-directory=${directory}\n`, 'utf8');
           NODE
 
-      - name: Inspect targeted check artifact
+      - name: Inspect targeted check artifacts
         shell: bash
-        env:
-          KIT_ARTIFACT: ${{ steps.artifact.outputs.kit-artifact }}
         run: |
           set -euo pipefail
-          node packages/kit-cli/dist/cli.js inspect "$KIT_ARTIFACT" --json \
-            > "$RUNNER_TEMP/check-inspection.json"
+          for kit_artifact in "$RUNNER_TEMP"/kit-check/*.hkit; do
+            node packages/kit-cli/dist/cli.js inspect "$kit_artifact" --json >/dev/null
+          done
 
       - name: Transfer checked Kit artifact
         uses: actions/upload-artifact@v7
         with:
           name: kit-checked-artifact
-          path: ${{ steps.artifact.outputs.kit-artifact }}
+          path: ${{ steps.artifact.outputs.kit-artifacts-directory }}/*.hkit
           if-no-files-found: error
           retention-days: 1
 
@@ -223,7 +221,6 @@ jobs:
     permissions:
       contents: read
     outputs:
-      artifact-name: ${{ steps.package.outputs.artifact-name }}
       channel: ${{ needs.context.outputs.channel }}
       tag: ${{ needs.context.outputs.tag }}
       version: ${{ needs.context.outputs.version }}
@@ -277,33 +274,31 @@ jobs:
           const directory = `${process.env.RUNNER_TEMP}/kit-check`;
           const artifacts = readdirSync(directory, { withFileTypes: true })
             .filter((entry) => entry.isFile() && entry.name.endsWith('.hkit'));
-          if (artifacts.length !== 1) {
-            throw new Error('Checked transfer must contain exactly one .hkit');
+          if (artifacts.length === 0) {
+            throw new Error('Checked transfer must contain at least one .hkit');
           }
-          const artifact = path.join(directory, artifacts[0].name);
-          appendFileSync(process.env.GITHUB_OUTPUT, `kit-artifact=${artifact}\n`, 'utf8');
+          appendFileSync(process.env.GITHUB_OUTPUT, `kit-artifacts-directory=${directory}\n`, 'utf8');
           NODE
 
-      - name: Inspect checked Kit artifact
+      - name: Inspect checked Kit artifacts
         shell: bash
-        env:
-          KIT_ARTIFACT: ${{ steps.artifact.outputs.kit-artifact }}
         run: |
           set -euo pipefail
-          node packages/kit-cli/dist/cli.js inspect "$KIT_ARTIFACT" --json \
-            > "$RUNNER_TEMP/check-inspection.json"
+          for kit_artifact in "$RUNNER_TEMP"/kit-check/*.hkit; do
+            node packages/kit-cli/dist/cli.js inspect "$kit_artifact" --json >/dev/null
+          done
 
-      - name: Prepare publication quartet
+      - name: Prepare publication bundle
         id: package
         shell: bash
         env:
           KIT_LABEL: ${{ needs.context.outputs.label }}
           KIT_SUMMARY: ${{ needs.context.outputs.summary }}
-          KIT_ARTIFACT: ${{ steps.artifact.outputs.kit-artifact }}
+          KIT_ARTIFACTS_DIRECTORY: ${{ steps.artifact.outputs.kit-artifacts-directory }}
         run: |
           set -euo pipefail
           node scripts/kit-publish.mjs prepare \
-            --kit-artifact "$KIT_ARTIFACT" \
+            --kit-artifacts-directory "$KIT_ARTIFACTS_DIRECTORY" \
             --output-directory "$RUNNER_TEMP/kit-release" \
             --kit-id "$KIT_ID" \
             --kit-version "$EXPECTED_VERSION" \
@@ -334,8 +329,8 @@ jobs:
             outputs.set(key, value);
           }
           const expectedKeys = [
-            'ARTIFACT_NAME', 'ARTIFACT_SHA256', 'CHANNEL', 'REGISTRY_ENTRY',
-            'RELEASE_MANIFEST', 'SBOM', 'TAG', 'VERSION',
+            'ARTIFACT_COUNT', 'CHANNEL', 'REGISTRY_ENTRY',
+            'RELEASE_MANIFEST', 'SBOM_COUNT', 'TAG', 'VERSION',
           ];
           if (
             outputs.size !== expectedKeys.length
@@ -344,48 +339,47 @@ jobs:
             || outputs.get('TAG') !== process.env.RELEASE_TAG
             || outputs.get('VERSION') !== process.env.EXPECTED_VERSION
           ) throw new Error('Prepare outputs do not match validated Tag context');
-          appendFileSync(process.env.GITHUB_OUTPUT, `artifact-name=${outputs.get('ARTIFACT_NAME')}\n`, 'utf8');
           NODE
 
       - name: Inspect and verify prepared publication
         shell: bash
-        env:
-          ARTIFACT_NAME: ${{ steps.package.outputs.artifact-name }}
         run: |
           set -euo pipefail
-          node packages/kit-cli/dist/cli.js inspect \
-            "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" --json \
-            > "$RUNNER_TEMP/release-inspection.json"
           node --input-type=module <<'NODE'
           import { readFileSync, readdirSync } from 'node:fs';
-          import path from 'node:path';
-          import { deriveArtifactName } from './scripts/lib/kit-publish/metadata.mjs';
+          import { inspectKit } from '@itharbors/kit-cli';
 
           const temporary = process.env.RUNNER_TEMP;
-          const check = JSON.parse(readFileSync(`${temporary}/check-inspection.json`, 'utf8'));
-          const prepared = JSON.parse(readFileSync(`${temporary}/release-inspection.json`, 'utf8'));
           const release = JSON.parse(readFileSync(`${temporary}/kit-release/release.json`, 'utf8'));
           const entry = JSON.parse(readFileSync(`${temporary}/kit-release/registry-entry.json`, 'utf8'));
-          const artifactName = process.env.ARTIFACT_NAME;
-          const expectedArtifactName = deriveArtifactName(prepared.manifest);
-          const expectedFiles = [artifactName, 'registry-entry.json', 'release.json', 'sbom.spdx.json'].sort();
+          const sourceArtifacts = readdirSync(`${temporary}/kit-check`)
+            .filter((name) => name.endsWith('.hkit')).sort();
+          const releaseArtifacts = readdirSync(`${temporary}/kit-release`)
+            .filter((name) => name.endsWith('.hkit')).sort();
+          const sboms = readdirSync(`${temporary}/kit-release`)
+            .filter((name) => name.startsWith('sbom.') && name.endsWith('.spdx.json'));
+          const expectedFiles = [
+            ...releaseArtifacts, ...sboms, 'registry-entry.json', 'release.json',
+          ].sort();
           const actualFiles = readdirSync(`${temporary}/kit-release`).sort();
+          const inspections = await Promise.all(sourceArtifacts.map(async (name) => ({
+            name,
+            value: await inspectKit({ archive: `${temporary}/kit-check/${name}` }),
+          })));
           if (
-            check.manifest.id !== process.env.KIT_ID
-            || check.manifest.version !== process.env.EXPECTED_VERSION
-            || check.manifest.channel !== process.env.EXPECTED_CHANNEL
-            || prepared.manifest.id !== process.env.KIT_ID
-            || prepared.manifest.version !== process.env.EXPECTED_VERSION
-            || prepared.manifest.channel !== process.env.EXPECTED_CHANNEL
-            || check.sha256 !== prepared.sha256
+            JSON.stringify(sourceArtifacts) !== JSON.stringify(releaseArtifacts)
+            || release.assets.length !== releaseArtifacts.length
+            || sboms.length !== releaseArtifacts.length
+            || inspections.some(({ name, value }) => {
+              const asset = release.assets.find((candidate) => candidate.name === name);
+              return !asset || asset.sha256 !== value.sha256;
+            })
             || release.id !== process.env.KIT_ID
             || release.version !== process.env.EXPECTED_VERSION
             || release.channel !== process.env.EXPECTED_CHANNEL
             || entry.id !== process.env.KIT_ID
             || entry.version !== process.env.EXPECTED_VERSION
             || entry.channel !== process.env.EXPECTED_CHANNEL
-            || artifactName !== expectedArtifactName
-            || path.basename(`${temporary}/kit-release/${artifactName}`) !== expectedArtifactName
             || JSON.stringify(actualFiles) !== JSON.stringify(expectedFiles)
           ) throw new Error('Tag, Kit manifest, package, and artifact versions must match');
           NODE
@@ -438,13 +432,12 @@ jobs:
         uses: actions/attest@v4
         with:
           subject-path: |
-            ${{ runner.temp }}/kit-release/${{ needs.package.outputs.artifact-name }}
+            ${{ runner.temp }}/kit-release/*.hkit
             ${{ runner.temp }}/kit-release/release.json
 
       - name: Create immutable Preview Release
         shell: bash
         env:
-          ARTIFACT_NAME: ${{ needs.package.outputs.artifact-name }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           KIT_LABEL: ${{ needs.context.outputs.label }}
@@ -454,10 +447,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$TAG" \
-            "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" \
-            "$RUNNER_TEMP/kit-release/release.json" \
-            "$RUNNER_TEMP/kit-release/sbom.spdx.json" \
-            "$RUNNER_TEMP/kit-release/registry-entry.json" \
+            "$RUNNER_TEMP"/kit-release/* \
             --verify-tag \
             --prerelease \
             --title "$KIT_LABEL $VERSION Preview" \
@@ -505,13 +495,12 @@ jobs:
         uses: actions/attest@v4
         with:
           subject-path: |
-            ${{ runner.temp }}/kit-release/${{ needs.package.outputs.artifact-name }}
+            ${{ runner.temp }}/kit-release/*.hkit
             ${{ runner.temp }}/kit-release/release.json
 
       - name: Create immutable Stable Release
         shell: bash
         env:
-          ARTIFACT_NAME: ${{ needs.package.outputs.artifact-name }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ github.token }}
           KIT_LABEL: ${{ needs.context.outputs.label }}
@@ -521,10 +510,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$TAG" \
-            "$RUNNER_TEMP/kit-release/$ARTIFACT_NAME" \
-            "$RUNNER_TEMP/kit-release/release.json" \
-            "$RUNNER_TEMP/kit-release/sbom.spdx.json" \
-            "$RUNNER_TEMP/kit-release/registry-entry.json" \
+            "$RUNNER_TEMP"/kit-release/* \
             --verify-tag \
             --title "$KIT_LABEL $VERSION" \
             --notes "Reviewed immutable Kit Release from $RELEASE_COMMIT."

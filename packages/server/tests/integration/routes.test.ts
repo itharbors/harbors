@@ -91,6 +91,7 @@ describe('framework routes', () => {
     }));
     writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
       name: 'p',
+      version: '1.0.0',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {

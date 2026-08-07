@@ -24,6 +24,7 @@ function writePlugin(root: string, name: string, code = 'editor.plugin.define({ 
   fs.mkdirSync(path.join(dir, 'panel', 'dist'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
     name,
+    version: '0.0.1',
     main: './dist/index.js',
     'ce-editor': {
       contribute: {
@@ -73,7 +74,7 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
 
 describe('Plugin', () => {
   it('stores plugin info and starts as Idle', () => {
-    const plugin = new Plugin({ name: 'test-plugin', path: '/path/to/plugin', kind: 'external', entry: './dist/index.js' });
+    const plugin = new Plugin({ name: 'test-plugin', version: '1.0.0', path: '/path/to/plugin', kind: 'external', source: { scope: 'unmanaged' }, entry: './dist/index.js' });
     expect(plugin.name).toBe('test-plugin');
     expect(plugin.path).toBe('/path/to/plugin');
     expect(plugin.status).toBe(PluginStatus.Idle);
@@ -81,7 +82,7 @@ describe('Plugin', () => {
   });
 
   it('setContribute updates contribute data', () => {
-    const plugin = new Plugin({ name: 'test-plugin', path: '/path/to/plugin', kind: 'external', entry: './dist/index.js' });
+    const plugin = new Plugin({ name: 'test-plugin', version: '1.0.0', path: '/path/to/plugin', kind: 'external', source: { scope: 'unmanaged' }, entry: './dist/index.js' });
     const contribute = { panel: { editor: { entry: './panel/dist/index.html' } } };
     plugin.setContribute(contribute);
     expect(plugin.contribute).toEqual(contribute);
@@ -106,6 +107,7 @@ describe('plugin build discovery', () => {
       fs.mkdirSync(pluginDir, { recursive: true });
       fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
         name: '@scope/invalid-panel-plugin',
+        version: '0.0.1',
         main: './main/dist/index.js',
         'ce-editor': {
           contribute: {
@@ -134,6 +136,7 @@ describe('plugin build discovery', () => {
       fs.mkdirSync(path.join(pluginDir, 'panel.preview', 'src'), { recursive: true });
       fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
         name: '@scope/missing-built-output',
+        version: '0.0.1',
         main: './main/dist/index.js',
         'ce-editor': {
           contribute: {
@@ -171,6 +174,7 @@ describe('plugin build discovery', () => {
       fs.mkdirSync(path.join(pluginDir, 'panel.preview', 'dist'), { recursive: true });
       fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
         name: '@scope/missing-panel-css',
+        version: '0.0.1',
         main: './main/dist/index.js',
         'ce-editor': {
           contribute: {
@@ -223,7 +227,11 @@ describe('PluginModule', () => {
   it('register throws without ce-editor field', async () => {
     const dir = path.join(tmpDir, 'bad');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ name: 'bad' }));
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
+      name: 'bad',
+      version: '0.0.1',
+      main: './main/dist/index.js',
+    }));
     await expect(pluginModule.register(dir)).rejects.toThrow(/ce-editor/);
   });
 
@@ -248,6 +256,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(path.join(dir, 'main', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/declared-main',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': { contribute: {} },
     }));
@@ -274,6 +283,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/runtime-plugin',
+        version: '0.0.1',
       main: './dist/index.js',
       'ce-editor': {
         contribute: {
@@ -316,6 +326,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {
@@ -336,6 +347,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-entry',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {
@@ -368,6 +380,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-main-src',
+        version: '0.0.1',
       main: './src/index.js',
       'ce-editor': {
         contribute: {},
@@ -385,6 +398,7 @@ describe('PluginModule', () => {
     fs.writeFileSync(path.join(outside, 'index.js'), 'editor.plugin.define({ methods: {} });');
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-main-outside',
+        version: '0.0.1',
       main: '../outside/dist/index.js',
       'ce-editor': {
         contribute: {},
@@ -399,6 +413,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(path.join(dir, 'main', 'src'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-main-missing',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {},
@@ -419,6 +434,7 @@ describe('PluginModule', () => {
     fs.writeFileSync(path.join(outside, 'index.html'), '<html></html>');
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-panel-outside',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {
@@ -440,6 +456,7 @@ describe('PluginModule', () => {
     fs.writeFileSync(path.join(dir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: {} });');
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-panel-missing',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {
@@ -460,6 +477,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(path.join(dir, 'main', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/typed-plugin-panel-src',
+        version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {
@@ -481,6 +499,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/define-plugin',
+        version: '0.0.1',
       main: './dist/index.js',
       'ce-editor': { contribute: {} },
     }));
@@ -513,6 +532,7 @@ describe('PluginModule', () => {
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: '@scope/missing-define',
+        version: '0.0.1',
       main: './dist/index.js',
       'ce-editor': { contribute: {} },
     }));

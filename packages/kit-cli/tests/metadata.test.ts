@@ -68,5 +68,27 @@ describe('buildSpdx', () => {
       '@example/demo',
       '@example/kit-demo',
     ]);
+    expect(first.packages).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: '@example/demo',
+        versionInfo: '1.2.3',
+        filesAnalyzed: true,
+        externalRefs: [expect.objectContaining({
+          referenceType: 'purl',
+          referenceLocator: 'pkg:npm/%40example/demo@1.2.3',
+        })],
+      }),
+    ]));
+    expect(first.files).toHaveLength(project.payload.length);
+    expect(first.files[0]?.checksums[0]?.algorithm).toBe('SHA256');
+    expect(first.relationships).toEqual(expect.arrayContaining([
+      expect.objectContaining({ relationshipType: 'DESCRIBES' }),
+      expect.objectContaining({ relationshipType: 'CONTAINS' }),
+    ]));
+    const containedFiles = first.relationships
+      .filter(({ relationshipType }) => relationshipType === 'CONTAINS')
+      .map(({ relatedSpdxElement }) => relatedSpdxElement);
+    expect(containedFiles).toHaveLength(first.files.length);
+    expect(new Set(containedFiles)).toEqual(new Set(first.files.map(({ SPDXID }) => SPDXID)));
   });
 });

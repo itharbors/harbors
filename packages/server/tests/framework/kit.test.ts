@@ -59,6 +59,7 @@ function createCredentialKit(
     fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
     writeJson(path.join(pluginDir, 'package.json'), {
       name,
+      version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
       'ce-editor': capabilities ? { capabilities } : {},

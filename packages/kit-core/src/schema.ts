@@ -170,6 +170,9 @@ function parseTarget(value: unknown, permissions: readonly KitPermission[]): Kit
     if (platform !== 'any' || arch !== 'any' || nodeAbi !== undefined) {
       throw new Error('any target must use platform=any, arch=any, and omit nodeAbi');
     }
+    if (permissions.includes('native-code')) {
+      throw new Error('native-code target must declare a concrete platform, arch, and nodeAbi');
+    }
   } else if (permissions.includes('native-code') && !nodeAbi) {
     throw new Error('native-code target requires nodeAbi');
   }
@@ -240,10 +243,13 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
 
 function parseReleaseAsset(value: unknown): ReleaseAsset {
   const input = record(value, 'release asset');
-  exactKeys(input, ['name', 'url', 'sha256', 'size', 'manifest'], 'release asset');
+  exactKeys(input, ['name', 'url', 'attestationUrl', 'sha256', 'size', 'manifest'], 'release asset');
   return {
     name: stringValue(input.name, 'release asset name'),
     url: httpsUrl(input.url, 'release asset url'),
+    ...(input.attestationUrl === undefined ? {} : {
+      attestationUrl: httpsUrl(input.attestationUrl, 'release asset attestationUrl'),
+    }),
     sha256: sha256(input.sha256, 'release asset sha256'),
     size: positiveInteger(input.size, 'release asset size'),
     manifest: parseKitPackageManifest(input.manifest),
@@ -281,6 +287,24 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   if (new Set(assets.map((asset) => asset.name)).size !== assets.length) {
     throw new Error('release manifest contains a duplicate asset name');
   }
+  const targets = assets.map((asset) => {
+    const { platform, arch, nodeAbi } = asset.manifest.target;
+    return `${platform}/${arch}/${nodeAbi ?? ''}`;
+  });
+  if (new Set(targets).size !== targets.length) {
+    throw new Error('release manifest contains a duplicate asset target');
+  }
+  const sourceAttestationUrl = httpsUrl(
+    sourceInput.attestationUrl,
+    'release source attestationUrl',
+  );
+  if (assets.length > 1 && assets.some((asset) => asset.attestationUrl === undefined)) {
+    throw new Error('multi-target release assets must each declare an attestationUrl');
+  }
+  if (assets[0].attestationUrl !== undefined && assets[0].attestationUrl !== sourceAttestationUrl) {
+    throw new Error('release source attestationUrl must match the first release asset');
+  }
+  const permissionProjection = JSON.stringify([...assets[0].manifest.permissions].sort());
   for (const asset of assets) {
     const manifest = asset.manifest;
     if (
@@ -290,6 +314,9 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
       || manifest.publisher !== publisher
     ) {
       throw new Error(`release asset ${asset.name} has a mismatched release identity`);
+    }
+    if (JSON.stringify([...manifest.permissions].sort()) !== permissionProjection) {
+      throw new Error(`release asset ${asset.name} has mismatched permissions`);
     }
   }
 
@@ -304,7 +331,7 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
       commit: commitSha(sourceInput.commit, 'release source commit'),
       workflow: stringValue(sourceInput.workflow, 'release source workflow'),
       signerWorkflow: stringValue(sourceInput.signerWorkflow, 'release source signerWorkflow'),
-      attestationUrl: httpsUrl(sourceInput.attestationUrl, 'release source attestationUrl'),
+      attestationUrl: sourceAttestationUrl,
     },
     assets,
   };

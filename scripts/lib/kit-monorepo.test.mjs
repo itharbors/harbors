@@ -119,7 +119,7 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
         ? '0.1.0-preview.7'
         : slug === 'mysql'
           ? '0.1.0-preview.3'
-          : ['csv', 'sqlite'].includes(slug)
+          : ['csv', 'scheduler', 'sqlite'].includes(slug)
             ? '0.1.0-preview.2'
             : '0.1.0-preview.1',
     );

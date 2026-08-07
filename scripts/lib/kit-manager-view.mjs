@@ -406,7 +406,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     tabs.setAttribute('aria-label', `${selection.kit.label ?? selection.kit.id} 详情`);
     for (const [id, label] of [
       ['overview', '概览'],
-      ['permissions', '权限'],
+      ['permissions', '风险声明'],
       ['versions', '版本记录'],
     ]) {
       const button = element(document, 'button', 'detail-tab', label);
@@ -481,10 +481,10 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
           document,
           'p',
           'detail-empty detail-empty--warning',
-          '当前仓库未提供此本机版本的权限信息。',
+          '当前仓库未提供此本机版本的风险声明。声明用于审核与授权，不代表 OS 沙箱。',
         ));
       } else if (permissions.length === 0) {
-        panel.append(element(document, 'p', 'detail-empty', '此版本未声明额外权限。'));
+        panel.append(element(document, 'p', 'detail-empty', '此版本未声明额外风险；插件仍是受信代码，并非运行在 OS 沙箱中。'));
       } else {
         const list = element(document, 'ul', 'permission-list');
         for (const permission of permissions) {
@@ -562,7 +562,7 @@ export function createKitManagerView({ document, api, confirmInstall = () => tru
     if (!selection) {
       const empty = element(document, 'div', 'kit-detail__empty');
       empty.append(element(document, 'strong', '', '选择一个 Kit'));
-      empty.append(element(document, 'span', '', '查看用途、权限和本机版本。'));
+      empty.append(element(document, 'span', '', '查看用途、风险声明和本机版本。'));
       detail.append(empty);
       return;
     }

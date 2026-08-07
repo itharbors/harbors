@@ -498,7 +498,7 @@ export async function discoverTrustedKitReleases({
       throw new Error(`Trusted Kit Release is incomplete: ${releaseRecord.tag_name}`);
     }
     const hkitAssets = [...assets.values()].filter((asset) => asset.name.endsWith('.hkit'));
-    if (hkitAssets.length !== 1) throw new Error(`Trusted Kit Release must contain exactly one .hkit: ${releaseRecord.tag_name}`);
+    if (hkitAssets.length === 0) throw new Error(`Trusted Kit Release must contain at least one .hkit: ${releaseRecord.tag_name}`);
     const entry = parseRegistryEntry(await fetchAssetJson(assets.get('registry-entry.json'), {
       githubToken, fetchImpl, maxBytes: MAX_METADATA_BYTES, timeoutMs: requestTimeoutMs,
     }));
@@ -532,43 +532,48 @@ export async function discoverTrustedKitReleases({
       timeoutMs: requestTimeoutMs,
     });
     if (tagCommit !== validated.source.commit) throw new Error('GitHub Tag Commit does not match release.json');
-    const artifact = validated.assets[0];
-    const [hkitAsset] = hkitAssets;
-    if (
-      artifact.name !== hkitAsset.name
-      || hkitAsset.digest !== `sha256:${artifact.sha256}`
-      || !sameReleaseAssetUrl({
-        repository,
-        tag: releaseRecord.tag_name,
-        name: artifact.name,
-        immutableUrl: artifact.url,
-        browserUrl: hkitAsset.browser_download_url,
-      })
-    ) throw new Error('Release .hkit asset does not match release.json');
-    const expected = {
-      repository: validated.source.repository,
-      subjectName: artifact.name,
-      subjectSha256: artifact.sha256,
-      commit: validated.source.commit,
-      workflow: validated.source.workflow,
-      signerWorkflow: validated.source.signerWorkflow,
-      attestationUrl: validated.source.attestationUrl,
-    };
-    let verified;
-    try {
-      verified = await provenanceVerifier.verifyWithBundle(expected);
-    } catch (error) {
-      throw new Error('Artifact attestation verification failed', { cause: error });
+    if (hkitAssets.length !== validated.assets.length) {
+      throw new Error('Release .hkit asset set does not match release.json');
     }
-    assertVerifiedClaims(verified?.claims, expected);
-    if (!verified.bundle || typeof verified.bundle !== 'object' || Array.isArray(verified.bundle)) {
-      throw new Error('Artifact attestation verifier did not return a bundle');
+    const releaseAssetsByName = new Map(hkitAssets.map((asset) => [asset.name, asset]));
+    for (const artifact of validated.assets) {
+      const hkitAsset = releaseAssetsByName.get(artifact.name);
+      if (
+        !hkitAsset
+        || hkitAsset.digest !== `sha256:${artifact.sha256}`
+        || !sameReleaseAssetUrl({
+          repository,
+          tag: releaseRecord.tag_name,
+          name: artifact.name,
+          immutableUrl: artifact.url,
+          browserUrl: hkitAsset.browser_download_url,
+        })
+      ) throw new Error('Release .hkit asset does not match release.json');
+      const expected = {
+        repository: validated.source.repository,
+        subjectName: artifact.name,
+        subjectSha256: artifact.sha256,
+        commit: validated.source.commit,
+        workflow: validated.source.workflow,
+        signerWorkflow: validated.source.signerWorkflow,
+        attestationUrl: artifact.attestationUrl ?? validated.source.attestationUrl,
+      };
+      let verified;
+      try {
+        verified = await provenanceVerifier.verifyWithBundle(expected);
+      } catch (error) {
+        throw new Error('Artifact attestation verification failed', { cause: error });
+      }
+      assertVerifiedClaims(verified?.claims, expected);
+      if (!verified.bundle || typeof verified.bundle !== 'object' || Array.isArray(verified.bundle)) {
+        throw new Error('Artifact attestation verifier did not return a bundle');
+      }
+      const existingBundle = attestationBundlesByDigest.get(artifact.sha256);
+      if (existingBundle && JSON.stringify(existingBundle) !== JSON.stringify(verified.bundle)) {
+        throw new Error(`Artifact digest has conflicting attestation bundles: ${artifact.sha256}`);
+      }
+      if (!existingBundle) attestationBundlesByDigest.set(artifact.sha256, deepFreeze(verified.bundle));
     }
-    const existingBundle = attestationBundlesByDigest.get(artifact.sha256);
-    if (existingBundle && JSON.stringify(existingBundle) !== JSON.stringify(verified.bundle)) {
-      throw new Error(`Artifact digest has conflicting attestation bundles: ${artifact.sha256}`);
-    }
-    if (!existingBundle) attestationBundlesByDigest.set(artifact.sha256, deepFreeze(verified.bundle));
     entries.push(deepFreeze(entry));
     releasesByUrl.push([entry.releaseManifestUrl, deepFreeze(validated)]);
   }

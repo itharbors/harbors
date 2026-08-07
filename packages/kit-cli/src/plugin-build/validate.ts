@@ -1,5 +1,6 @@
 import { assertFileExists, resolveInsidePlugin } from './fs.js';
 import type { PluginProject } from './types.js';
+import { parsePluginPackageManifest } from '@itharbors/kit-core';
 
 function objectValue(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -16,23 +17,13 @@ function isDistPanelEntry(value: unknown): value is string {
 }
 
 export function validateRuntimePluginManifest(plugin: PluginProject): void {
-  const { pkg, main } = plugin;
-  const name = pkg.name;
-  if (typeof name !== 'string' || name.trim().length === 0) {
-    throw new Error('Plugin package.json missing name');
-  }
-  const ceEditor = objectValue(pkg['ce-editor']);
-  if (!ceEditor) throw new Error(`Plugin "${name}" missing "ce-editor" field in package.json`);
-  if (!isDistJavaScriptEntry(pkg.main)) {
-    throw new Error(`Plugin "${name}" package.json main must point to a dist JavaScript entry`);
-  }
-  resolveInsidePlugin(plugin.rootDir, pkg.main, `Plugin "${name}" package.json main`);
+  const { main } = plugin;
+  const manifest = parsePluginPackageManifest(plugin.pkg);
+  const { name } = manifest;
+  resolveInsidePlugin(plugin.rootDir, manifest.main, `Plugin "${name}" package.json main`);
   if (!main) throw new Error(`Plugin "${name}" package.json main must point to a dist JavaScript entry`);
-  const contribute = objectValue(ceEditor.contribute);
-  const panelDefinitions = objectValue(contribute?.panel) ?? {};
-  for (const [panelName, definitionValue] of Object.entries(panelDefinitions)) {
-    const definition = objectValue(definitionValue);
-    if (!definition || !isDistPanelEntry(definition.entry)) {
+  for (const [panelName, definition] of Object.entries(manifest.contribute.panel ?? {})) {
+    if (!isDistPanelEntry(definition.entry)) {
       throw new Error(`Plugin "${name}" panel contribution "${panelName}" entry must point to a dist index.html file`);
     }
     resolveInsidePlugin(plugin.rootDir, definition.entry, `Plugin "${name}" panel contribution "${panelName}" entry`);
@@ -49,11 +40,8 @@ export function validatePluginManifest(plugin: PluginProject): void {
 }
 
 export function validateBuiltOutputs(plugin: PluginProject): void {
-  const name = typeof plugin.pkg.name === 'string' ? plugin.pkg.name : plugin.rootDir;
-  const mainEntry = plugin.pkg.main;
-  if (!isDistJavaScriptEntry(mainEntry)) {
-    throw new Error(`Plugin "${name}" package.json main must point to a dist JavaScript entry`);
-  }
+  const manifest = parsePluginPackageManifest(plugin.pkg);
+  const { name, main: mainEntry } = manifest;
   assertFileExists(
     resolveInsidePlugin(plugin.rootDir, mainEntry, `Plugin "${name}" package.json main`),
     'plugin main',

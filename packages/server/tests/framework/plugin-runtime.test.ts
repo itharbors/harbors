@@ -27,6 +27,7 @@ function mkPlugin(
   fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
   fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
     name: pkgName,
+    version: '1.0.0',
     type: 'module',
     main: './main/dist/index.js',
     'ce-editor': capabilities === undefined ? {} : { capabilities },
@@ -138,14 +139,31 @@ describe('PluginModule', () => {
     expect(right.listRegistered()).toHaveLength(0);
   });
 
-  it('stores plugin kind in public plugin info', async () => {
+  it('stores plugin version and Kit artifact provenance in public plugin info', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-kind-'));
     const pluginDir = mkPlugin(root, 'log', 'log');
     const plugin = new PluginModule();
 
-    await plugin.register(pluginDir, { kind: 'external' });
+    await plugin.register(pluginDir, {
+      kind: 'external',
+      source: {
+        scope: 'kit',
+        kitId: '@example/kit-log',
+        kitVersion: '2.0.0',
+        artifactSha256: 'a'.repeat(64),
+      },
+    });
 
-    expect(plugin.getInfo('log')).toMatchObject({ kind: 'external' });
+    expect(plugin.getInfo('log')).toMatchObject({
+      kind: 'external',
+      version: '1.0.0',
+      source: {
+        scope: 'kit',
+        kitId: '@example/kit-log',
+        kitVersion: '2.0.0',
+        artifactSha256: 'a'.repeat(64),
+      },
+    });
   });
 
   it('validates and exposes declared plugin capabilities', async () => {

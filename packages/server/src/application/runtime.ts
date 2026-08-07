@@ -1018,8 +1018,10 @@ function setOptional<K extends 'generation' | 'pid' | 'lastFailureAt' | 'retryAf
 function pluginInfoSnapshot(info: PluginInfo): PluginInfo {
   return {
     name: info.name,
+    version: info.version,
     path: info.path,
     kind: info.kind,
+    source: structuredClone(info.source),
     entry: info.entry,
     ...(info.capabilities ? { capabilities: [...info.capabilities] } : {}),
     ...(info.assets ? { assets: structuredClone(info.assets) } : {}),

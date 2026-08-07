@@ -1053,6 +1053,7 @@ describe('ApplicationRuntime process integration', () => {
     fs.mkdirSync(path.join(pluginPath, 'main', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(pluginPath, 'package.json'), JSON.stringify({
       name,
+      version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
       'ce-editor': { contribute },

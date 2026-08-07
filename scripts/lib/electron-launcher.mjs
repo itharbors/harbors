@@ -78,6 +78,7 @@ export function createKitSourceSnapshot(catalog) {
   return Object.freeze(catalog.map((kit) => Object.freeze({
     directory: kit.directory,
     source: kit.source,
+    ...(kit.artifactSha256 ? { artifactSha256: kit.artifactSha256 } : {}),
   })));
 }
 

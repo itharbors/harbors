@@ -32,15 +32,20 @@ function parseKitSources(value) {
   const seen = new Set();
   const sources = parsed.map((item) => {
     if (!item || typeof item !== 'object' || Array.isArray(item)
-      || Object.keys(item).sort().join(',') !== 'directory,source'
+      || Object.keys(item).some((key) => !['artifactSha256', 'directory', 'source'].includes(key))
       || typeof item.directory !== 'string' || !path.isAbsolute(item.directory)
       || !KIT_SOURCE_KINDS.has(item.source)
+      || (item.artifactSha256 !== undefined && !/^[a-f0-9]{64}$/u.test(item.artifactSha256))
       || seen.has(path.resolve(item.directory))) {
       throw new Error(message);
     }
     const directory = path.resolve(item.directory);
     seen.add(directory);
-    return Object.freeze({ directory, source: item.source });
+    return Object.freeze({
+      directory,
+      source: item.source,
+      ...(item.artifactSha256 ? { artifactSha256: item.artifactSha256 } : {}),
+    });
   });
   return Object.freeze(sources);
 }
@@ -93,7 +98,7 @@ export function parseDesktopFrameworkEnvironment(env) {
     kitSources: parseKitSources(env.HARBORS_KIT_SOURCES),
     notificationPort: parseNotificationPort(env.HARBORS_NOTIFICATION_PORT),
     applicationControlToken,
-    host: '0.0.0.0',
+    host: '127.0.0.1',
     port: 0,
   });
 }

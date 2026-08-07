@@ -91,7 +91,12 @@ export const main = true;
   await write(root, 'packages/client/dist/index.html', '<script src="/assets/index.js"></script>');
   await write(root, 'packages/client/dist/assets/index.js', 'export const client = true;\n');
   for (const plugin of ['config', 'menu', 'message', 'panel']) {
-    await write(root, `plugins/${plugin}/package.json`, JSON.stringify({ name: `@itharbors/${plugin}` }));
+    await write(root, `plugins/${plugin}/package.json`, JSON.stringify({
+      name: `@itharbors/${plugin}`,
+      version: '0.0.1',
+      main: './main/dist/index.js',
+      'ce-editor': { contribute: {} },
+    }));
     await write(root, `plugins/${plugin}/main/dist/index.js`, `export const ${plugin} = true;\n`);
     await write(root, `plugins/${plugin}/main/src/index.ts`, 'throw new Error();\n');
   }
@@ -147,6 +152,7 @@ export const main = true;
   ]) {
     await write(root, `kits/default/plugins/${plugin}/package.json`, JSON.stringify({
       name: plugin,
+      version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
         contribute: {
@@ -163,6 +169,7 @@ export const main = true;
   }
   await write(root, 'kits/default/plugins/fixture-plugin/package.json', JSON.stringify({
     name: '@itharbors/fixture-plugin',
+    version: '0.0.1',
     main: './main/dist/index.js',
     'ce-editor': {
       contribute: {
@@ -342,8 +349,9 @@ test('production prepare builds and stages builtin Kits only from private instal
       calls.push(`load:${loadedRoot}:${slug}`);
       return { ...source, directory: installRoot };
     },
-    buildFramework: async ({ outputRoot: aggregateRoot, descriptors }) => {
+    buildFramework: async ({ outputRoot: aggregateRoot, descriptors, createRuntimeManifest }) => {
       assert.deepEqual(descriptors, []);
+      assert.equal(createRuntimeManifest, false);
       await write(aggregateRoot, 'framework.txt', 'framework');
       return { outputRoot: aggregateRoot, inventory: [] };
     },
@@ -359,6 +367,19 @@ test('production prepare builds and stages builtin Kits only from private instal
 
   assert.equal(existsSync(path.join(repositoryRoot, 'kits/surprise/dist')), false);
   assert.equal(await readFile(path.join(outputRoot, 'kits/surprise/resources/private.txt'), 'utf8'), 'private');
+  const runtimeManifest = JSON.parse(await readFile(
+    path.join(outputRoot, 'runtime-manifest.json'),
+    'utf8',
+  ));
+  assert.deepEqual(
+    runtimeManifest.files.map((entry) => entry.path),
+    [
+      'framework.txt',
+      'kits/surprise/kit.json',
+      'kits/surprise/package.json',
+      'kits/surprise/resources/private.txt',
+    ],
+  );
   assert.equal(existsSync(runRoot), false);
   assert.deepEqual(calls.map((item) => item.split(':')[0]), ['install', 'build', 'load', 'stage']);
 });
@@ -718,7 +739,7 @@ for (const [description, update] of [
         repositoryRoot,
         outputRoot: path.join(repositoryRoot, 'dist', 'desktop-runtime'),
       }),
-      /Desktop plugin (?:main|panel) entrypoint must name a built artifact beneath dist/u,
+      /(?:Plugin .* (?:main|panel).*(?:dist|built artifact)|Desktop plugin (?:main|panel) entrypoint)/iu,
     );
   });
 }
@@ -747,7 +768,7 @@ for (const [description, prepare, update] of [
         repositoryRoot,
         outputRoot: path.join(repositoryRoot, 'dist', 'desktop-runtime'),
       }),
-      /Desktop plugin (?:main|panel) entrypoint/iu,
+      /(?:Plugin .* (?:main|panel)|Desktop plugin (?:main|panel) entrypoint)/iu,
     );
   });
 }
@@ -828,7 +849,7 @@ test('rejects missing or malformed declared plugin public asset roots', async (t
   });
   await assert.rejects(
     buildDesktop({ repositoryRoot, outputRoot }),
-    /public asset roots are malformed/iu,
+    /(?:assets must be an object|public asset roots are malformed)/iu,
   );
 });
 

@@ -35,7 +35,14 @@ Kit API SemVer 范围、协议版本、权限和目标。通用包必须使用 `
 Framework Node 模块 ABI（不是 Electron 主进程 ABI）；安装端会同时检查 Framework、Kit API、
 协议、平台、架构和 ABI。
 
-### `credentials` 权限
+### 权限字段是风险声明，不是 OS 沙箱
+
+`permissions` 用于发布审核、兼容性选择、安装提示，以及少数由 Framework 显式代理的 owner-bound
+capability 授权。插件主进程仍是同一 OS 账号下的受信 Node.js 代码；`filesystem`、`network`、
+`native-code` 等声明不会自动建立操作系统级隔离。真正的宿主能力必须同时通过具体 capability、
+Kit/Plugin owner 身份和运行时策略检查，Panel 也不会因此直接获得 Node.js 或系统权限。
+
+### `credentials` 风险声明
 
 `credentials` 是高风险、官方发布者专用的权限。Registry reference、Release asset manifest 和
 签名来源声明中的权限集合必须精确一致；Resolver 只接受 publisher 为 `itharbors` 的制品，第三方

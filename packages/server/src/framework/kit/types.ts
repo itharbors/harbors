@@ -17,6 +17,8 @@ export interface KitLayoutInputConfig {
 
 export interface KitDescriptor {
   name: string;
+  version?: string;
+  artifactSha256?: string;
   label?: string;
   icon?: string;
   menuRoot: KitMenuRoot;

@@ -3,6 +3,7 @@ import type {
   PluginAssetsManifest,
   PluginInfo,
   PluginKind,
+  PluginSourceIdentity,
   PluginCapability,
   PluginModule as LoadedPluginModule,
 } from './types';
@@ -23,6 +24,7 @@ import { withPluginDefinitionLock } from './load-lock';
 import { createPluginPaths, type PluginPaths } from './paths';
 import type { PluginCredentialVault } from '@itharbors/plugin-types';
 import { credentialError } from '../../credentials/errors';
+import { parsePluginPackageManifest } from '@itharbors/kit-core';
 
 interface PackageJson {
   name?: string;
@@ -38,25 +40,6 @@ interface PluginDefinitionBridge {
   readonly plugin: Readonly<{
     define(definition: import('./types').PluginDefinition): void;
   }>;
-}
-
-const PLUGIN_CAPABILITIES = new Set<PluginCapability>(['credentials']);
-
-function parsePluginCapabilities(value: unknown, pluginName: string): PluginCapability[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) {
-    throw new Error(`Plugin "${pluginName}" ce-editor.capabilities must be an array`);
-  }
-  const capabilities = value.map((capability, index) => {
-    if (typeof capability !== 'string' || !PLUGIN_CAPABILITIES.has(capability as PluginCapability)) {
-      throw new Error(`Plugin "${pluginName}" ce-editor.capabilities[${index}] is unknown`);
-    }
-    return capability as PluginCapability;
-  });
-  if (new Set(capabilities).size !== capabilities.length) {
-    throw new Error(`Plugin "${pluginName}" ce-editor.capabilities contains duplicate values`);
-  }
-  return capabilities;
 }
 
 function isDistJavaScriptEntry(value: string): boolean {
@@ -128,7 +111,10 @@ export class PluginModule {
   private nameMap = new Map<string, Plugin>();
   private credentialRevokers = new Map<string, () => Promise<void>>();
 
-  async register(pluginPath: string, options: { kind: PluginKind } = { kind: 'external' }): Promise<void> {
+  async register(pluginPath: string, options: {
+    kind: PluginKind;
+    source?: PluginSourceIdentity;
+  } = { kind: 'external' }): Promise<void> {
     const absPath = path.resolve(pluginPath);
     if (this.pathMap.has(absPath)) return;
 
@@ -140,23 +126,23 @@ export class PluginModule {
       throw new Error(`Invalid plugin: no package.json found at ${absPath}`);
     }
 
-    if (!pkg.name) {
-      throw new Error(`Plugin at ${absPath} missing package name`);
-    }
-    if (!pkg['ce-editor']) {
-      throw new Error(`Plugin at ${absPath} missing "ce-editor" field in package.json`);
-    }
-
-    resolveDeclaredMain(absPath, pkg, pkg.name);
-    const contribute = pkg['ce-editor'].contribute;
-    assertPanelContributions(absPath, contribute, pkg.name);
-    const assets = pkg['ce-editor'].assets;
-    const capabilities = parsePluginCapabilities(pkg['ce-editor'].capabilities, pkg.name);
+    const manifest = parsePluginPackageManifest(pkg);
+    resolveDeclaredMain(absPath, { ...pkg, main: manifest.main }, manifest.name);
+    const contribute = manifest.contribute as ContributeData;
+    assertPanelContributions(absPath, contribute, manifest.name);
+    const assets = manifest.assets.public.length > 0
+      ? { public: [...manifest.assets.public] }
+      : undefined;
+    const capabilities = [...manifest.capabilities];
     const info: PluginInfo = {
-      name: pkg.name,
+      name: manifest.name,
+      version: manifest.version,
       path: absPath,
       kind: options.kind,
-      entry: pkg.main!,
+      source: options.source ?? {
+        scope: options.kind === 'builtin' ? 'framework' : 'unmanaged',
+      },
+      entry: manifest.main,
       capabilities,
       assets,
       contribute,

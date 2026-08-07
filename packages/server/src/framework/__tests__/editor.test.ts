@@ -44,6 +44,7 @@ describe('panel plugin contributions', () => {
     await mkdir(path.join(pluginDir, 'panel', 'dist'), { recursive: true });
     await writeFile(path.join(pluginDir, 'package.json'), JSON.stringify({
       name: 'panel-plugin',
+      version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
       'ce-editor': {

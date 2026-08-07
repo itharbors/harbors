@@ -160,22 +160,22 @@ function validateReleaseEvidence(release, { repository, tag, context }) {
   if (!PUBLISH_SIGNER_WORKFLOWS.has(release.source.signerWorkflow)) {
     throw new Error(`Release signer workflow does not match ${context}`);
   }
-  if (release.assets.length !== 1) {
-    throw new Error('Release manifest must contain exactly one attested Kit asset');
+  for (const asset of release.assets) {
+    const expectedAssetName = deriveArtifactName(asset.manifest);
+    if (asset.name !== expectedAssetName) {
+      throw new Error(`Release asset name does not match manifest ${context}`);
+    }
+    if (asset.url !== exactReleaseUrl(repository, tag, expectedAssetName)) {
+      throw new Error(`Release asset URL does not match ${context}`);
+    }
+    const expectedAttestation = `https://api.github.com/repos/${repository}/attestations/sha256:${asset.sha256}`;
+    const actualAttestation = asset.attestationUrl
+      ?? (release.assets.length === 1 ? release.source.attestationUrl : undefined);
+    if (actualAttestation !== expectedAttestation) {
+      throw new Error(`Release attestation URL does not match asset ${expectedAssetName}`);
+    }
   }
-  const [asset] = release.assets;
-  const expectedAssetName = deriveArtifactName(asset.manifest);
-  if (asset.name !== expectedAssetName) {
-    throw new Error(`Release asset name does not match manifest ${context}`);
-  }
-  if (asset.url !== exactReleaseUrl(repository, tag, expectedAssetName)) {
-    throw new Error(`Release asset URL does not match ${context}`);
-  }
-  const expectedAttestation = `https://api.github.com/repos/${repository}/attestations/sha256:${asset.sha256}`;
-  if (release.source.attestationUrl !== expectedAttestation) {
-    throw new Error(`Release attestation URL does not match asset ${expectedAssetName}`);
-  }
-  return asset;
+  return release.assets;
 }
 
 export function validateRegistryRelease(entry, rawRelease) {
@@ -188,12 +188,12 @@ export function validateRegistryRelease(entry, rawRelease) {
     || release.source.repository !== entry.source.repository
   ) throw new Error(`Release identity does not match Registry entry ${entry.id}@${entry.version}`);
 
-  const asset = validateReleaseEvidence(release, {
+  const assets = validateReleaseEvidence(release, {
     repository: entry.source.repository,
     tag: entry.source.tag,
     context: `Registry entry ${entry.id}@${entry.version}`,
   });
-  if (!sameStrings(asset.manifest.permissions, entry.permissions)) {
+  if (!sameStrings(assets[0].manifest.permissions, entry.permissions)) {
     throw new Error(`Release permissions do not match Registry entry ${entry.id}@${entry.version}`);
   }
   return release;
@@ -307,9 +307,10 @@ export function buildKitRegistryIndex({ entries, releasesByUrl, revocations, gen
   )));
   const channels = new Map();
   for (const candidate of candidates) {
-    const artifact = candidate.release.assets[0];
-    const revocationKey = `${candidate.entry.id}\0${candidate.entry.version}\0${artifact.sha256}`;
-    if (revokedArtifacts.has(revocationKey)) continue;
+    const allAssetsRevoked = candidate.release.assets.every((artifact) => (
+      revokedArtifacts.has(`${candidate.entry.id}\0${candidate.entry.version}\0${artifact.sha256}`)
+    ));
+    if (allAssetsRevoked) continue;
     const key = `${candidate.entry.id}\0${candidate.entry.channel}`;
     const values = channels.get(key) ?? [];
     values.push(candidate);

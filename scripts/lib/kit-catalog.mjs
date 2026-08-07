@@ -304,6 +304,7 @@ async function readKitEntry(directory, source, installedSource) {
       startupPlugins: [...startupPlugins],
       source,
       version,
+      ...(source === 'installed' ? { artifactSha256: installedSource.digest } : {}),
     },
   };
 }

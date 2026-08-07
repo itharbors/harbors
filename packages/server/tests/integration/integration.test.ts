@@ -65,6 +65,7 @@ describe('Framework Integration', () => {
     tempDirs.push(pluginDir);
     writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
       name: pluginName,
+      version: '1.0.0',
       type: 'module',
       main: 'dist/index.js',
       'ce-editor': {

@@ -1,5 +1,6 @@
 {
   "name": "@acceptance/crashing",
+  "version": "1.0.0",
   "type": "module",
   "main": "./main/dist/index.js",
   "ce-editor": {

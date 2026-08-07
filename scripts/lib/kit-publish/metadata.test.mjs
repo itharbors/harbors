@@ -65,6 +65,7 @@ test('creates immutable Stable Release and Registry metadata from the inspected 
     assets: [{
       name: metadata.artifactName,
       url: 'https://github.com/itharbors/harbors/releases/download/kit%2Fmysql%2Fv1.2.3/kit-mysql-1.2.3-darwin-arm64-abi127.hkit',
+      attestationUrl: `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${'a'.repeat(64)}`,
       sha256: 'a'.repeat(64),
       size: 3_179,
       manifest: stableManifest,
@@ -108,10 +109,34 @@ test('creates Preview metadata only for a prerelease manifest on its immutable T
 
 test('derives portable artifact names for any and native targets', () => {
   assert.equal(
-    deriveArtifactName({ ...stableManifest, target: { platform: 'any', arch: 'any' } }),
+    deriveArtifactName({
+      ...stableManifest,
+      target: { platform: 'any', arch: 'any' },
+      permissions: ['network', 'filesystem', 'credentials'],
+    }),
     'kit-mysql-1.2.3-any-any.hkit',
   );
   assert.equal(deriveArtifactName(stableManifest), 'kit-mysql-1.2.3-darwin-arm64-abi127.hkit');
+});
+
+test('creates one independently attested Release asset per unique target', () => {
+  const linuxManifest = {
+    ...stableManifest,
+    target: { platform: 'linux', arch: 'x64', nodeAbi: '127' },
+  };
+  const metadata = createKitPublicationMetadata(input({
+    artifacts: [
+      { manifest: stableManifest, sha256: 'a'.repeat(64), size: 3_179 },
+      { manifest: linuxManifest, sha256: 'b'.repeat(64), size: 4_200 },
+    ],
+  }));
+
+  assert.deepEqual(metadata.artifactNames, [
+    'kit-mysql-1.2.3-darwin-arm64-abi127.hkit',
+    'kit-mysql-1.2.3-linux-x64-abi127.hkit',
+  ]);
+  assert.equal(metadata.release.assets[1].attestationUrl,
+    `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${'b'.repeat(64)}`);
 });
 
 test('rejects channel-specific SemVer, Tag, source workflow, and signer mismatches', () => {

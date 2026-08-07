@@ -232,8 +232,29 @@ test('rejects incompatible or ambiguous compatible assets', async () => {
       releaseValue: {
         ...release,
         assets: [
-          release.assets[0],
-          { ...release.assets[0], name: 'duplicate-compatible.hkit', sha256: 'b'.repeat(64) },
+          {
+            ...release.assets[0],
+            name: 'concrete-compatible.hkit',
+            attestationUrl: release.source.attestationUrl,
+            manifest: {
+              ...manifest,
+              target: { platform: runtime.platform, arch: runtime.arch },
+            },
+          },
+          {
+            ...release.assets[0],
+            name: 'abi-compatible.hkit',
+            sha256: 'b'.repeat(64),
+            attestationUrl: `https://github.com/example/kit-demo/attestations/${'b'.repeat(64)}`,
+            manifest: {
+              ...manifest,
+              target: {
+                platform: runtime.platform,
+                arch: runtime.arch,
+                nodeAbi: runtime.nodeAbi,
+              },
+            },
+          },
         ],
       },
     }).resolve({ id: manifest.id, version: manifest.version, channel: 'stable', runtime }),

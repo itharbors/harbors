@@ -3,6 +3,7 @@
 import {
   copyFile,
   mkdir,
+  readdir,
   rm,
   writeFile,
 } from 'node:fs/promises';
@@ -28,6 +29,12 @@ import { GitHubArtifactAttestationVerifier } from './lib/kit-registry/github-att
 
 const USAGE = [
   'Usage:',
+  '  node scripts/kit-publish.mjs prepare \\',
+  '    --kit-artifacts-directory <directory> --output-directory <directory> \\',
+  '    --kit-id <id> --kit-version <version> --kit-channel <channel> \\',
+  '    --repository <owner/repo> --commit <sha> --workflow <workflow@ref> \\',
+  '    --signer-workflow <workflow@ref> \\',
+  '    --ref <refs/...> --tag <tag> --label <label> --summary <summary>',
   '  node scripts/kit-publish.mjs prepare \\',
   '    --kit-artifact <file> --output-directory <directory> \\',
   '    --kit-id <id> --kit-version <version> --kit-channel <channel> \\',
@@ -61,6 +68,10 @@ const PREPARE_ARTIFACT_OPTIONS = [
   'label',
   'summary',
 ];
+
+const PREPARE_ARTIFACTS_OPTIONS = PREPARE_ARTIFACT_OPTIONS.map((name) => (
+  name === 'kit-artifact' ? 'kit-artifacts-directory' : name
+));
 
 const PREPARE_DIRECTORY_OPTIONS = [
   'kit-directory',
@@ -106,7 +117,87 @@ function parseOptions(args, allowed) {
 
 async function prepare(options) {
   if (options['kit-directory']) return prepareDirectory(options);
+  if (options['kit-artifacts-directory']) return prepareArtifactsDirectory(options);
   return prepareArtifact(options);
+}
+
+async function prepareArtifactsDirectory(options) {
+  const sourceDirectory = path.resolve(options['kit-artifacts-directory']);
+  const artifactFiles = (await readdir(sourceDirectory, { withFileTypes: true }))
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.hkit'))
+    .map((entry) => path.join(sourceDirectory, entry.name))
+    .sort((left, right) => left.localeCompare(right));
+  if (artifactFiles.length === 0) {
+    throw new Error('Kit artifacts directory must contain at least one .hkit');
+  }
+  const artifacts = await Promise.all(artifactFiles.map(async (kitArtifact) => {
+    const inspected = await inspectKit({ archive: kitArtifact });
+    const artifactName = deriveArtifactName(inspected.manifest);
+    if (path.basename(kitArtifact) !== artifactName) {
+      throw new Error(`Kit artifact must use canonical artifact name ${artifactName}`);
+    }
+    for (const [field, actual, expected] of [
+      ['id', inspected.manifest.id, options['kit-id']],
+      ['version', inspected.manifest.version, options['kit-version']],
+      ['channel', inspected.manifest.channel, options['kit-channel']],
+    ]) {
+      if (actual !== expected) throw new Error(`Kit artifact ${field} does not match expected ${field}`);
+    }
+    return {
+      artifactName,
+      kitArtifact,
+      inspected,
+      spdx: await readEmbeddedSpdx(kitArtifact),
+    };
+  }));
+  const metadata = createKitPublicationMetadata({
+    artifacts: artifacts.map(({ inspected }) => ({
+      manifest: inspected.manifest,
+      sha256: inspected.sha256,
+      size: inspected.compressedSize,
+    })),
+    repository: options.repository,
+    commit: options.commit,
+    workflow: options.workflow,
+    signerWorkflow: options['signer-workflow'],
+    ref: options.ref,
+    tag: options.tag,
+    label: options.label,
+    summary: options.summary,
+  });
+  const outputDirectory = path.resolve(options['output-directory']);
+  let ownsOutputDirectory = false;
+  try {
+    await mkdir(outputDirectory, { mode: 0o700 });
+    ownsOutputDirectory = true;
+    await Promise.all(artifacts.map(({ artifactName, kitArtifact }) => (
+      copyFile(kitArtifact, path.join(outputDirectory, artifactName), fsConstants.COPYFILE_EXCL)
+    )));
+    const sbomNames = artifacts.map(({ artifactName }) => (
+      artifacts.length === 1 ? 'sbom.spdx.json' : `sbom.${artifactName}.spdx.json`
+    ));
+    await Promise.all([
+      writeFile(path.join(outputDirectory, 'release.json'), canonicalJson(metadata.release), { flag: 'wx', mode: 0o600 }),
+      writeFile(path.join(outputDirectory, 'registry-entry.json'), canonicalJson(metadata.registryEntry), { flag: 'wx', mode: 0o600 }),
+      ...artifacts.map(({ spdx }, index) => writeFile(
+        path.join(outputDirectory, sbomNames[index]),
+        canonicalJson(spdx),
+        { flag: 'wx', mode: 0o600 },
+      )),
+    ]);
+    return {
+      CHANNEL: artifacts[0].inspected.manifest.channel,
+      VERSION: artifacts[0].inspected.manifest.version,
+      TAG: options.tag,
+      ARTIFACT_COUNT: artifacts.length,
+      RELEASE_MANIFEST: 'release.json',
+      REGISTRY_ENTRY: 'registry-entry.json',
+      SBOM_COUNT: sbomNames.length,
+    };
+  } catch (error) {
+    if (ownsOutputDirectory) await rm(outputDirectory, { recursive: true, force: true });
+    throw error;
+  }
 }
 
 async function prepareArtifact(options) {
@@ -299,7 +390,7 @@ export async function runKitPublishCli(
 ) {
   const [command, ...rest] = args;
   const allowed = command === 'prepare'
-    ? [PREPARE_ARTIFACT_OPTIONS, PREPARE_DIRECTORY_OPTIONS]
+    ? [PREPARE_ARTIFACT_OPTIONS, PREPARE_ARTIFACTS_OPTIONS, PREPARE_DIRECTORY_OPTIONS]
     : command === 'aggregate'
         ? [AGGREGATE_OPTIONS]
         : null;

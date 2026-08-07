@@ -360,7 +360,7 @@ test('renders overview, permission, and version tabs with high-risk permission s
   await value.view.start();
   assert.deepEqual(
     [...value.document.querySelectorAll('[data-detail-tab]')].map((tab) => tab.textContent),
-    ['概览', '权限', '版本记录'],
+    ['概览', '风险声明', '版本记录'],
   );
   assert.match(value.document.querySelector('[role="tabpanel"]').textContent, /1\.2\.0/);
   assert.match(value.document.querySelector('[role="tabpanel"]').textContent, /稳定版/);

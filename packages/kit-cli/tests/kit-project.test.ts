@@ -138,6 +138,13 @@ describe('validateKit', () => {
     );
   });
 
+  it('rejects a native module payload without the native-code risk declaration', async () => {
+    const directory = await copyFixture();
+    await writeFile(path.join(directory, 'plugins/demo/main/dist/addon.node'), 'native fixture');
+
+    await expect(validateKit(directory)).rejects.toThrow(/native-code permission/i);
+  });
+
   it('rejects a symbolic link anywhere in the selected payload', async () => {
     const directory = await copyFixture();
     const pluginDirectory = path.join(directory, 'plugins/demo');
@@ -205,6 +212,20 @@ describe('validateKit', () => {
       'runtime-root',
       'transitive',
     ]);
+    expect(project.components).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        name: 'runtime-root',
+        version: '1.0.0',
+        kind: 'npm',
+        dependencies: ['transitive'],
+      }),
+      expect.objectContaining({
+        name: '@example/contracts',
+        version: '1.0.0',
+        kind: 'npm',
+        dependencies: ['transitive'],
+      }),
+    ]));
   });
 
   it('resolves hoisted production dependencies from a matching workspace lock root', async () => {

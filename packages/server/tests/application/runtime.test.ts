@@ -32,6 +32,7 @@ describe('ApplicationRuntime', () => {
     fs.mkdirSync(path.join(pluginDir, 'main', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
       name,
+      version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
       'ce-editor': { contribute },

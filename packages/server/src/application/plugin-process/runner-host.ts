@@ -472,11 +472,20 @@ function isPluginSnapshot(input: unknown): input is ApplicationPluginSnapshot {
 
 function isPluginInfo(input: unknown): input is PluginInfo {
   if (!isRecord(input) || !hasOnlyKeys(input, [
-    'name', 'path', 'kind', 'entry', 'capabilities', 'assets', 'contribute',
-  ]) || !Object.hasOwn(input, 'name') || !Object.hasOwn(input, 'path')
+    'name', 'version', 'path', 'kind', 'source', 'entry', 'capabilities', 'assets', 'contribute',
+  ]) || !Object.hasOwn(input, 'name') || !Object.hasOwn(input, 'version') || !Object.hasOwn(input, 'path')
     || !Object.hasOwn(input, 'kind') || !Object.hasOwn(input, 'entry')
-    || !isNonEmptyString(input.name) || !isNonEmptyString(input.path)
+    || !Object.hasOwn(input, 'source')
+    || !isNonEmptyString(input.name) || !isNonEmptyString(input.version) || !isNonEmptyString(input.path)
     || (input.kind !== 'builtin' && input.kind !== 'external') || !isNonEmptyString(input.entry)
+    || !isRecord(input.source)
+    || !hasOnlyKeys(input.source, ['scope', 'kitId', 'kitVersion', 'artifactSha256'])
+    || !['framework', 'kit', 'unmanaged'].includes(String(input.source.scope))
+    || (input.source.kitId !== undefined && !isNonEmptyString(input.source.kitId))
+    || (input.source.kitVersion !== undefined && !isNonEmptyString(input.source.kitVersion))
+    || (input.source.artifactSha256 !== undefined
+      && (typeof input.source.artifactSha256 !== 'string'
+        || !/^[a-f0-9]{64}$/u.test(input.source.artifactSha256)))
     || (input.capabilities !== undefined && (!Array.isArray(input.capabilities)
       || input.capabilities.some((capability) => capability !== 'credentials')))
     || (input.assets !== undefined && (!isRecord(input.assets)
