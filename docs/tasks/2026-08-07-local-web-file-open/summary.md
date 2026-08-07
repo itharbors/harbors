@@ -33,6 +33,7 @@
 - 最终聚焦测试：3 files、28 tests 通过。
 - `npm run build -w packages/server` 与 `git diff --check`：通过。
 - SQLite Web 实际验收：20 KiB 数据库经 localhost 暂存并以只读模式打开，浏览器显示 2 张表、1 个视图及 Alice/Bob 两条记录。
+- `npm run check` 暴露并修正 Agent Guard 已发布 `preview.7` 后两处仍期待 `preview.6` 的测试基线，随后完整门禁通过。
 
 ## 影响与风险
 
