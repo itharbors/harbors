@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "@itharbors/kit-scheduler",
-  "version": "0.1.0-preview.1",
+  "version": "0.1.0-preview.2",
   "channel": "preview",
   "publisher": "itharbors",
   "requires": {
@@ -16,7 +16,7 @@
   "permissions": [
     "application-startup",
     "filesystem",
-    "native-code"
+    "process-control"
   ],
   "entry": "package.json"
 }
