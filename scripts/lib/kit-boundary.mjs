@@ -297,7 +297,7 @@ export async function readChangedPathRecords({ repositoryRoot, base, head }) {
       '--name-status',
       '-z',
       '--find-renames',
-      '--find-copies',
+      '--find-copies=100%',
       '--find-copies-harder',
       baseCommit,
       headCommit,

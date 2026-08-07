@@ -308,6 +308,60 @@ test('validates the exact three real Task files with Git name-status and modes',
   });
 });
 
+test('treats independently generated similar Task status files as additions', async () => {
+  await withRepository(async ({ repositoryRoot }) => {
+    const previousTaskDirectory = path.join(
+      repositoryRoot,
+      'docs',
+      'tasks',
+      '2026-08-04-task-development-lifecycle',
+    );
+    await mkdir(previousTaskDirectory, { recursive: true });
+    await writeFile(path.join(previousTaskDirectory, 'status.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      taskId: '2026-08-04-task-development-lifecycle',
+      type: 'feature',
+      updatedAt: '2026-08-04T00:00:00.000Z',
+      stages: {
+        requirements: 'completed',
+        design: 'completed',
+        implementation: 'completed',
+        verification: 'completed',
+        consolidation: 'completed',
+      },
+      pullRequest: 42,
+    }, null, 2)}\n`);
+    const base = await commitAll(repositoryRoot, 'add previous Task status');
+
+    const currentTaskDirectory = path.join(repositoryRoot, 'docs', 'tasks', taskId);
+    await mkdir(currentTaskDirectory, { recursive: true });
+    await writeFile(path.join(currentTaskDirectory, 'status.json'), `${JSON.stringify({
+      schemaVersion: 1,
+      taskId,
+      type: 'refactor',
+      updatedAt: '2026-08-07T00:00:00.000Z',
+      stages: {
+        requirements: 'completed',
+        design: 'completed',
+        implementation: 'completed',
+        verification: 'completed',
+        consolidation: 'in_progress',
+      },
+      pullRequest: null,
+    }, null, 2)}\n`);
+    const head = await commitAll(repositoryRoot, 'add current Task status');
+
+    assert.deepEqual(
+      await readChangedPathRecords({ repositoryRoot, base, head }),
+      [{ status: 'A', paths: [`docs/tasks/${taskId}/status.json`] }],
+    );
+    assert.deepEqual(
+      await validateKitChange({ repositoryRoot, slug: 'sqlite', taskId, base, head }),
+      { paths: [`docs/tasks/${taskId}/status.json`] },
+    );
+  });
+});
+
 test('real CLI rejects an unchanged Kit source copied into the current Task boundary', async () => {
   await withRepository(async ({ repositoryRoot }) => {
     const content = 'copy detection fixture\n';
