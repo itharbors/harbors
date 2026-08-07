@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "taskId": "2026-08-07-permission-risk-contract",
   "type": "refactor",
-  "updatedAt": "2026-08-07T08:53:30.890Z",
+  "updatedAt": "2026-08-07T08:54:29.888Z",
   "stages": {
     "requirements": "completed",
     "design": "completed",
@@ -10,5 +10,7 @@
     "verification": "completed",
     "consolidation": "completed"
   },
-  "pullRequest": null
+  "pullRequest": {
+    "number": 67
+  }
 }
