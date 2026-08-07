@@ -385,5 +385,21 @@ export async function aggregateKitRegistry({
       requestTimeoutMs,
     }));
   }
-  return buildKitRegistryIndex({ entries: discovered.entries, releasesByUrl, revocations, generatedAt });
+  const index = buildKitRegistryIndex({
+    entries: discovered.entries,
+    releasesByUrl,
+    revocations,
+    generatedAt,
+  });
+  const attestationBundlesByDigest = new Map();
+  for (const kit of index.kits) {
+    for (const reference of Object.values(kit.channels)) {
+      const release = parseReleaseManifest(releasesByUrl.get(reference.releaseManifestUrl));
+      const digest = release.assets[0].sha256;
+      const bundle = discovered.attestationBundlesByDigest.get(digest);
+      if (!bundle) throw new Error(`Missing verified attestation bundle for ${digest}`);
+      attestationBundlesByDigest.set(digest, bundle);
+    }
+  }
+  return Object.freeze({ index, attestationBundlesByDigest });
 }

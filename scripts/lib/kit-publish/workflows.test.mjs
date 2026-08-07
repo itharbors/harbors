@@ -219,7 +219,7 @@ test('publisher deploys Registry only after exactly one release job succeeds', a
   assert.match(registry, /secrets:\s*inherit/u);
 });
 
-test('Registry workflow scans trusted Releases from main and deploys only one Pages index', async () => {
+test('Registry workflow scans trusted Releases from main and deploys one validated Pages site', async () => {
   const workflow = await read('.github/workflows/publish-kit-registry.yml');
   assert.match(workflow, /^on:\n  workflow_call:\n  workflow_dispatch:\n    inputs:\n      request-id:\n        description:\s*.+\n        required:\s*true\n        type:\s*string$/mu);
   assert.match(workflow, /^run-name:\s*Publish Kit Registry \$\{\{ inputs\.request-id \}\}$/mu);

@@ -468,12 +468,13 @@ export async function discoverTrustedKitReleases({
   if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0 || requestTimeoutMs > REQUEST_TIMEOUT_MS) {
     throw new TypeError(`requestTimeoutMs must be a positive integer no greater than ${REQUEST_TIMEOUT_MS}`);
   }
-  if (!provenanceVerifier || typeof provenanceVerifier.verify !== 'function') {
+  if (!provenanceVerifier || typeof provenanceVerifier.verifyWithBundle !== 'function') {
     throw new TypeError('provenanceVerifier is required');
   }
   const releases = await listReleases({ repository, githubToken, fetchImpl, timeoutMs: requestTimeoutMs });
   const entries = [];
   const releasesByUrl = [];
+  const attestationBundlesByDigest = new Map();
   const tags = new Set();
   const releaseUrls = new Set();
   for (const rawRecord of releases) {
@@ -553,18 +554,27 @@ export async function discoverTrustedKitReleases({
       signerWorkflow: validated.source.signerWorkflow,
       attestationUrl: validated.source.attestationUrl,
     };
-    let claims;
+    let verified;
     try {
-      claims = await provenanceVerifier.verify(expected);
+      verified = await provenanceVerifier.verifyWithBundle(expected);
     } catch (error) {
       throw new Error('Artifact attestation verification failed', { cause: error });
     }
-    assertVerifiedClaims(claims, expected);
+    assertVerifiedClaims(verified?.claims, expected);
+    if (!verified.bundle || typeof verified.bundle !== 'object' || Array.isArray(verified.bundle)) {
+      throw new Error('Artifact attestation verifier did not return a bundle');
+    }
+    const existingBundle = attestationBundlesByDigest.get(artifact.sha256);
+    if (existingBundle && JSON.stringify(existingBundle) !== JSON.stringify(verified.bundle)) {
+      throw new Error(`Artifact digest has conflicting attestation bundles: ${artifact.sha256}`);
+    }
+    if (!existingBundle) attestationBundlesByDigest.set(artifact.sha256, deepFreeze(verified.bundle));
     entries.push(deepFreeze(entry));
     releasesByUrl.push([entry.releaseManifestUrl, deepFreeze(validated)]);
   }
   return Object.freeze({
     entries: Object.freeze(entries),
     releasesByUrl: readOnlyMap(releasesByUrl),
+    attestationBundlesByDigest: readOnlyMap(attestationBundlesByDigest),
   });
 }

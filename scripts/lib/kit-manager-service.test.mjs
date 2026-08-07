@@ -86,19 +86,17 @@ test('accepts only explicit HTTPS Registry and strict publisher policy overrides
   }
 });
 
-test('forwards an explicit Kit GitHub token without exposing it in public config', async () => {
+test('loads provenance bundles from the Registry without GitHub authentication', async () => {
   const storeRoot = await mkdtemp(path.join(os.tmpdir(), 'harbors-kit-service-token-'));
   roots.push(storeRoot);
   const requests = [];
   const service = createKitManagerService({
     storeRoot,
     runtime,
-    env: { HARBORS_KIT_GITHUB_TOKEN: 'development-token' },
+    env: {},
     fetchImpl: async (url, init) => {
       requests.push({ url: String(url), init });
-      return new Response(JSON.stringify({ attestations: [] }), {
-        headers: { 'content-type': 'application/json' },
-      });
+      return new Response('missing', { status: 404 });
     },
   });
   const digest = 'a'.repeat(64);
@@ -112,20 +110,15 @@ test('forwards an explicit Kit GitHub token without exposing it in public config
       workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/v1.0.0',
       signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
     }),
-    (error) => error.code === 'ATTESTATION_NOT_FOUND',
+    (error) => error.code === 'BUNDLE_FETCH_FAILED',
   );
 
-  assert.equal(requests[0].init.headers.Authorization, 'Bearer development-token');
-  assert.equal(Object.hasOwn(service.config, 'githubToken'), false);
-  assert.equal(JSON.stringify(service.config).includes('development-token'), false);
-  assert.throws(
-    () => createKitManagerService({
-      storeRoot,
-      runtime,
-      env: { HARBORS_KIT_GITHUB_TOKEN: 'token\nvalue' },
-    }),
-    /githubToken/u,
+  assert.equal(
+    requests[0].url,
+    `${DEFAULT_KIT_REGISTRY_URL.replace('index.v1.json', '')}attestations/sha256/${digest}.json`,
   );
+  assert.equal(Object.hasOwn(requests[0].init.headers, 'Authorization'), false);
+  assert.equal(Object.hasOwn(service.config, 'githubToken'), false);
 });
 
 test('composes the production service around one shared local Store', async () => {
