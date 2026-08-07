@@ -1,4 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import path from 'node:path';
 import type { SessionManager } from './session/manager';
 import type { SSEChannel } from './sse/channel';
 import { BrowserRequestBroker } from './framework/browser-request-broker';
@@ -31,6 +32,10 @@ import { createKitCatalogRouter } from './routes/kit-catalog';
 import { createClientAssetRouter } from './routes/client-asset';
 import type { PluginPathRoots } from './framework/plugin/paths';
 import type { CredentialVault } from './credentials/vault';
+import {
+  createLocalWebFileRouter,
+  LocalWebFileStore,
+} from './routes/local-web-file';
 
 type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
@@ -124,6 +129,10 @@ export function createApp(
     }
   });
   const editorMap = registry.editors as Map<string, Editor>;
+  const localWebFiles = new LocalWebFileStore({
+    rootDirectory: path.join(appOptions.pluginPathRoots.temp, 'local-web-files'),
+  });
+  const localWebFileRouter = createLocalWebFileRouter(manager, localWebFiles);
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
     const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
     const catalogEntry = requestedKit
@@ -137,7 +146,9 @@ export function createApp(
   }, async (sessionId) => {
     broker.rejectSession(sessionId, new Error('Session destroyed'));
     channel.closeSession(sessionId);
-    return registry.destroy(sessionId);
+    const destroyed = await registry.destroy(sessionId);
+    if (destroyed) await localWebFiles.cleanupSession(sessionId);
+    return destroyed;
   });
   const bootstrapRouter = createBootstrapRouter(editorMap);
   const i18nRouter = createI18nRouter(editorMap);
@@ -252,6 +263,10 @@ export function createApp(
       await panelInstanceRouter(req, res);
       return;
     }
+    if (url.startsWith('/api/local-file/')) {
+      await localWebFileRouter(req, res);
+      return;
+    }
 
     // Legacy API routes
     if (url.startsWith('/api/')) {
@@ -294,6 +309,7 @@ export function createApp(
     registry,
     editorMap,
     broker,
+    localWebFiles,
     stopDisconnectHandling,
     prepareKitCatalog: loadKitCatalog,
   };

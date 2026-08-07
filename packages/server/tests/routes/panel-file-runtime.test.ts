@@ -35,6 +35,7 @@ function defineWindowValue(name: keyof TestWindow, value: unknown): void {
 describe('panel file runtime', () => {
   beforeEach(() => {
     document.body.innerHTML = '';
+    window.history.replaceState({}, '', '/panel?sessionId=web-session');
     vi.restoreAllMocks();
     Reflect.deleteProperty(window, 'harborsFiles');
     Reflect.deleteProperty(window, 'showSaveFilePicker');
@@ -77,18 +78,50 @@ describe('panel file runtime', () => {
     expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
-  it('reports the stable local-only error after a Web user selects a file', async () => {
+  it('stages a selected file through the local Web route when no desktop bridge exists', async () => {
     const file = new File(['x'], 'data.csv');
+    const fetchRequest = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ path: '/tmp/staged/data.csv', access: 'readonly-copy' }),
+    }));
+    defineWindowValue('fetch', fetchRequest);
+    vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (this: HTMLInputElement) {
+      Object.defineProperty(this, 'files', { configurable: true, value: [file] });
+      this.dispatchEvent(new Event('change'));
+    });
+
+    await expect(createRuntime().openLocal()).resolves.toBe('/tmp/staged/data.csv');
+    expect(fetchRequest).toHaveBeenCalledWith(
+      '/api/local-file/open/web-session?name=data.csv',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/octet-stream' },
+        body: file,
+      },
+    );
+    expect(document.querySelector('input[type="file"]')).toBeNull();
+  });
+
+  it('surfaces a stable remote-origin rejection from the local Web route', async () => {
+    const file = new File(['x'], 'data.sqlite');
+    defineWindowValue('fetch', vi.fn(async () => ({
+      ok: false,
+      json: async () => ({
+        error: {
+          code: 'REMOTE_LOCAL_FILE_FORBIDDEN',
+          message: '远程 Web 访问不能打开本机文件。',
+        },
+      }),
+    })));
     vi.spyOn(HTMLInputElement.prototype, 'click').mockImplementation(function (this: HTMLInputElement) {
       Object.defineProperty(this, 'files', { configurable: true, value: [file] });
       this.dispatchEvent(new Event('change'));
     });
 
     await expect(createRuntime().openLocal()).rejects.toMatchObject({
-      code: 'LOCAL_FILE_PATH_UNAVAILABLE',
-      message: '该功能只能读取运行 Harbors 的本机文件，请在桌面版中使用。',
+      code: 'REMOTE_LOCAL_FILE_FORBIDDEN',
+      message: '远程 Web 访问不能打开本机文件。',
     });
-    expect(document.querySelector('input[type="file"]')).toBeNull();
   });
 
   it('rejects an empty path returned by the desktop bridge', async () => {
@@ -121,11 +154,11 @@ describe('panel file runtime', () => {
     });
     await expect(createRuntime().openLocal()).rejects.toMatchObject({
       code: 'LOCAL_FILE_PATH_UNAVAILABLE',
-      message: '该功能只能读取运行 Harbors 的本机文件，请在桌面版中使用。',
+      message: '浏览器模式暂不支持新建或写回本机文件，请在桌面版中使用。',
     });
   });
 
-  it('resolves the desktop bridge from a Panel parent window and normalizes inaccessible parents', async () => {
+  it('resolves the desktop bridge from a Panel parent and uses Web staging when the parent is inaccessible', async () => {
     const file = new File(['x'], 'data.csv');
     const getPathForFile = vi.fn(() => '/tmp/parent.csv');
     const panelWindow = { parent: { harborsFiles: { getPathForFile } } } as unknown as TestWindow;
@@ -137,13 +170,19 @@ describe('panel file runtime', () => {
     await expect(createRuntime(panelWindow).openLocal()).resolves.toBe('/tmp/parent.csv');
     expect(getPathForFile).toHaveBeenCalledWith(file);
 
-    const inaccessibleParent = {} as TestWindow;
+    const stageRequest = vi.fn(async () => ({
+      ok: true,
+      json: async () => ({ path: '/tmp/staged/parent.csv' }),
+    }));
+    const inaccessibleParent = {
+      location: { search: '?sessionId=parent-session' },
+      fetch: stageRequest,
+    } as unknown as TestWindow;
     Object.defineProperty(inaccessibleParent, 'parent', {
       get() { throw new DOMException('cross origin', 'SecurityError'); },
     });
-    await expect(createRuntime(inaccessibleParent).openLocal()).rejects.toMatchObject({
-      code: 'LOCAL_FILE_PATH_UNAVAILABLE',
-    });
+    await expect(createRuntime(inaccessibleParent).openLocal()).resolves.toBe('/tmp/staged/parent.csv');
+    expect(stageRequest).toHaveBeenCalledOnce();
   });
 
   it('rejects save before opening a picker when no desktop path bridge exists', async () => {
@@ -152,7 +191,7 @@ describe('panel file runtime', () => {
 
     await expect(createRuntime().saveLocal({ suggestedName: 'new.sqlite' })).rejects.toMatchObject({
       code: 'LOCAL_FILE_PATH_UNAVAILABLE',
-      message: '该功能只能读取运行 Harbors 的本机文件，请在桌面版中使用。',
+      message: '浏览器模式暂不支持新建或写回本机文件，请在桌面版中使用。',
     });
     expect(showSaveFilePicker).not.toHaveBeenCalled();
 

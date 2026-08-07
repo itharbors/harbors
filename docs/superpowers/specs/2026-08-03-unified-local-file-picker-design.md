@@ -1,5 +1,9 @@
 # 浏览器原生本机文件选择设计
 
+> 更新：普通 Web 的 `openLocal()` 行为已由《2026-08-07 本机 Web 文件打开设计》扩展为仅
+> loopback Origin 可用的会话级只读暂存；本文中“Web 选择后固定报错”和“不暂存文件”的旧验收
+> 描述不再适用于打开流程。Electron 路径桥与 Web 保存限制保持不变。
+
 ## 背景
 
 Harbors 的 Kit Panel 同时运行在 Web 与 Electron 宿主中。SQLite 与 CSV 当前分别通过各自的
@@ -24,7 +28,7 @@ preload 中通过 `webUtils.getPathForFile(file)` 取得磁盘支持的 `File` �
 
 ## 非目标
 
-- 不把浏览器选中的文件上传、复制或缓存到 Harbors Server。
+- Web 打开流程的本机暂存能力已由《2026-08-07 本机 Web 文件打开设计》替代；远程 Web 与保存流程仍不得上传、复制或缓存文件。
 - 不允许 Web 通过文件内容、文件名或 `C:\\fakepath` 猜测本机绝对路径。
 - 不提供目录选择、批量选择、拖放或持久化文件权限。
 - 不改变 CSV 的编码、分隔符、预览和索引策略。
@@ -178,7 +182,7 @@ CSV 的路径校验、采样、取消、过期结果抑制、失败后保留配�
 - 只有明确用户手势能够打开选择器；脚本不能预填文件路径。
 - `accept` 是选择提示而非信任边界，core 必须继续验证。
 - preload 不暴露 Node `fs`、Electron `dialog`、IPC 通道或任意路径查询。
-- runtime 不读取或上传 `File` 内容，避免 Web 悄悄改变“仅本机路径”语义。
+- runtime 仅可按《2026-08-07 本机 Web 文件打开设计》在 loopback Origin、用户明确选择和会话临时生命周期内流式暂存 `File`；其他场景不得读取或上传内容。
 - 选择返回的路径不得写入 URL、日志或前端持久化；SQLite 现有当前连接展示除外。
 - Electron 桥缺失是受支持的 Web 状态，不是初始化失败。
 - `showSaveFilePicker` 仅用于 Electron 43 所带 Chromium；Web 不依赖其跨浏览器可用性。

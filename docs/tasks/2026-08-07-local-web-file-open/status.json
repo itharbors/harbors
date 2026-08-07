@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-07-local-web-file-open",
+  "type": "feature",
+  "updatedAt": "2026-08-07T04:44:28.153Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": {
+    "number": 63
+  }
+}
