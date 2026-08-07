@@ -26,7 +26,7 @@ Electron 路径和选择交互保持不变。
 
 - 每个 Harbors Server 进程和 Session 使用随机独占目录，不用 Session ID 或文件名拼接目录。
 - 文件名只保留安全 basename，并加随机标识；先写独占 `.part` 文件，成功后去除写权限并原子改名。
-- 同时检查 `Content-Length` 与实际流量，单文件上限 2 GiB；失败或中断删除部分文件。
+- loopback Web 不设置应用层单文件大小上限；可用空间和文件系统错误按正常上传失败处理，失败或中断时删除部分文件。
 - Session 删除时先释放 Kit 数据库/文件句柄，再删除对应暂存目录；Server 停止时删除进程目录。
 - 请求内容不进入 Session 数据库、URL 日志或前端持久化。
 

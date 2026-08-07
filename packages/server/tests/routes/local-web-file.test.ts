@@ -141,7 +141,20 @@ describe('local Web file route', () => {
     expect(fs.existsSync(shutdownStagedPath)).toBe(true);
   });
 
-  it('enforces the streaming byte limit and removes partial files', async () => {
+  it('does not impose a default application size limit on loopback files', async () => {
+    const rootDirectory = await fsp.mkdtemp(path.join(os.tmpdir(), 'harbors-local-unlimited-'));
+    const store = new LocalWebFileStore({ rootDirectory });
+    const request = Readable.from([Buffer.from('test')]) as IncomingMessage;
+    request.headers = { 'content-length': String(2 * 1024 * 1024 * 1024 + 1) };
+
+    await expect(store.stage('unlimited-session', 'large.sqlite', request)).resolves.toMatchObject({
+      size: 4,
+    });
+    await store.dispose();
+    await fsp.rm(rootDirectory, { recursive: true, force: true });
+  });
+
+  it('enforces an explicitly configured streaming byte limit and removes partial files', async () => {
     const rootDirectory = await fsp.mkdtemp(path.join(os.tmpdir(), 'harbors-local-limit-'));
     const store = new LocalWebFileStore({ rootDirectory, maxBytes: 3 });
     const request = Readable.from([Buffer.from('four')]) as IncomingMessage;
