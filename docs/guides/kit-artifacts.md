@@ -36,12 +36,13 @@ kit/<name>/v<semver>
 
 ## 本地 Kit 工作流
 
+Kit 变更与 Framework 一样使用 change-workflow：
+
 ```bash
-bash .agents/skills/kit-workflow/scripts/start-kit-change.sh <name> feature <slug>
-bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh <name> "中文摘要" /absolute/path/to/pr-body.md
-bash .agents/skills/kit-workflow/scripts/release-kit.sh <name> <semver>
+bash .agents/skills/change-workflow/scripts/start-change.sh feature <slug>
+bash .agents/skills/change-workflow/scripts/finish-change.sh "中文摘要" /absolute/path/to/pr-body.md
 ```
 
-`start-kit-change.sh` 固定从 `origin/main` 创建 `kit-change/<name>/<type>/<slug>` 隔离 worktree；`finish-kit-change.sh` 运行目标 Kit 完整检查并只创建 PR；`release-kit.sh` 只允许在干净且与远端一致的 `main` 上执行，并要求对精确 Tag 与 Commit 二次确认。
+`start-change.sh` 固定从 `origin/main` 创建 `<type>/<slug>` 隔离 worktree；`finish-change.sh` 运行目标 Kit 完整检查并只创建 PR。不可变 Kit Tag 由合并后的自动工作流创建；若自动 Tag 缺失，需从干净且与 `origin/main` 完全一致的 `main` 手动创建 `kit/<name>/v<semver>` Tag 并推送，由 `publish-kit.yml` 完成发布，且不得替换已有 Tag 或不可变 Release。
 
-所有动态发现的 builtin Kit 目录中必须恰好一个声明 default 角色。Framework 与共享协议变更使用 change-workflow，市场 Kit 变更使用 kit-workflow。
+所有动态发现的 builtin Kit 目录中必须恰好一个声明 default 角色。Framework 与市场 Kit 变更统一使用 change-workflow。

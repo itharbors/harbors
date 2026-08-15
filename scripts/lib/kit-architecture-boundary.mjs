@@ -403,7 +403,6 @@ async function auditDependencies({ repositoryRoot, kit, packageOwners, errors })
 function frameworkFile(repositoryRoot, file) {
   const name = relative(repositoryRoot, file);
   if (name === 'scripts/lib/kit-architecture-boundary.test.mjs') return false;
-  if (name === 'scripts/lib/kit-workflow/test-helper.sh') return false;
   if (name.startsWith('registry/')) return false;
   if (name.startsWith('kits/')) return false;
   if (name.startsWith('docs/')) return false;
@@ -606,7 +605,6 @@ async function auditFrameworkText({ repositoryRoot, identities, tokenToSlug, exa
     await walk(path.join(repositoryRoot, directory), (file) => path.basename(file) === 'package.json', packageFiles);
   }
   for (const file of [...files, ...packageFiles]) {
-    if (file.endsWith(`${path.sep}test-helper.sh`)) continue;
     if (!await exists(file)) continue;
     let text = await readFile(file, 'utf8');
     if (file.endsWith('package.json')) {

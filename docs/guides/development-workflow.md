@@ -18,19 +18,13 @@
 
 ### 2. Task 建档
 
-从 primary checkout 运行适合变更对象的 start workflow。Framework 变更使用：
+从 primary checkout 运行 change-workflow 的 start 脚本。Framework 和 Kit 变更都使用：
 
 ```bash
 bash .agents/skills/change-workflow/scripts/start-change.sh feature safe-login
 ```
 
-独立 Kit 变更使用：
-
-```bash
-bash .agents/skills/kit-workflow/scripts/start-kit-change.sh <name> feature safe-login
-```
-
-两种 start 脚本都会基于 `origin/main` 创建隔离分支与 worktree，并自动运行 Task init，输出
+start 脚本会基于 `origin/main` 创建隔离分支与 worktree，并自动运行 Task init，输出
 `TASK_ID=` 和 `TASK_DIR=`。进入输出的 worktree 后立即把已确认需求完整写入 `task.md`。如果代码
 已经存在而分支上没有 Task，必须先补建并填写，再继续或 finish；可在该 worktree 运行真实 CLI：
 
@@ -88,14 +82,11 @@ npm run task:status -- check <task-id> --ready-for-pr
 ```
 
 提交全部变更、保持 worktree clean，并在仓库外准备包含 `## Summary` 和 `## Testing` 的 body 文件。
-Framework 和 Kit 分别使用现有 finish 脚本：
+使用 change-workflow 的 finish 脚本：
 
 ```bash
 bash .agents/skills/change-workflow/scripts/finish-change.sh \
   "添加安全登录" /absolute/path/to/pr-body.md
-
-bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
-  <name> "添加安全登录" /absolute/path/to/pr-body.md
 ```
 
 finish 会重新执行 ready gate 和各自边界检查，只创建或恢复当前仓库拥有且 base/head 身份一致的 open PR；同名 fork PR 不会被编辑或记录。已记录 PR 关闭且未合并时可安全替换并更新编号，已合并或身份不符时 fail closed。finish 在 PR body 添加指向 pre-PR
@@ -319,12 +310,12 @@ Client 会尝试创建 session 并重试一次，但不会掩盖持续装载错�
 
 ## Framework 与 Kit 的单主分支治理
 
-Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill 和检查范围：
+Framework 和官方 Kit 都通过 `main` 集成，统一使用 change-workflow，按变更对象调整检查范围：
 
 | 变更对象 | 基线 / PR base | 变更分支 | 本地 Skill |
 | --- | --- | --- | --- |
 | Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
-| 单个 Kit | `origin/main` / `main` | `kit-change/<name>/<type>/<slug>` | `kit-workflow` |
+| 单个 Kit | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 
 每个 Kit 保存在自己的 `kits/<name>` 功能单元中；根工作流按 descriptor 发现，不维护产品清单。
 市场 Kit 的开发 PR 同时携带版本升级；PR 合并即发布授权。自动化只发布发生版本变化的市场 Kit，不修改或发布
@@ -332,7 +323,7 @@ Framework 版本。合并后工作流会自动创建对应的不可变 Kit Tag�
 
 ```text
 main
-  -> kit-change/<name>/<type>/<slug>
+  -> <type>/<slug>
   -> PR base main
   -> PR updates kits/<name>/kit.json, kits/<name>/package.json, and kits/<name>/package-lock.json
   -> merge to main authorizes publication
@@ -340,41 +331,35 @@ main
   -> publish immutable GitHub Release and refresh Registry
 ```
 
-开始某个 Kit 的变更：
+Kit 变更使用 change-workflow，与 Framework 共享同一套 start/finish 脚本：
 
 ```bash
-bash .agents/skills/kit-workflow/scripts/start-kit-change.sh <name> feature add-import
+bash .agents/skills/change-workflow/scripts/start-change.sh feature add-import
 ```
 
-该命令固定获取 `origin/main` 并校验仓库本地 Git 身份，然后创建隔离 worktree、执行根目录
-`npm ci`，再完整校验官方 Kit 契约。只在输出的 worktree 中开发。完成后准备含 `## Summary`
+该命令固定获取 `origin/main`，创建隔离分支与 worktree，并自动运行 Task init。
+只在输出的 worktree 中开发。完成后准备含 `## Summary`
 与 `## Testing` 的 PR body，再运行：
 
 ```bash
-bash .agents/skills/kit-workflow/scripts/finish-kit-change.sh \
-  <name> "添加数据导入" /absolute/path/to/pr-body.md
+bash .agents/skills/change-workflow/scripts/finish-change.sh \
+  "添加数据导入" /absolute/path/to/pr-body.md
 ```
 
-finish 只运行目标 Kit 的 `npm run kit:check -- <name>`，普通 push 后创建并核验 base 为 `main`
+finish 会重新执行 ready gate 与 `npm run check` 全量门禁，普通 push 后创建并核验 base 为 `main`
 的 PR。路径级 CI 至少检查被修改的 Kit；`kit-core`、Kit CLI、发布/Registry 工具或其他共享
 构建面变化会触发所有官方 Kit CI。
 
 开发 PR 必须同步更新目标目录的 `kit.json`、`package.json` 和 `package-lock.json`，三处使用同一个严格
-递增的规范 SemVer。Kit CI 会在 PR 和 merge queue 中展示将创建的 Tag；合并到 `main` 后，自动工作流先完整
+递增的规范 SemVer。普通 SemVer 发布 Stable，带 prerelease 段的 SemVer 发布 Preview；build metadata
+不允许用于发布 Tag。Kit CI 会在 PR 和 merge queue 中展示将创建的 Tag；合并到 `main` 后，自动工作流先完整
 校验所有候选，再逐个创建 Tag 并显式调度发布。Preview 直接发布，Stable 继续经过 `kit-stable` Environment
 审批。已有 Tag 或 Release 不会被移动、覆盖或删除。
 
-`release-kit.sh` 只保留为自动 Tag 缺失时的人工恢复入口。恢复前确保本地干净 `main` 与 `origin/main`
-完全一致，再运行：
-
-```bash
-bash .agents/skills/kit-workflow/scripts/release-kit.sh <name> 1.2.0
-```
-
-第一次运行只显示 Kit、版本、频道、Commit、Tag 和精确的 `Tag@40-char-SHA` 确认令牌，不创建
-Tag。获得用户对恢复操作的明确确认后，按输出设置 `HARBORS_KIT_RELEASE_CONFIRM` 重跑。普通 SemVer
-发布 Stable，带 prerelease 段的 SemVer 发布 Preview；build metadata 不允许用于发布 Tag。恢复流程也不得
-替换已有 Tag 或不可变 Release。
+不可变 Kit Tag `kit/<name>/v<semver>` 由合并后的自动工作流创建；若自动 Tag 缺失，需从干净且与
+`origin/main` 完全一致的 `main` 手动创建对应 Tag 并推送，由 `publish-kit.yml` 完成发布。
+手动创建 Tag 前必须二次确认 Kit、版本、频道、Commit 和精确的 `Tag@40-char-SHA`，且不得替换已有
+Tag 或不可变 Release。
 
 ## 提交信息规范
 

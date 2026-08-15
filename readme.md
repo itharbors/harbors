@@ -47,7 +47,7 @@ Harbors 只支持 Web host，不包含 Electron、桌面打包、托盘、原生
 
 Kit 由 `kit.json` 和 `package.json` descriptor 描述；`distribution` 决定 builtin 或 market 投影。插件通过 manifest 声明 Panel、Message、Menu 和 public assets，通过 `editor.plugin.define()` 注册生命周期。
 
-仓库中的 Kit 变更从 `origin/main` 创建 `kit-change/<name>/<type>/<slug>`，PR base main。合并后的可信 `kit/<name>/v<semver>` Tag 触发独立构建，将 `.hkit`、SBOM 和 attestation 作为 Release Asset 发布。Registry 聚合器自动扫描可信 Release，并依据 `registry/policy.json` 与 `registry/revocations.json` 生成 `index.v1.json`。
+仓库中的 Kit 变更与 Framework 一样使用 change-workflow，从 `origin/main` 创建 `<type>/<slug>` 分支，PR base main。合并后的可信 `kit/<name>/v<semver>` Tag 触发独立构建，将 `.hkit`、SBOM 和 attestation 作为 Release Asset 发布。Registry 聚合器自动扫描可信 Release，并依据 `registry/policy.json` 与 `registry/revocations.json` 生成 `index.v1.json`。
 
 常用命令：
 

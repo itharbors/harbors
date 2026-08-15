@@ -239,7 +239,7 @@ Kit 的 descriptor 通过 `harbors.distribution` 声明 builtin 或 market；bui
 发现全部合法 Kit，stable profile 只选择 descriptor 声明的 builtin，并从隔离构建生成的 staging
 加载。每个目录独立维护 `kit.json`、`package.json`、`package-lock.json`、依赖安装、插件、测试和
 构建产物，仓库只共享通用发布工具链。
-修改某个 Kit 时使用 `kit-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
+修改某个 Kit 时使用 `change-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
 不会发布 Kit 或 Framework。
 
 准备版本时必须同步 Kit manifest、package 和锁文件中的版本。只有显式创建
