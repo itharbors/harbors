@@ -3,7 +3,7 @@ import { WindowManager } from '../window/index';
 
 const MAIN_LAYOUT = {
   type: 'leaf',
-  panel: '@itharbors/log.log',
+  panel: 'log.log',
 } as const;
 
 describe('WindowManager', () => {
@@ -48,7 +48,7 @@ describe('WindowManager', () => {
           type: 'panel-area',
           entry: 'secondary.html',
           state: 'open',
-          layout: { type: 'leaf', panel: '@itharbors/message-debug.debug' },
+          layout: { type: 'leaf', panel: 'message-debug.debug' },
           panelInstanceIds: [],
         },
       ],
@@ -62,14 +62,14 @@ describe('WindowManager', () => {
 
   it('reuses a non-multi-instance panel instead of opening a second window-group', () => {
     const first = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: false,
     });
     const second = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: false,
     });
@@ -78,15 +78,15 @@ describe('WindowManager', () => {
     expect(second).toMatchObject({
       disposition: 'reuse',
       carrier: 'window-group',
-      panelName: '@itharbors/log.log',
+      panelName: 'log.log',
     });
     expect(wm.getSnapshot().windows).toHaveLength(2);
   });
 
   it('opens a fresh non-multi-instance panel after its window-group is destroyed', () => {
     const first = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: false,
     });
@@ -95,8 +95,8 @@ describe('WindowManager', () => {
     wm.destroy(first.windowGroupId);
 
     const second = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: false,
     });
@@ -104,7 +104,7 @@ describe('WindowManager', () => {
     expect(second).toMatchObject({
       disposition: 'open-window-group',
       carrier: 'window-group',
-      panelName: '@itharbors/log.log',
+      panelName: 'log.log',
     });
     expect(second.windowGroupId).not.toBe(first.windowGroupId);
     expect(second.panelInstanceId).not.toBe(first.panelInstanceId);
@@ -115,14 +115,14 @@ describe('WindowManager', () => {
 
   it('creates a new instance for multi-instance panels', () => {
     const first = wm.openPanel({
-      panelName: '@itharbors/plugin-detail.detail',
-      layout: { type: 'leaf', panel: '@itharbors/plugin-detail.detail' },
+      panelName: 'plugin-detail.detail',
+      layout: { type: 'leaf', panel: 'plugin-detail.detail' },
       entry: 'secondary.html',
       multiInstance: true,
     });
     const second = wm.openPanel({
-      panelName: '@itharbors/plugin-detail.detail',
-      layout: { type: 'leaf', panel: '@itharbors/plugin-detail.detail' },
+      panelName: 'plugin-detail.detail',
+      layout: { type: 'leaf', panel: 'plugin-detail.detail' },
       entry: 'secondary.html',
       multiInstance: true,
     });
@@ -135,8 +135,8 @@ describe('WindowManager', () => {
 
   it('marks a pending instance as floating when popup creation fails', () => {
     const opened = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: true,
     });
@@ -156,8 +156,8 @@ describe('WindowManager', () => {
 
   it('marks a pending window-group and its panel instance as open after entry load ack', () => {
     const opened = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: true,
     });
@@ -182,8 +182,8 @@ describe('WindowManager', () => {
 
   it('closes a panel instance and removes empty secondary groups', () => {
     const opened = wm.openPanel({
-      panelName: '@itharbors/log.log',
-      layout: { type: 'leaf', panel: '@itharbors/log.log' },
+      panelName: 'log.log',
+      layout: { type: 'leaf', panel: 'log.log' },
       entry: 'secondary.html',
       multiInstance: true,
     });

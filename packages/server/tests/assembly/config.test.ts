@@ -123,13 +123,13 @@ describe('resolver uses explicit directories only', () => {
     const pluginsDir = path.join(root, 'plugins');
 
     writePkg(path.join(builtinPluginsDir, 'menu'), {
-      name: '@itharbors/menu',
+      name: 'menu',
       type: 'module',
       main: 'index.js',
       'ce-editor': {},
     });
 
-    const resolved = await resolvePlugin('@itharbors/menu', {
+    const resolved = await resolvePlugin('menu', {
       builtinPluginsDir,
       pluginsDir,
       activeKitPluginsDir: null,

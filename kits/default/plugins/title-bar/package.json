@@ -1,5 +1,5 @@
 {
-  "name": "@itharbors/title-bar",
+  "name": "title-bar",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",

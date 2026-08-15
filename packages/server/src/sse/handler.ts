@@ -15,6 +15,7 @@ export function handleSSE(req: IncomingMessage, res: ServerResponse, channel: SS
 }
 
 function extractSessionId(url: string): string {
-  const match = url.match(/^\/sse\/(.+)$/);
+  const path = url.split('?')[0] || '/';
+  const match = path.match(/^\/sse\/(.+)$/);
   return match ? match[1] : 'unknown';
 }

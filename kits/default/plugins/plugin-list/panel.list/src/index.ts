@@ -43,7 +43,7 @@ const definition: PanelDefinition = {
     rootElement.append(header, list);
 
     try {
-      const summary = await ctx.message.request('@itharbors/plugin-list', 'getPluginSummary') as PluginSummary;
+      const summary = await ctx.message.request('plugin-list', 'getPluginSummary') as PluginSummary;
       selectedPluginName = summary.selectedPluginName;
       renderHeader(header, summary);
       renderPlugins(summary.plugins);
@@ -209,7 +209,7 @@ async function selectPlugin(name: string) {
   syncActivePlugin();
 
   try {
-    const detail = await context.message.request('@itharbors/plugin-list', 'selectPlugin', name) as { name?: string } | null;
+    const detail = await context.message.request('plugin-list', 'selectPlugin', name) as { name?: string } | null;
     selectedPluginName = detail?.name ?? name;
     syncActivePlugin();
   } catch {

@@ -149,9 +149,9 @@ function assertPanelContributions(pluginRoot: string, contribute: ContributeData
 }
 
 let importNonce = 0;
-const MESSAGE_OWNER = '@itharbors/message';
-const MENU_OWNER = '@itharbors/menu';
-const PANEL_OWNER = '@itharbors/panel';
+const MESSAGE_OWNER = 'message';
+const MENU_OWNER = 'menu';
+const PANEL_OWNER = 'panel';
 
 function resolveLoadEntryPath(pluginRoot: string, entry: string): string {
   const entryPath = path.resolve(pluginRoot, entry);

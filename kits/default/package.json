@@ -20,12 +20,12 @@
         "secondary": "secondary.html"
       },
       "plugin": [
-        "@itharbors/log",
-        "@itharbors/message-debug",
-        "@itharbors/plugin-detail",
-        "@itharbors/plugin-list",
-        "@itharbors/status-bar",
-        "@itharbors/title-bar"
+        "log",
+        "message-debug",
+        "plugin-detail",
+        "plugin-list",
+        "status-bar",
+        "title-bar"
       ]
     }
   },

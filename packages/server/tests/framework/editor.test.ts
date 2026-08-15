@@ -133,10 +133,10 @@ describe('createEditor', () => {
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
 
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/panel');
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/message');
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/menu');
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/config');
+    expect(editor.plugin.listLoaded()).toContain('panel');
+    expect(editor.plugin.listLoaded()).toContain('message');
+    expect(editor.plugin.listLoaded()).toContain('menu');
+    expect(editor.plugin.listLoaded()).toContain('config');
     expect(editor.plugin.listLoaded()).toContain('empty-plugin');
   });
 
@@ -166,7 +166,7 @@ describe('createEditor', () => {
 
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
-    await editor.plugin.unload('@itharbors/config');
+    await editor.plugin.unload('config');
 
     const spy = vi.spyOn(editor.message, 'broadcast');
 
@@ -179,8 +179,8 @@ describe('createEditor', () => {
   it('loads the default kit with built-in menu state', async () => {
     await editor.kit.load();
 
-    expect(editor.plugin.listLoaded()).toContain('@itharbors/menu');
-    expect(editor.plugin.getInfo('@itharbors/menu')?.path).toContain('/plugins/menu');
+    expect(editor.plugin.listLoaded()).toContain('menu');
+    expect(editor.plugin.getInfo('menu')?.path).toContain('/plugins/menu');
     const state = editor.menu.getState();
 
     expect(state.tree).toEqual(expect.arrayContaining([

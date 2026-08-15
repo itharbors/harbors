@@ -28,10 +28,10 @@ import type { CredentialVault } from '../credentials/vault';
 type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
 const BUILTIN_PLUGINS = [
-  '@itharbors/panel',
-  '@itharbors/message',
-  '@itharbors/menu',
-  '@itharbors/config',
+  'panel',
+  'message',
+  'menu',
+  'config',
 ];
 
 interface KitPackageJson {
@@ -115,10 +115,10 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       return menu.detach(pluginName);
     },
     setDefaults(items: MenuContributionNode[]) {
-      return menu.setDefaults('@itharbors/menu', items);
+      return menu.setDefaults('menu', items);
     },
     clearDefaults() {
-      return menu.clearDefaults('@itharbors/menu');
+      return menu.clearDefaults('menu');
     },
     reset() {
       return menu.reset();
