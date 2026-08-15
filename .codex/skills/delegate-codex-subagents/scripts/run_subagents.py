@@ -13,6 +13,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
@@ -364,97 +365,123 @@ def run_job(
     args: argparse.Namespace,
     protocol_dir: Path,
 ) -> dict[str, Any]:
-    task_id = brief["task_id"]
-    task_protocol_dir = protocol_dir / task_id
-    task_protocol_dir.mkdir(mode=0o700)
-    schema_path = task_protocol_dir / "schema.json"
-    message_path = task_protocol_dir / "message.json"
-    schema_path.write_text(json.dumps(REPORT_SCHEMA), encoding="utf-8")
-    command = [
-        args.codex_bin,
-        "--profile",
-        CODEX_PROFILE,
-        "--model",
-        DEFAULT_MODEL,
-        "--ask-for-approval",
-        "never",
-        "exec",
-        "--cd",
-        str(args.workdir.resolve()),
-        "--sandbox",
-        "danger-full-access",
-        "--skip-git-repo-check",
-        "--output-schema",
-        str(schema_path),
-        "--output-last-message",
-        str(message_path),
-        "--json",
-        "--color",
-        "never",
-        "-",
-    ]
-    sandbox_profile = build_write_sandbox(allowed_paths, task_protocol_dir)
-    command = [args.sandbox_exec_bin, "-p", sandbox_profile, *command]
+    start = time.monotonic()
+    task_id = brief.get("task_id", "unknown")
     try:
-        completed, timed_out = run_command(
-            command,
-            make_prompt(brief),
-            args.workdir,
-            task_protocol_dir,
-            args.timeout_seconds,
-        )
-    except OSError as error:
-        return {"task_id": task_id, "status": "launch_error", "message": str(error)}
-    if timed_out:
-        return {"task_id": task_id, "status": "launch_error", "message": "timeout"}
-    if completed.returncode != 0:
+        task_id = brief["task_id"]
+        task_protocol_dir = protocol_dir / task_id
+        task_protocol_dir.mkdir(mode=0o700)
+        schema_path = task_protocol_dir / "schema.json"
+        message_path = task_protocol_dir / "message.json"
+        schema_path.write_text(json.dumps(REPORT_SCHEMA), encoding="utf-8")
+        command = [
+            args.codex_bin,
+            "--profile",
+            CODEX_PROFILE,
+            "--model",
+            DEFAULT_MODEL,
+            "--ask-for-approval",
+            "never",
+            "exec",
+            "--cd",
+            str(args.workdir.resolve()),
+            "--sandbox",
+            "danger-full-access",
+            "--skip-git-repo-check",
+            "--output-schema",
+            str(schema_path),
+            "--output-last-message",
+            str(message_path),
+            "--json",
+            "--color",
+            "never",
+            "-",
+        ]
+        sandbox_profile = build_write_sandbox(allowed_paths, task_protocol_dir)
+        command = [args.sandbox_exec_bin, "-p", sandbox_profile, *command]
+        try:
+            completed, timed_out = run_command(
+                command,
+                make_prompt(brief),
+                args.workdir,
+                task_protocol_dir,
+                args.timeout_seconds,
+            )
+        except OSError as error:
+            return {
+                "task_id": task_id,
+                "status": "launch_error",
+                "message": str(error),
+                "duration_seconds": round(time.monotonic() - start, 3),
+            }
+        if timed_out:
+            return {
+                "task_id": task_id,
+                "status": "launch_error",
+                "message": "timeout",
+                "duration_seconds": round(time.monotonic() - start, 3),
+            }
+        if completed.returncode != 0:
+            return {
+                "task_id": task_id,
+                "status": "launch_error",
+                "exit_code": completed.returncode,
+                "message": completed.stderr.strip()[-1000:],
+                "duration_seconds": round(time.monotonic() - start, 3),
+            }
+        try:
+            message_text = message_path.read_text(encoding="utf-8")
+            report = parse_report(message_text)
+        except (OSError, json.JSONDecodeError) as error:
+            return {
+                "task_id": task_id,
+                "status": "protocol_error",
+                "message": str(error),
+                "message_preview": locals().get("message_text", "")[-1000:],
+                "stdout_preview": completed.stdout[-1000:],
+                "stderr_preview": completed.stderr[-1000:],
+                "duration_seconds": round(time.monotonic() - start, 3),
+            }
+        if not matches_schema(report, REPORT_SCHEMA):
+            return {
+                "task_id": task_id,
+                "status": "protocol_error",
+                "message": "result does not match REPORT_SCHEMA",
+                "duration_seconds": round(time.monotonic() - start, 3),
+            }
+        allowed = allowed_paths
+        root = args.workdir.resolve()
+        reported_outside = [
+            item
+            for item in report["changed_files"]
+            if not is_allowed(
+                ((root / item) if not Path(item).is_absolute() else Path(item)).resolve(),
+                allowed,
+            )
+        ]
+        if reported_outside:
+            return {
+                "task_id": task_id,
+                "status": "policy_error",
+                "message": "reported changed_files exceed allowed_changes",
+                "paths": reported_outside,
+                "duration_seconds": round(time.monotonic() - start, 3),
+            }
         return {
             "task_id": task_id,
-            "status": "launch_error",
-            "exit_code": completed.returncode,
-            "message": completed.stderr.strip()[-1000:],
+            "brief_path": str(path),
+            "session_id": parse_session_id(completed.stdout),
+            "report": report,
+            "duration_seconds": round(time.monotonic() - start, 3),
         }
-    try:
-        message_text = message_path.read_text(encoding="utf-8")
-        report = parse_report(message_text)
-    except (OSError, json.JSONDecodeError) as error:
+    except Exception as error:
         return {
             "task_id": task_id,
-            "status": "protocol_error",
+            "brief_path": str(path),
+            "status": "worker_error",
             "message": str(error),
-            "message_preview": locals().get("message_text", "")[-1000:],
-            "stdout_preview": completed.stdout[-1000:],
-            "stderr_preview": completed.stderr[-1000:],
+            "duration_seconds": round(time.monotonic() - start, 3),
         }
-    if not matches_schema(report, REPORT_SCHEMA):
-        return {
-            "task_id": task_id,
-            "status": "protocol_error",
-            "message": "result does not match REPORT_SCHEMA",
-        }
-    allowed = allowed_paths
-    root = args.workdir.resolve()
-    reported_outside = [
-        item
-        for item in report["changed_files"]
-        if not is_allowed(
-            ((root / item) if not Path(item).is_absolute() else Path(item)).resolve(),
-            allowed,
-        )
-    ]
-    if reported_outside:
-        return {
-            "task_id": task_id,
-            "status": "policy_error",
-            "message": "reported changed_files exceed allowed_changes",
-            "paths": reported_outside,
-        }
-    return {
-        "task_id": task_id,
-        "brief_path": str(path),
-        "session_id": parse_session_id(completed.stdout),
-        "report": report,
-    }
 
 
 def main() -> int:
@@ -503,12 +530,15 @@ def main() -> int:
         with concurrent.futures.ThreadPoolExecutor(
             max_workers=min(len(jobs), args.max_workers)
         ) as executor:
-            futures = [
-                executor.submit(run_job, path, brief, boundaries, args, protocol_dir)
-                for path, brief, boundaries in jobs
-            ]
+            futures = []
+            for path, brief, boundaries in jobs:
+                started_at = time.monotonic()
+                future = executor.submit(
+                    run_job, path, brief, boundaries, args, protocol_dir
+                )
+                futures.append((path, brief, future, started_at))
             results = []
-            for (path, brief, _), future in zip(jobs, futures):
+            for path, brief, future, started_at in futures:
                 try:
                     results.append(future.result())
                 except Exception as error:  # Keep the batch protocol intact.
@@ -518,6 +548,9 @@ def main() -> int:
                             "brief_path": str(path),
                             "status": "worker_error",
                             "message": str(error),
+                            "duration_seconds": round(
+                                time.monotonic() - started_at, 3
+                            ),
                         }
                     )
     try:

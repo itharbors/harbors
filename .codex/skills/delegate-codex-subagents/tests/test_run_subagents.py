@@ -12,6 +12,25 @@ SKILL_DIR = Path(__file__).resolve().parents[1]
 RUNNER = SKILL_DIR / "scripts" / "run_subagents.py"
 
 
+def _sandbox_exec_works():
+    if not Path("/usr/bin/sandbox-exec").is_file():
+        return False
+    try:
+        completed = subprocess.run(
+            [
+                "/usr/bin/sandbox-exec",
+                "-p",
+                "(version 1)(allow default)",
+                "/usr/bin/true",
+            ],
+            capture_output=True,
+            timeout=5,
+        )
+        return completed.returncode == 0
+    except Exception:
+        return False
+
+
 class RunSubagentsTests(unittest.TestCase):
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
@@ -275,6 +294,8 @@ class RunSubagentsTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["actual_changes"], ["src/allowed.ts"])
         self.assertTrue(payload["validation_required"])
+        self.assertIn("duration_seconds", payload["results"][0])
+        self.assertGreaterEqual(payload["results"][0]["duration_seconds"], 0)
 
     def test_rejects_report_that_does_not_match_schema(self):
         brief = self.write_brief("schema", ["src/schema.ts"])
@@ -283,6 +304,8 @@ class RunSubagentsTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(payload["status"], "failed")
         self.assertEqual(payload["results"][0]["status"], "protocol_error")
+        self.assertIn("duration_seconds", payload["results"][0])
+        self.assertGreaterEqual(payload["results"][0]["duration_seconds"], 0)
 
     def test_accepts_one_complete_json_code_fence(self):
         brief = self.write_brief("fenced", ["src/fenced.ts"])
@@ -290,7 +313,7 @@ class RunSubagentsTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     @unittest.skipUnless(
-        Path("/usr/bin/sandbox-exec").is_file(), "requires macOS sandbox-exec"
+        _sandbox_exec_works(), "requires functional macOS sandbox-exec"
     )
     def test_real_sandbox_enforces_per_brief_write_boundary(self):
         (self.workdir / "src").mkdir()

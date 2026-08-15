@@ -48,7 +48,7 @@ description: 在当前仓库处理任何非琐碎工作时使用。先把工作�
 一批任务使用一次启动器调用，并重复传入 `--brief`：
 
 ```bash
-python3 .agents/skills/delegate-codex-subagents/scripts/run_subagents.py \
+python3 .codex/skills/delegate-codex-subagents/scripts/run_subagents.py \
   --workdir /absolute/path/to/worktree \
   --brief /absolute/path/task-a.json \
   --brief /absolute/path/task-b.json
@@ -59,6 +59,8 @@ python3 .agents/skills/delegate-codex-subagents/scripts/run_subagents.py \
 Relay 认证仍必须由 Codex 进程读取本机认证源。不得在 Brief 中要求读取、输出或修改任何凭据；若任务本身需要凭据操作，停止委派并请求用户明确授权。
 
 每批结束后读取精简 JSON 结果。顶层 `completed` 只表示 Subagent 执行成功，不表示主 Agent 已验收；结果中的 `validation_required` 会保持为 `true`。若某个 Subagent 阻塞或失败，优先缩小问题、补充 Brief 或重新派发；不得由主 Agent 直接实现。
+
+并行策略：尽可能扩大有用的并行度，但不要把过小或存在依赖的任务强行拆开。并行能缩短墙钟时间，同时会带来独立的启动与上下文开销，并增加总 token 消耗。每个结果中的 `duration_seconds` 可用于观察单任务耗时；但供应商 token 计费必须在 Relay 中核对，不能仅凭本地耗时推算。
 
 ## 只做验收
 
