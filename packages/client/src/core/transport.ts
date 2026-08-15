@@ -7,6 +7,7 @@ import {
   type SessionInfo,
 } from '@itharbors/plugin-types';
 import type { ClientSession } from './session';
+import { getDeviceId } from './storage';
 
 export type OpenPanelResult = BrowserOpenPanelResult;
 
@@ -80,7 +81,8 @@ export class EditorTransport {
     onEvent?: (event: SSEEnvelope) => void,
     onError?: (error: Error) => void,
   ): void {
-    const url = `/sse/${this.session.sessionId}`;
+    const deviceId = getDeviceId();
+    const url = `/sse/${this.session.sessionId}?deviceId=${encodeURIComponent(deviceId)}`;
     this.eventSource = new EventSource(url);
 
     this.eventSource.onopen = () => {

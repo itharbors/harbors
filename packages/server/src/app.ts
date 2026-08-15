@@ -36,6 +36,9 @@ import {
   createLocalWebFileRouter,
   LocalWebFileStore,
 } from './routes/local-web-file';
+import { createAuthRouter } from './routes/auth';
+import type { AuthManager } from './auth';
+import { getDeviceId, isLocalRequest } from './auth';
 
 type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
@@ -49,6 +52,7 @@ export interface AppOptions {
   clientAssetsRoot?: string;
   pluginPathRoots: PluginPathRoots;
   credentialVault?: () => CredentialVaultBindingSource | undefined;
+  authManager?: AuthManager;
 }
 
 export function createApp(
@@ -175,9 +179,27 @@ export function createApp(
   const clientAssetRouter = appOptions.clientAssetsRoot
     ? createClientAssetRouter(appOptions.clientAssetsRoot)
     : undefined;
+  const auth = appOptions.authManager;
+  const authRouter = auth ? createAuthRouter(auth) : undefined;
+
+  const isRemoteUnauthorized = (req: IncomingMessage): boolean => {
+    if (!auth) return false;
+    if (isLocalRequest(req)) return false;
+    const deviceId = getDeviceId(req);
+    if (!deviceId) return true;
+    return !auth.devices.isAuthorized(deviceId);
+  };
 
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';
+
+    // Remote access authorization: only allow auth status check and health for unauthorized remote devices.
+    if (isRemoteUnauthorized(req)) {
+      const pathname = new URL(url, 'http://localhost').pathname;
+      if (pathname !== '/api/auth/status' && pathname !== '/api/health') {
+        throw new HttpError(403, 'DEVICE_NOT_AUTHORIZED', 'This device is not authorized for remote access');
+      }
+    }
 
     if (url.startsWith('/sse/application')) {
       applicationEventsRouter(req, res);
@@ -265,6 +287,12 @@ export function createApp(
     }
     if (url.startsWith('/api/local-file/')) {
       await localWebFileRouter(req, res);
+      return;
+    }
+
+    // Auth routes
+    if (authRouter && url.startsWith('/api/auth/')) {
+      await authRouter(req, res);
       return;
     }
 
