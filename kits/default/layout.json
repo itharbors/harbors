@@ -9,7 +9,7 @@
         "children": [
           {
             "type": "leaf",
-            "panel": "@itharbors/title-bar.title",
+            "panel": "title-bar.title",
             "panelType": "simple"
           },
           {
@@ -18,7 +18,7 @@
             "children": [
               {
                 "type": "leaf",
-                "panel": "@itharbors/plugin-list.list"
+                "panel": "plugin-list.list"
               },
               {
                 "type": "vsplit",
@@ -26,11 +26,11 @@
                 "children": [
                   {
                     "type": "leaf",
-                    "panel": "@itharbors/plugin-detail.detail"
+                    "panel": "plugin-detail.detail"
                   },
                   {
                     "type": "leaf",
-                    "panel": "@itharbors/message-debug.debug"
+                    "panel": "message-debug.debug"
                   }
                 ]
               }
@@ -38,16 +38,16 @@
           },
           {
             "type": "leaf",
-            "panel": "@itharbors/log.log"
+            "panel": "log.log"
           },
           {
             "type": "leaf",
-            "panel": "@itharbors/status-bar.status",
+            "panel": "status-bar.status",
             "panelType": "simple"
           }
         ]
       }
     }
   ],
-  "activePanel": "@itharbors/log.log"
+  "activePanel": "log.log"
 }

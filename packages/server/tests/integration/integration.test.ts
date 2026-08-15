@@ -341,7 +341,7 @@ describe('Framework Integration', () => {
     expect(defaultEditor.kit.getCurrent()?.name).toBe(testKitFixture.name);
     expect(sqliteEditor.kit.getCurrent()?.name).toBe(betaKit.name);
 
-    for (const builtin of ['@itharbors/panel', '@itharbors/message', '@itharbors/menu', '@itharbors/config']) {
+    for (const builtin of ['panel', 'message', 'menu', 'config']) {
       expect(defaultEditor.plugin.listLoaded()).toContain(builtin);
       expect(sqliteEditor.plugin.listLoaded()).toContain(builtin);
     }

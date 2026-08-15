@@ -37,6 +37,9 @@ importers:
         specifier: 4.60.4
         version: 4.60.4
     devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.1
       '@types/yauzl':
         specifier: ^3.4.0
         version: 3.4.0

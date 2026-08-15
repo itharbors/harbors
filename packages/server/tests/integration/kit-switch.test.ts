@@ -236,14 +236,14 @@ describe('kit lifecycle', () => {
     try {
       await editor.kit.load(defaultKit);
       const before = editor.plugin.listLoaded();
-      expect(before).toEqual(expect.arrayContaining(['@itharbors/menu', '@example/source-log', '@example/source-list']));
+      expect(before).toEqual(expect.arrayContaining(['menu', '@example/source-log', '@example/source-list']));
       expect(editor.panel.getRegistration('@example/source-log.log')).toMatchObject({ owner: '@example/source-log' });
       expect(editor.message.queryRequest('@example/source-log', 'getLogs')).toBeDefined();
 
       await editor.kit.switchKit(alternateKit);
       const after = editor.plugin.listLoaded();
 
-      expect(after).toContain('@itharbors/menu');
+      expect(after).toContain('menu');
       expect(after).toContain('@example/alternate-header');
       expect(after).not.toContain('@example/source-log');
       expect(after).not.toContain('@example/source-list');
@@ -283,7 +283,7 @@ describe('kit lifecycle', () => {
     try {
       await expect(editor.kit.load(kitDir)).rejects.toThrow('bad plugin load failed');
 
-      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['@itharbors/menu', '@itharbors/panel', '@itharbors/message']));
+      expect(editor.plugin.listLoaded()).toEqual(expect.arrayContaining(['menu', 'panel', 'message']));
       expect(editor.plugin.listLoaded()).not.toContain('good-plugin');
       expect(editor.plugin.listLoaded()).not.toContain('bad-plugin');
       expect(editor.panel.getRegistration('good-plugin.main')).toBeUndefined();

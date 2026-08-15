@@ -8,7 +8,7 @@ editor.plugin.define({
   },
   methods: {
     openDebugPanel() {
-      return runtime.window.openPanel('@itharbors/message-debug.debug');
+      return runtime.window.openPanel('message-debug.debug');
     },
     getSnapshot() {
       return {
@@ -36,7 +36,7 @@ editor.plugin.define({
   },
 });
 
-const PLUGIN_NAME = '@itharbors/message-debug';
+const PLUGIN_NAME = 'message-debug';
 const MESSAGE_CHANGE_TOPIC = `${PLUGIN_NAME}.messages.changed`;
 
 let runtime;

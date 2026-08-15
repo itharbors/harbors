@@ -6,11 +6,11 @@ import { buildMenuTree, type MenuContributionSource } from '../../src/framework/
 describe('buildMenuTree', () => {
   it('projects application defaults separately from kit plugin actions', () => {
     const menu = new MenuModule({ platform: 'linux' });
-    menu.setDefaults('@itharbors/menu', [
+    menu.setDefaults('menu', [
       { type: 'menu', id: 'view', label: 'View' },
       { type: 'menu', id: 'view/panels', label: 'Panels' },
     ]);
-    menu.attach('@itharbors/demo-kit-plugin', {
+    menu.attach('demo-kit-plugin', {
       menu: [
         { type: 'menu', id: 'view/panels/demo', label: 'Demo', message: 'openDemo' },
       ],
@@ -45,7 +45,7 @@ describe('buildMenuTree', () => {
       platform: 'win32',
     });
 
-    menu.setDefaults('@itharbors/menu', [
+    menu.setDefaults('menu', [
       { type: 'menu', id: 'file', label: 'File' },
       { type: 'menu', id: 'file/new-session', label: 'New Session', message: 'newSession' },
     ]);
@@ -509,7 +509,7 @@ describe('buildMenuTree', () => {
   it('restores runtime defaults after detaching the last external contribution', () => {
     const menu = new MenuModule({ platform: 'win32' });
 
-    menu.setDefaults('@itharbors/menu', [{ type: 'menu', id: 'file', label: 'File' }]);
+    menu.setDefaults('menu', [{ type: 'menu', id: 'file', label: 'File' }]);
     menu.attach('plugin-menu', {
       menu: [
         { type: 'menu', id: 'tools', label: 'Tools' },

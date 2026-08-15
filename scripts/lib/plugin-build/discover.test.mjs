@@ -55,7 +55,7 @@ function builtinDescriptor(rootDir, overrides = {}) {
 test('runtime discovery reconciles ordinary and startup declarations in deterministic order', () => {
   const rootDir = createRoot();
   try {
-    writePackageJson(path.join(rootDir, 'plugins/menu'), JSON.stringify({ name: '@itharbors/menu' }));
+    writePackageJson(path.join(rootDir, 'plugins/menu'), JSON.stringify({ name: 'menu' }));
     writeBuiltinKit(rootDir, {
       ordinary: ['@fixture/log'],
       startup: ['@fixture/background'],
