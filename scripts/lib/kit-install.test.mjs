@@ -16,6 +16,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 import { ensureKitInstall } from './kit-install.mjs';
 import { discoverRepositoryKits } from './repository-kits.mjs';
@@ -38,50 +39,96 @@ async function createKitFixture(root, slug, version = '1.0.0') {
     private: true,
   };
   const lock = {
-    name: packageJson.name,
-    version,
-    lockfileVersion: 3,
-    requires: true,
-    packages: {
-      '': { name: packageJson.name, version },
+    lockfileVersion: '9.0',
+    importers: {
+      '.': {},
     },
+    packages: {},
   };
   await writeFile(path.join(directory, 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
-  await writeFile(path.join(directory, 'package-lock.json'), `${JSON.stringify(lock, null, 2)}\n`);
+  await writeFile(path.join(directory, 'pnpm-workspace.yaml'), "packages: []\n");
+  await writeFile(path.join(directory, 'pnpm-lock.yaml'), `${stringifyYaml(lock)}\n`);
   await writeFile(path.join(directory, 'source.txt'), `${slug}\n`);
-  return { slug, id: packageJson.name, version, directory };
+  const pnpmExecutable = await createPnpmFixture(root);
+  return { slug, id: packageJson.name, version, directory, pnpmExecutable };
 }
 
 async function readKitMetadata(descriptor) {
   return {
     packageFile: path.join(descriptor.directory, 'package.json'),
-    lockFile: path.join(descriptor.directory, 'package-lock.json'),
+    lockFile: path.join(descriptor.directory, 'pnpm-lock.yaml'),
     packageJson: JSON.parse(await readFile(path.join(descriptor.directory, 'package.json'), 'utf8')),
-    lock: JSON.parse(await readFile(path.join(descriptor.directory, 'package-lock.json'), 'utf8')),
+    lock: parseYaml(await readFile(path.join(descriptor.directory, 'pnpm-lock.yaml'), 'utf8')),
   };
 }
 
 async function writeKitMetadata(metadata) {
   await writeFile(metadata.packageFile, `${JSON.stringify(metadata.packageJson, null, 2)}\n`);
-  await writeFile(metadata.lockFile, `${JSON.stringify(metadata.lock, null, 2)}\n`);
+  await writeFile(metadata.lockFile, `${stringifyYaml(metadata.lock)}\n`);
 }
 
-async function createNpmFixture(root, ciBody = '') {
-  const executable = path.join(root, `fake-npm-${Math.random().toString(16).slice(2)}.mjs`);
+function toImporterDependencies(dependencies) {
+  return Object.fromEntries(
+    Object.entries(dependencies ?? {}).map(([name, specifier]) => [name, { specifier, version: specifier }]),
+  );
+}
+
+async function createPnpmFixture(root, installBody = '') {
+  const executable = path.join(root, `fake-pnpm-${Math.random().toString(16).slice(2)}.mjs`);
   await writeFile(executable, `#!/usr/bin/env node
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-const command = process.argv[2];
-if (command === '--version') {
-  console.log('10.0.0-fixture');
-} else if (command === 'config') {
-  console.log('install-strategy=hoisted\\nlegacy-peer-deps=false\\ninstall-links=false\\nbin-links=true');
+const firstArg = process.argv[2];
+if (firstArg === '--version') {
+  console.log('9.12.0-fixture');
 } else {
-  const prefixIndex = process.argv.indexOf('--prefix');
-  const installRoot = process.argv[prefixIndex + 1];
-  if (command === 'ci') {
+  const dirIndex = process.argv.indexOf('--dir');
+  const installRoot = process.argv[dirIndex + 1];
+  const command = process.argv[dirIndex + 2];
+  if (command === 'install') {
     await mkdir(path.join(installRoot, 'node_modules'), { recursive: true });
-    ${ciBody}
+    try {
+      const pkg = JSON.parse(await readFile(path.join(installRoot, 'package.json'), 'utf8'));
+      const workspaceYaml = await readFile(path.join(installRoot, 'pnpm-workspace.yaml'), 'utf8');
+      const lines = workspaceYaml.split('\\n');
+      let inPackages = false;
+      const globs = [];
+      for (const line of lines) {
+        if (/^packages:\\s*$/.test(line)) { inPackages = true; continue; }
+        if (inPackages) {
+          const m = /^\\s*-\\s*['"]?([^'"]+)['"]?\\s*$/.exec(line);
+          if (m) globs.push(m[1]);
+          else if (line.trim() && !line.startsWith(' ') && !line.startsWith('\\t')) break;
+        }
+      }
+      const nameToDir = {};
+      for (const glob of globs) {
+        const base = glob.replace(/\\/\\*$/, '');
+        let entries = [];
+        try { entries = await readdir(path.join(installRoot, base), { withFileTypes: true }); } catch {}
+        for (const entry of entries) {
+          if (!entry.isDirectory()) continue;
+          const dir = path.join(base, entry.name);
+          try {
+            const wpkg = JSON.parse(await readFile(path.join(installRoot, dir, 'package.json'), 'utf8'));
+            nameToDir[wpkg.name] = dir;
+          } catch {}
+        }
+      }
+      for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+        for (const [name, spec] of Object.entries(pkg[field] ?? {})) {
+          if (typeof spec === 'string' && spec.startsWith('workspace:')) {
+            const target = nameToDir[name];
+            if (target) {
+              const linkPath = path.join(installRoot, 'node_modules', ...name.split('/'));
+              await mkdir(path.dirname(linkPath), { recursive: true });
+              await symlink(path.relative(path.dirname(linkPath), path.join(installRoot, target)), linkPath);
+            }
+          }
+        }
+      }
+    } catch {}
+    ${installBody}
   }
 }
 `);
@@ -89,56 +136,49 @@ if (command === '--version') {
   return executable;
 }
 
-async function createRecordingNpmFixture(root) {
-  const executable = path.join(root, `recording-npm-${Math.random().toString(16).slice(2)}.mjs`);
-  const logFile = path.join(root, `recording-npm-${Math.random().toString(16).slice(2)}.ndjson`);
+async function createRecordingPnpmFixture(root) {
+  const executable = path.join(root, `recording-pnpm-${Math.random().toString(16).slice(2)}.mjs`);
+  const logFile = path.join(root, `recording-pnpm-${Math.random().toString(16).slice(2)}.ndjson`);
   await writeFile(executable, `#!/usr/bin/env node
 import { appendFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
-const command = process.argv[2];
-if (command === '--version') {
-  console.log('10.0.0-fixture');
-} else if (command === 'config') {
-  console.log('install-strategy=hoisted\\nlegacy-peer-deps=false\\ninstall-links=false\\nbin-links=true');
+const firstArg = process.argv[2];
+if (firstArg === '--version') {
+  console.log('9.12.0-fixture');
 } else {
-  const prefixIndex = process.argv.indexOf('--prefix');
-  const installRoot = process.argv[prefixIndex + 1];
+  const dirIndex = process.argv.indexOf('--dir');
+  const installRoot = process.argv[dirIndex + 1];
+  const command = process.argv[dirIndex + 2];
   await appendFile(${JSON.stringify(logFile)}, JSON.stringify({ command, installRoot }) + '\\n');
-  if (command === 'ci') await mkdir(path.join(installRoot, 'node_modules'), { recursive: true });
+  if (command === 'install') await mkdir(path.join(installRoot, 'node_modules'), { recursive: true });
 }
 `);
   await chmod(executable, 0o755);
   return { executable, logFile };
 }
 
-async function createEnvironmentSensitiveNpmFixture(root) {
-  const executable = path.join(root, `environment-npm-${Math.random().toString(16).slice(2)}.mjs`);
-  const logFile = path.join(root, `environment-npm-${Math.random().toString(16).slice(2)}.ndjson`);
+async function createEnvironmentSensitivePnpmFixture(root) {
+  const executable = path.join(root, `environment-pnpm-${Math.random().toString(16).slice(2)}.mjs`);
+  const logFile = path.join(root, `environment-pnpm-${Math.random().toString(16).slice(2)}.ndjson`);
   await writeFile(executable, `#!/usr/bin/env node
 import { appendFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-const command = process.argv[2];
-if (command === '--version') {
-  console.log('10.0.0-fixture');
-} else if (command === 'config') {
-  const prefixIndex = process.argv.indexOf('--prefix');
-  const installRoot = process.argv[prefixIndex + 1];
-  let npmrc = '';
-  try { npmrc = await readFile(path.join(installRoot, '.npmrc'), 'utf8'); } catch {}
-  const legacyPeerDeps = /(?:^|\\n)legacy-peer-deps=true(?:\\n|$)/u.test(npmrc) ? 'true' : 'false';
-  console.log('install-strategy=hoisted\\nlegacy-peer-deps=' + legacyPeerDeps + '\\ninstall-links=false\\nbin-links=true');
+const firstArg = process.argv[2];
+if (firstArg === '--version') {
+  console.log('9.12.0-fixture');
 } else {
-  const prefixIndex = process.argv.indexOf('--prefix');
-  const installRoot = process.argv[prefixIndex + 1];
-  const args = process.argv.slice(3, prefixIndex);
+  const dirIndex = process.argv.indexOf('--dir');
+  const installRoot = process.argv[dirIndex + 1];
+  const command = process.argv[dirIndex + 2];
+  const args = process.argv.slice(dirIndex + 3);
   const selection = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     /^(?:node_env|npm_config_omit|npm_config_include)$/iu.test(key)));
   const tokens = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
     /^(?:node_auth_token|npm_token|github_token|gh_token)$/iu.test(key)));
   await appendFile(${JSON.stringify(logFile)}, JSON.stringify({ command, args, selection, tokens }) + '\\n');
-  if (command === 'ci') {
+  if (command === 'install') {
     await mkdir(path.join(installRoot, 'node_modules'), { recursive: true });
-    if (args.includes('--include=dev') && Object.keys(selection).length === 0) {
+    if (args.includes('--frozen-lockfile') && Object.keys(selection).length === 0) {
       await writeFile(path.join(installRoot, 'node_modules', 'dev-tool'), 'installed');
     }
   }
@@ -151,16 +191,16 @@ if (command === '--version') {
 test('every repository Kit owns a lockfile and the root lock owns no Kit package', async () => {
   const descriptors = await discoverRepositoryKits({ repositoryRoot });
   const rootPackage = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
-  const rootLock = JSON.parse(await readFile(path.join(repositoryRoot, 'package-lock.json'), 'utf8'));
+  const rootLock = parseYaml(await readFile(path.join(repositoryRoot, 'pnpm-lock.yaml'), 'utf8'));
+  const rootWorkspace = parseYaml(await readFile(path.join(repositoryRoot, 'pnpm-workspace.yaml'), 'utf8'));
 
-  assert.deepEqual(rootPackage.workspaces, ['packages/*', 'plugins/*']);
+  assert.deepEqual(rootWorkspace.packages, ['packages/*', 'plugins/*']);
   for (const descriptor of descriptors) {
-    const lock = JSON.parse(await readFile(path.join(descriptor.directory, 'package-lock.json'), 'utf8'));
-    assert.equal(lock.packages[''].name, descriptor.id, descriptor.slug);
-    assert.equal(lock.packages[''].version, descriptor.version, descriptor.slug);
+    const lock = parseYaml(await readFile(path.join(descriptor.directory, 'pnpm-lock.yaml'), 'utf8'));
+    assert.ok(lock.importers?.['.'], descriptor.slug);
   }
   assert.deepEqual(
-    Object.keys(rootLock.packages).filter((key) => key === 'kits' || key.startsWith('kits/')),
+    Object.keys(rootLock.importers ?? {}).filter((key) => key === 'kits' || key.startsWith('kits/')),
     [],
   );
 });
@@ -171,9 +211,9 @@ test('reuses only a complete install with the same lock and runtime cache key', 
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
 
-  const first = await ensureKitInstall({ descriptor, cacheRoot });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   await writeFile(path.join(descriptor.directory, 'source.txt'), 'current source\n');
-  const second = await ensureKitInstall({ descriptor, cacheRoot });
+  const second = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
 
   assert.equal(first.reused, false);
   assert.equal(second.reused, true);
@@ -186,7 +226,7 @@ test('dependency templates contain only node_modules projections and completion 
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-projection-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
-  const result = await ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache') });
+  const result = await ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache'), pnpmExecutable: descriptor.pnpmExecutable });
   const files = [];
   async function visit(directory) {
     for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -203,7 +243,7 @@ test('dependency templates contain only node_modules projections and completion 
     file === '.harbors-kit-install.json'
     || file.split(path.sep).includes('node_modules')
   )), files.join('\n'));
-  for (const forbidden of ['source.txt', 'package.json', 'package-lock.json', 'dist']) {
+  for (const forbidden of ['source.txt', 'package.json', 'pnpm-lock.yaml', 'dist']) {
     assert.equal(files.some((file) => file.split(path.sep).includes(forbidden)), false, forbidden);
   }
 });
@@ -213,13 +253,13 @@ test('a changed lock hash misses the cache', async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot });
-  const lockFile = path.join(descriptor.directory, 'package-lock.json');
-  const lock = JSON.parse(await readFile(lockFile, 'utf8'));
-  lock.packages[''].license = 'MIT';
-  await writeFile(lockFile, `${JSON.stringify(lock, null, 2)}\n`);
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
+  const lockFile = path.join(descriptor.directory, 'pnpm-lock.yaml');
+  const lock = parseYaml(await readFile(lockFile, 'utf8'));
+  lock.importers['.'].cacheBuster = 'changed';
+  await writeFile(lockFile, `${stringifyYaml(lock)}\n`);
 
-  const second = await ensureKitInstall({ descriptor, cacheRoot });
+  const second = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
 
   assert.equal(second.reused, false);
   assert.notEqual(second.cacheKey, first.cacheKey);
@@ -231,12 +271,12 @@ test('a partial cache directory is replaced instead of reused', async (t) => {
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   await rm(first.dependencyRoot, { recursive: true, force: true });
   await mkdir(first.dependencyRoot, { recursive: true });
   await writeFile(path.join(first.dependencyRoot, 'partial.txt'), 'incomplete\n');
 
-  const repaired = await ensureKitInstall({ descriptor, cacheRoot });
+  const repaired = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
 
   assert.equal(repaired.reused, false);
   await assert.rejects(readFile(path.join(repaired.dependencyRoot, 'partial.txt')));
@@ -249,14 +289,14 @@ test('a completed template with deleted or tampered projection content is rebuil
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
 
-  const first = await ensureKitInstall({ descriptor, cacheRoot });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   await rm(path.join(first.dependencyRoot, 'node_modules'), { recursive: true, force: true });
-  const repairedMissing = await ensureKitInstall({ descriptor, cacheRoot });
+  const repairedMissing = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   assert.equal(repairedMissing.reused, false);
   assert.equal((await lstat(path.join(repairedMissing.dependencyRoot, 'node_modules'))).isDirectory(), true);
 
   await writeFile(path.join(repairedMissing.dependencyRoot, 'node_modules', 'tampered.txt'), 'tampered\n');
-  const repairedTamper = await ensureKitInstall({ descriptor, cacheRoot });
+  const repairedTamper = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   assert.equal(repairedTamper.reused, false);
   await assert.rejects(access(path.join(repairedTamper.dependencyRoot, 'node_modules', 'tampered.txt')));
 });
@@ -265,12 +305,12 @@ test('a projection digest cannot collide by moving an entry header into file con
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-framed-digest-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
-  const npmExecutable = await createNpmFixture(root, `
+  const pnpmExecutable = await createPnpmFixture(root, `
     await writeFile(path.join(installRoot, 'node_modules', 'a'), '');
     await writeFile(path.join(installRoot, 'node_modules', 'b'), 'Y');
   `);
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot, npmExecutable });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable });
 
   await rm(path.join(first.dependencyRoot, 'node_modules', 'b'));
   await writeFile(
@@ -278,7 +318,7 @@ test('a projection digest cannot collide by moving an entry header into file con
     'f:node_modules/b\0Y',
   );
 
-  const repaired = await ensureKitInstall({ descriptor, cacheRoot, npmExecutable });
+  const repaired = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable });
 
   assert.equal(repaired.reused, false);
   assert.equal(await readFile(path.join(repaired.dependencyRoot, 'node_modules', 'a'), 'utf8'), '');
@@ -289,15 +329,15 @@ test('a completed projection with a changed executable mode is rebuilt', async (
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-mode-integrity-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
-  const npmExecutable = await createNpmFixture(root, `
+  const pnpmExecutable = await createPnpmFixture(root, `
     await writeFile(path.join(installRoot, 'node_modules', 'tool'), '#!/bin/sh\\n', { mode: 0o755 });
   `);
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot, npmExecutable });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable });
   const cachedTool = path.join(first.dependencyRoot, 'node_modules', 'tool');
   await chmod(cachedTool, 0o644);
 
-  const repaired = await ensureKitInstall({ descriptor, cacheRoot, npmExecutable });
+  const repaired = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable });
 
   assert.equal(repaired.reused, false);
   assert.equal((await lstat(path.join(repaired.dependencyRoot, 'node_modules', 'tool'))).mode & 0o777, 0o755);
@@ -309,18 +349,18 @@ test('win32 installs dependencies inside every private run without projection re
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
-  const npmFixture = await createRecordingNpmFixture(root);
+  const npmFixture = await createRecordingPnpmFixture(root);
 
   const first = await ensureKitInstall({
     descriptor,
     cacheRoot,
-    npmExecutable: npmFixture.executable,
+    pnpmExecutable: npmFixture.executable,
     runtimePlatform: 'win32',
   });
   const second = await ensureKitInstall({
     descriptor,
     cacheRoot,
-    npmExecutable: npmFixture.executable,
+    pnpmExecutable: npmFixture.executable,
     runtimePlatform: 'win32',
   });
   const calls = (await readFile(npmFixture.logFile, 'utf8'))
@@ -332,9 +372,9 @@ test('win32 installs dependencies inside every private run without projection re
   assert.equal(second.reused, false);
   assert.notEqual(first.runRoot, second.runRoot);
   assert.deepEqual(calls, [
-    { command: 'ci', installRoot: first.installRoot },
+    { command: 'install', installRoot: first.installRoot },
     { command: 'rebuild', installRoot: first.installRoot },
-    { command: 'ci', installRoot: second.installRoot },
+    { command: 'install', installRoot: second.installRoot },
     { command: 'rebuild', installRoot: second.installRoot },
   ]);
   await assert.rejects(access(path.join(cacheRoot, 'templates')));
@@ -352,7 +392,7 @@ test('installs dev dependencies deterministically and sanitizes lifecycle enviro
   const descriptor = await createKitFixture(root, 'alpha');
   await writeFile(path.join(descriptor.directory, '.npmrc'), 'legacy-peer-deps=true\n');
   const cacheRoot = path.join(root, 'cache');
-  const npmFixture = await createEnvironmentSensitiveNpmFixture(root);
+  const npmFixture = await createEnvironmentSensitivePnpmFixture(root);
   const controlledEnvironment = {
     NODE_ENV: 'production',
     npm_config_omit: 'dev',
@@ -376,13 +416,13 @@ test('installs dev dependencies deterministically and sanitizes lifecycle enviro
   const first = await ensureKitInstall({
     descriptor,
     cacheRoot,
-    npmExecutable: npmFixture.executable,
+    pnpmExecutable: npmFixture.executable,
   });
   for (const key of Object.keys(controlledEnvironment)) delete process.env[key];
   const second = await ensureKitInstall({
     descriptor,
     cacheRoot,
-    npmExecutable: npmFixture.executable,
+    pnpmExecutable: npmFixture.executable,
   });
   const calls = (await readFile(npmFixture.logFile, 'utf8'))
     .trim()
@@ -394,15 +434,9 @@ test('installs dev dependencies deterministically and sanitizes lifecycle enviro
   assert.equal(second.cacheKey, first.cacheKey);
   assert.equal(second.reused, true);
   assert.deepEqual(calls.map(({ command, args }) => ({ command, args })), [
-    { command: 'ci', args: [
+    { command: 'install', args: [
+      '--frozen-lockfile',
       '--ignore-scripts',
-      '--include=dev',
-      '--include=optional',
-      '--include=peer',
-      '--install-strategy=hoisted',
-      '--legacy-peer-deps=true',
-      '--install-links=false',
-      '--bin-links=true',
     ] },
     { command: 'rebuild', args: [] },
     { command: 'rebuild', args: [] },
@@ -422,10 +456,10 @@ test('a changed Kit npm configuration misses the dependency cache', async (t) =>
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
 
   await writeFile(path.join(descriptor.directory, '.npmrc'), 'legacy-peer-deps=true\n');
-  const second = await ensureKitInstall({ descriptor, cacheRoot });
+  const second = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
 
   assert.equal(second.reused, false);
   assert.notEqual(second.cacheKey, first.cacheKey);
@@ -436,11 +470,11 @@ test('rejects a dependency template changed after cache validation and cleans th
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-cache-race-'));
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
-  const npmExecutable = await createNpmFixture(root, `
+  const pnpmExecutable = await createPnpmFixture(root, `
     await writeFile(path.join(installRoot, 'node_modules', 'victim'), 'A');
   `);
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot, npmExecutable });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable });
   await rm(first.runRoot, { recursive: true });
   let hookCalled = false;
 
@@ -448,7 +482,7 @@ test('rejects a dependency template changed after cache validation and cleans th
     ensureKitInstall({
       descriptor,
       cacheRoot,
-      npmExecutable,
+      pnpmExecutable,
       testHooks: {
         afterProjectionValidation: async () => {
           hookCalled = true;
@@ -476,6 +510,7 @@ test('rejects a Framework symlink injected after source validation and cleans th
     ensureKitInstall({
       descriptor,
       cacheRoot,
+      pnpmExecutable: descriptor.pnpmExecutable,
       testHooks: {
         beforeFrameworkSnapshotInjection: async () => {
           hookCalled = true;
@@ -495,10 +530,10 @@ test('rejects an escaping projection symlink and rebuilds the completed template
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
-  const first = await ensureKitInstall({ descriptor, cacheRoot });
+  const first = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   await symlink(root, path.join(first.dependencyRoot, 'node_modules', 'escape'));
 
-  const repaired = await ensureKitInstall({ descriptor, cacheRoot });
+  const repaired = await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
 
   assert.equal(repaired.reused, false);
   await assert.rejects(access(path.join(repaired.dependencyRoot, 'node_modules', 'escape')));
@@ -509,13 +544,15 @@ test('preserves valid npm workspace links and keeps them inside template and ins
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const metadata = await readKitMetadata(descriptor);
-  metadata.packageJson.workspaces = ['packages/*'];
-  metadata.lock.packages[''].workspaces = ['packages/*'];
-  metadata.lock.packages['packages/workspace'] = { name: '@example/workspace', version: '1.0.0' };
-  metadata.lock.packages['node_modules/@example/workspace'] = {
-    resolved: 'packages/workspace',
-    link: true,
+  metadata.packageJson.dependencies = { '@example/workspace': 'workspace:*' };
+  metadata.lock.importers['.'].dependencies = {
+    '@example/workspace': { specifier: 'workspace:*', version: 'link:packages/workspace' },
   };
+  metadata.lock.importers['packages/workspace'] = {};
+  await writeFile(
+    path.join(descriptor.directory, 'pnpm-workspace.yaml'),
+    "packages:\n  - 'packages/*'\n",
+  );
   await mkdir(path.join(descriptor.directory, 'packages', 'workspace'), { recursive: true });
   await writeFile(
     path.join(descriptor.directory, 'packages', 'workspace', 'package.json'),
@@ -523,7 +560,7 @@ test('preserves valid npm workspace links and keeps them inside template and ins
   );
   await writeKitMetadata(metadata);
 
-  const result = await ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache') });
+  const result = await ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache'), pnpmExecutable: descriptor.pnpmExecutable });
   const relativeLink = path.join('node_modules', '@example', 'workspace');
 
   assert.equal((await lstat(path.join(result.dependencyRoot, relativeLink))).isSymbolicLink(), true);
@@ -543,8 +580,8 @@ test('different Kits never share an install root', async (t) => {
   const cacheRoot = path.join(root, 'cache');
 
   const [alphaInstall, zetaInstall] = await Promise.all([
-    ensureKitInstall({ descriptor: alpha, cacheRoot }),
-    ensureKitInstall({ descriptor: zeta, cacheRoot }),
+    ensureKitInstall({ descriptor: alpha, cacheRoot, pnpmExecutable: alpha.pnpmExecutable }),
+    ensureKitInstall({ descriptor: zeta, cacheRoot, pnpmExecutable: zeta.pnpmExecutable }),
   ]);
 
   assert.notEqual(alphaInstall.installRoot, zetaInstall.installRoot);
@@ -557,8 +594,8 @@ test('concurrent installs share one completed dependency template without sharin
   const cacheRoot = path.join(root, 'cache');
 
   const [left, right] = await Promise.all([
-    ensureKitInstall({ descriptor, cacheRoot }),
-    ensureKitInstall({ descriptor, cacheRoot }),
+    ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable }),
+    ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable }),
   ]);
 
   assert.equal(left.dependencyRoot, right.dependencyRoot);
@@ -576,15 +613,15 @@ test('rejects package and lock drift before consulting an existing cache', async
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const cacheRoot = path.join(root, 'cache');
-  await ensureKitInstall({ descriptor, cacheRoot });
+  await ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable });
   const packageFile = path.join(descriptor.directory, 'package.json');
   const packageJson = JSON.parse(await readFile(packageFile, 'utf8'));
-  packageJson.version = '2.0.0';
+  packageJson.dependencies = { 'drift-dep': '1.0.0' };
   await writeFile(packageFile, `${JSON.stringify(packageJson, null, 2)}\n`);
 
   await assert.rejects(
-    ensureKitInstall({ descriptor, cacheRoot }),
-    /package-lock.*package.json|drift/iu,
+    ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable }),
+    /pnpm-lock.*package.json|drift/iu,
   );
 });
 
@@ -598,7 +635,7 @@ test('rejects descriptor identity drift before creating cache state', async (t) 
   ]) {
     const cacheRoot = path.join(root, `cache-${Object.keys(override)[0]}`);
     await assert.rejects(
-      ensureKitInstall({ descriptor: { ...descriptor, ...override }, cacheRoot }),
+      ensureKitInstall({ descriptor: { ...descriptor, ...override }, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable }),
       /descriptor\.(?:id|version).*Kit package/u,
     );
     await assert.rejects(access(cacheRoot));
@@ -612,7 +649,7 @@ test('rejects cache roots that overlap the Kit before writing cache state', asyn
   const cacheRoot = path.join(descriptor.directory, '.cache', 'installs');
 
   await assert.rejects(
-    ensureKitInstall({ descriptor, cacheRoot }),
+    ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable }),
     /cacheRoot.*overlap.*Kit/iu,
   );
   await assert.rejects(access(path.join(descriptor.directory, '.cache')));
@@ -629,7 +666,7 @@ test('rejects cache roots overlapping Framework snapshot inputs before writing c
     path.join(root, 'node_modules', 'custom-cache'),
   ]) {
     await assert.rejects(
-      ensureKitInstall({ descriptor, cacheRoot }),
+      ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable: descriptor.pnpmExecutable }),
       /cacheRoot.*overlap.*Framework/iu,
     );
     await assert.rejects(access(cacheRoot));
@@ -639,7 +676,7 @@ test('rejects cache roots overlapping Framework snapshot inputs before writing c
 test('rejects cache templates and runs symlinks without writing through them', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-cache-component-link-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const npmExecutable = await createNpmFixture(root);
+  const pnpmExecutable = await createPnpmFixture(root);
   for (const component of ['templates', 'runs']) {
     const descriptor = await createKitFixture(root, `alpha-${component}`);
     const cacheRoot = path.join(root, `cache-${component}`);
@@ -649,7 +686,7 @@ test('rejects cache templates and runs symlinks without writing through them', a
     await symlink(outside, path.join(cacheRoot, component));
 
     await assert.rejects(
-      ensureKitInstall({ descriptor, cacheRoot, npmExecutable }),
+      ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable }),
       /cache.*(?:symbolic link|contained|directory)/iu,
     );
     assert.deepEqual(await readdir(outside), [], component);
@@ -670,7 +707,7 @@ test('rejects a cache component replaced with a symlink after validation', async
     ensureKitInstall({
       descriptor,
       cacheRoot,
-      npmExecutable: await createNpmFixture(root),
+      pnpmExecutable: await createPnpmFixture(root),
       testHooks: {
         beforeTemplateDirectoryUse: async () => {
           hookCalled = true;
@@ -694,14 +731,14 @@ test('rejects source and Framework snapshot symlinks before copying them', async
   await writeFile(outside, 'outside\n');
   await symlink(outside, path.join(descriptor.directory, 'source-link'));
   await assert.rejects(
-    ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache-source') }),
+    ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache-source'), pnpmExecutable: descriptor.pnpmExecutable }),
     /Kit source.*symbolic link/iu,
   );
 
   await rm(path.join(descriptor.directory, 'source-link'));
   await symlink(outside, path.join(root, 'scripts', 'framework-link'));
   await assert.rejects(
-    ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache-framework') }),
+    ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache-framework'), pnpmExecutable: descriptor.pnpmExecutable }),
     /Framework snapshot.*symbolic link/iu,
   );
 });
@@ -709,68 +746,77 @@ test('rejects source and Framework snapshot symlinks before copying them', async
 test('rejects cross-platform local dependency escapes in root, workspace, and lock metadata', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-portable-paths-'));
   t.after(() => rm(root, { recursive: true, force: true }));
-  const npmExecutable = await createNpmFixture(root);
+  const pnpmExecutable = await createPnpmFixture(root);
   const cases = [
     ['peer file escape', async (descriptor, metadata) => {
       metadata.packageJson.peerDependencies = { bad: 'file:../../outside' };
-      metadata.lock.packages[''].peerDependencies = metadata.packageJson.peerDependencies;
+      metadata.lock.importers['.'].peerDependencies = toImporterDependencies(metadata.packageJson.peerDependencies);
     }],
     ['manifest link escape', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: 'link:../../outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['lock naked link escape', async (descriptor, metadata) => {
-      metadata.lock.packages['node_modules/bad'] = { resolved: '../../outside', link: true };
+      metadata.packageJson.dependencies = { bad: '1.0.0' };
+      metadata.lock.importers['.'].dependencies = { bad: { specifier: '1.0.0', version: 'link:../../outside' } };
     }],
     ['encoded path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: 'file:%2e%2e/outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['backslash path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: 'file:..\\..\\outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['drive path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: 'file:C:/outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['bare POSIX absolute path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: '/tmp/outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['bare parent path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: '../../outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['bare current-directory path', async (descriptor, metadata) => {
       await mkdir(path.join(descriptor.directory, 'inside'));
       await writeFile(path.join(descriptor.directory, 'inside', 'package.json'), '{"name":"inside","version":"1.0.0"}\n');
       metadata.packageJson.dependencies = { bad: './inside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['bare Windows drive path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: 'C:\\outside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['bare UNC path', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: '\\\\server\\share' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['bare encoded traversal', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { bad: '%2e%2e%2foutside' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['unknown workspace dependency', async (descriptor, metadata) => {
       metadata.packageJson.dependencies = { '@example/missing': 'workspace:*' };
-      metadata.lock.packages[''].dependencies = metadata.packageJson.dependencies;
+      metadata.lock.importers['.'].dependencies = toImporterDependencies(metadata.packageJson.dependencies);
     }],
     ['unsafe package path', async (descriptor, metadata) => {
-      metadata.lock.packages['..\\outside'] = { name: 'bad', version: '1.0.0' };
+      metadata.lock.packages['/bad@1.0.0'] = { resolution: { tarball: 'file:../../outside' } };
     }],
     ['workspace-owned escape', async (descriptor, metadata) => {
-      metadata.packageJson.workspaces = ['packages/*'];
-      metadata.lock.packages[''].workspaces = ['packages/*'];
-      metadata.lock.packages['packages/workspace'] = { name: '@example/workspace', version: '1.0.0' };
+      metadata.packageJson.dependencies = { '@example/workspace': 'workspace:*' };
+      metadata.lock.importers['.'].dependencies = {
+        '@example/workspace': { specifier: 'workspace:*', version: 'link:packages/workspace' },
+      };
+      metadata.lock.importers['packages/workspace'] = {
+        dependencies: { bad: { specifier: 'file:../../../outside', version: 'file:../../../outside' } },
+      };
+      await writeFile(
+        path.join(descriptor.directory, 'pnpm-workspace.yaml'),
+        "packages:\n  - 'packages/*'\n",
+      );
       await mkdir(path.join(descriptor.directory, 'packages', 'workspace'), { recursive: true });
       await writeFile(
         path.join(descriptor.directory, 'packages', 'workspace', 'package.json'),
@@ -785,8 +831,8 @@ test('rejects cross-platform local dependency escapes in root, workspace, and lo
     await writeKitMetadata(metadata);
     const cacheRoot = path.join(root, `cache-${descriptor.slug}`);
     await assert.rejects(
-      ensureKitInstall({ descriptor, cacheRoot, npmExecutable }),
-      /dependency|package-lock entry|portable relative path/iu,
+      ensureKitInstall({ descriptor, cacheRoot, pnpmExecutable }),
+      /dependency|pnpm-lock|portable relative path/iu,
       name,
     );
     await assert.rejects(access(cacheRoot), name);
@@ -798,20 +844,18 @@ test('rejects product lock file dependencies that escape the Kit root', async (t
   t.after(() => rm(root, { recursive: true, force: true }));
   const descriptor = await createKitFixture(root, 'alpha');
   const packageFile = path.join(descriptor.directory, 'package.json');
-  const lockFile = path.join(descriptor.directory, 'package-lock.json');
+  const lockFile = path.join(descriptor.directory, 'pnpm-lock.yaml');
   const packageJson = JSON.parse(await readFile(packageFile, 'utf8'));
-  const lock = JSON.parse(await readFile(lockFile, 'utf8'));
+  const lock = parseYaml(await readFile(lockFile, 'utf8'));
   packageJson.dependencies = { '@example/shared': 'file:../../packages/shared' };
-  lock.packages[''].dependencies = packageJson.dependencies;
-  lock.packages['node_modules/@example/shared'] = {
-    resolved: 'file:../../packages/shared',
-    link: true,
+  lock.importers['.'].dependencies = {
+    '@example/shared': { specifier: 'file:../../packages/shared', version: 'file:../../packages/shared' },
   };
   await writeFile(packageFile, `${JSON.stringify(packageJson, null, 2)}\n`);
-  await writeFile(lockFile, `${JSON.stringify(lock, null, 2)}\n`);
+  await writeFile(lockFile, `${stringifyYaml(lock)}\n`);
 
   await assert.rejects(
-    ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache') }),
+    ensureKitInstall({ descriptor, cacheRoot: path.join(root, 'cache'), pnpmExecutable: descriptor.pnpmExecutable }),
     /file dependency.*Kit root/iu,
   );
 });

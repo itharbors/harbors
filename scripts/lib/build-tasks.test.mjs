@@ -28,6 +28,11 @@ test('discovers buildable Framework workspaces and orders their package dependen
     'workspace:consumer',
   ]);
   assert.deepEqual(plan.tasks[1].dependencies, ['workspace:foundation']);
+  assert.deepEqual(plan.tasks[1].command, {
+    file: 'pnpm',
+    args: ['--filter', '@fixture/consumer', 'run', 'build'],
+  });
+  assert.ok(plan.tasks[1].inputs.includes('pnpm-lock.yaml'));
   assert.ok(plan.tasks[1].inputs.includes('packages/foundation/dist'));
   assert.deepEqual(discoverWorkspaceBuildOutputs(fixture), [
     'packages/foundation/dist',
@@ -168,7 +173,7 @@ async function createWorkspaceFixture(t, workspaces) {
   const directory = await mkdtemp(path.join(tmpdir(), 'harbors-build-plan-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   await mkdir(path.join(directory, 'packages'), { recursive: true });
-  await writeFile(path.join(directory, 'package-lock.json'), '{}');
+  await writeFile(path.join(directory, 'pnpm-lock.yaml'), '');
   await writeFile(path.join(directory, 'tsconfig.json'), '{}');
   for (const workspace of workspaces) {
     const workspaceDirectory = path.join(directory, 'packages', workspace.directory);

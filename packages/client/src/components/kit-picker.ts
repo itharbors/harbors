@@ -1,8 +1,8 @@
 import type { PublicKitCatalogEntry } from '@itharbors/plugin-types';
 import '../styles/kit-picker.css';
 
-export function renderKitPicker(host: HTMLElement, kits: PublicKitCatalogEntry[]): void {
-  host.replaceChildren(createPicker(kits));
+export function renderKitPicker(host: HTMLElement, kits: PublicKitCatalogEntry[], sessionId: string): void {
+  host.replaceChildren(createPicker(kits, sessionId));
 }
 
 export function renderKitPickerLoading(host: HTMLElement): void {
@@ -36,7 +36,7 @@ export function renderKitPickerError(host: HTMLElement, retry: () => void): void
   host.replaceChildren(alert);
 }
 
-function createPicker(kits: PublicKitCatalogEntry[]): HTMLElement {
+function createPicker(kits: PublicKitCatalogEntry[], sessionId: string): HTMLElement {
   const main = element('main', 'kit-picker-shell');
   main.setAttribute('aria-labelledby', 'kit-picker-title');
 
@@ -80,7 +80,7 @@ function createPicker(kits: PublicKitCatalogEntry[]): HTMLElement {
   } else {
     const list = element('ul', 'kit-list');
     list.setAttribute('role', 'list');
-    for (const kit of kits) list.append(createKitItem(kit));
+    for (const kit of kits) list.append(createKitItem(kit, sessionId));
     berth.append(list);
   }
 
@@ -94,11 +94,11 @@ function createPicker(kits: PublicKitCatalogEntry[]): HTMLElement {
   return main;
 }
 
-function createKitItem(kit: PublicKitCatalogEntry): HTMLLIElement {
+function createKitItem(kit: PublicKitCatalogEntry, sessionId: string): HTMLLIElement {
   const item = element('li', 'kit-item');
   const link = element('a', 'kit-link');
   link.dataset.kitId = kit.id;
-  link.href = `/kits/${encodeURIComponent(kit.id)}`;
+  link.href = `/kits/${encodeURIComponent(kit.id)}?session=${encodeURIComponent(sessionId)}`;
 
   const symbol = element('span', 'kit-symbol', monogram(kit.label));
   symbol.setAttribute('aria-hidden', 'true');

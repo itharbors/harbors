@@ -12,6 +12,7 @@ export interface SessionCreateOptions {
   kitName?: string;
   kitPath?: string;
   locale?: string;
+  deferred?: boolean;
 }
 
 interface SessionCreateRequest extends SessionCreateOptions {
@@ -68,7 +69,7 @@ export function createSessionRouter(
       const existedBefore = manager.get(id) !== undefined;
       const session = manager.getOrCreate(id, workspacePath || '');
       try {
-        await onSessionCreated?.(session, options);
+        if (!options.deferred) await onSessionCreated?.(session, options);
       } catch (error) {
         if (!existedBefore) {
           manager.destroy(id);
@@ -94,5 +95,6 @@ function isSessionCreateRequest(value: unknown): value is SessionCreateRequest {
     input.kitName,
     input.kitPath,
     input.locale,
-  ].every((field) => field === undefined || typeof field === 'string');
+    input.deferred,
+  ].every((field) => field === undefined || typeof field === 'string' || typeof field === 'boolean');
 }

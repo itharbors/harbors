@@ -68,8 +68,7 @@ async function createKit(options: {
   await writeFile(path.join(directory, 'package.json'), JSON.stringify({
     name: '@fixture/kit-demo',
     version: '1.2.3',
-    workspaces: options.workspaces ?? ['packages/*'],
-    scripts: options.packageScripts ?? { 'test:kit': 'vitest run' },
+    scripts: options.packageScripts ?? { 'build:prepare': 'node --version', 'test:kit': 'vitest run' },
     'ce-editor': { kit: { plugin: declaredPlugins } },
     harbors: {
       distribution: 'market',
@@ -78,6 +77,11 @@ async function createKit(options: {
       scripts: { build: 'build', test: options.testScript ?? 'test:kit' },
     },
   }));
+  const workspacePackages = options.workspaces ?? ['packages/*'];
+  await writeFile(
+    path.join(directory, 'pnpm-workspace.yaml'),
+    `packages:\n${workspacePackages.map((p) => `  - '${p}'`).join('\n')}\n`,
+  );
   for (const plugin of plugins) {
     const pluginDirectory = path.join(directory, 'plugins', plugin.directory);
     await mkdir(pluginDirectory, { recursive: true });
@@ -115,8 +119,8 @@ describe('buildKit', () => {
     const kitRoot = await realpath(directory);
 
     expect(commands).toEqual([
-      ['npm', ['run', 'build:prepare', '--if-present'], kitRoot],
-      ['npm', ['run', 'build', '--workspaces', '--if-present'], kitRoot],
+      ['pnpm', ['run', 'build:prepare'], kitRoot],
+      ['pnpm', ['-r', 'run', 'build'], kitRoot],
       ['plugin-build', [path.join(kitRoot, 'plugins', 'first')], kitRoot],
       ['plugin-build', [path.join(kitRoot, 'plugins', 'second')], kitRoot],
     ]);
@@ -152,7 +156,7 @@ describe('buildKit', () => {
     const result = await buildKit({ directory, commandRunner: recordingRunner(commands) });
 
     expect(commands).toEqual([
-      ['npm', ['run', 'build:prepare', '--if-present'], result.directory],
+      ['pnpm', ['run', 'build:prepare'], result.directory],
     ]);
     expect(result.plugins).toEqual([]);
   });
@@ -193,8 +197,8 @@ describe('buildKit', () => {
 
     await expect(buildKit({ directory, commandRunner: runner })).rejects.toThrow('prepare failed');
     expect(commands).toEqual([[
-      'npm',
-      ['run', 'build:prepare', '--if-present'],
+      'pnpm',
+      ['run', 'build:prepare'],
       await realpath(directory),
     ]]);
   });
@@ -330,7 +334,7 @@ describe('testKit', () => {
 
     const result = await testKit({ directory, commandRunner: recordingRunner(commands) });
 
-    expect(commands).toEqual([['npm', ['run', 'verify:kit'], await realpath(directory)]]);
+    expect(commands).toEqual([['pnpm', ['run', 'verify:kit'], await realpath(directory)]]);
     expect(result.script).toBe('verify:kit');
   });
 

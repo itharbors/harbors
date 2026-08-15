@@ -16,7 +16,7 @@ test('the root Kit check command bootstraps Kit Core and Kit CLI before loading 
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/magnet -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
+    'pnpm --filter @itharbors/magnet --filter @itharbors/kit-core --filter @itharbors/kit-cli --filter @itharbors/plugin-types --filter @itharbors/host-security --filter @itharbors/server run build && node scripts/check-kit.mjs',
   );
 });
 
@@ -83,7 +83,7 @@ test('rejects an unknown slug before running a command', async () => {
       runCommand: async (...args) => calls.push(args),
       ensureInstall: async () => { throw new Error('must not install'); },
     }),
-    /not trusted for market publication/u,
+    /Unknown Kit slug: unknown/u,
   );
   assert.deepEqual(calls, []);
 });

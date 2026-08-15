@@ -1,4 +1,0 @@
-interface:
-  display_name: "Kit Workflow"
-  short_description: "从 main 隔离开发、验收并按 Tag 安全发布 Harbors Kit"
-  default_prompt: "Use $kit-workflow to start an isolated Harbors Kit change from main."

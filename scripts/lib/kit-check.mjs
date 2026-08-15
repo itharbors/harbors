@@ -2,9 +2,28 @@ import { spawn } from 'node:child_process';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 
+import { parseKitPackageManifest } from '@itharbors/kit-core';
 import { loadTrustedMarketKit } from './kit-monorepo.mjs';
 import { ensureKitInstall } from './kit-install.mjs';
-import { deriveArtifactName } from './kit-publish/metadata.mjs';
+
+const KIT_ID_PATTERN = /^@([a-z0-9][a-z0-9._-]*)\/(kit-([a-z0-9]+(?:-[a-z0-9]+)*))$/u;
+const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
+
+function packageNameFromManifestId(id) {
+  const match = KIT_ID_PATTERN.exec(id);
+  if (match) return match[2];
+  if (!SLUG_PATTERN.test(id)) {
+    throw new Error('Kit id must use @publisher/kit-<name> or be a valid slug');
+  }
+  return id;
+}
+
+export function deriveArtifactName(rawManifest) {
+  const manifest = parseKitPackageManifest(rawManifest);
+  const packageName = packageNameFromManifestId(manifest.id);
+  const abi = manifest.target.nodeAbi === undefined ? '' : '-abi' + manifest.target.nodeAbi;
+  return packageName + '-' + manifest.version + '-' + manifest.target.platform + '-' + manifest.target.arch + abi + '.hkit';
+}
 
 function normalizeOutputDirectory(outputDirectory) {
   if (typeof outputDirectory !== 'string' || outputDirectory.length === 0 || !path.isAbsolute(outputDirectory)) {

@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-15-remove-kit-publishing",
+  "type": "feature",
+  "updatedAt": "2026-08-15T14:33:53.427Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": {
+    "number": 13
+  }
+}

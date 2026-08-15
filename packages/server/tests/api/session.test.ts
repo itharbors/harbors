@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createSessionRouter } from '../../src/api/session';
 import { SessionManager } from '../../src/session/manager';
 import { SessionStore } from '../../src/session/store';
@@ -125,6 +125,21 @@ describe('Session API Routes', () => {
     const data = JSON.parse(await body());
 
     expect(data.sessionId).toBe('custom-id');
+  });
+
+  it('POST /api/session reserves a session without initializing its runtime', async () => {
+    const onSessionCreated = vi.fn();
+    const deferredRouter = createSessionRouter(manager, onSessionCreated);
+    const { res, body } = mockRes();
+
+    await invoke(deferredRouter, mockReq('POST', '/api/session', {
+      sessionId: 'picker-session',
+      deferred: true,
+    }), res);
+
+    expect(JSON.parse(await body()).sessionId).toBe('picker-session');
+    expect(manager.get('picker-session')).toBeDefined();
+    expect(onSessionCreated).not.toHaveBeenCalled();
   });
 
   it('POST /api/session returns INVALID_JSON for malformed input', async () => {

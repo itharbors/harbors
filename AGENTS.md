@@ -1,22 +1,29 @@
-# Harbors repository instructions
+# Harbors 仓库说明
 
-## Development validation
+## 文档规范
+- 文档默认使用中文。
 
-- Use `npm run dev:web` and browser-based testing by default to develop, debug, and complete acceptance for Framework and Kit changes.
-- Harbors has one supported Web host. Do not add Electron, desktop packaging, native window lifecycle, tray, updater, or desktop IPC assumptions to Framework or Kit code.
-- Validate server-side changes with focused tests and validate visible shared behavior in the browser.
+## 开发验证
+- 默认使用 `npm run dev:web` 和基于浏览器的测试来开发、调试并完成 Framework 和 Kit 变更的验收。
+- Harbors 仅支持一个 Web 宿主。不要在 Framework 或 Kit 代码中加入 Electron、桌面打包、原生窗口生命周期、托盘、更新器或桌面 IPC 相关的假设。
+- 通过针对性测试验证服务端变更，并在浏览器中验证可见的共享行为。
 
-## Commit messages
+## 模块开发边界
+- Kit 是装配包。开发一个 Kit 时，应在其文件夹内独立闭环完成；若需要改动超出该文件夹范围，大概率存在问题，需先询问用户。
+- Plugin 是独立的业务单元。开发 Plugin 时，不应修改其文件夹之外的代码；若需要改动超出该文件夹范围，大概率存在问题，需先询问用户。
 
-Use exactly one of these title formats:
+## 任务编排
+- 排任务时可以以 Plugin 为单元，先定义各 Plugin 之间交互的协议，再分派给 Agent 实现。
 
-- `[Init] 摘要` — repository initialization only.
-- `[Feature] 摘要` — new features and their accompanying tests or documentation.
-- `[Bug] 摘要` — bug and regression fixes.
-- `[Docs] 摘要` — standalone documentation changes.
-- `[Refactor] 摘要` — structure and maintainability changes without intended behavior changes.
-- `[Optimize] 摘要` — performance and resource-usage improvements.
-- `[Test] 摘要` — standalone test changes.
-- `[Chore] 摘要` — dependencies, build tooling, and routine maintenance.
+## 提交信息
+请严格使用以下标题格式之一：
+- `[Init] 摘要` — 仅用于仓库初始化。
+- `[Feature] 摘要` — 新功能及其配套的测试或文档。
+- `[Bug] 摘要` — 缺陷和回归修复。
+- `[Docs] 摘要` — 独立的文档变更。
+- `[Refactor] 摘要` — 不改变预期行为的结构与可维护性改进。
+- `[Optimize] 摘要` — 性能和资源使用优化。
+- `[Test] 摘要` — 独立的测试变更。
+- `[Chore] 摘要` — 依赖、构建工具和日常维护。
 
-Keep the tag capitalization exact, write a concise Chinese summary without a trailing period, and keep each commit focused on one reviewable change. See `docs/guides/development-workflow.md` for the full convention.
+请保持标签大小写完全一致，撰写简洁的中文摘要且末尾不加句号，每次提交聚焦于一项可评审的变更。完整约定参见 `docs/guides/development-workflow.md`。

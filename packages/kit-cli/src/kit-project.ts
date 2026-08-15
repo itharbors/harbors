@@ -6,6 +6,7 @@ import {
   stat,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 import {
   normalizeArchivePath,
@@ -23,7 +24,7 @@ export interface PayloadFile {
 export interface SoftwareComponent {
   archiveDirectory: string;
   dependencies: string[];
-  kind: 'kit' | 'plugin' | 'npm';
+  kind: 'kit' | 'plugin' | 'pnpm';
   license: string | null;
   name: string;
   version: string;
@@ -328,39 +329,45 @@ async function isWorkspaceDependency(
   if (!symbolicLink) return false;
   const relativeCandidate = path.relative(installationRoot, candidate).split(path.sep).join('/');
   if (!relativeCandidate.startsWith('node_modules/')) return false;
-  const packageLock = await readJson(
-    path.join(installationRoot, 'package-lock.json'),
-    'package-lock.json',
-  ).catch(() => null);
-  const packages = packageLock?.packages;
-  if (packages === null || typeof packages !== 'object' || Array.isArray(packages)) return false;
-  const packageEntry = packages[relativeCandidate];
-  if (packageEntry === null || typeof packageEntry !== 'object' || Array.isArray(packageEntry)
-    || packageEntry.link !== true || typeof packageEntry.resolved !== 'string') {
+  const name = relativeCandidate.slice('node_modules/'.length);
+  let lock: any = null;
+  try {
+    const text = await readFile(path.join(installationRoot, 'pnpm-lock.yaml'), 'utf8');
+    lock = parseYaml(text);
+  } catch {
     return false;
   }
-  const resolved = await realpath(path.resolve(installationRoot, packageEntry.resolved)).catch(() => null);
-  return resolved === directory;
+  const importers = lock?.importers;
+  if (importers === null || typeof importers !== 'object' || Array.isArray(importers)) return false;
+  for (const importer of Object.values(importers) as any[]) {
+    for (const field of ['dependencies', 'devDependencies', 'optionalDependencies']) {
+      const dep = importer?.[field]?.[name];
+      if (dep && typeof dep.version === 'string' && dep.version.startsWith('link:')) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 async function findDependencyInstallationRoot(
   kitDirectory: string,
   runtimeManifest: Record<string, any>,
 ): Promise<string> {
-  const name = nonEmptyString(runtimeManifest.name, 'package.json name');
-  const version = nonEmptyString(runtimeManifest.version, 'package.json version');
   let current = kitDirectory;
   while (true) {
-    const packageLock = await readJson(
-      path.join(current, 'package-lock.json'),
-      'package-lock.json',
-    ).catch(() => null);
-    const packages = packageLock?.packages;
+    let lock: any = null;
+    try {
+      const text = await readFile(path.join(current, 'pnpm-lock.yaml'), 'utf8');
+      lock = parseYaml(text);
+    } catch {
+      lock = null;
+    }
+    const importers = lock?.importers;
     const relativeKitPath = path.relative(current, kitDirectory).split(path.sep).join('/');
-    if (packages !== null && typeof packages === 'object' && !Array.isArray(packages)) {
-      const packageEntry = packages[relativeKitPath];
-      if (packageEntry !== null && typeof packageEntry === 'object' && !Array.isArray(packageEntry)
-        && packageEntry.name === name && packageEntry.version === version) {
+    if (importers !== null && typeof importers === 'object' && !Array.isArray(importers)) {
+      const key = relativeKitPath === '' ? '.' : relativeKitPath;
+      if (Object.prototype.hasOwnProperty.call(importers, key)) {
         return current;
       }
     }
@@ -433,7 +440,7 @@ async function collectProductionDependencies(
       dependencies: declaredDependencyNames(installed.manifest)
         .filter((name) => packageNames.has(name))
         .sort((left, right) => left.localeCompare(right)),
-      kind: 'npm',
+      kind: 'pnpm',
       license: declaredLicense(installed.manifest),
       name: installed.name,
       version: installed.version,

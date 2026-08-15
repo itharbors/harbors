@@ -85,7 +85,7 @@ test('rejects other Kits, root files, and deceptive path forms', () => {
   const newline = String.fromCharCode(10);
   const nul = String.fromCharCode(0);
   for (const changedPath of [
-    'package-lock.json',
+    'pnpm-lock.yaml',
     '/kits/default/a.ts',
     'C:/kits/default/a.ts',
     'kits\\default\\a.ts',
@@ -477,7 +477,7 @@ test('allows a real deletion and an in-boundary rename with absent source modes'
 
 test('rejects a real out-of-boundary commit', async () => {
   await withRepository(async ({ base, repositoryRoot }) => {
-    await writeFile(path.join(repositoryRoot, 'package-lock.json'), '{}\n');
+    await writeFile(path.join(repositoryRoot, 'pnpm-lock.yaml'), '{}\n');
     const head = await commitAll(repositoryRoot, 'root change');
     await assert.rejects(
       validateKitChange({ repositoryRoot, slug: 'default', taskId, base, head }),

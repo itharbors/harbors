@@ -18,28 +18,28 @@ describe('Kit picker', () => {
     renderKitPicker(host, [
       { id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' },
       { id: 'sqlite', name: '@itharbors/kit-sqlite', label: 'SQLite' },
-    ]);
+    ], 'picker-session');
 
     expect(host.querySelector('main')?.getAttribute('aria-labelledby')).toBe('kit-picker-title');
     expect(host.querySelector('h1')?.textContent).toBe('选择工作台');
     expect(host.textContent).toContain('多 Kit 主机');
     expect(host.querySelector('[role="list"]')).not.toBeNull();
     const mysql = host.querySelector<HTMLAnchorElement>('[data-kit-id="mysql"]');
-    expect(mysql?.getAttribute('href')).toBe('/kits/mysql');
+    expect(mysql?.getAttribute('href')).toBe('/kits/mysql?session=picker-session');
     expect(mysql?.textContent).toContain('MySQL');
     expect(mysql?.textContent).toContain('@itharbors/kit-mysql');
     expect(mysql?.textContent).toContain('打开工作台');
     expect(mysql?.querySelector('.kit-package')?.getAttribute('translate')).toBe('no');
     expect(mysql?.querySelector('.kit-route')?.getAttribute('translate')).toBe('no');
     expect(mysql?.querySelector('.kit-open-arrow')?.getAttribute('aria-hidden')).toBe('true');
-    expect(host.querySelector('[data-kit-id="sqlite"]')?.getAttribute('href')).toBe('/kits/sqlite');
+    expect(host.querySelector('[data-kit-id="sqlite"]')?.getAttribute('href')).toBe('/kits/sqlite?session=picker-session');
     expect(host.textContent).not.toContain('/private');
   });
 
   it('renders a directional empty state without creating links', () => {
     const host = mountHost();
 
-    renderKitPicker(host, []);
+    renderKitPicker(host, [], 'picker-session');
 
     expect(host.textContent).toContain('没有可用的 Kit');
     expect(host.textContent).toContain('检查 kits 目录中的 package.json');

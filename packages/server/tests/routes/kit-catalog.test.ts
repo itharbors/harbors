@@ -38,6 +38,16 @@ describe('Kit catalog routes', () => {
     expect(response.body()).toBe('');
   });
 
+  it('preserves a reserved session while redirecting to a selected Kit', async () => {
+    const response = mockResponse();
+    const router = createKitCatalogRouter(() => catalog);
+
+    await router(mockRequest('GET', '/kits/mysql?session=reserved-session'), response.res);
+
+    expect(response.status()).toBe(302);
+    expect(response.header('location')).toBe('/?kit=%40itharbors%2Fkit-mysql&session=reserved-session');
+  });
+
   it('rejects unknown Kit ids without treating them as filesystem paths', async () => {
     const router = createKitCatalogRouter(() => catalog);
 

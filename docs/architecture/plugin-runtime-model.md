@@ -3,7 +3,7 @@
 插件是 ITHARBORS 的主要扩展单元。manifest 静态声明“贡献什么”，main entry 通过
 `editor.plugin.define()` 声明“装载时做什么”以及可调用方法。
 
-核心实现由 workspace npm 包 `@itharbors/magnet` 提供。该包拥有 Manifest schema、插件身份与
+核心实现由 workspace 包 `@itharbors/magnet` 提供。该包拥有 Manifest schema、插件身份与
 状态、入口校验和动态导入、生命周期编排、受限 runtime 构造及 owner 私有存储路径；它不依赖
 Session、Kit、Panel、Menu 或 Message 的具体实现。`@itharbors/server` 是当前宿主，通过结构化
 host 接口向核心包注入这些能力，并继续负责 Application 子进程、消息传输和浏览器路由。
@@ -295,8 +295,8 @@ Server 返回 Panel HTML 时注入 runtime 脚本，再导入同目录的 `index
 ```bash
 node scripts/ce-plugin.mjs build plugins/menu
 node scripts/ce-plugin.mjs check plugins/menu
-npm run plugins:build
-npm run plugins:check
+pnpm run plugins:build
+pnpm run plugins:check
 ```
 
 `--all` 会发现仓库 `plugins/*` 与 `kits/*/plugins/*` 下包含 `package.json` 的一级目录。

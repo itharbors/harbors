@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process';
 import path from 'node:path';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
 import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
-import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
+import { createPnpmSpawnSpec } from './lib/pnpm-spawn.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -38,9 +38,9 @@ if (requestedKit) {
 printDevPages(stack.ports.gateway, devPages);
 
 const children = [
-  start('gateway', ['run', 'dev', '-w', 'packages/gateway'], stack.gatewayEnv),
-  start('server', ['run', 'dev', '-w', 'packages/server'], stack.serverEnv),
-  start('client', ['run', 'dev', '-w', 'packages/client'], stack.clientEnv),
+  start('gateway', ['--filter', '@itharbors/gateway', 'run', 'dev'], stack.gatewayEnv),
+  start('server', ['--filter', '@itharbors/server', 'run', 'dev'], stack.serverEnv),
+  start('client', ['--filter', '@itharbors/client', 'run', 'dev'], stack.clientEnv),
 ];
 
 let shuttingDown = false;
@@ -67,9 +67,9 @@ process.on('SIGTERM', () => {
 });
 
 function start(name, args, env) {
-  const npm = createNpmSpawnSpec(args, { env });
-  const child = spawn(npm.command, npm.args, {
-    ...npm.spawnOptions,
+  const pnpm = createPnpmSpawnSpec(args, { env });
+  const child = spawn(pnpm.command, pnpm.args, {
+    ...pnpm.spawnOptions,
     env,
     stdio: 'inherit',
   });
@@ -154,12 +154,12 @@ function parseArgs(args) {
 function printHelp() {
   console.log(`
 Usage:
-  npm run dev:web
-  npm run dev:web -- --kit <kit-package-name-or-path>
+  pnpm run dev:web
+  pnpm run dev:web -- --kit <kit-package-name-or-path>
 
 Examples:
-  npm run dev:web -- --kit <package-name>
-  npm run dev:web -- --kit ./kits/<name>
-  npm run dev:web -- --kit-path /absolute/path/to/kit
+  pnpm run dev:web -- --kit <package-name>
+  pnpm run dev:web -- --kit ./kits/<name>
+  pnpm run dev:web -- --kit-path /absolute/path/to/kit
 `.trim());
 }

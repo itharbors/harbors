@@ -157,9 +157,9 @@ function discoverWorkspaceTasks(rootDir) {
     return {
       name,
       kind: 'workspace',
-      command: { file: 'npm', args: ['run', 'build', '-w', workspace.pkg.name] },
+      command: { file: 'pnpm', args: ['--filter', workspace.pkg.name, 'run', 'build'] },
       inputs: uniqueSorted([
-        ...existingRepositoryPaths(rootDir, ['package-lock.json', 'tsconfig.json']),
+        ...existingRepositoryPaths(rootDir, ['pnpm-lock.yaml', 'tsconfig.json']),
         ...workspaceInputs(rootDir, workspace.directory),
         ...dependencies.map((dependency) => outputByTask.get(dependency)),
       ]),
@@ -226,7 +226,7 @@ function createPluginTask(rootDir, pluginDir, workspaceByPackage, workspaceTasks
     command: { file: 'node', args: ['scripts/ce-plugin.mjs', 'build', repositoryPluginDir] },
     inputs: uniqueSorted([
       ...existingRepositoryPaths(rootDir, [
-        'package-lock.json',
+        'pnpm-lock.yaml',
         'tsconfig.json',
         'scripts/ce-plugin.mjs',
         'packages/kit-cli/dist',

@@ -2,10 +2,9 @@ const SHARED_PREFIXES = Object.freeze([
   'packages/',
   'scripts/',
   '.github/workflows/',
-  'registry/',
 ]);
 
-const SHARED_FILES = new Set(['package.json', 'package-lock.json', 'tsconfig.json']);
+const SHARED_FILES = new Set(['package.json', 'pnpm-lock.yaml', 'tsconfig.json']);
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
 const UNSAFE_PATH_CHARACTERS = /[\\\u0000-\u001f\u007f-\u009f\u2028\u2029]/u;
 const WINDOWS_ABSOLUTE_PATH = /^[a-zA-Z]:\//u;

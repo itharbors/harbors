@@ -76,13 +76,13 @@ export async function runBuildCli(
 
 async function prepareBuildPlanner(rootDir) {
   await new Promise((resolve, reject) => {
-    const child = spawn('npm', [
+    const child = spawn('pnpm', [
+      '--filter',
+      '@itharbors/kit-core',
+      '--filter',
+      '@itharbors/kit-cli',
       'run',
       'build',
-      '-w',
-      '@itharbors/kit-core',
-      '-w',
-      '@itharbors/kit-cli',
     ], { cwd: rootDir, stdio: 'inherit' });
     child.once('error', reject);
     child.once('close', (code, signal) => {

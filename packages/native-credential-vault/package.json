@@ -21,7 +21,7 @@
   "scripts": {
     "install": "node scripts/build.cjs",
     "build": "node scripts/build.cjs",
-    "test": "npm run build && node --test tests/loader.test.cjs tests/keychain-smoke.test.cjs && node scripts/test-status-code.cjs"
+    "test": "pnpm run build && node --test tests/loader.test.cjs tests/keychain-smoke.test.cjs && node scripts/test-status-code.cjs"
   },
   "devDependencies": {
     "node-gyp": "12.4.0"

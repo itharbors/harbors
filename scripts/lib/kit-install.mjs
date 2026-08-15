@@ -15,18 +15,15 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 export const KIT_INSTALL_RUNNER_VERSION = '1';
 const COMPLETION_FILE = '.harbors-kit-install.json';
-const LOCK_ROOT_FIELDS = [
-  'name',
-  'version',
+const LOCK_DEPENDENCY_FIELDS = [
   'dependencies',
   'devDependencies',
   'optionalDependencies',
   'peerDependencies',
-  'peerDependenciesMeta',
-  'workspaces',
 ];
 const STRIPPED_DEPENDENCY_SELECTION_ENVIRONMENT = new Set([
   'NODE_ENV',
@@ -39,12 +36,6 @@ const STRIPPED_LIFECYCLE_CREDENTIAL_ENVIRONMENT = new Set([
   'GITHUB_TOKEN',
   'GH_TOKEN',
 ]);
-const NPM_TREE_CONFIG_KEYS = [
-  'install-strategy',
-  'legacy-peer-deps',
-  'install-links',
-  'bin-links',
-];
 
 function canonicalDirectory(value, context) {
   if (typeof value !== 'string' || !path.isAbsolute(value) || path.resolve(value) !== value) {
@@ -108,49 +99,68 @@ function sanitizedInstallEnvironment(command) {
 }
 
 function assertLockMatchesPackage(packageJson, lock) {
-  const lockedRoot = lock?.packages?.[''];
-  if (lockedRoot === null || typeof lockedRoot !== 'object' || Array.isArray(lockedRoot)) {
-    throw new Error('package-lock.json is missing its root package snapshot');
+  const rootImporter = lock?.importers?.['.'];
+  if (rootImporter === null || typeof rootImporter !== 'object' || Array.isArray(rootImporter)) {
+    throw new Error('pnpm-lock.yaml is missing its root importer');
   }
-  for (const field of LOCK_ROOT_FIELDS) {
-    if (JSON.stringify(stable(packageJson[field])) !== JSON.stringify(stable(lockedRoot[field]))) {
-      throw new Error(`package-lock.json and package.json drift at ${field}`);
+  for (const field of LOCK_DEPENDENCY_FIELDS) {
+    const packageDeps = packageJson[field] ?? {};
+    const lockedDeps = rootImporter[field] ?? {};
+    const packageNames = Object.keys(packageDeps).sort();
+    const lockedNames = Object.keys(lockedDeps).sort();
+    if (JSON.stringify(packageNames) !== JSON.stringify(lockedNames)) {
+      throw new Error(`pnpm-lock.yaml and package.json drift at ${field}`);
+    }
+    for (const name of packageNames) {
+      const locked = lockedDeps[name];
+      if (locked === null || typeof locked !== 'object' || locked.specifier !== packageDeps[name]) {
+        throw new Error(`pnpm-lock.yaml and package.json drift at ${field}.${name}`);
+      }
     }
   }
 }
 
 async function assertLocalDependenciesStayInsideKit(packageJson, lock, kitDirectory, workspaceNames) {
-  for (const [packagePath, entry] of Object.entries(lock.packages ?? {})) {
-    const normalizedPackagePath = packagePath === ''
+  for (const [importerPath, importer] of Object.entries(lock.importers ?? {})) {
+    const normalizedImporterPath = importerPath === '.'
       ? ''
-      : assertPortablePath(packagePath, 'package-lock entry', { allowParent: false });
-    const packageDirectory = path.resolve(kitDirectory, ...normalizedPackagePath.split('/'));
-    if (!isInside(packageDirectory, kitDirectory)) {
-      throw new Error(`package-lock entry must stay inside the Kit root: ${packagePath}`);
+      : assertPortablePath(importerPath, 'pnpm-lock importer', { allowParent: false });
+    const importerDirectory = path.resolve(kitDirectory, ...normalizedImporterPath.split('/'));
+    if (!isInside(importerDirectory, kitDirectory)) {
+      throw new Error(`pnpm-lock importer must stay inside the Kit root: ${importerPath}`);
     }
-    await assertManifestDependencies(entry ?? {}, packageDirectory, kitDirectory, workspaceNames, lock);
-    if (entry?.link === true) {
-      const match = /^(?:file|link):(.*)$/u.exec(entry.resolved ?? '');
+    for (const field of LOCK_DEPENDENCY_FIELDS) {
+      for (const [dependencyName, entry] of Object.entries(importer?.[field] ?? {})) {
+        const version = entry?.version;
+        if (typeof version !== 'string') continue;
+        const match = /^(?:file|link):(.*)$/u.exec(version);
+        if (match) {
+          await assertContainedDependencyPath(
+            match[1],
+            importerDirectory,
+            kitDirectory,
+            `pnpm-lock ${field} link dependency`,
+          );
+        }
+      }
+    }
+  }
+  for (const [packageKey, entry] of Object.entries(lock.packages ?? {})) {
+    const tarball = entry?.resolution?.tarball;
+    if (typeof tarball === 'string' && /^(?:file|link):/u.test(tarball)) {
       await assertContainedDependencyPath(
-        match ? match[1] : entry.resolved,
+        tarball.replace(/^(?:file|link):/u, ''),
         kitDirectory,
         kitDirectory,
-        'package-lock link dependency',
-      );
-    } else if (typeof entry?.resolved === 'string' && /^(?:file|link):/u.test(entry.resolved)) {
-      await assertContainedDependencyPath(
-        entry.resolved.replace(/^(?:file|link):/u, ''),
-        kitDirectory,
-        kitDirectory,
-        'package-lock resolved dependency',
+        'pnpm-lock package resolution',
       );
     }
   }
 }
 
-function runNpm(npmExecutable, args, installRoot) {
+function runPnpm(pnpmExecutable, args, installRoot) {
   return new Promise((resolve, reject) => {
-    const child = spawn(npmExecutable, [...args, '--prefix', installRoot], {
+    const child = spawn(pnpmExecutable, ['--dir', installRoot, ...args], {
       cwd: installRoot,
       env: sanitizedInstallEnvironment(args[0]),
       shell: false,
@@ -158,8 +168,8 @@ function runNpm(npmExecutable, args, installRoot) {
     });
     child.once('error', reject);
     child.once('close', (code, signal) => {
-      if (signal) reject(new Error(`npm ${args[0]} terminated by signal ${signal}`));
-      else if (code !== 0) reject(new Error(`npm ${args[0]} exited with code ${String(code)}`));
+      if (signal) reject(new Error(`pnpm ${args[0]} terminated by signal ${signal}`));
+      else if (code !== 0) reject(new Error(`pnpm ${args[0]} exited with code ${String(code)}`));
       else resolve();
     });
   });
@@ -178,80 +188,18 @@ function readCommandVersion(executable) {
     child.stderr.on('data', (chunk) => { stderr += chunk; });
     child.once('error', reject);
     child.once('close', (code, signal) => {
-      if (signal) reject(new Error(`npm --version terminated by signal ${signal}`));
-      else if (code !== 0) reject(new Error(`npm --version exited with code ${String(code)}: ${stderr.trim()}`));
+      if (signal) reject(new Error(`pnpm --version terminated by signal ${signal}`));
+      else if (code !== 0) reject(new Error(`pnpm --version exited with code ${String(code)}: ${stderr.trim()}`));
       else resolve(stdout.trim());
     });
   });
 }
 
-function readNpmTreeConfig(executable, installRoot) {
-  return new Promise((resolve, reject) => {
-    const child = spawn(executable, [
-      'config',
-      'get',
-      ...NPM_TREE_CONFIG_KEYS,
-      '--prefix',
-      installRoot,
-    ], {
-      cwd: installRoot,
-      env: sanitizedInstallEnvironment('config'),
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
-    child.once('error', reject);
-    child.once('close', (code, signal) => {
-      if (signal) {
-        reject(new Error(`npm config get terminated by signal ${signal}`));
-        return;
-      }
-      if (code !== 0) {
-        reject(new Error(`npm config get exited with code ${String(code)}: ${stderr.trim()}`));
-        return;
-      }
-      const config = Object.create(null);
-      for (const line of stdout.trim().split(/\r?\n/u)) {
-        const separator = line.indexOf('=');
-        if (separator <= 0) {
-          reject(new Error('npm config get returned malformed tree configuration'));
-          return;
-        }
-        const key = line.slice(0, separator);
-        const value = line.slice(separator + 1);
-        if (!NPM_TREE_CONFIG_KEYS.includes(key) || Object.hasOwn(config, key)) {
-          reject(new Error('npm config get returned unexpected tree configuration'));
-          return;
-        }
-        config[key] = value;
-      }
-      if (!['hoisted', 'nested', 'shallow', 'linked'].includes(config['install-strategy'])
-        || !['true', 'false'].includes(config['legacy-peer-deps'])
-        || !['true', 'false'].includes(config['install-links'])
-        || !['true', 'false'].includes(config['bin-links'])
-        || Object.keys(config).length !== NPM_TREE_CONFIG_KEYS.length) {
-        reject(new Error('npm config get returned invalid tree configuration'));
-        return;
-      }
-      resolve(Object.freeze(Object.fromEntries(NPM_TREE_CONFIG_KEYS.map((key) => [key, config[key]]))));
-    });
-  });
-}
-
-function npmCiArguments(treeConfig) {
+function pnpmInstallArguments() {
   return [
-    'ci',
+    'install',
+    '--frozen-lockfile',
     '--ignore-scripts',
-    '--include=dev',
-    '--include=optional',
-    '--include=peer',
-    `--install-strategy=${treeConfig['install-strategy']}`,
-    `--legacy-peer-deps=${treeConfig['legacy-peer-deps']}`,
-    `--install-links=${treeConfig['install-links']}`,
-    `--bin-links=${treeConfig['bin-links']}`,
   ];
 }
 
@@ -511,6 +459,10 @@ async function assertManifestDependencies(
   workspaceNames,
   lock,
 ) {
+  const importerKey = ownerDirectory === kitDirectory
+    ? '.'
+    : path.relative(kitDirectory, ownerDirectory).split(path.sep).join('/');
+  const importer = lock.importers?.[importerKey] ?? {};
   for (const field of ['dependencies', 'devDependencies', 'optionalDependencies', 'peerDependencies']) {
     for (const [dependencyName, specifier] of Object.entries(packageJson[field] ?? {})) {
       if (typeof specifier !== 'string') continue;
@@ -526,16 +478,15 @@ async function assertManifestDependencies(
         if (!workspaceNames.has(dependencyName)) {
           throw new Error(`workspace dependency must name a Kit-local workspace: ${dependencyName}`);
         }
-        const lockEntry = lock.packages?.[`node_modules/${dependencyName}`];
-        if (lockEntry?.link !== true || typeof lockEntry.resolved !== 'string') {
-          throw new Error(`workspace dependency must have a contained package-lock link: ${dependencyName}`);
+        const locked = importer[field]?.[dependencyName];
+        if (locked === null || typeof locked !== 'object' || typeof locked.version !== 'string' || !locked.version.startsWith('link:')) {
+          throw new Error(`workspace dependency must have a contained pnpm-lock link: ${dependencyName}`);
         }
-        const lockMatch = /^(?:file|link):(.*)$/u.exec(lockEntry.resolved);
         await assertContainedDependencyPath(
-          lockMatch ? lockMatch[1] : lockEntry.resolved,
+          locked.version.slice('link:'.length),
           kitDirectory,
           kitDirectory,
-          'workspace package-lock link dependency',
+          'workspace pnpm-lock link dependency',
         );
       } else if (isBareLocalPathSpecifier(specifier)) {
         throw new Error(`dependency specifier must not be a bare local path: ${specifier}`);
@@ -673,11 +624,16 @@ async function validateInstalledProjection(root, runtimePlatform) {
   await visit(root, false);
 }
 
-async function readWorkspaceManifests(kitDirectory, packageJson) {
+async function readWorkspaceManifests(kitDirectory) {
   const hash = createHash('sha256');
   const manifests = [];
   const names = new Set();
-  for (const pattern of [...(packageJson.workspaces ?? [])].sort()) {
+  const workspaceConfigPath = path.join(kitDirectory, 'pnpm-workspace.yaml');
+  const workspaceConfigText = await readRegularFile(workspaceConfigPath, 'Kit pnpm-workspace.yaml');
+  const workspaceConfig = parseYaml(workspaceConfigText);
+  const patterns = Array.isArray(workspaceConfig?.packages) ? workspaceConfig.packages : [];
+  hash.update(`pnpm-workspace.yaml\0${workspaceConfigText}\0`);
+  for (const pattern of [...patterns].sort()) {
     if (typeof pattern !== 'string' || !pattern.endsWith('/*')) {
       throw new Error(`Kit workspace pattern must end with /*: ${String(pattern)}`);
     }
@@ -796,7 +752,7 @@ async function injectFrameworkSnapshot(repositoryRoot, workingRepositoryRoot, ru
 export async function ensureKitInstall({
   descriptor,
   cacheRoot,
-  npmExecutable = 'npm',
+  pnpmExecutable = 'pnpm',
   runtimePlatform = process.platform,
   testHooks = {},
 }) {
@@ -808,8 +764,8 @@ export async function ensureKitInstall({
   if (typeof descriptor.slug !== 'string' || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(descriptor.slug)) {
     throw new TypeError('descriptor.slug must be a canonical Kit slug');
   }
-  if (typeof npmExecutable !== 'string' || npmExecutable.length === 0) {
-    throw new TypeError('npmExecutable must be a non-empty string');
+  if (typeof pnpmExecutable !== 'string' || pnpmExecutable.length === 0) {
+    throw new TypeError('pnpmExecutable must be a non-empty string');
   }
   if (typeof runtimePlatform !== 'string' || runtimePlatform.length === 0) {
     throw new TypeError('runtimePlatform must be a non-empty string');
@@ -822,9 +778,9 @@ export async function ensureKitInstall({
   }
 
   const packageText = await readRegularFile(path.join(kitDirectory, 'package.json'), 'Kit package.json');
-  const lockText = await readRegularFile(path.join(kitDirectory, 'package-lock.json'), 'Kit package-lock.json');
+  const lockText = await readRegularFile(path.join(kitDirectory, 'pnpm-lock.yaml'), 'Kit pnpm-lock.yaml');
   const packageJson = JSON.parse(packageText);
-  const lock = JSON.parse(lockText);
+  const lock = parseYaml(lockText);
   assertLockMatchesPackage(packageJson, lock);
 
   const repositoryRoot = await realpath(path.dirname(path.dirname(kitDirectory)));
@@ -867,7 +823,7 @@ export async function ensureKitInstall({
       isFrameworkSnapshotEntryIncluded,
     );
   }
-  const workspaceState = await readWorkspaceManifests(kitDirectory, packageJson);
+  const workspaceState = await readWorkspaceManifests(kitDirectory);
   await assertManifestDependencies(packageJson, kitDirectory, kitDirectory, workspaceState.names, lock);
   for (const workspace of workspaceState.manifests) {
     await assertManifestDependencies(
@@ -881,7 +837,7 @@ export async function ensureKitInstall({
   await assertLocalDependenciesStayInsideKit(packageJson, lock, kitDirectory, workspaceState.names);
 
   const lockHash = createHash('sha256').update(lockText).digest('hex');
-  const npmConfig = await readOptionalRegularBytes(path.join(kitDirectory, '.npmrc'), 'Kit .npmrc');
+  const pnpmConfig = await readOptionalRegularBytes(path.join(kitDirectory, '.npmrc'), 'Kit .npmrc');
   const runnerPackage = JSON.parse(await readRegularFile(
     path.join(repositoryRoot, 'packages', 'kit-cli', 'package.json'),
     'Kit runner package.json',
@@ -889,15 +845,14 @@ export async function ensureKitInstall({
     if (error.message.includes('does not exist')) return '{"version":"fixture"}';
     throw error;
   }));
-  const npmTreeConfig = await readNpmTreeConfig(npmExecutable, kitDirectory);
   const cacheIdentity = Object.freeze({
     installerSchema: KIT_INSTALL_RUNNER_VERSION,
     slug: descriptor.slug,
     id: packageJson.name,
     lockHash,
-    npmConfigHash: npmConfig === undefined
+    pnpmConfigHash: pnpmConfig === undefined
       ? 'missing'
-      : `sha256:${createHash('sha256').update(npmConfig).digest('hex')}`,
+      : `sha256:${createHash('sha256').update(pnpmConfig).digest('hex')}`,
     workspaceManifestHash: workspaceState.hash,
     runnerVersion: runnerPackage.version,
     runnerArtifactHash: await digestTree(path.join(repositoryRoot, 'packages', 'kit-cli', 'dist')),
@@ -905,8 +860,7 @@ export async function ensureKitInstall({
     arch: process.arch,
     nodeVersion: process.version,
     nodeAbi: process.versions.modules,
-    npmVersion: await readCommandVersion(npmExecutable),
-    npmTreeConfig,
+    pnpmVersion: await readCommandVersion(pnpmExecutable),
   });
   const cacheKey = createHash('sha256')
     .update(JSON.stringify(cacheIdentity))
@@ -971,7 +925,7 @@ export async function ensureKitInstall({
               recursive: true,
               filter: isKitSourceEntryIncluded,
             });
-            await runNpm(npmExecutable, npmCiArguments(npmTreeConfig), temporaryInstallRoot);
+            await runPnpm(pnpmExecutable, pnpmInstallArguments(), temporaryInstallRoot);
             await mkdir(path.join(temporaryInstallRoot, 'node_modules'), { recursive: true });
             await copyDependencyProjection(temporaryInstallRoot, temporaryDependencyRoot);
             const projectionHash = await digestDependencyProjection(temporaryDependencyRoot);
@@ -1071,12 +1025,12 @@ export async function ensureKitInstall({
         await rm(verificationRoot, { recursive: true, force: true });
       }
     } else {
-      await runNpm(npmExecutable, npmCiArguments(npmTreeConfig), installRoot);
+      await runPnpm(pnpmExecutable, pnpmInstallArguments(), installRoot);
     }
     await validateInstalledProjection(installRoot, runtimePlatform);
     await testHooks.beforeFrameworkSnapshotInjection?.();
     await injectFrameworkSnapshot(repositoryRoot, workingRepositoryRoot, runtimePlatform);
-    await runNpm(npmExecutable, ['rebuild'], installRoot);
+    await runPnpm(pnpmExecutable, ['rebuild'], installRoot);
     await validateInstalledProjection(installRoot, runtimePlatform);
   } catch (error) {
     await assertSafeDirectChild(runRoot, runsRoot, canonicalRunsRoot, 'private Kit run cleanup');

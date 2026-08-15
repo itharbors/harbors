@@ -5,9 +5,9 @@
 ## Local lifecycle
 
 ```bash
-npm ci --prefix kits/default
-npm run build --prefix kits/default
-npm run test:kit --prefix kits/default
+pnpm --dir kits/default install --frozen-lockfile
+pnpm --dir kits/default run build
+pnpm --dir kits/default run test:kit
 ```
 
 本 Kit 未声明独立 smoke 脚本，以仓库目标 Kit 的完整检查验收。

@@ -112,21 +112,21 @@ export async function runKitMatrix({
   removeDirectory = (directory) => rm(directory, { recursive: true, force: true }),
 }) {
   canonicalDirectory(repositoryRoot, 'repositoryRoot');
-  await run('npm', [
+  await run('pnpm', [
+    '--filter',
+    '@itharbors/magnet',
+    '--filter',
+    '@itharbors/plugin-types',
+    '--filter',
+    '@itharbors/kit-core',
+    '--filter',
+    '@itharbors/kit-cli',
+    '--filter',
+    '@itharbors/host-security',
+    '--filter',
+    '@itharbors/server',
     'run',
     'build',
-    '-w',
-    '@itharbors/magnet',
-    '-w',
-    '@itharbors/plugin-types',
-    '-w',
-    '@itharbors/kit-core',
-    '-w',
-    '@itharbors/kit-cli',
-    '-w',
-    '@itharbors/host-security',
-    '-w',
-    '@itharbors/server',
   ], { cwd: repositoryRoot, encoding: 'utf8' });
   const loaded = descriptors ?? await discover(repositoryRoot, slugs);
   const plan = createKitMatrixPlan({ action, slugs, descriptors: loaded });

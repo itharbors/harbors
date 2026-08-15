@@ -1,0 +1,21 @@
+lockfileVersion: '9.0'
+
+settings:
+  autoInstallPeers: true
+  excludeLinksFromLockfile: false
+
+importers:
+
+  .: {}
+
+  plugins/log: {}
+
+  plugins/message-debug: {}
+
+  plugins/plugin-detail: {}
+
+  plugins/plugin-list: {}
+
+  plugins/status-bar: {}
+
+  plugins/title-bar: {}
