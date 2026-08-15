@@ -280,7 +280,7 @@ test('Kit CI builds every Server workspace dependency before each Kit lifecycle 
   const workflow = await readFile(kitWorkflowUrl, 'utf8');
   const checkKit = workflowJob(workflow, 'check-kit');
   const installIndex = checkKit.indexOf('run: npm ci');
-  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server');
+  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/magnet -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server');
   const staticIndex = checkKit.indexOf('npm run kits:boundary -- "${{ matrix.kit }}"');
   const checkIndex = checkKit.indexOf('node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"');
 
@@ -313,7 +313,7 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
   assert.equal(packageJson.scripts.test, 'npm run test:framework && npm run kits:test && npm run test:workflows');
   assert.equal(
     packageJson.scripts['test:framework'],
-    'npm run test:toolchain && npm run test:framework:prepared',
+    'npm run test:toolchain && npm run test -w @itharbors/magnet && npm run test:framework:prepared',
   );
   assert.match(
     packageJson.scripts['test:framework:prepared'],

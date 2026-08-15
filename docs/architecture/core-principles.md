@@ -96,7 +96,7 @@ Panel 入口和公开资源来自插件 manifest。服务端解析真实路径�
 ## 源码索引
 
 - [Editor 装配与 Kit 切换](../../packages/server/src/editor/index.ts)
-- [插件运行时](../../packages/server/src/framework/plugin/index.ts)
+- [插件运行时](../../packages/plugin/src/index.ts)
 - [消息模块](../../packages/server/src/framework/message/index.ts)
 - [窗口状态模型](../../packages/server/src/framework/window/index.ts)
 - [插件资源路由](../../packages/server/src/routes/panel-asset.ts)

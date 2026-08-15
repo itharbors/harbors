@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createPluginPaths } from '../../src/framework/plugin/paths';
+import { createPluginPaths } from '@itharbors/magnet';
 
 const temporaryRoots: string[] = [];
 
@@ -106,7 +106,7 @@ describe('createPluginPaths', () => {
 
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: [],
     })).rejects.toThrow(/plugin storage unavailable/iu);
     expect(await lstat(actualData)).toMatchObject({});
@@ -121,12 +121,12 @@ describe('createPluginPaths', () => {
 
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: ['legacy-link'],
     })).rejects.toThrow(/plugin storage unavailable/iu);
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: ['legacy-file'],
     })).rejects.toThrow(/plugin storage unavailable/iu);
   });
@@ -160,7 +160,7 @@ describe('createPluginPaths', () => {
 
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: [],
     }, fileSystem)).rejects.toThrow(/plugin storage unavailable/iu);
     expect(swapped).toBe(true);
@@ -193,7 +193,7 @@ describe('createPluginPaths', () => {
 
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: [],
     }, fileSystem)).rejects.toThrow(/plugin storage unavailable/iu);
     expect(swapped).toBe(true);
@@ -230,7 +230,7 @@ describe('createPluginPaths', () => {
 
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: [],
     }, fileSystem)).rejects.toThrow(/plugin storage unavailable/iu);
     expect(swapped).toBe(true);
@@ -242,22 +242,22 @@ describe('createPluginPaths', () => {
 
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: ['../foreign'],
     })).rejects.toThrow(/plugin storage unavailable/iu);
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: ['foreign\\directory'],
     })).rejects.toThrow(/plugin storage unavailable/iu);
     await expect(createPluginPaths({
       roots,
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: ['duplicate', 'duplicate'],
     })).rejects.toThrow(/plugin storage unavailable/iu);
     await expect(createPluginPaths({
       roots: { ...roots, cache: 'relative/cache' },
-      owner: '@itharbors/plugin',
+      owner: '@itharbors/example-plugin',
       legacyDataDirectories: [],
     })).rejects.toThrow(/plugin storage unavailable/iu);
   });

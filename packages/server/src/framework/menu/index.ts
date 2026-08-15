@@ -1,4 +1,4 @@
-import type { ContributeData } from '../plugin/types';
+import type { ContributeData } from '@itharbors/magnet';
 import type { I18nChangeEvent } from '../i18n/types';
 import type { MenuContributionNode, MenuPlatform, MenuTreeNode, NormalizedMenuResult } from './types';
 import { buildMenuTreeWithActions, normalizeMenuPlatform, type InternalMenuAction } from './normalize';

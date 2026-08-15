@@ -18,7 +18,7 @@ test('root scripts expose the Kit artifact and targeted-check CLIs without migra
   assert.equal(packageJson.scripts.kit, 'node packages/kit-cli/dist/cli.js');
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/magnet -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
   );
   assert.equal(packageJson.scripts['kit:publish'], 'node scripts/kit-publish.mjs');
   assert.equal(packageJson.scripts['kits:validate'], 'npm run kit -- validate');

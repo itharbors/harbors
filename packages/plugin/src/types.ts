@@ -1,5 +1,3 @@
-import type { MenuContributionNode } from '../menu/types';
-
 export type PluginKind = 'builtin' | 'external';
 export type PluginCapability = 'credentials';
 
@@ -20,7 +18,7 @@ export interface PanelContribution {
 
 export interface ContributeData {
   panel?: Record<string, PanelContribution>;
-  menu?: MenuContributionNode[];
+  menu?: unknown[];
   message?: {
     request?: Record<string, string[]>;
     broadcast?: Record<string, string[]>;
@@ -48,7 +46,7 @@ export interface PluginSourceIdentity {
 }
 
 export interface PluginLifecycle {
-  load?(ctx: import('../../editor/types').PluginRuntime | import('../../editor/types').ApplicationPluginRuntime): void | Promise<void>;
+  load?(ctx: object): void | Promise<void>;
   unload?(): void | Promise<void>;
   attach?(pluginName: string, contribute: ContributeData): void | Promise<void>;
   detach?(pluginName: string): void | Promise<void>;

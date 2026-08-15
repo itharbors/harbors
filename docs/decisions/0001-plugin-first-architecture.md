@@ -88,5 +88,5 @@ ITHARBORS 需要支撑不同形态的桌面开发工具。它们共享窗口、�
 - [插件运行时模型](../architecture/plugin-runtime-model.md)
 - [Kit 与会话模型](../architecture/kit-and-session-model.md)
 - [Editor 装配源码](../../packages/server/src/editor/index.ts)
-- [PluginModule 源码](../../packages/server/src/framework/plugin/index.ts)
+- [PluginModule 源码](../../packages/plugin/src/index.ts)
 - [ADR 0002：单一 Web host](./0002-web-only-host.md)
