@@ -10,14 +10,14 @@ import { normalizeKitTheme } from '../framework/kit/theme';
 import { MenuModule } from '../framework/menu/index';
 import { MessageModule } from '../framework/message/index';
 import { PanelModule } from '../framework/panel/index';
-import { PluginModule } from '@itharbors/plugin';
+import { PluginModule } from '@itharbors/magnet';
 import { WindowManager } from '../framework/window/index';
 import type { LayoutNode, WindowDescriptor } from '../framework/window/types';
 import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { PluginPathRoots } from '@itharbors/plugin';
+import type { PluginPathRoots } from '@itharbors/magnet';
 import {
   parseKitPackageManifest,
   parseRepositoryKitPackage,

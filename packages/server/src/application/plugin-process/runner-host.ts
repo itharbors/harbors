@@ -1,4 +1,4 @@
-import type { PluginDefinition, PluginInfo } from '@itharbors/plugin';
+import type { PluginDefinition, PluginInfo } from '@itharbors/magnet';
 import { isPluginProcessProxy, normalizePluginProcessError } from './error.js';
 import {
   type PluginProcessEnvelope,

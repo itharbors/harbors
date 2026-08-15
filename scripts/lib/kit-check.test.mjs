@@ -16,7 +16,7 @@ test('the root Kit check command bootstraps Kit Core and Kit CLI before loading 
   const packageJson = JSON.parse(await readFile(path.join(repositoryRoot, 'package.json'), 'utf8'));
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/plugin -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/magnet -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
   );
 });
 

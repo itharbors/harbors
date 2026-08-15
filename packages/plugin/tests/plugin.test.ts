@@ -91,7 +91,7 @@ function createHost(module: PluginModule): PluginRuntimeHost {
   };
 }
 
-describe('@itharbors/plugin standalone runtime', () => {
+describe('@itharbors/magnet standalone runtime', () => {
   it('registers, loads, calls, unloads, and unregisters a plugin without Server', async () => {
     const root = temporaryDirectory('itharbors-plugin-package-');
     const pluginDirectory = createPlugin(root, `

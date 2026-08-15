@@ -2,8 +2,8 @@ import path from 'node:path';
 import type { ApplicationHostMode, NotificationInput } from '../editor/types';
 import { MenuModule } from '../framework/menu';
 import { MessageModule } from '../framework/message';
-import { PluginModule, createPluginPaths, type PluginPathRoots, type PluginPaths } from '@itharbors/plugin';
-import type { ContributeData, PluginInfo } from '@itharbors/plugin';
+import { PluginModule, createPluginPaths, type PluginPathRoots, type PluginPaths } from '@itharbors/magnet';
+import type { ContributeData, PluginInfo } from '@itharbors/magnet';
 import type {
   CredentialCapabilitySnapshot,
   CredentialMode,

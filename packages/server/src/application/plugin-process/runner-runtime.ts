@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { ApplicationPluginRuntime } from '../../editor/types';
-import type { ContributeData, PluginInfo } from '@itharbors/plugin';
+import type { ContributeData, PluginInfo } from '@itharbors/magnet';
 import type { PluginProcessRpcPeer } from './rpc-peer';
 import { normalizePluginProcessError } from './error.js';
 

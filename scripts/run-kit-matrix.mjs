@@ -116,7 +116,7 @@ export async function runKitMatrix({
     'run',
     'build',
     '-w',
-    '@itharbors/plugin',
+    '@itharbors/magnet',
     '-w',
     '@itharbors/plugin-types',
     '-w',

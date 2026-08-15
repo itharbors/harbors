@@ -6,7 +6,7 @@ import { ApplicationRuntime, type ApplicationRuntimeOptions } from '../../src/ap
 import type { ApplicationPluginSpec } from '../../src/application/types';
 import { createEditor } from '../../src/editor';
 import type { PluginRuntimeHost } from '../../src/editor/types';
-import { PluginModule } from '@itharbors/plugin';
+import { PluginModule } from '@itharbors/magnet';
 import { testAssembly } from '../helpers/assembly';
 
 describe('ApplicationRuntime', () => {

@@ -108,7 +108,7 @@ test('validates builtin Kits without market artifacts and packs exactly one insp
       'run',
       'build',
       '-w',
-      '@itharbors/plugin',
+      '@itharbors/magnet',
       '-w',
       '@itharbors/plugin-types',
       '-w',

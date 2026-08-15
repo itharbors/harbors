@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import type { ContributeData } from '@itharbors/plugin';
+import type { ContributeData } from '@itharbors/magnet';
 import { isPluginProcessProxy } from './error.js';
 import {
   assertPluginProcessPayload,

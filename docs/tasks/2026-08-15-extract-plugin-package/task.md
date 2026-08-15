@@ -6,7 +6,7 @@ Type: `refactor`
 ## 背景与问题
 
 将当前内嵌在 `@itharbors/server` 的插件核心抽取为根 workspace 下的独立 npm 包
-`packages/plugin`（包名 `@itharbors/plugin`）。Server 改为消费该包，不再持有重复的插件
+`packages/plugin`（包名 `@itharbors/magnet`）。Server 改为消费该包，不再持有重复的插件
 注册、Manifest 校验、动态加载、生命周期和插件存储实现。
 
 插件协议虽然已有 `@itharbors/plugin-types`，但负责 Manifest 校验、插件身份、状态机、入口动态
@@ -25,7 +25,7 @@ Type: `refactor`
 - 将插件 Manifest/身份类型、`Plugin`、`PluginModule`、definition load lock 和插件路径实现迁入该包。
 - 通过宿主 runtime factory 解耦 Server 的 Editor/ApplicationRuntime 类型；包负责插件生命周期，宿主
   负责提供具体运行时能力及其可撤销资源。
-- Server 依赖 `@itharbors/plugin`，所有生产代码和相关测试改从包入口导入。
+- Server 依赖 `@itharbors/magnet`，所有生产代码和相关测试改从包入口导入。
 - 更新架构与开发文档，明确核心包和 Server adapter 的边界。
 
 ## 非目标
@@ -36,7 +36,7 @@ Type: `refactor`
 
 ## 验收标准
 
-- `packages/plugin/package.json` 存在，包名为 `@itharbors/plugin`，提供公开根导出并能独立 build/typecheck/test。
+- `packages/plugin/package.json` 存在，包名为 `@itharbors/magnet`，提供公开根导出并能独立 build/typecheck/test。
 - `packages/server/src/framework/plugin` 不再保存插件核心实现，Server 通过 workspace 依赖使用新包。
 - 原有插件注册、校验、加载、卸载、owner 限制、凭据撤销和私有路径行为保持通过测试。
 - 新包测试覆盖不依赖 Server 的独立消费路径。
@@ -51,4 +51,6 @@ Type: `refactor`
 ## 需求变更
 
 实现过程中没有缩减原始目标。为保证 npm 包真实可消费，额外把 Manifest schema 和插件凭据/
-公共类型的权威实现一并迁入 `packages/plugin`，并保留 Kit Core、plugin-types 的兼容转发。
+公共类型的权威实现一并迁入 `packages/plugin`，并保留 Kit Core、plugin-types 的兼容转发。PR
+审查阶段进一步确认插件系统的正式包名为 `@itharbors/magnet`，目录仍按原范围保留为
+`packages/plugin`。

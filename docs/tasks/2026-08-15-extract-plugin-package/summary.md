@@ -2,7 +2,7 @@
 
 ## 最终结论
 
-插件系统核心已独立为 workspace npm 包 `@itharbors/plugin`，位于 `packages/plugin`。Server 已改为
+插件系统核心已独立为 workspace npm 包 `@itharbors/magnet`，位于 `packages/plugin`。Server 已改为
 消费该包，npm tarball 也已在临时外部 consumer 中完成安装和运行验证。
 
 ## 需求完成情况
@@ -14,7 +14,7 @@
 
 ## 主要改动
 
-- 新增 workspace npm 包 `@itharbors/plugin`，公开 Manifest schema、插件与贡献类型、
+- 新增 workspace npm 包 `@itharbors/magnet`，公开 Manifest schema、插件与贡献类型、
   `PluginModule`、生命周期状态机、Session/Application runtime host 合约、凭据 facade 和 owner
   私有存储路径。
 - 将原 `packages/server/src/framework/plugin` 的实现迁入新包；Server 改为通过 workspace 依赖
@@ -36,10 +36,12 @@
 
 ## 验证结果
 
-- `npm test -w @itharbors/plugin`：12/12 通过。
-- Plugin tarball 临时 consumer：`npm pack`、安装后导入 `PluginModule`、
-  `parsePluginPackageManifest`、`createPluginPaths`，输出 `PACKAGED_PLUGIN_IMPORT_OK`。
+- `npm test -w @itharbors/magnet`：12/12 通过。
+- Magnet tarball 临时 consumer：`npm pack`、安装后通过 `@itharbors/magnet` 与
+  `@itharbors/magnet/manifest` 导入 `PluginModule`、`parsePluginPackageManifest`、
+  `createPluginPaths`，输出 `PACKAGED_MAGNET_IMPORT_OK`。
 - `npm exec vitest run -- --config packages/server/vitest.config.ts packages/server/tests/framework/plugin.test.ts packages/server/tests/framework/plugin-runtime.test.ts packages/server/tests/framework/plugin-paths.test.ts packages/server/tests/application/runtime.test.ts`：64/64 通过。
+- Build/CI/Kit 命名与依赖顺序聚焦脚本测试：69/69 通过。
 - `npm test -w @itharbors/server`：60 个测试文件、703/703 通过。
 - `node scripts/build.mjs all --force`：全部 Framework workspace 与内置插件构建通过。
 - `npm run test:preflight`：169 个检查通过。

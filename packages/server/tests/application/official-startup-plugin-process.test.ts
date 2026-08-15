@@ -152,7 +152,7 @@ beforeAll(async () => {
     runNpmSandboxed('initial npm ci', 'npm', ['ci', '--ignore-scripts']);
     runNpmSandboxed('snapshot framework build', 'npm', [
       'run', 'build',
-      '-w', '@itharbors/plugin',
+      '-w', '@itharbors/magnet',
       '-w', '@itharbors/plugin-types',
       '-w', '@itharbors/kit-core',
       '-w', '@itharbors/kit-cli',

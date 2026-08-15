@@ -261,7 +261,7 @@ npm run build
 
 根构建顺序：
 
-1. `@itharbors/plugin` 插件核心；
+1. `@itharbors/magnet` 插件核心；
 2. `@itharbors/plugin-types` 浏览器与宿主共享协议；
 3. Kit Core 与 Kit CLI；
 4. Client、Server 等 Framework workspace；

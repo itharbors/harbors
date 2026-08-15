@@ -1,6 +1,6 @@
 export { createDefaultAssemblyConfig } from './assembly/config';
 export { createEditor } from './editor/index';
-export type { PluginPathRoots } from '@itharbors/plugin';
+export type { PluginPathRoots } from '@itharbors/magnet';
 export { CredentialStore } from './credentials/store';
 export { CredentialVault } from './credentials/vault';
 export {
