@@ -193,10 +193,13 @@ export function createApp(
   const dispatchRequest = async function app(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = req.url || '/';
 
-    // Remote access authorization: only allow auth status check and health for unauthorized remote devices.
+    // Remote access authorization: only block API routes for unauthorized remote devices.
+    // HTML page routes (/, /kits/*) are allowed so the client app can handle the auth flow.
     if (isRemoteUnauthorized(req)) {
       const pathname = new URL(url, 'http://localhost').pathname;
-      if (pathname !== '/api/auth/status' && pathname !== '/api/health') {
+      const isApiRoute = pathname.startsWith('/api/') || pathname.startsWith('/sse/');
+      const isAllowedRoute = pathname === '/api/auth/status' || pathname === '/api/health';
+      if (isApiRoute && !isAllowedRoute) {
         throw new HttpError(403, 'DEVICE_NOT_AUTHORIZED', 'This device is not authorized for remote access');
       }
     }

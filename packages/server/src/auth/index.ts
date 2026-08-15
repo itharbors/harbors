@@ -111,5 +111,11 @@ export function getDeviceId(req: IncomingMessage): string | undefined {
   const url = new URL(req.url || '/', 'http://localhost');
   const queryDeviceId = url.searchParams.get('deviceId');
   if (queryDeviceId && queryDeviceId.length > 0) return queryDeviceId;
+  // Fallback to cookie for requests from iframes (panels) that don't have the fetch wrapper.
+  const cookieHeader = req.headers.cookie;
+  if (typeof cookieHeader === 'string') {
+    const match = cookieHeader.match(/(?:^|;\s*)deviceId=([^;]+)/);
+    if (match) return decodeURIComponent(match[1]);
+  }
   return undefined;
 }

@@ -1,7 +1,7 @@
 import { EditorTransport, getKitFromURL, getSessionIdFromURL } from '../core/transport';
 import type { BootstrapInfo, I18nChangeEvent, I18nVisibleSnapshot, LayoutNode } from '../core/session';
 import { ClientSession } from '../core/session';
-import { getStoredSessionId, setStoredSessionId } from '../core/storage';
+import { getStoredSessionId, setStoredSessionId, generateUUID } from '../core/storage';
 import { I18nClient } from '../i18n/client';
 import { i18nStore } from '../i18n/store';
 import '../layout/split-pane';
@@ -80,7 +80,7 @@ export class EditorApp extends HTMLElement {
     this.style.overflow = 'hidden';
     this.style.position = 'relative';
 
-    const sessionId = getSessionIdFromURL() || getStoredSessionId() || crypto.randomUUID();
+    const sessionId = getSessionIdFromURL() || getStoredSessionId() || generateUUID();
 
     // If URL has no session param, redirect to include it.
     const searchParams = new URLSearchParams(window.location.search);

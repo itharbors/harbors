@@ -20,10 +20,31 @@ function write(key: string, value: string): void {
 export function getDeviceId(): string {
   let deviceId = read(DEVICE_ID_KEY);
   if (!deviceId) {
-    deviceId = crypto.randomUUID();
+    deviceId = generateUUID();
     write(DEVICE_ID_KEY, deviceId);
   }
+  setDeviceIdCookie(deviceId);
   return deviceId;
+}
+
+function setDeviceIdCookie(deviceId: string): void {
+  try {
+    document.cookie = `deviceId=${encodeURIComponent(deviceId)}; path=/; max-age=${60 * 60 * 24 * 365}`;
+  } catch {
+    // Ignore cookie failures
+  }
+}
+
+export function generateUUID(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  // Fallback for non-secure contexts where crypto.randomUUID is unavailable.
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/gu, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    const value = char === 'x' ? random : (random & 0x3) | 0x8;
+    return value.toString(16);
+  });
 }
 
 export function getStoredSessionId(): string | null {
