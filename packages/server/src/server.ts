@@ -25,6 +25,7 @@ import type { ApplicationHostMode } from './editor/types';
 import type { PluginPathRoots } from '@itharbors/magnet';
 import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
 import type { ApplicationPluginProcessRuntimeOptions } from './application/plugin-process/spawn';
+import { AuthManager } from './auth';
 
 type CredentialVaultRuntime = Pick<CredentialVault, 'bind' | 'capability' | 'recover' | 'close'>;
 
@@ -118,6 +119,7 @@ export function createServer(options: ServerOptions) {
       : Promise.resolve(undefined);
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
+  const auth = new AuthManager({ dbPath });
   const channel = new SSEChannel();
   const broker = new BrowserRequestBroker();
   const serverDir = path.dirname(fileURLToPath(import.meta.url));
@@ -162,6 +164,7 @@ export function createServer(options: ServerOptions) {
     clientAssetsRoot: options.clientAssetsRoot,
     pluginPathRoots,
     credentialVault: () => recoveredCredentialVault,
+    authManager: auth,
   }, broker);
 
   const server = http.createServer(async (req, res) => {
@@ -269,6 +272,11 @@ export function createServer(options: ServerOptions) {
     }
     try {
       store.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    try {
+      auth.close();
     } catch (error) {
       errors.push(error);
     }

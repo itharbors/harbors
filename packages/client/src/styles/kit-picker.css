@@ -342,3 +342,207 @@
   .kit-link:hover { transform: none; }
   .kit-host-spinner { animation-duration: 1.5s; }
 }
+
+/* Tabs */
+.kit-tabs {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 4px;
+  padding-bottom: 0;
+  border-bottom: 1px solid rgb(169 199 247 / 18%);
+}
+
+.kit-tab {
+  padding: 10px 18px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--kit-steel);
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: color 160ms ease, border-color 160ms ease;
+}
+
+.kit-tab:hover { color: var(--kit-mist); }
+
+.kit-tab-active {
+  color: var(--kit-signal-ice);
+  border-bottom-color: var(--kit-channel-blue);
+}
+
+.kit-tab-panel {
+  grid-column: 1 / -1;
+}
+
+/* Auth view */
+.auth-view {
+  padding: 24px 0;
+}
+
+.auth-section-title {
+  margin: 0 0 14px;
+  color: var(--kit-mist);
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.auth-section-title:not(:first-child) { margin-top: 32px; }
+
+.auth-device-list {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.auth-device-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border: 1px solid rgb(169 199 247 / 13%);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--kit-dock-slate) 92%, transparent);
+}
+
+.auth-device-info { min-width: 0; flex: 1; }
+
+.auth-device-id {
+  color: #f3f7fc;
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-device-meta {
+  margin-top: 4px;
+  color: var(--kit-steel);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+}
+
+.auth-device-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.auth-btn {
+  padding: 7px 14px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+
+.auth-btn-approve {
+  color: #fff;
+  background: var(--kit-channel-blue);
+}
+.auth-btn-approve:hover { background: #4a7ae0; }
+
+.auth-btn-reject,
+.auth-btn-revoke {
+  color: #f4b3b3;
+  border-color: rgb(244 159 159 / 30%);
+  background: transparent;
+}
+.auth-btn-reject:hover,
+.auth-btn-revoke:hover { background: rgb(244 159 159 / 10%); }
+
+.auth-btn-refresh {
+  color: var(--kit-signal-ice);
+  border-color: rgb(169 199 247 / 30%);
+  background: transparent;
+}
+.auth-btn-refresh:hover { background: rgb(91 141 239 / 12%); }
+
+.auth-empty,
+.auth-loading,
+.auth-error {
+  padding: 20px;
+  border: 1px dashed rgb(169 199 247 / 20%);
+  border-radius: 12px;
+  color: var(--kit-steel);
+  font-size: 13px;
+  text-align: center;
+}
+
+.auth-error { color: #f4b3b3; border-color: rgb(244 159 159 / 25%); }
+
+/* Waiting for authorization */
+.auth-waiting-shell {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  min-height: 100%;
+  padding: 40px 20px;
+  background: var(--kit-harbor-ink);
+  color: var(--kit-mist);
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+.auth-waiting-card {
+  width: min(460px, 100%);
+  display: grid;
+  justify-items: center;
+  gap: 14px;
+  padding: 40px 32px;
+  border: 1px solid rgb(169 199 247 / 15%);
+  border-radius: 18px;
+  background: var(--kit-dock-slate);
+  text-align: center;
+}
+
+.auth-waiting-spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid rgb(169 199 247 / 18%);
+  border-top-color: var(--kit-channel-blue);
+  border-radius: 50%;
+  animation: kit-spin 900ms linear infinite;
+}
+
+.auth-waiting-title {
+  margin: 0;
+  color: #f3f7fc;
+  font-size: 22px;
+  font-weight: 650;
+}
+
+.auth-waiting-desc {
+  margin: 0;
+  color: var(--kit-steel);
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.auth-waiting-device {
+  margin-top: 8px;
+  padding: 12px 16px;
+  border: 1px solid rgb(169 199 247 / 12%);
+  border-radius: 10px;
+  background: rgb(17 23 34 / 60%);
+}
+
+.auth-waiting-label {
+  display: block;
+  color: var(--kit-steel);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.auth-waiting-device-id {
+  display: block;
+  margin-top: 4px;
+  color: var(--kit-signal-ice);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
