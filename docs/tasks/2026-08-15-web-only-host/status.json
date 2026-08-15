@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-15-web-only-host",
+  "type": "refactor",
+  "updatedAt": "2026-08-15T12:18:56.819Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": {
+    "number": 71
+  }
+}

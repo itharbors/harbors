@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { existsSync, realpathSync } from 'node:fs';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,44 +13,6 @@ import {
 } from './build-tasks.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-
-test('private contracts exist only beneath their owning Kits', () => {
-  for (const name of ['csv', 'sqlite', 'mysql', 'traceweave']) {
-    assert.equal(existsSync(path.join(rootDir, 'packages', `${name}-contracts`)), false, name);
-    assert.equal(
-      existsSync(path.join(rootDir, 'kits', name, 'packages', 'contracts', 'package.json')),
-      true,
-      name,
-    );
-  }
-});
-
-test('database Kits declare distinct local Relationship Graph package owners', async () => {
-  const owners = await Promise.all(['sqlite', 'mysql'].map(async (kit) => {
-    const kitRoot = path.join(rootDir, 'kits', kit);
-    const [kitPackage, kitLock, relationshipPackage] = await Promise.all([
-      readJson(path.join(kitRoot, 'package.json')),
-      readJson(path.join(kitRoot, 'package-lock.json')),
-      readJson(path.join(kitRoot, 'packages/relationship-graph/package.json')),
-    ]);
-    const dependency = 'file:packages/relationship-graph';
-    assert.equal(kitPackage.dependencies?.['@itharbors/relationship-graph'], dependency, kit);
-    assert.equal(kitLock.packages?.['']?.dependencies?.['@itharbors/relationship-graph'], dependency, kit);
-    assert.deepEqual(
-      kitLock.packages?.['node_modules/@itharbors/relationship-graph'],
-      { resolved: 'packages/relationship-graph', link: true },
-      kit,
-    );
-    assert.equal(relationshipPackage.name, '@itharbors/relationship-graph', kit);
-    const owner = realpathSync(path.join(kitRoot, 'packages/relationship-graph'));
-    const relativeOwner = path.relative(realpathSync(kitRoot), owner);
-    assert.ok(relativeOwner !== '' && !relativeOwner.startsWith(`..${path.sep}`), kit);
-    return owner;
-  }));
-
-  assert.notEqual(owners[0], owners[1]);
-  assert.equal(existsSync(path.join(rootDir, 'packages/relationship-graph')), false);
-});
 
 test('discovers buildable Framework workspaces and orders their package dependencies first', async (t) => {
   const fixture = await createWorkspaceFixture(t, [
@@ -154,7 +115,7 @@ test('plugin-only graph includes only the required Framework dependency closure'
 test('Framework source contains no product Kit, contract, or resource build registrations', async () => {
   const source = await readFile(new URL('build-tasks.mjs', import.meta.url), 'utf8');
 
-  assert.doesNotMatch(source, /NOTIFICATION|notify-user|agent-guard-contracts|csv-contracts|mysql-contracts|sqlite-contracts|traceweave-contracts|relationship-graph/u);
+  assert.doesNotMatch(source, /NOTIFICATION|notify-user|relationship-graph/u);
   assert.doesNotMatch(source, /kits\/[a-z0-9-]+\/plugins/u);
 });
 
@@ -162,14 +123,11 @@ test('Framework hosts contain no Agent Guard storage identity or dedicated envir
   const sources = await Promise.all([
     'packages/server/src/server.ts',
     'packages/server/src/index.ts',
-    'scripts/lib/desktop-paths.mjs',
-    'scripts/lib/desktop-framework.mjs',
-    'scripts/electron.mjs',
   ].map((relativePath) => readFile(path.join(rootDir, relativePath), 'utf8')));
 
   assert.doesNotMatch(
     sources.join('\n'),
-    /agentGuardDataDir|HARBORS_AGENT_GUARD_DATA_DIR|agent-guard-contracts/u,
+    /agentGuardDataDir|HARBORS_AGENT_GUARD_DATA_DIR|default-contracts/u,
   );
 });
 

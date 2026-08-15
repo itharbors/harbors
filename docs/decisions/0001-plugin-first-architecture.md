@@ -65,7 +65,7 @@ ITHARBORS 需要支撑不同形态的桌面开发工具。它们共享窗口、�
 - Kit 可以通过声明组合不同工作台。
 - session 拥有独立的插件、消息和窗口状态。
 - 贡献点具备统一 attach/detach 与 owner 清理语义。
-- Web 与 Electron 使用同一运行时和插件模型。
+- Web host 使用统一运行时和插件模型。原有 Electron 双宿主结论已由 [ADR 0002](./0002-web-only-host.md) 取代。
 
 ## 负面影响
 
@@ -89,3 +89,4 @@ ITHARBORS 需要支撑不同形态的桌面开发工具。它们共享窗口、�
 - [Kit 与会话模型](../architecture/kit-and-session-model.md)
 - [Editor 装配源码](../../packages/server/src/editor/index.ts)
 - [PluginModule 源码](../../packages/plugin/src/index.ts)
+- [ADR 0002：单一 Web host](./0002-web-only-host.md)

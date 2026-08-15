@@ -223,15 +223,14 @@ kits/my-kit/
 }
 ```
 
-`menuRoot`、`default` layout 与两个 window entry 是必需项。Electron 窗口统一使用聚合菜单，
-`menuRoot.label` 成为该 Kit 的顶层菜单名。`startup.plugins` 缺省为空，`plugin` 仍是普通
-Session 插件，两者不能在同一 Kit 中包含同一 package name。Electron 默认不自动打开 Kit，
-用户首次从 Tray 选择或通过 `--kit` 直达时才创建 Session；Kit 下的插件仍需先生成 dist。
+`menuRoot`、`default` layout 与两个 window entry 是必需项。`menuRoot.label` 成为该 Kit
+的顶层菜单名。`startup.plugins` 缺省为空，`plugin` 是普通 Session 插件，两者不能在
+同一 Kit 中包含同一 package name。Web 客户端从 Kit 选择器或 `--kit` 直达路径创建
+Session；Kit 下的插件仍需先生成 dist。
 
 要生成可独立传递的 Kit 制品，还需在 Kit 根增加发布协议 `kit.json`，并使用
-`npm run kit -- validate/pack/inspect`。完整字段、目标 ABI、制品内容和本地 Store 行为见
-[Kit 制品与本地安装](./kit-artifacts.md)。`--kit <path>` 仍是开发期显式路径，不会写入
-Installed Kit Store。
+`npm run kit -- validate/pack/inspect`。完整字段、目标 ABI、制品内容和发布信任链见
+[Kit 制品与 Registry](./kit-artifacts.md)。`--kit <path>` 是开发期显式路径，不会写入持久安装状态。
 
 ### 官方 Kit 的目录与发布边界
 
@@ -246,8 +245,8 @@ Kit 的 descriptor 通过 `harbors.distribution` 声明 builtin 或 market；bui
 准备版本时必须同步 Kit manifest、package 和锁文件中的版本。只有显式创建
 `kit/<name>/v<semver>` Tag 才会选择对应 `kits/<name>` 目录执行检查与打包。发布得到独立 `.hkit`
 Release Asset，随后市场工作流自动扫描可信 Release 并重建 `index.v1.json`；开发者不提交逐版本
-Registry entry。具体确认令牌、Stable/Preview 频道和回滚规则见
-[Kit 制品与本地安装](./kit-artifacts.md)。
+Registry entry。具体确认令牌与 Stable/Preview 频道见
+[Kit 制品与 Registry](./kit-artifacts.md)。
 
 ### 应用启动插件
 
@@ -284,10 +283,10 @@ Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser me
 ```
 
 其 `lifecycle.load(ctx)` 只收到 `plugin`、`menu`、`message`、`service` 和 `host`。`host.mode`
-为 `desktop` 或 `web`；依赖 Electron 的方法在 web 模式应返回明确错误。启动失败会在
+由仓库入口固定为 `web`。启动失败会在
 `GET /api/application/bootstrap` 中显示为 `degraded`，但不阻止其他插件或 Kit 启动。
 `menu` 只允许启动插件 attach/detach 自己的贡献和读取当前状态，不提供清空全局菜单的能力。
-应用菜单的 HTTP 触发接口是 Electron 内部控制面，要求每次启动生成的令牌，不能作为普通网页
+应用菜单的 HTTP 触发接口是内部控制面，要求启动时注入的令牌，不能作为普通网页
 或外部工具 API 使用。
 
 每个唯一的 Application 启动插件在独立 OS 进程中运行；多个 Kit 声明同一 package name 时共享
@@ -314,7 +313,7 @@ initialize/load 最长 30 秒，正常 unload/shutdown 最长 10 秒；随后 Ho
 连续运行 5 分钟重置预算。
 
 失败时 Host 固定撤销 lifecycle attachment，清静态 attach，再按 menu、message、service 顺序清理
-owner，最后广播新 snapshot。`failed` 可由 Electron 内部控制面调用
+owner，最后广播新 snapshot。`failed` 可由内部控制面调用
 `POST /api/application/plugin/retry` 恢复；请求必须带 application token、使用 JSON 且 body 只有
 canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒绝。
 
@@ -329,19 +328,12 @@ secret 不会进入插件 argv/env，但这不是通用 secret detector，也不
 集成方捕获或新增 host secret 时，必须通过 capture 并在 `secretEnvironmentKeys` 登记变量名，或使用
 未来提供的窄化 capability。
 
-### 官方 Kit 与 runner 兼容
+### Application runner
 
-当前所有已发布的官方 startup plugin package 继续走同一 manifest 与 runtime facade，不需要为
-进程化复制一份实现。为兼容 Scheduler 已发布行为，
-`HARBORS_DATA_ROOT` 目前因未列入移除键而与 `PATH`、locale 等父环境一起保留；它不得承载敏感值。
-新代码仍应优先使用 `ctx.paths`，不要把 `HARBORS_DATA_ROOT` 当成新的通用插件 API，也不要把 host
-token 或云凭据塞入未登记的自定义环境变量。
-
-Web/source 开发从当前 Server 源码解析 `runner.ts` 并使用仓库 `tsx` loader；编译 Server 使用同目录
-`runner.js`。packaged Electron 使用自己的 executable 配合 `ELECTRON_RUN_AS_NODE=1`，并从
-`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js` 启动。执行
-`npm run desktop:prepare` 会先构建 Server，再把本次 runner 放入 desktop runtime staging；不要依赖
-手工生成或历史残留的 `packages/server/dist`。
+启动插件继续使用同一 manifest 与 runtime facade。新代码应使用 `ctx.paths`，不要把
+host token 或云凭据放入未登记的自定义环境变量。source 开发从当前 Server 源码解析
+`runner.ts` 并使用仓库 `tsx` loader；编译 Server 使用同目录 `runner.js`。两者都通过
+Node `process.execPath` 启动，不要依赖手工生成或历史残留的 `packages/server/dist`。
 
 ### layout
 
@@ -399,8 +391,7 @@ npm run dev -- --kit ./kits/my-kit
 
 Framework 文档只维护通用的 Kit、Plugin、Catalog 与 Host 契约。每个 Kit 的功能、生命周期、
 权限、平台限制、资源上限和验证命令由 `kits/<slug>/README.md` 维护；新增或修改产品行为时，
-应在对应 Kit 内同步更新。仓库级 Agent 通知流程另见
-[notify-user Skill](../../.agents/skills/notify-user/SKILL.md)。
+应在对应 Kit 内同步更新。
 
 ## 参考实现
 
@@ -409,4 +400,3 @@ Framework 文档只维护通用的 Kit、Plugin、Catalog 与 Host 契约。每�
 - `kits/<name>/plugins/<plugin>/package.json`
 - [共享插件协议](../../packages/plugin-types/src/index.ts)
 - 各 Kit 自己的 README
-- [notify-user Skill](../../.agents/skills/notify-user/SKILL.md)

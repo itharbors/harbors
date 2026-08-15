@@ -20,7 +20,7 @@ function marketSlugs(policy) {
   }
   const slugs = Object.keys(policy.kits).sort();
   for (const slug of slugs) {
-    if (!SLUG_PATTERN.test(slug) || policy.kits[slug]?.id !== `@itharbors/kit-${slug}`) {
+    if (!SLUG_PATTERN.test(slug) || policy.kits[slug]?.id !== slug) {
       throw new Error(`Registry policy identity mismatch for ${slug}`);
     }
   }
@@ -29,7 +29,7 @@ function marketSlugs(policy) {
 
 function validateProduct(slug, product) {
   if (!product || typeof product !== 'object') throw new Error(`Market Kit ${slug} is missing at the head revision`);
-  const expectedId = `@itharbors/kit-${slug}`;
+  const expectedId = slug;
   const { manifest, packageJson, lockfile } = product;
   if (manifest?.id !== expectedId || packageJson?.name !== expectedId) {
     throw new Error(`Kit identity mismatch for ${slug}: expected ${expectedId}`);

@@ -1018,7 +1018,7 @@ describe('EditorApp default layout', () => {
     }
   });
 
-  it('sends menuTree to Electron bridge after bootstrap', async () => {
+  it('does not send menu state to a legacy Electron bridge after bootstrap', async () => {
     const syncMenu = vi.fn();
     (window as typeof window & {
       electronMenu?: { syncMenu: typeof syncMenu; onMenuAction: ReturnType<typeof vi.fn> };
@@ -1033,19 +1033,12 @@ describe('EditorApp default layout', () => {
     document.body.appendChild(el);
     await waitForBootstrap();
 
-    expect(syncMenu).toHaveBeenCalledWith({
-      sessionId: 'existing-id',
-      menuMode: 'multi',
-      menuTree: bootstrapPayload.menuTree,
-      applicationMenuTree: bootstrapPayload.applicationMenuTree,
-      kitMenuTree: bootstrapPayload.kitMenuTree,
-      kitMenuRoot: bootstrapPayload.kitMenuRoot,
-    });
+    expect(syncMenu).not.toHaveBeenCalled();
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
   });
 
-  it('syncs Electron menu again when an i18n SSE event carries a translated menu tree', async () => {
+  it('keeps translated menu state inside the Web client', async () => {
     const syncMenu = vi.fn();
     (window as typeof window & {
       electronMenu?: { syncMenu: typeof syncMenu; onMenuAction: ReturnType<typeof vi.fn> };
@@ -1079,21 +1072,12 @@ describe('EditorApp default layout', () => {
       }),
     });
 
-    expect(syncMenu).toHaveBeenLastCalledWith({
-      sessionId: 'existing-id',
-      menuMode: 'single',
-      menuTree: [
-        { type: 'menu', id: 'file', label: 'File', labelKey: 'menu.file', children: [] },
-      ],
-      applicationMenuTree: bootstrapPayload.applicationMenuTree,
-      kitMenuTree: bootstrapPayload.kitMenuTree,
-      kitMenuRoot: bootstrapPayload.kitMenuRoot,
-    });
+    expect(syncMenu).not.toHaveBeenCalled();
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
   });
 
-  it('syncs Electron menu again when a menu-changed SSE event arrives', async () => {
+  it('does not export menu-changed SSE state to a legacy Electron bridge', async () => {
     const syncMenu = vi.fn();
     (window as typeof window & {
       electronMenu?: { syncMenu: typeof syncMenu; onMenuAction: ReturnType<typeof vi.fn> };
@@ -1137,39 +1121,12 @@ describe('EditorApp default layout', () => {
       }),
     });
 
-    expect(syncMenu).toHaveBeenLastCalledWith({
-      sessionId: 'existing-id',
-      menuMode: 'single',
-      menuTree: [
-        {
-          type: 'menu',
-          id: 'view',
-          label: 'View',
-          children: [
-            {
-              type: 'menu',
-              id: 'view/panels',
-              label: 'Panels',
-              children: [
-                { type: 'menu', id: 'view/panels/ce-log-log', label: 'Log', children: [] },
-              ],
-            },
-          ],
-        },
-      ],
-      applicationMenuTree: [
-        { type: 'menu', id: 'app', label: 'Translated APP', children: [] },
-      ],
-      kitMenuTree: [
-        { type: 'menu', id: 'kit/action', label: 'Translated Kit Action', children: [] },
-      ],
-      kitMenuRoot: bootstrapPayload.kitMenuRoot,
-    });
+    expect(syncMenu).not.toHaveBeenCalled();
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
   });
 
-  it('forwards Electron menu actions to the menu trigger route', async () => {
+  it('does not subscribe to legacy Electron menu actions', async () => {
     const syncMenu = vi.fn();
     let handler: ((payload: { sessionId: string; menuId: string }) => void) | undefined;
     (window as typeof window & {
@@ -1199,12 +1156,10 @@ describe('EditorApp default layout', () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);
     await waitForBootstrap();
-    handler?.({ sessionId: 'existing-id', menuId: 'file/new-session' });
-    await Promise.resolve();
-
-    expect(mockFetch).toHaveBeenCalledWith(
+    expect(handler).toBeUndefined();
+    expect(mockFetch).not.toHaveBeenCalledWith(
       '/api/menu/trigger',
-      expect.objectContaining({ method: 'POST' }),
+      expect.anything(),
     );
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;

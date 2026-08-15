@@ -155,66 +155,25 @@ npm install
 - `kits/*`；
 - `plugins/*`。
 
-## 启动 Electron 多 Kit 工作台
+## 启动 Web 工作台
 
-`npm run start` 是稳定 Electron 入口；`npm run electron` 保留为兼容入口：
-
-```bash
-npm run start
-```
-
-它只加载显式内置 Kit，以及 `<userData>/kit-store` 中已经安装并激活的商城 Kit，不扫描仓库中的
-普通开发 Kit。启动后只显示系统托盘图标，不会自动打开默认 Kit。单击或右键托盘图标，从列表选择
-当前可用 Kit；首次
-选择会按需创建稳定 session、独立窗口和插件/Panel/消息管线，之后再次选择只会打开或聚焦
-已有窗口。
-
-`npm run dev` 启动隔离开发 Electron，可与稳定实例并行运行：
+开发时运行：
 
 ```bash
 npm run dev
 ```
 
-开发入口使用同一套来源解析，但额外加载仓库 `kits/*` 中所有合法 Kit，因此可以直接联合调试
-descriptor 发现的全部合法 Kit，不需要先从市场安装。开发源码与 active 商城 Kit
-同 ID 时只在当前开发进程中临时使用源码，不修改 `installed.json`。
+`npm run dev` 等同于 `npm run dev:web`，并行启动 Gateway、Server 和 Client。浏览器应访问
+Gateway `http://localhost:49380`，由它将 API 和 SSE 路由到 Server，不要将 Vite 端口当作完整应用入口。
 
-两种 Electron 入口分别启动以下 Web 开发服务：
-
-脚本并行启动：
-
-| 服务 | 稳定 Electron | 隔离开发 Electron | 说明 |
-| --- | --- | --- | --- |
-| Gateway | `http://localhost:48380` | `http://localhost:49380` | 对外统一入口 |
-| Server | `http://localhost:48381` | `http://localhost:49381` | API、SSE 与运行时 |
-| Client | `http://localhost:48382` | `http://localhost:49382` | Vite 开发服务 |
-| Notification Host | `127.0.0.1:48383` | `127.0.0.1:49383` | 本机通知与桌面提示 |
-
-需要浏览器调试入口时显式运行：
-
-```bash
-npm run dev:web
-```
-
-浏览器访问 Gateway，而不是直接访问 Vite。`npm run dev:web` 默认使用隔离开发端口，因此访问
-`http://localhost:49380`；Gateway 才能把 API 和 SSE 路由到 Server。
-
-Web 栈始终运行统一 Kit 主机，裸地址显示 Kit 选择页，并提供开发直达地址：
+Web 栈运行统一 Kit host，裸地址显示 Kit 选择页，并提供开发直达地址：
 
 ```text
 Kit 选择页   http://localhost:49380/
 任意 Kit     http://localhost:49380/kits/<name>
 ```
 
-### Kit Web 优先、桌面能力按需验收
-
-普通 Kit 的开发、调试和最终验收默认使用 `npm run dev:web` 与浏览器。只要改动在 Web 与 Electron
-中共享实现，浏览器验收即可作为该改动的界面验收证据，无需再执行统一的 Electron 收口。
-
-涉及系统托盘、BrowserWindow 生命周期、原生对话框、桌面 IPC、通知、自动更新、打包、操作系统
-集成，或明确修改 Web 与 Electron 不同的控件、入口或行为时，必须使用 Electron 开发或完成补充
-验收。同时影响共享 Kit 行为和桌面专属行为时，分别验证浏览器共享路径与 Electron 专属路径。
-普通 Kit 可以自愿执行 Electron 冒烟检查，但它不是统一门禁。
+界面或 Kit 行为变更应使用浏览器完成最终验收。仓库不再包含桌面 host、托盘、原生窗口或打包链路。
 
 `/?kit=<package-name>` 仍是兼容的直接入口。省略 session 时客户端会为该 Kit 创建新 session；
 已有 session 首次初始化后以其已加载 Kit 为准，不能通过替换 URL 中的 `kit` 隐式切换。
@@ -232,25 +191,13 @@ npm run dev -- --kit ./kits/<name>
 npm run dev -- --kit <package-name>
 ```
 
-`--kit`、`--kit-path` 和 `--kitPath` 都被开发 Electron 启动脚本接受。指定参数代表已经显式
-选择 Kit：服务就绪后只自动创建该 Kit 的窗口，其他 Kit 仍保留在 Tray 中并继续懒加载。
-Electron 窗口统一使用多 Kit 聚合菜单。路径必须包含有效 package；package name 必须能在
-Kit 目录中找到。外部路径会临时追加到 Catalog。Web 裸地址 `/` 始终显示选择页；开发脚本
-额外打印 `Requested Kit` 直达地址，供内置浏览器打开。
-
-## Electron
+`--kit`、`--kit-path` 和 `--kitPath` 都被 Web 开发脚本接受。路径必须包含有效 package；
+package name 必须能在 Kit 目录中找到。外部路径会临时追加到 Catalog，开发脚本会打印
+`Requested Kit` 直达地址。稳定的单进程 Web 入口为：
 
 ```bash
-npm run start
-```
-
-`npm run start` 是稳定桌面入口，`npm run electron` 为兼容入口，使用 Gateway 48380、Server 48381、Client 48382 和 Notification Host 48383。`npm run dev` 是
-隔离开发入口，使用 Gateway 49380、Server 49381、Client 49382 和 Notification Host 49383。Electron 先显示托盘，再启动
-`npm run dev:web` 子进程；选择 Kit 后会等待 Gateway 就绪再创建 BrowserWindow，不会递归
-启动桌面宿主。传给 Electron 的 Kit 参数会继续转发给 Web 开发栈：
-
-```bash
-npm run dev -- --kit ./kits/<name>
+npm run build
+npm start
 ```
 
 ## 构建
@@ -337,12 +284,11 @@ lsof -i :49381
 lsof -i :49382
 ```
 
-仓库提供 `npm run kill`，但它会对这三个开发端口上的所有进程发送 `SIGKILL`，不会关闭
-稳定 Electron 的 48380、48381、48382 或 48383 端口，也不清理开发 Notification Host 的 49383 端口。只有确认进程确属本项目后才使用。
+仓库提供 `npm run kill`，但它会对这三个开发端口上的所有进程发送 `SIGKILL`。
+只有确认进程确属本项目后才使用。
 
-可用 `HARBORS_GATEWAY_PORT`、`HARBORS_SERVER_PORT`、`HARBORS_CLIENT_PORT` 和
-`HARBORS_NOTIFICATION_PORT` 分别覆盖 Gateway、Server、Client 和 Notification Host 端口。
-每个值必须是 1–65535 的整数，且四个端口不得重复。
+可用 `HARBORS_GATEWAY_PORT`、`HARBORS_SERVER_PORT` 和 `HARBORS_CLIENT_PORT` 分别覆盖
+Gateway、Server 和 Client 端口。每个值必须是 1–65535 的整数，且三个端口不得重复。
 
 ## 常见失败
 
@@ -382,7 +328,7 @@ Framework 和官方 Kit 都通过 `main` 集成，但使用不同的本地 Skill
 
 每个 Kit 保存在自己的 `kits/<name>` 功能单元中；根工作流按 descriptor 发现，不维护产品清单。
 市场 Kit 的开发 PR 同时携带版本升级；PR 合并即发布授权。自动化只发布发生版本变化的市场 Kit，不修改或发布
-Framework 版本。完整生命周期是：
+Framework 版本。合并后工作流会自动创建对应的不可变 Kit Tag。完整生命周期是：
 
 ```text
 main
@@ -461,13 +407,6 @@ Tag。获得用户对恢复操作的明确确认后，按输出设置 `HARBORS_K
 与当前 PR 无关的产品行为仍应使用独立变更分支。
 
 ## 提交前最小检查
-
-## 主程序发布与本地包验收
-
-主程序发布使用 updater 可直接解析的 `v<semver>`、**Developer ID Application** 和受保护的 `app-publish-v1` 工作流。
-`npm run desktop:dir` 的未签名目录包只能用于隔离的本地结构验收，不能上传或替代 GitHub 签名发布；
-精确确认令牌、Apple 凭据、环境门禁、attestation 与不可变 Release 的恢复方式见
-[主程序构建、发布与验收](./app-releases.md)。
 
 根检查是有限时长命令，不会启动开发服务器：
 

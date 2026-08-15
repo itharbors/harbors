@@ -26,7 +26,7 @@ const publishSignerV4 = 'itharbors/harbors/.github/workflows/publish-kit-reusabl
 function manifest(channel = 'stable') {
   return {
     schemaVersion: 1,
-    id: '@itharbors/kit-mysql',
+    id: 'default',
     version: channel === 'stable' ? '1.2.3' : '1.3.0-preview.1',
     channel,
     publisher: 'itharbors',
@@ -43,7 +43,7 @@ function manifest(channel = 'stable') {
 
 function entry(channel = 'stable', overrides = {}) {
   const value = manifest(channel);
-  const tag = `kit/mysql/v${value.version}`;
+  const tag = `kit/default/v${value.version}`;
   return {
     schemaVersion: 1,
     id: value.id,
@@ -62,7 +62,7 @@ function entry(channel = 'stable', overrides = {}) {
 function release(channel = 'stable', overrides = {}) {
   const value = manifest(channel);
   const publication = entry(channel);
-  const artifactName = `kit-mysql-${value.version}-any-any.hkit`;
+  const artifactName = `default-${value.version}-any-any.hkit`;
   return {
     schemaVersion: 1,
     id: value.id,
@@ -89,7 +89,7 @@ function release(channel = 'stable', overrides = {}) {
 
 function entryAtVersion({ version, channel }) {
   const value = entry(channel);
-  const tag = `kit/mysql/v${version}`;
+  const tag = `kit/default/v${version}`;
   return {
     ...value,
     version,
@@ -101,7 +101,7 @@ function entryAtVersion({ version, channel }) {
 function releaseAtVersion({ version, channel, sha256 = digest }) {
   const value = release(channel);
   const publication = entryAtVersion({ version, channel });
-  const artifactName = `kit-mysql-${version}-any-any.hkit`;
+  const artifactName = `default-${version}-any-any.hkit`;
   return {
     ...value,
     version,
@@ -177,13 +177,13 @@ test('parses only canonical channel entries with exact GitHub Release URLs', () 
     { extra: true },
     { releaseManifestUrl: 'https://example.test/release.json' },
     { source: { ...stable.source, repository: 'other/harbors' } },
-    { source: { ...stable.source, tag: 'kit/mysql/v9.9.9' } },
+    { source: { ...stable.source, tag: 'kit/default/v9.9.9' } },
   ]) {
     assert.throws(() => parseRegistryEntry({ ...stable, ...mutation }));
   }
   assert.throws(() => parseRegistryEntry({
     ...preview,
-    source: { ...preview.source, tag: 'preview/mysql/41-0123456789ab' },
+    source: { ...preview.source, tag: 'preview/default/41-0123456789ab' },
   }));
 });
 
@@ -322,7 +322,7 @@ test('trusts only immutable v1 through v4 signer releases with Tag-based caller 
     releasesByUrl: new Map([[preview.releaseManifestUrl, release('preview', {
       source: {
         ...release('preview').source,
-        workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/mysql`,
+        workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/default`,
       },
     })]]),
     revocations: [],
@@ -356,7 +356,7 @@ test('requires the only Release asset to use the name derived from its parsed ma
   const base = release('stable');
   for (const name of [
     'source.zip',
-    'kit-mysql-9.9.9-any-any.hkit',
+    'default-9.9.9-any-any.hkit',
   ]) {
     const mutated = {
       ...base,
@@ -406,11 +406,11 @@ test('validates Preview revocation evidence against its exact immutable Tag', ()
     entries: [preview],
     releasesByUrl: new Map([
       [preview.releaseManifestUrl, release('preview')],
-      ['https://github.com/itharbors/harbors/releases/download/preview%2Fmysql%2F41-0123456789ab/release.json', release('preview')],
+      ['https://github.com/itharbors/harbors/releases/download/preview%2Fdefault%2F41-0123456789ab/release.json', release('preview')],
     ]),
     revocations: [{
       ...revocation,
-      releaseManifestUrl: `https://github.com/${repository}/releases/download/preview%2Fmysql%2F41-0123456789ab/release.json`,
+      releaseManifestUrl: `https://github.com/${repository}/releases/download/preview%2Fdefault%2F41-0123456789ab/release.json`,
     }],
     generatedAt: '2026-07-23T12:00:00.000Z',
   }), (error) => {
@@ -435,7 +435,7 @@ test('requires revocation evidence to meet the immutable Release trust contract'
     {
       source: {
         ...base.source,
-        workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/mysql`,
+        workflow: `${repository}/.github/workflows/publish-kit.yml@refs/heads/kit/default`,
       },
     },
     {
@@ -460,8 +460,8 @@ test('requires revocation evidence to meet the immutable Release trust contract'
     {
       assets: [{
         ...base.assets[0],
-        name: 'kit-mysql-9.9.9-any-any.hkit',
-        url: `https://github.com/${repository}/releases/download/${encodeURIComponent(preview.source.tag)}/kit-mysql-9.9.9-any-any.hkit`,
+        name: 'default-9.9.9-any-any.hkit',
+        url: `https://github.com/${repository}/releases/download/${encodeURIComponent(preview.source.tag)}/default-9.9.9-any-any.hkit`,
       }],
     },
     { assets: [{ ...base.assets[0], url: 'https://example.test/kit.hkit' }] },
