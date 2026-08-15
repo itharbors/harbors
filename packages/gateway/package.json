@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && vitest run"
+    "test": "pnpm run typecheck && vitest run"
   },
   "dependencies": {
     "@itharbors/host-security": "0.0.1"

@@ -61,12 +61,12 @@ async function initializeRepository({ seedRoot = true } = {}) {
     await writeFile(path.join(repository, '.root'), 'root\n');
     await commitAll(repository, 'root');
   }
-  // Copy the root package-lock so loadTrustedMarketKit can verify the Kit
+  // Copy the root pnpm-lock so loadTrustedMarketKit can verify the Kit
   // lock identity against the descriptor. The lockfile is not committed in
   // root-commit tests but is still readable from the working tree.
   await cp(
-    path.join(repositoryRoot, 'package-lock.json'),
-    path.join(repository, 'package-lock.json'),
+    path.join(repositoryRoot, 'pnpm-lock.yaml'),
+    path.join(repository, 'pnpm-lock.yaml'),
   );
   // Copy the minimum real Task 1 descriptor inputs (kit.json and package.json)
   // for every trusted Kit so loadTrustedMarketKit can resolve ciRunner.
@@ -159,7 +159,7 @@ test('ignores unrelated paths and rejects an undiscovered Kit directory', () => 
 test('selects all official Kits for shared build, validation, and workflow paths', () => {
   for (const sharedPath of [
     'package.json',
-    'package-lock.json',
+    'pnpm-lock.yaml',
     'tsconfig.json',
     'packages/kit-core/src/schema.ts',
     'packages/kit-cli/src/archive.ts',

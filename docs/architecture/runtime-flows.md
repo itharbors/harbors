@@ -4,7 +4,7 @@
 
 ```mermaid
 sequenceDiagram
-    participant CLI as npm run dev:web
+    participant CLI as pnpm run dev:web
     participant G as Gateway
     participant S as Server
     participant C as Vite Client
@@ -17,7 +17,7 @@ sequenceDiagram
     G->>C: 页面与静态资源
 ```
 
-`npm start` 使用 `packages/server/src/start.ts` 直接启动稳定 Web Server；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。运行数据位于 `.data/`。
+`pnpm start` 使用 `packages/server/src/start.ts` 直接启动稳定 Web Server；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。运行数据位于 `.data/`。
 
 ## 会话创建与 bootstrap
 
@@ -33,4 +33,4 @@ Panel 只能通过注入的 runtime API 发送 request 或 broadcast。Server �
 
 ## Kit 本地校验与打包
 
-Kit 源码由本地 `kits/` 目录发现。开发者先以 `npm run kit -- validate` 校验 descriptor 与声明文件，再以 `npm run kit -- pack` 生成 `.hkit`，并用 `npm run kit -- inspect` 检查制品内容。合并源码不会触发额外的制品分发流程。
+Kit 源码由本地 `kits/` 目录发现。开发者先以 `pnpm run kit -- validate` 校验 descriptor 与声明文件，再以 `pnpm run kit -- pack` 生成 `.hkit`，并用 `pnpm run kit -- inspect` 检查制品内容。合并源码不会触发额外的制品分发流程。

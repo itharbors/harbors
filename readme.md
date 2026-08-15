@@ -7,21 +7,21 @@ ITHARBORS 是一个插件优先的 Web 应用框架。Gateway 提供统一入口
 
 ## 快速开始
 
-需要 Node.js 22.12+、npm 9+，以及 `better-sqlite3` 在本机编译时需要的 Python/C++ 工具链。
+需要 Node.js 22.12+、pnpm 9+，以及 `better-sqlite3` 在本机编译时需要的 Python/C++ 工具链。
 
 ```bash
-npm install
-npm run dev
+pnpm install
+pnpm run dev
 ```
 
-`npm run dev` 等同于 `npm run dev:web`，启动开发 Gateway、Server 与 Client，访问 <http://localhost:49380>。稳定单进程入口使用：
+`pnpm run dev` 等同于 `pnpm run dev:web`，启动开发 Gateway、Server 与 Client，访问 <http://localhost:49380>。稳定单进程入口使用：
 
 ```bash
-npm run build
-npm start
+pnpm run build
+pnpm start
 ```
 
-`npm start` 在 `HARBORS_SERVER_PORT`（默认 `48381`）启动 Web Server，并从 `kits/default` 装配内置 Kit。运行数据写入被 Git 忽略的 `.data/`。
+`pnpm start` 在 `HARBORS_SERVER_PORT`（默认 `48381`）启动 Web Server，并从 `kits/default` 装配内置 Kit。运行数据写入被 Git 忽略的 `.data/`。
 
 ## 架构
 
@@ -46,18 +46,18 @@ Harbors 只支持 Web host，不包含 Electron、桌面打包、托盘、原生
 
 Kit 由 `kit.json` 和 `package.json` descriptor 描述；`distribution` 仅表达本地装配类别。插件通过 manifest 声明 Panel、Message、Menu 和 public assets，通过 `editor.plugin.define()` 注册生命周期。
 
-Kit 变更与 Framework 一样使用 change-workflow，从 `origin/main` 创建 `<type>/<slug>` 分支并提交到 `main`。合并只更新源码；不会自动创建制品、发布版本、创建 Release Tag 或更新远程 Registry。版本字段仍用于 descriptor 与本地制品校验，可用 `npm run kit -- validate`、`npm run kit -- pack` 和 `npm run kit -- inspect` 完成本地制品循环。
+Kit 变更与 Framework 一样使用 change-workflow，从 `origin/main` 创建 `<type>/<slug>` 分支并提交到 `main`。合并只更新源码；不会自动创建远程制品、发布版本、创建 Release Tag 或更新远程 Registry。版本字段仍用于 descriptor 与本地制品校验，可用 `pnpm run kit -- validate`、`pnpm run kit -- pack` 和 `pnpm run kit -- inspect` 完成本地制品循环。
 
 常用命令：
 
 ```bash
-npm run build
-npm run check
-npm run plugins:build
-npm run plugins:check
-npm run kit -- validate ./path/to/kit
-npm run kit -- pack ./path/to/kit --output ./dist/example.hkit
-npm run kit -- inspect ./dist/example.hkit --json
+pnpm run build
+pnpm run check
+pnpm run plugins:build
+pnpm run plugins:check
+pnpm run kit -- validate ./path/to/kit
+pnpm run kit -- pack ./path/to/kit --output ./dist/example.hkit
+pnpm run kit -- inspect ./dist/example.hkit --json
 ```
 
 ## 文档
@@ -76,4 +76,4 @@ npm run kit -- inspect ./dist/example.hkit --json
 - 产品能力优先放入 Kit 插件，Framework 保持通用。
 - Server 持有权威状态，Client 只投影快照并提交意图。
 - Panel 资源必须由 manifest 显式声明且不能越过插件目录。
-- 变更在隔离 worktree 中完成，并运行受影响测试与 `npm run check`。
+- 变更在隔离 worktree 中完成，并运行受影响测试与 `pnpm run check`。

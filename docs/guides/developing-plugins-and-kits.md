@@ -229,7 +229,7 @@ kits/my-kit/
 Session；Kit 下的插件仍需先生成 dist。
 
 要生成可独立传递的 Kit 制品，还需在 Kit 根增加打包协议 `kit.json`，并使用
-`npm run kit -- validate/pack/inspect`。完整字段、目标 ABI 和制品内容见
+`pnpm run kit -- validate/pack/inspect`。完整字段、目标 ABI 和制品内容见
 [Kit 制品打包](./kit-artifacts.md)。`--kit <path>` 是开发期显式路径，不会写入持久安装状态。
 
 ### 官方 Kit 的目录与边界
@@ -237,14 +237,14 @@ Session；Kit 下的插件仍需先生成 dist。
 Kit 的 descriptor 通过 `harbors.distribution` 声明本地装配类别；builtin 中恰好一个以
 `harbors.default=true` 声明默认角色。实现固定保存在主分支的 `kits/<name>`；development profile
 发现全部合法 Kit，stable profile 只选择 descriptor 声明的 builtin，并从隔离构建生成的 staging
-加载。每个目录独立维护 `kit.json`、`package.json`、`package-lock.json`、依赖安装、插件、测试和
+加载。每个目录独立维护 `kit.json`、`package.json`、`pnpm-lock.yaml`、依赖安装、插件、测试和
 构建产物，仓库只共享通用本地工具链。
 修改某个 Kit 时使用 `change-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
 仅更新源码，不发布 Kit 或 Framework。
 
 Kit 只在本地开发与打包。合并源码不会自动创建制品或变更版本；版本字段继续作为 descriptor
-与制品校验的静态元数据。可使用 `npm run kit -- validate`、`npm run kit -- pack` 和
-`npm run kit -- inspect` 完成本地制品循环。详见
+与制品校验的静态元数据。可使用 `pnpm run kit -- validate`、`pnpm run kit -- pack` 和
+`pnpm run kit -- inspect` 完成本地制品循环。详见
 [Kit 制品打包](./kit-artifacts.md)。
 
 ### 应用启动插件
@@ -370,7 +370,7 @@ Node `process.execPath` 启动，不要依赖手工生成或历史残留的 `pac
 
 ```bash
 node scripts/ce-plugin.mjs build kits/my-kit/plugins/my-plugin
-npm run dev -- --kit ./kits/my-kit
+pnpm run dev -- --kit ./kits/my-kit
 ```
 
 `--kit` 是直达快捷方式：它把外部 Kit 临时追加到 Catalog，并在服务就绪后只自动打开该 Kit；

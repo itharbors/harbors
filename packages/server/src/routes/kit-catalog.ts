@@ -34,8 +34,14 @@ export function createKitCatalogRouter(
     if (!entry) {
       throw new HttpError(404, 'KIT_NOT_FOUND', `Kit "${id}" not found`);
     }
+    const redirect = new URL('/', 'http://localhost');
+    redirect.searchParams.set('kit', entry.name);
+    for (const key of ['session', 'sessionId']) {
+      const value = url.searchParams.get(key);
+      if (value) redirect.searchParams.set(key, value);
+    }
     res.statusCode = 302;
-    res.setHeader('Location', `/?kit=${encodeURIComponent(entry.name)}`);
+    res.setHeader('Location', `${redirect.pathname}${redirect.search}`);
     res.end();
   };
 }

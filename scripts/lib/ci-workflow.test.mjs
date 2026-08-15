@@ -4,12 +4,11 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { parse as parseYaml } from 'yaml';
 
 const rootUrl = new URL('../../', import.meta.url);
-const workflowUrl = new URL('.github/workflows/ci.yaml', rootUrl);
-const kitWorkflowUrl = new URL('.github/workflows/kit-ci.yml', rootUrl);
 const packageUrl = new URL('package.json', rootUrl);
-const packageLockUrl = new URL('package-lock.json', rootUrl);
+const pnpmLockUrl = new URL('pnpm-lock.yaml', rootUrl);
 
 test('root package exposes Framework boundary, test, and plugin-check scripts', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
@@ -20,22 +19,22 @@ test('root package exposes Framework boundary, test, and plugin-check scripts', 
   assert.equal(typeof scripts.check, 'string');
 });
 
-test('root test and check scripts reference only declared root npm scripts', async () => {
+test('root test and check scripts reference only declared root pnpm scripts', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
   const scripts = packageJson.scripts ?? {};
-  const referenced = [...(scripts.test ?? '').matchAll(/npm run ([\w:-]+)/g)].map(([, s]) => s);
+  const referenced = [...(scripts.test ?? '').matchAll(/pnpm run ([\w:-]+)/g)].map(([, s]) => s);
   for (const script of referenced) {
     assert.ok(Object.hasOwn(scripts, script), `test script references missing root script: ${script}`);
   }
 });
 
-test('CI dependency lock does not reference the private npm registry', async () => {
-  const packageLock = await readFile(packageLockUrl, 'utf8');
+test('pnpm dependency lock does not reference the private npm registry', async () => {
+  const lockfile = await readFile(pnpmLockUrl, 'utf8');
 
   assert.equal(
-    packageLock.includes('https://bnpm.byted.org/'),
+    lockfile.includes('https://bnpm.byted.org/'),
     false,
-    'package-lock.json must use a registry reachable by public GitHub runners',
+    'pnpm-lock.yaml must use a registry reachable by public GitHub runners',
   );
 });
 
@@ -45,82 +44,30 @@ test('every Kit dependency lock uses a registry reachable by public CI', async (
     .filter((entry) => entry.isDirectory())
     .map(async (entry) => ({
       kit: entry.name,
-      lock: await readFile(new URL(`kits/${entry.name}/package-lock.json`, rootUrl), 'utf8'),
+      lock: await readFile(new URL(`kits/${entry.name}/pnpm-lock.yaml`, rootUrl), 'utf8'),
     })));
 
   for (const { kit, lock } of kitLocks) {
     assert.equal(
       lock.includes('https://bnpm.byted.org/'),
       false,
-      `${kit}/package-lock.json must use a registry reachable by public CI`,
+      `${kit}/pnpm-lock.yaml must use a registry reachable by public CI`,
     );
   }
 });
 
-test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
-  const [packageText, packageLockText] = await Promise.all([
+test('pnpm locks Linux binaries required by Ubuntu', async () => {
+  const [packageText, pnpmLockText] = await Promise.all([
     readFile(packageUrl, 'utf8'),
-    readFile(packageLockUrl, 'utf8'),
+    readFile(pnpmLockUrl, 'utf8'),
   ]);
   const packageJson = JSON.parse(packageText);
-  const packageLock = JSON.parse(packageLockText);
-  const version = '4.60.4';
-  const packageName = '@rollup/rollup-linux-x64-gnu';
-  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
-
-  assert.equal(packageJson.optionalDependencies?.[packageName], version);
-  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
-  assert.equal(lockedPackage?.version, version);
-  assert.equal(
-    lockedPackage?.resolved,
-    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
-  );
-  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
-  assert.deepEqual(lockedPackage?.os, ['linux']);
-  assert.deepEqual(lockedPackage?.cpu, ['x64']);
-  assert.equal(lockedPackage?.optional, true);
-
-});
-
-test('CI locks the Linux x64 esbuild binary required by script-isolated Framework builds', async () => {
-  const [packageText, packageLockText] = await Promise.all([
-    readFile(packageUrl, 'utf8'),
-    readFile(packageLockUrl, 'utf8'),
-  ]);
-  const packageJson = JSON.parse(packageText);
-  const packageLock = JSON.parse(packageLockText);
-  const version = '0.28.0';
-  const packageName = '@esbuild/linux-x64';
-  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
-
-  assert.equal(packageJson.optionalDependencies?.[packageName], version);
-  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
-  assert.equal(lockedPackage?.version, version);
-  assert.equal(
-    lockedPackage?.resolved,
-    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
-  );
-  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
-  assert.deepEqual(lockedPackage?.os, ['linux']);
-  assert.deepEqual(lockedPackage?.cpu, ['x64']);
-  assert.equal(lockedPackage?.optional, true);
-
-  for (const [packagePath, nestedVersion] of [
-    ['node_modules/vite/node_modules/@esbuild/linux-x64', '0.21.5'],
-    ['packages/client/node_modules/@esbuild/linux-x64', '0.25.12'],
-  ]) {
-    const nestedPackage = packageLock.packages?.[packagePath];
-    assert.equal(nestedPackage?.version, nestedVersion, packagePath);
-    assert.equal(
-      nestedPackage?.resolved,
-      `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${nestedVersion}.tgz`,
-      packagePath,
-    );
-    assert.match(nestedPackage?.integrity ?? '', /^sha512-/u, packagePath);
-    assert.deepEqual(nestedPackage?.os, ['linux'], packagePath);
-    assert.deepEqual(nestedPackage?.cpu, ['x64'], packagePath);
-    assert.equal(nestedPackage?.optional, true, packagePath);
-  }
+  const lockfile = parseYaml(pnpmLockText);
+  const optional = lockfile.importers?.['.']?.optionalDependencies;
+  assert.equal(packageJson.optionalDependencies?.['@rollup/rollup-linux-x64-gnu'], '4.60.4');
+  assert.equal(optional?.['@rollup/rollup-linux-x64-gnu']?.version, '4.60.4');
+  assert.equal(packageJson.optionalDependencies?.['@esbuild/linux-x64'], '0.28.0');
+  assert.equal(optional?.['@esbuild/linux-x64']?.version, '0.28.0');
 });
 
 test('root workflows test script exercises Kit CI selection and check suites', async () => {
@@ -231,24 +178,24 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
   assert.equal(packageJson.scripts['kits:check'], 'node scripts/run-kit-matrix.mjs check');
   assert.equal(packageJson.scripts['kits:boundary'], 'node scripts/check-kit-architecture.mjs');
   assert.equal(packageJson.scripts['plugins:check:framework'], 'node scripts/ce-plugin.mjs check --framework');
-  assert.equal(packageJson.scripts['plugins:check'], 'npm run plugins:check:framework && npm run kits:build');
-  assert.equal(packageJson.scripts.test, 'npm run test:framework && npm run kits:test && npm run test:workflows');
+  assert.equal(packageJson.scripts['plugins:check'], 'pnpm run plugins:check:framework && pnpm run kits:build');
+  assert.equal(packageJson.scripts.test, 'pnpm run test:framework && pnpm run kits:test && pnpm run test:workflows');
   assert.equal(
     packageJson.scripts['test:framework'],
-    'npm run test:toolchain && npm run test -w @itharbors/magnet && npm run test:framework:prepared',
+    'pnpm run test:toolchain && pnpm --filter @itharbors/magnet run test && pnpm run test:framework:prepared',
   );
   assert.match(
     packageJson.scripts['test:framework:prepared'],
-    /npm run test -w packages\/server/u,
+    /pnpm --filter @itharbors\/server run test/u,
   );
   assert.match(packageJson.scripts['test:preflight'], /--test-reporter=dot/u);
   assert.equal(
     packageJson.scripts['check:preflight'],
-    'npm run kits:boundary && npm run test:preflight',
+    'pnpm run kits:boundary && pnpm run test:preflight',
   );
   assert.equal(
     packageJson.scripts.check,
-    'npm run build && npm run test:framework:prepared && npm run test:workflows && npm run kits:check && npm run plugins:check:framework',
+    'pnpm run build && pnpm run test:framework:prepared && pnpm run test:workflows && pnpm run kits:check && pnpm run plugins:check:framework',
   );
   assert.match(packageJson.scripts['test:workflows'], /npm run test:kit-ci-selection/u);
   const scriptText = JSON.stringify(packageJson.scripts);

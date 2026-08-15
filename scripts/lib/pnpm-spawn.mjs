@@ -1,4 +1,4 @@
-export function createNpmSpawnSpec(args, {
+export function createPnpmSpawnSpec(args, {
   env = process.env,
   execPath = process.execPath,
   platform = process.platform,
@@ -15,14 +15,14 @@ export function createNpmSpawnSpec(args, {
 
   if (platform === 'win32') {
     return {
-      command: 'npm.cmd',
+      command: 'pnpm.cmd',
       args,
       spawnOptions: { shell: true },
     };
   }
 
   return {
-    command: 'npm',
+    command: 'pnpm',
     args,
     spawnOptions: {},
   };

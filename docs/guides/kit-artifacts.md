@@ -5,11 +5,11 @@ Harbors 将 Kit 封装为 `.hkit` 制品，用于本地分发与导入。制品�
 ## 构建与校验
 
 ```bash
-npm run build -w @itharbors/kit-core
-npm run build -w @itharbors/kit-cli
-npm run kit -- validate ./path/to/kit
-npm run kit -- pack ./path/to/kit --output ./dist/example.hkit
-npm run kit -- inspect ./dist/example.hkit --json
+pnpm --filter @itharbors/kit-core run build
+pnpm --filter @itharbors/kit-cli run build
+pnpm run kit -- validate ./path/to/kit
+pnpm run kit -- pack ./path/to/kit --output ./dist/example.hkit
+pnpm run kit -- inspect ./dist/example.hkit --json
 ```
 
 `validate` 要求 Kit 根目录同时包含 `kit.json` 和 `package.json` descriptor，两者的身份与版本必须一致。插件 main、Panel entry 和 public assets 必须指向真实文件；源码、测试、符号链接、路径逃逸和未声明插件不会进入制品。

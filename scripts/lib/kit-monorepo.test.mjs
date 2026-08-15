@@ -6,6 +6,7 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
 import { loadOfficialKit, loadTrustedMarketKit } from './kit-monorepo.mjs';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 
@@ -21,6 +22,12 @@ async function updateJson(file, transform) {
   const value = JSON.parse(await readFile(file, 'utf8'));
   transform(value);
   await writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function updateYaml(file, transform) {
+  const value = parseYaml(await readFile(file, 'utf8'));
+  transform(value);
+  await writeFile(file, `${stringifyYaml(value)}\n`);
 }
 
 test('discovers a Kit descriptor directly from its kits directory', async () => {
@@ -104,16 +111,16 @@ test('requires kit.json and package.json to have the same identity and version',
   }
 });
 
-test('requires package-lock.json to match the Kit descriptor identity', async () => {
+test('requires pnpm-lock.yaml to match the Kit descriptor identity', async () => {
   const root = await createKitRepository();
   try {
-    await updateJson(path.join(root, 'kits', 'default', 'package-lock.json'), (value) => {
-      value.packages[''].name = 'other-kit';
-      value.packages[''].version = '9.9.9';
+    await updateYaml(path.join(root, 'kits', 'default', 'pnpm-lock.yaml'), (value) => {
+      value.importers['.'].name = 'other-kit';
+      value.importers['.'].version = '9.9.9';
     });
     await assert.rejects(
       loadTrustedMarketKit({ repositoryRoot: root, slug: 'default' }),
-      /package-lock identity mismatch/i,
+      /pnpm-lock identity mismatch/i,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

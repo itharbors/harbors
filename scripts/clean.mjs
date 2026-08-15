@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { parse as parseYaml } from 'yaml';
 
 import { BUILD_CACHE_ROOT } from './lib/build-cache-contract.mjs';
 import { discoverWorkspaceBuildOutputs } from './lib/build-tasks.mjs';
@@ -44,10 +45,10 @@ function collectKitWorkspaceDistDirs(root, targets) {
   for (const kit of fs.readdirSync(kitsRoot, { withFileTypes: true })) {
     if (!kit.isDirectory() || kit.isSymbolicLink()) continue;
     const kitDirectory = path.join(kitsRoot, kit.name);
-    const packageJsonPath = path.join(kitDirectory, 'package.json');
-    if (!fs.existsSync(packageJsonPath)) continue;
-    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
-    const workspaces = Array.isArray(packageJson.workspaces) ? packageJson.workspaces : [];
+    const workspaceYamlPath = path.join(kitDirectory, 'pnpm-workspace.yaml');
+    if (!fs.existsSync(workspaceYamlPath)) continue;
+    const workspaceYaml = parseYaml(fs.readFileSync(workspaceYamlPath, 'utf8'));
+    const workspaces = Array.isArray(workspaceYaml?.packages) ? workspaceYaml.packages : [];
     for (const workspacePattern of workspaces) {
       if (typeof workspacePattern !== 'string' || !workspacePattern.endsWith('/*')) continue;
       const workspaceRoot = path.join(kitDirectory, workspacePattern.slice(0, -2));

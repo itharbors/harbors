@@ -15,13 +15,14 @@ function compact(value) {
 
 test('root scripts expose the Kit artifact and targeted-check CLIs without migration commands', async () => {
   const packageJson = JSON.parse(await read('package.json'));
+  assert.equal(packageJson.packageManager, 'pnpm@9.12.0');
   assert.equal(packageJson.scripts.kit, 'node packages/kit-cli/dist/cli.js');
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/magnet -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
+    'pnpm --filter @itharbors/magnet --filter @itharbors/kit-core --filter @itharbors/kit-cli --filter @itharbors/plugin-types --filter @itharbors/host-security --filter @itharbors/server run build && node scripts/check-kit.mjs',
   );
   assert.equal(packageJson.scripts['kit:publish'], undefined);
-  assert.equal(packageJson.scripts['kits:validate'], 'npm run kit -- validate');
+  assert.equal(packageJson.scripts['kits:validate'], 'pnpm run kit -- validate');
   assert.equal(packageJson.scripts['test:kit-migration'], undefined);
   assert.equal(packageJson.scripts['test:kit-registry-migration'], undefined);
   assert.doesNotMatch(packageJson.scripts.test, /test:kit-(?:registry-)?migration/u);
@@ -33,13 +34,13 @@ test('default check runs the clean-checkout Kit matrix suite once without droppi
     packageJson.scripts['test:kit-check'],
     'node --test scripts/lib/kit-check.test.mjs scripts/lib/kit-matrix.test.mjs',
   );
-  assert.match(packageJson.scripts['test:workflows'], /(?:^|&& )npm run test:kit-check(?: &&|$)/u);
-  assert.match(packageJson.scripts.test, /(?:^|&& )npm run test:workflows(?: &&|$)/u);
-  assert.match(packageJson.scripts.check, /(?:^|&& )npm run test:workflows(?: &&|$)/u);
-  assert.match(packageJson.scripts.check, /(?:^|&& )npm run kits:check(?: &&|$)/u);
-  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm test(?: &&|$)/u);
-  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm run kits:(?:test|build)(?: &&|$)/u);
-  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm run plugins:check(?: &&|$)/u);
+  assert.match(packageJson.scripts['test:workflows'], /(?:^|&& )pnpm run test:kit-check(?: &&|$)/u);
+  assert.match(packageJson.scripts.test, /(?:^|&& )pnpm run test:workflows(?: &&|$)/u);
+  assert.match(packageJson.scripts.check, /(?:^|&& )pnpm run test:workflows(?: &&|$)/u);
+  assert.match(packageJson.scripts.check, /(?:^|&& )pnpm run kits:check(?: &&|$)/u);
+  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )pnpm test(?: &&|$)/u);
+  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )pnpm run kits:(?:test|build)(?: &&|$)/u);
+  assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )pnpm run plugins:check(?: &&|$)/u);
 });
 
 test('active Kit docs define one mainline development and local-only Kit lifecycle', async () => {
@@ -77,9 +78,9 @@ test('docs navigation and guides define the six-stage Task lifecycle using real 
     'feature', 'bug', 'optimize', 'docs', 'refactor', 'test', 'chore',
     'task.md', 'status.json', 'summary.md', '.work/',
     '同机', '跨机', 'rewind', 'PR_URL', 'merged', 'required checks', 'main', 'Codex 会话',
-    'npm run task:status --',
-    'npm run test:task-status',
-    'npm run test:preflight',
+    'pnpm run task:status --',
+    'pnpm run test:task-status',
+    'pnpm run test:preflight',
     'start-change.sh',
     'finish-change.sh',
   ]) assert.ok(development.includes(expected), expected);
@@ -107,7 +108,7 @@ test('artifact and authoring guides document descriptor discovery and local pack
     '.hkit',
   ]) assert.ok(combined.includes(expected), expected);
   for (const command of [' validate ', ' pack ', ' inspect ']) {
-    assert.match(artifacts, new RegExp(`npm run kit --${command}`, 'u'));
+    assert.match(artifacts, new RegExp(`pnpm run kit --${command}`, 'u'));
   }
   for (const absent of [
     'Release Asset',
@@ -186,12 +187,12 @@ test('every Kit README owns its lifecycle, permissions, platform, and boundary c
     const contents = await read(relative);
     const descriptor = descriptors.find((item) => item.slug === entry.name);
     for (const command of [
-      `npm ci --prefix kits/${entry.name}`,
-      `npm run ${descriptor.scripts.build} --prefix kits/${entry.name}`,
-      `npm run ${descriptor.scripts.test} --prefix kits/${entry.name}`,
+      `pnpm --dir kits/${entry.name} install --frozen-lockfile`,
+      `pnpm --dir kits/${entry.name} run ${descriptor.scripts.build}`,
+      `pnpm --dir kits/${entry.name} run ${descriptor.scripts.test}`,
     ]) assert.ok(contents.includes(command), `${relative}: ${command}`);
     if (descriptor.scripts.smoke) {
-      assert.ok(contents.includes(`npm run smoke --prefix kits/${entry.name}`), `${relative}: smoke`);
+      assert.ok(contents.includes(`pnpm --dir kits/${entry.name} run smoke`), `${relative}: smoke`);
     } else {
       assert.match(contents, /完整检查|full check/iu, `${relative}: full check`);
     }

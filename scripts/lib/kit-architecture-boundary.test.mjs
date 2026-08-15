@@ -24,7 +24,7 @@ async function makeKit(root, slug, options = {}) {
     dependencies: options.dependencies ?? { '@itharbors/kit-core': '^1.0.0' },
     workspaces: options.workspaces,
   }));
-  if (options.lock !== false) await write(root, `kits/${slug}/package-lock.json`, '{}');
+  if (options.lock !== false) await write(root, `kits/${slug}/pnpm-lock.yaml`, "lockfileVersion: '9.0'\nimporters:\n  .: {}\n");
 }
 
 async function fixture(t) {
@@ -292,7 +292,7 @@ test('CLI rejects extra arguments and emits one deterministic failure summary', 
     repositoryRoot: '/repo',
     auditKitArchitecture: async () => ({
       scope: 'all',
-      errors: [{ code: 'KIT_LOCK_MISSING', path: 'kits/zeta/package-lock.json', message: 'missing' }],
+      errors: [{ code: 'KIT_LOCK_MISSING', path: 'kits/zeta/pnpm-lock.yaml', message: 'missing' }],
     }),
   });
   assert.equal(code, 1);

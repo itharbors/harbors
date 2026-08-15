@@ -216,13 +216,13 @@ describe('validateKit', () => {
       expect.objectContaining({
         name: 'runtime-root',
         version: '1.0.0',
-        kind: 'npm',
+        kind: 'pnpm',
         dependencies: ['transitive'],
       }),
       expect.objectContaining({
         name: '@example/contracts',
         version: '1.0.0',
-        kind: 'npm',
+        kind: 'pnpm',
         dependencies: ['transitive'],
       }),
     ]));
@@ -239,14 +239,20 @@ describe('validateKit', () => {
     await updateJson(path.join(directory, 'plugins/demo/package.json'), (pkg) => {
       pkg.dependencies = { '@example/contracts': '1.0.0' };
     });
-    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
-      lockfileVersion: 3,
-      packages: {
-        '': { name: 'workspace-root' },
-        'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
-        'node_modules/@example/contracts': { link: true, resolved: 'packages/contracts' },
-      },
-    }));
+    await writeFile(path.join(root, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'
+importers:
+  .: {}
+  kits/demo:
+    dependencies:
+      runtime-root:
+        specifier: 1.0.0
+        version: 1.0.0
+  kits/demo/plugins/demo:
+    dependencies:
+      '@example/contracts':
+        specifier: 1.0.0
+        version: link:../../../packages/contracts
+`);
 
     const contracts = path.join(root, 'packages/contracts');
     await mkdir(path.join(contracts, 'dist'), { recursive: true });
@@ -290,13 +296,15 @@ describe('validateKit', () => {
     await updateJson(path.join(directory, 'package.json'), (pkg) => {
       pkg.dependencies = { 'local-linked': '1.0.0' };
     });
-    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
-      lockfileVersion: 3,
-      packages: {
-        '': { name: 'workspace-root' },
-        'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
-      },
-    }));
+    await writeFile(path.join(root, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'
+importers:
+  .: {}
+  kits/demo:
+    dependencies:
+      local-linked:
+        specifier: 1.0.0
+        version: 1.0.0
+`);
     const localLinked = path.join(root, 'local-linked-source');
     await mkdir(localLinked, { recursive: true });
     await writeFile(path.join(localLinked, 'package.json'), JSON.stringify({
@@ -323,12 +331,10 @@ describe('validateKit', () => {
     await updateJson(path.join(directory, 'package.json'), (pkg) => {
       pkg.dependencies = { 'runtime-root': '1.0.0' };
     });
-    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
-      lockfileVersion: 3,
-      packages: {
-        'kits/demo': { name: '@example/kit-other', version: '1.2.3' },
-      },
-    }));
+    await writeFile(path.join(root, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'
+importers:
+  .: {}
+`);
     await writeInstalledPackage(path.join(root, 'node_modules'), 'runtime-root', '1.0.0');
 
     await expect(validateKit(directory)).rejects.toThrow(/production dependency runtime-root.*not installed/i);
@@ -343,13 +349,15 @@ describe('validateKit', () => {
     await updateJson(path.join(directory, 'package.json'), (pkg) => {
       pkg.dependencies = { outside: '1.0.0' };
     });
-    await writeFile(path.join(root, 'package-lock.json'), JSON.stringify({
-      lockfileVersion: 3,
-      packages: {
-        'kits/demo': { name: '@example/kit-demo', version: '1.2.3' },
-        'node_modules/outside': { link: true, resolved: path.join(outside, 'outside') },
-      },
-    }));
+    await writeFile(path.join(root, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'
+importers:
+  .: {}
+  kits/demo:
+    dependencies:
+      outside:
+        specifier: 1.0.0
+        version: link:${path.join(outside, 'outside')}
+`);
     await writeInstalledPackage(outside, 'outside', '1.0.0');
     await mkdir(path.join(root, 'node_modules'), { recursive: true });
     await symlink(path.join(outside, 'outside'), path.join(root, 'node_modules/outside'), 'dir');

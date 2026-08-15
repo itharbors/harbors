@@ -21,7 +21,7 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run typecheck && vitest run"
+    "test": "pnpm run typecheck && vitest run"
   },
   "dependencies": {
     "semver": "^7.8.5"

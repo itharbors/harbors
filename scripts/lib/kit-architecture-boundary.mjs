@@ -694,7 +694,7 @@ export async function auditKitArchitecture({ repositoryRoot, targetKit } = {}) {
     ));
     await auditImports({ repositoryRoot, kit, packageOwners, errors });
     await auditDependencies({ repositoryRoot, kit, packageOwners, errors });
-    const lockfile = path.join(kit.directory, 'package-lock.json');
+    const lockfile = path.join(kit.directory, 'pnpm-lock.yaml');
     const lockStat = await lstat(lockfile).catch(() => null);
     if (!lockStat?.isFile() || lockStat.isSymbolicLink()) {
       errors.push(error('KIT_LOCK_MISSING', repositoryRoot, lockfile, `Kit ${kit.slug} has no regular lockfile`));

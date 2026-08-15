@@ -2,6 +2,7 @@ import { lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
 import { parseKitPackageManifest, parseRepositoryKitPackage } from '@itharbors/kit-core';
+import { parse as parseYaml } from 'yaml';
 
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
 
@@ -61,10 +62,15 @@ export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
   }
 
   const metadata = parseRepositoryKitPackage(packageJson.harbors);
-  const packageLock = JSON.parse(await readFile(path.join(directory, 'package-lock.json'), 'utf8'));
-  const lockedPackage = packageLock.packages?.[''];
-  if (lockedPackage?.name !== manifest.id || lockedPackage?.version !== manifest.version) {
-    throw new Error(`package-lock identity mismatch for ${slug}: lock name ${lockedPackage?.name}@${lockedPackage?.version} does not match descriptor ${manifest.id}@${manifest.version}`);
+  const pnpmLock = parseYaml(await readFile(path.join(directory, 'pnpm-lock.yaml'), 'utf8'));
+  const rootImporter = pnpmLock?.importers?.['.'];
+  if (rootImporter === null || typeof rootImporter !== 'object' || Array.isArray(rootImporter)) {
+    throw new Error(`pnpm-lock identity mismatch for ${slug}: lock is missing the root importer`);
+  }
+  const lockName = rootImporter.name ?? manifest.id;
+  const lockVersion = rootImporter.version ?? manifest.version;
+  if (lockName !== manifest.id || lockVersion !== manifest.version) {
+    throw new Error(`pnpm-lock identity mismatch for ${slug}: lock name ${lockName}@${lockVersion} does not match descriptor ${manifest.id}@${manifest.version}`);
   }
 
   return Object.freeze({

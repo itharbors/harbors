@@ -29,7 +29,7 @@ start 脚本会基于 `origin/main` 创建隔离分支与 worktree，并自动�
 已经存在而分支上没有 Task，必须先补建并填写，再继续或 finish；可在该 worktree 运行真实 CLI：
 
 ```bash
-npm run task:status -- init feature safe-login
+pnpm run task:status -- init feature safe-login
 ```
 
 ### 3. 设计与计划
@@ -47,28 +47,28 @@ ADR 或设计文档。
 初始 Task 已将 requirements 标记为完成并进入 design。按实际工作运行状态命令：
 
 ```bash
-npm run task:status -- complete <task-id> design
-npm run task:status -- start <task-id> implementation
+pnpm run task:status -- complete <task-id> design
+pnpm run task:status -- start <task-id> implementation
 # 对进行中的 implementation，默认完成；若确认无需实施，用下一行注释中的 skip 替代 complete
-npm run task:status -- complete <task-id> implementation
-# npm run task:status -- skip <task-id> implementation
-npm run task:status -- start <task-id> verification
-npm run task:status -- block <task-id> verification
-npm run task:status -- resume <task-id> verification
-npm run task:status -- complete <task-id> verification
-npm run task:status -- start <task-id> consolidation
-npm run task:status -- check <task-id>
+pnpm run task:status -- complete <task-id> implementation
+# pnpm run task:status -- skip <task-id> implementation
+pnpm run task:status -- start <task-id> verification
+pnpm run task:status -- block <task-id> verification
+pnpm run task:status -- resume <task-id> verification
+pnpm run task:status -- complete <task-id> verification
+pnpm run task:status -- start <task-id> consolidation
+pnpm run task:status -- check <task-id>
 ```
 
 每次验证保留实际命令和结果。Task CLI 的聚焦测试与仓库快速预检是：
 
 ```bash
-npm run test:task-status
-npm run test:preflight
-npm run check:preflight
+pnpm run test:task-status
+pnpm run test:preflight
+pnpm run check:preflight
 ```
 
-`npm run test:preflight` 运行紧凑的关键测试；`npm run check:preflight` 先增加全仓 Kit 架构审计。
+`pnpm run test:preflight` 运行紧凑的关键测试；`pnpm run check:preflight` 先增加全仓 Kit 架构审计。
 它们提供快速反馈，不替代 finish 所运行的最终门禁。
 
 ### 5. 收口与 PR
@@ -77,8 +77,8 @@ npm run check:preflight
 完整且内部 stages 终态后，必须通过 `--ready-for-pr` ready gate：
 
 ```bash
-npm run task:status -- complete <task-id> consolidation
-npm run task:status -- check <task-id> --ready-for-pr
+pnpm run task:status -- complete <task-id> consolidation
+pnpm run task:status -- check <task-id> --ready-for-pr
 ```
 
 提交全部变更、保持 worktree clean，并在仓库外准备包含 `## Summary` 和 `## Testing` 的 body 文件。
@@ -98,7 +98,7 @@ status 写回状态，不把其他 dirty changes 当作可恢复状态。
 implementation、verification 或 consolidation，例如：
 
 ```bash
-npm run task:status -- rewind <task-id> implementation
+pnpm run task:status -- rewind <task-id> implementation
 ```
 
 之后重新实现、验证、更新 `summary.md`、完成各 stages，并再次运行 ready gate 与 finish。
@@ -130,17 +130,17 @@ npm run task:status -- rewind <task-id> implementation
 ## 环境准备
 
 - Node.js 22.12 或更高版本；
-- npm 9 或更高版本；
+- pnpm 9 或更高版本；
 - 安装原生 `better-sqlite3` 所需的平台工具。
 
-如果 npm 没有适配当前 Node/平台的 `better-sqlite3` 预编译包，还需要 Python、C/C++
+如果 pnpm 安装的依赖没有适配当前 Node/平台的 `better-sqlite3` 预编译包，还需要 Python、C/C++
 编译工具链和系统构建工具。
 
 ```bash
-npm install
+pnpm install
 ```
 
-仓库使用 npm workspaces：
+仓库使用 pnpm workspaces：
 
 - `packages/*`；
 - `kits/*`；
@@ -151,10 +151,10 @@ npm install
 开发时运行：
 
 ```bash
-npm run dev
+pnpm run dev
 ```
 
-`npm run dev` 等同于 `npm run dev:web`，并行启动 Gateway、Server 和 Client。浏览器应访问
+`pnpm run dev` 等同于 `pnpm run dev:web`，并行启动 Gateway、Server 和 Client。浏览器应访问
 Gateway `http://localhost:49380`，由它将 API 和 SSE 路由到 Server，不要将 Vite 端口当作完整应用入口。
 
 Web 栈运行统一 Kit host，裸地址显示 Kit 选择页，并提供开发直达地址：
@@ -178,8 +178,8 @@ Kit 选择页   http://localhost:49380/
 ## 指定 Kit
 
 ```bash
-npm run dev -- --kit ./kits/<name>
-npm run dev -- --kit <package-name>
+pnpm run dev -- --kit ./kits/<name>
+pnpm run dev -- --kit <package-name>
 ```
 
 `--kit`、`--kit-path` 和 `--kitPath` 都被 Web 开发脚本接受。路径必须包含有效 package；
@@ -187,14 +187,14 @@ package name 必须能在 Kit 目录中找到。外部路径会临时追加到 C
 `Requested Kit` 直达地址。稳定的单进程 Web 入口为：
 
 ```bash
-npm run build
-npm start
+pnpm run build
+pnpm start
 ```
 
 ## 构建
 
 ```bash
-npm run build
+pnpm run build
 ```
 
 根构建顺序：
@@ -213,14 +213,14 @@ node scripts/ce-plugin.mjs check plugins/menu
 node scripts/ce-plugin.mjs build kits/<name>/plugins/<plugin>
 node scripts/ce-plugin.mjs check kits/<name>/plugins/<plugin>
 
-npm run plugins:build
-npm run plugins:check
+pnpm run plugins:build
+pnpm run plugins:check
 ```
 
 `build` 会重建目标 `dist/`；单目录 `check` 要求产物已经存在，只做 manifest 与文件校验。
 根 `plugins:check` 先检查 Framework 插件，再在隔离副本中构建每个发现到的 Kit，既保留全量语义，
 也不会要求源码树预先保存非 builtin Kit 的 `dist/`。Framework CI 使用更窄的
-`npm run plugins:check:framework`。
+`pnpm run plugins:check:framework`。
 
 Kit 的运行时测试如果需要创建真实 Editor，只能从 `@itharbors/server/testing` 使用稳定的窄测试入口；
 隔离 runner 会提供对应 Framework toolchain。不要相对导入 `packages/server/src/**`，也不要借用
@@ -229,14 +229,14 @@ Kit 的运行时测试如果需要创建真实 Editor，只能从 `@itharbors/se
 ## 测试
 
 ```bash
-npm test
+pnpm test
 ```
 
 根测试先运行 Server，再运行 Client。也可分包执行：
 
 ```bash
-npm run test -w packages/server
-npm run test -w packages/client
+pnpm --filter @itharbors/server run test
+pnpm --filter @itharbors/client run test
 ```
 
 Client 的 test script 会先 typecheck，再通过包装脚本从 Client workspace 运行 Vitest。
@@ -246,14 +246,14 @@ Server 集成测试需要打开本机临时端口；在严格沙箱中可能因�
 Server 与 Client 两套环境：
 
 ```bash
-npm run test -w packages/client -- tests/core/transport.test.ts
-npm run test -w packages/server -- tests/framework/message.test.ts
+pnpm --filter @itharbors/client run test -- tests/core/transport.test.ts
+pnpm --filter @itharbors/server run test -- tests/framework/message.test.ts
 ```
 
 ## 清理
 
 ```bash
-npm run clean
+pnpm run clean
 ```
 
 会删除可再生内容：
@@ -275,7 +275,7 @@ lsof -i :49381
 lsof -i :49382
 ```
 
-仓库提供 `npm run kill`，但它会对这三个开发端口上的所有进程发送 `SIGKILL`。
+仓库提供 `pnpm run kill`，但它会对这三个开发端口上的所有进程发送 `SIGKILL`。
 只有确认进程确属本项目后才使用。
 
 可用 `HARBORS_GATEWAY_PORT`、`HARBORS_SERVER_PORT` 和 `HARBORS_CLIENT_PORT` 分别覆盖
@@ -342,10 +342,10 @@ bash .agents/skills/change-workflow/scripts/finish-change.sh \
   "添加数据导入" /absolute/path/to/pr-body.md
 ```
 
-finish 会重新执行 ready gate 与 `npm run check` 全量门禁，普通 push 后创建并核验 base 为 `main`
+finish 会重新执行 ready gate 与 `pnpm run check` 全量门禁，普通 push 后创建并核验 base 为 `main`
 的 PR。路径级 CI 至少检查被修改的 Kit；Kit CLI 或其他共享构建面变化会触发所有官方 Kit CI。
 
-若修改 Kit 的版本，必须同步 `kit.json`、`package.json` 和 `package-lock.json`；版本一致性由本地校验保证，但普通开发变更不要求递增版本。需要制品时，在本地运行 validate、pack 和 inspect。
+若修改 Kit 的版本，必须同步 `kit.json`、`package.json` 和 `pnpm-lock.yaml`；版本一致性由本地校验保证，但普通开发变更不要求递增版本。需要制品时，在本地运行 validate、pack 和 inspect。
 
 ## 提交信息规范
 
@@ -382,34 +382,34 @@ finish 会重新执行 ready gate 与 `npm run check` 全量门禁，普通 push
 根检查是有限时长命令，不会启动开发服务器：
 
 ```bash
-npm run check
+pnpm run check
 ```
 
 它只构建一次 Framework，再运行 Framework 与 workflow 测试，并以一次 `kits:check` 完成所有
-Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。独立的 `npm test`、
+Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。独立的 `pnpm test`、
 `kits:test` 与 `plugins:check` 仍保留各自的完整语义，但根门禁不会重复组合它们。
 
 需求开发循环优先运行聚焦测试和紧凑预检：
 
 ```bash
-npm run check:preflight
+pnpm run check:preflight
 ```
 
 预检执行全仓 Kit 架构审计和关键 workflow/元数据测试，成功时使用紧凑 reporter；它用于快速
-反馈，不替代 `npm run check`。通用变更提交完成后直接调用 `finish-change.sh`，由完成流程运行
+反馈，不替代 `pnpm run check`。通用变更提交完成后直接调用 `finish-change.sh`，由完成流程运行
 最终全量门禁；不要在没有新代码变化时先手动重复同一轮全量检查。
 
-`npm run kits:boundary`
-会独立审计完整源码树；`npm run kits:boundary -- <slug>` 只审计目标 Kit，不会被无关 Kit 的临时损坏拖累。
+`pnpm run kits:boundary`
+会独立审计完整源码树；`pnpm run kits:boundary -- <slug>` 只审计目标 Kit，不会被无关 Kit 的临时损坏拖累。
 审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失 lockfile、Framework 产品特判和静态产品清单。
 按变更范围快速
 迭代时可拆分执行，但提交前不要少于：
 
 ```bash
-npm run kits:boundary
-npm run test -w packages/server
-npm run test -w packages/client
-npm run plugins:check
+pnpm run kits:boundary
+pnpm --filter @itharbors/server run test
+pnpm --filter @itharbors/client run test
+pnpm run plugins:check
 git diff --check
 ```
 
