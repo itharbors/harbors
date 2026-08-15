@@ -2,11 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { PluginModule } from '../../src/framework/plugin/index';
+import { PluginModule } from '@itharbors/plugin';
 import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { PluginRuntimeHost } from '../../src/editor/types';
 import type { ApplicationPluginRuntimeHost } from '../../src/editor/types';
-import type { PluginPathRoots } from '../../src/framework/plugin/paths';
+import type { PluginPathRoots } from '@itharbors/plugin';
 import { testAssembly } from '../helpers/assembly';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 

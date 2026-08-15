@@ -233,8 +233,9 @@ my-plugin/
 packages/
 ├── client/        浏览器工作台与 UI 组件
 ├── gateway/       开发入口与反向代理
-├── plugin-types/  共享插件协议与类型
-└── server/        会话、运行时、Kit、插件和 API 路由
+├── plugin/        可独立消费的插件 Manifest、加载器、生命周期与存储运行时
+├── plugin-types/  浏览器、HTTP 与宿主共享的数据协议
+└── server/        插件宿主、会话、Kit 和 API 路由
 kits/
 └── <slug>/        自包含的 Kit 功能、依赖、构建、测试与文档
 plugins/           内置插件（配置、菜单、消息、面板）

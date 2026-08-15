@@ -4,7 +4,7 @@ import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { createPluginPaths } from '../../src/framework/plugin/paths';
+import { createPluginPaths } from '@itharbors/plugin';
 
 const temporaryRoots: string[] = [];
 

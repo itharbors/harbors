@@ -30,7 +30,7 @@ import { createApplicationMenuTriggerRouter } from './routes/application-menu-tr
 import { createApplicationPluginRetryRouter } from './routes/application-plugin-retry';
 import { createKitCatalogRouter } from './routes/kit-catalog';
 import { createClientAssetRouter } from './routes/client-asset';
-import type { PluginPathRoots } from './framework/plugin/paths';
+import type { PluginPathRoots } from '@itharbors/plugin';
 import type { CredentialVault } from './credentials/vault';
 import {
   createLocalWebFileRouter,

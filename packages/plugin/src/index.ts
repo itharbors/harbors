@@ -6,25 +6,81 @@ import type {
   PluginSourceIdentity,
   PluginCapability,
   PluginModule as LoadedPluginModule,
-} from './types';
+} from './types.js';
 import type {
   ApplicationPluginRuntime,
   ApplicationPluginRuntimeHost,
   PluginLoadOptions,
   PluginRuntime,
   PluginRuntimeHost,
-} from '../../editor/types';
-import { PluginStatus } from './types';
-import { Plugin } from './plugin';
+} from './runtime.js';
+import { PluginStatus } from './types.js';
+import { Plugin } from './plugin.js';
 import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { withPluginDefinitionLock } from './load-lock';
-import { createPluginPaths, type PluginPaths } from './paths';
-import type { PluginCredentialVault } from '@itharbors/plugin-types';
-import { credentialError } from '../../credentials/errors';
-import { parsePluginPackageManifest } from '@itharbors/kit-core';
+import { withPluginDefinitionLock } from './load-lock.js';
+import { createPluginPaths, type PluginPaths } from './paths.js';
+import type { PluginCredentialVault } from './credentials.js';
+import { parsePluginPackageManifest } from './manifest.js';
+
+export { Plugin } from './plugin.js';
+export {
+  createPluginPaths,
+  PLUGIN_STORAGE_UNAVAILABLE,
+  PluginStorageUnavailableError,
+} from './paths.js';
+export type {
+  CreatePluginPathsOptions,
+  PluginDirectoryHandle,
+  PluginPathFileSystem,
+  PluginPathRoots,
+  PluginPaths,
+} from './paths.js';
+export { PluginStatus } from './types.js';
+export type {
+  CredentialCapabilitySnapshot,
+  CredentialMode,
+  CredentialProfile,
+  PluginCredentialVault,
+} from './credentials.js';
+export * from './manifest.js';
+export type {
+  ContributeData,
+  PanelContribution,
+  PluginAssetsManifest,
+  PluginCapability,
+  PluginDefinition,
+  PluginInfo,
+  PluginKind,
+  PluginLifecycle,
+  PluginSourceIdentity,
+} from './types.js';
+export type {
+  ApplicationHostMode,
+  ApplicationPluginRuntime,
+  ApplicationPluginRuntimeHost,
+  MessageLocation,
+  NotificationHostCapability,
+  NotificationInput,
+  NotificationRecord,
+  NotificationSnapshot,
+  PluginLoadOptions,
+  PluginPathLoadConfiguration,
+  PluginRuntime,
+  PluginRuntimeHost,
+  PluginRuntimeMenuHost,
+  PluginRuntimeMessageHost,
+  PluginRuntimePanelHost,
+  PluginRuntimePluginHost,
+} from './runtime.js';
+
+function credentialOperationFailed(): Error & { readonly code: 'CREDENTIAL_OPERATION_FAILED' } {
+  return Object.assign(new Error('Credential operation failed'), {
+    code: 'CREDENTIAL_OPERATION_FAILED' as const,
+  });
+}
 
 interface PackageJson {
   name?: string;
@@ -38,7 +94,7 @@ interface PackageJson {
 
 interface PluginDefinitionBridge {
   readonly plugin: Readonly<{
-    define(definition: import('./types').PluginDefinition): void;
+    define(definition: import('./types.js').PluginDefinition): void;
   }>;
 }
 
@@ -443,7 +499,7 @@ function createPluginRuntime(
 }
 
 function createPluginDefinitionBridge(
-  capture: (definition: import('./types').PluginDefinition) => void,
+  capture: (definition: import('./types.js').PluginDefinition) => void,
 ): PluginDefinitionBridge {
   const define = Object.freeze(capture.bind(undefined));
   const plugin = Object.freeze({ define });
@@ -458,7 +514,7 @@ function createRevocableCredentialVault(credentials: PluginCredentialVault): {
   const operations = new Set<Promise<unknown>>();
   let drainPromise: Promise<void> | undefined;
   const run = <T>(operation: () => Promise<T>): Promise<T> => {
-    if (!active) return Promise.reject(credentialError('CREDENTIAL_OPERATION_FAILED'));
+    if (!active) return Promise.reject(credentialOperationFailed());
     const result = Promise.resolve().then(operation);
     operations.add(result);
     void result.then(
@@ -553,7 +609,7 @@ function createApplicationPluginRuntime(
 
 function assertApplicationMessageRoute(
   ownerName: string,
-  location: import('../message/types').MessageLocation | undefined,
+  location: import('./runtime.js').MessageLocation | undefined,
   methods: string[] | undefined,
 ): void {
   if ((location && location !== 'server') || methods?.some((method) => method.startsWith('panel.'))) {

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import type { PluginPathRoots } from '../../src/framework/plugin/paths';
+import type { PluginPathRoots } from '@itharbors/plugin';
 
 export function createTestPluginPathRoots(
   applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'harbors-test-plugin-paths-')),

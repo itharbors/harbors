@@ -100,7 +100,7 @@ test('keeps the complete Framework build graph free of product Kit tasks', async
       directory === 'packages/native-credential-vault'
         ? `${directory}/build`
         : `${directory}/dist`
-    )),
+    )).sort(),
   );
   assert.deepEqual(
     plan.tasks.filter((task) => task.kind === 'plugin').map((task) => task.pluginDir),

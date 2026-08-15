@@ -152,9 +152,10 @@ beforeAll(async () => {
     runNpmSandboxed('initial npm ci', 'npm', ['ci', '--ignore-scripts']);
     runNpmSandboxed('snapshot framework build', 'npm', [
       'run', 'build',
+      '-w', '@itharbors/plugin',
+      '-w', '@itharbors/plugin-types',
       '-w', '@itharbors/kit-core',
       '-w', '@itharbors/kit-cli',
-      '-w', '@itharbors/plugin-types',
       '-w', '@itharbors/host-security',
       '-w', '@itharbors/server',
     ]);
@@ -1303,6 +1304,7 @@ function snapshotHarnessControlledState(): Record<string, string[]> {
     'packages/server/node_modules',
     'packages/kit-core/dist',
     'packages/kit-cli/dist',
+    'packages/plugin/dist',
     'packages/plugin-types/dist',
     'packages/host-security/dist',
     'packages/server/dist',

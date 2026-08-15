@@ -22,7 +22,7 @@ import {
 import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
-import type { PluginPathRoots } from './framework/plugin/paths';
+import type { PluginPathRoots } from '@itharbors/plugin';
 import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
 import type { ApplicationPluginProcessRuntimeOptions } from './application/plugin-process/spawn';
 

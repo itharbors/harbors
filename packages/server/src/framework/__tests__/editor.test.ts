@@ -6,7 +6,7 @@ import { mkdtempSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PluginPathRoots } from '../plugin/paths';
+import type { PluginPathRoots } from '@itharbors/plugin';
 import { createKitFixture } from './kit-fixture';
 
 const projectRoot = fileURLToPath(new URL('../../../../../', import.meta.url));

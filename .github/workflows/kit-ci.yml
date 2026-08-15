@@ -175,7 +175,7 @@ jobs:
         run: npm ci
 
       - name: Build Kit lifecycle dependencies
-        run: npm run build -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server
+        run: npm run build -w @itharbors/plugin -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server
 
       - name: Audit selected Kit architecture
         run: npm run kits:boundary -- "${{ matrix.kit }}"

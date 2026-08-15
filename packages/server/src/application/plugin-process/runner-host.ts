@@ -1,4 +1,4 @@
-import type { PluginDefinition, PluginInfo } from '../../framework/plugin/types';
+import type { PluginDefinition, PluginInfo } from '@itharbors/plugin';
 import { isPluginProcessProxy, normalizePluginProcessError } from './error.js';
 import {
   type PluginProcessEnvelope,
