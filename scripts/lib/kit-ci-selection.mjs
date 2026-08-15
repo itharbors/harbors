@@ -2,7 +2,6 @@ const SHARED_PREFIXES = Object.freeze([
   'packages/',
   'scripts/',
   '.github/workflows/',
-  'registry/',
 ]);
 
 const SHARED_FILES = new Set(['package.json', 'package-lock.json', 'tsconfig.json']);

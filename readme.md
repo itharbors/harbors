@@ -3,7 +3,7 @@
 [![Node.js](https://img.shields.io/badge/Node.js-22.12%2B-339933?logo=node.js)](https://nodejs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5%2B-3178C6?logo=typescript)](https://www.typescriptlang.org/)
 
-ITHARBORS 是一个插件优先的 Web 应用框架。Gateway 提供统一入口，Server 持有 Kit、会话与插件运行时，Client 在浏览器中渲染工作台。仓库只内置 `default` Kit；其他 Kit 通过独立 Release 发布和发现。
+ITHARBORS 是一个插件优先的 Web 应用框架。Gateway 提供统一入口，Server 持有 Kit、会话与插件运行时，Client 在浏览器中渲染工作台。Kit 源码位于 `kits/`，用于本地开发、校验与打包。
 
 ## 快速开始
 
@@ -36,18 +36,17 @@ Gateway（开发统一入口）
 - `packages/server`：会话、Kit、插件、消息、API、SSE 和持久化。
 - `packages/client`：浏览器工作台、布局、主题和交互。
 - `packages/gateway`：开发环境统一入口与反向代理。
-- `packages/plugin`：可独立消费的插件 Manifest、加载器、生命周期与存储运行时。
 - `plugins`：框架级插件。
 - `kits/default`：内置 default Kit、descriptor、布局和依赖。
-- `scripts`：构建、检查、Task、Kit 制品和 Registry 工具。
+- `scripts`：构建、检查、Task 与 Kit 本地制品工具。
 
 Harbors 只支持 Web host，不包含 Electron、桌面打包、托盘、原生窗口、桌面更新或桌面 IPC。
 
 ## Kit 与插件
 
-Kit 由 `kit.json` 和 `package.json` descriptor 描述；`distribution` 决定 builtin 或 market 投影。插件通过 manifest 声明 Panel、Message、Menu 和 public assets，通过 `editor.plugin.define()` 注册生命周期。
+Kit 由 `kit.json` 和 `package.json` descriptor 描述；`distribution` 仅表达本地装配类别。插件通过 manifest 声明 Panel、Message、Menu 和 public assets，通过 `editor.plugin.define()` 注册生命周期。
 
-仓库中的 Kit 变更与 Framework 一样使用 change-workflow，从 `origin/main` 创建 `<type>/<slug>` 分支，PR base main。合并后的可信 `kit/<name>/v<semver>` Tag 触发独立构建，将 `.hkit`、SBOM 和 attestation 作为 Release Asset 发布。Registry 聚合器自动扫描可信 Release，并依据 `registry/policy.json` 与 `registry/revocations.json` 生成 `index.v1.json`。
+Kit 变更与 Framework 一样使用 change-workflow，从 `origin/main` 创建 `<type>/<slug>` 分支并提交到 `main`。合并只更新源码；不会自动创建制品、发布版本、创建 Release Tag 或更新远程 Registry。版本字段仍用于 descriptor 与本地制品校验，可用 `npm run kit -- validate`、`npm run kit -- pack` 和 `npm run kit -- inspect` 完成本地制品循环。
 
 常用命令：
 
@@ -69,7 +68,7 @@ npm run kit -- inspect ./dist/example.hkit --json
 - [插件运行时模型](./docs/architecture/plugin-runtime-model.md)
 - [Kit 与会话模型](./docs/architecture/kit-and-session-model.md)
 - [开发工作流](./docs/guides/development-workflow.md)
-- [Kit 制品与 Registry](./docs/guides/kit-artifacts.md)
+- [Kit 制品打包](./docs/guides/kit-artifacts.md)
 - [架构决策记录](./docs/decisions/README.md)
 
 ## 开发原则

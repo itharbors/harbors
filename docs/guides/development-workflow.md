@@ -219,7 +219,7 @@ npm run plugins:check
 
 `build` 会重建目标 `dist/`；单目录 `check` 要求产物已经存在，只做 manifest 与文件校验。
 根 `plugins:check` 先检查 Framework 插件，再在隔离副本中构建每个发现到的 Kit，既保留全量语义，
-也不会要求源码树预先保存市场 Kit 的 `dist/`。Framework CI 使用更窄的
+也不会要求源码树预先保存非 builtin Kit 的 `dist/`。Framework CI 使用更窄的
 `npm run plugins:check:framework`。
 
 Kit 的运行时测试如果需要创建真实 Editor，只能从 `@itharbors/server/testing` 使用稳定的窄测试入口；
@@ -317,18 +317,14 @@ Framework 和官方 Kit 都通过 `main` 集成，统一使用 change-workflow�
 | Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 | 单个 Kit | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
 
-每个 Kit 保存在自己的 `kits/<name>` 功能单元中；根工作流按 descriptor 发现，不维护产品清单。
-市场 Kit 的开发 PR 同时携带版本升级；PR 合并即发布授权。自动化只发布发生版本变化的市场 Kit，不修改或发布
-Framework 版本。合并后工作流会自动创建对应的不可变 Kit Tag。完整生命周期是：
+每个 Kit 保存在自己的 `kits/<name>` 功能单元中；根工作流按 descriptor 发现，不维护产品清单。Kit 只在本地开发与打包。PR 合并仅更新源码，不会自动创建制品、发布版本、递增版本、创建 Release Tag 或更新 Registry。完整生命周期是：
 
 ```text
 main
   -> <type>/<slug>
   -> PR base main
-  -> PR updates kits/<name>/kit.json, kits/<name>/package.json, and kits/<name>/package-lock.json
-  -> merge to main authorizes publication
-  -> automatically create kit/<name>/v<semver>
-  -> publish immutable GitHub Release and refresh Registry
+  -> PR updates the affected Kit source and descriptors as needed
+  -> merge to main updates source only
 ```
 
 Kit 变更使用 change-workflow，与 Framework 共享同一套 start/finish 脚本：
@@ -347,19 +343,9 @@ bash .agents/skills/change-workflow/scripts/finish-change.sh \
 ```
 
 finish 会重新执行 ready gate 与 `npm run check` 全量门禁，普通 push 后创建并核验 base 为 `main`
-的 PR。路径级 CI 至少检查被修改的 Kit；`kit-core`、Kit CLI、发布/Registry 工具或其他共享
-构建面变化会触发所有官方 Kit CI。
+的 PR。路径级 CI 至少检查被修改的 Kit；Kit CLI 或其他共享构建面变化会触发所有官方 Kit CI。
 
-开发 PR 必须同步更新目标目录的 `kit.json`、`package.json` 和 `package-lock.json`，三处使用同一个严格
-递增的规范 SemVer。普通 SemVer 发布 Stable，带 prerelease 段的 SemVer 发布 Preview；build metadata
-不允许用于发布 Tag。Kit CI 会在 PR 和 merge queue 中展示将创建的 Tag；合并到 `main` 后，自动工作流先完整
-校验所有候选，再逐个创建 Tag 并显式调度发布。Preview 直接发布，Stable 继续经过 `kit-stable` Environment
-审批。已有 Tag 或 Release 不会被移动、覆盖或删除。
-
-不可变 Kit Tag `kit/<name>/v<semver>` 由合并后的自动工作流创建；若自动 Tag 缺失，需从干净且与
-`origin/main` 完全一致的 `main` 手动创建对应 Tag 并推送，由 `publish-kit.yml` 完成发布。
-手动创建 Tag 前必须二次确认 Kit、版本、频道、Commit 和精确的 `Tag@40-char-SHA`，且不得替换已有
-Tag 或不可变 Release。
+若修改 Kit 的版本，必须同步 `kit.json`、`package.json` 和 `package-lock.json`；版本一致性由本地校验保证，但普通开发变更不要求递增版本。需要制品时，在本地运行 validate、pack 和 inspect。
 
 ## 提交信息规范
 
@@ -400,7 +386,7 @@ npm run check
 ```
 
 它只构建一次 Framework，再运行 Framework 与 workflow 测试，并以一次 `kits:check` 完成所有
-Kit 的 build、test、validate 和市场产物检查，最后检查 Framework 插件产物。独立的 `npm test`、
+Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。独立的 `npm test`、
 `kits:test` 与 `plugins:check` 仍保留各自的完整语义，但根门禁不会重复组合它们。
 
 需求开发循环优先运行聚焦测试和紧凑预检：

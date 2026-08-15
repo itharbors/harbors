@@ -18,9 +18,9 @@ test('root scripts expose the Kit artifact and targeted-check CLIs without migra
   assert.equal(packageJson.scripts.kit, 'node packages/kit-cli/dist/cli.js');
   assert.equal(
     packageJson.scripts['kit:check'],
-    'npm run build -w @itharbors/magnet -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
+    'npm run build -w @itharbors/magnet -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/plugin-types -w @itharbors/host-security -w @itharbors/server && node scripts/check-kit.mjs',
   );
-  assert.equal(packageJson.scripts['kit:publish'], 'node scripts/kit-publish.mjs');
+  assert.equal(packageJson.scripts['kit:publish'], undefined);
   assert.equal(packageJson.scripts['kits:validate'], 'npm run kit -- validate');
   assert.equal(packageJson.scripts['test:kit-migration'], undefined);
   assert.equal(packageJson.scripts['test:kit-registry-migration'], undefined);
@@ -42,21 +42,21 @@ test('default check runs the clean-checkout Kit matrix suite once without droppi
   assert.doesNotMatch(packageJson.scripts.check, /(?:^|&& )npm run plugins:check(?: &&|$)/u);
 });
 
-test('active Kit docs define one mainline development and automatic merge release lifecycle', async () => {
+test('active Kit docs define one mainline development and local-only Kit lifecycle', async () => {
   const development = compact(await read('docs/guides/development-workflow.md'));
   for (const expected of [
     'main',
     '<type>/<slug>',
     'PR base main',
-    'PR 合并即发布授权',
-    'kits/<name>/kit.json',
-    'kits/<name>/package.json',
-    'kits/<name>/package-lock.json',
-    '自动创建',
-    'kit/<name>/v<semver>',
+    '仅更新源码',
+    '本地',
+    'validate',
+    'pack',
+    'inspect',
   ]) assert.match(development, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
-  assert.match(development, /Kit[^。]{0,80}Framework[^。]{0,80}版本/iu);
-  assert.match(development, /共享[^。]{0,80}(全部|所有)[^。]{0,30}Kit[^。]{0,20}CI/iu);
+  for (const absent of ['release-kit.sh', 'kit/<name>/v<semver>', 'PR 合并即发布']) {
+    assert.doesNotMatch(development, new RegExp(absent.replaceAll('/', '\\/'), 'iu'), absent);
+  }
 });
 
 test('docs navigation and guides define the six-stage Task lifecycle using real commands', async () => {
@@ -96,7 +96,7 @@ test('docs navigation and guides define the six-stage Task lifecycle using real 
   assert.match(maintenance, /不能只留在[^。]{0,80}(?:\.work\/|summary)/u);
 });
 
-test('artifact and authoring guides document descriptor discovery and trusted Release discovery', async () => {
+test('artifact and authoring guides document descriptor discovery and local packaging', async () => {
   const artifacts = compact(await read('docs/guides/kit-artifacts.md'));
   const authoring = compact(await read('docs/guides/developing-plugins-and-kits.md'));
   const combined = `${artifacts} ${authoring}`;
@@ -104,43 +104,32 @@ test('artifact and authoring guides document descriptor discovery and trusted Re
     'descriptor',
     'distribution',
     'kits/',
-    'kit/<name>/v<semver>',
     '.hkit',
-    'Release Asset',
-    'registry/policy.json',
-    'registry/revocations.json',
-    'index.v1.json',
-    'https://itharbors.github.io/harbors/index.v1.json',
   ]) assert.ok(combined.includes(expected), expected);
   for (const command of [' validate ', ' pack ', ' inspect ']) {
     assert.match(artifacts, new RegExp(`npm run kit --${command}`, 'u'));
   }
-  for (const guarantee of [
-    'Release',
-    '可信',
+  for (const absent of [
+    'Release Asset',
+    'registry/policy',
+    'registry/revocations',
+    'index.v1.json',
     'GitHub Pages',
-    'RegistryArtifactAttestationVerifier',
-    'attestations/sha256/<digest>.json',
-    'actions/attest@v4',
-    'start-change.sh',
-    'finish-change.sh',
-  ]) assert.match(artifacts, new RegExp(guarantee, 'iu'), guarantee);
+    'attestations/sha256',
+    'actions/attest',
+    'release-kit.sh',
+  ]) assert.doesNotMatch(combined, new RegExp(absent.replaceAll('/', '\\/'), 'iu'), absent);
 });
 
-test('root README and architecture describe dynamic descriptors and automatic market projection', async () => {
+test('root README and architecture describe dynamic descriptors and local discovery', async () => {
   const readme = compact(await read('readme.md'));
   const architecture = compact(await read('docs/architecture/kit-and-session-model.md'));
   for (const expected of [
     'descriptor',
     'distribution',
     'kits/',
-    'kit/<name>/v<semver>',
-    'Release Asset',
-    'index.v1.json',
-    'registry/policy.json',
-    'registry/revocations.json',
   ]) assert.match(`${readme} ${architecture}`, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
-  assert.match(`${readme} ${architecture}`, /自动[^。]{0,80}(扫描|发现)[^。]{0,80}Release/iu);
+  assert.match(`${readme} ${architecture}`, /(扫描|发现)[^。]{0,80}(Kit|builtin|本地)/iu);
 });
 
 test('active sources and root docs contain no central builtin constants or product slug tables', async () => {
@@ -176,7 +165,7 @@ test('active sources and root docs contain no central builtin constants or produ
   );
   assert.doesNotMatch(prose.join('\n'), /根\s*`?package-lock\.json`?/u);
   assert.doesNotMatch(artifactGuide, /Default builtin/iu);
-  assert.match(artifactGuide, /所有动态发现的 builtin Kit 目录[^。]+恰好一个声明 default 角色/iu);
+  assert.match(artifactGuide, /所有 Kit 从 `kits\/` 目录进行本地开发与打包/iu);
   assert.doesNotMatch(
     prose.join('\n'),
     /^(?:[│├└].*\b(?:Agent Guard|CSV|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)\b.*)$/gmu,
@@ -230,6 +219,7 @@ test('active docs contain no branch-era migration or publication instructions', 
     'docs/guides/kit-artifacts.md',
     'docs/guides/developing-plugins-and-kits.md',
     'docs/architecture/kit-and-session-model.md',
+    'docs/architecture/runtime-flows.md',
   ];
   const prose = compact((await Promise.all(paths.map(read))).join('\n'));
   for (const obsolete of [

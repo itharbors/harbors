@@ -31,6 +31,6 @@ Panel 只能通过注入的 runtime API 发送 request 或 broadcast。Server �
 
 插件装载中途失败时，Editor 按 owner 清除 Panel、Message、Menu 等贡献。Kit 切换失败时清理新集合并尽力恢复旧集合，避免留下半装载状态。
 
-## Kit 发布
+## Kit 本地校验与打包
 
-Kit PR 合入 main 后，发布授权通过 `kit/<name>/v<semver>` Tag 表达。GitHub workflow 构建每个目标制品，生成 `.hkit`、SBOM 与独立 attestation。Registry 聚合器只接受符合 policy、Tag、commit、workflow、digest 和 manifest 契约的 Release，并生成可部署索引。
+Kit 源码由本地 `kits/` 目录发现。开发者先以 `npm run kit -- validate` 校验 descriptor 与声明文件，再以 `npm run kit -- pack` 生成 `.hkit`，并用 `npm run kit -- inspect` 检查制品内容。合并源码不会触发额外的制品分发流程。

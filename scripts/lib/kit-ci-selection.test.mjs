@@ -8,7 +8,8 @@ import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 
 import { selectKitSlugs } from './kit-ci-selection.mjs';
-import { loadKitPolicy, loadTrustedMarketKit } from './kit-monorepo.mjs';
+import { loadTrustedMarketKit } from './kit-monorepo.mjs';
+import { discoverRepositoryKits } from './repository-kits.mjs';
 
 const execFileAsync = promisify(execFile);
 const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
@@ -16,8 +17,8 @@ const cli = path.join(repositoryRoot, 'scripts/select-kit-ci.mjs');
 
 // Derive the authoritative trusted slug set and runner map from the repository
 // policy and descriptors at runtime, rather than hard-coding them.
-const policy = await loadKitPolicy({ repositoryRoot });
-const allKits = Object.keys(policy.kits).sort();
+const allDescriptorsFromRepo = Object.freeze(await discoverRepositoryKits({ repositoryRoot }));
+const allKits = allDescriptorsFromRepo.map((descriptor) => descriptor.slug).sort();
 const allDescriptors = Object.freeze(
   await Promise.all(allKits.map((slug) => loadTrustedMarketKit({ repositoryRoot, slug }))),
 );
@@ -60,11 +61,6 @@ async function initializeRepository({ seedRoot = true } = {}) {
     await writeFile(path.join(repository, '.root'), 'root\n');
     await commitAll(repository, 'root');
   }
-  await mkdir(path.join(repository, 'registry'), { recursive: true });
-  await writeFile(
-    path.join(repository, 'registry/policy.json'),
-    await readFile(path.join(repositoryRoot, 'registry/policy.json')),
-  );
   // Copy the root package-lock so loadTrustedMarketKit can verify the Kit
   // lock identity against the descriptor. The lockfile is not committed in
   // root-commit tests but is still readable from the working tree.
@@ -160,27 +156,19 @@ test('ignores unrelated paths and rejects an undiscovered Kit directory', () => 
   assert.throws(() => selectKitSlugs(['kits/unknown/kit.json'], allDescriptors), /Unknown Kit directory/u);
 });
 
-test('selects all official Kits for shared build, validation, Registry, and workflow paths', () => {
+test('selects all official Kits for shared build, validation, and workflow paths', () => {
   for (const sharedPath of [
     'package.json',
     'package-lock.json',
     'tsconfig.json',
-    'registry/policy.json',
-    'registry/revocations.json',
     'packages/kit-core/src/schema.ts',
     'packages/kit-cli/src/archive.ts',
     'scripts/check-kit.mjs',
     'scripts/lib/kit-check.mjs',
     'scripts/lib/kit-monorepo.mjs',
     'scripts/lib/kit-ci-selection.mjs',
-    'scripts/lib/kit-registry/audit.mjs',
-    'scripts/kit-publish.mjs',
     'scripts/select-kit-ci.mjs',
-    'scripts/lib/kit-publish/metadata.mjs',
     '.github/workflows/kit-ci.yml',
-    '.github/workflows/publish-kit.yml',
-    '.github/workflows/publish-kit-reusable.yml',
-    '.github/workflows/publish-kit-registry.yml',
   ]) {
     assert.deepEqual(selectKitSlugs([sharedPath], allDescriptors), allKits, sharedPath);
   }
@@ -409,15 +397,12 @@ test('CLI validates descriptor files instead of reading policy metadata', async 
   }
 });
 
-test('policy entries carry only the trusted identity and no product metadata fields', async () => {
-  const policy = await loadKitPolicy({ repositoryRoot });
-  for (const slug of Object.keys(policy.kits)) {
-    const entry = policy.kits[slug];
-    assert.deepEqual(Object.keys(entry), ['id'], slug);
-    assert.equal(entry.id, slug, slug);
-    assert.equal(entry.runner, undefined, `${slug} must not expose runner`);
-    assert.equal(entry.label, undefined, `${slug} must not expose label`);
-    assert.equal(entry.summary, undefined, `${slug} must not expose summary`);
+test('descriptors are discovered directly from kits/ with matching slug and identity', async () => {
+  const descriptors = await discoverRepositoryKits({ repositoryRoot });
+  for (const descriptor of descriptors) {
+    assert.equal(descriptor.slug, descriptor.id, descriptor.slug);
+    assert.equal(typeof descriptor.ciRunner, 'string', descriptor.slug);
+    assert.ok(descriptor.directory.endsWith(path.join('kits', descriptor.slug)), descriptor.slug);
   }
 });
 

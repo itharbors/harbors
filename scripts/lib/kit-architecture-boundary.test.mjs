@@ -48,7 +48,6 @@ test('reports every normalized architecture violation in deterministic policy or
   await write(root, 'packages/framework/src/environment.ts',
     'export const port = process.env.HARBORS_ZETA_PORT;\nexport const notification = process.env.HARBORS_NOTIFICATION_PORT;\n');
   await write(root, 'scripts/catalog.mjs', "export const kitSlugs = ['zeta', 'alpha'];\n");
-  await write(root, 'registry/policy.json', JSON.stringify({ trustedKitIds: ['dev.harbors.alpha'] }));
 
   const result = await auditKitArchitecture({ repositoryRoot: root });
   assert.deepEqual(result.errors.map((error) => error.code), [
