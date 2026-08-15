@@ -88,7 +88,7 @@ manifest、entry 与静态贡献校验，不再用它导入 Application 插件�
 - `menu`：注册全局菜单贡献；
 - `message`：注册或调用仅在 Server 执行的消息；
 - `service`：按 owner 注册和查询进程级服务；
-- `host`：读取 `desktop` / `web` 运行模式。
+- `host`：读取当前运行模式；仓库入口始终使用 `web`。
 
 application runtime 由白名单直接构造，不先创建完整 Editor 再删字段，因此不会泄漏
 `sessionId`、Kit、Panel、Window、Layout 或 Session config。Panel 贡献、`panel.*` 方法和
@@ -103,8 +103,7 @@ Session scope 的 server-side main 另有窄化的 `application.request(plugin, 
 
 ```mermaid
 flowchart LR
-    E["Electron main（桌面）"] --> F["Framework / ApplicationRuntime"]
-    W["Web / dev 启动器"] --> F
+    W["Web 稳定入口 / dev 启动器"] --> F["Server / ApplicationRuntime"]
     F --> A["startup plugin A / OS process"]
     F --> B["startup plugin B / OS process"]
     F --> C["startup plugin C / OS process"]
@@ -219,8 +218,8 @@ stateDiagram-v2
 公开状态全集固定为 `pending`、`starting`、`running`、`restarting`、`failed`、`stopping`、
 `stopped`。第一次、第二次、第三次自动重启分别等待 250 ms、1 s、4 s；滚动 60 秒内第 4 次失败
 熔断为 `failed`。连续运行满 5 分钟会清空失败窗口与 backoff 预算。运维恢复使用认证的
-`POST /api/application/plugin/retry`，body 只接受 `{ "plugin": "@scope/name" }`；该 Electron
-内部控制路由拒绝浏览器 Origin，要求 JSON 与每次启动生成的 application token，不是普通网页 API。
+`POST /api/application/plugin/retry`，body 只接受 `{ "plugin": "@scope/name" }`。该内部控制
+路由拒绝浏览器 Origin，要求 JSON 与启动时注入的 application token，不是普通网页 API。
 
 Supervisor 给 initialize/load 30 秒。正常 stop 先请求 unload（启动未完成时请求 shutdown），最多等
 10 秒；随后发送 `SIGTERM`，再等 2 秒仍未退出则 `SIGKILL`。Runner 自身的 fatal unload 也有 10 秒
@@ -299,11 +298,9 @@ npm run plugins:check
 build 清理目标 dist、编译 main/panel 脚本、复制样式和资源，再校验产物；check 只校验
 manifest 和现有产物。
 
-Web/source 开发由 Server 从 `spawn.ts` 相邻位置解析 `runner.ts` 并用仓库的 `tsx` loader 启动；
-Server 编译产物则使用相邻的 `runner.js`。稳定 Electron 以同一个 Electron executable 加
-`ELECTRON_RUN_AS_NODE=1` 启动插件子进程，runner 固定来自 packaged
-`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js`。桌面 staging
-复制本次 `npm run build` 生成的 Server runner；验证不能依赖仓库里历史或 ignored 的 dist 副本。
+source 开发由 Server 从 `spawn.ts` 相邻位置解析 `runner.ts` 并用仓库的 `tsx` loader 启动；
+Server 编译产物则使用相邻的 `runner.js`。两种情况都以 `process.execPath` 作为 Node 执行程序，
+验证不能依赖仓库里历史或 ignored 的 dist 副本。
 
 ## 源码索引
 

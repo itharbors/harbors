@@ -9,7 +9,7 @@ const APPLICATION_PLUGIN_PRIVATE_ENVIRONMENT_KEYS = Object.freeze([
   'HARBORS_CREDENTIAL_TRANSPORT_SECRET',
 ]);
 
-export type ApplicationPluginRunnerRuntimeMode = 'node' | 'electron-run-as-node';
+export type ApplicationPluginRunnerRuntimeMode = 'node';
 
 export interface ResolvedApplicationPluginRunner {
   executable: string;
@@ -120,7 +120,7 @@ export function resolveApplicationPluginRunner(importMetaUrl: string = import.me
   return Object.freeze({
     executable: process.execPath,
     args: Object.freeze(args),
-    runtimeMode: isElectronRunAsNode() ? 'electron-run-as-node' : 'node',
+    runtimeMode: 'node',
   });
 }
 
@@ -244,15 +244,7 @@ function sanitizeChildEnvironment(options: ApplicationPluginProcessRuntimeOption
   for (const key of Object.keys(environment)) {
     if (secretKeys.has(key)) delete environment[key];
   }
-  delete environment.ELECTRON_RUN_AS_NODE;
-  if (options.runner.runtimeMode === 'electron-run-as-node') {
-    environment.ELECTRON_RUN_AS_NODE = '1';
-  }
   return environment;
-}
-
-function isElectronRunAsNode(): boolean {
-  return Boolean(process.versions.electron) && process.env.ELECTRON_RUN_AS_NODE === '1';
 }
 
 function sanitizeChildError(input: unknown): ApplicationPluginChildError {

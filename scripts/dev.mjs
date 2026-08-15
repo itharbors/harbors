@@ -1,9 +1,8 @@
 import { spawn } from 'node:child_process';
+import path from 'node:path';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
 import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
 import { createNpmSpawnSpec } from './lib/npm-spawn.mjs';
-import { discoverKits } from './lib/kit-catalog.mjs';
-import { createKitSourceSnapshot } from './lib/electron-launcher.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
@@ -22,13 +21,8 @@ if (parsed.errors.length > 0) {
 
 const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const kitSources = baseEnv.HARBORS_HOST_MODE === 'desktop'
-  ? JSON.parse(baseEnv.HARBORS_KIT_SOURCES)
-  : createKitSourceSnapshot(await discoverKits({
-    rootDir: process.cwd(),
-    profile: 'development',
-    requestedKit: requestedKit || undefined,
-  }));
+const defaultKitDir = path.join(process.cwd(), 'kits', 'default');
+const kitSources = [{ directory: defaultKitDir, source: 'builtin' }];
 const stack = createDevStackEnvironments(
   baseEnv,
   requestedKit,

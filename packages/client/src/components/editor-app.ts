@@ -24,7 +24,7 @@ import {
 import { createWindowLayoutStorage } from '../layout/storage';
 import { applyThemeTokensToElement, DEFAULT_THEME_TOKENS, type ThemeTokens } from '../styles/theme';
 import { bindThemeToIframe } from '../styles/iframe-theme';
-import { getElectronMenuModeFromURL, mountMenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
+import { getMenuModeFromURL, mountMenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
 import type { FloatingPanelState } from './floating-panel-layer';
 
 export class EditorApp extends HTMLElement {
@@ -195,7 +195,7 @@ export class EditorApp extends HTMLElement {
       i18nStore.hydrate(bootstrap.i18n ?? createEmptyI18nSnapshot());
       this.mountMenuRuntime({
         sessionId: bootstrap.sessionId,
-        menuMode: getElectronMenuModeFromURL(),
+        menuMode: getMenuModeFromURL(),
         menuTree: bootstrap.menuTree,
         applicationMenuTree: bootstrap.applicationMenuTree ?? [],
         kitMenuTree: bootstrap.kitMenuTree ?? [],
@@ -684,7 +684,7 @@ export class EditorApp extends HTMLElement {
       : this.bootstrap;
     this.mountMenuRuntime({
       sessionId: this.session.sessionId,
-      menuMode: getElectronMenuModeFromURL(),
+      menuMode: getMenuModeFromURL(),
       menuTree,
       applicationMenuTree,
       kitMenuTree,

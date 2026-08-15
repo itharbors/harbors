@@ -103,15 +103,15 @@ test('detects production equality, switch, and semantic-variable Kit special cas
 test('detects semantic Kit identities in class, object, and assignment properties', async (t) => {
   const root = await fixture(t);
   await makeKit(root, 'zeta');
-  await makeKit(root, 'notifications');
-  await write(root, 'kits/notifications/kit.json', JSON.stringify({
-    id: '@itharbors/kit-notifications',
+  await makeKit(root, 'default');
+  await write(root, 'kits/default/kit.json', JSON.stringify({
+    id: 'default',
     distribution: 'market',
   }));
   await write(root, 'packages/framework/src/class-property.ts',
     "class Options { notificationKitName = 'zeta'; }\n");
   await write(root, 'packages/framework/src/assignment.ts',
-    "config.notificationKitName = '@itharbors/kit-notifications';\n");
+    "config.notificationKitName = 'default';\n");
   await write(root, 'packages/framework/src/object-property.ts',
     "const options = { notificationKitName: 'zeta' };\n");
   const result = await auditKitArchitecture({ repositoryRoot: root });

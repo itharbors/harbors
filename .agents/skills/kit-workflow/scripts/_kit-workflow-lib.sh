@@ -87,7 +87,7 @@ const manifest = read(`kits/${kit}/kit.json`);
 const pkg = read(`kits/${kit}/package.json`);
 const lock = read(`kits/${kit}/package-lock.json`);
 const policy = read('registry/policy.json');
-const expectedId = `@itharbors/kit-${kit}`;
+const expectedId = kit;
 const stop = (message) => { console.error(`error: ${message}`); process.exit(1); };
 let semver;
 try { semver = require(require.resolve('semver', { paths: [root] })); }

@@ -41,7 +41,7 @@ export async function loadKitPolicy({
     if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(['id'])) {
       throw new Error(`Kit policy entry contains unexpected fields: ${slug}`);
     }
-    if (entry.id !== `@itharbors/kit-${slug}` || ids.has(entry.id)) {
+    if (entry.id !== slug || ids.has(entry.id)) {
       throw new Error(`Kit policy id is invalid: ${slug}`);
     }
     ids.add(entry.id);
@@ -60,8 +60,8 @@ export async function loadTrustedMarketKit({ repositoryRoot, policyFile, slug })
     throw new Error(`Kit is not trusted for market publication: ${slug}`);
   }
   const descriptor = await loadRepositoryKit({ repositoryRoot, slug });
-  if (descriptor.distribution !== 'market') {
-    throw new Error(`Kit is not a market distribution: ${slug}`);
+  if (descriptor.distribution !== 'market' && descriptor.distribution !== 'builtin') {
+    throw new Error(`Kit is not a market or builtin distribution: ${slug}`);
   }
   if (descriptor.id !== policyEntry.id) {
     throw new Error(`Kit identity drift for ${slug}: descriptor ${descriptor.id} does not match policy ${policyEntry.id}`);
