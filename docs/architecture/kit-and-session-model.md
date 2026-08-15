@@ -10,7 +10,7 @@ session 一旦建立，其 Kit 就是该 session 的权威状态。URL 中后续
 
 ## Kit descriptor 与 manifest
 
-每个 Kit 目录同时拥有发布用 `kit.json` 和运行时 `package.json` descriptor。两者的 id/name 与 version 必须一致。`distribution=builtin` 的 descriptor 参与本地装配，且只能有一个声明 default 角色；`distribution=market` 的 descriptor 参与远程 Release 投影。
+每个 Kit 目录同时拥有打包用 `kit.json` 和运行时 `package.json` descriptor。两者的 id/name 与 version 必须一致。`distribution=builtin` 的 descriptor 参与本地装配，且只能有一个声明 default 角色；`distribution` 是本地装配和打包元数据，不触发远程分发。
 
 `ce-editor.kit` 必须定义 `menuRoot`、含 `default` 的 layouts、window entries、普通插件列表与可选的 application-scope `startup.plugins`。同一 package name 不能同时出现在启动插件和 session 插件中。插件的权限由 Kit permission 和插件 capability 共同约束。
 
@@ -20,11 +20,11 @@ Web host 从显式 Kit sources 构建 Catalog。默认稳定入口装配 `kits/d
 
 `GET /api/kits` 只返回 Catalog 的公开投影，不暴露本地路径、manifest 位置或插件列表。裸根页面渲染 Kit 选择器，`/kits/<menuRoot.id>` 进入现有 `?kit=<package-name>` 加载路径。
 
-## 远程发布与 Registry
+## 本地发现与打包
 
-市场 Kit 的源码位于 `main:kits/<name>`。信任的 `kit/<name>/v<semver>` Tag 会触发独立构建，将 `.hkit`、SBOM、`release.json` 与 attestation 作为 Release Asset 发布。Registry 聚合器自动扫描、发现并验证可信 Release，再根据 `registry/policy.json` 和 `registry/revocations.json` 生成 `index.v1.json`。
+所有 Kit 的源码位于 `kits/<name>`。开发与打包只使用本地目录；合并源码不会自动创建制品、发布版本或变更版本。版本字段仍是 descriptor 与制品校验所需的静态元数据。
 
-运行时不直接从 Registry 安装或执行远程代码。当前仓库保留发布、索引与证明验证工具，不再包含桌面 Kit Store、热切换、回滚或本地 Kit Manager。
+可使用 `npm run kit -- validate`、`npm run kit -- pack` 和 `npm run kit -- inspect` 在本地校验、打包和检查 `.hkit` 制品。运行时不安装或执行远程代码，也不包含桌面 Kit Store、热切换、回滚或本地 Kit Manager。
 
 ## 插件范围与布局
 

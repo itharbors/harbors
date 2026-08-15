@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  },
   "ce-editor": {
     "contribute": {
       "message": {

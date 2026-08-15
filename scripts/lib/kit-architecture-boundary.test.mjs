@@ -24,7 +24,7 @@ async function makeKit(root, slug, options = {}) {
     dependencies: options.dependencies ?? { '@itharbors/kit-core': '^1.0.0' },
     workspaces: options.workspaces,
   }));
-  if (options.lock !== false) await write(root, `kits/${slug}/package-lock.json`, '{}');
+  if (options.lock !== false) await write(root, `kits/${slug}/pnpm-lock.yaml`, "lockfileVersion: '9.0'\nimporters:\n  .: {}\n");
 }
 
 async function fixture(t) {
@@ -48,7 +48,6 @@ test('reports every normalized architecture violation in deterministic policy or
   await write(root, 'packages/framework/src/environment.ts',
     'export const port = process.env.HARBORS_ZETA_PORT;\nexport const notification = process.env.HARBORS_NOTIFICATION_PORT;\n');
   await write(root, 'scripts/catalog.mjs', "export const kitSlugs = ['zeta', 'alpha'];\n");
-  await write(root, 'registry/policy.json', JSON.stringify({ trustedKitIds: ['dev.harbors.alpha'] }));
 
   const result = await auditKitArchitecture({ repositoryRoot: root });
   assert.deepEqual(result.errors.map((error) => error.code), [
@@ -293,7 +292,7 @@ test('CLI rejects extra arguments and emits one deterministic failure summary', 
     repositoryRoot: '/repo',
     auditKitArchitecture: async () => ({
       scope: 'all',
-      errors: [{ code: 'KIT_LOCK_MISSING', path: 'kits/zeta/package-lock.json', message: 'missing' }],
+      errors: [{ code: 'KIT_LOCK_MISSING', path: 'kits/zeta/pnpm-lock.yaml', message: 'missing' }],
     }),
   });
   assert.equal(code, 1);

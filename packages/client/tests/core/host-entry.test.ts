@@ -7,9 +7,9 @@ describe('host entry selection', () => {
     expect(selectHostEntry(new URL('http://localhost:8080/?kit=%40itharbors%2Fkit-mysql')))
       .toBe('editor');
     expect(selectHostEntry(new URL('http://localhost:8080/?session=existing')))
-      .toBe('editor');
+      .toBe('picker');
     expect(selectHostEntry(new URL('http://localhost:8080/?sessionId=existing')))
-      .toBe('editor');
+      .toBe('picker');
     expect(selectHostEntry(
       new URL('http://localhost:8080/?session=existing&kit=%2Frepo%2Fkits%2Fmysql&menuMode=multi'),
     )).toBe('editor');

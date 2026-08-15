@@ -7,7 +7,7 @@
     "dev": "vite",
     "build": "tsc -p tsconfig.build.json && vite build",
     "typecheck": "tsc --noEmit",
-    "test": "npm run typecheck && node ./scripts/test.mjs"
+    "test": "pnpm run typecheck && node ./scripts/test.mjs"
   },
   "dependencies": {
     "@itharbors/plugin-types": "0.0.1",

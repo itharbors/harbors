@@ -4,51 +4,37 @@ import { access, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
+import { parse as parseYaml } from 'yaml';
 
 const rootUrl = new URL('../../', import.meta.url);
-const workflowUrl = new URL('.github/workflows/ci.yaml', rootUrl);
-const kitWorkflowUrl = new URL('.github/workflows/kit-ci.yml', rootUrl);
 const packageUrl = new URL('package.json', rootUrl);
-const packageLockUrl = new URL('package-lock.json', rootUrl);
+const pnpmLockUrl = new URL('pnpm-lock.yaml', rootUrl);
 
-test('Framework CI installs once then audits architecture, tests Framework, and checks only Framework plugins', async () => {
-  const workflow = await readFile(workflowUrl, 'utf8');
-  const installIndex = workflow.indexOf('run: npm ci');
-  const boundaryIndex = workflow.indexOf('run: npm run kits:boundary');
-  const testIndex = workflow.indexOf('run: npm run test:framework');
-  const pluginsIndex = workflow.indexOf('run: npm run plugins:check:framework');
-
-  assert.notEqual(installIndex, -1, 'CI must install dependencies with npm ci');
-  assert.ok(installIndex < boundaryIndex && boundaryIndex < testIndex && testIndex < pluginsIndex);
-  assert.doesNotMatch(workflow, /npm run (?:check|kits:check)\s*$/mu);
+test('root package exposes Framework boundary, test, and plugin-check scripts', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  const scripts = packageJson.scripts ?? {};
+  assert.equal(typeof scripts['kits:boundary'], 'string');
+  assert.equal(typeof scripts['test:framework'], 'string');
+  assert.equal(typeof scripts['plugins:check:framework'], 'string');
+  assert.equal(typeof scripts.check, 'string');
 });
 
-test('CI only invokes npm scripts declared by the root package', async () => {
-  const [workflow, packageText] = await Promise.all([
-    readFile(workflowUrl, 'utf8'),
-    readFile(packageUrl, 'utf8'),
-  ]);
-  const packageJson = JSON.parse(packageText);
-  const invokedScripts = [...workflow.matchAll(/run:\s+npm run ([\w:-]+)/g)].map(
-    ([, script]) => script,
-  );
-
-  assert.ok(invokedScripts.length > 0, 'CI must invoke at least one npm script');
-  for (const script of invokedScripts) {
-    assert.ok(
-      Object.hasOwn(packageJson.scripts ?? {}, script),
-      `CI invokes missing root npm script: ${script}`,
-    );
+test('root test and check scripts reference only declared root pnpm scripts', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  const scripts = packageJson.scripts ?? {};
+  const referenced = [...(scripts.test ?? '').matchAll(/pnpm run ([\w:-]+)/g)].map(([, s]) => s);
+  for (const script of referenced) {
+    assert.ok(Object.hasOwn(scripts, script), `test script references missing root script: ${script}`);
   }
 });
 
-test('CI dependency lock does not reference the private npm registry', async () => {
-  const packageLock = await readFile(packageLockUrl, 'utf8');
+test('pnpm dependency lock does not reference the private npm registry', async () => {
+  const lockfile = await readFile(pnpmLockUrl, 'utf8');
 
   assert.equal(
-    packageLock.includes('https://bnpm.byted.org/'),
+    lockfile.includes('https://bnpm.byted.org/'),
     false,
-    'package-lock.json must use a registry reachable by public GitHub runners',
+    'pnpm-lock.yaml must use a registry reachable by public GitHub runners',
   );
 });
 
@@ -58,147 +44,66 @@ test('every Kit dependency lock uses a registry reachable by public CI', async (
     .filter((entry) => entry.isDirectory())
     .map(async (entry) => ({
       kit: entry.name,
-      lock: await readFile(new URL(`kits/${entry.name}/package-lock.json`, rootUrl), 'utf8'),
+      lock: await readFile(new URL(`kits/${entry.name}/pnpm-lock.yaml`, rootUrl), 'utf8'),
     })));
 
   for (const { kit, lock } of kitLocks) {
     assert.equal(
       lock.includes('https://bnpm.byted.org/'),
       false,
-      `${kit}/package-lock.json must use a registry reachable by public CI`,
+      `${kit}/pnpm-lock.yaml must use a registry reachable by public CI`,
     );
   }
 });
 
-test('CI locks the Linux x64 Rollup binary required by Ubuntu', async () => {
-  const [packageText, packageLockText] = await Promise.all([
+test('pnpm locks Linux binaries required by Ubuntu', async () => {
+  const [packageText, pnpmLockText] = await Promise.all([
     readFile(packageUrl, 'utf8'),
-    readFile(packageLockUrl, 'utf8'),
+    readFile(pnpmLockUrl, 'utf8'),
   ]);
   const packageJson = JSON.parse(packageText);
-  const packageLock = JSON.parse(packageLockText);
-  const version = '4.60.4';
-  const packageName = '@rollup/rollup-linux-x64-gnu';
-  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
-
-  assert.equal(packageJson.optionalDependencies?.[packageName], version);
-  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
-  assert.equal(lockedPackage?.version, version);
-  assert.equal(
-    lockedPackage?.resolved,
-    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
-  );
-  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
-  assert.deepEqual(lockedPackage?.os, ['linux']);
-  assert.deepEqual(lockedPackage?.cpu, ['x64']);
-  assert.equal(lockedPackage?.optional, true);
-
+  const lockfile = parseYaml(pnpmLockText);
+  const optional = lockfile.importers?.['.']?.optionalDependencies;
+  assert.equal(packageJson.optionalDependencies?.['@rollup/rollup-linux-x64-gnu'], '4.60.4');
+  assert.equal(optional?.['@rollup/rollup-linux-x64-gnu']?.version, '4.60.4');
+  assert.equal(packageJson.optionalDependencies?.['@esbuild/linux-x64'], '0.28.0');
+  assert.equal(optional?.['@esbuild/linux-x64']?.version, '0.28.0');
 });
 
-test('CI locks the Linux x64 esbuild binary required by script-isolated Framework builds', async () => {
-  const [packageText, packageLockText] = await Promise.all([
-    readFile(packageUrl, 'utf8'),
-    readFile(packageLockUrl, 'utf8'),
-  ]);
-  const packageJson = JSON.parse(packageText);
-  const packageLock = JSON.parse(packageLockText);
-  const version = '0.28.0';
-  const packageName = '@esbuild/linux-x64';
-  const lockedPackage = packageLock.packages?.[`node_modules/${packageName}`];
-
-  assert.equal(packageJson.optionalDependencies?.[packageName], version);
-  assert.equal(packageLock.packages?.['']?.optionalDependencies?.[packageName], version);
-  assert.equal(lockedPackage?.version, version);
-  assert.equal(
-    lockedPackage?.resolved,
-    `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${version}.tgz`,
-  );
-  assert.match(lockedPackage?.integrity ?? '', /^sha512-/u);
-  assert.deepEqual(lockedPackage?.os, ['linux']);
-  assert.deepEqual(lockedPackage?.cpu, ['x64']);
-  assert.equal(lockedPackage?.optional, true);
-
-  for (const [packagePath, nestedVersion] of [
-    ['node_modules/vite/node_modules/@esbuild/linux-x64', '0.21.5'],
-    ['packages/client/node_modules/@esbuild/linux-x64', '0.25.12'],
-  ]) {
-    const nestedPackage = packageLock.packages?.[packagePath];
-    assert.equal(nestedPackage?.version, nestedVersion, packagePath);
-    assert.equal(
-      nestedPackage?.resolved,
-      `https://registry.npmjs.org/${packageName}/-/${packageName.split('/')[1]}-${nestedVersion}.tgz`,
-      packagePath,
-    );
-    assert.match(nestedPackage?.integrity ?? '', /^sha512-/u, packagePath);
-    assert.deepEqual(nestedPackage?.os, ['linux'], packagePath);
-    assert.deepEqual(nestedPackage?.cpu, ['x64'], packagePath);
-    assert.equal(nestedPackage?.optional, true, packagePath);
-  }
+test('root workflows test script exercises Kit CI selection and check suites', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  const scripts = packageJson.scripts ?? {};
+  assert.match(scripts['test:workflows'] ?? '', /test:kit-ci-selection/u);
+  assert.match(scripts['test:workflows'] ?? '', /test:kit-check/u);
 });
 
-test('CI runs for every pull request change without repository-inaccurate path filters', async () => {
-  const workflow = await readFile(workflowUrl, 'utf8');
-  const triggers = parseWorkflowTriggers(workflow);
-
-  assert.ok(triggers.has('pull_request'), 'CI must declare a pull_request trigger');
-  assert.equal(
-    triggers.get('pull_request').has('paths'),
-    false,
-    'pull_request CI must not skip changes outside an incomplete path allowlist',
-  );
+test('root check and preflight scripts run boundary, framework, workflow, Kit, and plugin checks', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  const scripts = packageJson.scripts ?? {};
+  assert.match(scripts['check:preflight'] ?? '', /kits:boundary/u);
+  assert.match(scripts.check ?? '', /test:framework:prepared/u);
+  assert.match(scripts.check ?? '', /test:workflows/u);
+  assert.match(scripts.check ?? '', /kits:check/u);
+  assert.match(scripts.check ?? '', /plugins:check:framework/u);
 });
 
-test('Framework CI runs branch pushes only on main while retaining PR and merge queue coverage', async () => {
-  const workflow = await readFile(workflowUrl, 'utf8');
-  const triggers = parseWorkflowTriggers(workflow);
-
-  assert.ok(triggers.has('push'));
-  assert.ok(triggers.get('push').has('branches'), 'push CI must declare a branch allowlist');
-  assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/u);
-  assert.ok(triggers.has('pull_request'));
-  assert.ok(triggers.has('merge_group'));
+test('Kit CI selector uses full-history Git diff and canonical Kit paths', async () => {
+  const selector = await readFile(new URL('scripts/select-kit-ci.mjs', rootUrl), 'utf8');
+  assert.match(selector, /rev-list.*--max-count=1/u);
+  assert.match(selector, /'diff'/u);
+  assert.match(selector, /'--no-renames'/u);
+  assert.match(selector, /selectKitSlugs/u);
+  assert.match(selector, /discoverRepositoryKits/u);
+  assert.doesNotMatch(selector, /plan-kit-releases|kit-publish/u);
 });
 
-test('Kit CI selects event-specific full-history Git comparisons without path trigger gaps', async () => {
-  const workflow = await readFile(kitWorkflowUrl, 'utf8');
-  const triggers = parseWorkflowTriggers(workflow);
-
-  for (const trigger of ['pull_request', 'merge_group', 'push']) {
-    assert.ok(triggers.has(trigger), `Kit CI must declare a ${trigger} trigger`);
-    assert.equal(triggers.get(trigger).has('paths'), false, `${trigger} must not use paths filters`);
-  }
-  assert.match(workflow, /push:\s*\n\s+branches:\s*\n\s+- main/u);
-  assert.match(workflow, /actions\/checkout@v6[\s\S]*fetch-depth:\s*0/u);
-  assert.match(workflow, /github\.event\.pull_request\.base\.sha/u);
-  assert.match(workflow, /github\.event\.merge_group\.base_sha/u);
-  assert.match(workflow, /github\.event\.before/u);
-  assert.match(workflow, /0\{40\}/u);
-  assert.match(workflow, /git rev-list --max-parents=0 --max-count=1/u);
-  assert.match(workflow, /node scripts\/select-kit-ci\.mjs/u);
+test('root package retains the local Kit boundary check without publication commands', async () => {
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  assert.equal(typeof packageJson.scripts['kit:boundary'], 'string');
+  assert.doesNotMatch(JSON.stringify(packageJson.scripts), /plan-kit-releases|kit-publish/u);
 });
 
-test('Kit change PRs enforce the branch-declared Kit boundary independently from the selected matrix', async () => {
-  const workflow = await readFile(kitWorkflowUrl, 'utf8');
-  const boundary = workflowJob(workflow, 'kit-change-boundary');
-  const resolveCommand = 'task_id=$(node scripts/task-status.mjs resolve "$GITHUB_HEAD_REF" "$BASE_SHA" --ready-for-pr)';
-  const boundaryCommand = 'npm run kit:boundary -- "$declared_kit" --task "$task_id" --base "$BASE_SHA" --head "$HEAD_SHA"';
-
-  assert.match(boundary, /if:\s*github\.event_name == 'pull_request' && startsWith\(github\.head_ref, 'kit-change\/'\)/u);
-  assert.match(boundary, /fetch-depth:\s*0/u);
-  assert.match(boundary, /ref:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
-  assert.match(boundary, /\^kit-change\/\(\[a-z0-9\]\+\(-\[a-z0-9\]\+\)\*\)\//u);
-  assert.match(boundary, /declared_kit="\$\{BASH_REMATCH\[1\]\}"/u);
-  assert.match(boundary, /test -f "kits\/\$declared_kit\/kit\.json"/u);
-  assert.match(boundary, /BASE_SHA:\s*\$\{\{ github\.event\.pull_request\.base\.sha \}\}/u);
-  assert.match(boundary, /HEAD_SHA:\s*\$\{\{ github\.event\.pull_request\.head\.sha \}\}/u);
-  assert.ok(boundary.includes(resolveCommand), 'Kit boundary must resolve the ready Task from the PR head branch');
-  assert.ok(boundary.includes(boundaryCommand), 'Kit boundary must receive the exact resolved Task ID');
-  assert.ok(boundary.indexOf(resolveCommand) < boundary.indexOf(boundaryCommand));
-  assert.doesNotMatch(boundary, /npm run kit:boundary -- "\$declared_kit" --base/u);
-  assert.doesNotMatch(boundary, /matrix\.kit/u);
-});
-
-test('Kit CI builds Kit Core before loading the selector in a clean checkout', async () => {
+test('Kit CI selector requires Kit Core to be built before loading kit-monorepo', async () => {
   const fixture = await mkdtemp(path.join(tmpdir(), 'kit-ci-clean-'));
   try {
     await Promise.all([
@@ -232,70 +137,34 @@ test('Kit CI builds Kit Core before loading the selector in a clean checkout', a
     ], { cwd: fixture, encoding: 'utf8' });
     assert.equal(cleanLoad.status, 1);
     assert.match(cleanLoad.stderr, /ERR_MODULE_NOT_FOUND[\s\S]*kit-core\/dist\/index\.js/u);
-
-    const select = workflowJob(await readFile(kitWorkflowUrl, 'utf8'), 'select');
-    const installIndex = select.indexOf('run: npm ci');
-    const buildIndex = select.indexOf('run: npm run build -w @itharbors/kit-core');
-    const selectorIndex = select.indexOf('node scripts/select-kit-ci.mjs');
-    assert.notEqual(installIndex, -1);
-    assert.notEqual(buildIndex, -1);
-    assert.notEqual(selectorIndex, -1);
-    assert.ok(installIndex < buildIndex && buildIndex < selectorIndex);
   } finally {
     await rm(fixture, { recursive: true, force: true });
   }
 });
 
-test('Kit CI exposes safe selector outputs and skips the matrix when no Kit applies', async () => {
-  const workflow = await readFile(kitWorkflowUrl, 'utf8');
-  const select = workflowJob(workflow, 'select');
-  const checkKit = workflowJob(workflow, 'check-kit');
-
-  assert.match(select, /id:\s*selection/u);
-  assert.match(select, /GITHUB_OUTPUT/u);
-  assert.match(select, /matrix-json/u);
-  assert.match(select, /has-kits/u);
-  assert.match(select, /MATRIX_JSON/u);
-  assert.match(select, /HAS_KITS/u);
-  assert.match(select, /matrix-json:\s*\$\{\{ steps\.selection\.outputs\.matrix-json \}\}/u);
-  assert.match(select, /has-kits:\s*\$\{\{ steps\.selection\.outputs\.has-kits \}\}/u);
-  assert.match(select, /base-sha:\s*\$\{\{ steps\.selection\.outputs\.base-sha \}\}/u);
-  assert.match(select, /head-sha:\s*\$\{\{ steps\.selection\.outputs\.head-sha \}\}/u);
-  assert.match(checkKit, /if:\s*needs\.select\.outputs\.has-kits == 'true'/u);
-  assert.match(checkKit, /include:\s*\$\{\{ fromJSON\(needs\.select\.outputs\.matrix-json\)\.include \}\}/u);
+test('Kit CI selector emits MATRIX_JSON and HAS_KITS outputs for downstream matrix jobs', async () => {
+  const selector = await readFile(new URL('scripts/select-kit-ci.mjs', rootUrl), 'utf8');
+  assert.match(selector, /MATRIX_JSON/u);
+  assert.match(selector, /HAS_KITS/u);
+  assert.match(selector, /ciRunner/u);
 });
 
-test('Kit CI validates and summarizes release intent inside the existing required selector job', async () => {
-  const workflow = await readFile(kitWorkflowUrl, 'utf8');
-  const select = workflowJob(workflow, 'select');
-
-  assert.match(select, /node scripts\/plan-kit-releases\.mjs/u);
-  assert.match(select, /steps\.selection\.outputs\.base-sha/u);
-  assert.match(select, /steps\.selection\.outputs\.head-sha/u);
-  assert.match(select, /GITHUB_STEP_SUMMARY/u);
-  assert.match(select, /RELEASES_JSON/u);
+test('Kit CI selector does not invoke release planning or publish scripts', async () => {
+  const selector = await readFile(new URL('scripts/select-kit-ci.mjs', rootUrl), 'utf8');
+  assert.doesNotMatch(selector, /plan-kit-releases|RELEASES_JSON|kit-publish/u);
 });
 
-test('Kit CI builds every Server workspace dependency before each Kit lifecycle and never publishes', async () => {
-  const workflow = await readFile(kitWorkflowUrl, 'utf8');
-  const checkKit = workflowJob(workflow, 'check-kit');
-  const installIndex = checkKit.indexOf('run: npm ci');
-  const lifecycleBuildIndex = checkKit.indexOf('npm run build -w @itharbors/magnet -w @itharbors/plugin-types -w @itharbors/kit-core -w @itharbors/kit-cli -w @itharbors/host-security -w @itharbors/server');
-  const staticIndex = checkKit.indexOf('npm run kits:boundary -- "${{ matrix.kit }}"');
-  const checkIndex = checkKit.indexOf('node scripts/run-kit-matrix.mjs check "${{ matrix.kit }}"');
+test('Kit lifecycle matrix runs boundary then check without publish or release steps', async () => {
+  const matrix = await readFile(new URL('scripts/run-kit-matrix.mjs', rootUrl), 'utf8');
+  assert.match(matrix, /build/u);
+  assert.match(matrix, /test/u);
+  assert.match(matrix, /validate/u);
+  assert.match(matrix, /check/u);
+  assert.doesNotMatch(matrix, /publish|release|plan-kit-releases/u);
 
-  assert.match(checkKit, /needs:\s*select/u);
-  assert.match(checkKit, /runs-on:\s*\$\{\{ matrix\.runner \}\}/u);
-  assert.match(checkKit, /fail-fast:\s*false/u);
-  assert.notEqual(installIndex, -1);
-  assert.notEqual(checkIndex, -1);
-  assert.notEqual(lifecycleBuildIndex, -1);
-  assert.match(checkKit, /fetch-depth:\s*0/u);
-  assert.ok(installIndex < lifecycleBuildIndex && lifecycleBuildIndex < staticIndex
-    && staticIndex < checkIndex);
-  assert.doesNotMatch(checkKit, /output_directory|kit:check/u);
-  assert.match(checkKit, /node scripts\/run-kit-matrix\.mjs check "\$\{\{ matrix\.kit \}\}"/u);
-  assert.doesNotMatch(workflow, /publish-kit|kit-publish|gh release|actions\/attest/u);
+  const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
+  assert.equal(packageJson.scripts['kits:check'], 'node scripts/run-kit-matrix.mjs check');
+  assert.doesNotMatch(JSON.stringify(packageJson.scripts), /publish-kit|kit-publish|release-kit/u);
 });
 
 test('root test delegates Kit work to descriptor-driven lifecycle scripts', async () => {
@@ -309,24 +178,24 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
   assert.equal(packageJson.scripts['kits:check'], 'node scripts/run-kit-matrix.mjs check');
   assert.equal(packageJson.scripts['kits:boundary'], 'node scripts/check-kit-architecture.mjs');
   assert.equal(packageJson.scripts['plugins:check:framework'], 'node scripts/ce-plugin.mjs check --framework');
-  assert.equal(packageJson.scripts['plugins:check'], 'npm run plugins:check:framework && npm run kits:build');
-  assert.equal(packageJson.scripts.test, 'npm run test:framework && npm run kits:test && npm run test:workflows');
+  assert.equal(packageJson.scripts['plugins:check'], 'pnpm run plugins:check:framework && pnpm run kits:build');
+  assert.equal(packageJson.scripts.test, 'pnpm run test:framework && pnpm run kits:test && pnpm run test:workflows');
   assert.equal(
     packageJson.scripts['test:framework'],
-    'npm run test:toolchain && npm run test -w @itharbors/magnet && npm run test:framework:prepared',
+    'pnpm run test:toolchain && pnpm --filter @itharbors/magnet run test && pnpm run test:framework:prepared',
   );
   assert.match(
     packageJson.scripts['test:framework:prepared'],
-    /npm run test -w packages\/server/u,
+    /pnpm --filter @itharbors\/server run test/u,
   );
   assert.match(packageJson.scripts['test:preflight'], /--test-reporter=dot/u);
   assert.equal(
     packageJson.scripts['check:preflight'],
-    'npm run kits:boundary && npm run test:preflight',
+    'pnpm run kits:boundary && pnpm run test:preflight',
   );
   assert.equal(
     packageJson.scripts.check,
-    'npm run build && npm run test:framework:prepared && npm run test:workflows && npm run kits:check && npm run plugins:check:framework',
+    'pnpm run build && pnpm run test:framework:prepared && pnpm run test:workflows && pnpm run kits:check && pnpm run plugins:check:framework',
   );
   assert.match(packageJson.scripts['test:workflows'], /npm run test:kit-ci-selection/u);
   const scriptText = JSON.stringify(packageJson.scripts);

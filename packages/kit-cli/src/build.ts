@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process';
 import { lstat, readFile, readdir, realpath } from 'node:fs/promises';
 import path from 'node:path';
+import { parse as parseYaml } from 'yaml';
 
 import {
   parseKitPackageManifest,
@@ -13,7 +14,7 @@ import { buildPlugin, discoverPlugin } from './plugin-build/index.js';
 
 type JsonRecord = Record<string, unknown>;
 
-export type KitCommand = 'npm' | 'plugin-build';
+export type KitCommand = 'pnpm' | 'plugin-build';
 
 export interface KitCommandRunner {
   run(command: KitCommand, args: readonly string[], cwd: string): Promise<void> | void;
@@ -197,12 +198,25 @@ async function loadKitProject(directory: string): Promise<KitProject> {
     throw new Error('Kit package.json version must match kit.json version');
   }
   const plugins = await discoverDeclaredPluginDirectories(root, packageJson);
-  const workspaces = packageJson.workspaces;
-  if (workspaces !== undefined && (
-    !Array.isArray(workspaces)
-    || workspaces.some((item) => typeof item !== 'string' || item.trim().length === 0)
-  )) {
-    throw new Error('Kit package.json workspaces must be an array of non-empty strings');
+  let workspaces: string[] = [];
+  try {
+    const workspaceYamlText = await readFile(
+      resolveInsideKit(root, 'pnpm-workspace.yaml', 'Kit pnpm-workspace.yaml'),
+      'utf8',
+    );
+    const workspaceYaml = parseYaml(workspaceYamlText);
+    if (workspaceYaml !== null && typeof workspaceYaml === 'object' && 'packages' in workspaceYaml) {
+      const packages = (workspaceYaml as { packages?: unknown }).packages;
+      if (packages !== undefined && packages !== null && (
+        !Array.isArray(packages)
+        || packages.some((item) => typeof item !== 'string' || item.trim().length === 0)
+      )) {
+        throw new Error('Kit pnpm-workspace.yaml packages must be an array of non-empty strings');
+      }
+      workspaces = Array.isArray(packages) ? packages : [];
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
   return {
     directory: root,
@@ -210,7 +224,7 @@ async function loadKitProject(directory: string): Promise<KitProject> {
     metadata,
     packageJson,
     plugins,
-    hasWorkspaces: Array.isArray(workspaces) && workspaces.length > 0,
+    hasWorkspaces: workspaces.length > 0,
   };
 }
 
@@ -222,11 +236,11 @@ const productionRunner: KitCommandRunner = {
       return;
     }
     await new Promise<void>((resolve, reject) => {
-      const child = spawn('npm', ['--prefix', cwd, ...args], { cwd, stdio: 'inherit' });
+      const child = spawn('pnpm', ['--dir', cwd, ...args], { cwd, stdio: 'inherit' });
       child.once('error', reject);
       child.once('exit', (code, signal) => {
         if (code === 0) resolve();
-        else reject(new Error(`npm command failed${signal ? ` with signal ${signal}` : ` with exit code ${String(code)}`}`));
+        else reject(new Error(`pnpm command failed${signal ? ` with signal ${signal}` : ` with exit code ${String(code)}`}`));
       });
     });
   },
@@ -235,9 +249,14 @@ const productionRunner: KitCommandRunner = {
 export async function buildKit(options: BuildKitOptions): Promise<BuildKitResult> {
   const project = await loadKitProject(options.directory);
   const runner = options.commandRunner ?? productionRunner;
-  await runner.run('npm', ['run', 'build:prepare', '--if-present'], project.directory);
+  const scripts = project.packageJson.scripts === undefined
+    ? {}
+    : record(project.packageJson.scripts, 'Kit package.json scripts');
+  if (typeof scripts['build:prepare'] === 'string' && scripts['build:prepare'].trim().length > 0) {
+    await runner.run('pnpm', ['run', 'build:prepare'], project.directory);
+  }
   if (project.hasWorkspaces) {
-    await runner.run('npm', ['run', 'build', '--workspaces', '--if-present'], project.directory);
+    await runner.run('pnpm', ['-r', 'run', 'build'], project.directory);
   }
   for (const pluginDirectory of project.plugins) {
     await runner.run('plugin-build', [pluginDirectory], project.directory);
@@ -260,7 +279,7 @@ export async function testKit(options: TestKitOptions): Promise<TestKitResult> {
     throw new Error(`Descriptor test script ${script} must exist in package.json scripts`);
   }
   const runner = options.commandRunner ?? productionRunner;
-  await runner.run('npm', ['run', script], project.directory);
+  await runner.run('pnpm', ['run', script], project.directory);
   return {
     directory: project.directory,
     id: project.manifest.id,

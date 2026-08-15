@@ -103,22 +103,22 @@ test('validates builtin Kits without market artifacts and packs exactly one insp
     { slug: 'zeta', status: 'passed' },
   ]);
   assert.deepEqual(calls[0], {
-    file: 'npm',
+    file: 'pnpm',
     args: [
+      '--filter',
+      '@itharbors/magnet',
+      '--filter',
+      '@itharbors/plugin-types',
+      '--filter',
+      '@itharbors/kit-core',
+      '--filter',
+      '@itharbors/kit-cli',
+      '--filter',
+      '@itharbors/host-security',
+      '--filter',
+      '@itharbors/server',
       'run',
       'build',
-      '-w',
-      '@itharbors/magnet',
-      '-w',
-      '@itharbors/plugin-types',
-      '-w',
-      '@itharbors/kit-core',
-      '-w',
-      '@itharbors/kit-cli',
-      '-w',
-      '@itharbors/host-security',
-      '-w',
-      '@itharbors/server',
     ],
     options: { cwd: repositoryRoot, encoding: 'utf8' },
   });
@@ -252,7 +252,7 @@ test('reports cleanup-only failures per Kit and continues later Kits', async () 
       descriptors,
       ensureInstall: installFixture,
       run: async (file, args) => {
-        if (file !== 'npm') visited.push(args.at(-1));
+        if (file !== 'pnpm') visited.push(args.at(-1));
       },
       removeDirectory: async (directory) => {
         if (directory === '/runs/alpha') throw new Error('alpha cleanup failed');
@@ -280,7 +280,7 @@ test('preserves operation and cleanup failures in deterministic order and contin
       descriptors,
       ensureInstall: installFixture,
       run: async (file, args) => {
-        if (file !== 'npm' && args.includes('/runs/alpha/repository/kits/alpha')) {
+        if (file !== 'pnpm' && args.includes('/runs/alpha/repository/kits/alpha')) {
           throw new Error('alpha operation failed');
         }
       },
@@ -317,7 +317,7 @@ test('CLI sanitizes control-bearing failures into one line and rejects malicious
     descriptors,
     ensureInstall: installFixture,
     run: async (file) => {
-      if (file !== 'npm') throw new Error('unsafe\nmessage\u0000with\u0085controls\u2028done');
+      if (file !== 'pnpm') throw new Error('unsafe\nmessage\u0000with\u0085controls\u2028done');
     },
   });
   assert.equal(code, 1);

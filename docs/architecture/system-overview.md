@@ -17,7 +17,7 @@ flowchart LR
     Panel -- "受控 runtime API" --> Gateway
 ```
 
-`npm run dev:web` 启动开发拓扑。`npm start` 则直接启动构建后的 Web Server，默认监听 `48381`，从 `kits/default` 装配内置 Kit，并把运行数据写入 `.data/`。
+`pnpm run dev:web` 启动开发拓扑。`pnpm start` 则直接启动构建后的 Web Server，默认监听 `48381`，从 `kits/default` 装配内置 Kit，并把运行数据写入 `.data/`。
 
 ## Workspace 职责
 
@@ -29,7 +29,7 @@ flowchart LR
 | `packages/plugin-types` | 插件和 Panel 可见协议 |
 | `plugins` | 框架级内置插件 |
 | `kits/default` | 内置 default Kit 的 descriptor、布局和插件组合 |
-| `scripts` | 构建、检查、Task、Kit 制品与 Registry 工具 |
+| `scripts` | 构建、检查、Task 与 Kit 制品工具 |
 
 ## Server 装配
 

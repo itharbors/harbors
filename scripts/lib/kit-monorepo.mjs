@@ -1,77 +1,95 @@
-import { readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import path from 'node:path';
 
-import { loadRepositoryKit } from './repository-kits.mjs';
+import { parseKitPackageManifest, parseRepositoryKitPackage } from '@itharbors/kit-core';
+import { parse as parseYaml } from 'yaml';
 
-const POLICY_FILE = 'registry/policy.json';
 const SLUG_PATTERN = /^[a-z0-9]+(-[a-z0-9]+)*$/u;
 
-export async function loadKitPolicy({
-  repositoryRoot,
-  policyFile = path.join(repositoryRoot, POLICY_FILE),
-}) {
-  const raw = JSON.parse(await readFile(policyFile, 'utf8'));
-  const expectedKeys = ['kits', 'repository', 'schemaVersion', 'signerWorkflows', 'workflow'];
-  if (JSON.stringify(Object.keys(raw).sort()) !== JSON.stringify(expectedKeys)) {
-    throw new Error('Kit policy contains unexpected fields');
+function assertCanonicalSlug(slug) {
+  if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {
+    throw new Error(`Invalid canonical Kit slug: ${String(slug)}`);
   }
-  if (raw.schemaVersion !== 1 || raw.repository !== 'itharbors/harbors') {
-    throw new Error('Kit policy identity is invalid');
-  }
-  if (raw.workflow !== 'itharbors/harbors/.github/workflows/publish-kit.yml') {
-    throw new Error('Kit policy workflow is invalid');
-  }
-  const expectedSigners = [
-    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
-    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2',
-    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v3',
-    'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4',
-  ];
-  if (JSON.stringify(raw.signerWorkflows) !== JSON.stringify(expectedSigners)) {
-    throw new Error('Kit policy signer workflows are invalid');
-  }
-  const slugs = Object.keys(raw.kits ?? {}).sort();
-  const ids = new Set();
-  const kits = {};
-  for (const slug of slugs) {
-    const entry = raw.kits[slug];
-    if (!SLUG_PATTERN.test(slug) || !entry || typeof entry !== 'object') {
-      throw new Error(`Kit policy entry is invalid: ${slug}`);
-    }
-    if (JSON.stringify(Object.keys(entry).sort()) !== JSON.stringify(['id'])) {
-      throw new Error(`Kit policy entry contains unexpected fields: ${slug}`);
-    }
-    if (entry.id !== slug || ids.has(entry.id)) {
-      throw new Error(`Kit policy id is invalid: ${slug}`);
-    }
-    ids.add(entry.id);
-    kits[slug] = Object.freeze({ id: entry.id });
-  }
-  return Object.freeze({ ...raw, kits: Object.freeze(kits) });
 }
 
-export async function loadTrustedMarketKit({ repositoryRoot, policyFile, slug }) {
-  if (typeof slug !== 'string' || !SLUG_PATTERN.test(slug)) {
-    throw new Error(`Unknown official Kit slug: ${String(slug)}`);
+function deepFreeze(value) {
+  if (value === null || typeof value !== 'object') return value;
+  if (Object.isFrozen(value)) return value;
+  if (Array.isArray(value)) {
+    for (const item of value) deepFreeze(item);
+  } else {
+    for (const key of Object.keys(value)) deepFreeze(value[key]);
   }
-  const policy = await loadKitPolicy({ repositoryRoot, policyFile });
-  const policyEntry = policy.kits[slug];
-  if (!policyEntry) {
-    throw new Error(`Kit is not trusted for market publication: ${slug}`);
+  return Object.freeze(value);
+}
+
+export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
+  assertCanonicalSlug(slug);
+  const kitsRoot = path.join(repositoryRoot, 'kits');
+  const directory = path.join(kitsRoot, slug);
+
+  let directoryStat;
+  try {
+    directoryStat = await lstat(directory);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') throw new Error(`Unknown Kit slug: ${slug}`);
+    throw error;
   }
-  const descriptor = await loadRepositoryKit({ repositoryRoot, slug });
-  if (descriptor.distribution !== 'market' && descriptor.distribution !== 'builtin') {
-    throw new Error(`Kit is not a market or builtin distribution: ${slug}`);
+  if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory()) {
+    throw new Error(`Kit directory is not a real directory: ${slug}`);
   }
-  if (descriptor.id !== policyEntry.id) {
-    throw new Error(`Kit identity drift for ${slug}: descriptor ${descriptor.id} does not match policy ${policyEntry.id}`);
+
+  const realDirectory = await realpath(directory);
+  const realKitsRoot = await realpath(kitsRoot);
+  if (realDirectory !== path.join(realKitsRoot, slug)) {
+    throw new Error(`Kit directory is not the canonical physical directory for slug: ${slug}`);
   }
-  const packageLock = JSON.parse(await readFile(path.join(descriptor.directory, 'package-lock.json'), 'utf8'));
-  const lockedPackage = packageLock.packages?.[''];
-  if (lockedPackage?.name !== descriptor.id || lockedPackage.version !== descriptor.version) {
-    throw new Error(`package-lock identity mismatch: ${slug}`);
+  const relative = path.relative(realKitsRoot, realDirectory);
+  if (relative.startsWith('..') || path.isAbsolute(relative)) {
+    throw new Error(`Kit directory escapes the kits root: ${slug}`);
   }
-  return descriptor;
+
+  const manifest = parseKitPackageManifest(JSON.parse(await readFile(path.join(directory, 'kit.json'), 'utf8')));
+  const packageJson = JSON.parse(await readFile(path.join(directory, 'package.json'), 'utf8'));
+  if (packageJson.name !== manifest.id) {
+    throw new Error(`Kit identity mismatch for ${slug}: package.json.name ${packageJson.name} does not match kit.json.id ${manifest.id}`);
+  }
+  if (packageJson.version !== manifest.version) {
+    throw new Error(`Kit version mismatch for ${slug}: package.json.version ${packageJson.version} does not match kit.json.version ${manifest.version}`);
+  }
+  if (packageJson.harbors === undefined) {
+    throw new Error(`package.json is missing harbors metadata: ${slug}`);
+  }
+
+  const metadata = parseRepositoryKitPackage(packageJson.harbors);
+  const pnpmLock = parseYaml(await readFile(path.join(directory, 'pnpm-lock.yaml'), 'utf8'));
+  const rootImporter = pnpmLock?.importers?.['.'];
+  if (rootImporter === null || typeof rootImporter !== 'object' || Array.isArray(rootImporter)) {
+    throw new Error(`pnpm-lock identity mismatch for ${slug}: lock is missing the root importer`);
+  }
+  const lockName = rootImporter.name ?? manifest.id;
+  const lockVersion = rootImporter.version ?? manifest.version;
+  if (lockName !== manifest.id || lockVersion !== manifest.version) {
+    throw new Error(`pnpm-lock identity mismatch for ${slug}: lock name ${lockName}@${lockVersion} does not match descriptor ${manifest.id}@${manifest.version}`);
+  }
+
+  return Object.freeze({
+    slug,
+    directory: realDirectory,
+    id: manifest.id,
+    version: manifest.version,
+    distribution: metadata.distribution,
+    isDefault: metadata.isDefault,
+    target: Object.freeze({ ...manifest.target }),
+    permissions: Object.freeze([...manifest.permissions]),
+    ciRunner: metadata.ciRunner,
+    summary: metadata.summary,
+    scripts: metadata.scripts,
+    resources: metadata.resources,
+    legacyDataDirectories: metadata.legacyDataDirectories,
+    manifest: deepFreeze(JSON.parse(JSON.stringify(manifest))),
+    packageJson: deepFreeze(JSON.parse(JSON.stringify(packageJson))),
+  });
 }
 
 export async function loadOfficialKit({ repositoryRoot, slug }) {

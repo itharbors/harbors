@@ -9,6 +9,9 @@ describe('client main entry', () => {
     expect(source).toContain("import './components/editor-app';");
     expect(source).toContain("import './components/window-group-app';");
     expect(source).toContain("fetch('/api/kits'");
+    expect(source).toContain("fetch('/api/session'");
+    expect(source).toContain('deferred: true');
+    expect(source).toContain('reservePickerSession');
     expect(source).toContain('isKitCatalogResponse');
     expect(source).toContain('selectHostEntry');
     expect(source).not.toContain('catalog.mode');

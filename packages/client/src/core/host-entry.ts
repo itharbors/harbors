@@ -4,7 +4,7 @@ export type HostEntry = 'picker' | 'editor';
 
 export function selectHostEntry(url: URL): HostEntry {
   if (url.pathname !== '/') return 'editor';
-  for (const parameter of ['session', 'sessionId', 'kit', 'page']) {
+  for (const parameter of ['kit', 'page']) {
     if (url.searchParams.has(parameter)) return 'editor';
   }
   return 'picker';
