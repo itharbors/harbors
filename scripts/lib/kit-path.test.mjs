@@ -5,12 +5,12 @@ import { normalizeKitArgument } from './kit-path.mjs';
 
 test('resolves relative kit paths before workspace processes start', () => {
   assert.equal(
-    normalizeKitArgument('./kits/sqlite', '/repo/harbors'),
-    path.resolve('/repo/harbors', './kits/sqlite'),
+    normalizeKitArgument('./kits/default', '/repo/harbors'),
+    path.resolve('/repo/harbors', './kits/default'),
   );
 });
 
 test('preserves package names and absolute kit paths', () => {
-  assert.equal(normalizeKitArgument('@itharbors/kit-sqlite', '/repo/harbors'), '@itharbors/kit-sqlite');
-  assert.equal(normalizeKitArgument('/tmp/sqlite-kit', '/repo/harbors'), '/tmp/sqlite-kit');
+  assert.equal(normalizeKitArgument('default', '/repo/harbors'), 'default');
+  assert.equal(normalizeKitArgument('/tmp/default-kit', '/repo/harbors'), '/tmp/default-kit');
 });

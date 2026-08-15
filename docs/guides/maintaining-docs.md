@@ -36,7 +36,7 @@ summary 中。跨环境仍需使用的客观事实也应整理到 `task.md`、`s
 | Kit manifest/layout/switch | Kit 与会话模型、布局模型、开发指南 |
 | Window/PanelInstance/LayoutNode | 布局模型、核心运行流程 |
 | Client Web Components/theme | UI 系统 |
-| Electron preload/IPC | 系统架构、UI 系统 |
+| Web host 边界与 Client/Server 协议 | 系统架构、UI 系统 |
 | npm scripts/build tools | 根 README、开发工作流 |
 
 ## 写作规则

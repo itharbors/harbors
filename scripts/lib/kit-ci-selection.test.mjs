@@ -125,39 +125,39 @@ function expectedCliOutput(slugs) {
 }
 
 test('selects only changed official Kits in deterministic order', () => {
-  assert.deepEqual(selectKitSlugs(['kits/agent-guard/package.json'], allDescriptors), ['agent-guard']);
+  assert.deepEqual(selectKitSlugs(['kits/default/package.json'], allDescriptors), ['default']);
   assert.deepEqual(
-    selectKitSlugs(['kits/agent-guard/packages/contracts/src/index.ts'], allDescriptors),
-    ['agent-guard'],
+    selectKitSlugs(['kits/default/packages/contracts/src/index.ts'], allDescriptors),
+    ['default'],
   );
-  assert.deepEqual(selectKitSlugs(['kits/csv/package.json'], allDescriptors), ['csv']);
-  assert.deepEqual(selectKitSlugs(['kits/csv/packages/contracts/src/index.ts'], allDescriptors), ['csv']);
-  assert.deepEqual(selectKitSlugs(['kits/mysql/package.json'], allDescriptors), ['mysql']);
-  assert.deepEqual(selectKitSlugs(['kits/mysql/packages/contracts/src/index.ts'], allDescriptors), ['mysql']);
+  assert.deepEqual(selectKitSlugs(['kits/default/package.json'], allDescriptors), ['default']);
+  assert.deepEqual(selectKitSlugs(['kits/default/packages/contracts/src/index.ts'], allDescriptors), ['default']);
+  assert.deepEqual(selectKitSlugs(['kits/default/package.json'], allDescriptors), ['default']);
+  assert.deepEqual(selectKitSlugs(['kits/default/packages/contracts/src/index.ts'], allDescriptors), ['default']);
   assert.deepEqual(
-    selectKitSlugs(['kits/mysql/packages/relationship-graph/src/index.ts'], allDescriptors),
-    ['mysql'],
+    selectKitSlugs(['kits/default/packages/relationship-graph/src/index.ts'], allDescriptors),
+    ['default'],
   );
-  assert.deepEqual(selectKitSlugs(['kits/sqlite/packages/contracts/src/index.ts'], allDescriptors), ['sqlite']);
+  assert.deepEqual(selectKitSlugs(['kits/default/packages/contracts/src/index.ts'], allDescriptors), ['default']);
   assert.deepEqual(
-    selectKitSlugs(['kits/sqlite/packages/relationship-graph/src/index.ts'], allDescriptors),
-    ['sqlite'],
+    selectKitSlugs(['kits/default/packages/relationship-graph/src/index.ts'], allDescriptors),
+    ['default'],
   );
   assert.deepEqual(
-    selectKitSlugs(['kits/traceweave/packages/contracts/src/index.ts'], allDescriptors),
-    ['traceweave'],
+    selectKitSlugs(['kits/default/packages/contracts/src/index.ts'], allDescriptors),
+    ['default'],
   );
-  assert.deepEqual(selectKitSlugs(['kits/scheduler/package.json'], allDescriptors), ['scheduler']);
+  assert.deepEqual(selectKitSlugs(['kits/default/package.json'], allDescriptors), ['default']);
   assert.deepEqual(
-    selectKitSlugs(['kits/sqlite/main.html', 'kits/notifications/layout.json'], allDescriptors),
-    ['notifications', 'sqlite'],
+    selectKitSlugs(['kits/default/main.html', 'kits/default/layout.json'], allDescriptors),
+    ['default'],
   );
-  assert.deepEqual(selectKitSlugs(['kits/sqlite', 'kits/sqlite/kit.json'], allDescriptors), ['sqlite']);
+  assert.deepEqual(selectKitSlugs(['kits/default', 'kits/default/kit.json'], allDescriptors), ['default']);
 });
 
 test('ignores unrelated paths and rejects an undiscovered Kit directory', () => {
   assert.deepEqual(selectKitSlugs(['docs/README.md'], allDescriptors), []);
-  assert.throws(() => selectKitSlugs(['kits/default/kit.json'], allDescriptors), /Unknown Kit directory/u);
+  assert.throws(() => selectKitSlugs(['kits/unknown/kit.json'], allDescriptors), /Unknown Kit directory/u);
 });
 
 test('selects all official Kits for shared build, validation, Registry, and workflow paths', () => {
@@ -188,7 +188,6 @@ test('selects all official Kits for shared build, validation, Registry, and work
 
 test('selects every descriptor for shared framework and workflow surfaces', () => {
   const cases = [
-    ['.agents/skills/notify-user/SKILL.md', []],
     ['scripts/ce-plugin.mjs', allKits],
     ['scripts/lib/plugin-build/validate.mjs', allKits],
   ];
@@ -208,18 +207,18 @@ test('rejects unknown Kit directories', () => {
 test('rejects non-canonical repository paths instead of ambiguously classifying them', () => {
   for (const changedPath of [
     '',
-    '/kits/sqlite/package.json',
-    'C:/kits/sqlite/package.json',
-    '../kits/sqlite/package.json',
-    './kits/sqlite/package.json',
-    'kits/./sqlite/package.json',
-    'kits/sqlite/../mysql/package.json',
-    'kits//sqlite/package.json',
-    'kits/sqlite/',
-    'kits\\sqlite\\package.json',
-    'kits/sqlite/bad\0name',
-    'kits/sqlite/bad\nname',
-    'kits/sqlite/bad\u0085name',
+    '/kits/default/package.json',
+    'C:/kits/default/package.json',
+    '../kits/default/package.json',
+    './kits/default/package.json',
+    'kits/./default/package.json',
+    'kits/default/../default/package.json',
+    'kits//default/package.json',
+    'kits/default/',
+    'kits\\default\\package.json',
+    'kits/default/bad\0name',
+    'kits/default/bad\nname',
+    'kits/default/bad\u0085name',
   ]) {
     assert.throws(
       () => selectKitSlugs([changedPath], allDescriptors),
@@ -227,21 +226,21 @@ test('rejects non-canonical repository paths instead of ambiguously classifying 
       JSON.stringify(changedPath),
     );
   }
-  assert.throws(() => selectKitSlugs('kits/sqlite/package.json', allDescriptors), /paths must be an array/i);
+  assert.throws(() => selectKitSlugs('kits/default/package.json', allDescriptors), /paths must be an array/i);
   assert.throws(() => selectKitSlugs([null], allDescriptors), /canonical repository path/i);
 });
 
 test('rejects invalid descriptor collections', () => {
   assert.throws(
-    () => selectKitSlugs([], 'sqlite'),
+    () => selectKitSlugs([], 'default'),
     /descriptors must be an array/u,
   );
   for (const descriptors of [
-    ['sqlite', 'sqlite'],
-    ['../sqlite'],
+    ['default', 'default'],
+    ['../default'],
     ['SQLite'],
-    ['sqlite-'],
-    ['sqlite--next'],
+    ['default-'],
+    ['default--next'],
     [null],
   ]) {
     assert.throws(
@@ -257,16 +256,16 @@ test('CLI selects descriptor-derived runners from a real NUL-delimited Git diff'
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
     const base = await commitAll(repository, 'initial');
-    await mkdir(path.join(repository, 'kits/sqlite'), { recursive: true });
-    await writeFile(path.join(repository, 'kits/sqlite/main.html'), '<main></main>\n');
-    const head = await commitAll(repository, 'sqlite');
+    await mkdir(path.join(repository, 'kits/default'), { recursive: true });
+    await writeFile(path.join(repository, 'kits/default/main.html'), '<main></main>\n');
+    const head = await commitAll(repository, 'default');
 
     const result = await runCli(repository, [base, head]);
     assert.equal(result.status, 0, result.stderr);
     assert.equal(result.stderr, '');
     assert.equal(
       result.stdout,
-      'MATRIX_JSON={"include":[{"kit":"sqlite","runner":"macos-14"}]}\nHAS_KITS=true\n',
+      'MATRIX_JSON={"include":[{"kit":"default","runner":"ubuntu-latest"}]}\nHAS_KITS=true\n',
     );
   } finally {
     await rm(repository, { recursive: true, force: true });
@@ -277,8 +276,8 @@ test('CLI includes current root-commit paths when the comparison base is the roo
   const repository = await initializeRepository({ seedRoot: false });
   try {
     // initializeRepository copied every trusted Kit descriptor; stage only the
-    // mysql descriptor paths so the root diff selects mysql alone.
-    await git(repository, 'add', 'kits/mysql/kit.json', 'kits/mysql/package.json');
+    // default descriptor paths so the root diff selects default alone.
+    await git(repository, 'add', 'kits/default/kit.json', 'kits/default/package.json');
     await git(repository, 'commit', '-qm', 'root Kit');
     const rootCommit = await git(repository, 'rev-parse', 'HEAD');
 
@@ -286,7 +285,7 @@ test('CLI includes current root-commit paths when the comparison base is the roo
     assert.equal(result.status, 0, result.stderr);
     assert.equal(
       result.stdout,
-      'MATRIX_JSON={"include":[{"kit":"mysql","runner":"ubuntu-latest"}]}\nHAS_KITS=true\n',
+      'MATRIX_JSON={"include":[{"kit":"default","runner":"ubuntu-latest"}]}\nHAS_KITS=true\n',
     );
   } finally {
     await rm(repository, { recursive: true, force: true });
@@ -297,9 +296,9 @@ test('CLI includes deletions and both sides of renames in Kit selection', async 
   const cases = [
     {
       name: 'deleted Kit file',
-      source: 'kits/mysql/removed.txt',
+      source: 'kits/default/removed.txt',
       destination: null,
-      expected: ['mysql'],
+      expected: ['default'],
     },
     {
       name: 'deleted shared file',
@@ -309,21 +308,21 @@ test('CLI includes deletions and both sides of renames in Kit selection', async 
     },
     {
       name: 'Kit file renamed to docs',
-      source: 'kits/mysql/moved.txt',
+      source: 'kits/default/moved.txt',
       destination: 'docs/moved.txt',
-      expected: ['mysql'],
+      expected: ['default'],
     },
     {
       name: 'docs file renamed into a Kit',
       source: 'docs/moved.txt',
-      destination: 'kits/sqlite/moved.txt',
-      expected: ['sqlite'],
+      destination: 'kits/default/moved.txt',
+      expected: ['default'],
     },
     {
-      name: 'file renamed between Kits',
-      source: 'kits/mysql/moved.txt',
-      destination: 'kits/sqlite/moved.txt',
-      expected: ['mysql', 'sqlite'],
+      name: 'file renamed within Kit',
+      source: 'kits/default/moved.txt',
+      destination: 'kits/default/renamed.txt',
+      expected: ['default'],
     },
     {
       name: 'shared file renamed to docs',
@@ -380,8 +379,8 @@ test('CLI rejects control-bearing Git paths without newline-based misclassificat
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
     const base = await commitAll(repository, 'initial');
-    await mkdir(path.join(repository, 'kits/sqlite'), { recursive: true });
-    await writeFile(path.join(repository, 'kits/sqlite/bad\nname'), 'unsafe\n');
+    await mkdir(path.join(repository, 'kits/default'), { recursive: true });
+    await writeFile(path.join(repository, 'kits/default/bad\nname'), 'unsafe\n');
     const head = await commitAll(repository, 'unsafe filename');
 
     const result = await runCli(repository, [base, head]);
@@ -398,13 +397,13 @@ test('CLI validates descriptor files instead of reading policy metadata', async 
   try {
     await writeFile(path.join(repository, 'README.md'), 'initial\n');
     const base = await commitAll(repository, 'initial');
-    await mkdir(path.join(repository, 'kits/mysql'), { recursive: true });
-    await writeFile(path.join(repository, 'kits/mysql/package.json'), '{}\n');
-    const head = await commitAll(repository, 'mysql');
+    await mkdir(path.join(repository, 'kits/default'), { recursive: true });
+    await writeFile(path.join(repository, 'kits/default/package.json'), '{}\n');
+    const head = await commitAll(repository, 'default');
     const result = await runCli(repository, [base, head]);
     assert.equal(result.status, 1);
     assert.equal(result.stdout, '');
-    assert.match(result.stderr, /^ERROR=Kit identity mismatch for mysql/u);
+    assert.match(result.stderr, /^ERROR=Kit identity mismatch for default/u);
   } finally {
     await rm(repository, { recursive: true, force: true });
   }
@@ -415,7 +414,7 @@ test('policy entries carry only the trusted identity and no product metadata fie
   for (const slug of Object.keys(policy.kits)) {
     const entry = policy.kits[slug];
     assert.deepEqual(Object.keys(entry), ['id'], slug);
-    assert.equal(entry.id, `@itharbors/kit-${slug}`, slug);
+    assert.equal(entry.id, slug, slug);
     assert.equal(entry.runner, undefined, `${slug} must not expose runner`);
     assert.equal(entry.label, undefined, `${slug} must not expose label`);
     assert.equal(entry.summary, undefined, `${slug} must not expose summary`);

@@ -1,5 +1,5 @@
 {
-  "name": "@itharbors/kit-default",
+  "name": "default",
   "version": "0.0.1",
   "private": true,
   "workspaces": [

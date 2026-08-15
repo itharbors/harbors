@@ -66,7 +66,7 @@ describe('application plugin process runner resolution', () => {
     });
   });
 
-  it('marks an Electron run-as-node resolver without changing its executable or arguments', () => {
+  it('always resolves a Node runner even when legacy Electron environment values are present', () => {
     Object.defineProperty(process.versions, 'electron', {
       configurable: true,
       value: '43.2.0',
@@ -78,7 +78,7 @@ describe('application plugin process runner resolution', () => {
       )).toEqual({
         executable: process.execPath,
         args: ['/Applications/ITHARBORS.app/Contents/Resources/runner/runner.js'],
-        runtimeMode: 'electron-run-as-node',
+        runtimeMode: 'node',
       });
     } finally {
       delete process.versions.electron;
@@ -147,37 +147,6 @@ describe('application plugin child adapter', () => {
     expect(child.pid).toBe(43210);
     expect('stdout' in child).toBe(false);
     expect('stderr' in child).toBe(false);
-  });
-
-  it('enables Electron run-as-node only in the child environment', () => {
-    const rawChild = fakeChildProcess();
-    const spawn = vi.fn(() => rawChild);
-    const runner: ResolvedApplicationPluginRunner = {
-      executable: '/Applications/ITHARBORS.app/Contents/MacOS/ITHARBORS',
-      args: ['/Applications/ITHARBORS.app/Contents/Resources/app.asar.unpacked/runner.js'],
-      runtimeMode: 'electron-run-as-node',
-    };
-
-    spawnApplicationPluginProcess({
-      runner,
-      cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
-      env: { PATH: '/usr/bin', HARBORS_RUNTIME_ROOT: '/runtime' },
-      spawn,
-    });
-
-    expect(spawn).toHaveBeenCalledWith(
-      runner.executable,
-      runner.args,
-      expect.objectContaining({
-        cwd: '/Applications/ITHARBORS.app/Contents/Resources/runtime',
-        env: {
-          PATH: '/usr/bin',
-          HARBORS_RUNTIME_ROOT: '/runtime',
-          ELECTRON_RUN_AS_NODE: '1',
-        },
-      }),
-    );
-    expect(runner.args.join(' ')).not.toContain('ELECTRON_RUN_AS_NODE');
   });
 
   it('waits for a successful IPC callback after send reports backpressure', async () => {

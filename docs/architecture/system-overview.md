@@ -1,157 +1,68 @@
 # 系统架构
 
-ITHARBORS 将开发时入口、服务端运行时、浏览器工作台和桌面宿主分开。核心状态集中在
-Server；Client 负责渲染与交互；Gateway 只做请求转发；Electron 是默认桌面宿主，Web
-入口保留用于独立调试。
-
-## 桌面发行边界
-
-桌面发行以 updater 可直接解析的 `v<semver>` 为唯一入口，使用 **Developer ID Application** 身份签名，并固定通过
-`app-publish-v1` 工作流在 GitHub 环境中构建、notarize、attest 和发布。运行时更新只消费已发布的签名
-资产；本地未签名目录包只承担结构验收。操作与恢复约束见[主程序构建、发布与验收](../guides/app-releases.md)。
+ITHARBORS 采用单一 Web host。Server 持有运行时权威状态，Client 在浏览器中渲染工作台，Gateway 只在开发环境提供统一代理入口。仓库不包含 Electron 或桌面发行链。
 
 ## 运行拓扑
 
 ```mermaid
 flowchart LR
-    User["用户"]
-    Browser["浏览器"]
-    Tray["Electron Tray / KitCatalog"]
-    Electron["按需 Kit BrowserWindow"]
-    Host["Desktop capability hosts"]
-    Agent["Authorized local clients"]
-    NativeUI["Native desktop UI"]
-    Gateway["Gateway :48380"]
-    Server["Server :48381"]
-    AppRuntime["Application Runtime / startup plugins"]
-    Client["Vite Client :48382"]
-    DB[("SQLite 会话元数据")]
-    Panel["Panel iframe"]
-
-    User --> Browser
-    User --> Tray
-    Agent --> Host
-    Host --> NativeUI
-    Host --> Electron
-    Tray --> Electron
-    Browser --> Gateway
-    Electron --> Gateway
-    Gateway -- "/api/* 与 /sse/*" --> Server
-    Server --> AppRuntime
-    Gateway -- "其他请求" --> Client
-    Server --> DB
-    Client --> Panel
-    Client -- "相对 URL：HTTP + SSE" --> Gateway
+    Browser["浏览器"] --> Gateway["Gateway :49380"]
+    Gateway -- "/api/* 与 /sse/*" --> Server["Server :49381"]
+    Gateway -- "页面资源" --> Client["Vite Client :49382"]
+    Server --> AppRuntime["Application Runtime"]
+    Server --> Sessions["Session Runtime"]
+    Server --> DB[("SQLite")]
+    Client --> Panel["Panel iframe"]
+    Client -- "HTTP + SSE" --> Gateway
     Panel -- "受控 runtime API" --> Gateway
 ```
 
-生产打包和部署策略尚未在仓库中固化；上图描述稳定直接运行的默认端口拓扑和 Electron 启动方式。
+`npm run dev:web` 启动开发拓扑。`npm start` 则直接启动构建后的 Web Server，默认监听 `48381`，从 `kits/default` 装配内置 Kit，并把运行数据写入 `.data/`。
 
 ## Workspace 职责
 
-| 路径 | 职责 | 不负责 |
-| --- | --- | --- |
-| `packages/gateway` | 在 48380 提供统一入口并按 URL 前缀反向代理 | 业务路由、认证、持久化 |
-| `packages/server` | 会话、Editor 运行时、Kit/插件、消息、窗口、API、SSE、存储 | 具体 Panel UI |
-| `packages/client` | 工作台、Web Components、布局交互、主题、HTTP/SSE 客户端 | 插件装载和权威窗口状态 |
-| `packages/plugin-types` | 插件与 Panel 可见的共享 TypeScript 协议 | 运行时实现 |
-| `plugins` | 始终可用的框架级插件：panel、message、menu、config | 具体 Kit 的产品能力 |
-| `kits` | 会话可选择的插件集合、布局、主题和窗口入口 | Framework 通用实现 |
-| `scripts` | 开发栈、Electron 宿主、通知 Host、插件构建与校验 | Server 会话业务状态 |
-| `.agents/skills/notify-user` | Agent 发送桌面通知的受控 CLI 与使用策略 | 启动 Electron 或绕过 Host 直接操作桌面 |
+| 路径 | 职责 |
+| --- | --- |
+| `packages/gateway` | 开发环境统一入口与反向代理 |
+| `packages/server` | 会话、Editor、Kit/插件、消息、API、SSE 和存储 |
+| `packages/client` | 浏览器工作台、Web Components、布局、主题和传输层 |
+| `packages/plugin-types` | 插件和 Panel 可见协议 |
+| `plugins` | 框架级内置插件 |
+| `kits/default` | 内置 default Kit 的 descriptor、布局和插件组合 |
+| `scripts` | 构建、检查、Task、Kit 制品与 Registry 工具 |
 
-## Server 内部装配
-
-每个 session 的 Editor 由多个职责单一的模块组合：
+## Server 装配
 
 ```mermaid
 flowchart TD
-    App["HTTP App / Routes"] --> Registry["SessionRuntimeRegistry"]
+    Routes["HTTP App / Routes"] --> Registry["SessionRuntimeRegistry"]
     Registry --> Editor["Editor(sessionId)"]
-    Editor --> Config["ConfigModule"]
-    Editor --> I18n["I18nModule"]
+    Editor --> Kit["KitModule"]
     Editor --> Plugin["PluginModule"]
-    Editor --> Panel["PanelModule"]
     Editor --> Message["MessageModule"]
     Editor --> Menu["MenuModule"]
-    Editor --> Kit["KitModule"]
     Editor --> Window["WindowManager"]
-    Plugin --> Panel
-    Plugin --> Message
-    Plugin --> Menu
-    Kit --> Plugin
+    Editor --> Config["ConfigModule"]
     Window --> SSE["SSEChannel"]
     Menu --> SSE
-    I18n --> SSE
-    Message --> Broker["BrowserRequestBroker"]
-    Broker --> SSE
+    Kit --> Plugin
 ```
 
-`createApp` 通过 `SessionRuntimeRegistry` 在首次创建 session 时建立 Editor，订阅布局、
-菜单和国际化变化并加载默认或请求指定的 Kit。注册表统一处理并发创建、销毁和只读查询。
+每个 session 拥有独立 Editor。Kit、插件、布局、菜单与消息路由的权威状态在 Server；Client 只保存渲染所需快照和短暂交互状态。
 
 ## 依赖方向
 
-稳定的依赖方向是：
-
-1. 路由层依赖 Editor 公共接口，不直接操作 framework 模块内部 map。
-2. Editor 装配层组合 framework 模块，并负责跨模块清理和回滚。
-3. framework 模块不依赖具体 Kit 或产品插件。
-4. Client 只依赖 HTTP/SSE 契约和共享可见数据，不导入 Server 实现。
-5. 插件通过运行时对象访问能力，不导入 Editor 内部实例。
-
-## 数据与状态归属
-
-| 状态 | 权威位置 | 生命周期 |
-| --- | --- | --- |
-| session 元数据 | SQLite `sessions` 表 | 使用文件数据库时跨 Server 重启保存 |
-| Editor 与当前 Kit | Server `SessionRuntimeRegistry` | Server 进程内 |
-| 插件注册/装载状态 | 每个 Editor 的 PluginModule | session 内 |
-| Window 与 PanelInstance | 每个 Editor 的 WindowManager | 当前 Kit/会话内 |
-| 菜单、i18n、消息路由 | 每个 Editor 的对应模块 | session 内 |
-| bootstrap 快照 | Client 内存副本 | 页面生命周期 |
-| tab 拖动、临时 resize | Client DOM/控制器 | 当前页面交互 |
-| Kit 目录与窗口注册表 | Electron main process | 应用生命周期 |
-| Kit sessionId 与窗口 bounds | Electron userData `workspaces.json` | 跨 Electron 重启 |
-| 桌面能力 Host 的瞬时状态 | Electron main process | 当前桌面应用生命周期 |
-
-## Web 与 Electron
-
-`npm run start` 启动稳定 Electron，`npm run electron` 是其兼容别名；`npm run dev`
-启动隔离开发 Electron，`npm run dev:web` 才直接启动隔离的 Gateway、Server 和 Client。
-Electron 启动时只扫描合法 Kit 的静态 manifest 并创建
-系统 Tray，不创建 Kit workspace、session 或 BrowserWindow。用户从 Tray 首次选择 Kit 时，
-Electron 才创建或恢复该 Kit 的稳定 workspace，等待 Gateway ready 并加载独立
-BrowserWindow；之后再次选择只打开或聚焦已有窗口。
-
-Electron 额外提供：
-
-- 通过系统托盘打开或聚焦 Kit，并持久化窗口 bounds；
-- 所有 Kit 窗口统一把菜单聚合为 `APP / <Kit...>`；
-- 把原生菜单点击送回对应 session 的窗口，发送前先显示目标窗口；
-- 只允许通过系统浏览器打开 `http:` 或 `https:` URL。
-- 按能力契约在 loopback 上暴露受控桌面 Host，并由窄化 preload 连接原生 UI；
-- 校验 Host 输入与调用来源，不向 Renderer 暴露操作系统级权限。
-
-这些能力通过 context-isolated preload 暴露，不改变核心运行时边界。
-
-桌面 Host 不监听外部网卡。Kit 的 server-side main 必须通过 permission-gated
-`runtime.host` capability 访问宿主能力，并由 Server 按 owner 与声明权限授权；Panel 不读取
-宿主端口，也不能直接访问 loopback 控制面。具体能力的生命周期和状态语义由其 Framework
-契约与消费它的 Kit 文档分别维护。
+1. 路由只依赖 Editor 公共接口。
+2. Editor 装配 framework 模块并负责回滚与清理。
+3. framework 不依赖具体 Kit 或产品插件。
+4. Client 只依赖 HTTP/SSE 契约。
+5. Panel 通过受限 runtime API 通信。
 
 ## 源码索引
 
-- [开发栈启动](../../scripts/dev.mjs)
-- [Gateway 代理](../../packages/gateway/src/index.ts)
-- [Server 入口](../../packages/server/src/server.ts)
-- [HTTP App 与路由装配](../../packages/server/src/app.ts)
-- [Editor 装配](../../packages/server/src/editor/index.ts)
-- [Client 工作台入口](../../packages/client/src/components/editor-app.ts)
-- [Client transport](../../packages/client/src/core/transport.ts)
-- [Electron 宿主](../../scripts/electron.mjs)
-- [Notification Host](../../scripts/lib/notification-host.mjs)
-- [Agent 通知 Skill](../../.agents/skills/notify-user/SKILL.md)
-
-关联阅读：[核心运行流程](./runtime-flows.md) ·
-[Kit 与会话模型](./kit-and-session-model.md)
+- [Web 开发栈](../../scripts/dev.mjs)
+- [Web Server 入口](../../packages/server/src/start.ts)
+- [Gateway](../../packages/gateway/src/index.ts)
+- [Server](../../packages/server/src/server.ts)
+- [Editor](../../packages/server/src/editor/index.ts)
+- [Client](../../packages/client/src/components/editor-app.ts)

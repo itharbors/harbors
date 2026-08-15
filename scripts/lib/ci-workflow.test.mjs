@@ -331,15 +331,12 @@ test('root test delegates Kit work to descriptor-driven lifecycle scripts', asyn
   assert.match(packageJson.scripts['test:workflows'], /npm run test:kit-ci-selection/u);
   const scriptText = JSON.stringify(packageJson.scripts);
   assert.doesNotMatch(scriptText, /@itharbors\/kit-(?:agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u);
-  assert.equal(Object.hasOwn(packageJson.scripts, 'test:agent-guard'), false);
+  assert.equal(Object.hasOwn(packageJson.scripts, 'test:default'), false);
 });
 
-test('root test registers live Kit deactivation coverage', async () => {
+test('root test retains the prepared Framework suite', async () => {
   const packageJson = JSON.parse(await readFile(packageUrl, 'utf8'));
-  assert.match(
-    packageJson.scripts['test:framework:prepared'],
-    /scripts\/lib\/kit-live-deactivation\.test\.mjs/u,
-  );
+  assert.ok(packageJson.scripts['test:framework:prepared']);
 });
 
 test('prepared Framework test command references only existing test files', async () => {

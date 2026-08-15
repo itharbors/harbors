@@ -4,12 +4,6 @@
 [README](../readme.md) 用于快速了解与启动项目；本知识库用于回答“系统为何这样设计”
 以及“各模块如何协作”。
 
-## 主程序发布
-
-主程序发布以 updater 可直接解析的 `v<semver>` 触发，使用 **Developer ID Application** 签名并由
-`app-publish-v1` 工作流执行。请从[主程序构建、发布与验收](guides/app-releases.md)了解本地结构验收、
-精确确认、Preview/Stable 环境、凭据边界和不可变 Release 恢复。
-
 ## 推荐阅读路径
 
 ### 第一次接触项目
@@ -42,12 +36,12 @@
 | 文档 | 回答的问题 |
 | --- | --- |
 | [核心原则](./architecture/core-principles.md) | 哪些设计约束应长期保持？ |
-| [系统架构](./architecture/system-overview.md) | Gateway、Server、Client、Electron 和各 workspace 如何分工？ |
+| [系统架构](./architecture/system-overview.md) | Gateway、Server、Client 和各 workspace 如何分工？ |
 | [核心运行流程](./architecture/runtime-flows.md) | 启动、会话、消息、Kit 切换和打开面板时发生什么？ |
 | [Kit 与会话模型](./architecture/kit-and-session-model.md) | 能力如何按 Kit 组合、按 session 隔离？ |
 | [插件运行时模型](./architecture/plugin-runtime-model.md) | 插件如何发现、注册、装载、贡献能力和卸载？ |
 | [布局模型](./architecture/layout-model.md) | Window、Panel、Tab、Split 和实例状态如何表达？ |
-| [UI 系统](./architecture/ui-system.md) | Web Components、主题、iframe 与 Electron 如何协作？ |
+| [UI 系统](./architecture/ui-system.md) | Web Components、主题与 iframe 如何协作？ |
 | [Task 档案与生命周期](./tasks/README.md) | 可交付变更如何建档、推进、收口、确认完成与恢复？ |
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
@@ -71,8 +65,8 @@
 ```text
 packages/   Gateway、Server、Client 与共享插件类型
 plugins/    框架内置插件
-kits/       可选择的产品能力集合
-scripts/    开发栈、Electron 与插件构建工具
+kits/       内置 default Kit
+scripts/    Web 开发栈、Kit 发布与插件构建工具
 ```
 
 仓库仍在演进。文档不会把尚未实现的设想写成当前能力，也不对未声明的 API 稳定性或

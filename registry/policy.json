@@ -9,29 +9,8 @@
     "itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4"
   ],
   "kits": {
-    "agent-guard": {
-      "id": "@itharbors/kit-agent-guard"
-    },
-    "csv": {
-      "id": "@itharbors/kit-csv"
-    },
-    "mysql": {
-      "id": "@itharbors/kit-mysql"
-    },
-    "notifications": {
-      "id": "@itharbors/kit-notifications"
-    },
-    "scheduler": {
-      "id": "@itharbors/kit-scheduler"
-    },
-    "skill-manager": {
-      "id": "@itharbors/kit-skill-manager"
-    },
-    "sqlite": {
-      "id": "@itharbors/kit-sqlite"
-    },
-    "traceweave": {
-      "id": "@itharbors/kit-traceweave"
+    "default": {
+      "id": "default"
     }
   }
 }

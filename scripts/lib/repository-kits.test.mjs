@@ -108,10 +108,10 @@ test('builtin runtime discovery ignores a malformed market Kit', async () => {
   const root = await createTempRepository();
   try {
     await writeKit(root, 'default', {
-      kit: { ...baseKit, id: '@example/kit-default' },
+      kit: { ...baseKit, id: '@example/default' },
       packageJson: {
         ...basePackageJson,
-        name: '@example/kit-default',
+        name: '@example/default',
         'ce-editor': {
           kit: {
             ...basePackageJson['ce-editor'].kit,
@@ -130,7 +130,7 @@ test('builtin runtime discovery ignores a malformed market Kit', async () => {
     });
 
     const kits = await discoverRepositoryBuiltinKits({ repositoryRoot: root });
-    assert.deepEqual(kits.map((kit) => kit.id), ['@example/kit-default']);
+    assert.deepEqual(kits.map((kit) => kit.id), ['@example/default']);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

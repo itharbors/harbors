@@ -105,13 +105,16 @@ describe('parseKitPackageManifest', () => {
   });
 
   it.each([
-    'kit-demo',
     '@example',
     '@Example/kit-demo',
     '@example/Kit-Demo',
     '@example/kit demo',
   ])('rejects malformed Kit id %s', (id) => {
     expect(() => parseKitPackageManifest({ ...kitManifest, id })).toThrow(/id/i);
+  });
+
+  it('accepts an unscoped slug as a Kit id', () => {
+    expect(parseKitPackageManifest({ ...kitManifest, id: 'kit-demo' }).id).toBe('kit-demo');
   });
 
   it('rejects unsupported schema versions and unknown fields', () => {

@@ -23,7 +23,7 @@ function writeBuiltinKit(rootDir, { ordinary = [], startup = [] } = {}) {
   const kitDir = path.join(rootDir, 'kits/default');
   fs.mkdirSync(kitDir, { recursive: true });
   fs.writeFileSync(path.join(kitDir, 'package.json'), JSON.stringify({
-    name: '@itharbors/kit-default',
+    name: 'default',
     'ce-editor': {
       kit: {
         layouts: { default: 'layout.json' },
@@ -43,7 +43,7 @@ function builtinDescriptor(rootDir, overrides = {}) {
   return {
     slug: 'default',
     directory: path.join(rootDir, 'kits/default'),
-    id: '@itharbors/kit-default',
+    id: 'default',
     distribution: 'builtin',
     isDefault: true,
     menuRoot: { id: 'default', label: 'Default' },

@@ -1,6 +1,4 @@
 import type { KitMenuRoot, MenuTreeNode } from '../core/session';
-import { onElectronMenuAction, openExternalUrl, syncElectronMenu } from '../electron/bridge';
-import type { ElectronMenuMode } from '../electron/types';
 
 interface MenuTriggerResponse {
   result?: unknown;
@@ -21,7 +19,7 @@ interface MenuOpenCurrentUrlResult {
 
 export interface MenuRuntimeInput {
   sessionId: string;
-  menuMode?: ElectronMenuMode;
+  menuMode?: 'single' | 'multi';
   menuTree: MenuTreeNode[];
   applicationMenuTree?: MenuTreeNode[];
   kitMenuTree?: MenuTreeNode[];
@@ -29,43 +27,11 @@ export interface MenuRuntimeInput {
 }
 
 export function mountMenuRuntime(input: MenuRuntimeInput): { dispose: () => void } {
-  syncElectronMenu({
-    sessionId: input.sessionId,
-    menuMode: input.menuMode ?? 'single',
-    menuTree: input.menuTree,
-    applicationMenuTree: input.applicationMenuTree ?? [],
-    kitMenuTree: input.kitMenuTree ?? [],
-    kitMenuRoot: input.kitMenuRoot ?? null,
-  });
-
-  const dispose = onElectronMenuAction(async (payload) => {
-    if (payload.sessionId !== input.sessionId) {
-      return;
-    }
-    try {
-      const response = await fetch('/api/menu/trigger', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: input.sessionId, menuId: payload.menuId }),
-      });
-      if (!response.ok) {
-        throw new Error(`Failed to trigger menu action: ${response.status}`);
-      }
-      const triggerPayload = await response.json() as MenuTriggerResponse;
-      if (isMenuOpenPanelResult(triggerPayload.result)) {
-        await handleMenuOpenPanelResult(input.sessionId, triggerPayload.result);
-      } else if (isMenuOpenCurrentUrlResult(triggerPayload.result)) {
-        await handleMenuOpenCurrentUrl();
-      }
-    } catch (error) {
-      console.error('Failed to trigger menu action', error);
-    }
-  });
-
-  return { dispose };
+  // Web mode: menu is handled by the server, no Electron sync needed
+  return { dispose: () => {} };
 }
 
-export function getElectronMenuModeFromURL(): ElectronMenuMode {
+export function getMenuModeFromURL(): 'single' | 'multi' {
   return new URLSearchParams(window.location.search).get('menuMode') === 'multi'
     ? 'multi'
     : 'single';
@@ -97,11 +63,6 @@ async function handleMenuOpenPanelResult(sessionId: string, payload: MenuOpenPan
 
 async function handleMenuOpenCurrentUrl(): Promise<void> {
   const url = window.location.href;
-  const externalOpen = openExternalUrl(url);
-  if (externalOpen) {
-    await externalOpen;
-    return;
-  }
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 

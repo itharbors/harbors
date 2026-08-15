@@ -35,7 +35,7 @@ function expectedCommands({ artifactName, slug, outputDirectory }) {
 }
 
 async function checkCommandSequence({
-  artifactName = 'kit-mysql-0.1.0-preview.3-any-any.hkit',
+  artifactName = 'default-0.0.1-any-any.hkit',
   slug,
 }) {
   const outputDirectory = await mkdtemp(path.join(tmpdir(), `kit-check-${slug}-`));
@@ -66,58 +66,10 @@ async function checkCommandSequence({
   }
 }
 
-test('checks MySQL with its exact affected build, test, pack, and inspect sequence', async () => {
+test('checks the default Kit through its portable build, test, pack, and inspect sequence', async () => {
   await checkCommandSequence({
-    slug: 'mysql',
-  });
-});
-
-test('checks Agent Guard with its macOS-only build, test, pack, and inspect sequence', async () => {
-  await checkCommandSequence({
-    slug: 'agent-guard',
-    artifactName: 'kit-agent-guard-0.1.0-preview.7-darwin-arm64.hkit',
-  });
-});
-
-test('checks Notifications through its Kit-local build, test, pack, and inspect sequence', async () => {
-  await checkCommandSequence({
-    slug: 'notifications',
-    artifactName: 'kit-notifications-0.1.0-preview.1-any-any.hkit',
-  });
-});
-
-test('checks Skill Manager through its Kit-local build, test, pack, and inspect sequence', async () => {
-  await checkCommandSequence({
-    slug: 'skill-manager',
-    artifactName: 'kit-skill-manager-0.1.0-preview.1-any-any.hkit',
-  });
-});
-
-test('checks Scheduler through its Kit-local build, test, pack, and inspect sequence', async () => {
-  await checkCommandSequence({
-    slug: 'scheduler',
-    artifactName: 'kit-scheduler-0.1.0-preview.2-any-any.hkit',
-  });
-});
-
-test('checks SQLite with its exact affected build, test, pack, and inspect sequence', async () => {
-  await checkCommandSequence({
-    slug: 'sqlite',
-    artifactName: 'kit-sqlite-0.1.0-preview.2-darwin-arm64-abi127.hkit',
-  });
-});
-
-test('checks CSV with its exact affected build, test, pack, and inspect sequence', async () => {
-  await checkCommandSequence({
-    slug: 'csv',
-    artifactName: 'kit-csv-0.1.0-preview.2-darwin-arm64-abi127.hkit',
-  });
-});
-
-test('checks TraceWeave through its portable Kit pipeline', async () => {
-  await checkCommandSequence({
-    slug: 'traceweave',
-    artifactName: 'kit-traceweave-0.1.0-preview.1-any-any.hkit',
+    slug: 'default',
+    artifactName: 'default-0.0.1-any-any.hkit',
   });
 });
 
@@ -144,7 +96,7 @@ test('rejects a relative output directory before running commands or creating it
     await assert.rejects(
       checkOfficialKit({
         repositoryRoot,
-        slug: 'sqlite',
+        slug: 'default',
         outputDirectory,
         runCommand: async (...args) => calls.push(args),
         ensureInstall: async () => { throw new Error('must not install'); },
@@ -166,16 +118,16 @@ test('normalizes an absolute output directory before every artifact operation', 
   try {
     const result = await checkOfficialKit({
       repositoryRoot,
-      slug: 'mysql',
+      slug: 'default',
       outputDirectory,
       runCommand: async (command, args, options) => calls.push([command, args, options]),
       ensureInstall: async () => ({
-        installRoot: '/runs/mysql/repository/kits/mysql',
-        runRoot: '/runs/mysql',
+        installRoot: '/runs/default/repository/kits/default',
+        runRoot: '/runs/default',
       }),
       removeDirectory: async () => undefined,
     });
-    const artifactPath = path.join(normalizedOutputDirectory, 'kit-mysql-0.1.0-preview.3-any-any.hkit');
+    const artifactPath = path.join(normalizedOutputDirectory, 'default-0.0.1-any-any.hkit');
     assert.equal(result.artifactPath, artifactPath);
     assert.equal(calls.at(-2)[1].at(-1), artifactPath);
   } finally {
@@ -189,11 +141,11 @@ test('preserves operation and run-root cleanup failures together', async (t) => 
   await assert.rejects(
     checkOfficialKit({
       repositoryRoot,
-      slug: 'mysql',
+      slug: 'default',
       outputDirectory,
       ensureInstall: async () => ({
-        installRoot: '/runs/mysql/repository/kits/mysql',
-        runRoot: '/runs/mysql',
+        installRoot: '/runs/default/repository/kits/default',
+        runRoot: '/runs/default',
       }),
       runCommand: async () => { throw new Error('operation failed'); },
       removeDirectory: async () => { throw new Error('cleanup failed'); },
@@ -236,7 +188,7 @@ test('runCheckedCommand rejects non-zero exits, signals, error events, and inval
 test('the CLI returns Usage for non-array arguments and non-string output directories', async () => {
   for (const args of [
     null,
-    ['sqlite', '--output-directory', 42],
+    ['default', '--output-directory', 42],
   ]) {
     const stderr = [];
     const code = await runCheckKitCli(
@@ -259,7 +211,7 @@ test('the CLI reports one safely parseable ERROR line for unsafe or empty failur
   ]) {
     const stderr = [];
     const code = await runCheckKitCli(
-      ['sqlite', '--output-directory', path.resolve(tmpdir(), 'kit-check-cli-output')],
+      ['default', '--output-directory', path.resolve(tmpdir(), 'kit-check-cli-output')],
       { stdout: { write: () => undefined }, stderr: { write: (value) => stderr.push(value) } },
       { checkOfficialKit: async () => { throw error; } },
     );
@@ -271,8 +223,8 @@ test('the CLI reports one safely parseable ERROR line for unsafe or empty failur
 
 test('the CLI rejects relative output paths and extra arguments in a real process', () => {
   for (const args of [
-    ['sqlite', '--output-directory', 'relative-output'],
-    ['sqlite', '--output-directory', path.resolve(tmpdir(), 'kit-check-cli-output'), '--extra'],
+    ['default', '--output-directory', 'relative-output'],
+    ['default', '--output-directory', path.resolve(tmpdir(), 'kit-check-cli-output'), '--extra'],
   ]) {
     const result = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8' });
     assert.equal(result.status, 2, result.stderr);

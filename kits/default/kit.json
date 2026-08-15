@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "@itharbors/kit-default",
+  "id": "default",
   "version": "0.0.1",
   "channel": "stable",
   "publisher": "itharbors",

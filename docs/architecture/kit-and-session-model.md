@@ -1,285 +1,41 @@
 # Kit 与会话模型
 
-Kit 决定一个编辑器会话拥有哪些产品能力；session 决定这些能力和运行时状态彼此隔离。
-两者结合后，ITHARBORS 可以在同一 Server 进程中承载不同配置的工作台。
+Kit 决定 Web 工作台具有哪些产品能力，session 负责隔离这些能力与运行时状态。Harbors Server 可在同一进程中承载多个 session，浏览器只渲染当前 session 的投影。
 
-## Session 的两层状态
+## Session 与 Editor
 
-| 层 | 内容 | 存放位置 |
-| --- | --- | --- |
-| 持久元数据 | `sessionId`、workspace path、已保存文件列表、创建与访问时间 | SQLite `sessions` 表；文件数据库可跨重启保存 |
-| 运行时状态 | Editor、当前 Kit、插件、窗口、消息、菜单、i18n | `SessionRuntimeRegistry` 管理的 Server 内存 |
+Session 的持久元数据存在 SQLite，运行时对象由 `SessionRuntimeRegistry` 在 Server 内存中管理。每个 Editor 独立持有 PluginModule、PanelModule、MessageModule、MenuModule、KitModule、WindowManager、config store 与 i18n 状态。路由可读取注册表的只读视图，但不得维护第二份运行时 map。
 
-SessionManager 的 `getOrCreate` 负责持久元数据；`SessionRuntimeRegistry` 负责同一 Session
-并发创建去重、Editor 注册和统一销毁。Server 重启后 SQLite 行仍可存在，但运行时会在
-下一次初始化时重新构建。路由可读取注册表的只读 Editor 视图，但不能独立维护第二份 map。
+session 一旦建立，其 Kit 就是该 session 的权威状态。URL 中后续出现其他 Kit 参数不会触发隐式切换。空闲 session 由注册表统一回收，应用停止时先停止接受新请求，再逆序卸载插件。
 
-## Editor 是隔离容器
+## Kit descriptor 与 manifest
 
-每个 Editor 拥有独立的：
+每个 Kit 目录同时拥有发布用 `kit.json` 和运行时 `package.json` descriptor。两者的 id/name 与 version 必须一致。`distribution=builtin` 的 descriptor 参与本地装配，且只能有一个声明 default 角色；`distribution=market` 的 descriptor 参与远程 Release 投影。
 
-- PluginModule 与外部插件列表；
-- PanelModule、MessageModule、MenuModule；
-- KitModule 与当前 Kit；
-- WindowManager；
-- config 各层 store 与 i18n 状态。
+`ce-editor.kit` 必须定义 `menuRoot`、含 `default` 的 layouts、window entries、普通插件列表与可选的 application-scope `startup.plugins`。同一 package name 不能同时出现在启动插件和 session 插件中。插件的权限由 Kit permission 和插件 capability 共同约束。
 
-即使配置层名为 shared/global，其可变 store 也只在当前 Editor 内共享，不跨 session。
-只有 Electron 的 KitCatalog、托盘、窗口注册表等明确的应用服务属于 application scope。
+## 本地解析
 
-## 本机凭据边界
+Web host 从显式 Kit sources 构建 Catalog。默认稳定入口装配 `kits/default`；开发入口可扫描动态发现的 builtin Kit 目录，但仍以 descriptor 而非硬编码 slug 决定身份。Server 会重新校验运行时 manifest，不从任意 URL 或未声明目录加载代码。
 
-Credential Vault 是 application-owned 的本机能力，但插件只能拿到预绑定、可撤销的 Session
-facade。授予同时要求当前 Kit 的 `kit.json` 声明 `credentials` permission、目标插件的
-`ce-editor.capabilities` 声明 `credentials` capability，并且宿主模式不是 `off`；缺少任一条件都
-不会把 facade 注入运行时。MySQL Kit 中只有 `@itharbors/mysql-core` 满足插件条件，Panel 和另外五个
-MySQL 插件都不能读取保存项。
+`GET /api/kits` 只返回 Catalog 的公开投影，不暴露本地路径、manifest 位置或插件列表。裸根页面渲染 Kit 选择器，`/kits/<menuRoot.id>` 进入现有 `?kit=<package-name>` 加载路径。
 
-facade 绑定 `kitId + pluginName` 的 SHA-256 scope。系统凭据 service 固定为
-`com.itharbors.credentials.v1`，account 为
-`<scope>:<profileId>:<secretVersion>`；其他 Kit、同一 Kit 的其他插件和其他 scope 即使知道 profile
-ID，也只能得到 not-found。插件卸载后 facade 立即撤销。浏览器只看到 profile 元数据和
-`mode/status/reason` 能力快照；secret reference、scope、account、版本和密码都留在 Server/OS
-边界内。
+## 远程发布与 Registry
 
-Web 默认 `off`。只有显式 `HARBORS_CREDENTIAL_MODE=local` 且
-`HARBORS_BIND_HOST=127.0.0.1` 或 `::1` 才能启用；非法或非 loopback 组合在 Gateway、Client 和
-Server 监听前拒绝。Electron 控制的桌面宿主固定传入 `local + 0.0.0.0`，让工具网页既可通过
-loopback 也可通过本机网卡地址打开；该桌面模式不复用普通 Web 的公开部署凭据约束。`multi-user`、
-远程凭据和多用户共享凭据尚未实现，不存在向这些模式降级的 fallback。
+市场 Kit 的源码位于 `main:kits/<name>`。信任的 `kit/<name>/v<semver>` Tag 会触发独立构建，将 `.hkit`、SBOM、`release.json` 与 attestation 作为 Release Asset 发布。Registry 聚合器自动扫描、发现并验证可信 Release，再根据 `registry/policy.json` 和 `registry/revocations.json` 生成 `index.v1.json`。
 
-SQLite 只保存标签、MySQL 非秘密连接元数据、opaque ID、scope hash、secret reference 和事务
-状态；密码由当前 OS 用户的原生凭据后端保存。Vault 使用 `pending → active → deleting` 与 durable
-cleanup ledger 恢复进程中断的创建、更新和删除，应用停止时先销毁 Session/plugin 再关闭 Vault。
-OS 后端缺失、锁定、丢失条目或拒绝访问时能力变为 unavailable/locked；保存连接失败关闭，手工
-连接路径仍保持可用，且不会用明文文件、shell helper 或固定密钥替代。
+运行时不直接从 Registry 安装或执行远程代码。当前仓库保留发布、索引与证明验证工具，不再包含桌面 Kit Store、热切换、回滚或本地 Kit Manager。
 
-Vault 的 backend health probe 只读取固定保留的非 profile account，不写入 health secret。probe/import
-失败不会永久丢弃 adapter 或 loader；Panel 可显式“重新检测”，在 OS 凭据库解锁或服务恢复后于同一
-进程恢复 capability 与非秘密 profile 列表。并发 probe 共享结果，关闭开始后不会再次 probe/reopen；
-重新检测不读取 profile secret，也不触发自动连接。
+## 插件范围与布局
 
-连接资料不会自动连接、导出或恢复密码到 Panel。更新由 mysql-core 先探测完整新密码，再写入新
-版本并原子发布新的连接身份；删除活动 profile 先断开。OS 条目丢失时用户只能回到手工连接，删除
-失效 profile 后重新保存，不能从 SQLite 或 UI 恢复密码。
+Server 启动时创建无 session 的 `ApplicationRuntime`，对 Catalog 中的 `startup.plugins` 按真实路径去重。启动失败会按 owner 回滚并进入 `degraded`，不阻止普通 Kit 创建 session。Web Client 通过 application bootstrap 与 SSE 读取状态；菜单意图由普通 Web API 进入 Server 的 owner-bound 调度链。
 
-当前并发模型是一个 Harbors Server/Vault writer。store 内部 SQLite swap 使用旧 secret version
-做 CAS，Vault 的进程内锁也串行化同一 profile；但公开 facade 没有 `expectedVersion` 参数。尤其
-mysql-core 在 vault 写入后、连接提交异常时执行的补偿 `put` 无法表达跨 writer 的期望版本，可能
-覆盖另一个进程刚完成的更新。因此不得让多个进程共享同一 SQLite/keyring namespace；该限制也是
-远程/多人模式保持禁用的原因之一。扩展到多 writer 前必须设计端到端 version token 与补偿协议，
-不能把现有 ledger 当成跨进程事务保证。
-
-威胁模型保护的是 saved secret 的应用侧静态存储与非秘密投影：它不进入 SQLite、Session、浏览器
-storage、URL、bootstrap、快照、广播、日志或公开错误。它不防御已攻陷的同一 OS 账号、具有进程
-内存读取能力的代码、键盘记录器、恶意/失陷的 MySQL 端点，也不替代 TLS 和数据库最小权限配置。
-
-## Kit manifest
-
-Kit package 的核心结构：
-
-```json
-{
-  "name": "@example/kit-example",
-  "ce-editor": {
-    "kit": {
-      "menuRoot": {
-        "id": "example",
-        "label": "Example Kit"
-      },
-      "layouts": {
-        "default": "layout.json"
-      },
-      "windowEntries": {
-        "main": "main.html",
-        "secondary": "secondary.html"
-      },
-      "startup": {
-        "plugins": [
-          "@itharbors/background-service"
-        ]
-      },
-      "plugin": [
-        "@itharbors/log",
-        "@itharbors/plugin-list"
-      ],
-      "theme": {
-        "--ce-bg-primary": "#1e1e1e"
-      }
-    }
-  }
-}
-```
-
-约束：
-
-- `name` 和 `ce-editor.kit` 必须存在。
-- `menuRoot.id` 和 `menuRoot.label` 必须是非空字符串；目录内 root id 必须唯一。
-- `layouts` 必须是对象且包含 `default`。
-- `windowEntries.main` 与 `secondary` 必须是非空字符串。
-- `startup.plugins` 缺省为空数组，只允许唯一非空 package name。
-- `plugin` 缺省为空数组。
-- `permissions` 来自同目录 `kit.json`；高风险 `credentials` 仍需插件独立声明同名 capability，
-  manifest permission 本身不会向所有插件授予凭据。
-- 同一 package name 不能同时出现在 `startup.plugins` 与 `plugin`。
-- theme key 使用 `--ce-*` token。
-
-## Kit 解析
-
-远程 Kit 不由运行时直接解析 URL。application-scope 的 Registry 服务先读取严格
-`index.v1.json`，使用 ETag 刷新并原子缓存已验证快照；Release Resolver 再根据当前快照中的
-`id + version + channel` 选择唯一兼容资产，验证权限投影、publisher repository/workflow
-policy、revocation 和 attestation claims。生产 verifier 使用 Sigstore 分别验证固定 reusable
-signer 的 GitHub Actions 证书身份、transparency log，以及 caller workflow/Commit 的 SLSA
-source claims。下载器只接受 Resolver 创建的内部可信对象，流式核对大小与
-SHA-256 后交给 InstalledKitStore 安装事务。安装与激活分离，网络或校验失败不修改 active。
-
-发布源统一位于 `main:kits/<name>`。普通 PR 合并不产生 Release；只有专属
-`kit/<name>/v<semver>` Tag 才触发 caller，并从 Tag 解析出唯一 Kit 目录。固定
-`kit-publish-v2` reusable workflow 核对 Tag、`kit.json`、`package.json`、锁文件版本与
-Stable/Preview 频道，只将独立 `.hkit` 作为安装用 Release Asset，并通过 GitHub Artifact
-Attestation 绑定 signer workflow、caller Tag 和精确 Commit。
-
-市场 workflow 自动扫描可信且不可变的 GitHub Release，解析实际 Tag Commit，验证 metadata、
-`.hkit` digest、attestation claims 与 signer allowlist，然后根据 `registry/policy.json` 和
-`registry/revocations.json` 重建 `index.v1.json` 并部署 GitHub Pages。每次发版不提交 Registry
-entry；策略和撤回文件只是低频治理输入。客户端和聚合器只跟随 GitHub Release 到官方内容 CDN，
-不会接受任意重定向。
-
-市场 Kit 由 `distribution=market` descriptor 自动投影。具体功能契约由各 Kit README 维护；示例 Kit 展示了
-Session 插件边界的一个完整例子：Node main 只读解析本机 Codex 会话，Panel 不能访问文件系统，
-只通过 message request 获取不透明 id、归一化 trace 与按需脱敏证据。它不建立第二个 HTTP 服务。
-
-`KitRegistryManager.list/refresh` 将远程市场和已安装状态合并为公开投影，但移除 Release URL、
-本地目录、digest、Commit 和 source。相同 Kit 的 install 操作串行化，不同 Kit 可以并行下载；
-刷新和安装写入不接受任意详情字段的 `audit.ndjson`。Electron main process 通过独立本地 Kit
-Dock 提供六个 sender-bound IPC 操作，普通 Kit Renderer 无法调用，也不能提交 URL、路径或
-摘要。安装、更新、activate、rollback 和 uninstall 都由 main process 的串行 Runtime coordinator
-执行；Renderer 不能选择 Framework 命令、环境变量或删除路径。
-
-Electron 先把 builtin、active installed 和开发模式允许的 development 候选交给统一来源解析器，
-再把唯一的 resolved source snapshot 交给 Framework。Server 只在这份快照中按路径或 package name
-解析 Kit，并重新校验运行时 manifest；不会扫描 Store 根、任意版本目录或快照之外的仓库目录。
-
-默认 assembly 的两个 Kit 目录都指向仓库 `kits/`，installed 目录默认为空。默认 Kit 由
-descriptor 集合中唯一的 `distribution=builtin` 且 `default=true` 角色决定，不依赖包名或 slug。
-装配配置保留了分离 builtin 与外部目录的能力。
-
-Electron 在启动或 Manager 运行时事务中先将 pending 版本暂存为 active 并用完整 Catalog 校验，
-再让新 Framework 检查 application-scope 启动状态并通过一次临时 Session 真实加载普通插件。两层
-都成功后才提交激活；真实加载失败通过一次原子写入进入 badVersions，并把 previous 重新置为
-pending 后自动恢复上一代 Framework。previous 也必须重新通过两层验证；再次失败或没有 previous
-时原子清除该 Kit 的 active。每个 generation 都从 InstalledKitStore 重新读取 active 版本快照，
-并把解析完成的来源集合序列化为 `HARBORS_KIT_SOURCES` 传给 Server。Electron 主进程、托盘、Kit
-Manager 和 Notification Host 在切换期间保持运行；现存 Kit 窗口复用 BrowserWindow 与 workspace
-session，并在新 Framework 就绪后重新加载。桌面端校验发布 `kit.json` 与 Store 记录的 id/version，
-Server 再独立校验运行时 `package.json`。删除先暂存并从下一代 sources 排除，Framework 验证成功后
-才删除由 Store 记录的版本目录并提交状态。内置 ID 在商城下载或删除前直接拒绝；异常遗留冲突使用
-builtin，开发进程中的源码临时遮蔽 installed，均不修改用户安装状态。
-
-Electron stable profile 只解析显式 builtin 与 active installed；development profile 额外扫描
-仓库 `kits/*`。解析只保留静态目录并读取已有 workspace 记录。首次从 Tray 选择 Kit 时才调用
-`WorkspaceStore.getOrCreate()`，创建或恢复稳定
-sessionId 并加载对应窗口；未选择的 Kit 不创建新 workspace、Server session 或运行时。
-`--kit <name-or-path>` 代表显式选择，因此启动就绪后只自动打开指定 Kit；Catalog 和 Tray
-仍保留其他仓库 Kit，未打开的 Kit 不创建运行时。显式外部路径经校验后临时追加到 Catalog。
-缺失或损坏的持久 Kit 记录保留并在托盘标记为不可用，不会污染其他 Kit 的窗口和运行时。
-
-Web 主机通过 `GET /api/kits` 读取同一 assembly 边界内的公开 Catalog 投影，只返回
-`id`、`name` 和 `label`，不暴露本地目录、manifest 路径或插件列表。裸根页面始终只渲染
-选择器，不创建 session；`/kits/<menuRoot.id>` 重定向到现有 `?kit=<package-name>` 加载路径。
-`--kit` 仅增加直达目标，不能切换主机模式或缩减 Catalog。
-
-Kit 选择器生成的新浏览器 session 与 Electron Workspace session 采用同一隔离模型，但不
-写入 Electron 的 WorkspaceStore。session 一旦建立 runtime，其 Kit 即为该 session 的权威
-状态；URL 中后续出现的其他 Kit 参数不会触发隐式切换。
-
-## Kit 产品状态
-
-Framework 只定义 Session 隔离、目录身份、能力授权与恢复所需的通用契约。具体 Kit 的来源、
-持久化状态、资源限制和恢复语义由对应 `kits/<slug>/README.md` 维护。
-
-## 插件范围
-
-### 应用启动插件
-
-Server 启动时创建一个无 Session 的 ApplicationRuntime，收集完整 Catalog 中全部 Kit 的
-`startup.plugins`。`--kit` 只是窗口直达快捷方式，不会缩减这份启动插件目录。相同 name 和
-真实路径只加载一次，相同 name 解析到不同路径时
-拒绝冲突插件。ApplicationRuntime 维护独立全局菜单，并通过以下协议供 Electron 使用：
-
-- `GET /api/application/bootstrap`；
-- `POST /api/application/menu/trigger`；
-- `GET /sse/application`。
-
-两个读取接口只公开启动状态和菜单快照。菜单触发属于桌面控制面：Electron 每次启动生成随机
-令牌并通过请求头提交，Server 拒绝无令牌、带浏览器 `Origin` 或非 JSON 的写请求；Electron
-启动的网页 Host 绑定 `0.0.0.0`，Notification Host 等仅供本机进程调用的服务继续绑定
-`127.0.0.1`。
-
-启动插件失败会按 owner 回滚并令 phase 变为 `degraded`，不会创建 Session 或阻止普通 Kit。
-应用退出时先停止接收新请求，再按逆序卸载启动插件；Electron 等待 Framework 完成退出后才
-关闭通知 Host 等桌面服务。
-
-### 内置插件
-
-`@itharbors/panel`、`@itharbors/message`、`@itharbors/menu`、`@itharbors/config` 由 Editor 装配层确保装载。
-它们提供框架级贡献点，在 Kit 切换时保持可用。
-
-### Kit 外部插件
-
-Kit 的 `plugin` 列表按顺序解析。当前解析目录优先级为：
-
-1. assembly `builtinPluginsDir`；
-2. assembly `pluginsDir`；
-3. 当前 Kit 下的 `plugins/`。
-
-解析以 package `name` 和 `ce-editor` 字段为准，不使用 Node.js 的隐式模块解析。
-
-## Layout 与窗口入口
-
-每个命名 layout 文件被读取并标准化。第一个未声明 kind 的 window 默认为 `main`，
-后续默认为 `secondary`；缺省 entry 根据 kind 取 Kit 的 main 或 secondary HTML。
-
-装载成功后，WindowManager 使用 `layouts.default.windows` 初始化。调用
-`kit.applyLayout("name")` 时只提取该布局中的 main window layout，并重排当前 main
-window。
-
-## 切换不变量
-
-- 先确保内置插件可用。
-- 在修改当前 Kit 前解析、校验并注册全部新插件路径。
-- 旧外部插件按装载逆序卸载。
-- 插件卸载后按 owner 清除 panel、message 和 menu 贡献。
-- 新插件按 Kit 声明顺序装载。
-- 解析、旧插件卸载或新插件装载失败时，清理本次集合并恢复完整旧集合。
-- 只有新集合完整装载后才注册/激活 Kit 并重建 WindowManager。
-
-恢复成功后，当前 Kit、WindowManager 与外部插件列表都保持切换前状态。恢复也失败时，
-Editor 被标记为不可继续服务，错误同时包含切换与恢复原因；调用方必须销毁该 Session。
-插件自身的 `unload`/`detach` 仍必须幂等并清理外部资源。
-
-## 销毁生命周期
-
-`DELETE /api/session/:id` 先拒绝该 Session 的 browser request、关闭 SSE，再调用注册表销毁
-Editor 和持久元数据。`Editor.dispose()` 幂等，阻止新变更，尽量卸载全部插件并清理菜单、
-消息、Panel、i18n、配置、Kit 与窗口引用；多个清理失败通过 `AggregateError` 汇总。
-
-Server 停止时注册表只销毁内存 Editor，不删除可持久化 Session 行，随后关闭 SSE、
-BrowserRequestBroker 和数据库。
+Kit 的 `plugin` 列表按顺序解析，内置贡献点保证 Panel、Message、Menu 与 Config 模块可用。layout 仅描述容器树和 Panel 实例，window entry 是 Web 工作台路由与布局的命名入口，不映射原生窗口。Panel 在 sandboxed iframe 中运行，只能通过公开协议请求数据。
 
 ## 源码索引
 
-- [Session store](../../packages/server/src/session/store.ts)
-- [Session manager](../../packages/server/src/session/manager.ts)
-- [Session runtime registry](../../packages/server/src/session/runtime-registry.ts)
-- [App 中的 Editor 创建](../../packages/server/src/app.ts)
-- [Editor 与 Kit 装载](../../packages/server/src/editor/index.ts)
-- [Kit 类型](../../packages/server/src/framework/kit/types.ts)
-- [Kit 标准化](../../packages/server/src/framework/kit/index.ts)
-- [Kit/plugin resolver](../../packages/server/src/plugin/resolver.ts)
-- 各 `kits/<name>/README.md`
-- `kits/<name>/kit.json` 与 `kits/<name>/package.json`
-
-关联阅读：[插件运行时模型](./plugin-runtime-model.md) ·
-[布局模型](./layout-model.md)
+- [`packages/server/src/session/`](../../packages/server/src/session/)
+- [`packages/server/src/application/`](../../packages/server/src/application/)
+- [`packages/server/src/kit/`](../../packages/server/src/kit/)
+- [`packages/kit-core/src/`](../../packages/kit-core/src/)
+- [`kits/default/`](../../kits/default/)

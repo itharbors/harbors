@@ -20,7 +20,7 @@ import {
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_MAX_RESPONSE_BYTES = 1024 * 1024;
 const REPOSITORY_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?\/[a-z0-9](?:[a-z0-9._-]{0,98}[a-z0-9])?$/u;
-const KIT_ID_PATTERN = /^@([a-z0-9][a-z0-9._-]*)\/kit-([a-z0-9]+(?:-[a-z0-9]+)*)$/u;
+const KIT_ID_PATTERN = /^(?:@([a-z0-9][a-z0-9._-]*)\/)?(?:kit-)?([a-z0-9]+(?:-[a-z0-9]+)*)$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const PUBLISH_SIGNER_WORKFLOWS = new Set([
   'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v1',
@@ -55,8 +55,12 @@ function nonEmptyString(value, context) {
 
 function kitIdentity(id, publisher) {
   const match = typeof id === 'string' ? KIT_ID_PATTERN.exec(id) : null;
-  if (!match || match[1] !== publisher) {
-    throw new Error('Registry entry id must use @publisher/kit-<name>');
+  if (!match) {
+    throw new Error('Registry entry id must use @publisher/kit-<name> or be a valid slug');
+  }
+  const scope = match[1];
+  if (scope && scope !== publisher) {
+    throw new Error('Registry entry id scope must match publisher');
   }
   return { slug: match[2] };
 }

@@ -76,7 +76,7 @@ BroadcastChannel、HTTP 和 SSE 协作：
 - i18n snapshot 和变更同步到 iframe；
 - public asset URL 由 runtime 生成，仍由 Server 做路径校验。
 
-Panel 不应读取父页面私有对象，也不应假定存在 Electron/Node API。这样同一插件才能在
+Panel 不应读取父页面私有对象，也不应假定存在 Node API。这样同一插件才能在
 浏览器、主窗口、次窗口和 floating carrier 中运行。
 
 ## 国际化
@@ -87,18 +87,11 @@ Server 的 I18nModule 持有当前 locale、默认 locale、消息层与 version
 Panel runtime 提供 `getLocale`、`t`、`setLocale` 与 `subscribe`。缺失 key 回退到默认
 语言，再回退为 key 本身。
 
-## Electron 边界
+## Web 边界
 
-BrowserWindow 配置：
-
-- `contextIsolation: true`；
-- `nodeIntegration: false`；
-- preload 只暴露 `syncMenu`、`onMenuAction`、`openExternalUrl`。
-
-菜单 payload 为兼容现有协议仍携带 combined/application/kit 三棵树、Kit 根和菜单模式。
-主进程会清洗 payload、限制菜单 role；当前所有 Electron Kit 窗口统一发送 `multi`，聚合
-`APP` 与各 Kit root，并按 session 路由动作。外部 URL 只接受 HTTP(S)。页面和 Panel 仍通过
-Web 接口工作，不直接导入 Electron。
+Client 只通过 HTTP/SSE 与 Server 交互，不依赖 preload、IPC 或宿主私有全局变量。
+菜单点击、Kit 选择和 Panel 消息都是显式 Web 意图，Server 负责校验 session、owner 和 payload。
+页面可在新标签或嵌入容器中打开，但不应依赖原生窗口生命周期。
 
 ## UI 变更准则
 
@@ -106,7 +99,7 @@ Web 接口工作，不直接导入 Electron。
 2. 可复用交互放进聚焦的 Web Component；产品行为留在插件 Panel。
 3. 颜色、间距和状态样式使用语义 token。
 4. iframe 能力通过受限 runtime 增加，不读取宿主私有全局。
-5. Electron 能力通过窄 preload API 增加，并在主进程校验输入。
+5. 新宿主能力通过明确 Web API 增加，并在 Server 校验输入与 owner。
 
 ## 源码索引
 
@@ -119,7 +112,6 @@ Web 接口工作，不直接导入 Electron。
 - [主题 token](../../packages/client/src/styles/theme.ts)
 - [iframe 主题](../../packages/client/src/styles/iframe-theme.ts)
 - [Panel runtime 注入](../../packages/server/src/routes/panel-asset.ts)
-- [Electron preload](../../scripts/electron-preload.cjs)
 
 关联阅读：[布局模型](./layout-model.md) ·
 [插件运行时模型](./plugin-runtime-model.md)

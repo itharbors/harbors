@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createNpmSpawnSpec } from './npm-spawn.mjs';
 
 test('uses npm_node_execpath instead of the Electron executable for npm_execpath', () => {
-  const npmArgs = ['run', 'dev:web', '--', '--kit', '@itharbors/kit-sqlite'];
+  const npmArgs = ['run', 'dev:web', '--', '--kit', 'default'];
 
   const spec = createNpmSpawnSpec(npmArgs, {
     env: {
@@ -26,7 +26,7 @@ test('uses npm_node_execpath instead of the Electron executable for npm_execpath
 });
 
 test('uses the current Node executable for npm_execpath on Windows', () => {
-  const npmArgs = ['run', 'dev:web', '--', '--kit', '@itharbors/kit-sqlite'];
+  const npmArgs = ['run', 'dev:web', '--', '--kit', 'default'];
 
   const spec = createNpmSpawnSpec(npmArgs, {
     env: { npm_execpath: 'C:\\npm\\node_modules\\npm\\bin\\npm-cli.js' },

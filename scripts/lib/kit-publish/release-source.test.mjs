@@ -15,10 +15,7 @@ const policy = Object.freeze({
   repository,
   signerWorkflows: [signerWorkflow],
   kits: {
-    csv: { id: '@itharbors/kit-csv' },
-    mysql: { id: '@itharbors/kit-mysql' },
-    notifications: { id: '@itharbors/kit-notifications' },
-    sqlite: { id: '@itharbors/kit-sqlite' },
+    default: { id: 'default' },
   },
 });
 
@@ -31,11 +28,11 @@ function browserAssetUrl(tag, name) {
 }
 
 function values({ version = '1.2.3', channel = 'stable', overrides = {} } = {}) {
-  const tag = `kit/mysql/v${version}`;
-  const artifactName = `kit-mysql-${version}-any-any.hkit`;
+  const tag = `kit/default/v${version}`;
+  const artifactName = `default-${version}-any-any.hkit`;
   const manifest = {
     schemaVersion: 1,
-    id: '@itharbors/kit-mysql',
+    id: 'default',
     version,
     channel,
     publisher: 'itharbors',
@@ -366,7 +363,7 @@ test('returns deep-frozen entries and a read-only Map that remains usable by the
   assert.equal(result.releasesByUrl instanceof Map, true);
   assert.equal(Object.isFrozen(result.entries[0]), true);
   assert.equal(Object.isFrozen(release.assets[0].manifest), true);
-  assert.throws(() => { result.entries[0].source.tag = 'kit/mysql/v9.9.9'; }, TypeError);
+  assert.throws(() => { result.entries[0].source.tag = 'kit/default/v9.9.9'; }, TypeError);
   assert.throws(() => result.releasesByUrl.set('x', release), TypeError);
   assert.throws(() => result.releasesByUrl.delete(value.entry.releaseManifestUrl), TypeError);
   assert.throws(() => result.releasesByUrl.clear(), TypeError);
@@ -404,7 +401,7 @@ test('returns deep-frozen entries and a read-only Map that remains usable by the
 test('matches and verifies every target asset in one trusted Release', async () => {
   const value = values();
   const secondDigest = 'b'.repeat(64);
-  const secondName = 'kit-mysql-1.2.3-linux-x64.hkit';
+  const secondName = 'default-1.2.3-linux-x64.hkit';
   value.release.assets[0].attestationUrl = value.release.source.attestationUrl;
   value.release.assets.push({
     ...value.release.assets[0],
@@ -490,7 +487,7 @@ test('requires exact canonical Git ref and annotated Tag evidence URLs', async (
   }));
   for (const ref of [
     { ...goodRef, ref: 'refs/tags/other' },
-    { ...goodRef, url: 'https://api.github.com/repos/other/repo/git/refs/tags/kit/mysql/v1.2.3' },
+    { ...goodRef, url: 'https://api.github.com/repos/other/repo/git/refs/tags/kit/default/v1.2.3' },
     { ...goodRef, object: { ...goodRef.object, url: `${API_ORIGIN}/repos/${repository}/git/commits/${tagSha}` } },
   ]) {
     await assert.rejects(discover({
@@ -656,7 +653,7 @@ test('fetches only a canonical trusted Release manifest with bounded authenticat
   assert.equal(calls[1].options.headers.Authorization, undefined);
   for (const url of [
     'https://example.test/release.json',
-    `https://github.com/${repository}/releases/download/kit/mysql/v1.2.3/release.json`,
+    `https://github.com/${repository}/releases/download/kit/default/v1.2.3/release.json`,
     `https://github.com/${repository}/releases/download/${encodeURIComponent(value.tag)}/other.json`,
   ]) {
     await assert.rejects(fetchTrustedReleaseManifest({
@@ -744,7 +741,7 @@ test('ignores drafts, unrelated Tags, and unknown Kit slugs', async () => {
     ]]]),
     metadata: metadataFor(value),
   });
-  assert.deepEqual(result.entries.map((entry) => entry.id), ['@itharbors/kit-mysql']);
+  assert.deepEqual(result.entries.map((entry) => entry.id), ['default']);
 });
 
 test('rejects a trusted Release missing metadata or containing a non-unique Kit archive', async () => {
@@ -793,10 +790,10 @@ test('attests a Release only when GitHub, entry, manifest, and archive metadata 
   assert.equal(result.releasesByUrl.get(value.entry.releaseManifestUrl).version, '1.2.3');
   assert.deepEqual(verified, [{
     repository,
-    subjectName: 'kit-mysql-1.2.3-any-any.hkit',
+    subjectName: 'default-1.2.3-any-any.hkit',
     subjectSha256: digest,
     commit,
-    workflow: `${repository}/.github/workflows/publish-kit.yml@refs/tags/kit/mysql/v1.2.3`,
+    workflow: `${repository}/.github/workflows/publish-kit.yml@refs/tags/kit/default/v1.2.3`,
     signerWorkflow,
     attestationUrl: `https://api.github.com/repos/${repository}/attestations/sha256:${digest}`,
   }]);
@@ -832,13 +829,13 @@ test('rejects the complete aggregation for metadata drift and failed attestation
   }), /asset/i);
 });
 
-test('accepts a TraceWeave preview release when its policy identity matches', async () => {
+test('accepts a default preview release when its policy identity matches', async () => {
   const version = '0.1.0-preview.1';
-  const tag = `kit/traceweave/v${version}`;
-  const artifactName = `kit-traceweave-${version}-any-any.hkit`;
+  const tag = `kit/default/v${version}`;
+  const artifactName = `default-${version}-any-any.hkit`;
   const manifest = {
     schemaVersion: 1,
-    id: '@itharbors/kit-traceweave',
+    id: 'default',
     version,
     channel: 'preview',
     publisher: 'itharbors',
@@ -884,9 +881,9 @@ test('accepts a TraceWeave preview release when its policy identity matches', as
       manifest,
     }],
   };
-  const traceweavePolicy = {
+  const defaultPolicy = {
     ...policy,
-    kits: { ...policy.kits, traceweave: { id: '@itharbors/kit-traceweave' } },
+    kits: { ...policy.kits, default: { id: 'default' } },
   };
 
   const result = await discover({
@@ -895,20 +892,20 @@ test('accepts a TraceWeave preview release when its policy identity matches', as
       [browserAssetUrl(tag, 'release.json'), release],
       [browserAssetUrl(tag, 'registry-entry.json'), entry],
     ]),
-    policy: traceweavePolicy,
+    policy: defaultPolicy,
   });
 
   assert.equal(result.entries.length, 1);
-  assert.equal(result.entries[0].id, '@itharbors/kit-traceweave');
+  assert.equal(result.entries[0].id, 'default');
 });
 
-test('rejects a TraceWeave release whose trusted policy identity mismatches', async () => {
+test('rejects a default release whose trusted policy identity mismatches', async () => {
   const version = '0.1.0-preview.1';
-  const tag = `kit/traceweave/v${version}`;
-  const artifactName = `kit-traceweave-${version}-any-any.hkit`;
+  const tag = `kit/default/v${version}`;
+  const artifactName = `default-${version}-any-any.hkit`;
   const manifest = {
     schemaVersion: 1,
-    id: '@itharbors/kit-traceweave',
+    id: 'default',
     version,
     channel: 'preview',
     publisher: 'itharbors',
@@ -957,7 +954,7 @@ test('rejects a TraceWeave release whose trusted policy identity mismatches', as
 
   const mismatchedPolicy = {
     ...policy,
-    kits: { ...policy.kits, traceweave: { id: '@itharbors/kit-other' } },
+    kits: { ...policy.kits, default: { id: '@itharbors/kit-other' } },
   };
 
   // The generic tag syntax parses, but the trusted identity gate still rejects

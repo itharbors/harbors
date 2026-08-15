@@ -7,12 +7,12 @@ import {
 } from './metadata.mjs';
 
 const commit = '0123456789abcdef0123456789abcdef01234567';
-const previewTag = 'kit/mysql/v1.3.0-preview.1';
+const previewTag = 'kit/default/v1.3.0-preview.1';
 const publishSignerWorkflow = 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v4';
 
 const stableManifest = {
   schemaVersion: 1,
-  id: '@itharbors/kit-mysql',
+  id: 'default',
   version: '1.2.3',
   channel: 'stable',
   publisher: 'itharbors',
@@ -28,7 +28,7 @@ const stableManifest = {
 
 function input(overrides = {}) {
   const manifest = overrides.manifest ?? stableManifest;
-  const tag = `kit/mysql/v${manifest.version}`;
+  const tag = `kit/default/v${manifest.version}`;
   const ref = overrides.ref ?? `refs/tags/${tag}`;
   return {
     manifest,
@@ -40,15 +40,15 @@ function input(overrides = {}) {
     signerWorkflow: publishSignerWorkflow,
     ref,
     tag,
-    label: 'MySQL',
-    summary: 'MySQL database workbench',
+    label: 'Default',
+    summary: 'Default Harbors workspace',
     ...overrides,
   };
 }
 
 test('creates immutable Stable Release and Registry metadata from the inspected artifact', () => {
   const metadata = createKitPublicationMetadata(input());
-  assert.equal(metadata.artifactName, 'kit-mysql-1.2.3-darwin-arm64-abi127.hkit');
+  assert.equal(metadata.artifactName, 'default-1.2.3-darwin-arm64-abi127.hkit');
   assert.deepEqual(metadata.release, {
     schemaVersion: 1,
     id: stableManifest.id,
@@ -58,13 +58,13 @@ test('creates immutable Stable Release and Registry metadata from the inspected 
     source: {
       repository: 'itharbors/harbors',
       commit,
-      workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/mysql/v1.2.3',
+      workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/default/v1.2.3',
       signerWorkflow: publishSignerWorkflow,
       attestationUrl: `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${'a'.repeat(64)}`,
     },
     assets: [{
       name: metadata.artifactName,
-      url: 'https://github.com/itharbors/harbors/releases/download/kit%2Fmysql%2Fv1.2.3/kit-mysql-1.2.3-darwin-arm64-abi127.hkit',
+      url: 'https://github.com/itharbors/harbors/releases/download/kit%2Fdefault%2Fv1.2.3/default-1.2.3-darwin-arm64-abi127.hkit',
       attestationUrl: `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${'a'.repeat(64)}`,
       sha256: 'a'.repeat(64),
       size: 3_179,
@@ -74,14 +74,14 @@ test('creates immutable Stable Release and Registry metadata from the inspected 
   assert.deepEqual(metadata.registryEntry, {
     schemaVersion: 1,
     id: stableManifest.id,
-    label: 'MySQL',
+    label: 'Default',
     publisher: 'itharbors',
-    summary: 'MySQL database workbench',
+    summary: 'Default Harbors workspace',
     channel: 'stable',
     version: '1.2.3',
-    releaseManifestUrl: 'https://github.com/itharbors/harbors/releases/download/kit%2Fmysql%2Fv1.2.3/release.json',
+    releaseManifestUrl: 'https://github.com/itharbors/harbors/releases/download/kit%2Fdefault%2Fv1.2.3/release.json',
     permissions: stableManifest.permissions,
-    source: { repository: 'itharbors/harbors', tag: 'kit/mysql/v1.2.3' },
+    source: { repository: 'itharbors/harbors', tag: 'kit/default/v1.2.3' },
   });
   assert.equal(Object.isFrozen(metadata.release), true);
   assert.equal(Object.isFrozen(metadata.registryEntry), true);
@@ -99,7 +99,7 @@ test('creates Preview metadata only for a prerelease manifest on its immutable T
     repository: 'itharbors/harbors',
     tag: previewTag,
   });
-  assert.match(metadata.release.assets[0].url, /kit%2Fmysql%2Fv1\.3\.0-preview\.1/u);
+  assert.match(metadata.release.assets[0].url, /kit%2Fdefault%2Fv1\.3\.0-preview\.1/u);
   assert.equal(
     metadata.release.source.workflow,
     `itharbors/harbors/.github/workflows/publish-kit.yml@refs/tags/${previewTag}`,
@@ -114,9 +114,9 @@ test('derives portable artifact names for any and native targets', () => {
       target: { platform: 'any', arch: 'any' },
       permissions: ['network', 'filesystem', 'credentials'],
     }),
-    'kit-mysql-1.2.3-any-any.hkit',
+    'default-1.2.3-any-any.hkit',
   );
-  assert.equal(deriveArtifactName(stableManifest), 'kit-mysql-1.2.3-darwin-arm64-abi127.hkit');
+  assert.equal(deriveArtifactName(stableManifest), 'default-1.2.3-darwin-arm64-abi127.hkit');
 });
 
 test('creates one independently attested Release asset per unique target', () => {
@@ -132,8 +132,8 @@ test('creates one independently attested Release asset per unique target', () =>
   }));
 
   assert.deepEqual(metadata.artifactNames, [
-    'kit-mysql-1.2.3-darwin-arm64-abi127.hkit',
-    'kit-mysql-1.2.3-linux-x64-abi127.hkit',
+    'default-1.2.3-darwin-arm64-abi127.hkit',
+    'default-1.2.3-linux-x64-abi127.hkit',
   ]);
   assert.equal(metadata.release.assets[1].attestationUrl,
     `https://api.github.com/repos/itharbors/harbors/attestations/sha256:${'b'.repeat(64)}`);
@@ -144,14 +144,14 @@ test('rejects channel-specific SemVer, Tag, source workflow, and signer mismatch
   for (const [name, overrides] of [
     ['Stable prerelease', { manifest: { ...stableManifest, version: '1.2.3-preview.1' } }],
     ['Preview release version', { manifest: { ...stableManifest, channel: 'preview' } }],
-    ['Stable tag', { tag: 'kit/mysql/v9.9.9' }],
-    ['Stable ref', { ref: 'refs/heads/kit/mysql' }],
-    ['Preview branch ref', { manifest: preview, ref: 'refs/heads/kit/mysql' }],
-    ['Preview tag version', { manifest: preview, tag: 'kit/mysql/v1.2.4-preview.1' }],
-    ['Preview legacy tag', { manifest: preview, tag: 'preview/mysql/41-0123456789ab' }],
+    ['Stable tag', { tag: 'kit/default/v9.9.9' }],
+    ['Stable ref', { ref: 'refs/heads/kit/default' }],
+    ['Preview branch ref', { manifest: preview, ref: 'refs/heads/kit/default' }],
+    ['Preview tag version', { manifest: preview, tag: 'kit/default/v1.2.4-preview.1' }],
+    ['Preview legacy tag', { manifest: preview, tag: 'preview/default/41-0123456789ab' }],
     ['publisher owner', { repository: 'other/harbors' }],
-    ['workflow repository', { workflow: 'other/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/mysql/v1.2.3' }],
-    ['workflow path', { workflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit/mysql/v1.2.3' }],
+    ['workflow repository', { workflow: 'other/harbors/.github/workflows/publish-kit.yml@refs/tags/kit/default/v1.2.3' }],
+    ['workflow path', { workflow: 'itharbors/harbors/.github/workflows/other.yml@refs/tags/kit/default/v1.2.3' }],
     ['workflow ref', { workflow: 'itharbors/harbors/.github/workflows/publish-kit.yml@refs/heads/main' }],
     ['signer workflow', { signerWorkflow: 'itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v5' }],
     ['repository casing', { repository: 'ITHARBORS/harbors' }],
@@ -186,8 +186,8 @@ test('rejects display metadata and Kit identities that could become paths or wor
   for (const overrides of [
     { label: 'MySQL\nINJECT=1' },
     { summary: 'x'.repeat(281) },
-    { manifest: { ...stableManifest, id: '@itharbors/mysql' } },
-    { manifest: { ...stableManifest, id: '@other/kit-mysql' } },
+    { manifest: { ...stableManifest, id: '@itharbors/default' } },
+    { manifest: { ...stableManifest, id: '@other/default' } },
   ]) {
     assert.throws(() => createKitPublicationMetadata(input(overrides)));
   }

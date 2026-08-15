@@ -2,9 +2,9 @@
 
 ## Development validation
 
-- For ordinary Kit changes whose behavior is shared by the Web and Electron hosts, use `npm run dev:web` and browser-based testing by default to develop, debug, and complete final acceptance.
-- Use Electron when a change depends on or alters desktop-only behavior such as the Tray, BrowserWindow lifecycle, native dialogs, desktop IPC, notifications, updates, packaging, operating-system integration, or an explicit Web/Electron difference.
-- When a change spans shared Kit behavior and desktop-only behavior, validate the shared path in the browser and the desktop-specific path in Electron. An Electron smoke check remains optional for ordinary Kit changes, not a universal gate.
+- Use `npm run dev:web` and browser-based testing by default to develop, debug, and complete acceptance for Framework and Kit changes.
+- Harbors has one supported Web host. Do not add Electron, desktop packaging, native window lifecycle, tray, updater, or desktop IPC assumptions to Framework or Kit code.
+- Validate server-side changes with focused tests and validate visible shared behavior in the browser.
 
 ## Commit messages
 

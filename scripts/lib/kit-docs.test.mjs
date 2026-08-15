@@ -122,13 +122,7 @@ test('artifact and authoring guides document descriptor discovery and trusted Re
     'GitHub Pages',
     'RegistryArtifactAttestationVerifier',
     'attestations/sha256/<digest>.json',
-    'KitReleaseResolver',
-    'KitArtifactDownloader',
-    'KitRegistryManager',
     'actions/attest@v4',
-    'pending',
-    'bad',
-    'audit.ndjson',
     'start-kit-change.sh',
     'finish-kit-change.sh',
     'release-kit.sh',
@@ -156,10 +150,7 @@ test('active sources and root docs contain no central builtin constants or produ
   const sourcePaths = [
     'scripts/ce-plugin.mjs',
     'scripts/dev.mjs',
-    'scripts/electron.mjs',
-    'scripts/lib/kit-catalog.mjs',
     'scripts/lib/plugin-build/discover.mjs',
-    'scripts/lib/desktop-build.mjs',
     'packages/kit-cli/src/plugin-build/discover.ts',
   ];
   const rootDocs = [
@@ -170,7 +161,6 @@ test('active sources and root docs contain no central builtin constants or produ
     'docs/guides/developing-plugins-and-kits.md',
     'docs/guides/development-workflow.md',
     'docs/guides/kit-artifacts.md',
-    'docs/guides/app-releases.md',
     'docs/architecture/layout-model.md',
     'docs/architecture/plugin-runtime-model.md',
   ];
@@ -180,22 +170,22 @@ test('active sources and root docs contain no central builtin constants or produ
   assert.doesNotMatch(sources.join('\n'), /BUILTIN_KITS|BUILTIN_KIT_IDS/u);
   assert.doesNotMatch(
     [...sources, ...prose].join('\n'),
-    /kits\/(?:agent-guard|csv|default|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
+    /kits\/(?:agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
   );
   assert.doesNotMatch(
     prose.join('\n'),
-    /@itharbors\/kit-(?:agent-guard|csv|default|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
+    /@itharbors\/kit-(?:agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/u,
   );
   assert.doesNotMatch(prose.join('\n'), /根\s*`?package-lock\.json`?/u);
   assert.doesNotMatch(artifactGuide, /Default builtin/iu);
   assert.match(artifactGuide, /所有动态发现的 builtin Kit 目录[^。]+恰好一个声明 default 角色/iu);
   assert.doesNotMatch(
     prose.join('\n'),
-    /^(?:[│├└].*\b(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)\b.*)$/gmu,
+    /^(?:[│├└].*\b(?:Agent Guard|CSV|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)\b.*)$/gmu,
   );
   assert.doesNotMatch(
     prose.join('\n'),
-    /(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)(?:、|,|，| 和 | 与 ).*(?:Agent Guard|CSV|Default|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)/u,
+    /(?:Agent Guard|CSV|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)(?:、|,|，| 和 | 与 ).*(?:Agent Guard|CSV|MySQL|Notifications|Scheduler|Skill Manager|SQLite|TraceWeave)/u,
   );
 });
 
@@ -224,58 +214,6 @@ test('every Kit README owns its lifecycle, permissions, platform, and boundary c
   }
 });
 
-test('CSV Kit documentation states its read-only parsing, query, export, and resource contract', async () => {
-  const csv = compact(await read('kits/csv/README.md'));
-  for (const expected of [
-    '.csv',
-    '.tsv',
-    '.txt',
-    'UTF-8',
-    'GB18030',
-    '只读',
-    '不修改源文件',
-    '不规则记录',
-    'contains',
-    'equals',
-    'is-empty',
-    'is-not-empty',
-    'UTF-8 BOM',
-    '2 GiB',
-    '10,000',
-    '16 MiB',
-    'npm run dev -- --kit ./kits/csv',
-  ]) assert.match(csv, new RegExp(expected.replaceAll('/', '\\/'), 'iu'), expected);
-  assert.match(csv, /逗号[^。]{0,40}制表符[^。]{0,40}分号/iu);
-  assert.match(csv, /“导出当前结果”[^。]{0,80}新的/iu);
-  assert.match(csv, /不会覆盖源文件/iu);
-});
-
-test('Skill Manager documentation states its source, state, and recovery boundaries', async () => {
-  const skillManager = compact(await read('kits/skill-manager/README.md'));
-  const architecture = compact(await read('docs/architecture/kit-and-session-model.md'));
-  const combined = `${skillManager} ${architecture}`;
-  for (const expected of [
-    '$CODEX_HOME/skills',
-    '~/.codex/skills',
-    '$CODEX_HOME/skill-manager-store/v1',
-    'source-only',
-    'current',
-    'update-available',
-    'global-only',
-    'disabled',
-    'trashed',
-    'protected',
-    'conflict',
-    'invalid',
-    '.system',
-    'npm run dev -- --kit ./kits/skill-manager',
-  ]) assert.ok(combined.includes(expected), expected);
-  assert.match(combined, /来源目录[^。]{0,80}(当前|本次) Session/iu);
-  assert.match(combined, /不[^。]{0,80}(永久删除|不可恢复)/iu);
-  assert.match(combined, /Renderer[^。]{0,80}(原始|真实)[^。]{0,30}路径/iu);
-  assert.match(combined, /(不访问|不会访问|不支持)[^。]{0,80}(网络|GitHub)/iu);
-});
-
 test('active official-Kit docs do not retain exact-three lists that omit CSV', async () => {
   const prose = compact((await Promise.all([
     'readme.md',
@@ -297,7 +235,7 @@ test('active docs contain no branch-era migration or publication instructions', 
   ];
   const prose = compact((await Promise.all(paths.map(read))).join('\n'));
   for (const obsolete of [
-    /PR base kit\/(?:sqlite|mysql|notifications)/iu,
+    /PR base kit\/(?:agent-guard|csv|mysql|notifications|scheduler|skill-manager|sqlite|traceweave)/iu,
     /push kit\/<name>[^。]{0,40}Preview/iu,
     /migrate-kit-product\.mjs/iu,
     /migrate-kit-registry\.mjs/iu,

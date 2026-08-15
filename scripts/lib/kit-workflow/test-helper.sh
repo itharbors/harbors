@@ -58,14 +58,14 @@ write_kit_files() {
   mkdir -p "$directory/kits/$kit"
   printf '%s\n' \
     '{' \
-    "  \"name\": \"@itharbors/kit-$kit\"," \
+    "  \"name\": \"$kit\"," \
     "  \"version\": \"$version\"," \
     '  "private": true' \
     '}' > "$directory/kits/$kit/package.json"
   printf '%s\n' \
     '{' \
     '  "schemaVersion": 1,' \
-    "  \"id\": \"@itharbors/kit-$kit\"," \
+    "  \"id\": \"$kit\"," \
     "  \"version\": \"$version\"," \
     "  \"channel\": \"$channel\"," \
     '  "publisher": "itharbors",' \
@@ -76,12 +76,12 @@ write_kit_files() {
     '}' > "$directory/kits/$kit/kit.json"
   printf '%s\n' \
     '{' \
-    "  \"name\": \"@itharbors/kit-$kit\"," \
+    "  \"name\": \"$kit\"," \
     "  \"version\": \"$version\"," \
     '  "lockfileVersion": 3,' \
     '  "requires": true,' \
     '  "packages": {' \
-    "    \"\": { \"name\": \"@itharbors/kit-$kit\", \"version\": \"$version\" }" \
+    "    \"\": { \"name\": \"$kit\", \"version\": \"$version\" }" \
     '  }' \
     '}' > "$directory/kits/$kit/package-lock.json"
 }
@@ -108,11 +108,9 @@ write_repository_files() {
     '  "schemaVersion": 1,' \
     '  "repository": "itharbors/harbors",' \
     '  "workflow": "itharbors/harbors/.github/workflows/publish-kit.yml",' \
-    '  "signerWorkflows": ["itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2"],' \
-    '  "kits": {' \
-    '    "mysql": { "id": "@itharbors/kit-mysql", "label": "MySQL", "summary": "MySQL", "runner": "ubuntu-latest" },' \
-    '    "notifications": { "id": "@itharbors/kit-notifications", "label": "Notifications", "summary": "Notifications", "runner": "ubuntu-latest" },' \
-    '    "sqlite": { "id": "@itharbors/kit-sqlite", "label": "SQLite", "summary": "SQLite", "runner": "macos-14" }' \
+  '  "signerWorkflows": ["itharbors/harbors/.github/workflows/publish-kit-reusable.yml@refs/tags/kit-publish-v2"],' \
+  '  "kits": {' \
+    '    "sqlite": { "id": "sqlite" }' \
     '  }' \
     '}' > "$directory/registry/policy.json"
   write_kit_files "$directory"
