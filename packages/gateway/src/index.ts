@@ -16,14 +16,23 @@ resolveGatewayCredentialMode(process.env);
 const UPSTREAM_HOST = resolveGatewayUpstreamHost(HOST);
 
 function proxy(req: http.IncomingMessage, res: http.ServerResponse, targetPort: number): void {
+  const forwardedFor = req.socket.remoteAddress ?? '';
+  const existingForwardedFor = req.headers['x-forwarded-for'];
+  const xForwardedFor = existingForwardedFor
+    ? `${existingForwardedFor}, ${forwardedFor}`
+    : forwardedFor;
+
+  const headers = Object.fromEntries(
+    Object.entries(req.headers).filter(([k]) => k !== 'host'),
+  );
+  headers['x-forwarded-for'] = xForwardedFor;
+
   const options: http.RequestOptions = {
     hostname: UPSTREAM_HOST,
     port: targetPort,
     path: req.url,
     method: req.method,
-    headers: Object.fromEntries(
-      Object.entries(req.headers).filter(([k]) => k !== 'host')
-    ),
+    headers,
   };
 
   const proxyReq = http.request(options, (proxyRes) => {
