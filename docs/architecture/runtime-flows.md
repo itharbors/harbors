@@ -1,280 +1,36 @@
 # 核心运行流程
 
-本篇沿端到端路径描述各模块如何协作。接口字段可能继续演进，但状态所有权和清理边界
-应保持与[核心原则](./core-principles.md)一致。
-
-## 桌面发布与更新流程
-
-发布从 updater 可直接解析的 `v<semver>` 开始，签名使用 **Developer ID Application**，受保护的
-`app-publish-v1` 工作流将经验证的 DMG/ZIP 与更新元数据一次性发布。Preview 与 Stable 走不同 GitHub
-environment；客户端只检查对应频道的签名 Release。完整的凭据、确认和回滚流程见
-[主程序构建、发布与验收](../guides/app-releases.md)。
-
-## 1. Electron 与开发栈启动
+## Web 开发栈启动
 
 ```mermaid
 sequenceDiagram
-    participant CLI as npm run dev (development)
-    participant E as Electron main
-    participant N as Notification Host
-    participant K as KitCatalog/WorkspaceStore
-    participant Web as scripts/dev.mjs (dev:web)
-    participant P as Application plugin processes
-    participant U as User
+    participant CLI as npm run dev:web
     participant G as Gateway
     participant S as Server
     participant C as Vite Client
-    CLI->>E: 启动隔离开发桌面宿主
-    E->>K: 扫描 Kit manifest + 读取已有记录
-    E->>E: 创建 Tray（无 BrowserWindow）
-    E->>N: 绑定 127.0.0.1:49383 并订阅通知状态
-    E->>Web: npm run dev:web
-    Web->>G: npm run dev -w packages/gateway
-    Web->>S: npm run dev -w packages/server
-    Web->>C: npm run dev -w packages/client
-    S->>P: 每个唯一 startup plugin 启动一个 OS process
-    P-->>S: generation-scoped defined + loaded
-    U->>E: 从 Tray 选择 Kit
-    E->>E: 等待 Gateway ready
-    E->>K: getOrCreate workspace
-    E->>E: create/load Kit BrowserWindow
-    Note over G,C: 任一子进程异常退出时停止其余进程
+    participant B as Browser
+    CLI->>S: 启动 Web Server 与 default Kit 来源
+    CLI->>C: 启动前端开发服务
+    CLI->>G: 启动统一代理
+    B->>G: HTTP / SSE
+    G->>S: /api/* 与 /sse/*
+    G->>C: 页面与静态资源
 ```
 
-不带参数时 Electron 只扫描全部合法 Kit 并显示 Tray，不创建新 workspace、session 或窗口。
-用户首次选择 Kit 时才进入加载路径；`--kit` 只代表一次显式选择，服务就绪后自动打开该 Kit，
-但 Catalog 和 Tray 仍保留其他 Kit。稳定桌面端入口是 `npm run start`，`npm run electron` 保留为兼容入口；`npm run dev:web` 可跳过 Electron 单独调试 Web 栈。开发 Gateway 默认监听
-49380，Server 监听 49381，Vite 监听 49382，Notification Host 监听 49383；所有页面请求仍从 Gateway 进入。稳定 Electron 使用
-Gateway 48380、Server 48381、Vite 48382 和 Notification Host 48383。
+`npm start` 使用 `packages/server/src/start.ts` 直接启动稳定 Web Server；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。运行数据位于 `.data/`。
 
-Web 客户端启动时先读取 `GET /api/kits`。裸根地址始终只显示 Catalog 选择页，不进入
-SessionManager；稳定路径 `/kits/<id>` 由 Server 精确匹配公开 id 后重定向到
-`/?kit=<package-name>`。带 `session`、`sessionId` 或 `kit` 的地址直接进入现有 Editor
-初始化路径。`dev:web -- --kit <name-or-path>` 只追加并打印 Requested Kit 直达地址，不改变
-裸根页面或过滤 Catalog。
+## 会话创建与 bootstrap
 
-开发 Notification Host 默认监听 `127.0.0.1:49383`，先于 Web 子进程启动，并通过
-`HARBORS_NOTIFICATION_PORT` 将实际端口传入子进程。它不属于 Gateway 路由；只启动
-`npm run dev:web` 时不会创建该 Host。稳定 Electron 保持监听 `127.0.0.1:48383`。`npm run kill` 的开发 Web 清理范围仅为 49380、49381 和 49382。
+浏览器请求创建 session 后，`SessionRuntimeRegistry` 建立 Editor，装配 default Kit，加载插件并生成布局、菜单和国际化快照。Client 获取 bootstrap 后渲染工作台，并用 SSE 接收后续变化。
 
-### Application 启动插件隔离与恢复
+## Panel 消息
 
-```mermaid
-sequenceDiagram
-    participant F as Framework / Supervisor
-    participant O as Owner registries
-    participant P as Plugin generation N
-    participant R as Plugin generation N+1
-    F->>P: advanced IPC initialize（protocol v1 + generation N）
-    P-->>F: definition metadata + loaded
-    F->>O: attach menu / message / lifecycle
-    P--xF: crash / disconnect / invalid current-generation IPC
-    F->>F: 拒绝 pending RPC，等待 host command 收敛
-    F->>O: lifecycle bookkeeping → menu → message → service → snapshot
-    F->>P: SIGTERM；2 秒后仍存活则 SIGKILL
-    alt 60 秒失败窗口尚未第 4 次
-        F->>F: 等待 250 ms / 1 s / 4 s
-        F->>R: 新 generation initialize
-    else 已熔断或 owner cleanup 失败
-        F->>F: failed，等待认证的显式 retry
-    end
-```
+Panel 只能通过注入的 runtime API 发送 request 或 broadcast。Server 校验 session、插件所有权和消息路由；request 必须有唯一处理器，broadcast 允许多个订阅者。
 
-Application 启动插件由 Catalog 跨 Kit 去重，每个唯一插件一个 OS 子进程；Session 插件仍在
-Framework 内按 Editor/Session 加载。单个插件失败时，Application bootstrap 进入 `degraded` 并
-公开 `pending`、`starting`、`running`、`restarting`、`failed`、`stopping`、`stopped` 中的当前
-状态，但不会公开 stderr、stack、token 或原始异常。健康 sibling、Session 与 `/api/health` 继续
-服务。连续运行 5 分钟重置失败预算；60 秒窗口内第 4 次失败停止自动重启，之后只能经带 Electron
-application token 的 `POST /api/application/plugin/retry` 明确恢复。
+## Kit 与插件失败清理
 
-Web/source runner 使用 `tsx` 加载当前 `runner.ts`，编译后的 Node Server 使用相邻 `runner.js`。
-packaged Electron 使用 `ELECTRON_RUN_AS_NODE=1` 和 staged
-`Contents/Resources/runtime/packages/server/dist/application/plugin-process/runner.js`。child env 先复制
-Framework 父环境，再删除权威固定 host secret 键和显式 `secretEnvironmentKeys`；固定 Application、
-Notification owner 与 credential transport secret 也不进入 runner argv。该机制既不是通用 secret
-detector，也不是 allowlist，未登记的自定义 token 或云凭据仍可能被继承。开发者不得把敏感值放在
-普通环境变量中；Framework 集成方必须通过 capture/`secretEnvironmentKeys` 登记新增 secret，或使用
-未来的窄化 capability。这仍只是秘密最小化和 crash containment，不是 OS 权限沙箱：插件使用
-Framework cwd，以同一 OS 账号运行，并拥有该账号的文件访问权。
+插件装载中途失败时，Editor 按 owner 清除 Panel、Message、Menu 等贡献。Kit 切换失败时清理新集合并尽力恢复旧集合，避免留下半装载状态。
 
-## 2. Agent 桌面通知
+## Kit 发布
 
-```mermaid
-sequenceDiagram
-    participant A as Agent / notify-user Skill
-    participant H as Notification Host
-    participant Q as Toast Queue
-    participant D as Desktop Indicators
-    participant K as Notification Center Kit
-    A->>H: POST /v1/notifications
-    H->>H: 校验并写入内存，unread +1
-    H-->>A: 201 + notification id
-    H->>Q: created event
-    H->>D: 更新 Dock/Linux badge、Windows overlay、托盘标签
-    Q->>D: 显示弹窗，最多 3 个，其余 FIFO 等待
-    alt 临时通知
-        Q->>D: durationMs 后关闭弹窗
-    else 常驻通知
-        Q->>D: 等待用户关闭或打开
-    end
-    K->>H: GET /v1/notifications
-    H-->>K: 历史 + unreadCount
-    K->>H: read / read-all / DELETE
-```
-
-弹窗超时或关闭只改变桌面呈现，不改变未读状态；点击弹窗会标记该通知已读并打开通知中心。
-通知中心每秒刷新，可逐条已读、全部已读或删除。Host 只接受声明字段，JSON body 上限 16 KiB，
-历史最多保留 500 条，并优先淘汰最旧的已读通知。所有写操作拒绝带 `Origin` 的浏览器请求，
-创建通知还要求 `Content-Type: application/json`，避免网页借 loopback 接口触发桌面状态变更。
-
-## 3. 会话创建与 bootstrap
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant A as Server App
-    participant M as SessionManager
-    participant R as SessionRuntimeRegistry
-    participant E as Editor
-    C->>A: GET /api/session/:sessionId
-    alt session 不存在
-        C->>A: POST /api/session (sessionId + window Kit)
-        A->>M: getOrCreate(sessionId)
-        A->>R: getOrCreate(sessionId)
-        R->>E: createEditor(sessionId)
-        A->>E: kit.load(requested or default)
-    end
-    C->>A: GET /api/bootstrap/:sessionId
-    A-->>C: protocolVersion=1 + Kit、Window、Panel、Menu、i18n 快照
-    C->>A: EventSource /sse/:sessionId
-```
-
-Client 对 bootstrap 的 404 或 5xx 会尝试初始化 session 后重取一次。Server 只在
-注册表中没有对应 session 时创建 Editor，并对并发初始化去重；SQLite session 行与内存
-Editor 是两层不同状态。Client 在应用 bootstrap 前校验 `protocolVersion`，不支持的版本
-会失败且不会污染现有会话投影。
-
-失败边界：Kit 无法解析或装载时，session 创建请求返回错误，Client 不应假定存在可用
-bootstrap。
-
-## 4. Request
-
-Panel 或 Client 将 `sessionId`、插件名、消息名和参数提交到
-`POST /api/message/request`。
-
-1. 路由找到 session 的 Editor。
-2. MessageModule 先通知 server 侧的 `*` 观察路由；观察者失败被忽略。
-3. 精确查找 `plugin:name`。不存在时 request 失败。
-4. server route 直接执行 handler 并返回结果。
-5. 带 `panel.*` method 的 route 将第一个参数解释为 panel key，再分发给 Panel。
-6. browser-targeted route 必须声明 `panel.*` method；BrowserRequestBroker 生成 request ID，
-   通过 SSE 派发，并等待 Client 经 `/api/message/result` 返回带 Session 归属的结果。
-
-request 是一对一、有返回值的调用，不应使用 broadcast 模拟。
-
-## 5. Broadcast 与 SSE
-
-`POST /api/message/broadcast` 触发同 topic 的全部订阅者及 `*` 订阅者。
-
-- server handler 以 fire-and-forget 方式执行；
-- 一个 handler 抛错不会中止其余订阅；
-- `panel.*` method 由 Editor 按插件名前缀找到对应 Panel；
-- Server 通过 SSE 发送 `panel-dispatch`，Client 再把调用送入目标 iframe。
-
-布局、菜单和 i18n 变化也使用 SSE，但事件类型分别是 `layout-changed`、
-`menu-changed`、`locale-changed` 或 `messages-changed`。Client 收到后更新当前投影。
-
-所有 SSE 数据 envelope 都带 `protocolVersion=1`。每个连接每 15 秒收到注释心跳；当
-`write()` 返回背压时，业务事件按顺序缓冲，最多 64 条，心跳不排队。写异常、队列溢出、
-请求/响应关闭会清理连接；某 Session 最后一个连接消失时，其未完成 browser request
-立即失败。本轮不提供离线重放。
-
-Panel iframe 执行结果只接受来自当前已渲染 iframe 的 `postMessage`。Client 把成功值或
-序列化错误连同 Session 和 request ID 回传；错误 Session 返回 409，重复或迟到结果返回
-404。Broker 默认 10 秒超时。
-
-## 6. Kit 装载与切换
-
-```mermaid
-flowchart TD
-    Start["kit.load(nameOrPath)"] --> Core["确保内置插件已装载"]
-    Core --> Read["解析 Kit、读取 manifest 与 layouts"]
-    Read --> Prepare["解析并注册全部新插件路径"]
-    Prepare --> Save["保存旧 Kit、窗口与插件列表"]
-    Save --> Unload["反序卸载旧外部插件并清贡献"]
-    Unload --> Load["按声明顺序解析并装载新插件"]
-    Load --> Success{"全部成功？"}
-    Success -- 是 --> Register["注册并激活 Kit"]
-    Register --> Window["用 default layout 重建 WindowManager"]
-    Success -- 否 --> Cleanup["反序清理已装载的新插件"]
-    Cleanup --> Restore["尽力恢复旧外部插件"]
-    Restore --> Restored{"恢复成功？"}
-    Restored -- 是 --> Error["保留旧状态并抛出切换错误"]
-    Restored -- 否 --> Unusable["Editor 标记不可用并抛出聚合错误"]
-```
-
-内置插件只装载一次并保持可用。切换成功后 WindowManager 以新 Kit 的 default layout
-重新创建，因此旧 Kit 的窗口状态不会跨 Kit 自动继承。
-
-## 7. 打开 Panel
-
-1. 调用方提交 `panelName`。
-2. Editor 从 PanelModule 获取约束和 `multiInstance`。
-3. WindowManager 对单实例 Panel 先查找未关闭实例；找到则返回 `reuse`。
-4. 否则创建 `opening` 状态的 PanelInstance 和 secondary WindowGroup。
-5. Client/Electron 打开返回 URL 对应的窗口。
-6. 窗口就绪后标记 WindowGroup 和 PanelInstance 为 `open`。
-7. 若浏览器阻止新窗口，Client 可把实例转为 `floating`，删除临时 WindowGroup。
-
-关闭最后一个 PanelInstance 会同时删除对应的 secondary WindowGroup；main window 不走
-这一销毁规则。
-
-## 8. 布局变化
-
-Kit layout 在装载时标准化为 WindowDescriptor。`kit.applyLayout(name|LayoutNode)`
-只重排 main window 的 layout，并通过 `onLayoutChanged` 发送 SSE。Client 接收后重新
-投影结构。
-
-Client 内部的 divider resize 与 tab drag 先在当前 DOM/布局控制器中处理。需要跨窗口或
-持久化的结构变化应回到 Server 模型，避免产生两套权威状态。
-
-## 失败处理摘要
-
-| 场景 | 行为 |
-| --- | --- |
-| session 或参数缺失 | 路由返回 4xx |
-| Kit/插件无法解析 | 装载失败并返回错误 |
-| 新 Kit 部分装载失败 | 清理新插件，尽力恢复旧插件 |
-| Kit 回滚也失败 | Editor 标记不可用，销毁 Session |
-| request 无精确路由 | 明确抛错 |
-| browser request 超时或断连 | 拒绝 Promise 并删除 pending 记录 |
-| HTTP JSON 非法或超过 1 MiB | 返回稳定的 400/413 结构化错误 |
-| broadcast handler 抛错 | 忽略该 handler，继续其他订阅者 |
-| 单实例 Panel 已打开 | 返回已有实例，不重复创建 |
-| 新窗口被阻止 | 转为 Client 内浮层承载 |
-| 通知字段、method 或 body 非法 | Host 返回稳定的 4xx JSON 错误 |
-| Notification Host 未运行 | Skill 与通知中心明确报告服务不可用，不伪造成功 |
-| Application 插件单次故障 | 清 owner 后按 250 ms / 1 s / 4 s 自动重启，不影响健康 sibling |
-| 60 秒内第 4 次 Application 插件故障 | 熔断为 `failed`，等待认证显式 retry |
-| Application 插件 initialize/load 超过 30 秒 | 视为失败并进入同一清理/重启预算 |
-| Application 插件 stop/unload 超过 10 秒 | `SIGTERM`，2 秒仍未退出则 `SIGKILL` |
-
-## 源码索引
-
-- [开发栈](../../scripts/dev.mjs)
-- [会话 API](../../packages/server/src/api/session.ts)
-- [App 路由装配](../../packages/server/src/app.ts)
-- [Client transport](../../packages/client/src/core/transport.ts)
-- [Editor 与 Kit 切换](../../packages/server/src/editor/index.ts)
-- [MessageModule](../../packages/server/src/framework/message/index.ts)
-- [WindowManager](../../packages/server/src/framework/window/index.ts)
-- [SSE channel](../../packages/server/src/sse/channel.ts)
-- [Browser request broker](../../packages/server/src/framework/browser-request-broker.ts)
-- [共享协议](../../packages/plugin-types/src/protocol/version.ts)
-- [Notification Host](../../scripts/lib/notification-host.mjs)
-- [桌面通知适配](../../scripts/lib/notification-desktop.mjs)
-- [通知 Skill CLI](../../.agents/skills/notify-user/scripts/notify.mjs)
-- [Application Runtime](../../packages/server/src/application/runtime.ts)
-- [Application 插件 Supervisor](../../packages/server/src/application/plugin-process/supervisor.ts)
-- [Application 插件进程适配](../../packages/server/src/application/plugin-process/spawn.ts)
-- [Application 插件重试路由](../../packages/server/src/routes/application-plugin-retry.ts)
+Kit PR 合入 main 后，发布授权通过 `kit/<name>/v<semver>` Tag 表达。GitHub workflow 构建每个目标制品，生成 `.hkit`、SBOM 与独立 attestation。Registry 聚合器只接受符合 policy、Tag、commit、workflow、digest 和 manifest 契约的 Release，并生成可部署索引。

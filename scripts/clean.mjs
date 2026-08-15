@@ -7,10 +7,22 @@ import { discoverWorkspaceBuildOutputs } from './lib/build-tasks.mjs';
 
 const rootDir = fileURLToPath(new URL('..', import.meta.url));
 
+// 历史遗留：contracts 已迁移到 kits/*/packages/contracts，
+// 这些目录是迁移前的构建产物残留，需要清理。
+const LEGACY_PACKAGE_DIRECTORIES = [
+  'packages/agent-guard-contracts',
+  'packages/csv-contracts',
+  'packages/mysql-contracts',
+  'packages/sqlite-contracts',
+  'packages/traceweave-contracts',
+  'packages/relationship-graph',
+];
+
 export function cleanBuildArtifacts(root) {
   const targets = new Set([
     BUILD_CACHE_ROOT,
     ...discoverWorkspaceBuildOutputs(root),
+    ...LEGACY_PACKAGE_DIRECTORIES,
   ]);
 
   collectPluginDistDirs(root, targets, 'plugins');

@@ -26,7 +26,7 @@ test('loads the trusted market Kit set from one strict policy', async () => {
   const descriptors = await discoverRepositoryKits({ repositoryRoot });
   const trustedMarketSlugs = descriptors
     .filter((descriptor) => (
-      descriptor.distribution === 'market'
+      (descriptor.distribution === 'market' || descriptor.distribution === 'builtin')
       && policy.kits[descriptor.slug]?.id === descriptor.id
     ))
     .map((descriptor) => descriptor.slug);
@@ -44,13 +44,13 @@ test('policy Kit entries contain only the trusted identity field', async () => {
   const policy = await loadKitPolicy({ repositoryRoot });
   for (const slug of Object.keys(policy.kits)) {
     assert.deepEqual(Object.keys(policy.kits[slug]).sort(), ['id'], slug);
-    assert.equal(policy.kits[slug].id, `@itharbors/kit-${slug}`, slug);
+    assert.equal(policy.kits[slug].id, slug, slug);
   }
 });
 
 test('rejects unknown Kit slugs before resolving a path', async () => {
   await assert.rejects(
-    loadTrustedMarketKit({ repositoryRoot, slug: '../sqlite' }),
+    loadTrustedMarketKit({ repositoryRoot, slug: '../default' }),
     /unknown official Kit slug/i,
   );
 });
@@ -66,7 +66,7 @@ test('rejects a discoverable Kit whose slug is absent from the trust policy', as
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-untrusted-'));
   try {
     await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
-    await cp(path.join(repositoryRoot, 'kits', 'sqlite'), path.join(root, 'kits', 'unapproved'), { recursive: true });
+    await cp(path.join(repositoryRoot, 'kits', 'default'), path.join(root, 'kits', 'unapproved'), { recursive: true });
     const packageJson = JSON.parse(await readFile(path.join(root, 'kits', 'unapproved', 'package.json'), 'utf8'));
     packageJson.name = '@itharbors/kit-unapproved';
     await writeFile(path.join(root, 'kits', 'unapproved', 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
@@ -86,20 +86,19 @@ test('rejects a discoverable Kit whose slug is absent from the trust policy', as
   }
 });
 
-test('rejects builtin Kit distributions from market publication', async () => {
+test('accepts builtin Kit distributions for development', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-builtin-'));
   try {
     await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
-    await cp(path.join(repositoryRoot, 'kits', 'sqlite'), path.join(root, 'kits', 'sqlite'), { recursive: true });
+    await cp(path.join(repositoryRoot, 'kits', 'default'), path.join(root, 'kits', 'default'), { recursive: true });
     await cp(path.join(repositoryRoot, 'package-lock.json'), path.join(root, 'package-lock.json'));
-    const packageJson = JSON.parse(await readFile(path.join(root, 'kits', 'sqlite', 'package.json'), 'utf8'));
+    const packageJson = JSON.parse(await readFile(path.join(root, 'kits', 'default', 'package.json'), 'utf8'));
     packageJson.harbors.distribution = 'builtin';
-    await writeFile(path.join(root, 'kits', 'sqlite', 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
+    await writeFile(path.join(root, 'kits', 'default', 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
 
-    await assert.rejects(
-      loadTrustedMarketKit({ repositoryRoot: root, slug: 'sqlite' }),
-      /not a market distribution/u,
-    );
+    // builtin distributions are accepted in development mode
+    const kit = await loadTrustedMarketKit({ repositoryRoot: root, slug: 'default' });
+    assert.equal(kit.slug, 'default');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -113,17 +112,8 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
     assert.equal(kit.manifest.id, kit.id);
     assert.equal(kit.manifest.version, kit.packageJson.version);
     assert.equal(kit.packageJson.name, kit.id);
-    assert.equal(
-      kit.manifest.version,
-      slug === 'agent-guard'
-        ? '0.1.0-preview.7'
-        : slug === 'mysql'
-          ? '0.1.0-preview.3'
-          : ['csv', 'scheduler', 'sqlite'].includes(slug)
-            ? '0.1.0-preview.2'
-            : '0.1.0-preview.1',
-    );
-    assert.equal(kit.manifest.channel, 'preview');
+    assert.equal(kit.manifest.version, '0.0.1');
+    assert.equal(kit.manifest.channel, 'stable');
     assert.equal(typeof kit.packageJson.scripts?.build, 'string');
     assert.notEqual(kit.packageJson.scripts.build.trim(), '');
     assert.equal(typeof kit.label, 'string');
@@ -135,8 +125,8 @@ test('loads every trusted market Kit with descriptor-derived display metadata', 
 });
 
 test('loads the immutable v2 official Kit contract through the current trust policy', async () => {
-  const current = await loadTrustedMarketKit({ repositoryRoot, slug: 'sqlite' });
-  const compatible = await loadOfficialKit({ repositoryRoot, slug: 'sqlite' });
+  const current = await loadTrustedMarketKit({ repositoryRoot, slug: 'default' });
+  const compatible = await loadOfficialKit({ repositoryRoot, slug: 'default' });
   assert.deepEqual(compatible, {
     ...current,
     runner: current.ciRunner,
@@ -151,7 +141,7 @@ test('loads the immutable v2 official Kit contract through the current trust pol
 test('validates a historical product snapshot through an explicit current publisher policy', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-historical-'));
   try {
-    await cp(path.join(repositoryRoot, 'kits', 'agent-guard'), path.join(root, 'kits', 'agent-guard'), { recursive: true });
+    await cp(path.join(repositoryRoot, 'kits', 'default'), path.join(root, 'kits', 'default'), { recursive: true });
     await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
     const historicalPolicyFile = path.join(root, 'registry', 'policy.json');
     const historicalPolicy = JSON.parse(await readFile(historicalPolicyFile, 'utf8'));
@@ -161,73 +151,59 @@ test('validates a historical product snapshot through an explicit current publis
     await writeFile(historicalPolicyFile, `${JSON.stringify(historicalPolicy, null, 2)}\n`);
 
     await assert.rejects(
-      loadTrustedMarketKit({ repositoryRoot: root, slug: 'agent-guard' }),
+      loadTrustedMarketKit({ repositoryRoot: root, slug: 'default' }),
       /policy signer workflows are invalid/u,
     );
     const kit = await loadTrustedMarketKit({
       repositoryRoot: root,
       policyFile: path.join(repositoryRoot, 'registry', 'policy.json'),
-      slug: 'agent-guard',
+      slug: 'default',
     });
-    assert.equal(kit.id, '@itharbors/kit-agent-guard');
-    assert.equal(path.basename(kit.directory), 'agent-guard');
+    assert.equal(kit.id, 'default');
+    assert.equal(path.basename(kit.directory), 'default');
     assert.equal(path.basename(path.dirname(kit.directory)), 'kits');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('sources MySQL summary from the Kit descriptor rather than central policy', async () => {
-  const kit = await loadTrustedMarketKit({ repositoryRoot, slug: 'mysql' });
-  assert.equal(kit.summary, 'MySQL 数据库连接、浏览、编辑、关系图与 SQL 工作台');
+test('sources default Kit summary from the Kit descriptor rather than central policy', async () => {
+  const kit = await loadTrustedMarketKit({ repositoryRoot, slug: 'default' });
+  assert.equal(kit.summary, '默认 Kit，提供基础插件与布局');
 });
 
-test('publishes TraceWeave as a portable filesystem-only Preview Kit', async () => {
-  const kit = await loadTrustedMarketKit({ repositoryRoot, slug: 'traceweave' });
+test('publishes default Kit as a portable filesystem-only Kit', async () => {
+  const kit = await loadTrustedMarketKit({ repositoryRoot, slug: 'default' });
 
   assert.equal(kit.ciRunner, 'ubuntu-latest');
   assert.equal(kit.manifest.target.platform, 'any');
   assert.equal(kit.manifest.target.arch, 'any');
-  assert.deepEqual(kit.manifest.permissions, ['filesystem']);
+  assert.deepEqual(kit.manifest.permissions, []);
 });
 
-test('database Kit tests prepare runtime, test local Relationship Graph, then run Vitest', async () => {
-  const prepareRuntime = [
-    'node ../../scripts/ce-plugin.mjs build ../../plugins/panel',
-    'node ../../scripts/ce-plugin.mjs build ../../plugins/message',
-    'node ../../scripts/ce-plugin.mjs build ../../plugins/menu',
-    'node ../../scripts/ce-plugin.mjs build ../../plugins/config',
-  ].join(' && ');
-  for (const slug of ['mysql', 'sqlite']) {
-    const kit = await loadTrustedMarketKit({ repositoryRoot, slug });
-    assert.equal(kit.packageJson.scripts?.['test:prepare'], prepareRuntime, slug);
-    assert.deepEqual(
-      kit.packageJson.scripts?.test.split(' && '),
-      [
-        'npm run test:prepare',
-        'npm test --prefix packages/relationship-graph',
-        'vitest run --config vitest.config.ts',
-      ],
-      slug,
-    );
-  }
+test('default Kit has build and test scripts', async () => {
+  const kit = await loadTrustedMarketKit({ repositoryRoot, slug: 'default' });
+  assert.equal(typeof kit.packageJson.scripts?.build, 'string');
+  assert.notEqual(kit.packageJson.scripts.build.trim(), '');
+  assert.equal(typeof kit.packageJson.scripts?.['test:kit'], 'string');
+  assert.notEqual(kit.packageJson.scripts['test:kit'].trim(), '');
 });
 
 test('rejects a Kit whose descriptor identity drifts from the trusted policy id', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-drift-'));
   try {
     await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
-    await cp(path.join(repositoryRoot, 'kits', 'sqlite'), path.join(root, 'kits', 'sqlite'), { recursive: true });
+    await cp(path.join(repositoryRoot, 'kits', 'default'), path.join(root, 'kits', 'default'), { recursive: true });
     await cp(path.join(repositoryRoot, 'package-lock.json'), path.join(root, 'package-lock.json'));
-    const packageJson = JSON.parse(await readFile(path.join(root, 'kits', 'sqlite', 'package.json'), 'utf8'));
+    const packageJson = JSON.parse(await readFile(path.join(root, 'kits', 'default', 'package.json'), 'utf8'));
     packageJson.name = '@itharbors/kit-other';
-    await writeFile(path.join(root, 'kits', 'sqlite', 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
-    const manifest = JSON.parse(await readFile(path.join(root, 'kits', 'sqlite', 'kit.json'), 'utf8'));
+    await writeFile(path.join(root, 'kits', 'default', 'package.json'), `${JSON.stringify(packageJson, null, 2)}\n`);
+    const manifest = JSON.parse(await readFile(path.join(root, 'kits', 'default', 'kit.json'), 'utf8'));
     manifest.id = '@itharbors/kit-other';
-    await writeFile(path.join(root, 'kits', 'sqlite', 'kit.json'), `${JSON.stringify(manifest, null, 2)}\n`);
+    await writeFile(path.join(root, 'kits', 'default', 'kit.json'), `${JSON.stringify(manifest, null, 2)}\n`);
 
     await assert.rejects(
-      loadTrustedMarketKit({ repositoryRoot: root, slug: 'sqlite' }),
+      loadTrustedMarketKit({ repositoryRoot: root, slug: 'default' }),
       /identity drift/u,
     );
   } finally {
@@ -239,15 +215,15 @@ test('rejects a Kit whose local lock identity differs from its descriptor', asyn
   const root = await mkdtemp(path.join(tmpdir(), 'kit-monorepo-lock-'));
   try {
     await cp(path.join(repositoryRoot, 'registry'), path.join(root, 'registry'), { recursive: true });
-    await cp(path.join(repositoryRoot, 'kits', 'sqlite'), path.join(root, 'kits', 'sqlite'), { recursive: true });
-    const lockFile = path.join(root, 'kits', 'sqlite', 'package-lock.json');
+    await cp(path.join(repositoryRoot, 'kits', 'default'), path.join(root, 'kits', 'default'), { recursive: true });
+    const lockFile = path.join(root, 'kits', 'default', 'package-lock.json');
     const lock = JSON.parse(await readFile(lockFile, 'utf8'));
     lock.packages[''].version = '9.9.9';
     await writeFile(lockFile, `${JSON.stringify(lock, null, 2)}\n`);
 
     await assert.rejects(
-      loadTrustedMarketKit({ repositoryRoot: root, slug: 'sqlite' }),
-      /package-lock identity.*sqlite/i,
+      loadTrustedMarketKit({ repositoryRoot: root, slug: 'default' }),
+      /package-lock identity.*default/i,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

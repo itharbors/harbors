@@ -33,12 +33,19 @@ function boundedText(value, name, maxLength) {
 
 function publicationIdentity(manifest) {
   const match = KIT_ID_PATTERN.exec(manifest.id);
-  if (!match) throw new Error('Kit id must use @publisher/kit-<name>');
-  const [, scope, packageName, slug] = match;
-  if (scope !== manifest.publisher) {
-    throw new Error('Kit id scope must match publisher');
+  if (match) {
+    const [, scope, packageName, slug] = match;
+    if (scope !== manifest.publisher) {
+      throw new Error('Kit id scope must match publisher');
+    }
+    return { packageName, publisher: manifest.publisher, slug };
   }
-  return { packageName, publisher: manifest.publisher, slug };
+  // Handle non-scoped ids (e.g., "default")
+  const slug = manifest.id;
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error('Kit id must use @publisher/kit-<name> or be a valid slug');
+  }
+  return { packageName: slug, publisher: manifest.publisher, slug };
 }
 
 function validateRepository(repository, publisher) {

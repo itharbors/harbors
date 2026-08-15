@@ -70,14 +70,11 @@ Panel 入口和公开资源来自插件 manifest。服务端解析真实路径�
 
 插件构建工具同样要求 main 和 panel entry 指向 `dist/`，运行时不直接执行 `src/`。
 
-## 8. Web 工作台与 Electron 宿主保持薄边界
+## 8. Web 是唯一宿主边界
 
-浏览器和 Electron 使用同一 Client。Electron 负责启动开发栈、发现 Kit、维护托盘与每 Kit
-窗口、同步原生菜单和打开外部 HTTP(S) 链接；业务状态和插件运行时仍在各 session 的
-Server Editor 中。
-
-preload bridge 开启 context isolation、关闭 Node integration，并只暴露有限方法。新增
-桌面能力时应继续通过窄桥接接口，而不是把 Node 能力暴露给页面或 Panel iframe。
+浏览器是唯一受支持的交互宿主。Client、Panel 与插件不得假设存在 Electron、Node renderer、
+原生窗口、托盘或桌面 IPC。操作系统级能力必须先形成明确的 Web/Server 契约，并遵守权限与
+部署边界。
 
 ## 9. 失败时清理所有权，而不是留下半装载状态
 
@@ -94,7 +91,7 @@ preload bridge 开启 context isolation、关闭 Node integration，并只暴露
 2. 状态属于单个 session、单个 Kit、单个插件，还是明确共享层？
 3. Server 与 Client 谁持有权威状态？
 4. 装载中途失败或卸载时，谁负责清理？
-5. 是否扩大了 Panel、Web 页面或 Electron bridge 的权限边界？
+5. 是否扩大了 Panel、Web 页面或 Server API 的权限边界？
 
 ## 源码索引
 
@@ -103,9 +100,9 @@ preload bridge 开启 context isolation、关闭 Node integration，并只暴露
 - [消息模块](../../packages/server/src/framework/message/index.ts)
 - [窗口状态模型](../../packages/server/src/framework/window/index.ts)
 - [插件资源路由](../../packages/server/src/routes/panel-asset.ts)
-- [Electron 宿主](../../scripts/electron.mjs)
-- [Electron preload](../../scripts/electron-preload.cjs)
+- [Web Server 入口](../../packages/server/src/start.ts)
 
 关联阅读：[系统架构](./system-overview.md) ·
 [插件运行时模型](./plugin-runtime-model.md) ·
-[ADR 0001：插件优先架构](../decisions/0001-plugin-first-architecture.md)
+[ADR 0001：插件优先架构](../decisions/0001-plugin-first-architecture.md) ·
+[ADR 0002：单一 Web host](../decisions/0002-web-only-host.md)
