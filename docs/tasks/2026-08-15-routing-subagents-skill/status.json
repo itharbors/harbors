@@ -1,0 +1,16 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-15-routing-subagents-skill",
+  "type": "feature",
+  "updatedAt": "2026-08-15T10:44:59.789Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": {
+    "number": 70
+  }
+}

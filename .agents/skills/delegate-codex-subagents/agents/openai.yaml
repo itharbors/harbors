@@ -1,0 +1,4 @@
+interface:
+  display_name: "Codex Subagent 并行委派"
+  short_description: "拆分边界并并行交给 Codex CLI，主 Agent 专注验收"
+  default_prompt: "使用 $delegate-codex-subagents 拆分、并行派发并验收当前任务。"
