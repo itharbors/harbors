@@ -1,6 +1,19 @@
-export * from './plugin.js';
+export type {
+  ContributeData,
+  PanelContribution,
+  PluginAssetsManifest,
+  PluginDefinition,
+  PluginInfo,
+  PluginLifecycle,
+  PluginRuntime,
+} from '@itharbors/magnet';
 export * from './panel.js';
-export * from './credentials.js';
+export type {
+  CredentialCapabilitySnapshot,
+  CredentialMode,
+  CredentialProfile,
+  PluginCredentialVault,
+} from '@itharbors/magnet';
 export * from './protocol/bootstrap.js';
 export * from './protocol/http.js';
 export * from './protocol/kit-catalog.js';

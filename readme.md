@@ -36,6 +36,7 @@ Gateway（开发统一入口）
 - `packages/server`：会话、Kit、插件、消息、API、SSE 和持久化。
 - `packages/client`：浏览器工作台、布局、主题和交互。
 - `packages/gateway`：开发环境统一入口与反向代理。
+- `packages/plugin`：可独立消费的插件 Manifest、加载器、生命周期与存储运行时。
 - `plugins`：框架级插件。
 - `kits/default`：内置 default Kit、descriptor、布局和依赖。
 - `scripts`：构建、检查、Task、Kit 制品和 Registry 工具。

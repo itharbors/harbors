@@ -3,6 +3,11 @@
 插件是 ITHARBORS 的主要扩展单元。manifest 静态声明“贡献什么”，main entry 通过
 `editor.plugin.define()` 声明“装载时做什么”以及可调用方法。
 
+核心实现由 workspace npm 包 `@itharbors/magnet` 提供。该包拥有 Manifest schema、插件身份与
+状态、入口校验和动态导入、生命周期编排、受限 runtime 构造及 owner 私有存储路径；它不依赖
+Session、Kit、Panel、Menu 或 Message 的具体实现。`@itharbors/server` 是当前宿主，通过结构化
+host 接口向核心包注入这些能力，并继续负责 Application 子进程、消息传输和浏览器路由。
+
 ## 插件目录与 manifest
 
 运行时和构建工具都要求加载 `dist/` 产物：
@@ -304,7 +309,10 @@ Server 编译产物则使用相邻的 `runner.js`。两种情况都以 `process.
 
 ## 源码索引
 
-- [PluginModule](../../packages/server/src/framework/plugin/index.ts)
+- [PluginModule 与公共导出](../../packages/plugin/src/index.ts)
+- [插件 Manifest schema](../../packages/plugin/src/manifest.ts)
+- [插件宿主接口](../../packages/plugin/src/runtime.ts)
+- [插件私有路径](../../packages/plugin/src/paths.ts)
 - [ApplicationRuntime](../../packages/server/src/application/runtime.ts)
 - [Application 插件 Supervisor](../../packages/server/src/application/plugin-process/supervisor.ts)
 - [Application 插件 runner](../../packages/server/src/application/plugin-process/runner.ts)
@@ -312,11 +320,11 @@ Server 编译产物则使用相邻的 `runner.js`。两种情况都以 `process.
 - [IPC 协议](../../packages/server/src/application/plugin-process/protocol.ts)
 - [应用启动插件发现](../../packages/server/src/application/catalog.ts)
 - [应用服务注册表](../../packages/server/src/application/service-registry.ts)
-- [插件类型](../../packages/server/src/framework/plugin/types.ts)
+- [插件核心类型](../../packages/plugin/src/types.ts)
 - [插件 resolver](../../packages/server/src/plugin/resolver.ts)
 - [Panel 资源与 runtime 注入](../../packages/server/src/routes/panel-asset.ts)
 - [MessageModule](../../packages/server/src/framework/message/index.ts)
-- [共享插件类型](../../packages/plugin-types/src/plugin.ts)
+- [浏览器与宿主共享协议](../../packages/plugin-types/src/index.ts)
 - [插件构建入口](../../scripts/ce-plugin.mjs)
 - [构建发现规则](../../scripts/lib/plugin-build/discover.mjs)
 - [manifest/产物校验](../../scripts/lib/plugin-build/validate.mjs)

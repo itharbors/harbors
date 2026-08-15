@@ -1,7 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { PluginModule } from '../../src/framework/plugin/index';
-import { Plugin } from '../../src/framework/plugin/plugin';
-import { PluginStatus } from '../../src/framework/plugin/types';
+import { Plugin, PluginModule, PluginStatus } from '@itharbors/magnet';
 import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { PluginRuntimeHost } from '../../src/editor/types';
 import { execFileSync } from 'node:child_process';

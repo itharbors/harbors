@@ -208,10 +208,11 @@ npm run build
 
 根构建顺序：
 
-1. `@itharbors/plugin-types`；
-2. Client TypeScript 与 Vite；
-3. Server TypeScript；
-4. 所有插件。
+1. `@itharbors/magnet` 插件核心；
+2. `@itharbors/plugin-types` 浏览器与宿主共享协议；
+3. Kit Core 与 Kit CLI；
+4. Client、Server 等 Framework workspace；
+5. 所有插件。
 
 插件可以单独处理：
 

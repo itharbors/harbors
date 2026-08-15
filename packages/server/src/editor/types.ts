@@ -4,8 +4,7 @@ import type { EditorI18n } from '../framework/i18n/types';
 import type { MessageBroadcastRoute, MessageLocation, MessageRequestRoute } from '../framework/message/types';
 import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '../framework/menu/types';
 import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistration } from '../framework/panel/types';
-import type { PluginDefinition, PluginInfo } from '../framework/plugin/types';
-import type { PluginPathRoots, PluginPaths } from '../framework/plugin/paths';
+import type { ContributeData, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths } from '@itharbors/magnet';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
 import type { PanelFileRuntime, PluginCredentialVault } from '@itharbors/plugin-types';
 
@@ -49,7 +48,7 @@ export interface PluginRuntime {
     readonly layouts: string[];
   };
   menu: {
-    attach(pluginName: string, contribute: import('../framework/plugin/types').ContributeData): void;
+    attach(pluginName: string, contribute: ContributeData): void;
     detach(pluginName: string): void;
     setDefaults(items: MenuContributionNode[]): void;
     clearDefaults(): void;

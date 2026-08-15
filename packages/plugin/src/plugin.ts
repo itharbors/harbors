@@ -1,5 +1,5 @@
-import type { ContributeData, PluginInfo, PluginModule } from './types';
-import { PluginStatus } from './types';
+import type { ContributeData, PluginInfo, PluginModule } from './types.js';
+import { PluginStatus } from './types.js';
 
 export class Plugin {
   info: PluginInfo;
