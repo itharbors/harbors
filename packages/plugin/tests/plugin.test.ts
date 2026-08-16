@@ -44,6 +44,38 @@ function createPlugin(root: string, code: string): string {
   return directory;
 }
 
+function createCjsPlugin(
+  root: string,
+  entryCode: string,
+  helperCode?: string,
+  options: {
+    packageType?: 'module' | 'commonjs';
+    omitPackageType?: boolean;
+    main?: string;
+  } = {},
+): string {
+  const directory = path.join(root, 'cjs-plugin');
+  fs.mkdirSync(path.join(directory, 'main', 'dist'), { recursive: true });
+  const main = options.main ?? './main/dist/index.cjs';
+  fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
+    name: '@example/cjs-plugin',
+    version: '1.0.0',
+    ...(options.omitPackageType ? {} : { type: options.packageType ?? 'module' }),
+    main,
+    'ce-editor': {
+      schemaVersion: 1,
+      contribute: {
+        message: { request: { greet: ['greet'] } },
+      },
+    },
+  }));
+  fs.writeFileSync(path.join(directory, main), entryCode);
+  if (helperCode !== undefined) {
+    fs.writeFileSync(path.join(directory, 'main', 'dist', 'helper.cjs'), helperCode);
+  }
+  return directory;
+}
+
 function createRoots(root: string): PluginPathRoots {
   fs.mkdirSync(root, { recursive: true });
   return {
@@ -87,6 +119,9 @@ function createHost(module: PluginModule): PluginRuntimeHost {
       unregisterBroadcast: vi.fn(),
       request: vi.fn(),
       broadcast: vi.fn(),
+    },
+    kit: {
+      getCurrent: vi.fn(() => undefined),
     },
   };
 }
@@ -143,6 +178,30 @@ describe('@itharbors/magnet standalone runtime', () => {
     expect((globalThis as { __invalidPluginExecuted?: boolean }).__invalidPluginExecuted).toBeUndefined();
   });
 
+  it('rejects panel entries that resolve through a symlink outside the plugin directory', async () => {
+    const root = temporaryDirectory('itharbors-panel-symlink-');
+    const pluginDirectory = createPlugin(root, 'globalThis.__panelSymlinkPluginExecuted = true;');
+    const outsidePanel = path.join(root, 'outside-panel.html');
+    const panelEntry = path.join(pluginDirectory, 'main', 'dist', 'index.html');
+    fs.writeFileSync(outsidePanel, '<!doctype html>');
+
+    try {
+      fs.symlinkSync(outsidePanel, panelEntry);
+    } catch {
+      return;
+    }
+
+    const manifestPath = path.join(pluginDirectory, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest['ce-editor'].contribute.panel = {
+      demo: { entry: './main/dist/index.html' },
+    };
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    await expect(new PluginModule().register(pluginDirectory))
+      .rejects.toThrow(/panel contribution "demo" entry must stay inside the plugin directory/);
+  });
+
   it('creates owner-isolated storage paths', async () => {
     const root = temporaryDirectory('itharbors-plugin-paths-');
     const roots = createRoots(root);
@@ -163,5 +222,115 @@ describe('@itharbors/magnet standalone runtime', () => {
       Running: 'running',
       Unloading: 'unloading',
     });
+  });
+
+  it('loads, calls, and unloads a CommonJS plugin via createRequire', async () => {
+    const root = temporaryDirectory('itharbors-cjs-plugin-');
+    const pluginDirectory = createCjsPlugin(root, `
+      let sessionId;
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) { sessionId = runtime.sessionId; },
+        },
+        methods: {
+          greet(name) { return sessionId + ':hello ' + name; },
+        },
+      });
+    `);
+    const module = new PluginModule();
+
+    await module.register(pluginDirectory);
+    await module.load(pluginDirectory, {
+      scope: 'session',
+      host: createHost(module),
+      paths: {
+        roots: createRoots(path.join(root, 'application-data')),
+        legacyDataDirectories: [],
+      },
+    });
+
+    expect(module.callPlugin('@example/cjs-plugin', 'greet', 'Harbors'))
+      .toBe('standalone-consumer:hello Harbors');
+    await module.unload(pluginDirectory);
+    expect(() => module.callPlugin('@example/cjs-plugin', 'greet')).toThrow(/not loaded/);
+  });
+
+  it('clears require.cache for entry-local helpers so reloading picks up changes', async () => {
+    const root = temporaryDirectory('itharbors-cjs-cache-');
+    const helperPath = path.join(root, 'cjs-plugin', 'main', 'dist', 'helper.cjs');
+    const pluginDirectory = createCjsPlugin(
+      root,
+      `
+        const helper = require('./helper.cjs');
+        editor.plugin.define({
+          methods: {
+            value() { return helper.value; },
+          },
+        });
+      `,
+      'module.exports = { value: "v1" };',
+    );
+    const module = new PluginModule();
+
+    const loadOptions = {
+      scope: 'session' as const,
+      host: createHost(module),
+      paths: {
+        roots: createRoots(path.join(root, 'application-data')),
+        legacyDataDirectories: [],
+      },
+    };
+
+    await module.register(pluginDirectory);
+    await module.load(pluginDirectory, loadOptions);
+    expect(module.callPlugin('@example/cjs-plugin', 'value')).toBe('v1');
+    await module.unload(pluginDirectory);
+
+    fs.writeFileSync(helperPath, 'module.exports = { value: "v2" };');
+
+    await module.load(pluginDirectory, loadOptions);
+    expect(module.callPlugin('@example/cjs-plugin', 'value')).toBe('v2');
+    await module.unload(pluginDirectory);
+  });
+
+  it.each([
+    { name: 'declared commonjs', packageType: 'commonjs' as const },
+    { name: 'default package type', omitPackageType: true },
+  ])('reloads a CommonJS .js plugin with $name package type', async ({ packageType, omitPackageType }) => {
+    const root = temporaryDirectory('itharbors-commonjs-js-cache-');
+    const helperPath = path.join(root, 'cjs-plugin', 'main', 'dist', 'helper.cjs');
+    const pluginDirectory = createCjsPlugin(
+      root,
+      `
+        const helper = require('./helper.cjs');
+        editor.plugin.define({
+          methods: {
+            value() { return helper.value; },
+          },
+        });
+      `,
+      'module.exports = { value: "v1" };',
+      { packageType, omitPackageType, main: './main/dist/index.js' },
+    );
+    const module = new PluginModule();
+    const loadOptions = {
+      scope: 'session' as const,
+      host: createHost(module),
+      paths: {
+        roots: createRoots(path.join(root, 'application-data')),
+        legacyDataDirectories: [],
+      },
+    };
+
+    await module.register(pluginDirectory);
+    await module.load(pluginDirectory, loadOptions);
+    expect(module.callPlugin('@example/cjs-plugin', 'value')).toBe('v1');
+    await module.unload(pluginDirectory);
+
+    fs.writeFileSync(helperPath, 'module.exports = { value: "v2" };');
+
+    await module.load(pluginDirectory, loadOptions);
+    expect(module.callPlugin('@example/cjs-plugin', 'value')).toBe('v2');
+    await module.unload(pluginDirectory);
   });
 });

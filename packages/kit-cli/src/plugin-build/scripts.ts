@@ -56,6 +56,22 @@ function typecheckPanel(rootDir: string, sourceDir: string): void {
   ]);
 }
 
+function typecheckMain(rootDir: string, sourceDir: string): void {
+  runTypeScript(rootDir, [
+    path.join(sourceDir, 'index.ts'),
+    '--noEmit',
+    '--rootDir', sourceDir,
+    '--module', 'nodenext',
+    '--moduleResolution', 'nodenext',
+    '--target', 'ES2022',
+    '--esModuleInterop',
+    '--skipLibCheck',
+    '--strict', 'false',
+    '--types', 'node',
+    '--lib', 'ES2022',
+  ]);
+}
+
 function bundlePanel(rootDir: string, sourceDir: string, outDir: string, outputFile?: string): string {
   ensureDir(outDir);
   const jsOutFile = outputFile ?? path.join(outDir, 'index.js');
@@ -75,6 +91,23 @@ function bundlePanel(rootDir: string, sourceDir: string, outDir: string, outputF
 
 export function compileMainScript(plugin: PluginProject): string | null {
   if (!plugin.main) return null;
+  const { outputFile } = plugin.main;
+  if (outputFile.endsWith('.cjs')) {
+    typecheckMain(plugin.rootDir, plugin.main.sourceDir);
+    ensureDir(path.dirname(outputFile));
+    buildSync({
+      absWorkingDir: plugin.rootDir,
+      entryPoints: [plugin.main.entryFile],
+      bundle: true,
+      platform: 'node',
+      format: 'cjs',
+      target: 'es2022',
+      packages: 'external',
+      outfile: outputFile,
+      logLevel: 'warning',
+    });
+    return outputFile;
+  }
   return compileUnit({
     rootDir: plugin.rootDir,
     sourceDir: plugin.main.sourceDir,

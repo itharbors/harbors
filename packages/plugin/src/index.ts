@@ -16,8 +16,9 @@ import type {
 } from './runtime.js';
 import { PluginStatus } from './types.js';
 import { Plugin } from './plugin.js';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withPluginDefinitionLock } from './load-lock.js';
@@ -85,6 +86,7 @@ function credentialOperationFailed(): Error & { readonly code: 'CREDENTIAL_OPERA
 interface PackageJson {
   name?: string;
   main?: string;
+  type?: string;
   'ce-editor'?: {
     assets?: PluginAssetsManifest;
     capabilities?: unknown;
@@ -123,6 +125,11 @@ function resolveDeclaredMain(pluginRoot: string, pkg: PackageJson, pluginName: s
   if (!existsSync(entryPath) || !statSync(entryPath).isFile()) {
     throw new Error(`Plugin "${pluginName}" package.json main file does not exist`);
   }
+  const realRoot = realpathSync(root);
+  const realEntryPath = realpathSync(entryPath);
+  if (realEntryPath !== realRoot && !realEntryPath.startsWith(realRoot + path.sep)) {
+    throw new Error(`Plugin "${pluginName}" package.json main must stay inside the plugin directory`);
+  }
   return entryPath;
 }
 
@@ -145,6 +152,11 @@ function assertPanelContributions(pluginRoot: string, contribute: ContributeData
     if (!existsSync(entryPath) || !statSync(entryPath).isFile()) {
       throw new Error(`Plugin "${pluginName}" panel contribution "${panelName}" entry file does not exist`);
     }
+    const realRoot = realpathSync(root);
+    const realEntryPath = realpathSync(entryPath);
+    if (realEntryPath !== realRoot && !realEntryPath.startsWith(realRoot + path.sep)) {
+      throw new Error(`Plugin "${pluginName}" panel contribution "${panelName}" entry must stay inside the plugin directory`);
+    }
   }
 }
 
@@ -159,13 +171,80 @@ function resolveLoadEntryPath(pluginRoot: string, entry: string): string {
   if (entryPath !== root && !entryPath.startsWith(root + path.sep)) {
     throw new Error(`Plugin at ${pluginRoot} has an out-of-bounds main entry`);
   }
+  const realRoot = realpathSync(root);
+  const realEntryPath = realpathSync(entryPath);
+  if (realEntryPath !== realRoot && !realEntryPath.startsWith(realRoot + path.sep)) {
+    throw new Error(`Plugin at ${pluginRoot} has an out-of-bounds main entry`);
+  }
   return entryPath;
+}
+
+function clearPluginRequireCache(entryPath: string): void {
+  const realEntryPath = requireResolveRealPath(entryPath);
+  const entryDir = path.dirname(realEntryPath);
+  const cache = createRequire(realEntryPath).cache;
+  const childrenByParent = new Map<string, string[]>();
+
+  for (const [filename, cachedModule] of Object.entries(cache)) {
+    if (!cachedModule) continue;
+    const parentFilename = cachedModule.parent?.filename;
+    if (!parentFilename) continue;
+    const children = childrenByParent.get(parentFilename) ?? [];
+    children.push(filename);
+    childrenByParent.set(parentFilename, children);
+  }
+
+  const visited = new Set<string>();
+  const pending = [realEntryPath];
+  const pluginModules = new Set<string>();
+  while (pending.length > 0) {
+    const filename = pending.pop()!;
+    if (visited.has(filename)) continue;
+    visited.add(filename);
+    pluginModules.add(filename);
+
+    const cachedModule = cache[filename];
+    if (cachedModule) {
+      for (const child of cachedModule.children) {
+        pending.push(child.filename);
+      }
+    }
+    // A failed entry is evicted from require.cache, but its successfully
+    // loaded children retain a parent whose filename points at the entry.
+    for (const child of childrenByParent.get(filename) ?? []) {
+      pending.push(child);
+    }
+  }
+
+  for (const filename of pluginModules) {
+    let realFilename: string;
+    try {
+      realFilename = realpathSync(filename);
+    } catch {
+      continue;
+    }
+    const relative = path.relative(entryDir, realFilename);
+    if (relative === '' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      continue;
+    }
+    // A plugin may live below a node_modules directory, so only exclude
+    // node_modules segments below the entry directory itself.
+    if (relative.split(path.sep).includes('node_modules')) continue;
+    delete cache[filename];
+  }
+}
+
+function requireResolveRealPath(entryPath: string): string {
+  const require = createRequire(entryPath);
+  const resolved = require.resolve(entryPath);
+  return resolved;
 }
 
 export class PluginModule {
   private pathMap = new Map<string, Plugin>();
   private nameMap = new Map<string, Plugin>();
   private credentialRevokers = new Map<string, () => Promise<void>>();
+  private commonjsPaths = new Set<string>();
 
   async register(pluginPath: string, options: {
     kind: PluginKind;
@@ -205,6 +284,7 @@ export class PluginModule {
     };
 
     this.pathMap.set(absPath, new Plugin(info));
+    if (manifest.main.endsWith('.js') && pkg.type !== 'module') this.commonjsPaths.add(absPath);
   }
 
   async load(
@@ -280,8 +360,15 @@ export class PluginModule {
         });
 
         try {
-          importNonce += 1;
-          await import(pathToFileURL(entryPath).href + `?t=${Date.now()}-${importNonce}`);
+          if (entryPath.endsWith('.cjs')) {
+            clearPluginRequireCache(entryPath);
+            const cjsRequire = createRequire(entryPath);
+            cjsRequire(entryPath);
+          } else {
+            if (this.commonjsPaths.has(absPath)) clearPluginRequireCache(entryPath);
+            importNonce += 1;
+            await import(pathToFileURL(entryPath).href + `?t=${Date.now()}-${importNonce}`);
+          }
         } finally {
           if (previousEditorDescriptor) {
             Object.defineProperty(globalScope, 'editor', previousEditorDescriptor);
@@ -390,6 +477,7 @@ export class PluginModule {
       throw new Error(`Plugin "${plugin.name}" must be unloaded before unregistering`);
     }
     this.pathMap.delete(absPath);
+    this.commonjsPaths.delete(absPath);
   }
 
   getInfo(name: string): PluginInfo | undefined {
