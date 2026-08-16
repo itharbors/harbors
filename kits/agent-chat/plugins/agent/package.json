@@ -13,6 +13,7 @@
           "createConversation": ["createConversation"],
           "deleteConversation": ["deleteConversation"],
           "getMessages": ["getMessages"],
+          "getConversationTrace": ["getConversationTrace"],
           "sendMessage": ["sendMessage"]
         }
       }

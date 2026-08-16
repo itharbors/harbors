@@ -5,25 +5,23 @@
       "type": "panel-area",
       "layout": {
         "type": "hsplit",
-        "sizes": [280, 1],
+        "sizes": [
+          280,
+          1,
+          300
+        ],
         "children": [
           {
             "type": "leaf",
             "panel": "conversation-list.list"
           },
           {
-            "type": "tab",
-            "activeIndex": 0,
-            "children": [
-              {
-                "type": "leaf",
-                "panel": "message-panel.main"
-              },
-              {
-                "type": "leaf",
-                "panel": "plugin-list.list"
-              }
-            ]
+            "type": "leaf",
+            "panel": "message-panel.main"
+          },
+          {
+            "type": "leaf",
+            "panel": "plugin-list.list"
           }
         ]
       }
