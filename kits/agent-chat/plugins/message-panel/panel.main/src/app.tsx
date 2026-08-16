@@ -12,6 +12,9 @@ interface SelectOption { id: string; name: string; description?: string; }
 interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
 interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: string; }
 interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selection?: TurnOptions; configurationError?: string; }
+type PermissionOutcome = 'allowed-once' | 'rejected';
+interface PermissionRequest { requestId: string; conversationId: string; turn: number; step: number; toolName: string; currentMode: string; requestedMode?: string; justification?: string; }
+interface ProgressStatus { phase?: string; message?: string; turn?: number; step?: number; }
 const REQUEST_RETRY_DELAYS = [0, 100, 250, 500, 1000];
 
 function sourceFromId(id: string): Source { return id.startsWith('harbors:') ? 'harbors' : 'codex'; }
@@ -149,6 +152,29 @@ function ToolProcessCard({ entry }: { entry: ToolProcessEntry }) {
   );
 }
 
+function PermissionRequestCard({ request, resolving, onResolve }: { request: PermissionRequest; resolving: boolean; onResolve: (outcome: PermissionOutcome) => void; }) {
+  const modeLabel = (mode?: string): string => ({
+    'read-only': '只读',
+    'workspace-write': '工作区可写',
+    'danger-full-access': '完全访问',
+  }[mode || ''] || mode || '未说明');
+  return (
+    <div className="permission-card">
+      <div className="permission-card-header">
+        <span className="permission-title">需要权限确认</span>
+        <span className="permission-status">等待处理</span>
+      </div>
+      <div className="permission-card-tool">工具：<strong>{request.toolName}</strong></div>
+      <div className="permission-card-modes">当前：{modeLabel(request.currentMode)} → 请求：{modeLabel(request.requestedMode)}</div>
+      {request.justification && <p className="permission-card-justification">{request.justification}</p>}
+      <div className="permission-card-actions">
+        <button type="button" onClick={() => onResolve('rejected')} disabled={resolving}>拒绝</button>
+        <button type="button" className="approve" onClick={() => onResolve('allowed-once')} disabled={resolving}>允许一次</button>
+      </div>
+    </div>
+  );
+}
+
 export default function App({ ctx, registerSetter }: { ctx: any; registerSetter: (key: string, setter: (data: any) => void) => void; }) {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -166,6 +192,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [activity, setActivity] = useState<string | null>(null);
   const [toolEntries, setToolEntries] = useState<ToolProcessEntry[]>([]);
   const [localProcessEntries, setLocalProcessEntries] = useState<ToolProcessEntry[]>([]);
+  const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
+  const [resolvingPermissionId, setResolvingPermissionId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
@@ -177,6 +205,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const sendingRef = useRef(false);
   const pendingConversationIdRef = useRef<string | null>(null);
   const traceRequestSeqRef = useRef(0);
+  const permissionRequestSeqRef = useRef(0);
   const loadTrace = async (id: string, seq: number): Promise<void> => {
     const requestSeq = ++traceRequestSeqRef.current;
     try {
@@ -199,6 +228,16 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setServiceTier(options.selection.serviceTier || '');
     setConfigurationError(options.configurationError);
   };
+  const loadPermissionRequests = async (id: string): Promise<void> => {
+    const requestSeq = ++permissionRequestSeqRef.current;
+    try {
+      const value = await requestWithRetry(ctx, 'agent', 'getPendingPermissionRequests', id);
+      if (id !== conversationIdRef.current || requestSeq !== permissionRequestSeqRef.current) return;
+      setPermissionRequests(Array.isArray(value) ? value as PermissionRequest[] : []);
+    } catch (err) {
+      if (id === conversationIdRef.current && requestSeq === permissionRequestSeqRef.current) logError('加载权限申请失败', err);
+    }
+  };
 
 
   useEffect(() => {
@@ -209,7 +248,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setActivity(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setActivity(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'codex'); setProject(draftData?.project || null); setDraft(true);
@@ -219,9 +258,10 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); if (!preserveSending) { setSending(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
       requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
       loadTrace(id, seq);
+      loadPermissionRequests(id);
       requestWithRetry(ctx, 'agent', 'getConversationOptions', id).then((options: unknown) => {
         if (disposed || seq !== loadSeqRef.current) return;
         applyAgentOptions(options);
@@ -256,8 +296,22 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       }
     });
     registerSetter('message.status', (value: unknown) => {
-      const status = value as { conversationId?: string; status?: string } | null;
-      if (!disposed && status?.conversationId === conversationIdRef.current && status.status) setActivity(status.status);
+      const payload = value as { conversationId?: string; status?: string | ProgressStatus } | null;
+      const statusConversationId = payload?.conversationId;
+      if (disposed || !statusConversationId || statusConversationId !== conversationIdRef.current) return;
+      const progress = payload.status;
+      if (typeof progress === 'string') {
+        if (progress) setActivity(progress);
+        return;
+      }
+      if (!progress || typeof progress !== 'object') return;
+      if (progress.phase === 'waiting_permission') {
+        setActivity(progress.message || '等待权限确认…');
+        void loadPermissionRequests(statusConversationId);
+      } else if (progress.message) {
+        setActivity(progress.message);
+      }
+      if (progress.phase === 'completed' || progress.phase === 'error') void loadPermissionRequests(statusConversationId);
     });
     const initialUiStateSequence = uiStateSequenceRef.current;
     requestWithRetry(ctx, 'conversation-list', 'getConversationUiState').then((value: unknown) => applyConversationUiState(value, initialUiStateSequence)).catch((err: unknown) => {
@@ -277,7 +331,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   }, [ctx, draft, source]);
 
   const send = async () => {
-    if (!text.trim() || sending || sendingRef.current || loading || configurationError) return;
+    if (!text.trim() || sending || sendingRef.current || loading || configurationError || permissionRequests.length > 0) return;
     let target = conversationId;
     const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -336,6 +390,24 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     }
   };
 
+  const resolvePermission = async (requestId: string, outcome: PermissionOutcome): Promise<void> => {
+    if (resolvingPermissionId) return;
+    const id = conversationIdRef.current;
+    if (!id) return;
+    setResolvingPermissionId(requestId);
+    setError(null);
+    try {
+      const result = await requestWithRetry(ctx, 'agent', 'resolvePermissionRequest', { requestId, outcome });
+      if (result === false) throw new Error('权限申请已失效或已被处理');
+      await loadPermissionRequests(id);
+    } catch (err) {
+      logError('处理权限申请失败', err);
+      setError(`处理权限申请失败：${readableErrorMessage(err)}`);
+    } finally {
+      setResolvingPermissionId(null);
+    }
+  };
+
   const switchSource = async (nextSource: Source) => {
     if (!draft || nextSource === source || sending) return;
     setError(null);
@@ -374,14 +446,14 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   }
 
   const composer = <div className="composer-shell">
-    <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="随心输入，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 3} disabled={loading || sending} />
+    <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="随心输入，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 3} disabled={loading || sending || permissionRequests.length > 0} />
     <div className="composer-toolbar">
       <button type="button" className="composer-add" aria-label="添加上下文" title="添加上下文">＋</button>
       <div className="source-tabs" role="tablist" aria-label="选择 Agent">{(['codex', 'harbors'] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={source === item} className={source === item ? 'selected' : ''} disabled={!draft && source !== item} onClick={() => void switchSource(item)}>{item === 'codex' ? '⌘ Codex' : '⚓ HubBert'}</button>)}</div>
       <label className="option-picker model-picker">模型<select value={model} disabled={models.length < 2} onChange={(event) => selectModel(event.target.value)}>{models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">{fallbackModel(source)}</option>}</select></label>
       {reasoningOptions.length > 0 && <label className="option-picker reasoning-picker">推理深度<select value={reasoningEffort} disabled={reasoningOptions.length < 2} onChange={(event) => setReasoningEffort(event.target.value)}>{reasoningOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
       {serviceTierOptions.length > 0 && <label className="option-picker service-tier-picker">服务档位<select value={serviceTier} disabled={serviceTierOptions.length < 2} onChange={(event) => setServiceTier(event.target.value)}>{serviceTierOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
-      <button type="button" className="send-button" onClick={send} disabled={!text.trim() || loading || sending || Boolean(configurationError)} aria-label="发送消息">↑</button>
+      <button type="button" className="send-button" onClick={send} disabled={!text.trim() || loading || sending || permissionRequests.length > 0 || Boolean(configurationError)} aria-label="发送消息">↑</button>
     </div>
   </div>;
 
@@ -404,6 +476,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
           );
         })}
         {processEntries.filter((entry) => !renderedProcessIds.has(entry.id)).map((entry) => <Fragment key={entry.id}><ToolProcessCard entry={entry} /></Fragment>)}
+        {permissionRequests.map((request) => <Fragment key={request.requestId}><PermissionRequestCard request={request} resolving={resolvingPermissionId === request.requestId} onResolve={(outcome) => void resolvePermission(request.requestId, outcome)} /></Fragment>)}
         {sending && <div className="sending-indicator">{activity || (messages.some((message) => message.role === 'assistant' && !message.content) ? '正在生成回复…' : '正在请求模型…')}</div>}
       </div>}
     </div>
