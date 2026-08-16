@@ -19,7 +19,8 @@
           "deleteConversation": ["deleteConversation"],
           "getMessages": ["getMessages"],
           "getConversationTrace": ["getConversationTrace"],
-          "sendMessage": ["sendMessage"]
+          "sendMessage": ["sendMessage"],
+          "stopConversation": ["stopConversation"]
         }
       }
     }

@@ -181,6 +181,9 @@ export interface AgentAdapter {
   /** 发送消息；支持的 adapter 会在回复完成前通过 onDelta 交付增量文本。 */
   sendMessage(conversationId: string, content: string, options?: AgentTurnInput, onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string>;
 
+  /** 停止指定会话当前正在执行的 turn；返回是否确实存在可停止的 turn。 */
+  stopConversation?(conversationId: string): Promise<boolean>;
+
   /** 停止 adapter，终止底层 client 并拒绝/清理所有未完成 turn */
   stop(): void;
 }

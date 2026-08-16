@@ -77,6 +77,8 @@ const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_COMPACTION_POLICY: CompactionPolicy = { thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 8_192, maxOverflowRetries: 1 };
+const MAX_CONSECUTIVE_TOOL_FAILURES = 3;
+const MAX_REPEATED_TOOL_FAILURES = 3;
 const TOOL_RESULT_PRUNE_THRESHOLD_CHARS = 8_192;
 const TOOL_RESULT_PRUNE_HEAD_CHARS = 4_096;
 const TOOL_RESULT_PRUNE_TAIL_CHARS = 1_024;
@@ -117,6 +119,7 @@ export class HarborsAdapter implements AgentAdapter {
   private readonly storageDir = resolve(process.env.HARBORS_AGENT_STORAGE_DIR || process.env.HARBORS_PI_AGENT_STORAGE_DIR || join(homedir(), '.harbors', 'pi-agent', 'sessions'));
   private eventWriteQueue: Promise<void> = Promise.resolve();
   private permissionRequester?: AgentPermissionRequester;
+  private readonly activeTurnControllers = new Map<string, AbortController>();
 
   async createConversation(project?: string, input?: AgentTurnInput): Promise<AgentConversation> {
     throwIfAborted(this.abortController.signal);
@@ -177,6 +180,7 @@ export class HarborsAdapter implements AgentAdapter {
 
   async sendMessage(id: string, content: string, input?: AgentTurnInput, _onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string> {
     if (this.stopped) throw new Error('Harbors adapter has been stopped');
+    if (this.activeTurnControllers.has(id)) throw new Error('该会话已有正在执行的 turn');
     const session = await this.load(id);
     const options = normalizeTurnOptions(input);
     if (options.model) session.model = options.model;
@@ -196,18 +200,35 @@ export class HarborsAdapter implements AgentAdapter {
     await this.appendEvent(session, 'turn/start', { turn, ...turnSettings(session), ...permissionSettings(session) });
     await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId }, { surfaceOp: 'append' });
     if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
+    const turnController = new AbortController();
+    const signal = AbortSignal.any([this.abortController.signal, turnController.signal]);
+    this.activeTurnControllers.set(id, turnController);
     try {
-      const response = await this.runTurn(session, turn, onStatus);
+      const response = await this.runTurn(session, turn, signal, onStatus);
       await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } });
       return response;
     } catch (error) {
       const normalized = normalizeError(error);
       await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'error', error: { message: normalized, code: 'UNKNOWN' } } });
       throw error;
+    } finally {
+      if (this.activeTurnControllers.get(id) === turnController) this.activeTurnControllers.delete(id);
     }
   }
 
-  stop(): void { this.stopped = true; this.abortController.abort(); }
+  async stopConversation(id: string): Promise<boolean> {
+    const controller = this.activeTurnControllers.get(id);
+    if (!controller) return false;
+    controller.abort(new Error('用户已停止当前对话'));
+    return true;
+  }
+
+  stop(): void {
+    this.stopped = true;
+    for (const controller of this.activeTurnControllers.values()) controller.abort(new Error('Harbors adapter has been stopped'));
+    this.activeTurnControllers.clear();
+    this.abortController.abort();
+  }
 
   async getModels(): Promise<AgentOptions> {
     const config = await this.config();
@@ -266,8 +287,7 @@ export class HarborsAdapter implements AgentAdapter {
 
   setPermissionRequester(requester?: AgentPermissionRequester): void { this.permissionRequester = requester; }
 
-  private async runTurn(session: StoredSession, turn: number, onStatus?: (status: string) => void): Promise<string> {
-    const signal = this.abortController.signal;
+  private async runTurn(session: StoredSession, turn: number, signal: AbortSignal, onStatus?: (status: string) => void): Promise<string> {
     const config = await this.config();
     throwIfAborted(signal);
     const { baseUrl, apiKey, api, modelId, retry } = config;
@@ -285,6 +305,7 @@ export class HarborsAdapter implements AgentAdapter {
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
     let overflowRetries = 0;
+    const failureGuard = createToolFailureGuard();
     while (true) {
       await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
@@ -306,7 +327,13 @@ export class HarborsAdapter implements AgentAdapter {
           return text;
         }
         for (const call of calls) await this.appendEvent(session, 'tool/call', { turn, step, callId: call.id, name: call.name, arguments: call.arguments });
-        await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
+        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
+        const guardReason = updateToolFailureGuard(failureGuard, calls, results);
+        if (guardReason) {
+          await this.appendEvent(session, 'turn/stop', { turn, step, reason: { kind: 'tool-loop-guard', message: guardReason } });
+          onStatus?.(`检测到工具失败循环，已自动停止：${guardReason}`);
+          throw new ToolLoopGuardError(guardReason);
+        }
         await this.appendEvent(session, 'step/end', { turn, step });
         step += 1;
       } catch (error) {
@@ -328,6 +355,7 @@ export class HarborsAdapter implements AgentAdapter {
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
     let overflowRetries = 0;
+    const failureGuard = createToolFailureGuard();
     while (true) {
       await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
@@ -350,7 +378,13 @@ export class HarborsAdapter implements AgentAdapter {
           return text;
         }
         for (const call of calls) await this.appendEvent(session, 'tool/call', { turn, step, callId: call.id, name: call.name, arguments: call.arguments });
-        await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
+        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
+        const guardReason = updateToolFailureGuard(failureGuard, calls, results);
+        if (guardReason) {
+          await this.appendEvent(session, 'turn/stop', { turn, step, reason: { kind: 'tool-loop-guard', message: guardReason } });
+          onStatus?.(`检测到工具失败循环，已自动停止：${guardReason}`);
+          throw new ToolLoopGuardError(guardReason);
+        }
         await this.appendEvent(session, 'step/end', { turn, step });
         step += 1;
       } catch (error) {
@@ -604,6 +638,40 @@ export class HarborsAdapter implements AgentAdapter {
 
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; arguments: string; }
 interface ToolResult { content: string; isError: boolean; image?: HubBertToolImage; }
+
+interface ToolFailureGuard {
+  consecutive: number;
+  repeated: Map<string, number>;
+}
+
+class ToolLoopGuardError extends Error {
+  constructor(message: string) {
+    super(message);
+  }
+}
+
+function createToolFailureGuard(): ToolFailureGuard { return { consecutive: 0, repeated: new Map() }; }
+
+function updateToolFailureGuard(guard: ToolFailureGuard, calls: ToolCall[], results: ToolResult[]): string | undefined {
+  let lastFailure: { name: string; content: string; count: number } | undefined;
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index];
+    if (!result?.isError) {
+      guard.consecutive = 0;
+      continue;
+    }
+    guard.consecutive += 1;
+    const call = calls[index];
+    const signature = `${call?.name || 'unknown'}:${result.content.replace(/\s+/gu, ' ').trim().slice(0, 240)}`;
+    const count = (guard.repeated.get(signature) || 0) + 1;
+    guard.repeated.set(signature, count);
+    lastFailure = { name: call?.name || 'unknown', content: result.content, count };
+    if (guard.consecutive >= MAX_CONSECUTIVE_TOOL_FAILURES || count >= MAX_REPEATED_TOOL_FAILURES) {
+      return `工具 ${lastFailure.name} 连续或重复失败 ${Math.max(guard.consecutive, count)} 次：${lastFailure.content.slice(0, 240)}`;
+    }
+  }
+  return undefined;
+}
 
 function isParallelTool(name: string): boolean { return new Set(['list_files', 'read_file', 'search_text', 'list_skills', 'load_skill', 'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch']).has(name); }
 function parseToolArguments(value: string | undefined): Record<string, unknown> { if (!value) return {}; try { const parsed = JSON.parse(value) as unknown; return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; } }
