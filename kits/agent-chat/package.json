@@ -1,0 +1,43 @@
+{
+  "name": "agent-chat",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "build": "node ../../packages/kit-cli/dist/cli.js build .",
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate ."
+  },
+  "ce-editor": {
+    "kit": {
+      "menuRoot": {
+        "id": "agent-chat",
+        "label": "Agent Chat"
+      },
+      "layouts": {
+        "default": "layout.json"
+      },
+      "windowEntries": {
+        "main": "main.html",
+        "secondary": "secondary.html"
+      },
+      "plugin": [
+        "conversation-list",
+        "message-panel",
+        "agent"
+      ]
+    }
+  },
+  "harbors": {
+    "distribution": "builtin",
+    "ci": { "runner": "ubuntu-latest" },
+    "docs": { "summary": "AI 对话工作台 Kit，提供对话列表与消息界面，后端对接 Codex app-server" },
+    "resources": [],
+    "storage": { "legacyDataDirectories": [] },
+    "scripts": {
+      "build": "build",
+      "test": "test:kit"
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0"
+  }
+}

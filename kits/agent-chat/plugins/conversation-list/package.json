@@ -1,0 +1,31 @@
+{
+  "name": "conversation-list",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "list": {
+          "entry": "./panel.list/dist/index.html",
+          "title": "对话列表",
+          "width": 280,
+          "minWidth": 200
+        }
+      },
+      "message": {
+        "broadcast": {
+          "conversation.changed": ["panel.onConversationChanged"],
+          "conversation.selected": ["panel.onConversationSelected"],
+          "message.sent": ["panel.onMessageSent"]
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@chatscope/chat-ui-kit-react": "^2.1.1",
+    "@chatscope/chat-ui-kit-styles": "^1.4.0"
+  }
+}
