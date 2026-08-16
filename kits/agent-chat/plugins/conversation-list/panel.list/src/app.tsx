@@ -8,6 +8,8 @@ interface ConversationData {
   preview?: string;
   source: 'harbors';
   project?: string;
+  /** 该会话是否正在执行 agent turn。 */
+  active?: boolean;
 }
 
 interface ConversationDraft {
@@ -65,6 +67,8 @@ export default function App({
   const [conversations, setConversations] = useState<ConversationData[]>([]);
   const [uiState, setUiState] = useState<ConversationUiState>(EMPTY_UI_STATE);
   const [error, setError] = useState<string | null>(null);
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
   const sequenceRef = useRef(0);
   const uiStateArrivalSequenceRef = useRef(0);
   const latestUiArrivalSequenceRef = useRef(-1);
@@ -201,6 +205,37 @@ export default function App({
     }
   };
 
+  const startRename = (conversation: ConversationData, event: ReactMouseEvent) => {
+    event.stopPropagation();
+    // 关闭承载菜单的 details。
+    (event.currentTarget as HTMLElement).closest('details')?.removeAttribute('open');
+    setRenamingId(conversation.id);
+    setRenameValue(conversation.title);
+  };
+
+  const cancelRename = () => {
+    setRenamingId(null);
+    setRenameValue('');
+  };
+
+  const commitRename = async (id: string) => {
+    const nextTitle = renameValue.trim();
+    const current = conversations.find((conversation) => conversation.id === id);
+    if (!nextTitle || nextTitle === current?.title) {
+      cancelRename();
+      return;
+    }
+    try {
+      await ctx.message.request('agent', 'renameConversation', id, nextTitle);
+      setError(null);
+    } catch (err) {
+      console.error('Failed to rename conversation:', describeError(err));
+      setError(`重命名对话失败：${describeError(err)}`);
+    } finally {
+      cancelRename();
+    }
+  };
+
   const groups = new Map<string, ConversationData[]>();
   for (const conversation of conversations) {
     const project = projectLabel(conversation.project);
@@ -223,17 +258,38 @@ export default function App({
           <section key={project} className="project-group" aria-label={`${project} 项目会话`}>
             <div className="project-group-heading"><span>{project}</span><span>{projectConversations.length}</span></div>
             {projectConversations.map((conversation) => {
+              const isRenaming = renamingId === conversation.id;
               return (
-                <article key={conversation.id} className={`conversation-card ${uiState.selectedConversationId === conversation.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => handleSelect(conversation.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
-                  <div className="source-mark harbors" aria-hidden="true">⚓</div>
+                <article key={conversation.id} className={`conversation-card ${uiState.selectedConversationId === conversation.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => { if (!isRenaming) handleSelect(conversation.id); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
                   <div className="conversation-card-content">
                     <div className="conversation-card-title-row">
-                      <span className="conversation-card-title">{conversation.title}</span>
+                      {isRenaming ? (
+                        <input
+                          className="conversation-rename-input"
+                          value={renameValue}
+                          autoFocus
+                          onClick={(event) => event.stopPropagation()}
+                          onChange={(event) => setRenameValue(event.target.value)}
+                          onKeyDown={(event) => {
+                            event.stopPropagation();
+                            if (event.key === 'Enter') { event.preventDefault(); void commitRename(conversation.id); }
+                            else if (event.key === 'Escape') { event.preventDefault(); cancelRename(); }
+                          }}
+                          onBlur={() => void commitRename(conversation.id)}
+                          aria-label="重命名对话"
+                        />
+                      ) : (
+                        <span className="conversation-card-title">{conversation.title}</span>
+                      )}
                     </div>
                   </div>
+                  {conversation.active && (
+                    <span className="conversation-spinner" role="status" aria-label="正在执行" title="正在执行…" />
+                  )}
                   <details className="conversation-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
                     <summary className="more-btn" aria-label={`更多操作：${conversation.title}`} aria-haspopup="menu" title="更多操作">•••</summary>
                     <div className="conversation-menu-popover" role="menu">
+                      <button type="button" role="menuitem" onClick={(event) => startRename(conversation, event)}>重命名</button>
                       <button type="button" role="menuitem" onClick={(event) => handleArchive(conversation.id, event)}>归档</button>
                     </div>
                   </details>

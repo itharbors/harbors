@@ -171,6 +171,16 @@ export class HarborsAdapter implements AgentAdapter {
     await rename(source, join(trashDir, `${id}-${Date.now()}.jsonl`));
   }
 
+  async renameConversation(id: string, title: string): Promise<AgentConversation> {
+    throwIfAborted(this.abortController.signal);
+    const trimmed = title.trim();
+    if (!trimmed) throw new Error('会话标题不能为空');
+    const nextTitle = trimmed.slice(0, 120);
+    const session = await this.load(id);
+    await this.appendEvent(session, 'session/title', { title: nextTitle, source: { kind: 'user' } });
+    return toConversation(session);
+  }
+
   async getMessages(id: string): Promise<AgentChatMessage[]> {
     return (await this.load(id)).messages.map((message) => ({ ...message }));
   }
@@ -695,7 +705,7 @@ function updateToolFailureGuard(guard: ToolFailureGuard, calls: ToolCall[], resu
   return undefined;
 }
 
-function isParallelTool(name: string): boolean { return new Set(['list_files', 'read_file', 'search_text', 'list_skills', 'load_skill', 'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch']).has(name); }
+function isParallelTool(name: string): boolean { return new Set(['list_files', 'list_skills', 'load_skill', 'read', 'tree', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write']).has(name); }
 function parseToolArguments(value: string | undefined): Record<string, unknown> { if (!value) return {}; try { const parsed = JSON.parse(value) as unknown; return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; } }
 function boundedText(value: string): string { return value.length <= MAX_STORED_VALUE_CHARS ? value : `${value.slice(0, MAX_STORED_VALUE_CHARS)}\n...[truncated]`; }
 function boundedJson(value: unknown): string { try { return boundedText(JSON.stringify(value)); } catch { return '[unserializable]'; } }
@@ -789,7 +799,7 @@ function projectMessages(events: AgentTraceEvent[]): AgentChatMessage[] {
   return messages;
 }
 
-function titleFromEvents(events: AgentTraceEvent[]): string { const title = events.find((event) => event.type === 'session/title' && typeof event.data.title === 'string'); if (title) return String(title.data.title); const user = events.find((event) => event.type === 'user/message'); return user ? textContent(user.data.content).trim().slice(0, 48) || '未命名对话' : '未命名对话'; }
+function titleFromEvents(events: AgentTraceEvent[]): string { const title = [...events].reverse().find((event) => event.type === 'session/title' && typeof event.data.title === 'string'); if (title) return String(title.data.title); const user = events.find((event) => event.type === 'user/message'); return user ? textContent(user.data.content).trim().slice(0, 48) || '未命名对话' : '未命名对话'; }
 
 function toOpenAiMessages(events: AgentTraceEvent[], surface: readonly number[]): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];

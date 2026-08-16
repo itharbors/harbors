@@ -17,6 +17,7 @@
           "resolvePermissionRequest": ["resolvePermissionRequest"],
           "createConversation": ["createConversation"],
           "deleteConversation": ["deleteConversation"],
+          "renameConversation": ["renameConversation"],
           "getMessages": ["getMessages"],
           "getConversationTrace": ["getConversationTrace"],
           "sendMessage": ["sendMessage"],

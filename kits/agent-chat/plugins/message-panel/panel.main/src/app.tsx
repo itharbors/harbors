@@ -6,7 +6,7 @@ import './index.css';
 
 type Source = 'harbors';
 interface MessageData { id: string; role: 'user' | 'assistant'; content: string; }
-interface ConversationData { id: string; }
+interface ConversationData { id: string; active?: boolean; }
 interface DraftData { source?: Source; project?: string; }
 interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; generation?: string; revision?: number; }
 interface SelectOption { id: string; name: string; description?: string; }
@@ -197,6 +197,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const stopRequestedRef = useRef(false);
   const traceRequestSeqRef = useRef(0);
   const permissionRequestSeqRef = useRef(0);
+  const activeConversationsRef = useRef<Set<string>>(new Set());
+  const sendingConversationRef = useRef<string | null>(null);
   const loadTrace = async (id: string, seq: number): Promise<void> => {
     const requestSeq = ++traceRequestSeqRef.current;
     try {
@@ -249,13 +251,39 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     };
     const loadConversation = (id: string) => {
       const seq = ++loadSeqRef.current;
-      const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
+      // 该会话是否正在执行中：后端 active 集合 或 本地正在给它发送
+      const targetActive = activeConversationsRef.current.has(id) || sendingConversationRef.current === id;
+      const preserveSending = (sendingRef.current && sendingConversationRef.current === id) || targetActive;
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
-      requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
+      requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const confirmed = new Set(loaded.map((message) => `${message.role}\u0000${message.content}`)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !confirmed.has(`${message.role}\u0000${message.content}`))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
       loadTrace(id, seq);
       loadPermissionRequests(id);
+      // 切入正在执行中的会话时，启动轮询实时刷新进度，直到该会话不再执行、或用户切走
+      if (targetActive && sendingConversationRef.current !== id) {
+        void (async () => {
+          while (!disposed && seq === loadSeqRef.current && activeConversationsRef.current.has(id)) {
+            await wait(1500);
+            if (disposed || seq !== loadSeqRef.current) return;
+            await loadTrace(id, seq);
+            if (conversationIdRef.current === id) {
+              try {
+                const latest = await requestWithRetry(ctx, 'agent', 'getMessages', id);
+                if (!disposed && seq === loadSeqRef.current) setMessages(Array.isArray(latest) ? latest as MessageData[] : []);
+              } catch { /* 轮询期间的瞬时错误忽略 */ }
+            }
+          }
+          // 该会话结束后拉取最终结果
+          if (!disposed && seq === loadSeqRef.current && conversationIdRef.current === id) {
+            await loadTrace(id, seq);
+            try {
+              const latest = await requestWithRetry(ctx, 'agent', 'getMessages', id);
+              if (!disposed && seq === loadSeqRef.current) { setMessages(Array.isArray(latest) ? latest as MessageData[] : []); setSending(false); setStopping(false); }
+            } catch { /* ignore */ }
+          }
+        })();
+      }
       requestWithRetry(ctx, 'agent', 'getConversationOptions', id).then((options: unknown) => {
         if (disposed || seq !== loadSeqRef.current) return;
         applyAgentOptions(options);
@@ -277,7 +305,26 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     };
     applyUiStateRef.current = applyConversationUiState;
     registerSetter('conversation.ui.changed', (value: unknown) => applyConversationUiState(value, ++uiStateSequenceRef.current));
-    registerSetter('conversation.changed', (value: unknown) => { if (!disposed && conversationIdRef.current && Array.isArray(value) && !(value as ConversationData[]).some((conversation) => conversation.id === conversationIdRef.current)) clearConversation(); });
+    registerSetter('conversation.changed', (value: unknown) => {
+      if (disposed || !Array.isArray(value)) return;
+      const list = value as ConversationData[];
+      // 维护「正在执行中的会话」集合，作为发送锁的真相来源
+      const nextActive = new Set(list.filter((conversation) => conversation.active).map((conversation) => conversation.id));
+      activeConversationsRef.current = nextActive;
+      const current = conversationIdRef.current;
+      // 当前会话被删除时清空
+      if (current && !list.some((conversation) => conversation.id === current)) { clearConversation(); return; }
+      // 根据后端状态同步当前会话的发送锁
+      if (current) {
+        if (nextActive.has(current)) {
+          setSending(true);
+        } else if (sendingConversationRef.current !== current) {
+          // 后端已结束，且本地也不是正在给该会话发送 → 解锁
+          setSending(false);
+          setStopping(false);
+        }
+      }
+    });
     registerSetter('message.delta', (value: unknown) => {
       const delta = value as { conversationId?: string; messageId?: string; content?: string } | null;
       if (!disposed && delta?.conversationId === conversationIdRef.current && delta.messageId) {
@@ -320,7 +367,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   }, [ctx, draft, source]);
 
   const send = async () => {
-    if (!text.trim() || sending || sendingRef.current || loading || configurationError || permissionRequests.length > 0) return;
+    const currentActive = sending || (sendingRef.current && sendingConversationRef.current === conversationId) || (!!conversationId && activeConversationsRef.current.has(conversationId));
+    if (!text.trim() || currentActive || loading || configurationError || permissionRequests.length > 0) return;
     let target = conversationId;
     const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier, sandboxMode, approvalPolicy);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -337,6 +385,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setLocalProcessEntries((current) => [...current, processEntry]);
     shouldFollowLatestRef.current = true;
     sendingRef.current = true;
+    sendingConversationRef.current = target;
     stopRequestedRef.current = false;
     setSending(true); setError(null);
     let stopPolling = false;
@@ -345,6 +394,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (!target) {
         const created = await ctx.message.request('agent', 'createConversation', source, project || undefined, selectedTurnOptions) as { id: string };
         target = created.id;
+        sendingConversationRef.current = target;
         pendingConversationIdRef.current = target;
         const selectionSequence = ++uiStateSequenceRef.current;
         const snapshot = await requestWithRetry(ctx, 'conversation-list', 'selectConversation', target);
@@ -376,9 +426,11 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       stopPolling = true;
       if (pollPromise) await pollPromise.catch(() => undefined);
       sendingRef.current = false;
+      if (sendingConversationRef.current === target) sendingConversationRef.current = null;
       stopRequestedRef.current = false;
       if (pendingConversationIdRef.current === target) pendingConversationIdRef.current = null;
-      setSending(false); setStopping(false);
+      // 只有当前显示的仍是本次发送的会话时，才在此处解锁，避免误伤已切走的其他会话
+      if (conversationIdRef.current === target) { setSending(false); setStopping(false); }
     }
   };
 

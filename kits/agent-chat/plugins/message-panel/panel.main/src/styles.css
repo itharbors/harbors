@@ -100,13 +100,19 @@ html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; o
 .permission-card-actions button:disabled { cursor: default; opacity: .55; }
 
 /* AI SDK UIMessage parts: one step contains the model intent and its tool process. */
-.agent-step { display: flex; width: min(760px, 88%); min-width: 0; flex-direction: column; gap: 10px; align-self: flex-start; margin: 2px 0 12px; padding: 4px 0 4px 16px; border-left: 2px solid #628bc6; }
+.agent-step { display: flex; width: min(760px, 88%); min-width: 0; flex-direction: column; gap: 4px; align-self: flex-start; margin: 2px 0 12px; padding: 4px 0 4px 16px; border-left: 2px solid #628bc6; }
 .agent-step::before { content: ''; display: block; width: 6px; height: 6px; margin-left: -20px; margin-bottom: -18px; border: 2px solid #7fa7df; border-radius: 50%; background: #171a21; }
-.agent-turn-header { color: #8f9bab; font-size: 11px; font-weight: 600; }
-.agent-cycle { display: flex; min-width: 0; flex-direction: column; gap: 6px; padding: 5px 0; }
+.agent-turn-header { display: flex; align-items: center; gap: 6px; width: fit-content; margin: 0; padding: 2px 6px 2px 0; border: 0; background: transparent; color: #8f9bab; font: inherit; font-size: 11px; font-weight: 600; cursor: pointer; user-select: none; }
+.agent-turn-header:hover { color: #b9c4d2; }
+.agent-turn-caret { display: inline-block; flex: 0 0 auto; font-size: 13px; line-height: 1; transition: transform .15s ease; transform: rotate(90deg); }
+.agent-step.collapsed .agent-turn-caret { transform: rotate(0deg); }
+.agent-turn-title { flex: 0 0 auto; }
+.agent-turn-hint { flex: 0 0 auto; color: #6b7789; font-weight: 500; font-size: 10.5px; }
+.agent-cycle { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 0; }
+.agent-step-tools { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
 .agent-step-error { overflow-wrap: anywhere; border: 1px solid #713c43; border-radius: 8px; background: #351f25; padding: 7px 9px; color: #e6aeb2; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }
 .agent-step-intent { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
-.agent-final-response { margin-top: 10px; border-top: 1px solid rgba(132, 148, 170, 0.2); padding-top: 9px; }
+.agent-final-response { margin-top: 5px; border-top: 1px solid rgba(132, 148, 170, 0.2); padding-top: 6px; }
 .agent-step .chat-message.assistant { width: 100%; }
 .agent-step .chat-message.assistant .chat-message-content { border: 0; background: transparent; padding: 0; color: #aeb8c6; font-size: 13px; line-height: 1.5; }
 .agent-step .markdown-body { color: inherit; font-size: 13px; line-height: 1.5; }
