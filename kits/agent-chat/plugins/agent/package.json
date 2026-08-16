@@ -2,7 +2,7 @@
   "name": "agent",
   "version": "0.0.1",
   "type": "module",
-  "main": "./main/dist/index.js",
+  "main": "./main/dist/index.cjs",
   "ce-editor": {
     "contribute": {
       "message": {
