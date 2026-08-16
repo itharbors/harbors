@@ -6,13 +6,42 @@ import type {
   ThreadReadResult,
   TurnStartResult,
 } from './codex-history.js';
-import type { AgentAdapter, AgentConversation, AgentChatMessage } from './base.js';
+import type { AgentAdapter, AgentChatMessage, AgentConversation, AgentModelOption, AgentOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
+import { normalizeTurnOptions } from './base.js';
 
 const TURN_TIMEOUT_MS = 5 * 60_000;
 
 /** thread/start 响应：仅包含新建线程摘要。 */
 interface ThreadStartResult {
   thread?: ThreadInfo;
+}
+
+interface CodexReasoningEffortOption {
+  reasoningEffort?: string;
+  description?: string;
+}
+
+interface CodexServiceTierOption {
+  id?: string;
+  name?: string;
+  description?: string;
+}
+
+interface CodexModelEntry {
+  id?: string;
+  displayName?: string;
+  description?: string;
+  isDefault?: boolean;
+  defaultReasoningEffort?: string;
+  supportedReasoningEfforts?: CodexReasoningEffortOption[];
+  defaultServiceTier?: string | null;
+  serviceTiers?: CodexServiceTierOption[];
+}
+
+interface ThreadResumeResult {
+  model?: string;
+  reasoningEffort?: string | null;
+  serviceTier?: string | null;
 }
 
 /** item/agentMessage/delta 通知参数。 */
@@ -40,6 +69,36 @@ interface TurnResolver {
   timer: ReturnType<typeof setTimeout>;
 }
 
+function mapCodexModel(entry: CodexModelEntry): AgentModelOption {
+  const reasoningEfforts = (entry.supportedReasoningEfforts || []).filter((option) => option.reasoningEffort).map((option) => ({ id: option.reasoningEffort!, name: option.reasoningEffort!, ...(option.description ? { description: option.description } : {}) }));
+  const serviceTiers = (entry.serviceTiers || []).filter((option) => option.id).map((option) => ({ id: option.id!, name: option.name || option.id!, ...(option.description ? { description: option.description } : {}) }));
+  return {
+    id: entry.id!,
+    name: entry.displayName || entry.id!,
+    ...(entry.description ? { description: entry.description } : {}),
+    ...(reasoningEfforts.length ? { reasoningEfforts } : {}),
+    ...(serviceTiers.length ? { serviceTiers } : {}),
+    ...(entry.defaultReasoningEffort ? { defaultReasoningEffort: entry.defaultReasoningEffort } : {}),
+    ...(entry.defaultServiceTier ? { defaultServiceTier: entry.defaultServiceTier } : {}),
+  };
+}
+
+function codexTurnParams(options: AgentTurnOptions): Record<string, string> {
+  return {
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.reasoningEffort ? { effort: options.reasoningEffort } : {}),
+    ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
+  };
+}
+
+function codexConversationSettings(options: AgentTurnOptions): AgentTurnOptions {
+  return {
+    ...(options.model ? { model: options.model } : {}),
+    ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+    ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
+  };
+}
+
 /**
  * Codex Adapter 编排层。
  *
@@ -61,6 +120,7 @@ export class CodexAdapter implements AgentAdapter {
 
   private readonly loadedThreadIds = new Set<string>();
   private readonly resumePromises = new Map<string, Promise<void>>();
+  private readonly conversationSettings = new Map<string, AgentTurnOptions>();
 
   /**
    * 确保底层 client 已启动并返回。
@@ -161,25 +221,34 @@ export class CodexAdapter implements AgentAdapter {
     });
   }
 
-  async createConversation(_project?: string, model?: string): Promise<AgentConversation> {
+  async createConversation(_project?: string, input?: AgentTurnInput): Promise<AgentConversation> {
+    const options = normalizeTurnOptions(input);
     const client = await this.ensureClient();
     const result = (await client.request('thread/start', {
       approvalPolicy: 'never',
-      ...(model ? { model } : {}),
+      ...codexTurnParams(options),
     })) as ThreadStartResult;
     if (!result.thread?.id) {
       throw new Error('Failed to create conversation: no thread id');
     }
-    const conversation = mapThreadToConversation(result.thread);
+    const settings = codexConversationSettings(options);
+    const conversation = { ...mapThreadToConversation(result.thread), ...settings };
+    this.conversationSettings.set(conversation.id, settings);
     this.loadedThreadIds.add(conversation.id);
     return conversation;
   }
 
-  async getModels(): Promise<{ models: Array<{ id: string; name: string }>; defaultModel: string }> {
+  async getModels(): Promise<AgentOptions> {
     const client = await this.ensureClient();
-    const result = await client.request('model/list', {}) as { data?: Array<{ id?: string; displayName?: string; isDefault?: boolean }> };
-    const models = (result.data || []).filter((entry) => entry.id).map((entry) => ({ id: entry.id!, name: entry.displayName || entry.id! }));
-    return { models, defaultModel: result.data?.find((entry) => entry.isDefault)?.id || models[0]?.id || 'default' };
+    const result = await client.request('model/list', {}) as { data?: CodexModelEntry[] };
+    const models = (result.data || []).filter((entry) => entry.id).map(mapCodexModel);
+    const defaultEntry = result.data?.find((entry) => entry.isDefault);
+    return {
+      models,
+      defaultModel: defaultEntry?.id || models[0]?.id || 'default',
+      ...(defaultEntry?.defaultReasoningEffort ? { defaultReasoningEffort: defaultEntry.defaultReasoningEffort } : {}),
+      ...(defaultEntry?.defaultServiceTier ? { defaultServiceTier: defaultEntry.defaultServiceTier } : {}),
+    };
   }
 
   async listConversations(): Promise<AgentConversation[]> {
@@ -213,7 +282,12 @@ export class CodexAdapter implements AgentAdapter {
       unique.push(t);
     }
 
-    return unique.map(mapThreadToConversation);
+    return unique.map((thread) => ({ ...mapThreadToConversation(thread), ...(this.conversationSettings.get(thread.id) || {}) }));
+  }
+
+  async getConversationSettings(conversationId: string): Promise<AgentTurnOptions> {
+    await this.ensureThreadLoaded(conversationId);
+    return { ...(this.conversationSettings.get(conversationId) || {}) };
   }
 
   async getMessages(conversationId: string): Promise<AgentChatMessage[]> {
@@ -237,10 +311,16 @@ export class CodexAdapter implements AgentAdapter {
     const promise = (async (): Promise<void> => {
       try {
         const client = await this.ensureClient();
-        await client.request('thread/resume', {
+        const result = await client.request('thread/resume', {
           threadId,
           approvalPolicy: 'never',
-        });
+        }) as ThreadResumeResult;
+        const settings = {
+          ...(result.model ? { model: result.model } : {}),
+          ...(result.reasoningEffort ? { reasoningEffort: result.reasoningEffort } : {}),
+          ...(result.serviceTier ? { serviceTier: result.serviceTier } : {}),
+        };
+        if (Object.keys(settings).length > 0) this.conversationSettings.set(threadId, settings);
         this.loadedThreadIds.add(threadId);
       } finally {
         this.resumePromises.delete(threadId);
@@ -251,14 +331,16 @@ export class CodexAdapter implements AgentAdapter {
     return promise;
   }
 
-  async sendMessage(conversationId: string, content: string, model?: string, onDelta?: (delta: string) => void): Promise<string> {
+  async sendMessage(conversationId: string, content: string, input?: AgentTurnInput, onDelta?: (delta: string) => void): Promise<string> {
+    const options = normalizeTurnOptions(input);
     await this.ensureThreadLoaded(conversationId);
     const client = await this.ensureClient();
     const result = (await client.request('turn/start', {
       threadId: conversationId,
       input: [{ type: 'text', text: content }],
-      ...(model ? { model } : {}),
+      ...codexTurnParams(options),
     })) as TurnStartResult;
+    this.conversationSettings.set(conversationId, { ...(this.conversationSettings.get(conversationId) || {}), ...codexConversationSettings(options) });
     const turnId = result.turn?.id;
     if (!turnId) {
       throw new Error('Failed to start turn: no turn id');
@@ -292,6 +374,7 @@ export class CodexAdapter implements AgentAdapter {
     const client = await this.ensureClient();
     await client.request('thread/archive', { threadId: id });
     this.loadedThreadIds.delete(id);
+    this.conversationSettings.delete(id);
   }
 
   /**
@@ -317,6 +400,7 @@ export class CodexAdapter implements AgentAdapter {
     this.turnDeltas.clear();
     this.loadedThreadIds.clear();
     this.resumePromises.clear();
+    this.conversationSettings.clear();
 
     if (client) {
       client.stop();

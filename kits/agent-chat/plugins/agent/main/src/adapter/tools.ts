@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync } from 'node:
 import { homedir } from 'node:os';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import type { AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentSandboxMode } from './base.js';
 import { readDshRelayConfig } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
 
@@ -46,6 +47,8 @@ export const hubbertTools: HubBertTool[] = [
       properties: {
         file_path: { type: 'string', description: '相对工作区的文件路径。' },
         content: { type: 'string', description: '要写入的完整 UTF-8 文本内容。' },
+        sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
+        justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
       },
       required: ['file_path', 'content'],
     },
@@ -60,6 +63,8 @@ export const hubbertTools: HubBertTool[] = [
         old_string: { type: 'string', description: '要被替换的字面量文本。' },
         new_string: { type: 'string', description: '替换后的文本，可为空字符串以删除匹配。' },
         replace_all: { type: 'boolean', description: '是否替换所有匹配，默认 false。' },
+        sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
+        justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
       },
       required: ['file_path', 'old_string', 'new_string'],
     },
@@ -99,6 +104,8 @@ export const hubbertTools: HubBertTool[] = [
         description: { type: 'string', description: '命令用途的简短描述。' },
         timeoutMs: { type: 'number', description: '超时毫秒数，默认 120000。' },
         workdir: { type: 'string', description: '工作目录，默认工作区；相对路径按工作区解析。' },
+        sandbox_permissions: { type: 'string', enum: ['danger-full-access'], description: '当前实现无法为 bash 提供操作系统级 workspace-write 隔离；仅可请求一次 danger-full-access，并且必须同时提供 justification。' },
+        justification: { type: 'string', description: '说明这次命令为什么需要更宽的权限。' },
       },
       required: ['command'],
     },
@@ -165,25 +172,32 @@ export interface HubBertToolResult {
   image?: HubBertToolImage;
 }
 
-export async function runHubBertTool(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<string> {
-  return (await runHubBertToolContent(name, input, workspace, signal)).text;
+export interface HubBertToolPermissionContext extends AgentPermissionState {
+  conversationId: string;
+  turn: number;
+  step: number;
+  requestPermission?: (request: Omit<AgentPermissionRequest, 'requestId' | 'conversationId' | 'turn' | 'step' | 'signal'> & { signal?: AbortSignal }) => Promise<AgentPermissionOutcome>;
 }
 
-export async function runHubBertToolContent(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<HubBertToolResult> {
+export async function runHubBertTool(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<string> {
+  return (await runHubBertToolContent(name, input, workspace, signal, permission)).text;
+}
+
+export async function runHubBertToolContent(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<HubBertToolResult> {
   throwIfToolAborted(signal);
   const root = resolve(workspace);
-  if (name === 'read_image') return runReadImage(root, input, signal);
-  return { text: await runHubBertToolText(name, input, workspace, signal) };
+  if (name === 'read_image') return runReadImage(root, input, signal, permission?.sandboxMode);
+  return { text: await runHubBertToolText(name, input, workspace, signal, permission) };
 }
 
-async function runHubBertToolText(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<string> {
+async function runHubBertToolText(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<string> {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted');
   const root = resolve(workspace);
 
-  if (name === 'list_files') return cap((await readdir(within(root, string(input.path)), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
-  if (name === 'read_file') return cap(await readFile(within(root, required(input.path, 'path')), 'utf8'));
+  if (name === 'list_files') return cap((await readdir(resolveToolPath(root, string(input.path), permission?.sandboxMode), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
+  if (name === 'read_file') return cap(await readFile(resolveToolPath(root, required(input.path, 'path'), permission?.sandboxMode), 'utf8'));
   if (name === 'search_text') {
-    const searchPath = string(input.path) ? within(root, string(input.path)) : root;
+    const searchPath = string(input.path) ? resolveToolPath(root, string(input.path), permission?.sandboxMode) : root;
     const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), searchPath], { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, signal });
     return cap(stdout || '未找到匹配项');
   }
@@ -194,23 +208,23 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
     return cap(await readFile(skill.path, 'utf8'));
   }
 
-  if (name === 'read') return runRead(root, input);
-  if (name === 'write') return runExclusive(() => runWrite(root, input), signal);
-  if (name === 'edit') return runExclusive(() => runEdit(root, input), signal);
-  if (name === 'glob') return runGlob(root, input, signal);
-  if (name === 'grep') return runGrep(root, input, signal);
-  if (name === 'bash') return runExclusive(() => runBash(root, input, signal), signal);
+  if (name === 'read') return runRead(root, input, permission?.sandboxMode);
+  if (name === 'write') return runExclusive(() => runWrite(root, input, permission, signal), signal);
+  if (name === 'edit') return runExclusive(() => runEdit(root, input, permission, signal), signal);
+  if (name === 'glob') return runGlob(root, input, signal, permission?.sandboxMode);
+  if (name === 'grep') return runGrep(root, input, signal, permission?.sandboxMode);
+  if (name === 'bash') return runExclusive(() => runBash(root, input, signal, permission), signal);
   if (name === 'web_search') return runWebSearch(input, signal);
   if (name === 'web_fetch') return runWebFetch(input, signal);
 
   throw new Error(`不支持的工具：${name}`);
 }
 
-function runRead(root: string, input: Record<string, unknown>): string {
+function runRead(root: string, input: Record<string, unknown>, mode?: AgentSandboxMode): string {
   const filePath = required(input.file_path, 'file_path');
   const offset = Math.max(1, Math.floor(Number(input.offset) || 1));
   const limit = Math.min(READ_LIMIT, Math.max(1, Math.floor(Number(input.limit) || READ_LIMIT)));
-  const content = readFileSync(within(root, filePath), 'utf8');
+  const content = readFileSync(resolveToolPath(root, filePath, mode), 'utf8');
   const lines = content.split('\n');
   const totalLines = lines.length;
   const start = offset - 1;
@@ -226,7 +240,7 @@ function runRead(root: string, input: Record<string, unknown>): string {
   return cap(`${header}\n${body}${footer}\n</content>`);
 }
 
-async function runReadImage(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<HubBertToolResult> {
+async function runReadImage(root: string, input: Record<string, unknown>, signal?: AbortSignal, mode?: AgentSandboxMode): Promise<HubBertToolResult> {
   const filePath = required(input.file_path, 'file_path');
   const extension = extname(filePath).toLowerCase();
   const mediaTypes: Record<string, HubBertToolImage['mediaType']> = {
@@ -238,7 +252,7 @@ async function runReadImage(root: string, input: Record<string, unknown>, signal
   };
   const mediaType = mediaTypes[extension];
   if (!mediaType) throw new Error(`read_image 只支持 PNG、JPEG、WebP 和 GIF：${filePath}`);
-  const target = within(root, filePath);
+  const target = resolveToolPath(root, filePath, mode);
   const data = await readFile(target);
   throwIfToolAborted(signal);
   if (data.byteLength > IMAGE_MAX_BYTES) throw new Error(`图片超过 ${IMAGE_MAX_BYTES / 1024 / 1024} MB 限制：${filePath}`);
@@ -256,22 +270,24 @@ function matchesImageSignature(data: Buffer, mediaType: HubBertToolImage['mediaT
   return data.length >= 12 && data.subarray(0, 4).toString('ascii') === 'RIFF' && data.subarray(8, 12).toString('ascii') === 'WEBP';
 }
 
-function runWrite(root: string, input: Record<string, unknown>): string {
+async function runWrite(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
+  const mode = await resolveToolMode('write', input, permission, signal);
   const filePath = required(input.file_path, 'file_path');
   const content = typeof input.content === 'string' ? input.content : '';
-  const target = within(root, filePath);
+  const target = resolveToolPath(root, filePath, mode);
   mkdirSync(dirname(target), { recursive: true });
   fsWriteFileSync(target, content, 'utf8');
   return `<path>${filePath}</path>\n<type>file</type>\n<content>\nFile written successfully\n</content>`;
 }
 
-function runEdit(root: string, input: Record<string, unknown>): string {
+async function runEdit(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
+  const mode = await resolveToolMode('edit', input, permission, signal);
   const filePath = required(input.file_path, 'file_path');
   const oldString = required(input.old_string, 'old_string');
   const newString = typeof input.new_string === 'string' ? input.new_string : '';
   const replaceAll = Boolean(input.replace_all);
   if (oldString === newString) throw new Error('old_string 和 new_string 必须不同');
-  const target = within(root, filePath);
+  const target = resolveToolPath(root, filePath, mode);
   const original = readFileSync(target, 'utf8');
   const occurrences = countOccurrences(original, oldString);
   if (occurrences === 0) throw new Error('未找到 old_string');
@@ -281,9 +297,9 @@ function runEdit(root: string, input: Record<string, unknown>): string {
   return `The file ${filePath} has been updated${replaceAll ? '. All occurrences were successfully replaced.' : ' successfully.'}`;
 }
 
-async function runGlob(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+async function runGlob(root: string, input: Record<string, unknown>, signal?: AbortSignal, mode?: AgentSandboxMode): Promise<string> {
   const pattern = required(input.pattern, 'pattern');
-  const path = string(input.path) ? within(root, string(input.path)) : root;
+  const path = string(input.path) ? resolveToolPath(root, string(input.path), mode) : root;
   const args = ['--files', `--glob=${pattern}`, '--sort=modified', '--no-ignore', '--hidden'];
   for (const vcs of ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl']) {
     args.push(`--glob=!**/${vcs}`, `--glob=!**/${vcs}/**`);
@@ -297,9 +313,9 @@ async function runGlob(root: string, input: Record<string, unknown>, signal?: Ab
   return cap(lines.join('\n'));
 }
 
-async function runGrep(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+async function runGrep(root: string, input: Record<string, unknown>, signal?: AbortSignal, mode?: AgentSandboxMode): Promise<string> {
   const pattern = required(input.pattern, 'pattern');
-  const path = string(input.path) ? within(root, string(input.path)) : root;
+  const path = string(input.path) ? resolveToolPath(root, string(input.path), mode) : root;
   const include = string(input.include);
   const args = ['--json', `--regexp=${pattern}`];
   if (include) args.push(`--glob=${include}`);
@@ -322,11 +338,12 @@ async function runGrep(root: string, input: Record<string, unknown>, signal?: Ab
   return cap(`Found ${matches.length} match${matches.length === 1 ? '' : 'es'}\n\n${sections.join('\n\n')}`);
 }
 
-async function runBash(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+async function runBash(root: string, input: Record<string, unknown>, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<string> {
+  const mode = await resolveToolMode('bash', input, permission, signal);
   const command = required(input.command, 'command');
   const timeoutMs = Math.min(BASH_TIMEOUT_MS, Math.max(1, Math.floor(Number(input.timeoutMs) || BASH_TIMEOUT_MS)));
   const workdirArg = string(input.workdir);
-  const cwd = workdirArg ? within(root, workdirArg) : root;
+  const cwd = workdirArg ? resolveToolPath(root, workdirArg, mode) : root;
   try {
     const { stdout, stderr } = await exec('bash', ['-c', command], { cwd, timeout: timeoutMs, maxBuffer: MAX_OUTPUT * 8, signal });
     const out = cap(stdout);
@@ -369,6 +386,51 @@ function parseGrepJson(output: string): GrepMatch[] {
     } catch { /* ignore malformed ripgrep diagnostics */ }
   }
   return matches;
+}
+
+const WIDER_SANDBOX_MODES: Record<AgentSandboxMode, readonly AgentSandboxMode[]> = {
+  'read-only': ['workspace-write', 'danger-full-access'],
+  'workspace-write': ['danger-full-access'],
+  'danger-full-access': [],
+};
+
+async function resolveToolMode(toolName: string, input: Record<string, unknown>, permission: HubBertToolPermissionContext | undefined, signal?: AbortSignal): Promise<AgentSandboxMode> {
+  const currentMode = permission?.sandboxMode || 'workspace-write';
+  const requestedMode = string(input.sandbox_permissions) as AgentSandboxMode | '';
+  const justification = string(input.justification);
+  if (requestedMode && !justification.trim()) throw new Error('sandbox_permissions 必须同时提供非空 justification');
+  if (!requestedMode && justification) throw new Error('justification 只能和 sandbox_permissions 一起使用');
+  if (!requestedMode) {
+    if ((toolName === 'bash' && currentMode !== 'danger-full-access') || (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit'))) {
+      throw sandboxDenied(toolName, currentMode);
+    }
+    return currentMode;
+  }
+  if (toolName === 'bash' && requestedMode !== 'danger-full-access') {
+    throw new Error('当前实现无法为 bash 提供 workspace-write 级别的操作系统隔离；请请求 danger-full-access');
+  }
+  if (!Object.prototype.hasOwnProperty.call(WIDER_SANDBOX_MODES, requestedMode) || !(WIDER_SANDBOX_MODES[currentMode] || []).includes(requestedMode)) {
+    throw new Error(`sandbox escalation to "${requestedMode}" is not strictly wider than this call's current "${currentMode}" mode`);
+  }
+  if (!permission?.requestPermission) throw new Error(`sandbox escalation to "${requestedMode}" requires approval, but no approval channel is available`);
+  const outcome = await permission.requestPermission({ toolName, currentMode, requestedMode, justification, signal });
+  switch (outcome) {
+    case 'allowed-once': return requestedMode;
+    case 'rejected': throw new Error(`用户拒绝将 ${toolName} 提升到 "${requestedMode}" 权限`);
+    case 'cancelled': throw new Error(`提升到 "${requestedMode}" 的权限请求已取消`);
+    case 'unavailable': throw new Error(`sandbox escalation to "${requestedMode}" requires approval, but no approval channel is available`);
+    default: throw new Error(`未知的权限审批结果：${String(outcome)}`);
+  }
+}
+
+function sandboxDenied(toolName: string, mode: AgentSandboxMode): Error {
+  const subject = toolName === 'bash' ? 'command' : 'operation';
+  return new Error(`[sandbox: file access denied under ${mode} mode]\n[sandbox: escalation available — retry this exact ${subject} once with sandbox_permissions + justification; the approval prompt asks the user]`);
+}
+
+function resolveToolPath(root: string, candidate: string, mode?: AgentSandboxMode): string {
+  if (mode === 'danger-full-access') return resolve(root, candidate || '.');
+  return within(root, candidate);
 }
 
 function within(root: string, candidate: string): string {

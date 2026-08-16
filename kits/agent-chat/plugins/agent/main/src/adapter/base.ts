@@ -5,6 +5,79 @@
 
 export type AgentSource = 'codex' | 'harbors';
 
+export type AgentSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+export const AGENT_SANDBOX_MODES: readonly AgentSandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
+
+export type AgentApprovalPolicy = 'ask' | 'never';
+export const AGENT_APPROVAL_POLICIES: readonly AgentApprovalPolicy[] = ['ask', 'never'];
+
+export type AgentPermissionOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
+
+export type AgentProgressPhase = 'running' | 'waiting_permission' | 'completed' | 'error';
+
+export interface AgentProgressStatus {
+  phase: AgentProgressPhase;
+  message?: string;
+  turn?: number;
+  step?: number;
+}
+
+export interface AgentPermissionState {
+  sandboxMode: AgentSandboxMode;
+  approvalPolicy: AgentApprovalPolicy;
+}
+
+export interface AgentPermissionRequest {
+  requestId: string;
+  conversationId: string;
+  turn: number;
+  step: number;
+  toolName: string;
+  currentMode: AgentSandboxMode;
+  requestedMode: AgentSandboxMode;
+  justification: string;
+  signal?: AbortSignal;
+}
+
+export type AgentPermissionRequester = (request: AgentPermissionRequest) => Promise<AgentPermissionOutcome>;
+
+export interface AgentOption {
+  id: string;
+  name: string;
+  description?: string;
+}
+
+export interface AgentModelOption extends AgentOption {
+  reasoningEfforts?: AgentOption[];
+  serviceTiers?: AgentOption[];
+  defaultReasoningEffort?: string;
+  defaultServiceTier?: string;
+}
+
+export interface AgentTurnOptions {
+  model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  sandboxMode?: AgentSandboxMode;
+  approvalPolicy?: AgentApprovalPolicy;
+}
+
+export type AgentTurnInput = string | AgentTurnOptions | undefined;
+
+export interface AgentOptions {
+  models: AgentModelOption[];
+  defaultModel: string;
+  defaultReasoningEffort?: string;
+  defaultServiceTier?: string;
+  configurationError?: string;
+  permissions?: {
+    sandboxModes: AgentSandboxMode[];
+    approvalPolicies: AgentApprovalPolicy[];
+    defaultSandboxMode: AgentSandboxMode;
+    defaultApprovalPolicy: AgentApprovalPolicy;
+  };
+}
+
 export interface AgentConversation {
   id: string;
   title: string;
@@ -15,6 +88,14 @@ export interface AgentConversation {
   project?: string;
   /** 此会话最近一次用于发送的模型。 */
   model?: string;
+  /** 此会话最近一次使用的推理强度。 */
+  reasoningEffort?: string;
+  /** 此会话最近一次使用的服务档位。 */
+  serviceTier?: string;
+  /** 此会话当前的文件沙盒模式。 */
+  sandboxMode?: AgentSandboxMode;
+  /** 此会话当前的审批策略。 */
+  approvalPolicy?: AgentApprovalPolicy;
   /** 聚合列表中标识会话来源；底层 adapter 返回时可省略。 */
   source?: AgentSource;
 }
@@ -48,10 +129,10 @@ export interface AgentTraceEvent {
 
 export interface AgentAdapter {
   /** 创建新对话 */
-  createConversation(project?: string, model?: string): Promise<AgentConversation>;
+  createConversation(project?: string, options?: AgentTurnInput): Promise<AgentConversation>;
 
   /** 返回新建会话时可供选择的模型；不支持时由宿主提供保守默认值。 */
-  getModels?(): Promise<{ models: Array<{ id: string; name: string }>; defaultModel: string; configurationError?: string }>;
+  getModels?(): Promise<AgentOptions>;
 
   /** 列出所有对话 */
   listConversations(): Promise<AgentConversation[]>;
@@ -62,12 +143,29 @@ export interface AgentAdapter {
   /** 获取对话历史消息 */
   getMessages(conversationId: string): Promise<AgentChatMessage[]>;
 
+  /** 获取会话最近一次使用的配置；不支持时返回空对象。 */
+  getConversationSettings?(conversationId: string): Promise<AgentTurnOptions>;
+
+  /** 获取会话当前的权限状态。 */
+  getConversationPermissions?(conversationId: string): Promise<AgentPermissionState>;
+
+  /** 更新会话权限状态；未提供的字段保持不变。 */
+  setConversationPermissions?(conversationId: string, permissions: Partial<AgentPermissionState>): Promise<AgentPermissionState>;
+
+  /** 设置工具越权审批的宿主回调；未设置时审批失败关闭。 */
+  setPermissionRequester?(requester?: AgentPermissionRequester): void;
+
   /** 获取对话的 Agent 执行轨迹；不支持轨迹的 adapter 返回空数组。 */
   getConversationTrace?(conversationId: string, turnId?: string): Promise<AgentTraceEvent[]>;
 
   /** 发送消息；支持的 adapter 会在回复完成前通过 onDelta 交付增量文本。 */
-  sendMessage(conversationId: string, content: string, model?: string, onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string>;
+  sendMessage(conversationId: string, content: string, options?: AgentTurnInput, onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string>;
 
   /** 停止 adapter，终止底层 client 并拒绝/清理所有未完成 turn */
   stop(): void;
+}
+
+export function normalizeTurnOptions(input: AgentTurnInput): AgentTurnOptions {
+  if (typeof input === 'string') return input ? { model: input } : {};
+  return input ? { ...input } : {};
 }

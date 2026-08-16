@@ -2,7 +2,8 @@ import { appendFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentChatMessage, AgentConversation, AgentTraceEvent } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './base.js';
+import { normalizeTurnOptions } from './base.js';
 import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
@@ -12,6 +13,10 @@ interface StoredSession {
   title: string;
   project?: string;
   model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  sandboxMode: AgentSandboxMode;
+  approvalPolicy: AgentApprovalPolicy;
   createdAt: string;
   updatedAt: string;
   messages: AgentChatMessage[];
@@ -26,6 +31,10 @@ interface SessionHeader {
   createdAt: number;
   cwd?: string;
   model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
+  sandboxMode?: AgentSandboxMode;
+  approvalPolicy?: AgentApprovalPolicy;
 }
 
 interface RelayRetryConfig {
@@ -39,6 +48,8 @@ const REQUEST_TIMEOUT_MS = 5 * 60_000;
 const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
 const DEFAULT_RELAY_RETRY_CONFIG: RelayRetryConfig = { enabled: true, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 8_000 };
+const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
+const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
 
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
@@ -55,16 +66,24 @@ export class HarborsAdapter implements AgentAdapter {
   private readonly abortController = new AbortController();
   private readonly storageDir = resolve(process.env.HARBORS_AGENT_STORAGE_DIR || process.env.HARBORS_PI_AGENT_STORAGE_DIR || join(homedir(), '.harbors', 'pi-agent', 'sessions'));
   private eventWriteQueue: Promise<void> = Promise.resolve();
+  private permissionRequester?: AgentPermissionRequester;
 
-  async createConversation(project?: string, model?: string): Promise<AgentConversation> {
+  async createConversation(project?: string, input?: AgentTurnInput): Promise<AgentConversation> {
     throwIfAborted(this.abortController.signal);
+    const options = normalizeTurnOptions(input);
+    const sandboxMode = options.sandboxMode ? assertSandboxMode(options.sandboxMode) : DEFAULT_SANDBOX_MODE;
+    const approvalPolicy = options.approvalPolicy ? assertApprovalPolicy(options.approvalPolicy) : DEFAULT_APPROVAL_POLICY;
     const now = new Date();
     const id = randomUUID();
     const session: StoredSession = {
       id,
       title: '未命名对话',
       ...(project ? { project } : {}),
-      ...(model ? { model } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
+      ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
+      sandboxMode,
+      approvalPolicy,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
       messages: [],
@@ -73,6 +92,8 @@ export class HarborsAdapter implements AgentAdapter {
     };
     await mkdir(this.storageDir, { recursive: true });
     await writeFile(session.logPath, `${JSON.stringify(this.headerFor(session))}\n`, 'utf8');
+    await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
+    await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
     return toConversation(session);
   }
 
@@ -103,14 +124,25 @@ export class HarborsAdapter implements AgentAdapter {
     return events.filter((event) => !turnId || String(event.data.turn) === turnId).map((event) => ({ ...event, data: { ...event.data } }));
   }
 
-  async sendMessage(id: string, content: string, model?: string, _onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string> {
+  async sendMessage(id: string, content: string, input?: AgentTurnInput, _onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string> {
     if (this.stopped) throw new Error('Harbors adapter has been stopped');
     const session = await this.load(id);
-    if (model) session.model = model;
+    const options = normalizeTurnOptions(input);
+    if (options.model) session.model = options.model;
+    if (options.reasoningEffort) session.reasoningEffort = options.reasoningEffort;
+    if (options.serviceTier) session.serviceTier = options.serviceTier;
+    if (options.sandboxMode && options.sandboxMode !== session.sandboxMode) {
+      session.sandboxMode = assertSandboxMode(options.sandboxMode);
+      await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
+    }
+    if (options.approvalPolicy && options.approvalPolicy !== session.approvalPolicy) {
+      session.approvalPolicy = assertApprovalPolicy(options.approvalPolicy);
+      await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
+    }
     const turn = nextTurnNumber(session.events);
     const userMessageId = randomUUID();
     if (session.title === '未命名对话') session.title = content.trim().slice(0, 48) || session.title;
-    await this.appendEvent(session, 'turn/start', { turn });
+    await this.appendEvent(session, 'turn/start', { turn, ...turnSettings(session), ...permissionSettings(session) });
     await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId });
     if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
     try {
@@ -126,7 +158,7 @@ export class HarborsAdapter implements AgentAdapter {
 
   stop(): void { this.stopped = true; this.abortController.abort(); }
 
-  async getModels(): Promise<{ models: RelayModel[]; defaultModel: string; configurationError?: string }> {
+  async getModels(): Promise<AgentOptions> {
     const config = await this.config();
     const models = config.models.length ? config.models : [{ id: config.modelId, name: config.modelId }];
     const configurationError = !config.baseUrl
@@ -136,6 +168,37 @@ export class HarborsAdapter implements AgentAdapter {
         : undefined;
     return { models, defaultModel: config.defaultModel || models[0].id, ...(configurationError ? { configurationError } : {}) };
   }
+
+  async getConversationSettings(id: string): Promise<AgentTurnOptions> {
+    const session = await this.load(id);
+    return {
+      ...(session.model ? { model: session.model } : {}),
+      ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
+      ...(session.serviceTier ? { serviceTier: session.serviceTier } : {}),
+      sandboxMode: session.sandboxMode,
+      approvalPolicy: session.approvalPolicy,
+    };
+  }
+
+  async getConversationPermissions(id: string): Promise<AgentPermissionState> {
+    const session = await this.load(id);
+    return { sandboxMode: session.sandboxMode, approvalPolicy: session.approvalPolicy };
+  }
+
+  async setConversationPermissions(id: string, permissions: Partial<AgentPermissionState>): Promise<AgentPermissionState> {
+    const session = await this.load(id);
+    if (permissions.sandboxMode && assertSandboxMode(permissions.sandboxMode) !== session.sandboxMode) {
+      session.sandboxMode = assertSandboxMode(permissions.sandboxMode);
+      await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
+    }
+    if (permissions.approvalPolicy && assertApprovalPolicy(permissions.approvalPolicy) !== session.approvalPolicy) {
+      session.approvalPolicy = assertApprovalPolicy(permissions.approvalPolicy);
+      await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
+    }
+    return { sandboxMode: session.sandboxMode, approvalPolicy: session.approvalPolicy };
+  }
+
+  setPermissionRequester(requester?: AgentPermissionRequester): void { this.permissionRequester = requester; }
 
   private async runTurn(session: StoredSession, turn: number, onStatus?: (status: string) => void): Promise<string> {
     const signal = this.abortController.signal;
@@ -160,7 +223,7 @@ export class HarborsAdapter implements AgentAdapter {
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
-        await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'anthropic-messages' });
+        await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'anthropic-messages', ...turnSettings(session), ...permissionSettings(session) });
         const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }) }, retry, session, turn, step, onStatus, signal);
         const payload = await response.json() as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> };
         const blocks = payload.content || [];
@@ -197,7 +260,7 @@ export class HarborsAdapter implements AgentAdapter {
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
-        await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'openai-completions' });
+        await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'openai-completions', ...turnSettings(session), ...permissionSettings(session) });
         const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
         const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }> };
         const message = payload.choices?.[0]?.message;
@@ -274,7 +337,14 @@ export class HarborsAdapter implements AgentAdapter {
   private async executeOneTool(call: ToolCall, workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number, _index: number): Promise<ToolResult> {
     onStatus?.(`正在执行 ${call.name}…`);
     try {
-      const result = await runHubBertToolContent(call.name, call.input, workspace, signal);
+      const result = await runHubBertToolContent(call.name, call.input, workspace, signal, {
+        conversationId: session.id,
+        turn,
+        step,
+        sandboxMode: session.sandboxMode,
+        approvalPolicy: session.approvalPolicy,
+        requestPermission: ({ toolName, currentMode, requestedMode, justification, signal: requestSignal }) => this.requestPermission(session, turn, step, call.id, toolName, currentMode, requestedMode, justification, requestSignal),
+      });
       const toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };
       await this.appendToolResult(session, turn, step, call, toolResult);
       return toolResult;
@@ -284,6 +354,25 @@ export class HarborsAdapter implements AgentAdapter {
       await this.appendToolResult(session, turn, step, call, toolResult);
       return toolResult;
     }
+  }
+
+  private async requestPermission(session: StoredSession, turn: number, step: number, callId: string, toolName: string, currentMode: AgentSandboxMode, requestedMode: AgentSandboxMode, justification: string, signal?: AbortSignal): Promise<AgentPermissionOutcome> {
+    const requestId = randomUUID();
+    await this.appendEvent(session, 'approval/asked', { requestId, turn, step, callId, toolName, currentMode, requestedMode, justification });
+    let outcome: AgentPermissionOutcome;
+    if (signal?.aborted || this.abortController.signal.aborted) outcome = 'cancelled';
+    else if (session.approvalPolicy === 'never') outcome = 'rejected';
+    else if (!this.permissionRequester) outcome = 'unavailable';
+    else {
+      try {
+        outcome = await this.permissionRequester({ requestId, conversationId: session.id, turn, step, toolName, currentMode, requestedMode, justification, signal });
+      } catch {
+        outcome = signal?.aborted || this.abortController.signal.aborted ? 'cancelled' : 'unavailable';
+      }
+    }
+    if (!['allowed-once', 'rejected', 'cancelled', 'unavailable'].includes(outcome)) outcome = 'unavailable';
+    await this.appendEvent(session, 'approval/decided', { requestId, turn, step, callId, toolName, requestedMode, outcome });
+    return outcome;
   }
 
   private async appendToolResult(session: StoredSession, turn: number, step: number, call: ToolCall, result: ToolResult): Promise<void> {
@@ -312,7 +401,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private logPathFor(id: string): string { if (!/^[a-f0-9-]{36}$/iu.test(id)) throw new Error('Invalid Harbors conversation id'); return join(this.storageDir, `${id}.jsonl`); }
-  private headerFor(session: StoredSession): SessionHeader { return { type: 'session', version: SESSION_FORMAT_VERSION, id: session.id, createdAt: Date.parse(session.createdAt), ...(session.project ? { cwd: session.project } : {}), ...(session.model ? { model: session.model } : {}) }; }
+  private headerFor(session: StoredSession): SessionHeader { return { type: 'session', version: SESSION_FORMAT_VERSION, id: session.id, createdAt: Date.parse(session.createdAt), ...(session.project ? { cwd: session.project } : {}), ...turnSettings(session), ...permissionSettings(session) }; }
 
   private async load(id: string): Promise<StoredSession> { return this.loadByPath(this.logPathFor(id)); }
 
@@ -323,7 +412,8 @@ export class HarborsAdapter implements AgentAdapter {
     if (header.type !== 'session' || header.version !== SESSION_FORMAT_VERSION || !header.id) throw new Error(`Invalid Harbors session header: ${path}`);
     const events = lines.map((line) => JSON.parse(line) as AgentTraceEvent);
     const lastEvent = events.at(-1);
-    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...(header.model ? { model: header.model } : {}), createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), messages: projectMessages(events), events, logPath: path };
+    const settings = settingsFromEvents(events, header);
+    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), messages: projectMessages(events), events, logPath: path };
   }
 
   private async ensureLog(session: StoredSession): Promise<void> {
@@ -362,6 +452,46 @@ function parseToolArguments(value: string | undefined): Record<string, unknown> 
 function boundedText(value: string): string { return value.length <= MAX_STORED_VALUE_CHARS ? value : `${value.slice(0, MAX_STORED_VALUE_CHARS)}\n...[truncated]`; }
 function boundedJson(value: unknown): string { try { return boundedText(JSON.stringify(value)); } catch { return '[unserializable]'; } }
 function normalizeError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function turnSettings(value: Pick<StoredSession, 'model' | 'reasoningEffort' | 'serviceTier'>): AgentTurnOptions {
+  return {
+    ...(value.model ? { model: value.model } : {}),
+    ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}),
+    ...(value.serviceTier ? { serviceTier: value.serviceTier } : {}),
+  };
+}
+function permissionSettings(value: Pick<StoredSession, 'sandboxMode' | 'approvalPolicy'>): AgentPermissionState {
+  return { sandboxMode: value.sandboxMode, approvalPolicy: value.approvalPolicy };
+}
+function settingsFromEvents(events: AgentTraceEvent[], header: SessionHeader): AgentTurnOptions & AgentPermissionState {
+  const settings: AgentTurnOptions & AgentPermissionState = {
+    ...turnSettings(header),
+    sandboxMode: header.sandboxMode ? assertSandboxMode(header.sandboxMode) : DEFAULT_SANDBOX_MODE,
+    approvalPolicy: header.approvalPolicy ? assertApprovalPolicy(header.approvalPolicy) : DEFAULT_APPROVAL_POLICY,
+  };
+  for (const event of events) {
+    const data = event.data;
+    if (event.type === 'turn/start' || event.type === 'request/context') {
+      if (typeof data.model === 'string' && data.model) settings.model = data.model;
+      if (typeof data.reasoningEffort === 'string' && data.reasoningEffort) settings.reasoningEffort = data.reasoningEffort;
+      if (typeof data.serviceTier === 'string' && data.serviceTier) settings.serviceTier = data.serviceTier;
+      if (typeof data.sandboxMode === 'string') settings.sandboxMode = assertSandboxMode(data.sandboxMode);
+      if (typeof data.approvalPolicy === 'string') settings.approvalPolicy = assertApprovalPolicy(data.approvalPolicy);
+    } else if (event.type === 'sandbox/mode' && typeof data.mode === 'string') {
+      settings.sandboxMode = assertSandboxMode(data.mode);
+    } else if (event.type === 'approval/policy' && typeof data.policy === 'string') {
+      settings.approvalPolicy = assertApprovalPolicy(data.policy);
+    }
+  }
+  return settings;
+}
+function assertSandboxMode(value: string): AgentSandboxMode {
+  if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
+  throw new Error(`Invalid sandbox mode: ${value}`);
+}
+function assertApprovalPolicy(value: string): AgentApprovalPolicy {
+  if (value === 'ask' || value === 'never') return value;
+  throw new Error(`Invalid approval policy: ${value}`);
+}
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean { if (!value) return fallback; if (/^(?:1|true|yes|on)$/iu.test(value)) return true; if (/^(?:0|false|no|off)$/iu.test(value)) return false; return fallback; }
 function parseIntegerEnv(value: string | undefined, fallback: number, min: number, max: number): number { const parsed = Number(value); return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback; }
 function isRetryableStatus(status: number): boolean { return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504; }
@@ -424,4 +554,4 @@ function toAnthropicMessages(events: AgentTraceEvent[]): Array<{ role: 'user' | 
 function anthropicImageBlock(image: HubBertToolImage): Record<string, unknown> { return { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } }; }
 function openAiImagePart(image: HubBertToolImage): Record<string, unknown> { return { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } }; }
 function nextTurnNumber(events: AgentTraceEvent[]): number { return events.filter((event) => event.type === 'turn/start').length + 1; }
-function toConversation(session: StoredSession): AgentConversation { const last = session.messages.at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...(session.model ? { model: session.model } : {}), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }
+function toConversation(session: StoredSession): AgentConversation { const last = session.messages.at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...turnSettings(session), ...permissionSettings(session), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }
