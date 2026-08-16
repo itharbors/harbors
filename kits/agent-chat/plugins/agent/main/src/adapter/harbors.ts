@@ -73,6 +73,7 @@ class RelayRequestError extends Error {
 }
 
 const REQUEST_TIMEOUT_MS = 5 * 60_000;
+const STOP_SETTLE_TIMEOUT_MS = 10_000;
 const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
@@ -120,6 +121,7 @@ export class HarborsAdapter implements AgentAdapter {
   private eventWriteQueue: Promise<void> = Promise.resolve();
   private permissionRequester?: AgentPermissionRequester;
   private readonly activeTurnControllers = new Map<string, AbortController>();
+  private readonly activeTurnCompletions = new Map<string, Promise<void>>();
 
   async createConversation(project?: string, input?: AgentTurnInput): Promise<AgentConversation> {
     throwIfAborted(this.abortController.signal);
@@ -202,10 +204,15 @@ export class HarborsAdapter implements AgentAdapter {
     if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
     const turnController = new AbortController();
     const signal = AbortSignal.any([this.abortController.signal, turnController.signal]);
+    let completeTurn!: () => void;
+    const completion = new Promise<void>((resolve) => { completeTurn = resolve; });
     this.activeTurnControllers.set(id, turnController);
+    this.activeTurnCompletions.set(id, completion);
     try {
       const response = await this.runTurn(session, turn, signal, onStatus);
+      throwIfAborted(signal);
       await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } });
+      throwIfAborted(signal);
       return response;
     } catch (error) {
       const normalized = normalizeError(error);
@@ -213,6 +220,8 @@ export class HarborsAdapter implements AgentAdapter {
       throw error;
     } finally {
       if (this.activeTurnControllers.get(id) === turnController) this.activeTurnControllers.delete(id);
+      if (this.activeTurnCompletions.get(id) === completion) this.activeTurnCompletions.delete(id);
+      completeTurn();
     }
   }
 
@@ -220,6 +229,8 @@ export class HarborsAdapter implements AgentAdapter {
     const controller = this.activeTurnControllers.get(id);
     if (!controller) return false;
     controller.abort(new Error('用户已停止当前对话'));
+    const completion = this.activeTurnCompletions.get(id);
+    if (completion) await Promise.race([completion, new Promise<void>((resolve) => setTimeout(resolve, STOP_SETTLE_TIMEOUT_MS))]);
     return true;
   }
 
@@ -227,6 +238,7 @@ export class HarborsAdapter implements AgentAdapter {
     this.stopped = true;
     for (const controller of this.activeTurnControllers.values()) controller.abort(new Error('Harbors adapter has been stopped'));
     this.activeTurnControllers.clear();
+    this.activeTurnCompletions.clear();
     this.abortController.abort();
   }
 
@@ -307,6 +319,7 @@ export class HarborsAdapter implements AgentAdapter {
     let overflowRetries = 0;
     const failureGuard = createToolFailureGuard();
     while (true) {
+      throwIfAborted(signal);
       await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
       try {
@@ -317,12 +330,14 @@ export class HarborsAdapter implements AgentAdapter {
         const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }) }, retry, session, turn, step, onStatus, signal);
         overflowRetries = 0;
         const payload = await response.json() as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> };
+        throwIfAborted(signal);
         const blocks = payload.content || [];
         const calls = blocks.filter((block) => block.type === 'tool_use' && block.id && block.name).map((call) => ({ id: call.id!, name: call.name!, input: call.input || {}, arguments: boundedJson(call.input || {}) }));
         await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: blocks, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
         if (!calls.length) {
           const text = blocks.filter((block) => block.type === 'text').map((block) => block.text || '').join('');
           if (!text) throw new Error('Harbors agent returned no text response');
+          throwIfAborted(signal);
           await this.appendEvent(session, 'step/end', { turn, step });
           return text;
         }
@@ -357,6 +372,7 @@ export class HarborsAdapter implements AgentAdapter {
     let overflowRetries = 0;
     const failureGuard = createToolFailureGuard();
     while (true) {
+      throwIfAborted(signal);
       await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
       try {
@@ -367,6 +383,7 @@ export class HarborsAdapter implements AgentAdapter {
         const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
         overflowRetries = 0;
         const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }> };
+        throwIfAborted(signal);
         const message = payload.choices?.[0]?.message;
         if (!message) throw new Error('Harbors agent returned no message');
         const calls = (message.tool_calls || []).filter((call) => call.id && call.function?.name).map((call) => ({ id: call.id!, name: call.function!.name!, input: parseToolArguments(call.function!.arguments), arguments: boundedText(call.function!.arguments || '{}') }));
@@ -374,6 +391,7 @@ export class HarborsAdapter implements AgentAdapter {
         if (!calls.length) {
           const text = textContent(message.content);
           if (!text) throw new Error('Harbors agent returned no text response');
+          throwIfAborted(signal);
           await this.appendEvent(session, 'step/end', { turn, step });
           return text;
         }
