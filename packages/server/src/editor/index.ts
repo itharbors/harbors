@@ -17,7 +17,7 @@ import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { PluginPathRoots } from '@itharbors/magnet';
+import type { PluginPathRoots, PluginSourceIdentity } from '@itharbors/magnet';
 import {
   parseKitPackageManifest,
   parseRepositoryKitPackage,
@@ -549,9 +549,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       define: () => {
         throw new Error('editor.plugin.define() is only available while loading a plugin entry file');
       },
-      register: (pluginPath: string) => {
+      register: (pluginPath: string, options?: { source?: PluginSourceIdentity }) => {
         assertUsable();
-        return plugin.register(pluginPath);
+        return plugin.register(pluginPath, {
+          kind: "external",
+          ...(options?.source ? { source: options.source } : {}),
+        });
       },
       load: async (pluginPath: string) => {
         assertUsable();

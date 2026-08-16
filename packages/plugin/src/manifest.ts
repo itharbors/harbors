@@ -1,7 +1,7 @@
 import semver from 'semver';
 
 export const PLUGIN_PACKAGE_SCHEMA_VERSION = 1 as const;
-export const PLUGIN_CAPABILITIES = ['credentials'] as const;
+export const PLUGIN_CAPABILITIES = ['credentials', 'plugin-lifecycle'] as const;
 
 export type PluginCapability = typeof PLUGIN_CAPABILITIES[number];
 

@@ -1,5 +1,5 @@
 export type PluginKind = 'builtin' | 'external';
-export type PluginCapability = 'credentials';
+export type PluginCapability = 'credentials' | 'plugin-lifecycle';
 
 export interface PluginAssetsManifest {
   public?: string[];

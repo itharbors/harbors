@@ -4,7 +4,7 @@ import type { EditorI18n } from '../framework/i18n/types';
 import type { MessageBroadcastRoute, MessageLocation, MessageRequestRoute } from '../framework/message/types';
 import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '../framework/menu/types';
 import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistration } from '../framework/panel/types';
-import type { ContributeData, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths } from '@itharbors/magnet';
+import type { ContributeData, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, PluginSourceIdentity } from '@itharbors/magnet';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
 import type { PanelFileRuntime, PluginCredentialVault } from '@itharbors/plugin-types';
 
@@ -164,7 +164,7 @@ export interface Editor {
   i18n: EditorI18n;
   plugin: {
     define(definition: PluginDefinition): void;
-    register(path: string): Promise<void>;
+    register(path: string, options?: { source?: PluginSourceIdentity }): Promise<void>;
     load(path: string): Promise<void>;
     unload(path: string): Promise<void>;
     unregister(path: string): void;
