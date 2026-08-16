@@ -91,7 +91,7 @@ html, body, #panel-root {
   position: relative;
   display: flex;
   gap: 9px;
-  align-items: flex-start;
+  align-items: center;
   margin-bottom: 2px;
   padding: 10px 8px;
   border: 1px solid transparent;
@@ -146,49 +146,75 @@ html, body, #panel-root {
   white-space: nowrap;
 }
 
-.source-badge {
+.conversation-menu {
+  position: relative;
+  display: flex;
   flex: 0 0 auto;
-  padding: 2px 4px;
-  border-radius: 4px;
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: .06em;
+  align-self: stretch;
+  align-items: center;
 }
 
-.source-badge.codex { background: #243b60; color: #98c0ff; }
-.source-badge.harbors { background: #4b3221; color: #ffc184; }
+.conversation-menu[open] { z-index: 2; }
 
-.conversation-card-preview {
-  display: -webkit-box;
-  margin-top: 3px;
-  overflow: hidden;
-  color: #9ca7b6;
-  font-size: 12px;
-  line-height: 1.35;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 1;
-}
-
-.archive-btn {
-  position: absolute;
-  right: 7px;
-  bottom: 7px;
-  padding: 2px 6px;
-  border: 1px solid #46505f;
-  border-radius: 4px;
-  background: #242b36;
+.more-btn {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
   color: #aeb9c8;
-  font-size: 11px;
+  font-size: 15px;
+  letter-spacing: 1px;
+  line-height: 1;
   cursor: pointer;
   opacity: 0;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s, color 0.15s, opacity 0.15s;
+  list-style: none;
 }
 
-.conversation-card:hover .archive-btn,
-.conversation-card:focus-within .archive-btn { opacity: 1; }
+.more-btn::-webkit-details-marker { display: none; }
 
-.archive-btn:hover {
-  background: #fee2e2;
-  color: #b91c1c;
-  border-color: #fecaca;
+.conversation-card:hover .more-btn,
+.conversation-card:focus-within .more-btn,
+.conversation-menu[open] .more-btn { opacity: 1; }
+
+.more-btn:hover,
+.more-btn:focus-visible {
+  background: #303846;
+  color: #eef3fa;
+}
+
+.conversation-menu-popover {
+  position: absolute;
+  z-index: 3;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 88px;
+  padding: 4px;
+  border: 1px solid #3a4351;
+  border-radius: 7px;
+  background: #202630;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, .28);
+}
+
+.conversation-menu-popover button {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  padding: 7px 9px;
+  color: #d9e0eb;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.conversation-menu-popover button:hover,
+.conversation-menu-popover button:focus-visible {
+  background: #303846;
+  color: #f4f7fb;
 }
