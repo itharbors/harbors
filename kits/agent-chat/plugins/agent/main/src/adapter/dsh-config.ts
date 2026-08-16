@@ -15,7 +15,9 @@ export async function readDshRelayConfig(): Promise<DshRelayConfig> {
   if (!relay) return { models: [] };
   const apiKeyEnv = value(relay, 'apiKeyEnv');
   const models = [...relay.matchAll(/^\s*-\s+id:\s*([^\n#]+)([\s\S]*?)(?=^\s*-\s+id:|(?![\s\S]))/gmu)].map((match) => ({
-    id: clean(match[1]), name: value(match[0], 'name') || clean(match[1]),
+    id: clean(match[1]),
+    name: value(match[0], 'name') || clean(match[1]),
+    ...(positiveInteger(value(match[0], 'contextWindow')) ? { contextWindow: positiveInteger(value(match[0], 'contextWindow')) } : {}),
   })).filter((model) => model.id);
   const defaultSection = block(text, /^agent-default-model:\s*$/mu, 0);
   const isRelayDefault = value(defaultSection || '', 'provider') === 'relay';
@@ -30,3 +32,4 @@ function block(text: string, heading: RegExp, indent: number): string | undefine
 }
 function value(text: string, key: string): string | undefined { const match = new RegExp(`^\\s*${key}:\\s*([^\\n#]+)`, 'mu').exec(text); return match ? clean(match[1]) : undefined; }
 function clean(value: string): string { return value.trim().replace(/^['"]|['"]$/g, ''); }
+function positiveInteger(value: string | undefined): number | undefined { const parsed = Number(value); return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined; }
