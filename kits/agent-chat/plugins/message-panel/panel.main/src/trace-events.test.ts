@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseTraceEvents, groupEntriesByTurn, MAX_TOOL_CONTENT_LENGTH, type TraceEvent } from './trace-events.ts';
+import { parseTraceEvents, parseTraceTurns, groupEntriesByTurn, MAX_TOOL_CONTENT_LENGTH, type TraceEvent } from './trace-events.ts';
 
 function toolCall(seq: number, data: Partial<TraceEvent['data']> & { callId: string; name: string }): TraceEvent {
   return { type: 'tool/call', seq, time: seq, data: { turn: 1, step: 1, arguments: '{}', ...data } };
@@ -157,4 +157,29 @@ test('handles non-string arguments by JSON serializing', () => {
   ];
   const entries = parseTraceEvents(events);
   assert.equal(entries[0].arguments, '{"a":1}');
+});
+
+test('keeps model messages and tools in separate trace steps', () => {
+  const events: TraceEvent[] = [
+    { type: 'step/start', seq: 0, time: 0, data: { turn: 1, step: 1 } },
+    { type: 'request/context', seq: 1, time: 1, data: { turn: 1, step: 1, model: 'model-a' } },
+    { type: 'assistant/message', seq: 2, time: 2, data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: '先读取文件' }, { type: 'tool_use', id: 'c1', name: 'read_file' }] } } },
+    toolCall(3, { callId: 'c1', name: 'read_file', step: 1 }),
+    toolResult(4, 'c1', 'file content'),
+    { type: 'step/end', seq: 5, time: 5, data: { turn: 1, step: 1 } },
+    { type: 'step/start', seq: 6, time: 6, data: { turn: 1, step: 2 } },
+    { type: 'request/context', seq: 7, time: 7, data: { turn: 1, step: 2, model: 'model-a' } },
+    { type: 'assistant/message', seq: 8, time: 8, data: { turn: 1, step: 2, message: { content: '文件内容如下。' } } },
+    { type: 'step/end', seq: 9, time: 9, data: { turn: 1, step: 2 } },
+    { type: 'turn/end', seq: 10, time: 10, data: { turn: 1, reason: { kind: 'completed' } } },
+  ];
+
+  const turns = parseTraceTurns(events);
+  assert.equal(turns.length, 1);
+  assert.deepEqual(turns[0].steps.map((step) => step.step), [1, 2]);
+  assert.equal(turns[0].steps[0].assistant?.text, '先读取文件');
+  assert.equal(turns[0].steps[0].assistant?.hasToolCalls, true);
+  assert.equal(turns[0].steps[0].tools[0].name, 'read_file');
+  assert.equal(turns[0].steps[1].assistant?.text, '文件内容如下。');
+  assert.equal(turns[0].steps[1].assistant?.hasToolCalls, false);
 });

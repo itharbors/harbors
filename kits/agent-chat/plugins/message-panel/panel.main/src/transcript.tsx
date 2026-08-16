@@ -1,8 +1,7 @@
 import { Fragment, useMemo } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import type { UIMessage } from "@ai-sdk/react";
-import type { ToolProcessEntry } from "./trace-events.js";
+import type { ToolProcessEntry, TraceStep, TraceTurn } from "./trace-events.js";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -30,7 +29,8 @@ interface TranscriptProps {
   project: string | null;
   modelLabel: string;
   messages: MessageData[];
-  processEntries: ToolProcessEntry[];
+  traceTurns: TraceTurn[];
+  localProcessEntries: ToolProcessEntry[];
   turnOffset: number;
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
@@ -104,54 +104,6 @@ function toolEntryToPart(entry: ToolProcessEntry): ToolPart {
     state: "input-available",
     input,
   };
-}
-
-function buildUIMessages(messages: MessageData[], processEntries: ToolProcessEntry[], turnOffset: number): UIMessage[] {
-  const entriesByTurn = new Map<number, ToolProcessEntry[]>();
-  for (const entry of processEntries) {
-    const list = entriesByTurn.get(entry.turn) ?? [];
-    list.push(entry);
-    entriesByTurn.set(entry.turn, list);
-  }
-
-  const uiMessages: UIMessage[] = [];
-  let currentTurn = turnOffset;
-
-  for (let i = 0; i < messages.length; i++) {
-    const msg = messages[i];
-    if (msg.role !== "user") continue;
-
-    currentTurn += 1;
-    uiMessages.push({
-      id: msg.id,
-      role: "user",
-      parts: [{ type: "text", text: msg.content }],
-    });
-
-    const assistantTexts: string[] = [];
-    let nextIndex = i + 1;
-    while (nextIndex < messages.length && messages[nextIndex].role === "assistant") {
-      if (messages[nextIndex].content) assistantTexts.push(messages[nextIndex].content);
-      nextIndex += 1;
-    }
-    const turnEntries = entriesByTurn.get(currentTurn) ?? [];
-    const hasAssistant = assistantTexts.length > 0;
-
-    if (hasAssistant || turnEntries.length > 0) {
-      const parts: Array<{ type: "text"; text: string } | ToolPart> = [];
-      if (hasAssistant) parts.push({ type: "text", text: assistantTexts.join("\n\n") });
-      parts.push(...turnEntries.map(toolEntryToPart));
-      uiMessages.push({
-        id: hasAssistant ? messages[i + 1].id : `assistant-turn-${currentTurn}`,
-        role: "assistant",
-        parts: parts as unknown as UIMessage["parts"],
-      });
-    }
-
-    i = nextIndex - 1;
-  }
-
-  return uiMessages;
 }
 
 function ToolPartView({ part }: { part: ToolPart }) {
@@ -240,9 +192,63 @@ function PermissionRequestCard({
   );
 }
 
+interface DisplayStep extends TraceStep {
+  localRequest?: ToolProcessEntry;
+}
+
+interface DisplayTurn {
+  turn: number;
+  steps: DisplayStep[];
+  error?: ToolProcessEntry;
+}
+
+function assistantTextsAfter(messages: MessageData[], userIndex: number): { texts: string[]; nextIndex: number } {
+  const texts: string[] = [];
+  let nextIndex = userIndex + 1;
+  while (nextIndex < messages.length && messages[nextIndex].role === "assistant") {
+    if (messages[nextIndex].content) texts.push(messages[nextIndex].content);
+    nextIndex += 1;
+  }
+  return { texts, nextIndex };
+}
+
+function buildDisplayTurns(messages: MessageData[], traceTurns: TraceTurn[], localProcessEntries: ToolProcessEntry[], turnOffset: number): Array<{ user: MessageData; turn: DisplayTurn }> {
+  const result: Array<{ user: MessageData; turn: DisplayTurn }> = [];
+  let turnNumber = turnOffset;
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    if (message.role !== "user") continue;
+    turnNumber += 1;
+    const assistant = assistantTextsAfter(messages, index);
+    const sourceTurn = traceTurns.find((item) => item.turn === turnNumber);
+    const steps: DisplayStep[] = (sourceTurn?.steps || []).map((step) => ({ ...step, tools: [...step.tools] }));
+    const localRequests = localProcessEntries.filter((entry) => entry.turn === turnNumber && entry.name === "请求模型");
+    for (const localRequest of localRequests) {
+      let step = steps.find((item) => item.step === localRequest.step);
+      if (!step) {
+        step = { turn: turnNumber, step: localRequest.step || 1, tools: [], completed: false };
+        steps.push(step);
+      }
+      step.localRequest = localRequest;
+    }
+
+    if (assistant.texts.length > 0 && !steps.some((step) => step.assistant && !step.assistant.hasToolCalls)) {
+      const step = steps.at(-1) || { turn: turnNumber, step: 1, tools: [], completed: false };
+      if (!steps.includes(step)) steps.push(step);
+      step.assistant = { id: `live-assistant-${message.id}`, seq: Number.MAX_SAFE_INTEGER, turn: turnNumber, step: step.step, text: assistant.texts.at(-1) || "", hasToolCalls: false };
+    }
+    if (sourceTurn?.error && steps.length === 0) steps.push({ turn: turnNumber, step: 1, tools: [], completed: false });
+    steps.sort((left, right) => left.step - right.step);
+    result.push({ user: message, turn: { turn: turnNumber, steps, error: sourceTurn?.error } });
+    index = assistant.nextIndex - 1;
+  }
+  return result;
+}
+
 function AssistantStep({
-  message,
+  step,
   turn,
+  turnError,
   modelLabel,
   permissionRequests,
   resolvingPermissionId,
@@ -250,8 +256,9 @@ function AssistantStep({
   activity,
   sending,
 }: {
-  message: UIMessage;
+  step: DisplayStep;
   turn: number;
+  turnError?: ToolProcessEntry;
   modelLabel: string;
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
@@ -259,74 +266,73 @@ function AssistantStep({
   activity: string | null;
   sending: boolean;
 }) {
-  const textParts = message.parts.filter((p) => p.type === "text") as Array<{ type: "text"; text: string }>;
-  const toolParts = message.parts.filter((p) => p.type.startsWith("tool-")) as unknown as ToolPart[];
-  const requestPart = toolParts.find((part) => getToolNameFromPartType(part.type) === "请求模型");
-  const processParts = toolParts.filter((part) => part !== requestPart);
-  const assistantText = textParts.map((p) => p.text).join("");
-  const requestFailed = requestPart?.state === "output-error";
-  const requestDone = requestPart?.state === "output-available";
+  const request = step.localRequest;
+  const thinkingText = step.assistant?.hasToolCalls ? step.assistant.text : "";
+  const finalText = step.assistant && !step.assistant.hasToolCalls ? step.assistant.text : "";
+  const hasRunningTool = step.tools.some((part) => part.result === undefined && !part.isError);
+  let statusLabel = "处理中";
+  let statusClass: "pending" | "done" | "error" = "pending";
+  if (request?.isError || step.tools.some((part) => part.isError) || turnError) {
+    statusLabel = "执行出错";
+    statusClass = "error";
+  } else if (hasRunningTool || (request && request.result === undefined && !step.assistant)) {
+    statusLabel = "处理中";
+  } else if (step.assistant || step.completed || request?.result !== undefined) {
+    statusLabel = "已完成";
+    statusClass = "done";
+  }
 
   return (
     <div className="agent-step">
       <div className="agent-step-header">
-        <span className="agent-step-number">Step {turn}</span>
-        <span className={`agent-step-label ${requestFailed ? "error" : requestDone ? "done" : "pending"}`}>
-          {requestFailed ? "请求失败" : requestDone ? "请求模型完成" : "请求模型"}
-        </span>
-        <span className="agent-step-model">{modelLabel}</span>
+        <span className="agent-step-number">Step {turn}.{step.step}</span>
+        <span className={`agent-step-label ${statusClass}`}>{statusLabel}</span>
+        <span className="agent-step-model">{step.model || modelLabel}</span>
       </div>
 
-      {assistantText && (
+      {(step.requestSeq !== undefined || request) && (
+        <details className="agent-step-request">
+          <summary>请求上下文</summary>
+          <div className="agent-step-request-body">模型：{step.model || modelLabel}</div>
+        </details>
+      )}
+
+      {request?.isError && request.result && <div className="agent-step-error">{request.result}</div>}
+
+      {thinkingText && (
         <div className="agent-step-intent">
           <div className="agent-step-intent-label">模型下一步</div>
-          <div className="chat-message assistant">
-            <div className="chat-message-content">
-              <MarkdownMessage content={assistantText} />
-            </div>
-          </div>
+          <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={thinkingText} /></div></div>
         </div>
       )}
 
-      {requestFailed && requestPart?.errorText && (
-        <div className="agent-step-error">{requestPart.errorText}</div>
-      )}
-
-      {processParts.length > 0 && (
+      {step.tools.length > 0 && (
         <div className="agent-step-tools">
           <div className="agent-step-tools-title">工具调用</div>
-          {processParts.map((part) => (
-            <div key={part.toolCallId || part.type}>
-              <ToolPartView part={part} />
-            </div>
-          ))}
+          {step.tools.map((part) => <div key={part.callId || part.id}><ToolPartView part={toolEntryToPart(part)} /></div>)}
         </div>
       )}
 
-      {permissionRequests.filter((request) => request.turn === turn).map((request) => (
-        <div key={request.requestId}>
-          <PermissionRequestCard
-            request={request}
-            resolving={resolvingPermissionId === request.requestId}
-            onResolve={(outcome) => void onResolvePermission(request.requestId, outcome)}
-          />
+      {finalText && (
+        <div className="agent-step-intent">
+          <div className="agent-step-intent-label">最终回复</div>
+          <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={finalText} /></div></div>
         </div>
+      )}
+
+      {permissionRequests.filter((requestItem) => requestItem.turn === turn && requestItem.step === step.step).map((requestItem) => (
+        <div key={requestItem.requestId}><PermissionRequestCard request={requestItem} resolving={resolvingPermissionId === requestItem.requestId} onResolve={(outcome) => void onResolvePermission(requestItem.requestId, outcome)} /></div>
       ))}
 
-      {sending && !assistantText && processParts.length === 0 && !requestPart && (
-        <div className="sending-indicator">{activity || "正在生成回复…"}</div>
-      )}
+      {sending && !thinkingText && !finalText && step.tools.length === 0 && !request?.isError && <div className="sending-indicator">{activity || "正在生成回复…"}</div>}
+      {turnError && <div className="agent-step-error">{turnError.result}</div>}
     </div>
   );
 }
 
 export default function Transcript(props: TranscriptProps) {
-  const { draft, project, modelLabel, messages, processEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, activity, sending } = props;
-
-  const uiMessages = useMemo(
-    () => buildUIMessages(messages, processEntries, turnOffset),
-    [messages, processEntries, turnOffset],
-  );
+  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, activity, sending } = props;
+  const displayTurns = useMemo(() => buildDisplayTurns(messages, traceTurns, localProcessEntries, turnOffset), [messages, traceTurns, localProcessEntries, turnOffset]);
 
   return (
     <div className={`chat-surface ${draft || messages.length === 0 ? "fresh" : ""}`}>
@@ -338,36 +344,14 @@ export default function Transcript(props: TranscriptProps) {
         </div>
       )}
 
-      {uiMessages.map((msg) => {
-        if (msg.role === "user") {
-          const textPart = msg.parts.find((p) => p.type === "text") as { type: "text"; text: string } | undefined;
-          return (
-            <div key={msg.id} className="chat-message user">
-              <div className="chat-message-content">
-                <MarkdownMessage content={textPart?.text || ""} />
-              </div>
-            </div>
-          );
-        }
+      {displayTurns.map(({ user, turn }) => (
+        <Fragment key={user.id}>
+          <div className="chat-message user"><div className="chat-message-content"><MarkdownMessage content={user.content} /></div></div>
+          {turn.steps.map((step) => <Fragment key={`${turn.turn}-${step.step}`}><AssistantStep step={step} turn={turn.turn} turnError={turn.error && step === turn.steps.at(-1) ? turn.error : undefined} modelLabel={modelLabel} permissionRequests={permissionRequests} resolvingPermissionId={resolvingPermissionId} onResolvePermission={onResolvePermission} activity={activity} sending={sending} /></Fragment>)}
+        </Fragment>
+      ))}
 
-        const turn = turnOffset + uiMessages
-          .slice(0, uiMessages.indexOf(msg) + 1)
-          .filter((item) => item.role === "user").length;
-        return (
-          <Fragment key={msg.id}>
-            <AssistantStep
-              message={msg}
-              turn={turn}
-              modelLabel={modelLabel}
-              permissionRequests={permissionRequests}
-              resolvingPermissionId={resolvingPermissionId}
-              onResolvePermission={onResolvePermission}
-              activity={activity}
-              sending={sending}
-            />
-          </Fragment>
-        );
-      })}
+      {sending && displayTurns.every(({ turn }) => turn.steps.length === 0) && <div className="sending-indicator">{activity || "正在生成回复…"}</div>}
     </div>
   );
 }

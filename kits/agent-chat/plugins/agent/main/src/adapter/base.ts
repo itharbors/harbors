@@ -1,9 +1,9 @@
 /**
  * 统一 Agent Adapter 接口。
- * 当前实现 Codex 与 Harbors 自主管理的 agent。
+ * 当前实现 Harbors 自主管理的 agent。
  */
 
-export type AgentSource = 'codex' | 'harbors';
+export type AgentSource = 'harbors';
 
 export type AgentSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export const AGENT_SANDBOX_MODES: readonly AgentSandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];

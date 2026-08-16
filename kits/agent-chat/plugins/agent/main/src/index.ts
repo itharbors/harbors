@@ -1,6 +1,5 @@
 import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
-import { CodexAdapter } from './adapter/codex.js';
 import { HarborsAdapter } from './adapter/harbors.js';
 
 declare const editor: any;
@@ -54,7 +53,7 @@ function requireAdapter(source: AgentSource): AgentAdapter {
 }
 
 function createAdapters(): Record<AgentSource, AgentAdapter> {
-  const result: Record<AgentSource, AgentAdapter> = { codex: new CodexAdapter(), harbors: new HarborsAdapter() };
+  const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter() };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
   });
@@ -67,7 +66,7 @@ function parseConversationId(id: string): { source: AgentSource; adapterId: stri
   const delimiter = id.indexOf(':');
   const source = id.slice(0, delimiter) as AgentSource;
   const adapterId = id.slice(delimiter + 1);
-  if (delimiter < 1 || !adapterId || (source !== 'codex' && source !== 'harbors')) throw new Error('[agent] invalid conversation id');
+  if (delimiter < 1 || !adapterId || source !== 'harbors') throw new Error('[agent] invalid conversation id');
   return { source, adapterId };
 }
 
@@ -76,9 +75,7 @@ function copyConversations(): Conversation[] {
 }
 
 async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
-  const result = source === 'harbors'
-    ? await (requireAdapter('harbors').getModels?.() || { models: [], defaultModel: '' })
-    : await (requireAdapter('codex').getModels?.() || { models: [{ id: 'default', name: 'Codex 默认模型' }], defaultModel: 'default' });
+  const result = (await (requireAdapter('harbors').getModels?.() || { models: [], defaultModel: '' })) as AgentOptions;
   return {
     ...result,
     permissions: result.permissions || {
@@ -131,13 +128,13 @@ async function ensureMessages(conversationId: string): Promise<ChatMessage[]> {
 
 async function refreshConversations(): Promise<Conversation[]> {
   const localById = new Map(conversations.map((conversation) => [conversation.id, conversation]));
-  const results = await Promise.allSettled((['codex', 'harbors'] as const).map(async (source) => ({ source, conversations: await requireAdapter(source).listConversations() })));
+  const results = await Promise.allSettled((['harbors'] as const).map(async (source) => ({ source, conversations: await requireAdapter(source).listConversations() })));
   conversations = results.flatMap((result) => {
     if (result.status === 'rejected') { console.error('[agent] failed to list conversations:', result.reason); return []; }
     return result.value.conversations.map((conversation) => {
       const id = conversationId(result.value.source, conversation.id);
       const local = localById.get(id);
-      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || (result.value.source === 'harbors' ? 'Harbors' : '未归类项目'), lastMessage: local?.lastMessage };
+      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage };
     });
   }).sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
   return copyConversations();
@@ -310,7 +307,7 @@ editor.plugin.define({
     async resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome }): Promise<boolean> {
       return resolvePermissionRequest(input.requestId, input.outcome);
     },
-    async createConversation(source: AgentSource = 'codex', project?: string, input?: AgentTurnInput) {
+    async createConversation(source: AgentSource = 'harbors', project?: string, input?: AgentTurnInput) {
       const options = normalizeTurnOptions(input);
       const result = await requireAdapter(source).createConversation(project, options);
       const conv: Conversation = { ...result, sandboxMode: result.sandboxMode || options.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: result.approvalPolicy || options.approvalPolicy || DEFAULT_APPROVAL_POLICY, id: conversationId(source, result.id), adapterId: result.id, source };

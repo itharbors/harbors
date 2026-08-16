@@ -791,12 +791,8 @@ html, body, #panel-root {
   gap: 10px;
   align-self: flex-start;
   margin: 2px 0 12px;
-  padding: 12px 14px 14px 16px;
-  border: 1px solid #303b4b;
+  padding: 4px 0 4px 16px;
   border-left: 2px solid #628bc6;
-  border-radius: 12px;
-  background: #1d232d;
-  box-shadow: 0 8px 22px rgba(0, 0, 0, .12);
 }
 .agent-step::before {
   content: '';
@@ -807,7 +803,7 @@ html, body, #panel-root {
   margin-bottom: -18px;
   border: 2px solid #7fa7df;
   border-radius: 50%;
-  background: #1d232d;
+  background: #171a21;
 }
 .agent-step-header {
   display: flex;
@@ -816,6 +812,19 @@ html, body, #panel-root {
   gap: 8px;
   color: #aebbd0;
   font-size: 12px;
+}
+.agent-step-request {
+  color: #8290a5;
+  font-size: 11px;
+}
+.agent-step-request summary {
+  cursor: pointer;
+}
+.agent-step-request-body {
+  margin-top: 6px;
+  border-left: 1px solid #344153;
+  padding-left: 10px;
+  color: #9aa9bd;
 }
 .agent-step-number {
   flex: 0 0 auto;

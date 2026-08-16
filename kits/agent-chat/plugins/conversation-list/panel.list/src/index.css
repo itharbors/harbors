@@ -124,7 +124,6 @@ html, body, #panel-root {
   font-weight: 700;
 }
 
-.source-mark.codex { background: #243b60; color: #8db8ff; }
 .source-mark.harbors { background: #4b3221; color: #ffc184; }
 
 .conversation-card-content { min-width: 0; flex: 1; }

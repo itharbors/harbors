@@ -23,7 +23,7 @@ export default {
   async mount(context: PanelContext) {
     const root = document.getElementById('panel-root');
     if (!root) return;
-    root.innerHTML = '<header><strong>插件列表</strong><span>正在读取…</span></header><main></main>';
+    root.innerHTML = '<header><span>正在读取…</span></header><main></main>';
     const status = root.querySelector('header span');
     const list = root.querySelector('main');
     try {
@@ -32,9 +32,9 @@ export default {
       const loadedCount = summary.loadedCount ?? plugins.filter((plugin) => plugin.loaded).length;
       const updateStatus = () => {
         const currentLoadedCount = plugins.filter((plugin) => plugin.loaded).length;
-        if (status) status.textContent = `已加载 ${currentLoadedCount} 个 · 共 ${plugins.length} 个 · 当前 Kit: ${summary.activeKitName ?? 'unknown'}`;
+        if (status) status.textContent = `插件：${currentLoadedCount}/${plugins.length}`;
       };
-      if (status) status.textContent = `已加载 ${loadedCount} 个 · 共 ${plugins.length} 个 · 当前 Kit: ${summary.activeKitName ?? 'unknown'}`;
+      if (status) status.textContent = `插件：${loadedCount}/${plugins.length}`;
       if (!list) return;
       if (!plugins.length) { list.textContent = '没有已注册的插件'; return; }
       for (const plugin of plugins) {

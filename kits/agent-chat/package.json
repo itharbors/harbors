@@ -30,7 +30,7 @@
   "harbors": {
     "distribution": "builtin",
     "ci": { "runner": "ubuntu-latest" },
-    "docs": { "summary": "AI 对话工作台 Kit，提供对话列表与消息界面，后端对接 Codex app-server" },
+    "docs": { "summary": "AI 对话工作台 Kit，提供对话列表与消息界面，后端对接 Harbors agent" },
     "resources": [],
     "storage": { "legacyDataDirectories": [] },
     "scripts": {
@@ -40,5 +40,11 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "lightningcss": "1.33.0",
+      "nanoid": "3.3.18"
+    }
   }
 }
