@@ -8,8 +8,8 @@ export type AgentSource = 'codex' | 'harbors';
 export type AgentSandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 export const AGENT_SANDBOX_MODES: readonly AgentSandboxMode[] = ['read-only', 'workspace-write', 'danger-full-access'];
 
-export type AgentApprovalPolicy = 'ask' | 'never';
-export const AGENT_APPROVAL_POLICIES: readonly AgentApprovalPolicy[] = ['ask', 'never'];
+export type AgentApprovalPolicy = 'ask' | 'always';
+export const AGENT_APPROVAL_POLICIES: readonly AgentApprovalPolicy[] = ['ask', 'always'];
 
 export type AgentPermissionOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
