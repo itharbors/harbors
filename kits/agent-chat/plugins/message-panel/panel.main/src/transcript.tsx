@@ -35,7 +35,6 @@ interface TranscriptProps {
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
-  activity: string | null;
   sending: boolean;
 }
 
@@ -249,73 +248,41 @@ function AssistantStep({
   step,
   turn,
   turnError,
-  modelLabel,
   permissionRequests,
   resolvingPermissionId,
   onResolvePermission,
-  activity,
   sending,
 }: {
   step: DisplayStep;
   turn: number;
   turnError?: ToolProcessEntry;
-  modelLabel: string;
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
-  activity: string | null;
   sending: boolean;
 }) {
   const request = step.localRequest;
   const thinkingText = step.assistant?.hasToolCalls ? step.assistant.text : "";
   const finalText = step.assistant && !step.assistant.hasToolCalls ? step.assistant.text : "";
-  const hasRunningTool = step.tools.some((part) => part.result === undefined && !part.isError);
-  let statusLabel = "处理中";
-  let statusClass: "pending" | "done" | "error" = "pending";
-  if (request?.isError || step.tools.some((part) => part.isError) || turnError) {
-    statusLabel = "执行出错";
-    statusClass = "error";
-  } else if (hasRunningTool || (request && request.result === undefined && !step.assistant)) {
-    statusLabel = "处理中";
-  } else if (step.assistant || step.completed || request?.result !== undefined) {
-    statusLabel = "已完成";
-    statusClass = "done";
-  }
 
   return (
-    <div className="agent-step">
-      <div className="agent-step-header">
-        <span className="agent-step-number">Step {turn}.{step.step}</span>
-        <span className={`agent-step-label ${statusClass}`}>{statusLabel}</span>
-        <span className="agent-step-model">{step.model || modelLabel}</span>
-      </div>
-
-      {(step.requestSeq !== undefined || request) && (
-        <details className="agent-step-request">
-          <summary>请求上下文</summary>
-          <div className="agent-step-request-body">模型：{step.model || modelLabel}</div>
-        </details>
-      )}
-
+    <div className="agent-cycle">
       {request?.isError && request.result && <div className="agent-step-error">{request.result}</div>}
 
       {thinkingText && (
         <div className="agent-step-intent">
-          <div className="agent-step-intent-label">模型下一步</div>
           <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={thinkingText} /></div></div>
         </div>
       )}
 
       {step.tools.length > 0 && (
         <div className="agent-step-tools">
-          <div className="agent-step-tools-title">工具调用</div>
           {step.tools.map((part) => <div key={part.callId || part.id}><ToolPartView part={toolEntryToPart(part)} /></div>)}
         </div>
       )}
 
       {finalText && (
-        <div className="agent-step-intent">
-          <div className="agent-step-intent-label">最终回复</div>
+        <div className="agent-step-intent agent-final-response">
           <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={finalText} /></div></div>
         </div>
       )}
@@ -324,14 +291,13 @@ function AssistantStep({
         <div key={requestItem.requestId}><PermissionRequestCard request={requestItem} resolving={resolvingPermissionId === requestItem.requestId} onResolve={(outcome) => void onResolvePermission(requestItem.requestId, outcome)} /></div>
       ))}
 
-      {sending && !thinkingText && !finalText && step.tools.length === 0 && !request?.isError && <div className="sending-indicator">{activity || "正在生成回复…"}</div>}
       {turnError && <div className="agent-step-error">{turnError.result}</div>}
     </div>
   );
 }
 
 export default function Transcript(props: TranscriptProps) {
-  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, activity, sending } = props;
+  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, sending } = props;
   const displayTurns = useMemo(() => buildDisplayTurns(messages, traceTurns, localProcessEntries, turnOffset), [messages, traceTurns, localProcessEntries, turnOffset]);
 
   return (
@@ -347,11 +313,13 @@ export default function Transcript(props: TranscriptProps) {
       {displayTurns.map(({ user, turn }) => (
         <Fragment key={user.id}>
           <div className="chat-message user"><div className="chat-message-content"><MarkdownMessage content={user.content} /></div></div>
-          {turn.steps.map((step) => <Fragment key={`${turn.turn}-${step.step}`}><AssistantStep step={step} turn={turn.turn} turnError={turn.error && step === turn.steps.at(-1) ? turn.error : undefined} modelLabel={modelLabel} permissionRequests={permissionRequests} resolvingPermissionId={resolvingPermissionId} onResolvePermission={onResolvePermission} activity={activity} sending={sending} /></Fragment>)}
+          {turn.steps.length > 0 && <div className="agent-step">
+            <div className="agent-turn-header">Turn {turn.turn}</div>
+            {turn.steps.map((step) => <Fragment key={`${turn.turn}-${step.step}`}><AssistantStep step={step} turn={turn.turn} turnError={turn.error && step === turn.steps.at(-1) ? turn.error : undefined} permissionRequests={permissionRequests} resolvingPermissionId={resolvingPermissionId} onResolvePermission={onResolvePermission} sending={sending} /></Fragment>)}
+          </div>}
         </Fragment>
       ))}
 
-      {sending && displayTurns.every(({ turn }) => turn.steps.length === 0) && <div className="sending-indicator">{activity || "正在生成回复…"}</div>}
     </div>
   );
 }

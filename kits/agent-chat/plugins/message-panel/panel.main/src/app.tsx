@@ -178,7 +178,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
-  const [activity, setActivity] = useState<string | null>(null);
   const [traceTurns, setTraceTurns] = useState<TraceTurn[]>([]);
   const [localProcessEntries, setLocalProcessEntries] = useState<ToolProcessEntry[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
@@ -239,11 +238,11 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     if (!shouldFollowLatestRef.current) return;
     const list = messageListRef.current;
     if (list) list.scrollTop = list.scrollHeight;
-  }, [conversationId, loading, messages, sending, traceTurns, localProcessEntries, permissionRequests, activity]);
+  }, [conversationId, loading, messages, sending, traceTurns, localProcessEntries, permissionRequests]);
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setActivity(null); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
@@ -253,7 +252,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
       requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
       loadTrace(id, seq);
       loadPermissionRequests(id);
@@ -295,17 +294,11 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const statusConversationId = payload?.conversationId;
       if (disposed || !statusConversationId || statusConversationId !== conversationIdRef.current) return;
       const progress = payload.status;
-      if (typeof progress === 'string') {
-        if (progress) setActivity(progress);
-        return;
-      }
+      if (typeof progress === 'string') return;
       if (!progress || typeof progress !== 'object') return;
       if (progress.contextUsage !== undefined) setContextUsage(readContextUsage(progress.contextUsage));
       if (progress.phase === 'waiting_permission') {
-        setActivity(progress.message || '等待权限确认…');
         void loadPermissionRequests(statusConversationId);
-      } else if (progress.message) {
-        setActivity(progress.message);
       }
       if (progress.phase === 'completed' || progress.phase === 'error') void loadPermissionRequests(statusConversationId);
     });
@@ -345,7 +338,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     shouldFollowLatestRef.current = true;
     sendingRef.current = true;
     stopRequestedRef.current = false;
-    setSending(true); setActivity('正在准备对话…'); setError(null);
+    setSending(true); setError(null);
     let stopPolling = false;
     let pollPromise: Promise<void> | null = null;
     try {
@@ -385,7 +378,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       sendingRef.current = false;
       stopRequestedRef.current = false;
       if (pendingConversationIdRef.current === target) pendingConversationIdRef.current = null;
-      setSending(false); setStopping(false); setActivity(null);
+      setSending(false); setStopping(false);
     }
   };
 
@@ -398,7 +391,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     try {
       const stopped = await requestWithRetry(ctx, 'agent', 'stopConversation', id);
       if (stopped !== true) throw new Error('当前会话没有可终止的执行，或当前 Agent 暂不支持终止');
-      setActivity('正在终止当前对话…');
     } catch (err) {
       stopRequestedRef.current = false;
       setStopping(false);
@@ -518,7 +510,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
             permissionRequests={permissionRequests}
             resolvingPermissionId={resolvingPermissionId}
             onResolvePermission={resolvePermission}
-            activity={activity}
             sending={sending}
           />
         </>
