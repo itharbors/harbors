@@ -45,3 +45,21 @@ html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; o
 .error-alert { border-bottom: 1px solid #7d3c3c; background: #3a2226; color: #ffc6c8; padding: 8px 14px; font-size: 13px; }
 .sending-indicator { color: #9ab8e6; padding: 8px; text-align: center; font-size: 13px; }
 @media (max-width: 720px) { .message-list-container { padding: 14px; } .message-input-container { padding: 10px 14px 14px; } .new-thread-context { grid-template-columns: 1fr; gap: 5px; } .new-thread-context span:last-child { justify-self: start; } .model-picker { display: none; } }
+
+.tool-process-card { display: flex; min-width: 0; max-width: min(760px, 88%); flex-direction: column; gap: 6px; align-self: flex-start; margin: 2px 0; padding: 10px 12px; border: 1px solid #333b48; border-left: 3px solid #5a8fd6; border-radius: 10px; background: #1b2029; color: #cdd6e2; font-size: 13px; }
+.tool-process-card.error { border-left-color: #d65a5a; background: #2a1d20; }
+.tool-process-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.tool-name { font-weight: 600; color: #e8eef7; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.tool-status { flex: 0 0 auto; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.tool-status.pending { background: #3a3320; color: #e8c87a; }
+.tool-status.success { background: #1f3a2a; color: #8fd6a0; }
+.tool-status.error { background: #3a1f22; color: #e89a9a; }
+.tool-arguments { margin: 0; }
+.tool-arguments summary { cursor: pointer; color: #8f9aaa; font-size: 12px; user-select: none; }
+.tool-arguments pre { margin: 6px 0 0; max-width: 100%; overflow-x: auto; overflow-wrap: anywhere; white-space: pre-wrap; border: 1px solid #2e3540; border-radius: 6px; background: #12161d; padding: 8px; }
+.tool-arguments pre code { padding: 0; background: transparent; color: #b8c4d4; }
+.tool-result { margin: 0; }
+.tool-result pre { margin: 0; max-width: 100%; max-height: 320px; overflow: auto; overflow-wrap: anywhere; white-space: pre-wrap; border: 1px solid #2e3540; border-radius: 6px; background: #12161d; padding: 8px; }
+.tool-result pre code { padding: 0; background: transparent; color: #c2cfe0; }
+.tool-process-card.error .tool-result pre { border-color: #5a3338; }
+.tool-result-pending { color: #e8c87a; font-style: italic; }
