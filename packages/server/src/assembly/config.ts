@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { readFileSync } from 'node:fs';
+import { lstat, readdir, realpath } from 'node:fs/promises';
 import { parseRepositoryKitPackage } from '@itharbors/kit-core';
 
 export interface AssemblyConfig {
@@ -20,6 +21,31 @@ export interface AssemblyKitSource {
 }
 
 export interface AssemblyConfigOverride extends Partial<AssemblyConfig> {}
+
+/**
+ * Discovers the built-in Kits shipped with a repository checkout.
+ *
+ * A server started from the repository must expose every Kit under `kits/`,
+ * rather than maintaining a hand-written source list in its entry point.
+ */
+export async function discoverBuiltinKitSources(projectRoot: string): Promise<AssemblyKitSource[]> {
+  const kitsDirectory = path.join(projectRoot, 'kits');
+  const entries = await readdir(kitsDirectory, { withFileTypes: true });
+  const sources: AssemblyKitSource[] = [];
+
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue;
+    const directory = path.join(kitsDirectory, entry.name);
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+    sources.push({ directory: await realpath(directory), source: 'builtin' });
+  }
+
+  if (sources.length === 0) {
+    throw new Error(`No built-in Kits found in ${kitsDirectory}`);
+  }
+  return sources;
+}
 
 export function createDefaultAssemblyConfig(
   projectRoot: string,

@@ -7,6 +7,8 @@ export interface SessionRuntimeCreateOptions {
   kitName?: string;
   kitPath?: string;
   locale?: string;
+  /** Stable Kit identity used only to address one runtime inside a client session. */
+  runtimeKit?: string;
 }
 
 export interface SessionRuntime {
@@ -55,7 +57,8 @@ export class SessionRuntimeRegistry {
   ): Promise<SessionRuntime> {
     if (!this.accepting) return Promise.reject(new SessionRuntimeRegistryClosedError());
 
-    const existingEditor = this.runtimes.get(sessionId);
+    const runtimeId = getRuntimeId(sessionId, options.runtimeKit);
+    const existingEditor = this.runtimes.get(runtimeId);
     if (existingEditor) {
       const session = this.manager.get(sessionId);
       if (!session) {
@@ -64,7 +67,7 @@ export class SessionRuntimeRegistry {
       return Promise.resolve({ session, editor: existingEditor });
     }
 
-    const existingPending = this.pending.get(sessionId);
+    const existingPending = this.pending.get(runtimeId);
     if (existingPending) return existingPending;
 
     const existedBefore = this.manager.get(sessionId) !== undefined;
@@ -72,7 +75,7 @@ export class SessionRuntimeRegistry {
       const session = this.manager.getOrCreate(sessionId, options.workspacePath ?? '');
       try {
         const editor = await this.createRuntime(session, options);
-        this.runtimes.set(sessionId, editor);
+        this.runtimes.set(runtimeId, editor);
         return { session, editor };
       } catch (error) {
         if (!existedBefore) {
@@ -80,7 +83,7 @@ export class SessionRuntimeRegistry {
         }
         throw error;
       } finally {
-        this.pending.delete(sessionId);
+        this.pending.delete(runtimeId);
       }
     })();
 
@@ -134,4 +137,8 @@ export class SessionRuntimeRegistry {
       throw new AggregateError(errors, 'Session runtime disposal failed');
     }
   }
+}
+
+export function getRuntimeId(sessionId: string, kit?: string): string {
+  return kit ? `${sessionId}::${kit}` : sessionId;
 }

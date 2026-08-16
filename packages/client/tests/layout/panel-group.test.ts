@@ -38,6 +38,31 @@ describe('ce-panel-group', () => {
     expect(panels[1].hasAttribute('active')).toBe(true);
   });
 
+  it('switches active panels on a touch pointer release', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+
+    const tab = group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
+    const event = new Event('pointerup', { bubbles: true, composed: true }) as PointerEvent;
+    Object.defineProperty(event, 'pointerType', { value: 'touch' });
+    tab.dispatchEvent(event);
+
+    expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
+  });
+
+  it('switches active panels across a touchstart and touchend gesture', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+
+    const tab = group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
+    tab.dispatchEvent(new Event('touchstart', { bubbles: true, composed: true }));
+    tab.dispatchEvent(new Event('touchend', { bubbles: true, composed: true }));
+
+    expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
+  });
+
   it('emits a panel change event', () => {
     const group = document.createElement('ce-panel-group');
     group.innerHTML = `

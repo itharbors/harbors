@@ -41,10 +41,11 @@ export class EditorTransport {
   }
 
   async fetchBootstrap(): Promise<BootstrapInfo> {
-    let resp = await fetch(`/api/bootstrap/${encodeURIComponent(this.session.sessionId)}`);
+    const runtimeId = this.getRuntimeId();
+    let resp = await fetch(`/api/bootstrap/${encodeURIComponent(runtimeId)}`);
     if (resp.status === 404 || resp.status >= 500) {
       await this.initializeSessionForBootstrap();
-      resp = await fetch(`/api/bootstrap/${encodeURIComponent(this.session.sessionId)}`);
+      resp = await fetch(`/api/bootstrap/${encodeURIComponent(runtimeId)}`);
     }
     if (!resp.ok) {
       throw new Error(`Failed to fetch bootstrap: ${resp.status}`);
@@ -77,12 +78,16 @@ export class EditorTransport {
     });
   }
 
+  private getRuntimeId(): string {
+    return this.options.kit ? `${this.session.sessionId}::${this.options.kit}` : this.session.sessionId;
+  }
+
   connectSSE(
     onEvent?: (event: SSEEnvelope) => void,
     onError?: (error: Error) => void,
   ): void {
     const deviceId = getDeviceId();
-    const url = `/sse/${this.session.sessionId}?deviceId=${encodeURIComponent(deviceId)}`;
+    const url = `/sse/${this.getRuntimeId()}?deviceId=${encodeURIComponent(deviceId)}`;
     this.eventSource = new EventSource(url);
 
     this.eventSource.onopen = () => {
@@ -212,7 +217,14 @@ export function getSessionIdFromURL(): string {
 }
 
 export function getKitFromURL(): string {
-  return new URLSearchParams(window.location.search).get('kit') || '';
+  const queryKit = new URLSearchParams(window.location.search).get('kit');
+  if (queryKit) return queryKit;
+
+  // Kit picker links use a stable public route (`/kits/:id`) so that local
+  // filesystem paths never appear in browser history. Preserve that Kit when
+  // the editor creates its session.
+  const match = window.location.pathname.match(/^\/kits\/([^/]+)\/?$/u);
+  return match ? decodeURIComponent(match[1]) : '';
 }
 
 function delay(ms: number): Promise<void> {

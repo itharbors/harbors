@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { MockInstance } from 'vitest';
-import { EditorTransport, getSessionIdFromURL } from '../../src/core/transport';
+import { EditorTransport, getKitFromURL, getSessionIdFromURL } from '../../src/core/transport';
 import { ClientSession } from '../../src/core/session';
 
 // Mock EventSource since jsdom doesn't have it
@@ -48,6 +48,22 @@ describe('getSessionIdFromURL', () => {
       location: { search: '?sessionId=alias-123&windowGroupId=group-1' },
     });
     expect(getSessionIdFromURL()).toBe('alias-123');
+  });
+});
+
+describe('getKitFromURL', () => {
+  it('uses the Kit identifier encoded in a picker route', () => {
+    vi.stubGlobal('window', {
+      location: { search: '?session=abc123', pathname: '/kits/agent-chat' },
+    });
+    expect(getKitFromURL()).toBe('agent-chat');
+  });
+
+  it('prefers an explicit Kit query parameter', () => {
+    vi.stubGlobal('window', {
+      location: { search: '?kit=default', pathname: '/kits/agent-chat' },
+    });
+    expect(getKitFromURL()).toBe('default');
   });
 });
 

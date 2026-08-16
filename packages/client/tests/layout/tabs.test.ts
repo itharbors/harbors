@@ -36,6 +36,39 @@ describe('ce-tabs', () => {
     expect(tab1.hasAttribute('active')).toBe(false);
   });
 
+  it('switches tabs on a touch pointer release', () => {
+    const el = document.createElement('ce-tabs');
+    const first = document.createElement('ce-tab');
+    first.setAttribute('label', 'One');
+    const second = document.createElement('ce-tab');
+    second.setAttribute('label', 'Two');
+    el.append(first, second);
+    document.body.appendChild(el);
+
+    const tab = el.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
+    const event = new Event('pointerup', { bubbles: true, composed: true }) as PointerEvent;
+    Object.defineProperty(event, 'pointerType', { value: 'touch' });
+    tab.dispatchEvent(event);
+
+    expect(second.hasAttribute('active')).toBe(true);
+  });
+
+  it('switches tabs across a touchstart and touchend gesture', () => {
+    const el = document.createElement('ce-tabs');
+    const first = document.createElement('ce-tab');
+    first.setAttribute('label', 'One');
+    const second = document.createElement('ce-tab');
+    second.setAttribute('label', 'Two');
+    el.append(first, second);
+    document.body.appendChild(el);
+
+    const tab = el.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
+    tab.dispatchEvent(new Event('touchstart', { bubbles: true, composed: true }));
+    tab.dispatchEvent(new Event('touchend', { bubbles: true, composed: true }));
+
+    expect(second.hasAttribute('active')).toBe(true);
+  });
+
   it('dispatches ce-tab-close when close button clicked', async () => {
     const el = document.createElement('ce-tabs');
     const tab1 = document.createElement('ce-tab');

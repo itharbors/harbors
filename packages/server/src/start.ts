@@ -1,10 +1,9 @@
 import path from 'node:path';
 import { createServer } from './server.js';
-import { createDefaultAssemblyConfig } from './assembly/config.js';
+import { createDefaultAssemblyConfig, discoverBuiltinKitSources } from './assembly/config.js';
 import { ensureDataDir, resolveStartConfig } from './start-config.js';
 
 const rootDir = process.cwd();
-const defaultKitDir = path.join(rootDir, 'kits', 'default');
 const { dataDir, dbPath, port, host } = resolveStartConfig(rootDir, process.env);
 
 await ensureDataDir(dataDir);
@@ -12,7 +11,7 @@ await ensureDataDir(path.dirname(dbPath));
 
 const server = createServer({
   assembly: createDefaultAssemblyConfig(rootDir, {
-    kitSources: [{ directory: defaultKitDir, source: 'builtin' }],
+    kitSources: await discoverBuiltinKitSources(rootDir),
   }),
   pluginPathRoots: {
     applicationData: dataDir,
@@ -23,8 +22,8 @@ const server = createServer({
   host,
   port,
   clientAssetsRoot: path.join(rootDir, 'packages', 'client', 'dist'),
-  dbPath,
   applicationHostMode: 'web',
+  dbPath,
 });
 
 const shutdown = async (): Promise<void> => {

@@ -62,6 +62,11 @@ export class TabDragController {
   }
 
   private handlePointerDown = (event: PointerEvent) => {
+    // Touch interactions select tabs.  Do not create a drag session for them:
+    // Safari may route the follow-up pointer events through its gesture handling,
+    // which can compete with the tab's own touch/click activation path.
+    if (event.pointerType === 'touch') return;
+
     const path = event.composedPath();
     const tabItem = path.find((node) => node instanceof HTMLElement && node.classList.contains('tab-item')) as HTMLElement | undefined;
     const group = path.find((node) => node instanceof HTMLElement && node.tagName.toLowerCase() === 'ce-panel-group') as HTMLElement | undefined;

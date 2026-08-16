@@ -22,7 +22,8 @@
       "plugin": [
         "conversation-list",
         "message-panel",
-        "agent"
+        "agent",
+        "plugin-list"
       ]
     }
   },

@@ -20,7 +20,7 @@ import { createWindowEntryRouter } from './routes/window-entry';
 import { createWindowGroupRouter } from './routes/window-group';
 import type { AssemblyConfig } from './assembly/config';
 import { discoverKitCatalog } from './assembly/kit-catalog';
-import { SessionRuntimeRegistry } from './session/runtime-registry';
+import { getRuntimeId, SessionRuntimeRegistry } from './session/runtime-registry';
 import { HttpError } from './http/errors';
 import { sendHttpError } from './http/json';
 import type { ApplicationRuntime } from './application/runtime';
@@ -71,8 +71,9 @@ export function createApp(
     return kitCatalogPromise;
   };
   const registry = new SessionRuntimeRegistry(manager, async (session, options) => {
+    const runtimeSessionId = getRuntimeId(session.sessionId, options.runtimeKit);
     const credentialVault = appOptions.credentialVault?.();
-    const editor = createEditor(session.sessionId, {
+    const editor = createEditor(runtimeSessionId, {
         assembly,
         pluginPathRoots: appOptions.pluginPathRoots,
         credentialVault,
@@ -81,12 +82,12 @@ export function createApp(
         ),
         initialLocale: options.locale,
         dispatchBrowserRequest: (panel, method, args) => broker.request(
-          session.sessionId,
-          (event) => channel.broadcast(session.sessionId, event),
+          runtimeSessionId,
+          (event) => channel.broadcast(runtimeSessionId, event),
           { panel, method, args },
         ),
         dispatchPanelBroadcast: (panel, method, args) => {
-          channel.broadcast(session.sessionId, {
+          channel.broadcast(runtimeSessionId, {
             type: 'panel-dispatch',
             panel,
             method,
@@ -94,13 +95,13 @@ export function createApp(
           });
         },
         onLayoutChanged: (_sessionId, window) => {
-          channel.broadcast(session.sessionId, {
+          channel.broadcast(runtimeSessionId, {
             type: 'layout-changed',
             window,
           });
         },
         onMenuChanged: (_sessionId, state, applicationState, kitState) => {
-          channel.broadcast(session.sessionId, {
+          channel.broadcast(runtimeSessionId, {
             type: 'menu-changed',
             menuTree: state.tree,
             applicationMenuTree: applicationState.tree,
@@ -109,7 +110,7 @@ export function createApp(
         },
     });
     editor.i18n.subscribe((event) => {
-        channel.broadcast(session.sessionId, {
+        channel.broadcast(runtimeSessionId, {
           ...event,
           i18n: editor.i18n.getVisibleSnapshot(),
           menuTree: editor.menu.getState().tree,
@@ -140,10 +141,13 @@ export function createApp(
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
     const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
     const catalogEntry = requestedKit
-      ? (await loadKitCatalog()).find((entry) => entry.name === requestedKit)
+      ? (await loadKitCatalog()).find((entry) => (
+        entry.name === requestedKit || entry.id === requestedKit
+      ))
       : undefined;
     await registry.getOrCreate(session.sessionId, {
       ...options,
+      runtimeKit: requestedKit,
       ...(catalogEntry ? { kit: catalogEntry.directory } : {}),
       workspacePath: session.workspacePath,
     });
