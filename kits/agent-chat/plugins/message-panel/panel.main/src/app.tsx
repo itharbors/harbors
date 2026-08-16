@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState } from 'react';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
+import { parseTraceEvents, groupEntriesByTurn, type ToolProcessEntry } from './trace-events.js';
 import './index.css';
 
 type Source = 'codex' | 'harbors';
@@ -96,6 +97,34 @@ function MarkdownMessage({ content }: { content: string }) {
   }))}</>;
 }
 
+
+function ToolProcessCard({ entry }: { entry: ToolProcessEntry }) {
+  const hasResult = entry.result !== undefined;
+  const statusLabel = entry.isError ? '失败' : hasResult ? '完成' : '执行中';
+  const statusClass = entry.isError ? 'error' : hasResult ? 'success' : 'pending';
+  return (
+    <div className={`tool-process-card ${entry.isError ? 'error' : ''}`}>
+      <div className="tool-process-header">
+        <span className="tool-name">{entry.name}</span>
+        <span className={`tool-status ${statusClass}`}>{statusLabel}</span>
+      </div>
+      {entry.arguments && (
+        <details className="tool-arguments">
+          <summary>参数</summary>
+          <pre><code>{entry.arguments}</code></pre>
+        </details>
+      )}
+      <div className="tool-result">
+        {hasResult ? (
+          <pre><code>{entry.result}</code></pre>
+        ) : (
+          <span className="tool-result-pending">执行中…</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App({ ctx, registerSetter }: { ctx: any; registerSetter: (key: string, setter: (data: any) => void) => void; }) {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -109,6 +138,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
+  const [toolEntries, setToolEntries] = useState<ToolProcessEntry[]>([]);
+  const [localProcessEntries, setLocalProcessEntries] = useState<ToolProcessEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
@@ -119,6 +150,22 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const applyUiStateRef = useRef<(value: unknown, sequence?: number) => void>(() => undefined);
   const sendingRef = useRef(false);
   const pendingConversationIdRef = useRef<string | null>(null);
+  const traceRequestSeqRef = useRef(0);
+  const loadTrace = async (id: string, seq: number): Promise<void> => {
+    const requestSeq = ++traceRequestSeqRef.current;
+    try {
+      const events = await requestWithRetry(ctx, 'agent', 'getConversationTrace', id);
+      if (seq !== loadSeqRef.current || requestSeq !== traceRequestSeqRef.current) return;
+      const list = Array.isArray(events) ? events : [];
+      const entries = parseTraceEvents(list as any[]);
+      setToolEntries(entries);
+    } catch (err) {
+      if (seq === loadSeqRef.current && requestSeq === traceRequestSeqRef.current) {
+        logError('加载轨迹失败', err);
+      }
+    }
+  };
+
 
   useEffect(() => {
     if (!shouldFollowLatestRef.current) return;
@@ -128,7 +175,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setActivity(null); setError(null); setConfigurationError(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setActivity(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'codex'); setProject(draftData?.project || null); setDraft(true);
@@ -138,8 +185,9 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); if (!preserveSending) { setSending(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) setMessages([]);
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); if (!preserveSending) { setSending(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
       requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
+      loadTrace(id, seq);
       requestWithRetry(ctx, 'agent', 'getConversationOptions', id).then((options: unknown) => {
         if (disposed || seq !== loadSeqRef.current) return;
         const typedOptions = options as { models?: ModelOption[]; defaultModel?: string; selectedModel?: string; configurationError?: string };
@@ -205,9 +253,23 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const send = async () => {
     if (!text.trim() || sending || sendingRef.current || loading || configurationError) return;
     let target = conversationId;
+    const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const processTurn = messages.filter((message) => message.role === 'user').length + 1;
+    const processEntry: ToolProcessEntry = {
+      id: processId,
+      turn: processTurn,
+      step: 0,
+      callId: processId,
+      name: '请求模型',
+      arguments: JSON.stringify({ source, model: model || fallbackModel(source) }),
+      isError: false,
+    };
+    setLocalProcessEntries((current) => [...current, processEntry]);
     shouldFollowLatestRef.current = true;
     sendingRef.current = true;
     setSending(true); setActivity('正在准备对话…'); setError(null);
+    let stopPolling = false;
+    let pollPromise: Promise<void> | null = null;
     try {
       if (!target) {
         const created = await ctx.message.request('agent', 'createConversation', source, project || undefined, model || undefined) as { id: string };
@@ -219,10 +281,32 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       }
       const optimistic: MessageData = { id: `opt-${Date.now()}`, role: 'user', content: text };
       setMessages((current) => [...current, optimistic]); setText('');
+      const pollTrace = async () => {
+        while (!stopPolling) {
+          if (target && target === conversationIdRef.current) {
+            await loadTrace(target, loadSeqRef.current);
+          }
+          await wait(1500);
+        }
+      };
+      pollPromise = pollTrace();
       await ctx.message.request('agent', 'sendMessage', target, optimistic.content, model || undefined);
+      setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result: '模型已完成', isError: false } : entry));
+      stopPolling = true;
+      await pollPromise;
+      if (target === conversationIdRef.current) await loadTrace(target, loadSeqRef.current);
       const latest = await ctx.message.request('agent', 'getMessages', target);
       if (target === conversationIdRef.current) setMessages(Array.isArray(latest) ? latest as MessageData[] : []);
-    } catch (err) { logError('发送消息失败', err); setError(sendErrorMessage(err)); } finally { sendingRef.current = false; if (pendingConversationIdRef.current === target) pendingConversationIdRef.current = null; setSending(false); setActivity(null); }
+    } catch (err) {
+      logError('发送消息失败', err);
+      setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result: sendErrorMessage(err), isError: true } : entry));
+    } finally {
+      stopPolling = true;
+      if (pollPromise) await pollPromise.catch(() => undefined);
+      sendingRef.current = false;
+      if (pendingConversationIdRef.current === target) pendingConversationIdRef.current = null;
+      setSending(false); setActivity(null);
+    }
   };
 
   const switchSource = async (nextSource: Source) => {
@@ -237,6 +321,21 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       setError(`切换 Agent 失败：${readableErrorMessage(err)}`);
     }
   };
+
+
+  const processEntries = [...toolEntries, ...localProcessEntries];
+  const toolEntriesByTurn = groupEntriesByTurn(processEntries);
+  const messageTurnMap = new Map<string, number>();
+  const renderedProcessIds = new Set<string>();
+  {
+    let userIndex = 0;
+    for (const msg of messages) {
+      if (msg.role === 'user') {
+        userIndex += 1;
+        messageTurnMap.set(msg.id, userIndex);
+      }
+    }
+  }
 
   const composer = <div className="composer-shell">
     <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="随心输入，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 3} disabled={loading || sending} />
@@ -256,10 +355,21 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     }}>
       {!conversationId && !draft ? <div className="empty-state"><div className="empty-state-card"><div className="empty-state-mark">✦</div><h2>选择或新建一个对话</h2><p>从左侧项目中继续工作，或点击“新对话”开始。</p></div></div> : <div className={`chat-surface ${draft || messages.length === 0 ? 'fresh' : ''}`}>
         {(draft || messages.length === 0) && <div className="new-thread-context"><span>▣ 当前项目</span><strong>{project ? project.split('/').filter(Boolean).slice(-2).join(' / ') : '本地项目'}</strong><span>{source === 'harbors' ? '⚓ HubBert' : '⌘ Codex'} · {models.find((item) => item.id === model)?.name || fallbackModel(source)}</span></div>}
-        {messages.map((message) => <article key={message.id} className={`chat-message ${message.role}`}><div className="chat-message-content"><MarkdownMessage content={message.content} /></div></article>)}
+        {messages.map((message) => {
+          const turn = messageTurnMap.get(message.id);
+          const turnEntries = turn !== undefined ? (toolEntriesByTurn.get(turn) ?? []) : [];
+          return (
+            <Fragment key={message.id}>
+              <article className={`chat-message ${message.role}`}><div className="chat-message-content"><MarkdownMessage content={message.content} /></div></article>
+              {message.role === 'user' && turnEntries.map((entry) => { renderedProcessIds.add(entry.id); return <Fragment key={entry.id}><ToolProcessCard entry={entry} /></Fragment>; })}
+            </Fragment>
+          );
+        })}
+        {processEntries.filter((entry) => !renderedProcessIds.has(entry.id)).map((entry) => <Fragment key={entry.id}><ToolProcessCard entry={entry} /></Fragment>)}
         {sending && <div className="sending-indicator">{activity || (messages.some((message) => message.role === 'assistant' && !message.content) ? '正在生成回复…' : '正在请求模型…')}</div>}
       </div>}
     </div>
     {(conversationId || draft) && <div className="message-input-container">{composer}</div>}
   </div>;
 }
+// test
