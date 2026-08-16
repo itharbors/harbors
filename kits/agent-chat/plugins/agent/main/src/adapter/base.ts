@@ -20,6 +20,7 @@ export interface AgentProgressStatus {
   message?: string;
   turn?: number;
   step?: number;
+  contextUsage?: AgentContextUsage;
 }
 
 export interface AgentPermissionState {
@@ -52,6 +53,17 @@ export interface AgentModelOption extends AgentOption {
   serviceTiers?: AgentOption[];
   defaultReasoningEffort?: string;
   defaultServiceTier?: string;
+  /** Model context capacity used by the adapter's compaction policy. */
+  contextWindow?: number;
+}
+
+/** 当前会话的上下文容量与估算占用。 */
+export interface AgentContextUsage {
+  model: string;
+  contextWindow: number;
+  usedTokens: number;
+  usageRatio: number;
+  estimated: true;
 }
 
 export interface AgentTurnOptions {
@@ -69,6 +81,7 @@ export interface AgentOptions {
   defaultModel: string;
   defaultReasoningEffort?: string;
   defaultServiceTier?: string;
+  contextUsage?: AgentContextUsage;
   configurationError?: string;
   permissions?: {
     sandboxModes: AgentSandboxMode[];
@@ -124,6 +137,10 @@ export interface AgentTraceEvent {
   seq: number;
   time: number;
   data: Record<string, unknown>;
+  /** How this event enters the model-visible surface. */
+  surfaceOp?: 'append' | { op: 'replace'; start: number; end: number };
+  /** Earlier events cited as the source of a replacement or derived message. */
+  sourceEventSeqs?: number[];
   ignorable?: true;
 }
 
@@ -145,6 +162,9 @@ export interface AgentAdapter {
 
   /** 获取会话最近一次使用的配置；不支持时返回空对象。 */
   getConversationSettings?(conversationId: string): Promise<AgentTurnOptions>;
+
+  /** 获取会话当前的上下文容量与估算占用。 */
+  getConversationContext?(conversationId: string): Promise<AgentContextUsage | undefined>;
 
   /** 获取会话当前的权限状态。 */
   getConversationPermissions?(conversationId: string): Promise<AgentPermissionState>;

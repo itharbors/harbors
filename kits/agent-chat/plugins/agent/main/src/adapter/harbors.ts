@@ -2,7 +2,7 @@ import { appendFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
 import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
@@ -21,6 +21,8 @@ interface StoredSession {
   updatedAt: string;
   messages: AgentChatMessage[];
   events: AgentTraceEvent[];
+  /** Current model-visible event sequence, folded from the append-only log. */
+  surface: number[];
   logPath?: string;
 }
 
@@ -44,9 +46,57 @@ interface RelayRetryConfig {
   maxDelayMs: number;
 }
 
+interface CompactionPolicy {
+  thresholdRatio: number;
+  retainRatio: number;
+  retainTokens?: number;
+  maxTokens: number;
+  maxOverflowRetries: number;
+}
+
+interface SurfaceSelection {
+  start: number;
+  end: number;
+  nodes: number[];
+  shadowedTokenCount: number;
+}
+
+interface AppendEventOptions {
+  surfaceOp?: AgentTraceEvent['surfaceOp'];
+  sourceEventSeqs?: number[];
+}
+
+class RelayRequestError extends Error {
+  constructor(readonly status: number, readonly body: string) {
+    super(`Harbors relay request failed (${status}): ${body.slice(0, 500)}`);
+  }
+}
+
 const REQUEST_TIMEOUT_MS = 5 * 60_000;
 const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+const DEFAULT_COMPACTION_POLICY: CompactionPolicy = { thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 8_192, maxOverflowRetries: 1 };
+const TOOL_RESULT_PRUNE_THRESHOLD_CHARS = 8_192;
+const TOOL_RESULT_PRUNE_HEAD_CHARS = 4_096;
+const TOOL_RESULT_PRUNE_TAIL_CHARS = 1_024;
+const COMPACTION_SUMMARY_OPEN = '<compacted-summary>';
+const COMPACTION_SUMMARY_CLOSE = '</compacted-summary>';
+const COMPACTION_INSTRUCTION = [
+  'You are compacting the context of an AI coding assistant.',
+  'Produce one concise Markdown checkpoint that preserves only information needed to continue the work.',
+  'If an earlier <compacted-summary> exists, merge it with newer facts instead of copying it verbatim.',
+  'Remove stale, duplicated, and low-value execution details. Preserve exact paths, identifiers, errors, decisions, constraints, and unfinished work.',
+  '',
+  '## Primary Request and Intent',
+  '## Key Technical Concepts',
+  '## Files and Code',
+  '## Errors and Fixes',
+  '## Pending Jobs',
+  '## Current Work',
+  '## Next Step',
+  '## Critical Context',
+].join('\n');
 const DEFAULT_RELAY_RETRY_CONFIG: RelayRetryConfig = { enabled: true, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 8_000 };
 const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
 const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
@@ -88,6 +138,7 @@ export class HarborsAdapter implements AgentAdapter {
       updatedAt: now.toISOString(),
       messages: [],
       events: [],
+      surface: [],
       logPath: this.logPathFor(id),
     };
     await mkdir(this.storageDir, { recursive: true });
@@ -143,7 +194,7 @@ export class HarborsAdapter implements AgentAdapter {
     const userMessageId = randomUUID();
     if (session.title === '未命名对话') session.title = content.trim().slice(0, 48) || session.title;
     await this.appendEvent(session, 'turn/start', { turn, ...turnSettings(session), ...permissionSettings(session) });
-    await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId });
+    await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId }, { surfaceOp: 'append' });
     if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
     try {
       const response = await this.runTurn(session, turn, onStatus);
@@ -180,6 +231,21 @@ export class HarborsAdapter implements AgentAdapter {
     };
   }
 
+  async getConversationContext(id: string): Promise<AgentContextUsage> {
+    const session = await this.load(id);
+    const config = await this.config();
+    const model = session.model || config.modelId;
+    const contextWindow = contextWindowFor(config.models, model);
+    const usedTokens = measureSurface(session, config.api).totalTokens;
+    return {
+      model,
+      contextWindow,
+      usedTokens,
+      usageRatio: Math.min(1, usedTokens / contextWindow),
+      estimated: true,
+    };
+  }
+
   async getConversationPermissions(id: string): Promise<AgentPermissionState> {
     const session = await this.load(id);
     return { sandboxMode: session.sandboxMode, approvalPolicy: session.approvalPolicy };
@@ -208,27 +274,31 @@ export class HarborsAdapter implements AgentAdapter {
     if (!baseUrl) throw new Error('HubBert agent requires HARBORS_RELAY_BASE_URL or ~/.dsh/settings.yaml');
     if (!apiKey) throw new Error('HubBert agent requires HARBORS_RELAY_API_KEY or the DSH apiKeyEnv environment variable');
     const model = session.model || modelId;
-    if (api === 'anthropic-messages') return this.runAnthropicToolLoop(session, turn, baseUrl, apiKey, model, retry, onStatus, signal);
-    if (api === 'openai-completions') return this.runOpenAiToolLoop(session, turn, baseUrl, apiKey, model, retry, onStatus, signal);
+    const contextWindow = contextWindowFor(config.models, model);
+    if (api === 'anthropic-messages') return this.runAnthropicToolLoop(session, turn, baseUrl, apiKey, model, contextWindow, retry, onStatus, signal);
+    if (api === 'openai-completions') return this.runOpenAiToolLoop(session, turn, baseUrl, apiKey, model, contextWindow, retry, onStatus, signal);
     throw new Error(`Unsupported Harbors relay API: ${api}`);
   }
 
-  private async runAnthropicToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
-    const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = toAnthropicMessages(session.events);
+  private async runAnthropicToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, contextWindow: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
+    let overflowRetries = 0;
     while (true) {
+      await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'anthropic-messages', ...turnSettings(session), ...permissionSettings(session) });
+        const messages = toAnthropicMessages(session.events, session.surface);
         const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }) }, retry, session, turn, step, onStatus, signal);
+        overflowRetries = 0;
         const payload = await response.json() as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> };
         const blocks = payload.content || [];
         const calls = blocks.filter((block) => block.type === 'tool_use' && block.id && block.name).map((call) => ({ id: call.id!, name: call.name!, input: call.input || {}, arguments: boundedJson(call.input || {}) }));
-        await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: blocks, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } });
+        await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: blocks, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
         if (!calls.length) {
           const text = blocks.filter((block) => block.type === 'text').map((block) => block.text || '').join('');
           if (!text) throw new Error('Harbors agent returned no text response');
@@ -236,37 +306,43 @@ export class HarborsAdapter implements AgentAdapter {
           return text;
         }
         for (const call of calls) await this.appendEvent(session, 'tool/call', { turn, step, callId: call.id, name: call.name, arguments: call.arguments });
-        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
-        const anthropicResults = results.map((result, index) => ({ type: 'tool_result', tool_use_id: calls[index].id, ...(result.isError ? { is_error: true } : {}), content: result.image ? [{ type: 'text', text: result.content }, anthropicImageBlock(result.image)] : result.content }));
-        messages.push({ role: 'assistant', content: blocks });
-        messages.push({ role: 'user', content: anthropicResults });
+        await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
         await this.appendEvent(session, 'step/end', { turn, step });
         step += 1;
       } catch (error) {
         await this.appendEvent(session, 'step/end', { turn, step }).catch(() => undefined);
+        if (isContextOverflowError(error) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
+          overflowRetries += 1;
+          if (await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, true)) {
+            continue;
+          }
+        }
         throw error;
       }
     }
   }
 
-  private async runOpenAiToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+  private async runOpenAiToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, contextWindow: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
-    const messages: Array<Record<string, unknown>> = toOpenAiMessages(session.events);
     const tools = hubbertTools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } }));
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
+    let overflowRetries = 0;
     while (true) {
+      await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'openai-completions', ...turnSettings(session), ...permissionSettings(session) });
+        const messages = toOpenAiMessages(session.events, session.surface);
         const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
+        overflowRetries = 0;
         const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }> };
         const message = payload.choices?.[0]?.message;
         if (!message) throw new Error('Harbors agent returned no message');
         const calls = (message.tool_calls || []).filter((call) => call.id && call.function?.name).map((call) => ({ id: call.id!, name: call.function!.name!, input: parseToolArguments(call.function!.arguments), arguments: boundedText(call.function!.arguments || '{}') }));
-        await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } });
+        await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
         if (!calls.length) {
           const text = textContent(message.content);
           if (!text) throw new Error('Harbors agent returned no text response');
@@ -274,21 +350,23 @@ export class HarborsAdapter implements AgentAdapter {
           return text;
         }
         for (const call of calls) await this.appendEvent(session, 'tool/call', { turn, step, callId: call.id, name: call.name, arguments: call.arguments });
-        messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
-        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
-        results.forEach((result, index) => messages.push({ role: 'tool', tool_call_id: calls[index].id, content: result.content }));
-        const images = results.filter((result) => result.image);
-        if (images.length) messages.push({ role: 'user', content: images.flatMap((result) => [{ type: 'text', text: result.content }, openAiImagePart(result.image!)]), });
+        await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
         await this.appendEvent(session, 'step/end', { turn, step });
         step += 1;
       } catch (error) {
         await this.appendEvent(session, 'step/end', { turn, step }).catch(() => undefined);
+        if (isContextOverflowError(error) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
+          overflowRetries += 1;
+          if (await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, true)) {
+            continue;
+          }
+        }
         throw error;
       }
     }
   }
 
-  private async requestRelay(url: string, init: RequestInit, retry: RelayRetryConfig, session: StoredSession, turn: number, step: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<Response> {
+  private async requestRelay(url: string, init: RequestInit, retry: RelayRetryConfig, session: StoredSession, turn: number | null, step: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<Response> {
     let retries = 0;
     while (true) {
       throwIfAborted(signal);
@@ -296,7 +374,7 @@ export class HarborsAdapter implements AgentAdapter {
         const response = await fetch(url, { ...init, signal: requestSignal(signal) });
         if (response.ok) return response;
         const body = await response.text();
-        if (!retry.enabled || retries >= retry.maxRetries || !isRetryableStatus(response.status)) throw new Error(`Harbors relay request failed (${response.status}): ${body.slice(0, 500)}`);
+        if (!retry.enabled || retries >= retry.maxRetries || !isRetryableStatus(response.status)) throw new RelayRequestError(response.status, body);
         retries += 1;
         await this.waitBeforeRetry(session, turn, step, retries, retry, onStatus, signal, { status: response.status, retryAfterMs: parseRetryAfter(response.headers.get('retry-after'), retry.maxDelayMs) });
       } catch (error) {
@@ -308,7 +386,7 @@ export class HarborsAdapter implements AgentAdapter {
     }
   }
 
-  private async waitBeforeRetry(session: StoredSession, turn: number, step: number, attempt: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, reason: { status?: number; error?: string; retryAfterMs?: number }): Promise<void> {
+  private async waitBeforeRetry(session: StoredSession, turn: number | null, step: number, attempt: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, reason: { status?: number; error?: string; retryAfterMs?: number }): Promise<void> {
     const delayMs = reason.retryAfterMs ?? retryDelayMs(attempt, retry);
     const { retryAfterMs: _retryAfterMs, ...eventReason } = reason;
     await this.appendEvent(session, 'request/retry', { turn, step, attempt, maxRetries: retry.maxRetries, delayMs, ...eventReason });
@@ -376,7 +454,86 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async appendToolResult(session: StoredSession, turn: number, step: number, call: ToolCall, result: ToolResult): Promise<void> {
-    await this.appendEvent(session, 'tool/result', { turn, step, message: { source: { kind: 'tool', callId: call.id }, content: [{ type: 'tool-result', toolCallId: call.id, content: [{ type: 'text', text: result.content }], ...(result.isError ? { isError: true } : {}) }], role: 'user', id: randomUUID() }, ...(result.isError ? { error: { name: 'ToolError', code: 'TOOL_FAILED' } } : {}) });
+    await this.appendEvent(session, 'tool/result', { turn, step, message: { source: { kind: 'tool', callId: call.id }, content: [{ type: 'tool-result', toolCallId: call.id, content: [{ type: 'text', text: result.content }], ...(result.isError ? { isError: true } : {}) }], role: 'user', id: randomUUID() }, ...(result.image ? { image: result.image } : {}), ...(result.isError ? { error: { name: 'ToolError', code: 'TOOL_FAILED' } } : {}) }, { surfaceOp: 'append' });
+  }
+
+  private async compactIfNeeded(session: StoredSession, turn: number | null, step: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, force: boolean): Promise<boolean> {
+    const policy = compactionPolicy();
+    let changed = false;
+    const pruned = await this.pruneToolResults(session, turn);
+    changed = pruned > 0;
+    const attempts = force ? 1 : 2;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      throwIfAborted(signal);
+      const measurement = measureSurface(session, 'anthropic-messages');
+      const thresholdTokens = Math.floor(contextWindow * policy.thresholdRatio);
+      if (!force && measurement.totalTokens < thresholdTokens) return changed;
+      const retainTokens = policy.retainTokens ?? Math.floor(contextWindow * policy.retainRatio);
+      const selection = selectCompactableRange(session, retainTokens);
+      if (!selection) return changed;
+      onStatus?.('正在压缩上下文…');
+      const compactionId = randomUUID();
+      const lifecycle = { compactionId, turn, shadowedRange: { start: selection.start, end: selection.end }, shadowedSeqs: selection.nodes };
+      const startEvent = await this.appendEvent(session, 'compaction/start', lifecycle);
+      try {
+        const summary = await this.summarizeContext(session, selection.nodes, model, turn, step, policy.maxTokens, onStatus, signal);
+        const summaryTextValue = frameSummary(summary);
+        const summaryTokens = estimateTextTokens(summaryTextValue);
+        if (summaryTokens >= selection.shadowedTokenCount) {
+          throw new Error(`summary is not smaller than the shadowed content (${summaryTokens} estimated tokens >= ${selection.shadowedTokenCount})`);
+        }
+        const summaryEvent = await this.appendEvent(session, 'compaction/summary', { ...lifecycle, summary: summaryTextValue, provider: 'harbors', model, maxTokens: policy.maxTokens, shadowedTokenCount: selection.shadowedTokenCount });
+        await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: summaryTextValue }], source: { kind: 'plugin', plugin: 'agent', purpose: 'context-compaction' }, role: 'user', id: randomUUID() }, { surfaceOp: { op: 'replace', start: selection.start, end: selection.end }, sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...selection.nodes] });
+        await this.appendEvent(session, 'compaction/end', lifecycle);
+        changed = true;
+      } catch (error) {
+        await this.appendEvent(session, 'compaction/end', { ...lifecycle, error: normalizeError(error) }).catch(() => undefined);
+        if (force) return changed;
+        return changed;
+      }
+      if (force) return changed;
+    }
+    return changed;
+  }
+
+  private async pruneToolResults(session: StoredSession, turn: number | null): Promise<number> {
+    let count = 0;
+    const candidates = [...session.surface];
+    for (const seq of candidates) {
+      const event = session.events[seq];
+      if (!event || event.type !== 'tool/result') continue;
+      const pruned = pruneToolResultEvent(event);
+      if (!pruned) continue;
+      const shadowedTokenCount = estimateEventTokens(event);
+      await this.appendEvent(session, 'compaction/prune', { turn, shadowedRange: { start: seq, end: seq }, shadowedSeqs: [seq], shadowedTokenCount, charsBefore: pruned.charsBefore, charsAfter: pruned.charsAfter });
+      await this.appendEvent(session, 'tool/result', pruned.data, { surfaceOp: { op: 'replace', start: seq, end: seq }, sourceEventSeqs: [seq] });
+      count += 1;
+    }
+    return count;
+  }
+
+  private async summarizeContext(session: StoredSession, nodes: number[], model: string, turn: number | null, step: number, maxTokens: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+    const config = await this.config();
+    if (!config.baseUrl || !config.apiKey) throw new Error('cannot compact context without a configured relay');
+    const instruction = COMPACTION_INSTRUCTION;
+    const sourceMessages = config.api === 'anthropic-messages'
+      ? toAnthropicMessages(session.events, nodes)
+      : toOpenAiMessages(session.events, nodes);
+    const messages = config.api === 'anthropic-messages'
+      ? [...sourceMessages, { role: 'user' as const, content: [{ type: 'text', text: instruction }] }]
+      : [...sourceMessages, { role: 'user', content: instruction }];
+    onStatus?.('正在生成上下文摘要…');
+    const url = config.api === 'anthropic-messages' ? `${config.baseUrl}/v1/messages` : `${config.baseUrl}/chat/completions`;
+    const init: RequestInit = config.api === 'anthropic-messages'
+      ? { method: 'POST', headers: { 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: maxTokens, messages }) }
+      : { method: 'POST', headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages }) };
+    const response = await this.requestRelay(url, init, { ...config.retry, enabled: false }, session, turn, step, onStatus, signal);
+    const payload = await response.json() as { content?: Array<{ type?: string; text?: string }>; choices?: Array<{ message?: { content?: unknown } }> };
+    const output = config.api === 'anthropic-messages'
+      ? (payload.content || []).filter((block) => block.type === 'text').map((block) => block.text || '').join('')
+      : textContent(payload.choices?.[0]?.message?.content);
+    if (!output.trim()) throw new Error('context compaction produced no summary');
+    return boundedSummary(output.trim());
   }
 
   private async config(): Promise<{ baseUrl: string; apiKey?: string; api: string; modelId: string; models: RelayModel[]; defaultModel?: string; retry: RelayRetryConfig }> {
@@ -413,7 +570,7 @@ export class HarborsAdapter implements AgentAdapter {
     const events = lines.map((line) => JSON.parse(line) as AgentTraceEvent);
     const lastEvent = events.at(-1);
     const settings = settingsFromEvents(events, header);
-    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), messages: projectMessages(events), events, logPath: path };
+    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), messages: projectMessages(events), events, surface: foldSurface(events), logPath: path };
   }
 
   private async ensureLog(session: StoredSession): Promise<void> {
@@ -426,13 +583,14 @@ export class HarborsAdapter implements AgentAdapter {
     session.logPath = logPath;
   }
 
-  private async appendEvent(session: StoredSession, type: string, data: Record<string, unknown>): Promise<AgentTraceEvent> {
+  private async appendEvent(session: StoredSession, type: string, data: Record<string, unknown>, options: AppendEventOptions = {}): Promise<AgentTraceEvent> {
     let result: AgentTraceEvent | undefined;
     const task = this.eventWriteQueue.then(async () => {
       await this.ensureLog(session);
-      const event: AgentTraceEvent = { type, seq: session.events.length, time: Date.now(), data };
+      const event: AgentTraceEvent = { type, seq: session.events.length, time: Date.now(), data, ...options };
       await appendFile(session.logPath!, `${JSON.stringify(event)}\n`, 'utf8');
       session.events.push(event);
+      session.surface = applySurfaceEvent(session.surface, event);
       session.messages = projectMessages(session.events);
       session.updatedAt = new Date(event.time).toISOString();
       if (type === 'session/title' && typeof data.title === 'string') session.title = data.title;
@@ -516,11 +674,14 @@ function textContent(content: unknown): string { if (typeof content === 'string'
 function messageContent(message: unknown): unknown { return message && typeof message === 'object' && 'content' in message ? (message as { content?: unknown }).content : ''; }
 function messageSource(message: unknown): Record<string, unknown> { return message && typeof message === 'object' && 'source' in message && message.source && typeof message.source === 'object' ? message.source as Record<string, unknown> : {}; }
 
+const MODEL_SURFACE_TYPES = new Set(['user/message', 'assistant/message', 'tool/result']);
+
 function projectMessages(events: AgentTraceEvent[]): AgentChatMessage[] {
   const messages: AgentChatMessage[] = [];
   for (const event of events) {
-    if (event.type === 'user/message') messages.push({ id: String(event.data.id || `event-${event.seq}`), role: 'user', content: textContent(event.data.content), timestamp: new Date(event.time).toISOString() });
+    if (event.type === 'user/message' && isAppendSurfaceEvent(event)) messages.push({ id: String(event.data.id || `event-${event.seq}`), role: 'user', content: textContent(event.data.content), timestamp: new Date(event.time).toISOString() });
     else if (event.type === 'assistant/message') {
+      if (!isAppendSurfaceEvent(event)) continue;
       const message = event.data.message;
       const content = textContent(messageContent(message));
       if (content) messages.push({ id: String(message && typeof message === 'object' && 'id' in message ? (message as { id?: unknown }).id : `event-${event.seq}`), role: 'assistant', content, timestamp: new Date(event.time).toISOString() });
@@ -531,27 +692,136 @@ function projectMessages(events: AgentTraceEvent[]): AgentChatMessage[] {
 
 function titleFromEvents(events: AgentTraceEvent[]): string { const title = events.find((event) => event.type === 'session/title' && typeof event.data.title === 'string'); if (title) return String(title.data.title); const user = events.find((event) => event.type === 'user/message'); return user ? textContent(user.data.content).trim().slice(0, 48) || '未命名对话' : '未命名对话'; }
 
-function toOpenAiMessages(events: AgentTraceEvent[]): Array<Record<string, unknown>> {
+function toOpenAiMessages(events: AgentTraceEvent[], surface: readonly number[]): Array<Record<string, unknown>> {
   const messages: Array<Record<string, unknown>> = [];
-  for (const event of events) {
+  for (const seq of surface) {
+    const event = events[seq];
+    if (!event) continue;
     if (event.type === 'user/message') messages.push({ role: 'user', content: textContent(event.data.content) });
     else if (event.type === 'assistant/message') { const message = event.data.message; if (message && typeof message === 'object' && 'tool_calls' in message) messages.push({ role: 'assistant', content: (message as { content?: unknown }).content ?? null, tool_calls: (message as { tool_calls?: unknown }).tool_calls }); else messages.push({ role: 'assistant', content: textContent(messageContent(message)) }); }
-    else if (event.type === 'tool/result') { const source = messageSource(event.data.message); messages.push({ role: 'tool', tool_call_id: String(source.callId || ''), content: textContent(messageContent(event.data.message)) }); }
+    else if (event.type === 'tool/result') {
+      const source = messageSource(event.data.message);
+      messages.push({ role: 'tool', tool_call_id: String(source.callId || ''), content: textContent(messageContent(event.data.message)) });
+      if (event.data.image && isHubBertToolImage(event.data.image)) messages.push({ role: 'user', content: [{ type: 'text', text: textContent(messageContent(event.data.message)) }, openAiImagePart(event.data.image)] });
+    }
   }
   return messages;
 }
 
-function toAnthropicMessages(events: AgentTraceEvent[]): Array<{ role: 'user' | 'assistant'; content: unknown }> {
+function toAnthropicMessages(events: AgentTraceEvent[], surface: readonly number[]): Array<{ role: 'user' | 'assistant'; content: unknown }> {
   const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [];
-  for (const event of events) {
+  for (const seq of surface) {
+    const event = events[seq];
+    if (!event) continue;
     if (event.type === 'user/message') messages.push({ role: 'user', content: event.data.content });
     else if (event.type === 'assistant/message') messages.push({ role: 'assistant', content: messageContent(event.data.message) });
-    else if (event.type === 'tool/result') { const source = messageSource(event.data.message); messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: String(source.callId || ''), ...(event.data.error ? { is_error: true } : {}), content: textContent(messageContent(event.data.message)) }] }); }
+    else if (event.type === 'tool/result') {
+      const source = messageSource(event.data.message);
+      const content: unknown[] = [{ type: 'text', text: textContent(messageContent(event.data.message)) }];
+      if (event.data.image && isHubBertToolImage(event.data.image)) content.push(anthropicImageBlock(event.data.image));
+      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: String(source.callId || ''), ...(event.data.error ? { is_error: true } : {}), content }] });
+    }
   }
   return messages;
+}
+
+function isAppendSurfaceEvent(event: AgentTraceEvent): boolean { return event.surfaceOp === undefined || event.surfaceOp === 'append'; }
+
+function foldSurface(events: AgentTraceEvent[]): number[] {
+  let surface: number[] = [];
+  for (const event of events) surface = applySurfaceEvent(surface, event);
+  return surface;
+}
+
+function applySurfaceEvent(surface: number[], event: AgentTraceEvent): number[] {
+  if (!MODEL_SURFACE_TYPES.has(event.type)) return surface;
+  if (event.surfaceOp === undefined || event.surfaceOp === 'append') return [...surface, event.seq];
+  const start = surface.indexOf(event.surfaceOp.start);
+  const end = surface.indexOf(event.surfaceOp.end);
+  if (start < 0 || end < start) throw new Error(`Invalid surface replacement at event ${event.seq}`);
+  return [...surface.slice(0, start), event.seq, ...surface.slice(end + 1)];
+}
+
+function estimateEventTokens(event: AgentTraceEvent): number {
+  return Math.ceil(JSON.stringify(event.data.message || event.data).length / 4) + 4;
+}
+
+function estimateTextTokens(text: string): number { return Math.ceil(text.length / 4) + 4; }
+
+function measureSurface(session: StoredSession, _api: string): { totalTokens: number; nodes: number[] } {
+  const surfaceTokens = session.surface.reduce((total, seq) => {
+    const event = session.events[seq];
+    return event ? total + estimateEventTokens(event) : total;
+  }, 0);
+  const toolTokens = Math.ceil(JSON.stringify(hubbertTools).length / 4) + 4;
+  return { totalTokens: surfaceTokens + toolTokens, nodes: [...session.surface] };
+}
+
+function selectCompactableRange(session: StoredSession, retainTokens: number): SurfaceSelection | null {
+  if (session.surface.length === 0) return null;
+  let retained = 0;
+  let keepFrom = session.surface.length;
+  for (let index = session.surface.length - 1; index >= 0; index -= 1) {
+    const event = session.events[session.surface[index]!];
+    retained += event ? estimateEventTokens(event) : 0;
+    keepFrom = index;
+    if (retained >= retainTokens) break;
+  }
+  while (keepFrom > 0) {
+    const event = session.events[session.surface[keepFrom]!];
+    if (event?.type !== 'tool/result') break;
+    keepFrom -= 1;
+  }
+  if (keepFrom <= 0) return null;
+  const nodes = session.surface.slice(0, keepFrom);
+  return { start: nodes[0]!, end: nodes.at(-1)!, nodes, shadowedTokenCount: nodes.reduce((total, seq) => total + (session.events[seq] ? estimateEventTokens(session.events[seq]!) : 0), 0) };
+}
+
+function pruneToolResultEvent(event: AgentTraceEvent): { data: Record<string, unknown>; charsBefore: number; charsAfter: number } | null {
+  const rawMessage = event.data.message;
+  if (!rawMessage || typeof rawMessage !== 'object' || !Array.isArray((rawMessage as { content?: unknown }).content)) return null;
+  const message = rawMessage as Record<string, unknown>;
+  const blocks = message.content as Array<Record<string, unknown>>;
+  const first = blocks[0];
+  if (!first || !Array.isArray(first.content)) return null;
+  const content = first.content as Array<Record<string, unknown>>;
+  const textIndex = content.findIndex((block) => block.type === 'text' && typeof block.text === 'string');
+  if (textIndex < 0) return null;
+  const text = String(content[textIndex]!.text);
+  if (text.length <= TOOL_RESULT_PRUNE_THRESHOLD_CHARS) return null;
+  const points = Array.from(text);
+  const nextText = `${points.slice(0, TOOL_RESULT_PRUNE_HEAD_CHARS).join('')}\n...[tool result pruned]\n${points.slice(-TOOL_RESULT_PRUNE_TAIL_CHARS).join('')}`;
+  const nextContent = content.map((block, index) => index === textIndex ? { ...block, text: nextText } : block);
+  const nextMessage = { ...message, content: blocks.map((block, index) => index === 0 ? { ...block, content: nextContent } : block) };
+  return { data: { ...event.data, message: nextMessage }, charsBefore: text.length, charsAfter: nextText.length };
 }
 
 function anthropicImageBlock(image: HubBertToolImage): Record<string, unknown> { return { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } }; }
 function openAiImagePart(image: HubBertToolImage): Record<string, unknown> { return { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } }; }
+function isHubBertToolImage(value: unknown): value is HubBertToolImage {
+  return !!value && typeof value === 'object' && typeof (value as { mediaType?: unknown }).mediaType === 'string' && typeof (value as { base64?: unknown }).base64 === 'string';
+}
+function frameSummary(summary: string): string {
+  return `This is an automatically generated checkpoint. Treat it as established background and continue from the messages that follow.\n\n${COMPACTION_SUMMARY_OPEN}\n${summary}\n${COMPACTION_SUMMARY_CLOSE}`;
+}
+function boundedSummary(value: string): string {
+  const max = DEFAULT_COMPACTION_POLICY.maxTokens * 4;
+  return value.length <= max ? value : `${value.slice(0, max)}\n...[summary truncated]`;
+}
+function compactionPolicy(): CompactionPolicy { return { ...DEFAULT_COMPACTION_POLICY }; }
+function contextWindowFor(models: RelayModel[], model: string): number {
+  const configured = models.find((entry) => entry.id === model)?.contextWindow;
+  const env = parseIntegerEnv(process.env.HARBORS_RELAY_CONTEXT_WINDOW || process.env.PI_AGENT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW, 1_024, 10_000_000);
+  return configured || env;
+}
+function isContextOverflowError(error: unknown): boolean {
+  if (error instanceof RelayRequestError) {
+    if (error.status === 413) return true;
+    if (error.status !== 400) return false;
+    return /context.{0,40}(length|window|limit|overflow)|too many tokens|maximum context|token.{0,20}limit/i.test(error.body);
+  }
+  const message = normalizeError(error).toLowerCase();
+  return /context.{0,20}(length|window|limit|overflow)|too many tokens|maximum context/i.test(message);
+}
 function nextTurnNumber(events: AgentTraceEvent[]): number { return events.filter((event) => event.type === 'turn/start').length + 1; }
 function toConversation(session: StoredSession): AgentConversation { const last = session.messages.at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...turnSettings(session), ...permissionSettings(session), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }

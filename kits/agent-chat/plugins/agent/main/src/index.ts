@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
 import { CodexAdapter } from './adapter/codex.js';
 import { HarborsAdapter } from './adapter/harbors.js';
@@ -147,8 +147,15 @@ function broadcastConversations(): void {
   runtime?.message.broadcast('conversation.changed', copyConversations());
 }
 
-function broadcastMessageStatus(conversationId: string, messageId: string | undefined, status: AgentProgressStatus): void {
-  runtime?.message.broadcast('message.status', { conversationId, ...(messageId ? { messageId } : {}), status });
+async function broadcastMessageStatusWithContext(conversationId: string, messageId: string | undefined, status: AgentProgressStatus): Promise<void> {
+  let contextUsage: AgentContextUsage | undefined;
+  try {
+    const route = parseConversationId(conversationId);
+    contextUsage = await requireAdapter(route.source).getConversationContext?.(route.adapterId);
+  } catch (error) {
+    console.warn('[agent] failed to read context usage:', error);
+  }
+  runtime?.message.broadcast('message.status', { conversationId, ...(messageId ? { messageId } : {}), status: { ...status, ...(contextUsage ? { contextUsage } : {}) } });
 }
 
 function requestPermission(request: AgentPermissionRequest): Promise<AgentPermissionOutcome> {
@@ -161,7 +168,7 @@ function requestPermission(request: AgentPermissionRequest): Promise<AgentPermis
       clearTimeout(pending.timer);
       if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
       pendingPermissionRequests.delete(request.requestId);
-      broadcastMessageStatus(request.conversationId, activeMessageIds.get(request.conversationId), {
+      void broadcastMessageStatusWithContext(request.conversationId, activeMessageIds.get(request.conversationId), {
         phase: outcome === 'cancelled' || outcome === 'unavailable' ? 'error' : 'running',
         message: outcome === 'allowed-once' ? '权限已确认，继续执行…' : '权限请求已结束',
         turn: request.turn,
@@ -178,7 +185,7 @@ function requestPermission(request: AgentPermissionRequest): Promise<AgentPermis
       signal,
       onAbort,
     });
-    broadcastMessageStatus(request.conversationId, activeMessageIds.get(request.conversationId), {
+    void broadcastMessageStatusWithContext(request.conversationId, activeMessageIds.get(request.conversationId), {
       phase: 'waiting_permission',
       message: '等待权限确认…',
       turn: request.turn,
@@ -258,8 +265,14 @@ editor.plugin.define({
       if (!conversation) throw new Error('[agent] conversation does not exist');
       const options = await adapterOptions(conversation.source);
       const adapterSettings = await requireAdapter(conversation.source).getConversationSettings?.(conversation.adapterId) || {};
+      const contextUsage = await requireAdapter(conversation.source).getConversationContext?.(conversation.adapterId);
       const selection = selectedOptions(options, { model: conversation.model, reasoningEffort: conversation.reasoningEffort, serviceTier: conversation.serviceTier, ...adapterSettings });
-      return { ...options, selection, selectedModel: selection.model, ...(selection.reasoningEffort ? { selectedReasoningEffort: selection.reasoningEffort } : {}), ...(selection.serviceTier ? { selectedServiceTier: selection.serviceTier } : {}), selectedSandboxMode: selection.sandboxMode, selectedApprovalPolicy: selection.approvalPolicy };
+      return { ...options, ...(contextUsage ? { contextUsage } : {}), selection, selectedModel: selection.model, ...(selection.reasoningEffort ? { selectedReasoningEffort: selection.reasoningEffort } : {}), ...(selection.serviceTier ? { selectedServiceTier: selection.serviceTier } : {}), selectedSandboxMode: selection.sandboxMode, selectedApprovalPolicy: selection.approvalPolicy };
+    },
+    async getConversationContext(id: string): Promise<AgentContextUsage | undefined> {
+      const conversation = conversations.find((entry) => entry.id === id);
+      if (!conversation) throw new Error('[agent] conversation does not exist');
+      return requireAdapter(conversation.source).getConversationContext?.(conversation.adapterId);
     },
     async getConversationPermissions(id: string): Promise<AgentPermissionState> {
       const conversation = conversations.find((entry) => entry.id === id);
@@ -352,10 +365,10 @@ editor.plugin.define({
           aiMsg.content += delta;
           runtime?.message.broadcast('message.delta', { conversationId, messageId: aiMsg.id, content: aiMsg.content });
         }, (status) => {
-          broadcastMessageStatus(conversationId, aiMsg.id, { phase: 'running', message: status });
+          void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'running', message: status });
         });
       } catch (err) {
-        broadcastMessageStatus(conversationId, aiMsg.id, { phase: 'error', message: err instanceof Error ? err.message : String(err) });
+        void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'error', message: err instanceof Error ? err.message : String(err) });
         const aiIndex = convMessages.indexOf(aiMsg);
         if (aiIndex !== -1) convMessages.splice(aiIndex, 1);
         throw err;
@@ -363,7 +376,7 @@ editor.plugin.define({
         activeMessageIds.delete(conversationId);
       }
       aiMsg.content = aiContent;
-      broadcastMessageStatus(conversationId, aiMsg.id, { phase: 'completed' });
+      void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'completed' });
       const local = conversations.find((conversation) => conversation.id === conversationId);
       if (local) {
         local.lastMessage = aiContent;
