@@ -136,32 +136,58 @@ export class CodexAppServerClient {
 
   stop(): void {
     if (this.dead) {
+      if (this.process) this.detachProcess(this.process);
       this.process = null;
       this.started = false;
+      this.notificationHandlers.clear();
+      this.exitHandler = null;
       return;
     }
     this.dead = true;
     this.rejectAllPending(new Error('Client stopped'));
-    this.process?.kill();
+    const child = this.process;
+    if (child) this.detachProcess(child);
+    child?.kill();
     this.process = null;
     this.started = false;
+    this.buffer = '';
+    this.notificationHandlers.clear();
+    this.exitHandler = null;
   }
 
   private cleanupAfterFailure(): void {
     this.rejectAllPending(new Error('Client start failed'));
-    this.process?.kill();
+    const child = this.process;
+    if (child) this.detachProcess(child);
+    child?.kill();
     this.process = null;
     this.started = false;
     this.dead = true;
+    this.buffer = '';
+    this.notificationHandlers.clear();
+    this.exitHandler = null;
   }
 
   private handleProcessDeath(error: Error): void {
     if (this.dead) return;
+    const child = this.process;
+    const exitHandler = this.exitHandler;
     this.dead = true;
     this.started = false;
     this.process = null;
     this.rejectAllPending(error);
-    this.exitHandler?.(error);
+    if (child) this.detachProcess(child);
+    this.buffer = '';
+    this.notificationHandlers.clear();
+    this.exitHandler = null;
+    exitHandler?.(error);
+  }
+
+  private detachProcess(child: ChildProcess): void {
+    child.stdout?.removeAllListeners('data');
+    child.stderr?.removeAllListeners('data');
+    child.removeAllListeners('error');
+    child.removeAllListeners('exit');
   }
 
   private processBuffer(): void {

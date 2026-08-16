@@ -16,12 +16,13 @@ export const hubbertTools: HubBertTool[] = [
   { name: 'load_skill', description: '读取一个 Skill 的完整 SKILL.md 指引。', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
 ];
 
-export async function runHubBertTool(name: string, input: Record<string, unknown>, workspace: string): Promise<string> {
+export async function runHubBertTool(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<string> {
+  if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted');
   const root = resolve(workspace);
   if (name === 'list_files') return cap((await readdir(within(root, string(input.path)), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
   if (name === 'read_file') return cap(await readFile(within(root, required(input.path, 'path')), 'utf8'));
   if (name === 'search_text') {
-    const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), string(input.path) || '.'], { cwd: root, timeout: 30_000, maxBuffer: MAX_OUTPUT });
+    const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), string(input.path) || '.'], { cwd: root, timeout: 30_000, maxBuffer: MAX_OUTPUT, signal });
     return cap(stdout || '未找到匹配项');
   }
   if (name === 'list_skills') return cap((await skills(root)).map((skill) => skill.name).join('\n') || '未发现 Skill');
