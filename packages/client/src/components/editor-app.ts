@@ -846,7 +846,7 @@ export class EditorApp extends HTMLElement {
 
   private withSession(entry: string): string {
     const url = new URL(entry, window.location.origin || 'http://localhost');
-    url.searchParams.set('sessionId', this.session?.sessionId ?? '');
+    url.searchParams.set('sessionId', this.bootstrap?.sessionId ?? this.session?.sessionId ?? '');
     return `${url.pathname}${url.search}`;
   }
 

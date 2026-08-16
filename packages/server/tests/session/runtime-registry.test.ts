@@ -16,6 +16,22 @@ describe('SessionRuntimeRegistry', () => {
   let store: SessionStore;
   let manager: SessionManager;
 
+  it('keeps one persistent client session while creating isolated Kit runtimes', async () => {
+    const store = new SessionStore(':memory:');
+    manager = new SessionManager(store);
+    const factory = vi.fn((session: { sessionId: string }) => createDisposableEditor(session.sessionId));
+    const registry = new SessionRuntimeRegistry(manager, factory);
+
+    const [defaultRuntime, agentRuntime] = await Promise.all([
+      registry.getOrCreate('client-a', { runtimeKit: '@itharbors/default-kit' }),
+      registry.getOrCreate('client-a', { runtimeKit: '@itharbors/agent-chat' }),
+    ]);
+
+    expect(manager.get('client-a')?.sessionId).toBe('client-a');
+    expect(defaultRuntime.editor).not.toBe(agentRuntime.editor);
+    expect(registry.editors.size).toBe(2);
+  });
+
   beforeEach(() => {
     store = new SessionStore(':memory:');
     manager = new SessionManager(store);

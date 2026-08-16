@@ -12,8 +12,18 @@
             "panel": "conversation-list.list"
           },
           {
-            "type": "leaf",
-            "panel": "message-panel.main"
+            "type": "tab",
+            "activeIndex": 0,
+            "children": [
+              {
+                "type": "leaf",
+                "panel": "message-panel.main"
+              },
+              {
+                "type": "leaf",
+                "panel": "plugin-list.list"
+              }
+            ]
           }
         ]
       }

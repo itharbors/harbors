@@ -4,6 +4,8 @@ export class PanelGroup extends HTMLElement {
   static observedAttributes = ['data-drop-edge', 'data-drop-target-tab-id', 'data-drop-placement'];
 
   private observer: MutationObserver | null = null;
+  private suppressClickUntil = 0;
+  private touchTabIndex: number | null = null;
 
   connectedCallback() {
     if (!this.shadowRoot) {
@@ -123,6 +125,7 @@ export class PanelGroup extends HTMLElement {
           white-space: nowrap;
           min-width: 0;
           cursor: pointer;
+          touch-action: manipulation;
           border-radius: var(--ce-tab-radius, var(--ce-radius-sm, 8px)) var(--ce-tab-radius, var(--ce-radius-sm, 8px)) 0 0;
         }
         .tab-item.active {
@@ -241,7 +244,33 @@ export class PanelGroup extends HTMLElement {
       </div>
     `;
 
-    this.shadowRoot!.querySelector('.tab-bar')!.addEventListener('click', (event) => {
+    const tabBar = this.shadowRoot!.querySelector('.tab-bar')!;
+    const activateTouchTab = (event: Event) => {
+      if (performance.now() < this.suppressClickUntil) return;
+      const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
+      if (!tab) return;
+      this.suppressClickUntil = performance.now() + 500;
+      this.activate(Number(tab.dataset.index || '0'));
+    };
+    tabBar.addEventListener('pointerup', (event) => {
+      activateTouchTab(event);
+    });
+    this.shadowRoot!.querySelectorAll<HTMLElement>('.tab-item').forEach((tab) => {
+      tab.addEventListener('touchstart', () => {
+        this.touchTabIndex = Number(tab.dataset.index || '0');
+      }, { passive: true });
+      tab.addEventListener('touchend', () => {
+        const index = this.touchTabIndex;
+        this.touchTabIndex = null;
+        if (index === null || performance.now() < this.suppressClickUntil) return;
+        this.suppressClickUntil = performance.now() + 500;
+        this.activate(index);
+      }, { passive: true });
+      tab.addEventListener('touchcancel', () => { this.touchTabIndex = null; }, { passive: true });
+    });
+
+    tabBar.addEventListener('click', (event) => {
+      if (performance.now() < this.suppressClickUntil) return;
       const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
       if (!tab) {
         return;

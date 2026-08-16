@@ -2,7 +2,11 @@ import { afterEach, describe, expect, it } from 'vitest';
 import path from 'node:path';
 import os from 'node:os';
 import fs from 'node:fs';
-import { normalizeAssemblyConfig, resolveDefaultKitFromSources } from '../../src/assembly/config';
+import {
+  discoverBuiltinKitSources,
+  normalizeAssemblyConfig,
+  resolveDefaultKitFromSources,
+} from '../../src/assembly/config';
 import { resolvePlugin, resolveKit } from '../../src/plugin/resolver';
 import { parseKitSources } from '../../src/server';
 
@@ -49,6 +53,21 @@ describe('normalizeAssemblyConfig', () => {
       defaultKit: 'kit-from-cli',
     });
     expect(config.kitSources).not.toBe(fileConfig.kitSources);
+  });
+});
+
+describe('discoverBuiltinKitSources', () => {
+  it('scans each real direct child of the repository kits directory', async () => {
+    const root = mkTmpDir('assembly-builtins');
+    fs.mkdirSync(path.join(root, 'kits', 'alpha'), { recursive: true });
+    fs.mkdirSync(path.join(root, 'kits', 'zeta'), { recursive: true });
+    fs.writeFileSync(path.join(root, 'kits', 'README.md'), 'not a kit');
+    fs.symlinkSync(path.join(root, 'kits', 'alpha'), path.join(root, 'kits', 'linked'));
+
+    await expect(discoverBuiltinKitSources(root)).resolves.toEqual([
+      { directory: fs.realpathSync(path.join(root, 'kits', 'alpha')), source: 'builtin' },
+      { directory: fs.realpathSync(path.join(root, 'kits', 'zeta')), source: 'builtin' },
+    ]);
   });
 });
 

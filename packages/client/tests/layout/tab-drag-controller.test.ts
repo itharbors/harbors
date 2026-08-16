@@ -29,6 +29,20 @@ function createDragEvent(
   return event as DragEvent;
 }
 
+function createPointerEvent(
+  type: string,
+  input: { clientX?: number; clientY?: number; pointerType?: string; bubbles?: boolean; composed?: boolean } = {},
+): PointerEvent {
+  const event = new PointerEventCtor(type, {
+    clientX: input.clientX ?? 0,
+    clientY: input.clientY ?? 0,
+    bubbles: input.bubbles ?? true,
+    composed: input.composed ?? true,
+  });
+  Object.defineProperty(event, 'pointerType', { value: input.pointerType ?? 'mouse' });
+  return event as PointerEvent;
+}
+
 const PointerEventCtor = window.PointerEvent ?? MouseEvent;
 
 afterEach(() => {
@@ -175,6 +189,28 @@ describe('TabDragController', () => {
     const sourceTab = root.querySelector('ce-panel-group')!.shadowRoot!.querySelector('.tab-item') as HTMLElement;
     sourceTab.dispatchEvent(new PointerEventCtor('pointerdown', { clientX: 10, clientY: 10, bubbles: true, composed: true }));
     document.dispatchEvent(new PointerEventCtor('pointerup', { clientX: 10, clientY: 10, bubbles: true }));
+
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
+    expect(commitLayout).not.toHaveBeenCalled();
+  });
+
+  it('leaves touch interactions to the tab activation handler', () => {
+    const root = document.createElement('div');
+    root.innerHTML = `
+      <ce-panel-group data-group-id="group-left" data-session-id="session-a" data-window-id="window-main">
+        <ce-panel title="Files" data-tab-id="tab-files" active>Files content</ce-panel>
+      </ce-panel-group>
+    `;
+    document.body.appendChild(root);
+
+    const commitLayout = vi.fn();
+    const controller = new TabDragController(root, { getLayout: () => createControllerLayout(), commitLayout });
+    controller.bind();
+
+    const sourceTab = root.querySelector('ce-panel-group')!.shadowRoot!.querySelector('.tab-item') as HTMLElement;
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', { pointerType: 'touch' }));
+    document.dispatchEvent(createPointerEvent('pointermove', { pointerType: 'touch', clientX: 24, clientY: 10 }));
+    document.dispatchEvent(createPointerEvent('pointerup', { pointerType: 'touch', clientX: 24, clientY: 10 }));
 
     expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
     expect(commitLayout).not.toHaveBeenCalled();
