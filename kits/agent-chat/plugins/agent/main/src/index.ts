@@ -83,7 +83,7 @@ async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
     ...result,
     permissions: result.permissions || {
       sandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
-      approvalPolicies: ['ask', 'never'],
+      approvalPolicies: ['ask', 'always'],
       defaultSandboxMode: DEFAULT_SANDBOX_MODE,
       defaultApprovalPolicy: DEFAULT_APPROVAL_POLICY,
     },
@@ -217,7 +217,9 @@ function assertSandboxMode(value: string): AgentSandboxMode {
 }
 
 function assertApprovalPolicy(value: string): AgentApprovalPolicy {
-  if (value === 'ask' || value === 'never') return value;
+  if (value === 'ask' || value === 'always') return value;
+  // 兼容旧会话中将“自动允许”保存为 never 的记录。
+  if (value === 'never') return 'always';
   throw new Error(`[agent] invalid approval policy: ${value}`);
 }
 

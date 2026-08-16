@@ -491,7 +491,7 @@ export class HarborsAdapter implements AgentAdapter {
     await this.appendEvent(session, 'approval/asked', { requestId, turn, step, callId, toolName, currentMode, requestedMode, justification });
     let outcome: AgentPermissionOutcome;
     if (signal?.aborted || this.abortController.signal.aborted) outcome = 'cancelled';
-    else if (session.approvalPolicy === 'never') outcome = 'rejected';
+    else if (session.approvalPolicy === 'always') outcome = 'allowed-once';
     else if (!this.permissionRequester) outcome = 'unavailable';
     else {
       try {
@@ -737,7 +737,9 @@ function assertSandboxMode(value: string): AgentSandboxMode {
   throw new Error(`Invalid sandbox mode: ${value}`);
 }
 function assertApprovalPolicy(value: string): AgentApprovalPolicy {
-  if (value === 'ask' || value === 'never') return value;
+  if (value === 'ask' || value === 'always') return value;
+  // 兼容旧会话中将“自动允许”保存为 never 的记录。
+  if (value === 'never') return 'always';
   throw new Error(`Invalid approval policy: ${value}`);
 }
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean { if (!value) return fallback; if (/^(?:1|true|yes|on)$/iu.test(value)) return true; if (/^(?:0|false|no|off)$/iu.test(value)) return false; return fallback; }
