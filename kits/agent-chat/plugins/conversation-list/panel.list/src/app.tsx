@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import './index.css';
 
 interface ConversationData {
@@ -108,7 +108,7 @@ export default function App({
     }
   };
 
-  const handleArchive = async (id: string, event: MouseEvent) => {
+  const handleArchive = async (id: string, event: ReactMouseEvent) => {
     event.stopPropagation();
     try {
       await ctx.message.request('agent', 'deleteConversation', id);
@@ -143,16 +143,19 @@ export default function App({
             {projectConversations.map((conversation) => {
               const harbors = conversation.source === 'harbors';
               return (
-                <article key={conversation.id} className={`conversation-card ${activeId === conversation.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => handleSelect(conversation.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
+                <article key={conversation.id} className={`conversation-card ${activeId === conversation.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => handleSelect(conversation.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
                   <div className={`source-mark ${harbors ? 'harbors' : 'codex'}`} aria-hidden="true">{harbors ? '⚓' : '⌘'}</div>
                   <div className="conversation-card-content">
                     <div className="conversation-card-title-row">
                       <span className="conversation-card-title">{conversation.title}</span>
-                      <span className={`source-badge ${harbors ? 'harbors' : 'codex'}`}>{harbors ? 'HARBORS' : 'CODEX'}</span>
                     </div>
-                    <div className="conversation-card-preview">{conversation.lastMessage || conversation.preview || '尚未发送消息'}</div>
                   </div>
-                  <button type="button" className="archive-btn" onClick={(event) => handleArchive(conversation.id, event)} aria-label={`归档对话：${conversation.title}`} title="归档对话">归档</button>
+                  <details className="conversation-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                    <summary className="more-btn" aria-label={`更多操作：${conversation.title}`} aria-haspopup="menu" title="更多操作">•••</summary>
+                    <div className="conversation-menu-popover" role="menu">
+                      <button type="button" role="menuitem" onClick={(event) => handleArchive(conversation.id, event)}>归档</button>
+                    </div>
+                  </details>
                 </article>
               );
             })}
