@@ -28,9 +28,17 @@ interface SessionHeader {
   model?: string;
 }
 
+interface RelayRetryConfig {
+  enabled: boolean;
+  maxRetries: number;
+  baseDelayMs: number;
+  maxDelayMs: number;
+}
+
 const REQUEST_TIMEOUT_MS = 5 * 60_000;
 const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
+const DEFAULT_RELAY_RETRY_CONFIG: RelayRetryConfig = { enabled: true, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 8_000 };
 
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
@@ -133,16 +141,16 @@ export class HarborsAdapter implements AgentAdapter {
     const signal = this.abortController.signal;
     const config = await this.config();
     throwIfAborted(signal);
-    const { baseUrl, apiKey, api, modelId } = config;
+    const { baseUrl, apiKey, api, modelId, retry } = config;
     if (!baseUrl) throw new Error('HubBert agent requires HARBORS_RELAY_BASE_URL or ~/.dsh/settings.yaml');
     if (!apiKey) throw new Error('HubBert agent requires HARBORS_RELAY_API_KEY or the DSH apiKeyEnv environment variable');
     const model = session.model || modelId;
-    if (api === 'anthropic-messages') return this.runAnthropicToolLoop(session, turn, baseUrl, apiKey, model, onStatus, signal);
-    if (api === 'openai-completions') return this.runOpenAiToolLoop(session, turn, baseUrl, apiKey, model, onStatus, signal);
+    if (api === 'anthropic-messages') return this.runAnthropicToolLoop(session, turn, baseUrl, apiKey, model, retry, onStatus, signal);
+    if (api === 'openai-completions') return this.runOpenAiToolLoop(session, turn, baseUrl, apiKey, model, retry, onStatus, signal);
     throw new Error(`Unsupported Harbors relay API: ${api}`);
   }
 
-  private async runAnthropicToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+  private async runAnthropicToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = toAnthropicMessages(session.events);
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
@@ -153,8 +161,7 @@ export class HarborsAdapter implements AgentAdapter {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'anthropic-messages' });
-        const response = await fetch(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }), signal: requestSignal(signal) });
-        if (!response.ok) throw new Error(`Harbors relay request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+        const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }) }, retry, session, turn, step, onStatus, signal);
         const payload = await response.json() as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> };
         const blocks = payload.content || [];
         const calls = blocks.filter((block) => block.type === 'tool_use' && block.id && block.name).map((call) => ({ id: call.id!, name: call.name!, input: call.input || {}, arguments: boundedJson(call.input || {}) }));
@@ -179,7 +186,7 @@ export class HarborsAdapter implements AgentAdapter {
     }
   }
 
-  private async runOpenAiToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+  private async runOpenAiToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
     const messages: Array<Record<string, unknown>> = toOpenAiMessages(session.events);
     const tools = hubbertTools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } }));
@@ -191,8 +198,7 @@ export class HarborsAdapter implements AgentAdapter {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'openai-completions' });
-        const response = await fetch(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }), signal: requestSignal(signal) });
-        if (!response.ok) throw new Error(`Harbors relay request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+        const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
         const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }> };
         const message = payload.choices?.[0]?.message;
         if (!message) throw new Error('Harbors agent returned no message');
@@ -217,6 +223,34 @@ export class HarborsAdapter implements AgentAdapter {
         throw error;
       }
     }
+  }
+
+  private async requestRelay(url: string, init: RequestInit, retry: RelayRetryConfig, session: StoredSession, turn: number, step: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<Response> {
+    let retries = 0;
+    while (true) {
+      throwIfAborted(signal);
+      try {
+        const response = await fetch(url, { ...init, signal: requestSignal(signal) });
+        if (response.ok) return response;
+        const body = await response.text();
+        if (!retry.enabled || retries >= retry.maxRetries || !isRetryableStatus(response.status)) throw new Error(`Harbors relay request failed (${response.status}): ${body.slice(0, 500)}`);
+        retries += 1;
+        await this.waitBeforeRetry(session, turn, step, retries, retry, onStatus, signal, { status: response.status, retryAfterMs: parseRetryAfter(response.headers.get('retry-after'), retry.maxDelayMs) });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        if (!retry.enabled || retries >= retry.maxRetries || !isRetryableNetworkError(error)) throw error;
+        retries += 1;
+        await this.waitBeforeRetry(session, turn, step, retries, retry, onStatus, signal, { error: normalizeError(error) });
+      }
+    }
+  }
+
+  private async waitBeforeRetry(session: StoredSession, turn: number, step: number, attempt: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, reason: { status?: number; error?: string; retryAfterMs?: number }): Promise<void> {
+    const delayMs = reason.retryAfterMs ?? retryDelayMs(attempt, retry);
+    const { retryAfterMs: _retryAfterMs, ...eventReason } = reason;
+    await this.appendEvent(session, 'request/retry', { turn, step, attempt, maxRetries: retry.maxRetries, delayMs, ...eventReason });
+    onStatus?.(`Relay 请求暂时失败，${delayMs}ms 后重试（${attempt}/${retry.maxRetries}）…`);
+    await delayWithAbort(delayMs, signal);
   }
 
   private async executeToolCalls(calls: ToolCall[], workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number): Promise<ToolResult[]> {
@@ -256,12 +290,25 @@ export class HarborsAdapter implements AgentAdapter {
     await this.appendEvent(session, 'tool/result', { turn, step, message: { source: { kind: 'tool', callId: call.id }, content: [{ type: 'tool-result', toolCallId: call.id, content: [{ type: 'text', text: result.content }], ...(result.isError ? { isError: true } : {}) }], role: 'user', id: randomUUID() }, ...(result.isError ? { error: { name: 'ToolError', code: 'TOOL_FAILED' } } : {}) });
   }
 
-  private async config(): Promise<{ baseUrl: string; apiKey?: string; api: string; modelId: string; models: RelayModel[]; defaultModel?: string }> {
+  private async config(): Promise<{ baseUrl: string; apiKey?: string; api: string; modelId: string; models: RelayModel[]; defaultModel?: string; retry: RelayRetryConfig }> {
     const dsh = await readDshRelayConfig();
     const baseUrl = (process.env.HARBORS_RELAY_BASE_URL || process.env.PI_AGENT_BASE_URL || dsh.baseUrl || '').replace(/\/$/u, '');
     const apiKey = process.env.HARBORS_RELAY_API_KEY || process.env.PI_AGENT_API_KEY || (await resolveDshCredential(dsh.apiKeyEnv))?.value;
     const modelId = process.env.HARBORS_RELAY_MODEL || process.env.PI_AGENT_MODEL || dsh.defaultModel || dsh.models[0]?.id || 'deepseek-chat';
-    return { baseUrl, apiKey, api: process.env.HARBORS_RELAY_API || process.env.PI_AGENT_API || dsh.api || 'openai-completions', modelId, models: dsh.models, defaultModel: dsh.defaultModel };
+    return {
+      baseUrl,
+      apiKey,
+      api: process.env.HARBORS_RELAY_API || process.env.PI_AGENT_API || dsh.api || 'openai-completions',
+      modelId,
+      models: dsh.models,
+      defaultModel: dsh.defaultModel,
+      retry: {
+        enabled: parseBooleanEnv(process.env.HARBORS_RELAY_RETRY_ENABLED || process.env.PI_AGENT_RETRY_ENABLED, DEFAULT_RELAY_RETRY_CONFIG.enabled),
+        maxRetries: parseIntegerEnv(process.env.HARBORS_RELAY_MAX_RETRIES || process.env.PI_AGENT_MAX_RETRIES, DEFAULT_RELAY_RETRY_CONFIG.maxRetries, 0, 10),
+        baseDelayMs: parseIntegerEnv(process.env.HARBORS_RELAY_RETRY_BASE_DELAY_MS || process.env.PI_AGENT_RETRY_BASE_DELAY_MS, DEFAULT_RELAY_RETRY_CONFIG.baseDelayMs, 0, 60_000),
+        maxDelayMs: parseIntegerEnv(process.env.HARBORS_RELAY_RETRY_MAX_DELAY_MS || process.env.PI_AGENT_RETRY_MAX_DELAY_MS, DEFAULT_RELAY_RETRY_CONFIG.maxDelayMs, 0, 300_000),
+      },
+    };
   }
 
   private logPathFor(id: string): string { if (!/^[a-f0-9-]{36}$/iu.test(id)) throw new Error('Invalid Harbors conversation id'); return join(this.storageDir, `${id}.jsonl`); }
@@ -315,6 +362,26 @@ function parseToolArguments(value: string | undefined): Record<string, unknown> 
 function boundedText(value: string): string { return value.length <= MAX_STORED_VALUE_CHARS ? value : `${value.slice(0, MAX_STORED_VALUE_CHARS)}\n...[truncated]`; }
 function boundedJson(value: unknown): string { try { return boundedText(JSON.stringify(value)); } catch { return '[unserializable]'; } }
 function normalizeError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
+function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean { if (!value) return fallback; if (/^(?:1|true|yes|on)$/iu.test(value)) return true; if (/^(?:0|false|no|off)$/iu.test(value)) return false; return fallback; }
+function parseIntegerEnv(value: string | undefined, fallback: number, min: number, max: number): number { const parsed = Number(value); return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback; }
+function isRetryableStatus(status: number): boolean { return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504; }
+function isRetryableNetworkError(error: unknown): boolean { return error instanceof TypeError || (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')); }
+function parseRetryAfter(value: string | null, maxDelayMs: number): number | undefined {
+  if (!value) return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(maxDelayMs, Math.round(seconds * 1_000));
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? Math.min(maxDelayMs, Math.max(0, timestamp - Date.now())) : undefined;
+}
+function retryDelayMs(attempt: number, retry: RelayRetryConfig): number { const exponential = Math.min(retry.maxDelayMs, retry.baseDelayMs * (2 ** Math.max(0, attempt - 1))); return exponential === 0 ? 0 : Math.max(1, Math.round(exponential * (0.75 + Math.random() * 0.5))); }
+async function delayWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
+  if (delayMs <= 0) { throwIfAborted(signal); return; }
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, delayMs);
+    const onAbort = () => { clearTimeout(timer); reject(signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped')); };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 function textContent(content: unknown): string { if (typeof content === 'string') return content; if (!Array.isArray(content)) return ''; return content.map((part) => typeof part === 'string' ? part : part && typeof part === 'object' && 'text' in part ? String((part as { text?: unknown }).text || '') : '').join(''); }
 function messageContent(message: unknown): unknown { return message && typeof message === 'object' && 'content' in message ? (message as { content?: unknown }).content : ''; }
 function messageSource(message: unknown): Record<string, unknown> { return message && typeof message === 'object' && 'source' in message && message.source && typeof message.source === 'object' ? message.source as Record<string, unknown> : {}; }
