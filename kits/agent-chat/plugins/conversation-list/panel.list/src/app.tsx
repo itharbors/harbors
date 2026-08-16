@@ -6,12 +6,12 @@ interface ConversationData {
   title: string;
   lastMessage?: string;
   preview?: string;
-  source: 'codex' | 'harbors';
+  source: 'harbors';
   project?: string;
 }
 
 interface ConversationDraft {
-  source: 'codex' | 'harbors';
+  source: 'harbors';
   project?: string;
 }
 
@@ -114,7 +114,7 @@ export default function App({
       const next: ConversationUiState = {
         selectedConversationId: typeof state.selectedConversationId === 'string' ? state.selectedConversationId : null,
         draft: state.draft && typeof state.draft === 'object'
-          && (state.draft.source === 'codex' || state.draft.source === 'harbors')
+          && state.draft.source === 'harbors'
           ? { source: state.draft.source, ...(typeof state.draft.project === 'string' ? { project: state.draft.project } : {}) }
           : null,
         generation,
@@ -214,7 +214,7 @@ export default function App({
       <div className="conversation-list-header">
         <div className="conversation-list-eyebrow">项目与会话</div>
         <div className="new-conversation-actions">
-          <button type="button" className="new-conversation-btn codex" onClick={handleNew} aria-label="新建对话">＋ 新对话</button>
+          <button type="button" className="new-conversation-btn" onClick={handleNew} aria-label="新建对话">＋ 新对话</button>
         </div>
       </div>
       {error && <div className="conversation-list-error" role="alert">{error}</div>}
@@ -223,10 +223,9 @@ export default function App({
           <section key={project} className="project-group" aria-label={`${project} 项目会话`}>
             <div className="project-group-heading"><span>{project}</span><span>{projectConversations.length}</span></div>
             {projectConversations.map((conversation) => {
-              const harbors = conversation.source === 'harbors';
               return (
                 <article key={conversation.id} className={`conversation-card ${uiState.selectedConversationId === conversation.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => handleSelect(conversation.id)} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
-                  <div className={`source-mark ${harbors ? 'harbors' : 'codex'}`} aria-hidden="true">{harbors ? '⚓' : '⌘'}</div>
+                  <div className="source-mark harbors" aria-hidden="true">⚓</div>
                   <div className="conversation-card-content">
                     <div className="conversation-card-title-row">
                       <span className="conversation-card-title">{conversation.title}</span>

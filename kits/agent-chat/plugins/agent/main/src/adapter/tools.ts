@@ -398,7 +398,7 @@ async function runBash(root: string, input: Record<string, unknown>, signal?: Ab
 }
 
 async function skills(workspace: string): Promise<Array<{ name: string; path: string }>> {
-  const roots = [resolve(workspace, '.agents/skills'), resolve(workspace, '.codex/skills'), resolve(homedir(), '.agents/skills'), resolve(homedir(), '.codex/skills')];
+  const roots = [resolve(workspace, '.agents/skills'), resolve(homedir(), '.agents/skills')];
   const found: Array<{ name: string; path: string }> = [];
   for (const root of roots) {
     try {

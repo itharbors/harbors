@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
-import { parseTraceEvents, type ToolProcessEntry } from './trace-events.js';
+import { parseTraceTurns, type ToolProcessEntry, type TraceTurn } from './trace-events.js';
 import Transcript from './transcript.js';
 import './index.css';
 
@@ -12,7 +12,7 @@ interface ConversationUiState { selectedConversationId?: string | null; draft?: 
 interface SelectOption { id: string; name: string; description?: string; }
 interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
-type ApprovalPolicy = 'ask' | 'never';
+type ApprovalPolicy = 'ask' | 'always';
 interface PermissionOptions { sandboxModes: SandboxMode[]; approvalPolicies: ApprovalPolicy[]; defaultSandboxMode: SandboxMode; defaultApprovalPolicy: ApprovalPolicy; }
 interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: string; sandboxMode?: SandboxMode; approvalPolicy?: ApprovalPolicy; }
 interface ContextUsage { model?: string; contextWindow: number; usedTokens: number; usageRatio: number; estimated?: boolean; }
@@ -25,6 +25,15 @@ const MESSAGE_BATCH_SIZE = 40;
 
 function sourceFromId(_id: string): Source { return 'harbors'; }
 function fallbackModel(_source: Source): string { return 'HubBert Relay'; }
+function normalizeApprovalPolicy(value: unknown): ApprovalPolicy | undefined {
+  if (value === 'ask' || value === 'always') return value;
+  // Agent 将旧会话中的 never 迁移为 always；面板也保留这一层兼容，避免旧快照让选择框失去选中值。
+  if (value === 'never') return 'always';
+  return undefined;
+}
+function approvalPolicyLabel(value: ApprovalPolicy): string {
+  return value === 'ask' ? '每次询问' : 'always';
+}
 function turnOptionsFor(model: string, reasoningEffort: string, serviceTier: string, sandboxMode: SandboxMode | '', approvalPolicy: ApprovalPolicy | ''): TurnOptions {
   return { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(sandboxMode ? { sandboxMode } : {}), ...(approvalPolicy ? { approvalPolicy } : {}) };
 }
@@ -43,7 +52,7 @@ function readAgentOptions(value: unknown): { models: ModelOption[]; selection: T
       reasoningEffort: optionValue(selectedModel?.reasoningEfforts, typed?.selection?.reasoningEffort || typed?.selectedReasoningEffort, selectedModel?.defaultReasoningEffort || typed?.defaultReasoningEffort),
       serviceTier: optionValue(selectedModel?.serviceTiers, typed?.selection?.serviceTier || typed?.selectedServiceTier, selectedModel?.defaultServiceTier || typed?.defaultServiceTier),
       sandboxMode: typed?.selection?.sandboxMode || typed?.selectedSandboxMode || typed?.permissions?.defaultSandboxMode,
-      approvalPolicy: typed?.selection?.approvalPolicy || typed?.selectedApprovalPolicy || typed?.permissions?.defaultApprovalPolicy,
+      approvalPolicy: normalizeApprovalPolicy(typed?.selection?.approvalPolicy || typed?.selectedApprovalPolicy || typed?.permissions?.defaultApprovalPolicy),
     },
     permissions: typed?.permissions || null,
     contextUsage: readContextUsage(typed?.contextUsage),
@@ -170,7 +179,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [activity, setActivity] = useState<string | null>(null);
-  const [toolEntries, setToolEntries] = useState<ToolProcessEntry[]>([]);
+  const [traceTurns, setTraceTurns] = useState<TraceTurn[]>([]);
   const [localProcessEntries, setLocalProcessEntries] = useState<ToolProcessEntry[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [resolvingPermissionId, setResolvingPermissionId] = useState<string | null>(null);
@@ -195,8 +204,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const events = await requestWithRetry(ctx, 'agent', 'getConversationTrace', id);
       if (seq !== loadSeqRef.current || requestSeq !== traceRequestSeqRef.current) return;
       const list = Array.isArray(events) ? events : [];
-      const entries = parseTraceEvents(list as any[]);
-      setToolEntries(entries);
+      setTraceTurns(parseTraceTurns(list as any[]));
     } catch (err) {
       if (seq === loadSeqRef.current && requestSeq === traceRequestSeqRef.current) {
         logError('加载轨迹失败', err);
@@ -215,7 +223,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setContextUsage(options.contextUsage);
     setConfigurationError(options.configurationError);
   };
-  const loadPermissionRequests = async (id: string): Promise<void> => {
+  const loadPermissionRequests = useCallback(async (id: string): Promise<void> => {
     const requestSeq = ++permissionRequestSeqRef.current;
     try {
       const value = await requestWithRetry(ctx, 'agent', 'getPendingPermissionRequests', id);
@@ -224,18 +232,18 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     } catch (err) {
       if (id === conversationIdRef.current && requestSeq === permissionRequestSeqRef.current) logError('加载权限申请失败', err);
     }
-  };
+  }, [ctx]);
 
 
   useLayoutEffect(() => {
     if (!shouldFollowLatestRef.current) return;
     const list = messageListRef.current;
     if (list) list.scrollTop = list.scrollHeight;
-  }, [conversationId, loading, messages, sending, toolEntries, localProcessEntries, permissionRequests, activity]);
+  }, [conversationId, loading, messages, sending, traceTurns, localProcessEntries, permissionRequests, activity]);
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setActivity(null); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setActivity(null); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
@@ -245,7 +253,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
       requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
       loadTrace(id, seq);
       loadPermissionRequests(id);
@@ -399,7 +407,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     }
   };
 
-  const resolvePermission = async (requestId: string, outcome: PermissionOutcome): Promise<void> => {
+  const resolvePermission = useCallback(async (requestId: string, outcome: PermissionOutcome): Promise<void> => {
     if (resolvingPermissionId) return;
     const id = conversationIdRef.current;
     if (!id) return;
@@ -415,7 +423,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     } finally {
       setResolvingPermissionId(null);
     }
-  };
+  }, [ctx, loadPermissionRequests, resolvingPermissionId]);
 
   const updateConversationPermissions = async (nextSandboxMode: SandboxMode | '', nextApprovalPolicy: ApprovalPolicy | ''): Promise<void> => {
     if (sending) return;
@@ -453,7 +461,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   };
 
 
-  const processEntries = [...toolEntries, ...localProcessEntries];
   const selectedModelOption = models.find((item) => item.id === model);
   const reasoningOptions = selectedModelOption?.reasoningEfforts?.length ? selectedModelOption.reasoningEfforts : (reasoningEffort ? [{ id: reasoningEffort, name: reasoningEffort }] : []);
   const serviceTierOptions = selectedModelOption?.serviceTiers?.length ? selectedModelOption.serviceTiers : (serviceTier ? [{ id: serviceTier, name: serviceTier }] : []);
@@ -471,7 +478,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       {reasoningOptions.length > 0 && <label className="option-picker reasoning-picker">推理深度<select value={reasoningEffort} disabled={reasoningOptions.length < 2} onChange={(event) => setReasoningEffort(event.target.value)}>{reasoningOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
       {serviceTierOptions.length > 0 && <label className="option-picker service-tier-picker">服务档位<select value={serviceTier} disabled={serviceTierOptions.length < 2} onChange={(event) => setServiceTier(event.target.value)}>{serviceTierOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
       {permissionOptions?.sandboxModes.length ? <label className="option-picker permission-picker">权限范围<select value={sandboxMode} disabled={sending} onChange={(event) => void updateConversationPermissions(event.target.value as SandboxMode, approvalPolicy)}>{permissionOptions.sandboxModes.map((item) => <option key={item} value={item}>{item === 'read-only' ? '只读' : item === 'workspace-write' ? '工作区可写' : '完全访问'}</option>)}</select></label> : null}
-      {permissionOptions?.approvalPolicies.length ? <label className="option-picker permission-picker">审批策略<select value={approvalPolicy} disabled={sending} onChange={(event) => void updateConversationPermissions(sandboxMode, event.target.value as ApprovalPolicy)}>{permissionOptions.approvalPolicies.map((item) => <option key={item} value={item}>{item === 'ask' ? '每次询问' : '自动允许'}</option>)}</select></label> : null}
+      {permissionOptions?.approvalPolicies.length ? <label className="option-picker permission-picker">审批策略<select value={approvalPolicy} disabled={sending} onChange={(event) => void updateConversationPermissions(sandboxMode, event.target.value as ApprovalPolicy)}>{permissionOptions.approvalPolicies.map((item) => <option key={item} value={item} title={item === 'always' ? 'always：自动允许权限请求' : undefined}>{approvalPolicyLabel(item)}</option>)}</select></label> : null}
       {contextUsage && <ContextRing ratio={contextUsage.usageRatio} tokens={contextUsage.usedTokens} max={contextUsage.contextWindow} />}
       {sending && conversationId ? (
         <button type="button" className="stop-button" onClick={() => void stopConversation()} disabled={stopping} aria-label="终止当前对话">{stopping ? '终止中…' : '终止'}</button>
@@ -505,7 +512,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
             project={project}
             modelLabel={models.find((item) => item.id === model)?.name || fallbackModel(source)}
             messages={visibleMessages}
-            processEntries={processEntries}
+            traceTurns={traceTurns}
+            localProcessEntries={localProcessEntries}
             turnOffset={hiddenTurnCount}
             permissionRequests={permissionRequests}
             resolvingPermissionId={resolvingPermissionId}

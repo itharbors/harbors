@@ -1,5 +1,5 @@
 /**
- * 将 Harbors 轨迹事件（tool/call、tool/result、turn/end）解析为可读的过程消息。
+ * 将 Harbors 轨迹事件解析为可读的过程消息。
  * 纯函数模块，便于单元测试。
  */
 
@@ -24,6 +24,31 @@ export interface ToolProcessEntry {
   result?: string;
   /** 工具调用是否失败。 */
   isError: boolean;
+}
+
+export interface ModelProcessEntry {
+  id: string;
+  seq: number;
+  turn: number;
+  step: number;
+  text: string;
+  hasToolCalls: boolean;
+}
+
+export interface TraceStep {
+  turn: number;
+  step: number;
+  requestSeq?: number;
+  model?: string;
+  assistant?: ModelProcessEntry;
+  tools: ToolProcessEntry[];
+  completed: boolean;
+}
+
+export interface TraceTurn {
+  turn: number;
+  steps: TraceStep[];
+  error?: ToolProcessEntry;
 }
 
 /** 渲染时的最大字符数，避免超长参数/结果撑爆页面。 */
@@ -110,6 +135,24 @@ function resolveResultCallId(data: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
+function assistantMessageDetails(value: unknown): { text: string; hasToolCalls: boolean } {
+  if (!value || typeof value !== 'object') return { text: '', hasToolCalls: false };
+  const message = value as Record<string, unknown>;
+  const content = message.content;
+  let text = '';
+  let hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  if (typeof content === 'string') text = content;
+  else if (Array.isArray(content)) {
+    for (const block of content) {
+      if (!block || typeof block !== 'object') continue;
+      const part = block as Record<string, unknown>;
+      if (part.type === 'text') text += String(part.text ?? '');
+      if (part.type === 'tool_use' || part.type === 'tool_call') hasToolCalls = true;
+    }
+  }
+  return { text: truncate(text), hasToolCalls };
+}
+
 /**
  * 将轨迹事件解析为工具调用过程消息列表。
  * - 处理 tool/call、tool/result 和失败的 turn/end，其余事件忽略。
@@ -162,6 +205,72 @@ export function parseTraceEvents(events: TraceEvent[]): ToolProcessEntry[] {
   }
   entries.push(...turnErrors);
   return entries.sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER));
+}
+
+function stepKey(turn: number, step: number): string {
+  return `${turn}:${step}`;
+}
+
+/**
+ * 按 JSONL 的 turn + step 重建模型执行过程，供刷新后的历史消息和实时消息共用。
+ * 不把同一 turn 的多个 step 压平，模型消息、工具调用和结果都留在原 step 内。
+ */
+export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
+  const turns = new Map<number, TraceTurn>();
+  const steps = new Map<string, TraceStep>();
+  const orderedEvents = [...events].sort((left, right) => left.seq - right.seq);
+  const ensureStep = (turn: number, step: number): TraceStep => {
+    const key = stepKey(turn, step);
+    const existing = steps.get(key);
+    if (existing) return existing;
+    const turnEntry = turns.get(turn) || { turn, steps: [] };
+    if (!turns.has(turn)) turns.set(turn, turnEntry);
+    const created: TraceStep = { turn, step, tools: [], completed: false };
+    turnEntry.steps.push(created);
+    steps.set(key, created);
+    return created;
+  };
+
+  for (const event of orderedEvents) {
+    const turn = Number(event.data.turn) || 0;
+    if (event.type === 'step/start' || event.type === 'request/context' || event.type === 'assistant/message' || event.type === 'step/end' || event.type === 'tool/call') {
+      const step = Number(event.data.step) || 0;
+      const current = ensureStep(turn, step);
+      if (event.type === 'request/context') {
+        current.requestSeq = event.seq;
+        if (typeof event.data.model === 'string' && event.data.model) current.model = event.data.model;
+      } else if (event.type === 'assistant/message') {
+        const details = assistantMessageDetails(event.data.message);
+        current.assistant = {
+          id: `assistant-${event.seq}`,
+          seq: event.seq,
+          turn,
+          step,
+          text: details.text,
+          hasToolCalls: details.hasToolCalls,
+        };
+      } else if (event.type === 'step/end') {
+        current.completed = true;
+      }
+    }
+  }
+
+  for (const entry of parseTraceEvents(orderedEvents)) {
+    if (entry.name === 'Agent 回合') {
+      const turnEntry = turns.get(entry.turn) || { turn: entry.turn, steps: [] };
+      if (!turns.has(entry.turn)) turns.set(entry.turn, turnEntry);
+      turnEntry.error = entry;
+      continue;
+    }
+    ensureStep(entry.turn, entry.step).tools.push(entry);
+  }
+
+  return [...turns.values()]
+    .sort((left, right) => left.turn - right.turn)
+    .map((turn) => ({
+      ...turn,
+      steps: turn.steps.sort((left, right) => left.step - right.step),
+    }));
 }
 
 /**

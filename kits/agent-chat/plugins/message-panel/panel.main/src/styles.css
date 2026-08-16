@@ -101,9 +101,12 @@ html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; o
 .permission-card-actions button:disabled { cursor: default; opacity: .55; }
 
 /* AI SDK UIMessage parts: one step contains the model intent and its tool process. */
-.agent-step { display: flex; width: min(760px, 88%); min-width: 0; flex-direction: column; gap: 10px; align-self: flex-start; margin: 2px 0 12px; padding: 12px 14px 14px 16px; border: 1px solid #303b4b; border-left: 2px solid #628bc6; border-radius: 12px; background: #1d232d; box-shadow: 0 8px 22px rgba(0, 0, 0, .12); }
-.agent-step::before { content: ''; display: block; width: 6px; height: 6px; margin-left: -20px; margin-bottom: -18px; border: 2px solid #7fa7df; border-radius: 50%; background: #1d232d; }
+.agent-step { display: flex; width: min(760px, 88%); min-width: 0; flex-direction: column; gap: 10px; align-self: flex-start; margin: 2px 0 12px; padding: 4px 0 4px 16px; border-left: 2px solid #628bc6; }
+.agent-step::before { content: ''; display: block; width: 6px; height: 6px; margin-left: -20px; margin-bottom: -18px; border: 2px solid #7fa7df; border-radius: 50%; background: #171a21; }
 .agent-step-header { display: flex; min-width: 0; align-items: center; gap: 8px; color: #aebbd0; font-size: 12px; }
+.agent-step-request { color: #8290a5; font-size: 11px; }
+.agent-step-request summary { cursor: pointer; }
+.agent-step-request-body { margin-top: 6px; border-left: 1px solid #344153; padding-left: 10px; color: #9aa9bd; }
 .agent-step-number { flex: 0 0 auto; color: #8299bb; font-variant-numeric: tabular-nums; font-weight: 700; }
 .agent-step-label { flex: 0 0 auto; color: #dce8fb; font-weight: 700; }
 .agent-step-label.pending { color: #e7c778; }

@@ -1,6 +1,6 @@
 declare const editor: any;
 
-type AgentSource = 'codex' | 'harbors';
+type AgentSource = 'harbors';
 
 interface ConversationSummary {
   id: string;
@@ -200,8 +200,8 @@ editor.plugin.define({
       }
       return updateUiState(id, null);
     },
-    startDraftConversation(source: AgentSource = 'codex', project?: string) {
-      if (source !== 'codex' && source !== 'harbors') {
+    startDraftConversation(source: AgentSource = 'harbors', project?: string) {
+      if (source !== 'harbors') {
         throw new Error('[conversation-list] invalid conversation source');
       }
       selectionSequence += 1;
