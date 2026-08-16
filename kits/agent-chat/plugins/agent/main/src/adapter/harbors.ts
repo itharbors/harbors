@@ -553,7 +553,11 @@ export class HarborsAdapter implements AgentAdapter {
     const candidates = [...session.surface];
     for (const seq of candidates) {
       const event = session.events[seq];
-      if (!event || event.type !== 'tool/result') continue;
+      // The next model request in this turn still needs the complete result to
+      // decide what to do next. Historical results can be compacted later, but
+      // pruning the current turn here can hide the very information it just
+      // received and make a successful tool call look empty or incomplete.
+      if (!event || event.type !== 'tool/result' || (turn !== null && event.data.turn === turn)) continue;
       const pruned = pruneToolResultEvent(event);
       if (!pruned) continue;
       const shadowedTokenCount = estimateEventTokens(event);
@@ -756,7 +760,14 @@ async function delayWithAbort(delayMs: number, signal: AbortSignal): Promise<voi
     signal.addEventListener('abort', onAbort, { once: true });
   });
 }
-function textContent(content: unknown): string { if (typeof content === 'string') return content; if (!Array.isArray(content)) return ''; return content.map((part) => typeof part === 'string' ? part : part && typeof part === 'object' && 'text' in part ? String((part as { text?: unknown }).text || '') : '').join(''); }
+function textContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (Array.isArray(content)) return content.map((part) => textContent(part)).join('');
+  if (!content || typeof content !== 'object') return '';
+  const value = content as { text?: unknown; content?: unknown };
+  if (typeof value.text === 'string') return value.text;
+  return 'content' in value ? textContent(value.content) : '';
+}
 function messageContent(message: unknown): unknown { return message && typeof message === 'object' && 'content' in message ? (message as { content?: unknown }).content : ''; }
 function messageSource(message: unknown): Record<string, unknown> { return message && typeof message === 'object' && 'source' in message && message.source && typeof message.source === 'object' ? message.source as Record<string, unknown> : {}; }
 

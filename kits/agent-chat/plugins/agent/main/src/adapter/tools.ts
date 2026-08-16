@@ -217,8 +217,14 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
   if (name === 'read_file') return cap(await readFile(resolveToolPath(root, required(input.path, 'path'), permission?.sandboxMode), 'utf8'));
   if (name === 'search_text') {
     const searchPath = string(input.path) ? resolveToolPath(root, string(input.path), permission?.sandboxMode) : root;
-    const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), searchPath], { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, signal });
-    return cap(stdout || '未找到匹配项');
+    try {
+      const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), searchPath], { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT * 8, signal });
+      return cap(stdout || '未找到匹配项');
+    } catch (error) {
+      if ((error as { code?: number }).code === 1) return '未找到匹配项';
+      if (isOutputLimitError(error)) return truncatedOutput((error as { stdout?: string }).stdout);
+      throw error;
+    }
   }
   if (name === 'list_skills') return cap((await skills(root)).map((skill) => skill.name).join('\n') || '未发现 Skill');
   if (name === 'load_skill') {
@@ -325,11 +331,17 @@ async function runGlob(root: string, input: Record<string, unknown>, signal?: Ab
   }
   args.push('--', path);
   let stdout = '';
+  let truncated = false;
   try { ({ stdout } = await exec('rg', args, { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT * 8, signal })); }
-  catch (error) { if ((error as { code?: number }).code !== 1) throw error; }
+  catch (error) {
+    if ((error as { code?: number }).code === 1) return 'No files found';
+    if (!isOutputLimitError(error)) throw error;
+    stdout = (error as { stdout?: string }).stdout || '';
+    truncated = true;
+  }
   const lines = stdout.split('\n').filter(Boolean);
   if (!lines.length) return 'No files found';
-  return cap(lines.join('\n'));
+  return cap(`${lines.join('\n')}${truncated ? '\n[glob output truncated; narrow the pattern or path]' : ''}`);
 }
 
 async function runGrep(root: string, input: Record<string, unknown>, signal?: AbortSignal, mode?: AgentSandboxMode): Promise<string> {
@@ -340,8 +352,14 @@ async function runGrep(root: string, input: Record<string, unknown>, signal?: Ab
   if (include) args.push(`--glob=${include}`);
   args.push('--', path);
   let stdout = '';
+  let truncated = false;
   try { ({ stdout } = await exec('rg', args, { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT * 8, signal })); }
-  catch (error) { if ((error as { code?: number }).code !== 1) throw error; }
+  catch (error) {
+    if ((error as { code?: number }).code === 1) return 'No matches found';
+    if (!isOutputLimitError(error)) throw error;
+    stdout = (error as { stdout?: string }).stdout || '';
+    truncated = true;
+  }
   const matches = parseGrepJson(stdout);
   if (!matches.length) return 'No matches found';
   const byFile = new Map<string, typeof matches>();
@@ -354,7 +372,7 @@ async function runGrep(root: string, input: Record<string, unknown>, signal?: Ab
   for (const [filePath, group] of byFile) {
     sections.push(`${filePath}\n${group.map((m) => `Line ${m.lineNumber}: ${m.line}`).join('\n')}`);
   }
-  return cap(`Found ${matches.length} match${matches.length === 1 ? '' : 'es'}\n\n${sections.join('\n\n')}`);
+  return cap(`Found ${matches.length} match${matches.length === 1 ? '' : 'es'}\n\n${sections.join('\n\n')}${truncated ? '\n[grep output truncated; narrow the pattern or path]' : ''}`);
 }
 
 async function runBash(root: string, input: Record<string, unknown>, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<string> {
@@ -457,6 +475,15 @@ function resolveToolPath(root: string, candidate: string, mode?: AgentSandboxMod
 }
 
 function isWithin(root: string, resolved: string): boolean { const rel = relative(root, resolved); return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..')); }
+
+function isOutputLimitError(error: unknown): boolean {
+  const value = error as { code?: unknown; message?: unknown };
+  return value.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER' || /maxBuffer length exceeded/iu.test(String(value.message || ''));
+}
+
+function truncatedOutput(output: string | undefined): string {
+  return `${cap(output || '')}\n[tool output truncated; narrow the path or query]`;
+}
 
 function required(value: unknown, name: string): string {
   const result = string(value);
