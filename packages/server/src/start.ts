@@ -1,16 +1,14 @@
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
 import { createServer } from './server.js';
 import { createDefaultAssemblyConfig } from './assembly/config.js';
+import { ensureDataDir, resolveStartConfig } from './start-config.js';
 
 const rootDir = process.cwd();
 const defaultKitDir = path.join(rootDir, 'kits', 'default');
-const dataDir = path.join(rootDir, '.data');
+const { dataDir, dbPath, port, host } = resolveStartConfig(rootDir, process.env);
 
-await mkdir(dataDir, { recursive: true });
-
-const port = Number(process.env.HARBORS_SERVER_PORT) || 48381;
-const host = process.env.HARBORS_BIND_HOST || '0.0.0.0';
+await ensureDataDir(dataDir);
+await ensureDataDir(path.dirname(dbPath));
 
 const server = createServer({
   assembly: createDefaultAssemblyConfig(rootDir, {
@@ -25,6 +23,7 @@ const server = createServer({
   host,
   port,
   clientAssetsRoot: path.join(rootDir, 'packages', 'client', 'dist'),
+  dbPath,
   applicationHostMode: 'web',
 });
 
