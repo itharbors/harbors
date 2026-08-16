@@ -69,6 +69,19 @@ test('ignores unknown event types', () => {
   assert.equal(entries[0].name, 'x');
 });
 
+test('exposes a failed turn/end as a process error', () => {
+  const entries = parseTraceEvents([
+    toolCall(0, { callId: 'c1', name: 'bash' }),
+    toolResult(1, 'c1', 'ok'),
+    { type: 'turn/end', seq: 2, time: 2, data: { turn: 1, reason: { kind: 'error', error: { message: 'HubBert tool loop exceeded 8 steps', code: 'UNKNOWN' } } } },
+  ]);
+
+  assert.equal(entries.length, 2);
+  assert.equal(entries[1].name, 'Agent 回合');
+  assert.equal(entries[1].isError, true);
+  assert.equal(entries[1].result, 'HubBert tool loop exceeded 8 steps');
+});
+
 test('matches result to call via nested toolCallId when source.callId is missing', () => {
   const events: TraceEvent[] = [
     toolCall(0, { callId: 'c1', name: 'x' }),

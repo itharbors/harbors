@@ -1,5 +1,5 @@
 /**
- * 将 Harbors 轨迹事件（tool/call、tool/result）解析为可读的过程消息。
+ * 将 Harbors 轨迹事件（tool/call、tool/result、turn/end）解析为可读的过程消息。
  * 纯函数模块，便于单元测试。
  */
 
@@ -13,6 +13,7 @@ export interface TraceEvent {
 /** 单个工具调用过程消息。 */
 export interface ToolProcessEntry {
   id: string;
+  seq?: number;
   turn: number;
   step: number;
   callId: string;
@@ -41,6 +42,27 @@ function asString(value: unknown): string {
   } catch {
     return String(value);
   }
+}
+
+function errorText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!value || typeof value !== 'object') return asString(value);
+  const record = value as Record<string, unknown>;
+  for (const key of ['message', 'error', 'reason', 'details']) {
+    if (typeof record[key] === 'string' && record[key]) return record[key] as string;
+    if (record[key] && typeof record[key] === 'object') {
+      const nested = errorText(record[key]);
+      if (nested) return nested;
+    }
+  }
+  return asString(value);
+}
+
+function extractTurnEndError(data: Record<string, unknown>): string | undefined {
+  const reason = data.reason as Record<string, unknown> | undefined;
+  if (reason?.kind !== 'error' && !reason?.error && !data.error) return undefined;
+  const text = errorText(reason?.error || data.error || reason);
+  return text || 'Agent 回合失败';
 }
 
 /** 从 tool/result 事件中提取结果文本与失败标记。 */
@@ -90,13 +112,14 @@ function resolveResultCallId(data: Record<string, unknown>): string | undefined 
 
 /**
  * 将轨迹事件解析为工具调用过程消息列表。
- * - 仅处理 tool/call 与 tool/result，其余事件忽略。
+ * - 处理 tool/call、tool/result 和失败的 turn/end，其余事件忽略。
  * - tool/result 通过 callId 匹配到对应的 tool/call。
  * - 结果按事件出现顺序排列。
  */
 export function parseTraceEvents(events: TraceEvent[]): ToolProcessEntry[] {
   const calls = new Map<string, ToolProcessEntry>();
   const results = new Map<string, { text: string; isError: boolean }>();
+  const turnErrors: ToolProcessEntry[] = [];
 
   for (const event of events) {
     if (event.type === 'tool/call') {
@@ -104,6 +127,7 @@ export function parseTraceEvents(events: TraceEvent[]): ToolProcessEntry[] {
       const callId = d.callId !== undefined && d.callId !== null ? String(d.callId) : `call-${event.seq}`;
       calls.set(callId, {
         id: callId,
+        seq: event.seq,
         turn: Number(d.turn) || 0,
         step: Number(d.step) || 0,
         callId,
@@ -116,6 +140,14 @@ export function parseTraceEvents(events: TraceEvent[]): ToolProcessEntry[] {
       if (!callId) continue;
       const { text, isError } = extractToolResult(event.data);
       results.set(callId, { text: truncate(text), isError });
+    } else if (event.type === 'turn/end') {
+      const message = extractTurnEndError(event.data);
+      if (message) {
+        const turn = Number(event.data.turn) || 0;
+        const step = Number(event.data.step) || 0;
+        const id = `turn-error-${turn}-${event.seq}`;
+        turnErrors.push({ id, seq: event.seq, turn, step, callId: id, name: 'Agent 回合', arguments: '', result: truncate(message), isError: true });
+      }
     }
   }
 
@@ -128,7 +160,8 @@ export function parseTraceEvents(events: TraceEvent[]): ToolProcessEntry[] {
       isError: result?.isError ?? false,
     });
   }
-  return entries;
+  entries.push(...turnErrors);
+  return entries.sort((left, right) => (left.seq ?? Number.MAX_SAFE_INTEGER) - (right.seq ?? Number.MAX_SAFE_INTEGER));
 }
 
 /**
