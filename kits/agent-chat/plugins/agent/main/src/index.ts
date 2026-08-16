@@ -337,6 +337,15 @@ editor.plugin.define({
       const trace = await requireAdapter(route.source).getConversationTrace?.(route.adapterId, turnId);
       return (trace || []).map((event) => ({ ...event, data: { ...event.data } }));
     },
+    async stopConversation(conversationId: string): Promise<boolean> {
+      if (!conversations.some((conversation) => conversation.id === conversationId)) {
+        throw new Error('[agent] conversation does not exist');
+      }
+      const route = parseConversationId(conversationId);
+      const stopped = await requireAdapter(route.source).stopConversation?.(route.adapterId) || false;
+      if (stopped) void broadcastMessageStatusWithContext(conversationId, activeMessageIds.get(conversationId), { phase: 'error', message: '已停止当前对话' });
+      return stopped;
+    },
     async sendMessage(conversationId: string, content: string, input?: AgentTurnInput) {
       if (!conversations.some((conversation) => conversation.id === conversationId)) {
         throw new Error('[agent] conversation does not exist');

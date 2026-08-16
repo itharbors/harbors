@@ -179,6 +179,12 @@ export interface HubBertToolPermissionContext extends AgentPermissionState {
   requestPermission?: (request: Omit<AgentPermissionRequest, 'requestId' | 'conversationId' | 'turn' | 'step' | 'signal'> & { signal?: AbortSignal }) => Promise<AgentPermissionOutcome>;
 }
 
+class SandboxPermissionRequiredError extends Error {
+  constructor(readonly requestedMode: AgentSandboxMode, message: string) {
+    super(message);
+  }
+}
+
 export async function runHubBertTool(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<string> {
   return (await runHubBertToolContent(name, input, workspace, signal, permission)).text;
 }
@@ -186,6 +192,19 @@ export async function runHubBertTool(name: string, input: Record<string, unknown
 export async function runHubBertToolContent(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<HubBertToolResult> {
   throwIfToolAborted(signal);
   const root = resolve(workspace);
+  try {
+    return await runHubBertToolAttempt(name, input, workspace, root, signal, permission);
+  } catch (error) {
+    if (!(error instanceof SandboxPermissionRequiredError)) throw error;
+    const mode = await requestSandboxMode(name, input, permission, error.requestedMode, signal, error.message);
+    const retryInput = { ...input };
+    delete retryInput.sandbox_permissions;
+    delete retryInput.justification;
+    return runHubBertToolAttempt(name, retryInput, workspace, root, signal, permission ? { ...permission, sandboxMode: mode } : permission);
+  }
+}
+
+async function runHubBertToolAttempt(name: string, input: Record<string, unknown>, workspace: string, root: string, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<HubBertToolResult> {
   if (name === 'read_image') return runReadImage(root, input, signal, permission?.sandboxMode);
   return { text: await runHubBertToolText(name, input, workspace, signal, permission) };
 }
@@ -396,24 +415,31 @@ const WIDER_SANDBOX_MODES: Record<AgentSandboxMode, readonly AgentSandboxMode[]>
 
 async function resolveToolMode(toolName: string, input: Record<string, unknown>, permission: HubBertToolPermissionContext | undefined, signal?: AbortSignal): Promise<AgentSandboxMode> {
   const currentMode = permission?.sandboxMode || 'workspace-write';
-  const requestedMode = string(input.sandbox_permissions) as AgentSandboxMode | '';
+  const explicitRequestedMode = string(input.sandbox_permissions) as AgentSandboxMode | '';
   const justification = string(input.justification);
-  if (requestedMode && !justification.trim()) throw new Error('sandbox_permissions 必须同时提供非空 justification');
-  if (!requestedMode && justification) throw new Error('justification 只能和 sandbox_permissions 一起使用');
-  if (!requestedMode) {
-    if ((toolName === 'bash' && currentMode !== 'danger-full-access') || (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit'))) {
-      throw sandboxDenied(toolName, currentMode);
-    }
-    return currentMode;
-  }
+  if (explicitRequestedMode && !justification.trim()) throw new Error('sandbox_permissions 必须同时提供非空 justification');
+  if (!explicitRequestedMode && justification) throw new Error('justification 只能和 sandbox_permissions 一起使用');
+  const requestedMode = explicitRequestedMode || requiredToolMode(toolName, currentMode);
+  if (!requestedMode) return currentMode;
   if (toolName === 'bash' && requestedMode !== 'danger-full-access') {
     throw new Error('当前实现无法为 bash 提供 workspace-write 级别的操作系统隔离；请请求 danger-full-access');
   }
   if (!Object.prototype.hasOwnProperty.call(WIDER_SANDBOX_MODES, requestedMode) || !(WIDER_SANDBOX_MODES[currentMode] || []).includes(requestedMode)) {
     throw new Error(`sandbox escalation to "${requestedMode}" is not strictly wider than this call's current "${currentMode}" mode`);
   }
+  return requestSandboxMode(toolName, input, permission, requestedMode, signal, justification || `工具 ${toolName} 在 ${currentMode} 模式下执行此操作需要 ${requestedMode} 权限`);
+}
+
+function requiredToolMode(toolName: string, currentMode: AgentSandboxMode): AgentSandboxMode | undefined {
+  if (toolName === 'bash' && currentMode !== 'danger-full-access') return 'danger-full-access';
+  if (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit')) return 'workspace-write';
+  return undefined;
+}
+
+async function requestSandboxMode(toolName: string, input: Record<string, unknown>, permission: HubBertToolPermissionContext | undefined, requestedMode: AgentSandboxMode, signal: AbortSignal | undefined, justification: string): Promise<AgentSandboxMode> {
+  const currentMode = permission?.sandboxMode || 'workspace-write';
   if (!permission?.requestPermission) throw new Error(`sandbox escalation to "${requestedMode}" requires approval, but no approval channel is available`);
-  const outcome = await permission.requestPermission({ toolName, currentMode, requestedMode, justification, signal });
+  const outcome = await permission.requestPermission({ toolName, currentMode, requestedMode, justification: justification || string(input.description), signal });
   switch (outcome) {
     case 'allowed-once': return requestedMode;
     case 'rejected': throw new Error(`用户拒绝将 ${toolName} 提升到 "${requestedMode}" 权限`);
@@ -423,22 +449,14 @@ async function resolveToolMode(toolName: string, input: Record<string, unknown>,
   }
 }
 
-function sandboxDenied(toolName: string, mode: AgentSandboxMode): Error {
-  const subject = toolName === 'bash' ? 'command' : 'operation';
-  return new Error(`[sandbox: file access denied under ${mode} mode]\n[sandbox: escalation available — retry this exact ${subject} once with sandbox_permissions + justification; the approval prompt asks the user]`);
-}
-
 function resolveToolPath(root: string, candidate: string, mode?: AgentSandboxMode): string {
   if (mode === 'danger-full-access') return resolve(root, candidate || '.');
-  return within(root, candidate);
+  const resolved = resolve(root, candidate || '.');
+  if (isWithin(root, resolved)) return resolved;
+  throw new SandboxPermissionRequiredError('danger-full-access', `路径超出当前工作区范围，需要 danger-full-access 权限：${candidate}`);
 }
 
-function within(root: string, candidate: string): string {
-  const resolved = resolve(root, candidate || '.');
-  const rel = relative(root, resolved);
-  if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..'))) return resolved;
-  throw new Error('工具路径必须位于工作区内');
-}
+function isWithin(root: string, resolved: string): boolean { const rel = relative(root, resolved); return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..')); }
 
 function required(value: unknown, name: string): string {
   const result = string(value);
