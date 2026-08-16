@@ -94,6 +94,9 @@ export function createClientAssetRouter(root: string) {
     res.setHeader('Content-Type', contentType(candidate.path));
     res.setHeader('Content-Length', candidate.size);
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (candidate.path === indexPath.path || (isAsset && assetRelative === 'index.js')) {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
     if (req.method === 'HEAD') res.end();
     else await pipeline(createReadStream(candidate.path), res);
     return true;

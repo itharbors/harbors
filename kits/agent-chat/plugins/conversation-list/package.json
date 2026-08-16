@@ -14,10 +14,14 @@
         }
       },
       "message": {
+        "request": {
+          "getConversationUiState": ["getConversationUiState"],
+          "selectConversation": ["selectConversation"],
+          "startDraftConversation": ["startDraftConversation"]
+        },
         "broadcast": {
-          "conversation.changed": ["panel.onConversationChanged"],
-          "conversation.selected": ["panel.onConversationSelected"],
-          "message.sent": ["panel.onMessageSent"]
+          "conversation.changed": ["onAgentConversationChanged", "panel.onConversationChanged"],
+          "conversation.ui.changed": ["panel.onConversationUiChanged"]
         }
       }
     }

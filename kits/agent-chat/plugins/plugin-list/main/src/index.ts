@@ -72,7 +72,11 @@ editor.plugin.define({
       }
 
       plugins.sort((left, right) => left.name.localeCompare(right.name));
-      return { activeKitName: currentKit?.name ?? null, plugins };
+      return {
+        activeKitName: currentKit?.name ?? null,
+        loadedCount: plugins.filter((plugin) => plugin.loaded).length,
+        plugins,
+      };
     },
 
     async register(target: string) {

@@ -31,7 +31,7 @@ function createDragEvent(
 
 function createPointerEvent(
   type: string,
-  input: { clientX?: number; clientY?: number; pointerType?: string; bubbles?: boolean; composed?: boolean } = {},
+  input: { clientX?: number; clientY?: number; pointerId?: number; pointerType?: string; bubbles?: boolean; composed?: boolean } = {},
 ): PointerEvent {
   const event = new PointerEventCtor(type, {
     clientX: input.clientX ?? 0,
@@ -39,6 +39,7 @@ function createPointerEvent(
     bubbles: input.bubbles ?? true,
     composed: input.composed ?? true,
   });
+  Object.defineProperty(event, 'pointerId', { value: input.pointerId ?? 1 });
   Object.defineProperty(event, 'pointerType', { value: input.pointerType ?? 'mouse' });
   return event as PointerEvent;
 }
@@ -108,6 +109,35 @@ function createControllerLayout(): EditorLayoutNode {
   };
 }
 
+function createTouchDragHarness() {
+  const root = document.createElement('div');
+  root.innerHTML = `
+    <ce-panel-group data-group-id="group-left" data-session-id="session-a" data-window-id="window-main">
+      <ce-panel title="Files" data-tab-id="tab-files" active>Files content</ce-panel>
+    </ce-panel-group>
+    <ce-panel-group data-group-id="group-right" data-session-id="session-a" data-window-id="window-main">
+      <ce-panel title="Main" data-tab-id="tab-main" active>Main content</ce-panel>
+    </ce-panel-group>
+  `;
+  document.body.appendChild(root);
+
+  let layout: EditorLayoutNode | null = createControllerLayout();
+  const commitLayout = vi.fn((next: EditorLayoutNode) => { layout = next; });
+  const controller = new TabDragController(root, { getLayout: () => layout, commitLayout });
+  controller.bind();
+
+  const sourceTab = root.querySelector('ce-panel-group')!.shadowRoot!.querySelector('.tab-item') as HTMLElement;
+  const targetGroup = root.querySelectorAll('ce-panel-group')[1] as HTMLElement;
+  const targetTab = targetGroup.shadowRoot!.querySelector('.tab-item') as HTMLElement;
+  const tabBar = targetGroup.shadowRoot!.querySelector('.tab-bar') as HTMLElement;
+  const content = targetGroup.shadowRoot!.querySelector('.content') as HTMLElement;
+  mockRect(tabBar, { left: 100, right: 260, top: 0, bottom: 32 });
+  mockRect(targetTab, { left: 100, right: 180, top: 0, bottom: 32 });
+  mockRect(content, { left: 100, right: 260, top: 32, bottom: 232 });
+
+  return { commitLayout, sourceTab };
+}
+
 describe('TabDragController', () => {
   it('applies preview on pointer move and commits on pointer up', () => {
     const root = document.createElement('div');
@@ -166,7 +196,7 @@ describe('TabDragController', () => {
 
     const sourceTab = root.querySelector('ce-panel-group')!.shadowRoot!.querySelector('.tab-item') as HTMLElement;
     sourceTab.dispatchEvent(new PointerEventCtor('pointerdown', { clientX: 10, clientY: 10, bubbles: true, composed: true }));
-    document.dispatchEvent(new PointerEventCtor('pointermove', { clientX: 20, clientY: 10, bubbles: true }));
+    document.dispatchEvent(new PointerEventCtor('pointermove', { clientX: 24, clientY: 10, bubbles: true }));
     expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeInstanceOf(HTMLElement);
 
     controller.destroy();
@@ -194,7 +224,7 @@ describe('TabDragController', () => {
     expect(commitLayout).not.toHaveBeenCalled();
   });
 
-  it('leaves touch interactions to the tab activation handler', () => {
+  it('keeps touch jitter below the drag threshold as a tap', () => {
     const root = document.createElement('div');
     root.innerHTML = `
       <ce-panel-group data-group-id="group-left" data-session-id="session-a" data-window-id="window-main">
@@ -209,11 +239,106 @@ describe('TabDragController', () => {
 
     const sourceTab = root.querySelector('ce-panel-group')!.shadowRoot!.querySelector('.tab-item') as HTMLElement;
     sourceTab.dispatchEvent(createPointerEvent('pointerdown', { pointerType: 'touch' }));
-    document.dispatchEvent(createPointerEvent('pointermove', { pointerType: 'touch', clientX: 24, clientY: 10 }));
-    document.dispatchEvent(createPointerEvent('pointerup', { pointerType: 'touch', clientX: 24, clientY: 10 }));
+    document.dispatchEvent(createPointerEvent('pointermove', { pointerType: 'touch', clientX: 10, clientY: 0 }));
+    document.dispatchEvent(createPointerEvent('pointerup', { pointerType: 'touch', clientX: 10, clientY: 0 }));
 
     expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
     expect(commitLayout).not.toHaveBeenCalled();
+  });
+
+  it('starts a touch drag at the shared threshold', () => {
+    const { sourceTab } = createTouchDragHarness();
+
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 10,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 10,
+      pointerType: 'touch',
+      clientX: 22,
+      clientY: 10,
+    }));
+
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeInstanceOf(HTMLElement);
+    document.dispatchEvent(createPointerEvent('pointercancel', { pointerId: 10, pointerType: 'touch' }));
+  });
+
+  it('cleans up a cancelled touch drag without committing it', () => {
+    const { commitLayout, sourceTab } = createTouchDragHarness();
+
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 11,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 11,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeInstanceOf(HTMLElement);
+
+    document.dispatchEvent(createPointerEvent('pointercancel', {
+      pointerId: 11,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+
+    expect(commitLayout).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
+  });
+
+  it('ignores a second pointer throughout the active drag gesture', () => {
+    const { commitLayout, sourceTab } = createTouchDragHarness();
+
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 21,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 22,
+      pointerType: 'touch',
+      clientX: 12,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 22,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    document.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 22,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    expect(commitLayout).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
+
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 21,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    document.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 21,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+
+    expect(commitLayout).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
   });
 
   it('marks foreign-session targets as forbidden and does not commit', () => {

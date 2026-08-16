@@ -21,8 +21,6 @@ let conversations: Conversation[] = [];
 let messages = new Map<string, ChatMessage[]>();
 let loadedMessageIds = new Set<string>();
 let pendingMessageLoads = new Map<string, Promise<ChatMessage[]>>();
-let activeConversationId: string | null = null;
-let draftConversation: { source: AgentSource; project?: string } | null = null;
 let nextMsgId = 1;
 
 function requireAdapter(source: AgentSource): AgentAdapter {
@@ -103,9 +101,7 @@ editor.plugin.define({
       adapters = createAdapters();
       try {
         await refreshConversations();
-        activeConversationId = conversations[0]?.id || null;
         broadcastConversations();
-        if (activeConversationId) runtime?.message.broadcast('conversation.selected', activeConversationId);
       } catch (err) {
         console.error('[agent] failed to load conversations:', err);
       }
@@ -122,17 +118,12 @@ editor.plugin.define({
       messages = new Map();
       loadedMessageIds = new Set();
       pendingMessageLoads = new Map();
-      activeConversationId = null;
-      draftConversation = null;
       nextMsgId = 1;
     },
   },
   methods: {
     async listConversations() {
       return refreshConversations();
-    },
-    getActiveConversation() {
-      return activeConversationId;
     },
     async getDraftOptions(source: AgentSource) {
       return adapterOptions(source);
@@ -143,37 +134,14 @@ editor.plugin.define({
       const options = await adapterOptions(conversation.source);
       return { ...options, selectedModel: conversation.model || options.defaultModel };
     },
-    startDraftConversation() {
-      const currentProject = conversations.find((conversation) => conversation.id === activeConversationId)?.project || process.cwd();
-      activeConversationId = null;
-      draftConversation = { source: 'codex', project: currentProject };
-      runtime?.message.broadcast('conversation.selected', null);
-      runtime?.message.broadcast('conversation.draft', draftConversation);
-      return { ...draftConversation };
-    },
-    getDraftConversation() {
-      return draftConversation ? { ...draftConversation } : null;
-    },
     async createConversation(source: AgentSource = 'codex', project?: string, model?: string) {
       const result = await requireAdapter(source).createConversation(project, model);
       const conv: Conversation = { ...result, id: conversationId(source, result.id), adapterId: result.id, source };
       conversations.unshift(conv);
       messages.set(conv.id, []);
       loadedMessageIds.add(conv.id);
-      activeConversationId = conv.id;
-      draftConversation = null;
       broadcastConversations();
-      runtime?.message.broadcast('conversation.selected', conv.id);
       return { ...conv };
-    },
-    selectConversation(id: string) {
-      if (!conversations.some((conversation) => conversation.id === id)) {
-        throw new Error('[agent] conversation does not exist');
-      }
-      activeConversationId = id;
-      draftConversation = null;
-      runtime?.message.broadcast('conversation.selected', id);
-      return id;
     },
     async deleteConversation(id: string) {
       const route = parseConversationId(id);
@@ -183,10 +151,6 @@ editor.plugin.define({
       loadedMessageIds.delete(id);
       pendingMessageLoads.delete(id);
       broadcastConversations();
-      if (activeConversationId === id) {
-        activeConversationId = conversations[0]?.id || null;
-        if (activeConversationId) runtime?.message.broadcast('conversation.selected', activeConversationId);
-      }
       return id;
     },
     async getMessages(conversationId: string) {
@@ -237,11 +201,6 @@ editor.plugin.define({
         console.error('[agent] failed to refresh conversation metadata:', err);
       }
       broadcastConversations();
-      runtime?.message.broadcast('message.sent', {
-        conversationId,
-        userMessage: { ...userMsg },
-        aiMessage: { ...aiMsg },
-      });
       return { ...aiMsg };
     },
   },

@@ -38,27 +38,146 @@ describe('ce-panel-group', () => {
     expect(panels[1].hasAttribute('active')).toBe(true);
   });
 
-  it('switches active panels on a touch pointer release', () => {
+  it('keeps the touched tab connected on pointerdown and switches on pointerup', () => {
     const group = document.createElement('ce-panel-group');
     group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
     document.body.appendChild(group);
 
     const tab = group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
-    const event = new Event('pointerup', { bubbles: true, composed: true }) as PointerEvent;
-    Object.defineProperty(event, 'pointerType', { value: 'touch' });
-    tab.dispatchEvent(event);
+    tab.dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 40,
+      clientY: 10,
+    }));
+
+    expect(group.querySelectorAll('ce-panel')[0].hasAttribute('active')).toBe(true);
+    expect(tab.isConnected).toBe(true);
+
+    tab.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 1,
+      pointerType: 'touch',
+      clientX: 40,
+      clientY: 10,
+    }));
 
     expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
   });
 
-  it('switches active panels across a touchstart and touchend gesture', () => {
+  it('switches active panels on a mouse pointer release', () => {
     const group = document.createElement('ce-panel-group');
     group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
     document.body.appendChild(group);
 
     const tab = group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
-    tab.dispatchEvent(new Event('touchstart', { bubbles: true, composed: true }));
-    tab.dispatchEvent(new Event('touchend', { bubbles: true, composed: true }));
+    tab.dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      clientX: 80,
+      clientY: 10,
+    }));
+    tab.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 2,
+      pointerType: 'mouse',
+      clientX: 80,
+      clientY: 10,
+    }));
+
+    expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
+  });
+
+  it('does not switch active panels after the pointer moves past the drag threshold', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+
+    const tab = group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
+    tab.dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 3,
+      pointerType: 'touch',
+      clientX: 20,
+      clientY: 10,
+    }));
+    tab.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 3,
+      pointerType: 'touch',
+      clientX: 40,
+      clientY: 10,
+    }));
+    tab.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 3,
+      pointerType: 'touch',
+      clientX: 40,
+      clientY: 10,
+    }));
+
+    const panels = group.querySelectorAll('ce-panel');
+    expect(panels[0].hasAttribute('active')).toBe(true);
+    expect(panels[1].hasAttribute('active')).toBe(false);
+  });
+
+  it('treats movement exactly at the drag threshold as a drag and suppresses the synthetic click', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+
+    const tab = group.shadowRoot!.querySelectorAll('.tab-item')[1] as HTMLElement;
+    tab.dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 4,
+      pointerType: 'touch',
+      clientX: 20,
+      clientY: 10,
+    }));
+    tab.dispatchEvent(pointerEvent('pointermove', {
+      pointerId: 4,
+      pointerType: 'touch',
+      clientX: 32,
+      clientY: 10,
+    }));
+    tab.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 4,
+      pointerType: 'touch',
+      clientX: 32,
+      clientY: 10,
+    }));
+    tab.click();
+
+    const panels = group.querySelectorAll('ce-panel');
+    expect(panels[0].hasAttribute('active')).toBe(true);
+    expect(panels[1].hasAttribute('active')).toBe(false);
+  });
+
+  it('does not let a second pointer replace the active tab gesture', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+
+    const tabs = group.shadowRoot!.querySelectorAll('.tab-item');
+    const outlineTab = tabs[1] as HTMLElement;
+    outlineTab.dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 5,
+      pointerType: 'touch',
+      clientX: 40,
+      clientY: 10,
+    }));
+    (tabs[0] as HTMLElement).dispatchEvent(pointerEvent('pointerdown', {
+      pointerId: 6,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    (tabs[0] as HTMLElement).dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 6,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    outlineTab.dispatchEvent(pointerEvent('pointerup', {
+      pointerId: 5,
+      pointerType: 'touch',
+      clientX: 40,
+      clientY: 10,
+    }));
 
     expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
   });
@@ -96,6 +215,7 @@ describe('ce-panel-group', () => {
     expect(styles).toContain('background: transparent');
     expect(styles).toContain('border: var(--ce-panel-group-border-width, 1px) solid var(--ce-panel-group-border-color, var(--ce-border, #444))');
     expect(styles).toContain('border-bottom: var(--ce-tabbar-border-width, 1px) solid var(--ce-tabbar-border-color, var(--ce-border, #444))');
+    expect(styles).toContain('touch-action: pan-x');
     expect(contentBlock).toContain('.content {');
     expect(contentBlock).not.toContain('background:');
     expect(styles).toContain('.content slot');
@@ -155,7 +275,7 @@ describe('ce-panel-group', () => {
     expect((tabs[1] as HTMLElement).dataset.tabId).toBe('tab-search');
   });
 
-  it('renders draggable tab buttons for native cross-window drag start', () => {
+  it('leaves native dragging disabled so pointer dragging owns the gesture', () => {
     const group = document.createElement('ce-panel-group');
     group.innerHTML = `
       <ce-panel title="Files" data-tab-id="tab-files" active>Files content</ce-panel>
@@ -165,8 +285,8 @@ describe('ce-panel-group', () => {
     document.body.appendChild(group);
 
     const tabs = group.shadowRoot!.querySelectorAll('.tab-item');
-    expect((tabs[0] as HTMLButtonElement).draggable).toBe(true);
-    expect((tabs[1] as HTMLButtonElement).draggable).toBe(true);
+    expect((tabs[0] as HTMLButtonElement).draggable).toBe(false);
+    expect((tabs[1] as HTMLButtonElement).draggable).toBe(false);
   });
 
   it('marks tab bar and content with drop region hooks', () => {
@@ -240,3 +360,16 @@ describe('ce-panel-group', () => {
     expect(styles).toContain('border-bottom-color: var(--ce-tab-bg-active, var(--ce-surface, #1a1a1a));');
   });
 });
+
+function pointerEvent(type: string, properties: {
+  pointerId: number;
+  pointerType: string;
+  clientX: number;
+  clientY: number;
+}): PointerEvent {
+  const event = new Event(type, { bubbles: true, composed: true }) as PointerEvent;
+  for (const [key, value] of Object.entries(properties)) {
+    Object.defineProperty(event, key, { value });
+  }
+  return event;
+}

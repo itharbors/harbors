@@ -5,6 +5,33 @@ import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isOptionalArray, isOptionalString, isRecord } from '../http/validation';
 
+const MESSAGE_REQUEST_FAILED = 'MESSAGE_REQUEST_FAILED';
+const MAX_EXPOSED_ERROR_MESSAGE_LENGTH = 1024;
+const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u;
+
+function readOwnString(error: unknown, property: string): string | null {
+  if (error === null || (typeof error !== 'object' && typeof error !== 'function')) return null;
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(error, property);
+    return descriptor && 'value' in descriptor && typeof descriptor.value === 'string'
+      ? descriptor.value
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeMessageRequestError(error: unknown): HttpError {
+  const rawMessage = readOwnString(error, 'message');
+  const message = rawMessage && rawMessage.trim()
+    ? rawMessage.slice(0, MAX_EXPOSED_ERROR_MESSAGE_LENGTH)
+    : 'Message request failed';
+  const rawCode = readOwnString(error, 'code');
+  const code = rawCode && SAFE_ERROR_CODE.test(rawCode) ? rawCode : MESSAGE_REQUEST_FAILED;
+  const status = code === 'APPLICATION_PLUGIN_UNAVAILABLE' ? 503 : 500;
+  return new HttpError(status, code, message);
+}
+
 export function createMessageRequestRouter(editorMap: Map<string, Editor>) {
   return async function messageRequestRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
@@ -26,7 +53,12 @@ export function createMessageRequestRouter(editorMap: Map<string, Editor>) {
     if (!editor.message.queryRequest(body.plugin, body.name)) {
       throw new HttpError(404, 'MESSAGE_ROUTE_NOT_FOUND', 'Message route not found');
     }
-    const result = await editor.message.request(body.plugin, body.name, ...(body.args ?? []));
+    let result: unknown;
+    try {
+      result = await editor.message.request(body.plugin, body.name, ...(body.args ?? []));
+    } catch (error) {
+      throw normalizeMessageRequestError(error);
+    }
     sendJson(res, 200, { result });
   };
 }

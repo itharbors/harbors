@@ -14,11 +14,9 @@
       "message": {
         "broadcast": {
           "conversation.changed": ["panel.onConversationChanged"],
-          "conversation.selected": ["panel.onConversationSelected"],
-          "conversation.draft": ["panel.onConversationDraft"],
+          "conversation.ui.changed": ["panel.onConversationUiChanged"],
           "message.delta": ["panel.onMessageDelta"],
-          "message.status": ["panel.onMessageStatus"],
-          "message.sent": ["panel.onMessageSent"]
+          "message.status": ["panel.onMessageStatus"]
         }
       }
     }

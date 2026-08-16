@@ -3,6 +3,15 @@ import { createRoot } from 'react-dom/client';
 import App from './app.js';
 
 const setters: Record<string, (data: any) => void> = {};
+let cachedConversationUiState: unknown;
+let hasCachedConversationUiState = false;
+
+function registerSetter(key: string, setter: (data: any) => void): void {
+  setters[key] = setter;
+  if (key === 'conversation.ui.changed' && hasCachedConversationUiState) {
+    setter(cachedConversationUiState);
+  }
+}
 
 export default {
   async mount(ctx: any) {
@@ -11,9 +20,7 @@ export default {
       createRoot(root).render(
         React.createElement(App, {
           ctx,
-          registerSetter: (key: string, setter: (data: any) => void) => {
-            setters[key] = setter;
-          },
+          registerSetter,
         })
       );
     }
@@ -23,12 +30,10 @@ export default {
       setters['conversation.changed']?.(data);
       return data;
     },
-    onConversationSelected(data: unknown) {
-      setters['conversation.selected']?.(data);
-      return data;
-    },
-    onConversationDraft(data: unknown) {
-      setters['conversation.draft']?.(data);
+    onConversationUiChanged(data: unknown) {
+      cachedConversationUiState = data;
+      hasCachedConversationUiState = true;
+      setters['conversation.ui.changed']?.(data);
       return data;
     },
     onMessageDelta(data: unknown) {
@@ -37,10 +42,6 @@ export default {
     },
     onMessageStatus(data: unknown) {
       setters['message.status']?.(data);
-      return data;
-    },
-    onMessageSent(data: unknown) {
-      setters['message.sent']?.(data);
       return data;
     },
   },

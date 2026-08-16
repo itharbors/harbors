@@ -8,24 +8,12 @@
       "message": {
         "request": {
           "listConversations": ["listConversations"],
-          "getActiveConversation": ["getActiveConversation"],
           "getDraftOptions": ["getDraftOptions"],
           "getConversationOptions": ["getConversationOptions"],
           "createConversation": ["createConversation"],
-          "startDraftConversation": ["startDraftConversation"],
-          "getDraftConversation": ["getDraftConversation"],
-          "selectConversation": ["selectConversation"],
           "deleteConversation": ["deleteConversation"],
           "getMessages": ["getMessages"],
           "sendMessage": ["sendMessage"]
-        },
-        "broadcast": {
-          "conversation.changed": ["panel.onConversationChanged"],
-          "conversation.selected": ["panel.onConversationSelected"],
-          "conversation.draft": ["panel.onConversationDraft"],
-          "message.delta": ["panel.onMessageDelta"],
-          "message.status": ["panel.onMessageStatus"],
-          "message.sent": ["panel.onMessageSent"]
         }
       }
     }

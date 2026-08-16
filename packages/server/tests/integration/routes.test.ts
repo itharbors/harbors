@@ -428,6 +428,45 @@ describe('framework routes', () => {
     expect(JSON.parse(await body()).result).toBe(42);
   });
 
+  it('message request returns safe plugin error codes and messages without details', async () => {
+    const editor = createEditor('s1', { assembly: testAssembly });
+    editor.message.registerRequest('relay', 'plain-error', () => {
+      throw new Error('Relay 凭据未配置');
+    });
+    editor.message.registerRequest('relay', 'coded-error', () => {
+      throw Object.assign(new Error('Relay 认证失败'), {
+        code: 'RELAY_AUTH_FAILED',
+        details: { token: 'must-not-leak' },
+      });
+    });
+    const router = createMessageRequestRouter(new Map([['s1', editor]]));
+
+    const plain = mockRes();
+    await invokeRoute(
+      router,
+      mockReq('POST', '/api/message/request?sessionId=s1', { plugin: 'relay', name: 'plain-error' }),
+      plain.res,
+    );
+    expect(plain.statusCode()).toBe(500);
+    expect(JSON.parse(await plain.body())).toEqual({
+      error: { code: 'MESSAGE_REQUEST_FAILED', message: 'Relay 凭据未配置', details: null },
+    });
+
+    const coded = mockRes();
+    await invokeRoute(
+      router,
+      mockReq('POST', '/api/message/request?sessionId=s1', { plugin: 'relay', name: 'coded-error' }),
+      coded.res,
+    );
+    expect(coded.statusCode()).toBe(500);
+    const codedBody = await coded.body();
+    expect(JSON.parse(codedBody)).toEqual({
+      error: { code: 'RELAY_AUTH_FAILED', message: 'Relay 认证失败', details: null },
+    });
+    expect(codedBody).not.toContain('must-not-leak');
+    expect(codedBody).not.toContain('[object Object]');
+  });
+
   it('message broadcast fires all matching handlers', async () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     const calls: string[] = [];

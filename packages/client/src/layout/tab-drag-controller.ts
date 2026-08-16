@@ -12,6 +12,7 @@ import { resolveDropDescriptor, type GroupDropTarget } from './tab-drop-resolver
 
 const TAB_DRAG_MIME = 'application/x-ce-tab-drag';
 const TAB_DRAG_TEXT_PREFIX = 'ce-tab-drag:';
+const DRAG_THRESHOLD = 12;
 
 export class TabDragController {
   private dragSession: DragSession | null = null;
@@ -20,8 +21,11 @@ export class TabDragController {
   private nativeDragging = false;
   private dragStartX = 0;
   private dragStartY = 0;
+  private dragThreshold = DRAG_THRESHOLD;
+  private dragPointerId: number | null = null;
   private moveHandler = (event: PointerEvent) => this.handlePointerMove(event);
   private upHandler = (event: PointerEvent) => this.handlePointerUp(event);
+  private cancelHandler = (event: PointerEvent) => this.handlePointerCancel(event);
   private dragStartHandler = (event: DragEvent) => this.handleDragStart(event);
   private dragOverHandler = (event: DragEvent) => this.handleDragOver(event);
   private dropHandler = (event: DragEvent) => this.handleDrop(event);
@@ -59,13 +63,14 @@ export class TabDragController {
     this.removeDocumentListeners();
     this.removeDragShield();
     this.clearPreview();
+    this.dragSession = null;
+    this.dragging = false;
+    this.dragPointerId = null;
+    this.nativeDragging = false;
   }
 
   private handlePointerDown = (event: PointerEvent) => {
-    // Touch interactions select tabs.  Do not create a drag session for them:
-    // Safari may route the follow-up pointer events through its gesture handling,
-    // which can compete with the tab's own touch/click activation path.
-    if (event.pointerType === 'touch') return;
+    if (this.dragPointerId !== null) return;
 
     const path = event.composedPath();
     const tabItem = path.find((node) => node instanceof HTMLElement && node.classList.contains('tab-item')) as HTMLElement | undefined;
@@ -84,6 +89,8 @@ export class TabDragController {
     this.dragging = false;
     this.dragStartX = event.clientX;
     this.dragStartY = event.clientY;
+    this.dragThreshold = DRAG_THRESHOLD;
+    this.dragPointerId = event.pointerId;
 
     this.addDocumentListeners();
   };
@@ -117,7 +124,9 @@ export class TabDragController {
     this.nativeDragging = true;
     this.dragSession = null;
     this.dragging = false;
+    this.dragPointerId = null;
     this.removeDragShield();
+    this.removeDocumentListeners();
     this.clearPreview();
   }
 
@@ -221,11 +230,13 @@ export class TabDragController {
   }
 
   private handlePointerMove(event: PointerEvent) {
-    if (!this.dragSession) return;
+    if (!this.dragSession || event.pointerId !== this.dragPointerId) return;
     if (!this.dragging) {
       const deltaX = event.clientX - this.dragStartX;
       const deltaY = event.clientY - this.dragStartY;
-      if (Math.hypot(deltaX, deltaY) < 4) return;
+      // A small amount of movement is normal on touchscreens and trackpads.
+      // Requiring a clearer gesture avoids turning a tap into a drag shield.
+      if (Math.hypot(deltaX, deltaY) < this.dragThreshold) return;
       this.dragging = true;
       this.addDragShield();
     }
@@ -268,8 +279,8 @@ export class TabDragController {
     }
   }
 
-  private handlePointerUp(_event: PointerEvent) {
-    if (!this.dragSession) return;
+  private handlePointerUp(event: PointerEvent) {
+    if (!this.dragSession || event.pointerId !== this.dragPointerId) return;
 
     const layout = this.options.getLayout();
     const floatingPanelInstanceId = getFloatingPanelInstanceId(this.dragSession.sourceGroupId);
@@ -288,6 +299,18 @@ export class TabDragController {
 
     this.dragSession = null;
     this.dragging = false;
+    this.dragPointerId = null;
+    this.clearPreview();
+    this.removeDragShield();
+    this.removeDocumentListeners();
+  }
+
+  private handlePointerCancel(event: PointerEvent) {
+    if (!this.dragSession || event.pointerId !== this.dragPointerId) return;
+
+    this.dragSession = null;
+    this.dragging = false;
+    this.dragPointerId = null;
     this.clearPreview();
     this.removeDragShield();
     this.removeDocumentListeners();
@@ -380,13 +403,13 @@ export class TabDragController {
   private addDocumentListeners() {
     document.addEventListener('pointermove', this.moveHandler);
     document.addEventListener('pointerup', this.upHandler);
-    document.addEventListener('pointercancel', this.upHandler);
+    document.addEventListener('pointercancel', this.cancelHandler);
   }
 
   private removeDocumentListeners() {
     document.removeEventListener('pointermove', this.moveHandler);
     document.removeEventListener('pointerup', this.upHandler);
-    document.removeEventListener('pointercancel', this.upHandler);
+    document.removeEventListener('pointercancel', this.cancelHandler);
   }
 
   private addDragShield() {
