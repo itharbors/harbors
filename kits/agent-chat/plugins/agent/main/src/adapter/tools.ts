@@ -1,28 +1,190 @@
 import { execFile } from 'node:child_process';
 import { readdir, readFile } from 'node:fs/promises';
+import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
+import { readDshRelayConfig } from './dsh-config.js';
+import { resolveDshCredential } from './credentials.js';
 
 const exec = promisify(execFile);
 const MAX_OUTPUT = 12_000;
+const READ_LIMIT = 2000;
+const MAX_LINE_LENGTH = 2000;
+const SEARCH_TIMEOUT_MS = 30_000;
+const BASH_TIMEOUT_MS = 120_000;
+const WEB_TIMEOUT_MS = 30_000;
+const WEB_MAX_BODY_CHARS = 20_000;
+const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface HubBertTool { name: string; description: string; input_schema: Record<string, unknown>; }
+
 export const hubbertTools: HubBertTool[] = [
   { name: 'list_files', description: '列出工作区内目录中的文件。', input_schema: { type: 'object', properties: { path: { type: 'string', description: '相对工作区路径，可省略。' } } } },
   { name: 'read_file', description: '读取工作区内的 UTF-8 文本文件。', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
   { name: 'search_text', description: '在工作区内搜索文本。', input_schema: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' } }, required: ['query'] } },
   { name: 'list_skills', description: '列出可按需加载的本地 Skill。先调用它确认名称，再调用 load_skill。', input_schema: { type: 'object', properties: {} } },
   { name: 'load_skill', description: '读取一个 Skill 的完整 SKILL.md 指引。', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  {
+    name: 'read',
+    description: '读取工作区内的 UTF-8 文本文件，返回带行号的内容。使用 offset 和 limit 分段读取大文件。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: '相对工作区的文件路径。' },
+        offset: { type: 'number', description: '起始行号（1-based），默认 1。' },
+        limit: { type: 'number', description: '最多返回行数，默认 2000。' },
+      },
+      required: ['file_path'],
+    },
+  },
+  {
+    name: 'write',
+    description: '创建或完全覆盖工作区内的 UTF-8 文本文件。覆盖前请先 read 确认内容。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: '相对工作区的文件路径。' },
+        content: { type: 'string', description: '要写入的完整 UTF-8 文本内容。' },
+      },
+      required: ['file_path', 'content'],
+    },
+  },
+  {
+    name: 'edit',
+    description: '对工作区内已有的 UTF-8 文本文件做字面量替换。默认 old_string 必须唯一出现；若有多处可设 replace_all 为 true。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: '相对工作区的文件路径。' },
+        old_string: { type: 'string', description: '要被替换的字面量文本。' },
+        new_string: { type: 'string', description: '替换后的文本，可为空字符串以删除匹配。' },
+        replace_all: { type: 'boolean', description: '是否替换所有匹配，默认 false。' },
+      },
+      required: ['file_path', 'old_string', 'new_string'],
+    },
+  },
+  {
+    name: 'glob',
+    description: '按 glob 模式查找工作区内的文件路径（不含目录），包含隐藏和被忽略文件，按修改时间排序。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'glob 模式，如 **/*.ts、src/**/*.test.js。不含 / 时匹配任意深度的文件名。' },
+        path: { type: 'string', description: '搜索起始目录，默认工作区。' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'grep',
+    description: '用 ripgrep 正则搜索工作区内文件内容，返回带行号的匹配行，按文件分组。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        pattern: { type: 'string', description: 'ripgrep 正则表达式。' },
+        path: { type: 'string', description: '搜索的文件或目录，默认工作区。' },
+        include: { type: 'string', description: '文件 glob 过滤，如 *.ts、*.{js,jsx}。' },
+      },
+      required: ['pattern'],
+    },
+  },
+  {
+    name: 'bash',
+    description: '在工作区执行 bash 命令并返回 stdout/stderr。每次调用都是独立 shell，不保留 cwd/变量；用 workdir 指定目录。非零退出码会在结果中标注。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        command: { type: 'string', description: '要执行的 bash 命令。' },
+        description: { type: 'string', description: '命令用途的简短描述。' },
+        timeoutMs: { type: 'number', description: '超时毫秒数，默认 120000。' },
+        workdir: { type: 'string', description: '工作目录，默认工作区；相对路径按工作区解析。' },
+      },
+      required: ['command'],
+    },
+  },
+  {
+    name: 'web_search',
+    description: '搜索互联网获取当前信息，返回来源 URL 列表及摘要。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: '搜索关键词。' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'web_fetch',
+    description: '获取指定 HTTP(S) URL 的内容并转为文本。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        url: { type: 'string', description: '要获取的 HTTP(S) URL。' },
+      },
+      required: ['url'],
+    },
+  },
+  {
+    name: 'read_image',
+    description: '读取工作区内的 PNG、JPEG、WebP 或 GIF 图片，并将图片本身传给当前模型。当前模型需要支持视觉输入。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: '相对工作区的图片路径。' },
+      },
+      required: ['file_path'],
+    },
+  },
 ];
 
+/** 串行执行 write/edit/bash 的互斥锁，避免并发写冲突。 */
+let writeMutex: Promise<unknown> = Promise.resolve();
+
+async function runExclusive<T>(fn: () => T | PromiseLike<T>, signal?: AbortSignal): Promise<T> {
+  const current = writeMutex;
+  let release!: () => void;
+  writeMutex = new Promise<void>((resolve) => { release = resolve; });
+  try {
+    if (signal) await Promise.race([current, abortPromise(signal)]);
+    else await current;
+    throwIfToolAborted(signal);
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+export interface HubBertToolImage {
+  mediaType: 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif';
+  base64: string;
+}
+
+export interface HubBertToolResult {
+  text: string;
+  image?: HubBertToolImage;
+}
+
 export async function runHubBertTool(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<string> {
+  return (await runHubBertToolContent(name, input, workspace, signal)).text;
+}
+
+export async function runHubBertToolContent(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<HubBertToolResult> {
+  throwIfToolAborted(signal);
+  const root = resolve(workspace);
+  if (name === 'read_image') return runReadImage(root, input, signal);
+  return { text: await runHubBertToolText(name, input, workspace, signal) };
+}
+
+async function runHubBertToolText(name: string, input: Record<string, unknown>, workspace: string, signal?: AbortSignal): Promise<string> {
   if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted');
   const root = resolve(workspace);
+
   if (name === 'list_files') return cap((await readdir(within(root, string(input.path)), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
   if (name === 'read_file') return cap(await readFile(within(root, required(input.path, 'path')), 'utf8'));
   if (name === 'search_text') {
-    const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), string(input.path) || '.'], { cwd: root, timeout: 30_000, maxBuffer: MAX_OUTPUT, signal });
+    const searchPath = string(input.path) ? within(root, string(input.path)) : root;
+    const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), searchPath], { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT, signal });
     return cap(stdout || '未找到匹配项');
   }
   if (name === 'list_skills') return cap((await skills(root)).map((skill) => skill.name).join('\n') || '未发现 Skill');
@@ -31,18 +193,313 @@ export async function runHubBertTool(name: string, input: Record<string, unknown
     if (!skill) throw new Error('Skill 不存在；请先调用 list_skills');
     return cap(await readFile(skill.path, 'utf8'));
   }
+
+  if (name === 'read') return runRead(root, input);
+  if (name === 'write') return runExclusive(() => runWrite(root, input), signal);
+  if (name === 'edit') return runExclusive(() => runEdit(root, input), signal);
+  if (name === 'glob') return runGlob(root, input, signal);
+  if (name === 'grep') return runGrep(root, input, signal);
+  if (name === 'bash') return runExclusive(() => runBash(root, input, signal), signal);
+  if (name === 'web_search') return runWebSearch(input, signal);
+  if (name === 'web_fetch') return runWebFetch(input, signal);
+
   throw new Error(`不支持的工具：${name}`);
+}
+
+function runRead(root: string, input: Record<string, unknown>): string {
+  const filePath = required(input.file_path, 'file_path');
+  const offset = Math.max(1, Math.floor(Number(input.offset) || 1));
+  const limit = Math.min(READ_LIMIT, Math.max(1, Math.floor(Number(input.limit) || READ_LIMIT)));
+  const content = readFileSync(within(root, filePath), 'utf8');
+  const lines = content.split('\n');
+  const totalLines = lines.length;
+  const start = offset - 1;
+  const end = Math.min(start + limit, totalLines);
+  const window = lines.slice(start, end).map((line, index) => {
+    const num = start + index + 1;
+    const text = line.length > MAX_LINE_LENGTH ? `${line.slice(0, MAX_LINE_LENGTH)}…` : line;
+    return `${num}\t${text}`;
+  });
+  const header = `<path>${filePath}</path>\n<type>file</type>\n<content>`;
+  const body = window.join('\n');
+  const footer = end < totalLines ? `\n… (${totalLines - end} more lines)` : '';
+  return cap(`${header}\n${body}${footer}\n</content>`);
+}
+
+async function runReadImage(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<HubBertToolResult> {
+  const filePath = required(input.file_path, 'file_path');
+  const extension = extname(filePath).toLowerCase();
+  const mediaTypes: Record<string, HubBertToolImage['mediaType']> = {
+    '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.jpeg': 'image/jpeg',
+    '.webp': 'image/webp',
+    '.gif': 'image/gif',
+  };
+  const mediaType = mediaTypes[extension];
+  if (!mediaType) throw new Error(`read_image 只支持 PNG、JPEG、WebP 和 GIF：${filePath}`);
+  const target = within(root, filePath);
+  const data = await readFile(target);
+  throwIfToolAborted(signal);
+  if (data.byteLength > IMAGE_MAX_BYTES) throw new Error(`图片超过 ${IMAGE_MAX_BYTES / 1024 / 1024} MB 限制：${filePath}`);
+  if (!matchesImageSignature(data, mediaType)) throw new Error(`图片扩展名与实际文件格式不匹配：${filePath}`);
+  return {
+    text: `<path>${filePath}</path>\n<type>image</type>\n<content>\n${mediaType} image, ${data.byteLength} bytes\n</content>`,
+    image: { mediaType, base64: data.toString('base64') },
+  };
+}
+
+function matchesImageSignature(data: Buffer, mediaType: HubBertToolImage['mediaType']): boolean {
+  if (mediaType === 'image/png') return data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+  if (mediaType === 'image/jpeg') return data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
+  if (mediaType === 'image/gif') return data.length >= 6 && (data.subarray(0, 6).toString('ascii') === 'GIF87a' || data.subarray(0, 6).toString('ascii') === 'GIF89a');
+  return data.length >= 12 && data.subarray(0, 4).toString('ascii') === 'RIFF' && data.subarray(8, 12).toString('ascii') === 'WEBP';
+}
+
+function runWrite(root: string, input: Record<string, unknown>): string {
+  const filePath = required(input.file_path, 'file_path');
+  const content = typeof input.content === 'string' ? input.content : '';
+  const target = within(root, filePath);
+  mkdirSync(dirname(target), { recursive: true });
+  fsWriteFileSync(target, content, 'utf8');
+  return `<path>${filePath}</path>\n<type>file</type>\n<content>\nFile written successfully\n</content>`;
+}
+
+function runEdit(root: string, input: Record<string, unknown>): string {
+  const filePath = required(input.file_path, 'file_path');
+  const oldString = required(input.old_string, 'old_string');
+  const newString = typeof input.new_string === 'string' ? input.new_string : '';
+  const replaceAll = Boolean(input.replace_all);
+  if (oldString === newString) throw new Error('old_string 和 new_string 必须不同');
+  const target = within(root, filePath);
+  const original = readFileSync(target, 'utf8');
+  const occurrences = countOccurrences(original, oldString);
+  if (occurrences === 0) throw new Error('未找到 old_string');
+  if (!replaceAll && occurrences > 1) throw new Error(`old_string 出现 ${occurrences} 次，请提供更具体的匹配或设置 replace_all 为 true`);
+  const updated = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
+  fsWriteFileSync(target, updated, 'utf8');
+  return `The file ${filePath} has been updated${replaceAll ? '. All occurrences were successfully replaced.' : ' successfully.'}`;
+}
+
+async function runGlob(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  const pattern = required(input.pattern, 'pattern');
+  const path = string(input.path) ? within(root, string(input.path)) : root;
+  const args = ['--files', `--glob=${pattern}`, '--sort=modified', '--no-ignore', '--hidden'];
+  for (const vcs of ['.git', '.svn', '.hg', '.bzr', '.jj', '.sl']) {
+    args.push(`--glob=!**/${vcs}`, `--glob=!**/${vcs}/**`);
+  }
+  args.push('--', path);
+  let stdout = '';
+  try { ({ stdout } = await exec('rg', args, { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT * 8, signal })); }
+  catch (error) { if ((error as { code?: number }).code !== 1) throw error; }
+  const lines = stdout.split('\n').filter(Boolean);
+  if (!lines.length) return 'No files found';
+  return cap(lines.join('\n'));
+}
+
+async function runGrep(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  const pattern = required(input.pattern, 'pattern');
+  const path = string(input.path) ? within(root, string(input.path)) : root;
+  const include = string(input.include);
+  const args = ['--json', `--regexp=${pattern}`];
+  if (include) args.push(`--glob=${include}`);
+  args.push('--', path);
+  let stdout = '';
+  try { ({ stdout } = await exec('rg', args, { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT * 8, signal })); }
+  catch (error) { if ((error as { code?: number }).code !== 1) throw error; }
+  const matches = parseGrepJson(stdout);
+  if (!matches.length) return 'No matches found';
+  const byFile = new Map<string, typeof matches>();
+  for (const match of matches) {
+    const group = byFile.get(match.path) || [];
+    group.push(match);
+    byFile.set(match.path, group);
+  }
+  const sections: string[] = [];
+  for (const [filePath, group] of byFile) {
+    sections.push(`${filePath}\n${group.map((m) => `Line ${m.lineNumber}: ${m.line}`).join('\n')}`);
+  }
+  return cap(`Found ${matches.length} match${matches.length === 1 ? '' : 'es'}\n\n${sections.join('\n\n')}`);
+}
+
+async function runBash(root: string, input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  const command = required(input.command, 'command');
+  const timeoutMs = Math.min(BASH_TIMEOUT_MS, Math.max(1, Math.floor(Number(input.timeoutMs) || BASH_TIMEOUT_MS)));
+  const workdirArg = string(input.workdir);
+  const cwd = workdirArg ? within(root, workdirArg) : root;
+  try {
+    const { stdout, stderr } = await exec('bash', ['-c', command], { cwd, timeout: timeoutMs, maxBuffer: MAX_OUTPUT * 8, signal });
+    const out = cap(stdout);
+    const err = cap(stderr);
+    return [out, err].filter(Boolean).join('\n') || '(no output)';
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    const err = error as { stdout?: string; stderr?: string; code?: number; signal?: string };
+    const out = cap(err.stdout || '');
+    const errOut = cap(err.stderr || '');
+    const body = [out, errOut].filter(Boolean).join('\n');
+    const code = err.code ?? (err.signal ? `signal ${err.signal}` : 'unknown');
+    return cap(`${body}\n[exit code: ${code}]`);
+  }
 }
 
 async function skills(workspace: string): Promise<Array<{ name: string; path: string }>> {
   const roots = [resolve(workspace, '.agents/skills'), resolve(workspace, '.codex/skills'), resolve(homedir(), '.agents/skills'), resolve(homedir(), '.codex/skills')];
   const found: Array<{ name: string; path: string }> = [];
   for (const root of roots) {
-    try { for (const entry of await readdir(root, { withFileTypes: true })) if (entry.isDirectory()) found.push({ name: entry.name, path: resolve(root, entry.name, 'SKILL.md') }); } catch { /* optional root */ }
+    try {
+      for (const entry of await readdir(root, { withFileTypes: true })) {
+        if (entry.isDirectory()) found.push({ name: entry.name, path: resolve(root, entry.name, 'SKILL.md') });
+      }
+    } catch { /* optional root */ }
   }
   return [...new Map(found.map((skill) => [skill.name, skill])).values()];
 }
-function within(root: string, candidate: string): string { const resolved = resolve(root, candidate || '.'); const rel = relative(root, resolved); if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..'))) return resolved; throw new Error('工具路径必须位于工作区内'); }
-function required(value: unknown, name: string): string { const result = string(value); if (!result) throw new Error(`缺少参数：${name}`); return result; }
+
+interface GrepMatch { path: string; lineNumber: number; line: string; }
+
+function parseGrepJson(output: string): GrepMatch[] {
+  const matches: GrepMatch[] = [];
+  for (const line of output.split('\n')) {
+    if (!line) continue;
+    try {
+      const event = JSON.parse(line) as { type?: string; data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } } };
+      if (event.type !== 'match' || !event.data?.path?.text || !event.data.line_number) continue;
+      matches.push({ path: event.data.path.text, lineNumber: event.data.line_number, line: (event.data.lines?.text || '').replace(/\n$/u, '') });
+    } catch { /* ignore malformed ripgrep diagnostics */ }
+  }
+  return matches;
+}
+
+function within(root: string, candidate: string): string {
+  const resolved = resolve(root, candidate || '.');
+  const rel = relative(root, resolved);
+  if (rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..'))) return resolved;
+  throw new Error('工具路径必须位于工作区内');
+}
+
+function required(value: unknown, name: string): string {
+  const result = string(value);
+  if (!result) throw new Error(`缺少参数：${name}`);
+  return result;
+}
+
 function string(value: unknown): string { return typeof value === 'string' ? value : ''; }
+
+function throwIfToolAborted(signal?: AbortSignal): void {
+  if (!signal?.aborted) return;
+  throw signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted');
+}
+
+function abortPromise(signal: AbortSignal): Promise<never> {
+  if (signal.aborted) return Promise.reject(signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted'));
+  return new Promise((_, reject) => signal.addEventListener('abort', () => reject(signal.reason instanceof Error ? signal.reason : new Error('Tool execution aborted')), { once: true }));
+}
+
+function countOccurrences(value: string, search: string): number {
+  let count = 0;
+  let offset = 0;
+  while (true) {
+    const index = value.indexOf(search, offset);
+    if (index < 0) return count;
+    count += 1;
+    offset = index + search.length;
+  }
+}
+
 function cap(value: string): string { return value.length > MAX_OUTPUT ? `${value.slice(0, MAX_OUTPUT)}\n…输出已截断` : value; }
+
+async function runWebSearch(input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  const query = required(input.query, 'query');
+  const endpoint = process.env.HARBORS_WEB_SEARCH_URL;
+  if (!endpoint) return runNativeWebSearch(query, signal);
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({ query }),
+    signal: requestTimeoutSignal(signal, WEB_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`web_search 请求失败（HTTP ${response.status}）：${(await response.text()).slice(0, 500)}`);
+  const payload = await response.json() as unknown;
+  return cap(formatSearchPayload(payload));
+}
+
+async function runNativeWebSearch(query: string, signal?: AbortSignal): Promise<string> {
+  const config = await readDshRelayConfig();
+  const baseUrl = (process.env.HARBORS_WEB_SEARCH_BASE_URL || process.env.HARBORS_RELAY_BASE_URL || config.baseUrl || '').replace(/\/$/u, '');
+  const apiKey = process.env.HARBORS_WEB_SEARCH_API_KEY || process.env.HARBORS_RELAY_API_KEY || (await resolveDshCredential(config.apiKeyEnv))?.value;
+  if (!baseUrl || !apiKey) throw new Error('未配置 web_search：请设置 HARBORS_WEB_SEARCH_URL，或配置 DSH Relay 的 baseURL/apiKeyEnv');
+  const model = process.env.HARBORS_WEB_SEARCH_MODEL || process.env.HARBORS_RELAY_MODEL || config.defaultModel || 'deepseek-v4-flash';
+  const endpoint = baseUrl.endsWith('/v1') ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'x-api-key': apiKey, authorization: `Bearer ${apiKey}`, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', accept: 'application/json' },
+    body: JSON.stringify({
+      model,
+      max_tokens: 4096,
+      messages: [{ role: 'user', content: [{ type: 'text', text: `Perform a web search for the query: ${query}` }] }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
+    }),
+    signal: requestTimeoutSignal(signal, WEB_TIMEOUT_MS),
+  });
+  if (!response.ok) throw new Error(`web_search 请求失败（HTTP ${response.status}）：${(await response.text()).slice(0, 500)}`);
+  const payload = await response.json() as { content?: Array<Record<string, unknown>> };
+  const sources = (payload.content || []).flatMap((block) => {
+    if (block.type !== 'web_search_tool_result' || !Array.isArray(block.content)) return [];
+    return (block.content as Array<Record<string, unknown>>).filter((item) => item.type === 'web_search_result').map((item) => ({ title: item.title, url: item.url, snippet: item.snippet || item.description }));
+  });
+  if (!sources.length) throw new Error('web_search 服务未返回结构化搜索结果');
+  return cap(formatSearchPayload(sources));
+}
+
+async function runWebFetch(input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+  const url = required(input.url, 'url');
+  let parsed: URL;
+  try { parsed = new URL(url); } catch { throw new Error('web_fetch 只接受有效的 HTTP(S) URL'); }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('web_fetch 只接受 HTTP(S) URL');
+  const response = await fetch(parsed, { redirect: 'follow', signal: requestTimeoutSignal(signal, WEB_TIMEOUT_MS), headers: { accept: 'text/html, text/plain, application/json' } });
+  if (!response.ok) throw new Error(`web_fetch 请求失败（HTTP ${response.status}）`);
+  const contentType = response.headers.get('content-type') || '';
+  const body = await response.text();
+  const text = contentType.includes('html') ? htmlToText(body) : body;
+  return cap(`<url>${parsed.toString()}</url>\n<content>\n${text.slice(0, WEB_MAX_BODY_CHARS)}\n</content>`);
+}
+
+function requestTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return signal ? AbortSignal.any([signal, timeout]) : timeout;
+}
+
+function formatSearchPayload(payload: unknown): string {
+  if (Array.isArray(payload)) return payload.map((item) => formatSearchItem(item)).filter(Boolean).join('\n\n') || '未找到搜索结果';
+  if (!payload || typeof payload !== 'object') return String(payload);
+  const object = payload as Record<string, unknown>;
+  const results = object.results || object.sources || object.items || object.data;
+  if (Array.isArray(results)) return results.map((item) => formatSearchItem(item)).filter(Boolean).join('\n\n') || '未找到搜索结果';
+  return JSON.stringify(payload, null, 2);
+}
+
+function formatSearchItem(item: unknown): string {
+  if (!item || typeof item !== 'object') return String(item ?? '');
+  const value = item as Record<string, unknown>;
+  const title = string(value.title) || string(value.name);
+  const url = string(value.url) || string(value.link);
+  const snippet = string(value.snippet) || string(value.description) || string(value.content);
+  return [title, url, snippet].filter(Boolean).join('\n');
+}
+
+function htmlToText(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?<\/script>/giu, '')
+    .replace(/<style[\s\S]*?<\/style>/giu, '')
+    .replace(/<br\s*\/?>/giu, '\n')
+    .replace(/<\/p\s*>/giu, '\n')
+    .replace(/<[^>]+>/gu, ' ')
+    .replace(/&nbsp;/gu, ' ')
+    .replace(/&amp;/gu, '&')
+    .replace(/&lt;/gu, '<')
+    .replace(/&gt;/gu, '>')
+    .replace(/[ \t]+/gu, ' ')
+    .replace(/\n\s*\n+/gu, '\n\n')
+    .trim();
+}

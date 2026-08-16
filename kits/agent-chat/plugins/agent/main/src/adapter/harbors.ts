@@ -5,11 +5,12 @@ import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentChatMessage, AgentConversation } from './base.js';
 import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
-import { hubbertTools, runHubBertTool } from './tools.js';
+import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
 
 interface StoredSession { id: string; title: string; project?: string; model?: string; createdAt: string; updatedAt: string; messages: AgentChatMessage[]; }
 
 const REQUEST_TIMEOUT_MS = 5 * 60_000;
+const TOOL_LOOP_MAX_STEPS = 8;
 
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
@@ -84,24 +85,13 @@ export class HarborsAdapter implements AgentAdapter {
     if (!apiKey) throw new Error('HubBert agent requires HARBORS_RELAY_API_KEY or the DSH apiKeyEnv environment variable');
     const model = selectedModel || modelId;
     if (api === 'anthropic-messages') return this.runAnthropicToolLoop(baseUrl, apiKey, model, history, project, onStatus, signal);
-    const { url, headers, body, readText } = {
-        url: `${baseUrl}/chat/completions`, headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-        body: { model, stream: false, messages: history.map(({ role, content }) => ({ role, content })) },
-        readText: (payload: { choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }> }) => {
-          const content = payload.choices?.[0]?.message?.content;
-          return typeof content === 'string' ? content : content?.map((part) => part.text || '').join('');
-        },
-      };
-    if (api !== 'openai-completions' && api !== 'anthropic-messages') throw new Error(`Unsupported Harbors relay API: ${api}`);
-    const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal: requestSignal(signal) });
-    if (!response.ok) throw new Error(`Harbors relay request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
-    const text = readText(await response.json());
-    if (!text) throw new Error('Harbors agent returned no text response'); return text;
+    if (api === 'openai-completions') return this.runOpenAiToolLoop(baseUrl, apiKey, model, history, project, onStatus, signal);
+    throw new Error(`Unsupported Harbors relay API: ${api}`);
   }
   private async runAnthropicToolLoop(baseUrl: string, apiKey: string, model: string, history: AgentChatMessage[], project: string | undefined, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = history.map(({ role, content }) => ({ role, content }));
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || project || process.cwd();
-    for (let step = 0; step < 8; step += 1) {
+    for (let step = 0; step < TOOL_LOOP_MAX_STEPS; step += 1) {
       throwIfAborted(signal);
       onStatus?.(step ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
       const response = await fetch(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }), signal: requestSignal(signal) });
@@ -115,19 +105,77 @@ export class HarborsAdapter implements AgentAdapter {
         return text;
       }
       messages.push({ role: 'assistant', content: blocks });
-      const results = await Promise.all(calls.map(async (call) => {
-        const toolId = call.id!;
-        const toolName = call.name!;
-        onStatus?.(`正在执行 ${toolName}…`);
-        try { return { type: 'tool_result', tool_use_id: toolId, content: await runHubBertTool(toolName, call.input || {}, workspace, signal) }; }
-        catch (error) {
-          if (signal.aborted) throw error;
-          return { type: 'tool_result', tool_use_id: toolId, is_error: true, content: error instanceof Error ? error.message : String(error) };
-        }
-      }));
-      messages.push({ role: 'user', content: results });
+      const results = await this.executeToolCalls(calls.map((call) => ({ id: call.id!, name: call.name!, input: call.input || {} })), workspace, signal, onStatus);
+      const anthropicResults = results.map((result, index) => ({ type: 'tool_result', tool_use_id: calls[index].id!, ...(result.isError ? { is_error: true } : {}), content: result.image ? [{ type: 'text', text: result.content }, anthropicImageBlock(result.image)] : result.content }));
+      messages.push({ role: 'user', content: anthropicResults });
     }
-    throw new Error('HubBert tool loop exceeded 8 steps');
+    throw new Error(`HubBert tool loop exceeded ${TOOL_LOOP_MAX_STEPS} steps`);
+  }
+
+  private async runOpenAiToolLoop(baseUrl: string, apiKey: string, model: string, history: AgentChatMessage[], project: string | undefined, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+    const workspace = process.env.HARBORS_AGENT_WORKSPACE || project || process.cwd();
+    const messages: Array<Record<string, unknown>> = history.map(({ role, content }) => ({ role, content }));
+    const tools = hubbertTools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } }));
+    for (let step = 0; step < TOOL_LOOP_MAX_STEPS; step += 1) {
+      throwIfAborted(signal);
+      onStatus?.(step ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ model, stream: false, messages, tools }),
+        signal: requestSignal(signal),
+      });
+      if (!response.ok) throw new Error(`Harbors relay request failed (${response.status}): ${(await response.text()).slice(0, 500)}`);
+      const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }> };
+      const message = payload.choices?.[0]?.message;
+      if (!message) throw new Error('Harbors agent returned no message');
+      const calls = (message.tool_calls || []).filter((call) => call.id && call.function?.name).map((call) => ({
+        id: call.id!, name: call.function!.name!, input: parseToolArguments(call.function!.arguments),
+      }));
+      if (!calls.length) {
+        const text = textContent(message.content);
+        if (!text) throw new Error('Harbors agent returned no text response');
+        return text;
+      }
+      messages.push({ role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls });
+      const results = await this.executeToolCalls(calls, workspace, signal, onStatus);
+      results.forEach((result, index) => messages.push({ role: 'tool', tool_call_id: calls[index].id, content: result.content }));
+      const images = results.filter((result) => result.image);
+      if (images.length) {
+        messages.push({ role: 'user', content: images.flatMap((result) => [{ type: 'text', text: result.content }, openAiImagePart(result.image!)]), });
+      }
+    }
+    throw new Error(`HubBert tool loop exceeded ${TOOL_LOOP_MAX_STEPS} steps`);
+  }
+
+  private async executeToolCalls(calls: ToolCall[], workspace: string, signal: AbortSignal, onStatus?: (status: string) => void): Promise<ToolResult[]> {
+    const results = new Array<ToolResult>(calls.length);
+    let index = 0;
+    while (index < calls.length) {
+      if (isParallelTool(calls[index].name)) {
+        const start = index;
+        while (index < calls.length && isParallelTool(calls[index].name)) index += 1;
+        const group = calls.slice(start, index).map((call, offset) => this.executeOneTool(call, workspace, signal, onStatus, start + offset));
+        const groupResults = await Promise.all(group);
+        groupResults.forEach((result, offset) => { results[start + offset] = result; });
+      } else {
+        results[index] = await this.executeOneTool(calls[index], workspace, signal, onStatus, index);
+        index += 1;
+      }
+    }
+    return results;
+  }
+
+  private async executeOneTool(call: ToolCall, workspace: string, signal: AbortSignal, onStatus?: (status: string) => void, _index?: number): Promise<ToolResult> {
+    onStatus?.(`正在执行 ${call.name}…`);
+    try {
+      const result = await runHubBertToolContent(call.name, call.input, workspace, signal);
+      return { content: result.text, ...(result.image ? { image: result.image } : {}), isError: false };
+    }
+    catch (error) {
+      if (signal.aborted) throw error;
+      return { content: error instanceof Error ? error.message : String(error), isError: true };
+    }
   }
   private async config(): Promise<{ baseUrl: string; apiKey?: string; api: string; modelId: string; models: RelayModel[]; defaultModel?: string }> {
     const dsh = await readDshRelayConfig();
@@ -146,4 +194,34 @@ export class HarborsAdapter implements AgentAdapter {
     await writeFile(this.pathFor(session.id), JSON.stringify(session, null, 2), 'utf8');
   }
 }
+
+interface ToolCall { id: string; name: string; input: Record<string, unknown>; }
+interface ToolResult { content: string; isError: boolean; image?: HubBertToolImage; }
+
+function isParallelTool(name: string): boolean {
+  return new Set(['list_files', 'read_file', 'search_text', 'list_skills', 'load_skill', 'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch']).has(name);
+}
+
+function parseToolArguments(value: string | undefined): Record<string, unknown> {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch { return {}; }
+}
+
+function textContent(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((part) => typeof part === 'string' ? part : part && typeof part === 'object' && 'text' in part ? String((part as { text?: unknown }).text || '') : '').join('');
+}
+
+function anthropicImageBlock(image: HubBertToolImage): Record<string, unknown> {
+  return { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } };
+}
+
+function openAiImagePart(image: HubBertToolImage): Record<string, unknown> {
+  return { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } };
+}
+
 function toConversation(session: StoredSession): AgentConversation { const last = session.messages.at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...(session.model ? { model: session.model } : {}), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }
