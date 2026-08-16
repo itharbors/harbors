@@ -157,6 +157,9 @@ export interface AgentAdapter {
   /** 删除对话 */
   deleteConversation(id: string): Promise<void>;
 
+  /** 重命名对话；返回更新后的会话摘要。不支持的 adapter 可省略。 */
+  renameConversation?(id: string, title: string): Promise<AgentConversation>;
+
   /** 获取对话历史消息 */
   getMessages(conversationId: string): Promise<AgentChatMessage[]>;
 

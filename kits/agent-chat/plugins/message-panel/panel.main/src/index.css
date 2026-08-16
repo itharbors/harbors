@@ -782,7 +782,7 @@ html, body, #panel-root {
   width: min(760px, 88%);
   min-width: 0;
   flex-direction: column;
-  gap: 10px;
+  gap: 4px;
   align-self: flex-start;
   margin: 2px 0 12px;
   padding: 4px 0 4px 16px;
@@ -800,16 +800,59 @@ html, body, #panel-root {
   background: #171a21;
 }
 .agent-turn-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: -moz-fit-content;
+  width: fit-content;
+  margin: 0;
+  padding: 2px 6px 2px 0;
+  border: 0;
+  background: transparent;
   color: #8f9bab;
+  font: inherit;
   font-size: 11px;
   font-weight: 600;
+  cursor: pointer;
+  -webkit-user-select: none;
+     -moz-user-select: none;
+          user-select: none;
+}
+.agent-turn-header:hover {
+  color: #b9c4d2;
+}
+.agent-turn-caret {
+  display: inline-block;
+  flex: 0 0 auto;
+  font-size: 13px;
+  line-height: 1;
+  transition: transform .15s ease;
+  transform: rotate(90deg);
+}
+.agent-step.collapsed .agent-turn-caret {
+  transform: rotate(0deg);
+}
+.agent-turn-title {
+  flex: 0 0 auto;
+}
+.agent-turn-hint {
+  flex: 0 0 auto;
+  color: #6b7789;
+  font-weight: 500;
+  font-size: 10.5px;
 }
 .agent-cycle {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 6px;
-  padding: 5px 0;
+  gap: 4px;
+  padding: 0;
+}
+.agent-step-tools {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
 }
 .agent-step-error {
   overflow-wrap: anywhere;
@@ -829,9 +872,9 @@ html, body, #panel-root {
   gap: 3px;
 }
 .agent-final-response {
-  margin-top: 10px;
+  margin-top: 5px;
   border-top: 1px solid rgba(132, 148, 170, 0.2);
-  padding-top: 9px;
+  padding-top: 6px;
 }
 .agent-step .chat-message.assistant {
   width: 100%;

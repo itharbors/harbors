@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
-import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync } from 'node:fs';
+import { readdir, readFile, rename, rm, stat } from 'node:fs/promises';
+import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -21,11 +21,8 @@ const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 export interface HubBertTool { name: string; description: string; input_schema: Record<string, unknown>; }
 
 export const hubbertTools: HubBertTool[] = [
-  { name: 'list_files', description: '列出工作区内目录中的文件。', input_schema: { type: 'object', properties: { path: { type: 'string', description: '相对工作区路径，可省略。' } } } },
-  { name: 'read_file', description: '读取工作区内的 UTF-8 文本文件。', input_schema: { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] } },
-  { name: 'search_text', description: '在工作区内搜索文本。', input_schema: { type: 'object', properties: { query: { type: 'string' }, path: { type: 'string' } }, required: ['query'] } },
-  { name: 'list_skills', description: '列出可按需加载的本地 Skill。先调用它确认名称，再调用 load_skill。', input_schema: { type: 'object', properties: {} } },
-  { name: 'load_skill', description: '读取一个 Skill 的完整 SKILL.md 指引。', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  // —— 只读 / 检索 ——
+  { name: 'list_files', description: '列出工作区内目录中的文件（仅一层）。查看整个项目结构请用 tree。', input_schema: { type: 'object', properties: { path: { type: 'string', description: '相对工作区路径，可省略。' } } } },
   {
     name: 'read',
     description: '读取工作区内的 UTF-8 文本文件，返回带行号的内容。使用 offset 和 limit 分段读取大文件。',
@@ -37,6 +34,17 @@ export const hubbertTools: HubBertTool[] = [
         limit: { type: 'number', description: '最多返回行数，默认 2000。' },
       },
       required: ['file_path'],
+    },
+  },
+  {
+    name: 'tree',
+    description: '递归列出目录结构，用于快速了解项目布局。默认忽略 .git、node_modules 等常见目录。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对工作区的起始目录，默认工作区根。' },
+        depth: { type: 'number', description: '最大递归深度，默认 3，最大 8。' },
+      },
     },
   },
   {
@@ -67,6 +75,61 @@ export const hubbertTools: HubBertTool[] = [
         justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
       },
       required: ['file_path', 'old_string', 'new_string'],
+    },
+  },
+  {
+    name: 'multi_edit',
+    description: '对同一个文件按顺序执行多处字面量替换，全部成功才写入（原子操作）。适合一次性改动同一文件的多个位置。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        file_path: { type: 'string', description: '相对工作区的文件路径。' },
+        edits: {
+          type: 'array',
+          description: '按顺序执行的替换列表；每一项在前一项的结果上继续替换。',
+          items: {
+            type: 'object',
+            properties: {
+              old_string: { type: 'string', description: '要被替换的字面量文本。' },
+              new_string: { type: 'string', description: '替换后的文本，可为空字符串以删除匹配。' },
+              replace_all: { type: 'boolean', description: '是否替换所有匹配，默认 false。' },
+            },
+            required: ['old_string', 'new_string'],
+          },
+        },
+        sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
+        justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
+      },
+      required: ['file_path', 'edits'],
+    },
+  },
+  {
+    name: 'move',
+    description: '移动或重命名工作区内的文件/目录。目标已存在时默认失败，除非 overwrite 为 true。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        source: { type: 'string', description: '相对工作区的源路径。' },
+        destination: { type: 'string', description: '相对工作区的目标路径。' },
+        overwrite: { type: 'boolean', description: '目标已存在时是否覆盖，默认 false。' },
+        sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
+        justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
+      },
+      required: ['source', 'destination'],
+    },
+  },
+  {
+    name: 'delete',
+    description: '删除工作区内的文件或目录。删除目录需将 recursive 设为 true。此操作不可撤销，请谨慎使用。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: '相对工作区的待删除路径。' },
+        recursive: { type: 'boolean', description: '删除非空目录时必须设为 true，默认 false。' },
+        sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
+        justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
+      },
+      required: ['path'],
     },
   },
   {
@@ -132,6 +195,10 @@ export const hubbertTools: HubBertTool[] = [
       required: ['url'],
     },
   },
+  // —— 技能 ——
+  { name: 'list_skills', description: '列出可按需加载的本地 Skill。先调用它确认名称，再调用 load_skill。', input_schema: { type: 'object', properties: {} } },
+  { name: 'load_skill', description: '读取一个 Skill 的完整 SKILL.md 指引。', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  // —— 多模态 ——
   {
     name: 'read_image',
     description: '读取工作区内的 PNG、JPEG、WebP 或 GIF 图片，并将图片本身传给当前模型。当前模型需要支持视觉输入。',
@@ -141,6 +208,28 @@ export const hubbertTools: HubBertTool[] = [
         file_path: { type: 'string', description: '相对工作区的图片路径。' },
       },
       required: ['file_path'],
+    },
+  },
+  {
+    name: 'todo_write',
+    description: '写入/更新当前任务的待办清单，用于规划多步任务并跟踪进度。每次调用会用给定列表整体替换现有清单。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        todos: {
+          type: 'array',
+          description: '完整的待办列表，按执行顺序排列。',
+          items: {
+            type: 'object',
+            properties: {
+              content: { type: 'string', description: '待办事项描述。' },
+              status: { type: 'string', enum: ['pending', 'in_progress', 'completed'], description: '当前状态。' },
+            },
+            required: ['content', 'status'],
+          },
+        },
+      },
+      required: ['todos'],
     },
   },
 ];
@@ -214,18 +303,6 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
   const root = resolve(workspace);
 
   if (name === 'list_files') return cap((await readdir(resolveToolPath(root, string(input.path), permission?.sandboxMode), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
-  if (name === 'read_file') return cap(await readFile(resolveToolPath(root, required(input.path, 'path'), permission?.sandboxMode), 'utf8'));
-  if (name === 'search_text') {
-    const searchPath = string(input.path) ? resolveToolPath(root, string(input.path), permission?.sandboxMode) : root;
-    try {
-      const { stdout } = await exec('rg', ['-n', '--max-count', '100', required(input.query, 'query'), searchPath], { cwd: root, timeout: SEARCH_TIMEOUT_MS, maxBuffer: MAX_OUTPUT * 8, signal });
-      return cap(stdout || '未找到匹配项');
-    } catch (error) {
-      if ((error as { code?: number }).code === 1) return '未找到匹配项';
-      if (isOutputLimitError(error)) return truncatedOutput((error as { stdout?: string }).stdout);
-      throw error;
-    }
-  }
   if (name === 'list_skills') return cap((await skills(root)).map((skill) => skill.name).join('\n') || '未发现 Skill');
   if (name === 'load_skill') {
     const skill = (await skills(root)).find((entry) => entry.name === required(input.name, 'name'));
@@ -234,11 +311,16 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
   }
 
   if (name === 'read') return runRead(root, input, permission?.sandboxMode);
+  if (name === 'tree') return runTree(root, input, permission?.sandboxMode);
   if (name === 'write') return runExclusive(() => runWrite(root, input, permission, signal), signal);
   if (name === 'edit') return runExclusive(() => runEdit(root, input, permission, signal), signal);
+  if (name === 'multi_edit') return runExclusive(() => runMultiEdit(root, input, permission, signal), signal);
+  if (name === 'move') return runExclusive(() => runMove(root, input, permission, signal), signal);
+  if (name === 'delete') return runExclusive(() => runDelete(root, input, permission, signal), signal);
   if (name === 'glob') return runGlob(root, input, signal, permission?.sandboxMode);
   if (name === 'grep') return runGrep(root, input, signal, permission?.sandboxMode);
   if (name === 'bash') return runExclusive(() => runBash(root, input, signal, permission), signal);
+  if (name === 'todo_write') return runTodoWrite(input);
   if (name === 'web_search') return runWebSearch(input, signal);
   if (name === 'web_fetch') return runWebFetch(input, signal);
 
@@ -320,6 +402,107 @@ async function runEdit(root: string, input: Record<string, unknown>, permission?
   const updated = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
   fsWriteFileSync(target, updated, 'utf8');
   return `The file ${filePath} has been updated${replaceAll ? '. All occurrences were successfully replaced.' : ' successfully.'}`;
+}
+
+interface MultiEditItem { oldString: string; newString: string; replaceAll: boolean; }
+
+function parseMultiEdits(value: unknown): MultiEditItem[] {
+  if (!Array.isArray(value) || value.length === 0) throw new Error('edits 必须是非空数组');
+  return value.map((raw, index) => {
+    if (!raw || typeof raw !== 'object') throw new Error(`edits[${index}] 必须是对象`);
+    const item = raw as Record<string, unknown>;
+    const oldString = required(item.old_string, `edits[${index}].old_string`);
+    const newString = typeof item.new_string === 'string' ? item.new_string : '';
+    if (oldString === newString) throw new Error(`edits[${index}] 的 old_string 和 new_string 必须不同`);
+    return { oldString, newString, replaceAll: Boolean(item.replace_all) };
+  });
+}
+
+async function runMultiEdit(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
+  const mode = await resolveToolMode('multi_edit', input, permission, signal);
+  const filePath = required(input.file_path, 'file_path');
+  const edits = parseMultiEdits(input.edits);
+  const target = resolveToolPath(root, filePath, mode);
+  let content = readFileSync(target, 'utf8');
+  edits.forEach((item, index) => {
+    const occurrences = countOccurrences(content, item.oldString);
+    if (occurrences === 0) throw new Error(`edits[${index}] 未找到 old_string`);
+    if (!item.replaceAll && occurrences > 1) throw new Error(`edits[${index}] 的 old_string 出现 ${occurrences} 次，请提供更具体的匹配或设置 replace_all 为 true`);
+    content = item.replaceAll ? content.split(item.oldString).join(item.newString) : content.replace(item.oldString, item.newString);
+  });
+  fsWriteFileSync(target, content, 'utf8');
+  return `The file ${filePath} has been updated with ${edits.length} edit${edits.length === 1 ? '' : 's'}.`;
+}
+
+async function runMove(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
+  const mode = await resolveToolMode('move', input, permission, signal);
+  const source = required(input.source, 'source');
+  const destination = required(input.destination, 'destination');
+  const overwrite = Boolean(input.overwrite);
+  const from = resolveToolPath(root, source, mode);
+  const to = resolveToolPath(root, destination, mode);
+  if (!existsSync(from)) throw new Error(`源路径不存在：${source}`);
+  if (existsSync(to) && !overwrite) throw new Error(`目标已存在：${destination}；如需覆盖请设置 overwrite 为 true`);
+  mkdirSync(dirname(to), { recursive: true });
+  throwIfToolAborted(signal);
+  await rename(from, to);
+  return `Moved ${source} to ${destination}`;
+}
+
+async function runDelete(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
+  const mode = await resolveToolMode('delete', input, permission, signal);
+  const path = required(input.path, 'path');
+  const recursive = Boolean(input.recursive);
+  const target = resolveToolPath(root, path, mode);
+  if (!existsSync(target)) throw new Error(`路径不存在：${path}`);
+  const info = await stat(target);
+  if (info.isDirectory() && !recursive) throw new Error(`${path} 是目录；删除目录请将 recursive 设为 true`);
+  throwIfToolAborted(signal);
+  await rm(target, { recursive, force: false });
+  return `Deleted ${path}`;
+}
+
+function runTree(root: string, input: Record<string, unknown>, mode?: AgentSandboxMode): string {
+  const start = resolveToolPath(root, string(input.path), mode);
+  const maxDepth = Math.min(8, Math.max(1, Math.floor(Number(input.depth) || 3)));
+  const ignore = new Set(['.git', 'node_modules', '.pnpm-store', 'dist', '.cache', '.DS_Store']);
+  const lines: string[] = [];
+  const walk = (dir: string, prefix: string, depth: number): void => {
+    if (depth > maxDepth) return;
+    let entries;
+    try { entries = readdirSyncSorted(dir); } catch { return; }
+    const visible = entries.filter((entry) => !ignore.has(entry.name));
+    visible.forEach((entry, index) => {
+      const last = index === visible.length - 1;
+      lines.push(`${prefix}${last ? '└── ' : '├── '}${entry.name}${entry.isDirectory() ? '/' : ''}`);
+      if (entry.isDirectory()) walk(resolve(dir, entry.name), `${prefix}${last ? '    ' : '│   '}`, depth + 1);
+    });
+  };
+  walk(start, '', 1);
+  return cap(lines.join('\n') || '(empty)');
+}
+
+function readdirSyncSorted(dir: string): Array<{ name: string; isDirectory: () => boolean }> {
+  return readdirSync(dir, { withFileTypes: true }).sort((a, b) => {
+    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function runTodoWrite(input: Record<string, unknown>): string {
+  const raw = input.todos;
+  if (!Array.isArray(raw) || raw.length === 0) throw new Error('todos 必须是非空数组');
+  const statuses = new Set(['pending', 'in_progress', 'completed']);
+  const marks: Record<string, string> = { pending: '[ ]', in_progress: '[~]', completed: '[x]' };
+  const lines = raw.map((item, index) => {
+    if (!item || typeof item !== 'object') throw new Error(`todos[${index}] 必须是对象`);
+    const todo = item as Record<string, unknown>;
+    const content = required(todo.content, `todos[${index}].content`);
+    const status = string(todo.status);
+    if (!statuses.has(status)) throw new Error(`todos[${index}].status 必须是 pending、in_progress 或 completed`);
+    return `${marks[status]} ${content}`;
+  });
+  return cap(`已更新任务清单（${lines.length} 项）：\n${lines.join('\n')}`);
 }
 
 async function runGlob(root: string, input: Record<string, unknown>, signal?: AbortSignal, mode?: AgentSandboxMode): Promise<string> {
@@ -450,7 +633,7 @@ async function resolveToolMode(toolName: string, input: Record<string, unknown>,
 
 function requiredToolMode(toolName: string, currentMode: AgentSandboxMode): AgentSandboxMode | undefined {
   if (toolName === 'bash' && currentMode !== 'danger-full-access') return 'danger-full-access';
-  if (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit')) return 'workspace-write';
+  if (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit' || toolName === 'multi_edit' || toolName === 'move' || toolName === 'delete')) return 'workspace-write';
   return undefined;
 }
 

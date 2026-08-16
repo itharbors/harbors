@@ -113,18 +113,41 @@ html, body, #panel-root {
   box-shadow: 0 0 0 3px rgba(65, 117, 214, .28);
 }
 
-.source-mark {
-  display: grid;
-  width: 26px;
-  height: 26px;
+.conversation-spinner {
+  display: block;
+  width: 15px;
+  height: 15px;
   flex: 0 0 auto;
-  place-items: center;
-  border-radius: 8px;
-  font-size: 14px;
-  font-weight: 700;
+  border: 2px solid rgba(126, 156, 216, .35);
+  border-top-color: #7ea0e6;
+  border-radius: 50%;
+  animation: conversation-spin 0.7s linear infinite;
 }
 
-.source-mark.harbors { background: #4b3221; color: #ffc184; }
+@keyframes conversation-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .conversation-spinner { animation-duration: 1.6s; }
+}
+
+.conversation-rename-input {
+  width: 100%;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid #537dbd;
+  border-radius: 5px;
+  background: #10131a;
+  color: #edf1f7;
+  font-size: 13px;
+  font-weight: 650;
+  outline: none;
+}
+
+.conversation-rename-input:focus-visible {
+  box-shadow: 0 0 0 2px rgba(83, 125, 189, .35);
+}
 
 .conversation-card-content { min-width: 0; flex: 1; }
 

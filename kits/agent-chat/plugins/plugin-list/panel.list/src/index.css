@@ -4,10 +4,17 @@ body { background: #171a20; color: #e7eaf0; }
 #panel-root { box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; }
 header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid #303642; background: #1d222b; font-size: 13px; }
 header span { color: #aab4c4; font-size: 12px; }
-main { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; padding: 10px 14px; overflow: auto; color: #aab4c4; font-size: 12px; }
+main { display: flex; flex-direction: column; gap: 16px; padding: 10px 14px; overflow: auto; color: #aab4c4; font-size: 12px; }
+.group { display: flex; flex-direction: column; gap: 8px; }
+.group-title { margin: 0; padding: 0 2px 6px; border-bottom: 1px solid #303642; color: #cdd6e4; font-size: 12px; font-weight: 600; letter-spacing: 0.3px; }
+.group-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 article { min-width: 0; padding: 9px 10px; border: 1px solid #303642; border-radius: 7px; background: #202631; }
-article strong, article span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-article strong { color: #edf2ff; font-size: 12px; }
+article strong, article .type { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+article strong { display: flex; align-items: center; gap: 6px; color: #edf2ff; font-size: 12px; }
+article strong .badge { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+article strong .badge[data-source='builtin'] { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
+article strong .badge[data-source='kit'] { background: rgba(110, 231, 168, 0.18); color: #6ee7a8; }
+article strong .badge[data-source='external'] { background: rgba(248, 152, 152, 0.18); color: #f8b98b; }
 article .meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
 article .type { color: #99a7bb; font-size: 11px; flex: 1; min-width: 0; }
 article .actions { display: flex; gap: 4px; flex-shrink: 0; }

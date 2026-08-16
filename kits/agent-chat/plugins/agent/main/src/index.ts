@@ -11,6 +11,7 @@ interface Conversation extends AgentConversation {
   lastMessage?: string;
   source: AgentSource;
   adapterId: string;
+  active?: boolean;
 }
 
 interface ChatMessage extends AgentChatMessage {
@@ -134,7 +135,7 @@ async function refreshConversations(): Promise<Conversation[]> {
     return result.value.conversations.map((conversation) => {
       const id = conversationId(result.value.source, conversation.id);
       const local = localById.get(id);
-      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage };
+      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage, active: activeMessageIds.has(id) };
     });
   }).sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
   return copyConversations();
@@ -327,6 +328,19 @@ editor.plugin.define({
       broadcastConversations();
       return id;
     },
+    async renameConversation(id: string, title: string) {
+      const trimmed = typeof title === 'string' ? title.trim() : '';
+      if (!trimmed) throw new Error('[agent] conversation title must not be empty');
+      const conversation = conversations.find((entry) => entry.id === id);
+      if (!conversation) throw new Error('[agent] conversation does not exist');
+      const adapter = requireAdapter(conversation.source);
+      if (!adapter.renameConversation) throw new Error(`[agent] ${conversation.source} adapter does not support renaming`);
+      const route = parseConversationId(id);
+      const updated = await adapter.renameConversation(route.adapterId, trimmed);
+      conversation.title = updated.title;
+      broadcastConversations();
+      return { ...conversation };
+    },
     async getMessages(conversationId: string) {
       await ensureMessages(conversationId);
       return copyMessages(conversationId);
@@ -366,6 +380,8 @@ editor.plugin.define({
       convMessages.push(aiMsg);
       let aiContent: string;
       activeMessageIds.set(conversationId, aiMsg.id);
+      const activeConv = conversations.find((conversation) => conversation.id === conversationId);
+      if (activeConv) { activeConv.active = true; broadcastConversations(); }
       try {
         const route = parseConversationId(conversationId);
         const options = normalizeTurnOptions(input);
@@ -382,6 +398,8 @@ editor.plugin.define({
         throw err;
       } finally {
         activeMessageIds.delete(conversationId);
+        const finishedConv = conversations.find((conversation) => conversation.id === conversationId);
+        if (finishedConv) { finishedConv.active = false; broadcastConversations(); }
       }
       aiMsg.content = aiContent;
       void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'completed' });

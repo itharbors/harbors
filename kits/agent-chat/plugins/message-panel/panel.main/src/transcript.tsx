@@ -1,4 +1,4 @@
-import { Fragment, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { ToolProcessEntry, TraceStep, TraceTurn } from "./trace-events.js";
@@ -252,6 +252,7 @@ function AssistantStep({
   resolvingPermissionId,
   onResolvePermission,
   sending,
+  collapsed,
 }: {
   step: DisplayStep;
   turn: number;
@@ -260,22 +261,30 @@ function AssistantStep({
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
   sending: boolean;
+  collapsed: boolean;
 }) {
   const request = step.localRequest;
   const thinkingText = step.assistant?.hasToolCalls ? step.assistant.text : "";
   const finalText = step.assistant && !step.assistant.hasToolCalls ? step.assistant.text : "";
+  const stepPermissions = permissionRequests.filter((requestItem) => requestItem.turn === turn && requestItem.step === step.step);
+
+  // 折叠时只保留最终回复，隐藏过程信息（错误、思考、工具）
+  const hideProcess = collapsed;
+
+  // 折叠且该 step 既无最终回复也无待处理权限请求时，不渲染以避免空白间距
+  if (hideProcess && !finalText && stepPermissions.length === 0) return null;
 
   return (
     <div className="agent-cycle">
-      {request?.isError && request.result && <div className="agent-step-error">{request.result}</div>}
+      {!hideProcess && request?.isError && request.result && <div className="agent-step-error">{request.result}</div>}
 
-      {thinkingText && (
+      {!hideProcess && thinkingText && (
         <div className="agent-step-intent">
           <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={thinkingText} /></div></div>
         </div>
       )}
 
-      {step.tools.length > 0 && (
+      {!hideProcess && step.tools.length > 0 && (
         <div className="agent-step-tools">
           {step.tools.map((part) => <div key={part.callId || part.id}><ToolPartView part={toolEntryToPart(part)} /></div>)}
         </div>
@@ -287,11 +296,58 @@ function AssistantStep({
         </div>
       )}
 
-      {permissionRequests.filter((requestItem) => requestItem.turn === turn && requestItem.step === step.step).map((requestItem) => (
+      {stepPermissions.map((requestItem) => (
         <div key={requestItem.requestId}><PermissionRequestCard request={requestItem} resolving={resolvingPermissionId === requestItem.requestId} onResolve={(outcome) => void onResolvePermission(requestItem.requestId, outcome)} /></div>
       ))}
 
-      {turnError && <div className="agent-step-error">{turnError.result}</div>}
+      {!hideProcess && turnError && <div className="agent-step-error">{turnError.result}</div>}
+    </div>
+  );
+}
+
+function TurnBlock({
+  turn,
+  permissionRequests,
+  resolvingPermissionId,
+  onResolvePermission,
+  sending,
+}: {
+  turn: DisplayTurn;
+  permissionRequests: PermissionRequest[];
+  resolvingPermissionId: string | null;
+  onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
+  sending: boolean;
+}) {
+  // 该 Turn 是否已产出最终回复（某个 step 有 assistant 且没有工具调用）
+  const hasFinalResponse = turn.steps.some((step) => step.assistant && !step.assistant.hasToolCalls);
+  // 用户手动设置的折叠状态；null 表示跟随默认策略
+  const [manualCollapsed, setManualCollapsed] = useState<boolean | null>(null);
+  // 默认策略：有最终回复则折叠，否则（执行中）展开
+  const collapsed = manualCollapsed ?? hasFinalResponse;
+
+  const toggle = () => setManualCollapsed(!collapsed);
+
+  return (
+    <div className={`agent-step ${collapsed ? "collapsed" : ""}`}>
+      <button type="button" className="agent-turn-header" onClick={toggle} aria-expanded={!collapsed}>
+        <span className="agent-turn-caret">›</span>
+        <span className="agent-turn-title">Turn {turn.turn}</span>
+        <span className="agent-turn-hint">{collapsed ? "展开过程" : "收起过程"}</span>
+      </button>
+      {turn.steps.map((step) => (
+        <Fragment key={`${turn.turn}-${step.step}`}>
+          <AssistantStep
+            step={step}
+            turn={turn.turn}
+            turnError={turn.error && step === turn.steps.at(-1) ? turn.error : undefined}
+            permissionRequests={permissionRequests}
+            resolvingPermissionId={resolvingPermissionId}
+            onResolvePermission={onResolvePermission}
+            sending={sending}
+            collapsed={collapsed}
+          />
+        </Fragment>
+      ))}
     </div>
   );
 }
@@ -313,10 +369,15 @@ export default function Transcript(props: TranscriptProps) {
       {displayTurns.map(({ user, turn }) => (
         <Fragment key={user.id}>
           <div className="chat-message user"><div className="chat-message-content"><MarkdownMessage content={user.content} /></div></div>
-          {turn.steps.length > 0 && <div className="agent-step">
-            <div className="agent-turn-header">Turn {turn.turn}</div>
-            {turn.steps.map((step) => <Fragment key={`${turn.turn}-${step.step}`}><AssistantStep step={step} turn={turn.turn} turnError={turn.error && step === turn.steps.at(-1) ? turn.error : undefined} permissionRequests={permissionRequests} resolvingPermissionId={resolvingPermissionId} onResolvePermission={onResolvePermission} sending={sending} /></Fragment>)}
-          </div>}
+          {turn.steps.length > 0 && (
+            <TurnBlock
+              turn={turn}
+              permissionRequests={permissionRequests}
+              resolvingPermissionId={resolvingPermissionId}
+              onResolvePermission={onResolvePermission}
+              sending={sending}
+            />
+          )}
         </Fragment>
       ))}
 
