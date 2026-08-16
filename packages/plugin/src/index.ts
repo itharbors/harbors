@@ -427,6 +427,28 @@ export class PluginModule {
   }
 }
 
+function assertPluginLifecycleCapability(ownerName: string, editor: PluginRuntimeHost): void {
+  const ownerInfo = editor.plugin.getInfo(ownerName);
+  if (!ownerInfo?.capabilities?.includes("plugin-lifecycle")) {
+    throw new Error(`Plugin "${ownerName}" does not have the "plugin-lifecycle" capability`);
+  }
+}
+
+function assertCurrentKitPlugin(editor: PluginRuntimeHost, pluginPath: string): PluginInfo {
+  const info = editor.plugin.getInfo(pluginPath);
+  if (!info) {
+    throw new Error(`Plugin at ${pluginPath} is not registered`);
+  }
+  if (info.kind === "builtin") {
+    throw new Error(`Cannot operate on builtin plugin "${info.name}"`);
+  }
+  const currentKit = editor.kit.getCurrent();
+  if (!currentKit || info.source.scope !== "kit" || info.source.kitId !== currentKit.name) {
+    throw new Error(`Plugin "${info.name}" does not belong to the current kit`);
+  }
+  return info;
+}
+
 function createPluginRuntime(
   editor: PluginRuntimeHost,
   ownerName: string,
@@ -434,6 +456,23 @@ function createPluginRuntime(
   credentials?: PluginCredentialVault,
 ): PluginRuntime {
   const menu = editor.menu;
+  const managedPluginPaths = new Set<string>();
+  let managedKitName: string | null = null;
+
+  function syncManagedPluginPaths() {
+    const currentKit = editor.kit.getCurrent();
+    if (managedKitName === (currentKit?.name ?? null)) return currentKit;
+
+    managedKitName = currentKit?.name ?? null;
+    managedPluginPaths.clear();
+    for (const pluginName of currentKit?.plugins ?? []) {
+      const info = editor.plugin.getInfo(pluginName);
+      if (info) managedPluginPaths.add(path.resolve(info.path));
+    }
+    return currentKit;
+  }
+
+  syncManagedPluginPaths();
   const runtime: Omit<PluginRuntime, 'paths'> = {
     ...editor,
     application: {
@@ -446,6 +485,46 @@ function createPluginRuntime(
       listLoaded: editor.plugin.listLoaded,
       listRegistered: editor.plugin.listRegistered,
       callPlugin: editor.plugin.callPlugin,
+      register: async (pluginPath) => {
+        assertPluginLifecycleCapability(ownerName, editor);
+        const currentKit = syncManagedPluginPaths();
+        if (!currentKit) {
+          throw new Error("No active kit");
+        }
+        const normalizedPath = path.resolve(pluginPath);
+        if (!managedPluginPaths.has(normalizedPath)) {
+          throw new Error(`Plugin path "${pluginPath}" is not part of the current kit`);
+        }
+        const existing = editor.plugin.getInfo(normalizedPath);
+        if (existing) {
+          if (existing.kind === "builtin") {
+            throw new Error(`Cannot register builtin plugin "${existing.name}"`);
+          }
+          if (existing.source.scope !== "kit" || existing.source.kitId !== currentKit.name) {
+            throw new Error(`Plugin "${existing.name}" does not belong to the current kit`);
+          }
+          return;
+        }
+        return editor.plugin.register!(normalizedPath, {
+          source: { scope: "kit", kitId: currentKit.name },
+        });
+      },
+      unregister: (pluginPath) => {
+        assertPluginLifecycleCapability(ownerName, editor);
+        const info = assertCurrentKitPlugin(editor, pluginPath);
+        managedPluginPaths.add(path.resolve(info.path));
+        return editor.plugin.unregister!(info.path);
+      },
+      load: async (pluginPath) => {
+        assertPluginLifecycleCapability(ownerName, editor);
+        assertCurrentKitPlugin(editor, pluginPath);
+        return editor.plugin.load!(pluginPath);
+      },
+      unload: async (pluginPath) => {
+        assertPluginLifecycleCapability(ownerName, editor);
+        assertCurrentKitPlugin(editor, pluginPath);
+        return editor.plugin.unload!(pluginPath);
+      },
     },
     panel: {
       register: (name, modulePath, constraints) =>

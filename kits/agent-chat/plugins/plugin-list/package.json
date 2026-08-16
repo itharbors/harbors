@@ -1,0 +1,41 @@
+{
+  "name": "plugin-list",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "capabilities": [
+      "plugin-lifecycle"
+    ],
+    "contribute": {
+      "panel": {
+        "list": {
+          "entry": "./panel.list/dist/index.html",
+          "title": "插件"
+        }
+      },
+      "message": {
+        "request": {
+          "getPluginSummary": [
+            "getPluginSummary"
+          ],
+          "register": [
+            "register"
+          ],
+          "unregister": [
+            "unregister"
+          ],
+          "load": [
+            "load"
+          ],
+          "unload": [
+            "unload"
+          ],
+          "restart": [
+            "restart"
+          ]
+        }
+      }
+    }
+  }
+}

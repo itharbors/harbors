@@ -1,12 +1,16 @@
 import type { PluginCredentialVault } from './credentials.js';
 import type { PluginPaths, PluginPathRoots } from './paths.js';
-import type { ContributeData, PluginDefinition, PluginInfo } from './types.js';
+import type { ContributeData, PluginDefinition, PluginInfo, PluginSourceIdentity } from './types.js';
 
 export type MessageLocation = 'server' | 'browser';
 export type PluginMethod = (...args: unknown[]) => unknown;
 
 export interface PluginRuntimePluginHost {
   define(definition: PluginDefinition): void;
+  register?(path: string, options?: { source?: PluginSourceIdentity }): Promise<void>;
+  load?(path: string): Promise<void>;
+  unload?(path: string): Promise<void>;
+  unregister?(path: string): void;
   getInfo(name: string): PluginInfo | undefined;
   listLoaded(): string[];
   listRegistered(): string[];
@@ -60,6 +64,9 @@ export interface PluginRuntimeHost {
   panel: PluginRuntimePanelHost;
   menu: PluginRuntimeMenuHost;
   message: PluginRuntimeMessageHost;
+  kit: {
+    getCurrent(): { readonly name: string; readonly plugins?: readonly string[] } | undefined;
+  };
 }
 
 export interface PluginRuntime extends PluginRuntimeHost {
