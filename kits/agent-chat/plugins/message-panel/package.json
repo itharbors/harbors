@@ -3,6 +3,9 @@
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
+  "scripts": {
+    "build": "postcss ./panel.main/src/styles.css -o ./panel.main/src/index.css"
+  },
   "ce-editor": {
     "contribute": {
       "panel": {
@@ -30,11 +33,19 @@
     }
   },
   "dependencies": {
-    "@chatscope/chat-ui-kit-react": "^2.1.1",
-    "@chatscope/chat-ui-kit-styles": "^1.4.0",
+    "@ai-sdk/react": "4.0.69",
     "dompurify": "^3.4.13",
     "marked": "^18.0.9",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.3",
+    "autoprefixer": "^10.5.4",
+    "lightningcss": "npm:lightningcss-wasm@^1.33.0",
+    "postcss": "^8.5.26",
+    "postcss-cli": "^11.0.1",
+    "tailwindcss": "^4.3.3"
   }
 }

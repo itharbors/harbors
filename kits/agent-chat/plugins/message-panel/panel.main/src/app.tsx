@@ -1,42 +1,37 @@
-import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { marked } from 'marked';
-import DOMPurify from 'dompurify';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
-import { parseTraceEvents, groupEntriesByTurn, type ToolProcessEntry } from './trace-events.js';
+import { parseTraceEvents, type ToolProcessEntry } from './trace-events.js';
+import Transcript from './transcript.js';
 import './index.css';
 
-// 配置 marked：启用 GFM（表格、删除线、任务列表），换行符转为 <br>
-marked.setOptions({ gfm: true, breaks: true });
-
-function MarkdownMessage({ content }: { content: string }) {
-  const html = DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
-  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
-}
-
-type Source = 'codex' | 'harbors';
+type Source = 'harbors';
 interface MessageData { id: string; role: 'user' | 'assistant'; content: string; }
 interface ConversationData { id: string; }
 interface DraftData { source?: Source; project?: string; }
 interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; generation?: string; revision?: number; }
 interface SelectOption { id: string; name: string; description?: string; }
 interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
-interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: string; }
+type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+type ApprovalPolicy = 'ask' | 'never';
+interface PermissionOptions { sandboxModes: SandboxMode[]; approvalPolicies: ApprovalPolicy[]; defaultSandboxMode: SandboxMode; defaultApprovalPolicy: ApprovalPolicy; }
+interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: string; sandboxMode?: SandboxMode; approvalPolicy?: ApprovalPolicy; }
 interface ContextUsage { model?: string; contextWindow: number; usedTokens: number; usageRatio: number; estimated?: boolean; }
-interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selection?: TurnOptions; contextUsage?: ContextUsage; configurationError?: string; }
+interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selectedSandboxMode?: SandboxMode; selectedApprovalPolicy?: ApprovalPolicy; selection?: TurnOptions; permissions?: PermissionOptions; contextUsage?: ContextUsage; configurationError?: string; }
 type PermissionOutcome = 'allowed-once' | 'rejected';
 interface PermissionRequest { requestId: string; conversationId: string; turn: number; step: number; toolName: string; currentMode: string; requestedMode?: string; justification?: string; }
 interface ProgressStatus { phase?: string; message?: string; turn?: number; step?: number; contextUsage?: ContextUsage; }
 const REQUEST_RETRY_DELAYS = [0, 100, 250, 500, 1000];
+const MESSAGE_BATCH_SIZE = 40;
 
-function sourceFromId(id: string): Source { return id.startsWith('harbors:') ? 'harbors' : 'codex'; }
-function fallbackModel(source: Source): string { return source === 'harbors' ? 'HubBert Relay' : 'Codex 默认模型'; }
-function turnOptionsFor(model: string, reasoningEffort: string, serviceTier: string): TurnOptions {
-  return { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) };
+function sourceFromId(_id: string): Source { return 'harbors'; }
+function fallbackModel(_source: Source): string { return 'HubBert Relay'; }
+function turnOptionsFor(model: string, reasoningEffort: string, serviceTier: string, sandboxMode: SandboxMode | '', approvalPolicy: ApprovalPolicy | ''): TurnOptions {
+  return { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(sandboxMode ? { sandboxMode } : {}), ...(approvalPolicy ? { approvalPolicy } : {}) };
 }
 function optionValue(options: SelectOption[] | undefined, selected: string | undefined, fallback: string | undefined): string {
   return selected || fallback || options?.[0]?.id || '';
 }
-function readAgentOptions(value: unknown): { models: ModelOption[]; selection: TurnOptions; contextUsage: ContextUsage | null; configurationError: string | null } {
+function readAgentOptions(value: unknown): { models: ModelOption[]; selection: TurnOptions; permissions: PermissionOptions | null; contextUsage: ContextUsage | null; configurationError: string | null } {
   const typed = value as AgentOptionsResponse | null;
   const models = Array.isArray(typed?.models) ? typed.models : [];
   const model = typed?.selection?.model || typed?.selectedModel || typed?.defaultModel || models[0]?.id || '';
@@ -47,7 +42,10 @@ function readAgentOptions(value: unknown): { models: ModelOption[]; selection: T
       model,
       reasoningEffort: optionValue(selectedModel?.reasoningEfforts, typed?.selection?.reasoningEffort || typed?.selectedReasoningEffort, selectedModel?.defaultReasoningEffort || typed?.defaultReasoningEffort),
       serviceTier: optionValue(selectedModel?.serviceTiers, typed?.selection?.serviceTier || typed?.selectedServiceTier, selectedModel?.defaultServiceTier || typed?.defaultServiceTier),
+      sandboxMode: typed?.selection?.sandboxMode || typed?.selectedSandboxMode || typed?.permissions?.defaultSandboxMode,
+      approvalPolicy: typed?.selection?.approvalPolicy || typed?.selectedApprovalPolicy || typed?.permissions?.defaultApprovalPolicy,
     },
+    permissions: typed?.permissions || null,
     contextUsage: readContextUsage(typed?.contextUsage),
     configurationError: typed?.configurationError || null,
   };
@@ -111,9 +109,6 @@ async function requestWithRetry(ctx: any, plugin: string, method: string, ...arg
 
 function sendErrorMessage(error: unknown): string {
   const message = readableErrorMessage(error);
-  if (message.includes('already has an active writer') || message.includes('thread-store conflict')) {
-    return '此 Codex 会话正由桌面 Codex 占用，Kit 只能查看历史，无法向同一会话写入。请点击左侧“新对话”创建一个可发送的 Kit Codex 会话，或改用 HubBert。';
-  }
   return `消息发送失败：${message}`;
 }
 
@@ -156,83 +151,19 @@ function ContextRing({ ratio, tokens, max }: { ratio: number; tokens: number; ma
   );
 }
 
-function ToolProcessCard({ entry }: { entry: ToolProcessEntry }) {
-  const [expanded, setExpanded] = useState(false);
-  const hasResult = entry.result !== undefined;
-  const statusLabel = entry.isError ? '已失败' : hasResult ? '已完成' : '处理中';
-  const statusClass = entry.isError ? 'error' : hasResult ? 'success' : 'pending';
-  const toggle = () => setExpanded((value) => !value);
-  return (
-    <div className={`tool-process-card ${entry.isError ? 'error' : ''}`}>
-      <div
-        className="tool-process-header"
-        role="button"
-        tabIndex={0}
-        onClick={toggle}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter' || event.key === ' ') {
-            event.preventDefault();
-            toggle();
-          }
-        }}
-      >
-        <span className={`tool-status ${statusClass}`}>{statusLabel}</span>
-        <span className="tool-name">{entry.name}</span>
-      </div>
-      {expanded && (
-        <>
-          {entry.arguments && (
-            <div className="tool-arguments">
-              <div className="tool-section-title">参数</div>
-              <pre><code>{entry.arguments}</code></pre>
-            </div>
-          )}
-          <div className="tool-result">
-            {hasResult ? (
-              <pre><code>{entry.result}</code></pre>
-            ) : (
-              <span className="tool-result-pending">处理中…</span>
-            )}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-function PermissionRequestCard({ request, resolving, onResolve }: { request: PermissionRequest; resolving: boolean; onResolve: (outcome: PermissionOutcome) => void; }) {
-  const modeLabel = (mode?: string): string => ({
-    'read-only': '只读',
-    'workspace-write': '工作区可写',
-    'danger-full-access': '完全访问',
-  }[mode || ''] || mode || '未说明');
-  return (
-    <div className="permission-card">
-      <div className="permission-card-header">
-        <span className="permission-title">需要权限确认</span>
-        <span className="permission-status">等待处理</span>
-      </div>
-      <div className="permission-card-tool">工具：<strong>{request.toolName}</strong></div>
-      <div className="permission-card-modes">当前：{modeLabel(request.currentMode)} → 请求：{modeLabel(request.requestedMode)}</div>
-      {request.justification && <p className="permission-card-justification">{request.justification}</p>}
-      <div className="permission-card-actions">
-        <button type="button" onClick={() => onResolve('rejected')} disabled={resolving}>拒绝</button>
-        <button type="button" className="approve" onClick={() => onResolve('allowed-once')} disabled={resolving}>允许一次</button>
-      </div>
-    </div>
-  );
-}
-
 export default function App({ ctx, registerSetter }: { ctx: any; registerSetter: (key: string, setter: (data: any) => void) => void; }) {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
-  const [source, setSource] = useState<Source>('codex');
+  const [source, setSource] = useState<Source>('harbors');
   const [draft, setDraft] = useState(false);
   const [project, setProject] = useState<string | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
   const [serviceTier, setServiceTier] = useState('');
+  const [permissionOptions, setPermissionOptions] = useState<PermissionOptions | null>(null);
+  const [sandboxMode, setSandboxMode] = useState<SandboxMode | ''>('');
+  const [approvalPolicy, setApprovalPolicy] = useState<ApprovalPolicy | ''>('');
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [text, setText] = useState('');
@@ -244,6 +175,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [resolvingPermissionId, setResolvingPermissionId] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
+  const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_BATCH_SIZE);
   const [error, setError] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
@@ -277,6 +209,9 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setModel(options.selection.model || '');
     setReasoningEffort(options.selection.reasoningEffort || '');
     setServiceTier(options.selection.serviceTier || '');
+    setPermissionOptions(options.permissions);
+    setSandboxMode(options.selection.sandboxMode || '');
+    setApprovalPolicy(options.selection.approvalPolicy || '');
     setContextUsage(options.contextUsage);
     setConfigurationError(options.configurationError);
   };
@@ -300,17 +235,17 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setStopping(false); setActivity(null); setContextUsage(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setActivity(null); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
-      clearConversation(); setSource(draftData?.source || 'codex'); setProject(draftData?.project || null); setDraft(true);
+      clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
     };
     const loadConversation = (id: string) => {
       const seq = ++loadSeqRef.current;
       const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
       requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
       loadTrace(id, seq);
       loadPermissionRequests(id);
@@ -386,7 +321,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const send = async () => {
     if (!text.trim() || sending || sendingRef.current || loading || configurationError || permissionRequests.length > 0) return;
     let target = conversationId;
-    const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier);
+    const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier, sandboxMode, approvalPolicy);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const processTurn = messages.filter((message) => message.role === 'user').length + 1;
     const processEntry: ToolProcessEntry = {
@@ -482,6 +417,28 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     }
   };
 
+  const updateConversationPermissions = async (nextSandboxMode: SandboxMode | '', nextApprovalPolicy: ApprovalPolicy | ''): Promise<void> => {
+    if (sending) return;
+    const id = conversationIdRef.current;
+    if (!draft && !id) return;
+    setSandboxMode(nextSandboxMode);
+    setApprovalPolicy(nextApprovalPolicy);
+    if (draft || !id) return;
+    setError(null);
+    try {
+      const result = await requestWithRetry(ctx, 'agent', 'setConversationPermissions', id, {
+        ...(nextSandboxMode ? { sandboxMode: nextSandboxMode } : {}),
+        ...(nextApprovalPolicy ? { approvalPolicy: nextApprovalPolicy } : {}),
+      }) as { sandboxMode?: SandboxMode; approvalPolicy?: ApprovalPolicy };
+      if (id !== conversationIdRef.current) return;
+      if (result?.sandboxMode) setSandboxMode(result.sandboxMode);
+      if (result?.approvalPolicy) setApprovalPolicy(result.approvalPolicy);
+    } catch (err) {
+      logError('更新权限设置失败', err);
+      setError(`更新权限设置失败：${readableErrorMessage(err)}`);
+    }
+  };
+
   const switchSource = async (nextSource: Source) => {
     if (!draft || nextSource === source || sending) return;
     setError(null);
@@ -497,7 +454,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
 
   const processEntries = [...toolEntries, ...localProcessEntries];
-  const toolEntriesByTurn = groupEntriesByTurn(processEntries);
   const selectedModelOption = models.find((item) => item.id === model);
   const reasoningOptions = selectedModelOption?.reasoningEfforts?.length ? selectedModelOption.reasoningEfforts : (reasoningEffort ? [{ id: reasoningEffort, name: reasoningEffort }] : []);
   const serviceTierOptions = selectedModelOption?.serviceTiers?.length ? selectedModelOption.serviceTiers : (serviceTier ? [{ id: serviceTier, name: serviceTier }] : []);
@@ -507,26 +463,15 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setReasoningEffort(optionValue(next?.reasoningEfforts, undefined, next?.defaultReasoningEffort));
     setServiceTier(optionValue(next?.serviceTiers, undefined, next?.defaultServiceTier));
   };
-  const messageTurnMap = new Map<string, number>();
-  const renderedProcessIds = new Set<string>();
-  {
-    let userIndex = 0;
-    for (const msg of messages) {
-      if (msg.role === 'user') {
-        userIndex += 1;
-        messageTurnMap.set(msg.id, userIndex);
-      }
-    }
-  }
-
   const composer = <div className="composer-shell">
     <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="随心输入，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 3} disabled={loading || sending || permissionRequests.length > 0} />
     <div className="composer-toolbar">
       <button type="button" className="composer-add" aria-label="添加上下文" title="添加上下文">＋</button>
-      <div className="source-tabs" role="tablist" aria-label="选择 Agent">{(['codex', 'harbors'] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={source === item} className={source === item ? 'selected' : ''} disabled={!draft && source !== item} onClick={() => void switchSource(item)}>{item === 'codex' ? '⌘ Codex' : '⚓ HubBert'}</button>)}</div>
       <label className="option-picker model-picker">模型<select value={model} disabled={models.length < 2} onChange={(event) => selectModel(event.target.value)}>{models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">{fallbackModel(source)}</option>}</select></label>
       {reasoningOptions.length > 0 && <label className="option-picker reasoning-picker">推理深度<select value={reasoningEffort} disabled={reasoningOptions.length < 2} onChange={(event) => setReasoningEffort(event.target.value)}>{reasoningOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
       {serviceTierOptions.length > 0 && <label className="option-picker service-tier-picker">服务档位<select value={serviceTier} disabled={serviceTierOptions.length < 2} onChange={(event) => setServiceTier(event.target.value)}>{serviceTierOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
+      {permissionOptions?.sandboxModes.length ? <label className="option-picker permission-picker">权限范围<select value={sandboxMode} disabled={sending} onChange={(event) => void updateConversationPermissions(event.target.value as SandboxMode, approvalPolicy)}>{permissionOptions.sandboxModes.map((item) => <option key={item} value={item}>{item === 'read-only' ? '只读' : item === 'workspace-write' ? '工作区可写' : '完全访问'}</option>)}</select></label> : null}
+      {permissionOptions?.approvalPolicies.length ? <label className="option-picker permission-picker">审批策略<select value={approvalPolicy} disabled={sending} onChange={(event) => void updateConversationPermissions(sandboxMode, event.target.value as ApprovalPolicy)}>{permissionOptions.approvalPolicies.map((item) => <option key={item} value={item}>{item === 'ask' ? '每次询问' : '自动允许'}</option>)}</select></label> : null}
       {contextUsage && <ContextRing ratio={contextUsage.usageRatio} tokens={contextUsage.usedTokens} max={contextUsage.contextWindow} />}
       {sending && conversationId ? (
         <button type="button" className="stop-button" onClick={() => void stopConversation()} disabled={stopping} aria-label="终止当前对话">{stopping ? '终止中…' : '终止'}</button>
@@ -536,30 +481,41 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     </div>
   </div>;
 
+  const visibleMessages = useMemo(
+    () => messages.slice(Math.max(0, messages.length - visibleMessageCount)),
+    [messages, visibleMessageCount],
+  );
+  const hiddenMessageCount = messages.length - visibleMessages.length;
+  const hiddenTurnCount = messages
+    .slice(0, hiddenMessageCount)
+    .filter((message) => message.role === 'user')
+    .length;
+  const loadOlderMessages = (): void => setVisibleMessageCount((count) => Math.min(messages.length, count + MESSAGE_BATCH_SIZE));
   return <div className="message-panel">
     {(error || configurationError) && <div role="alert" className="error-alert">{error || configurationError}</div>}
     <div className="message-list-container" ref={messageListRef} onScroll={(event) => {
       const list = event.currentTarget;
       shouldFollowLatestRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     }}>
-      {!conversationId && !draft ? <div className="empty-state"><div className="empty-state-card"><div className="empty-state-mark">✦</div><h2>选择或新建一个对话</h2><p>从左侧项目中继续工作，或点击“新对话”开始。</p></div></div> : <div className={`chat-surface ${draft || messages.length === 0 ? 'fresh' : ''}`}>
-        {(draft || messages.length === 0) && <div className="new-thread-context"><span>▣ 当前项目</span><strong>{project ? project.split('/').filter(Boolean).slice(-2).join(' / ') : '本地项目'}</strong><span>{source === 'harbors' ? '⚓ HubBert' : '⌘ Codex'} · {models.find((item) => item.id === model)?.name || fallbackModel(source)}</span></div>}
-        {messages.map((message) => {
-          const turn = messageTurnMap.get(message.id);
-          const turnEntries = turn !== undefined ? (toolEntriesByTurn.get(turn) ?? []) : [];
-          return (
-            <Fragment key={message.id}>
-              <article className={`chat-message ${message.role}`}><div className="chat-message-content"><MarkdownMessage content={message.content} /></div></article>
-              {message.role === 'user' && turnEntries.map((entry) => { renderedProcessIds.add(entry.id); return <Fragment key={entry.id}><ToolProcessCard entry={entry} /></Fragment>; })}
-            </Fragment>
-          );
-        })}
-        {processEntries.filter((entry) => !renderedProcessIds.has(entry.id)).map((entry) => <Fragment key={entry.id}><ToolProcessCard entry={entry} /></Fragment>)}
-        {permissionRequests.map((request) => <Fragment key={request.requestId}><PermissionRequestCard request={request} resolving={resolvingPermissionId === request.requestId} onResolve={(outcome) => void resolvePermission(request.requestId, outcome)} /></Fragment>)}
-        {sending && <div className="sending-indicator">{activity || (messages.some((message) => message.role === 'assistant' && !message.content) ? '正在生成回复…' : '正在请求模型…')}</div>}
-      </div>}
+      {!conversationId && !draft ? <div className="empty-state"><div className="empty-state-card"><div className="empty-state-mark">✦</div><h2>选择或新建一个对话</h2><p>从左侧项目中继续工作，或点击"新对话"开始。</p></div></div> : (
+        <>
+          {hiddenMessageCount > 0 && <button type="button" className="message-history-loader" onClick={loadOlderMessages}>加载更早的 {Math.min(hiddenMessageCount, MESSAGE_BATCH_SIZE)} 条消息</button>}
+          <Transcript
+            draft={draft}
+            project={project}
+            modelLabel={models.find((item) => item.id === model)?.name || fallbackModel(source)}
+            messages={visibleMessages}
+            processEntries={processEntries}
+            turnOffset={hiddenTurnCount}
+            permissionRequests={permissionRequests}
+            resolvingPermissionId={resolvingPermissionId}
+            onResolvePermission={resolvePermission}
+            activity={activity}
+            sending={sending}
+          />
+        </>
+      )}
     </div>
     {(conversationId || draft) && <div className="message-input-container">{composer}</div>}
   </div>;
 }
-// test
