@@ -8,11 +8,35 @@ interface MessageData { id: string; role: 'user' | 'assistant'; content: string;
 interface ConversationData { id: string; }
 interface DraftData { source?: Source; project?: string; }
 interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; generation?: string; revision?: number; }
-interface ModelOption { id: string; name: string; }
+interface SelectOption { id: string; name: string; description?: string; }
+interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
+interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: string; }
+interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selection?: TurnOptions; configurationError?: string; }
 const REQUEST_RETRY_DELAYS = [0, 100, 250, 500, 1000];
 
 function sourceFromId(id: string): Source { return id.startsWith('harbors:') ? 'harbors' : 'codex'; }
 function fallbackModel(source: Source): string { return source === 'harbors' ? 'HubBert Relay' : 'Codex 默认模型'; }
+function turnOptionsFor(model: string, reasoningEffort: string, serviceTier: string): TurnOptions {
+  return { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}) };
+}
+function optionValue(options: SelectOption[] | undefined, selected: string | undefined, fallback: string | undefined): string {
+  return selected || fallback || options?.[0]?.id || '';
+}
+function readAgentOptions(value: unknown): { models: ModelOption[]; selection: TurnOptions; configurationError: string | null } {
+  const typed = value as AgentOptionsResponse | null;
+  const models = Array.isArray(typed?.models) ? typed.models : [];
+  const model = typed?.selection?.model || typed?.selectedModel || typed?.defaultModel || models[0]?.id || '';
+  const selectedModel = models.find((item) => item.id === model);
+  return {
+    models,
+    selection: {
+      model,
+      reasoningEffort: optionValue(selectedModel?.reasoningEfforts, typed?.selection?.reasoningEffort || typed?.selectedReasoningEffort, selectedModel?.defaultReasoningEffort || typed?.defaultReasoningEffort),
+      serviceTier: optionValue(selectedModel?.serviceTiers, typed?.selection?.serviceTier || typed?.selectedServiceTier, selectedModel?.defaultServiceTier || typed?.defaultServiceTier),
+    },
+    configurationError: typed?.configurationError || null,
+  };
+}
 function readableErrorMessage(value: unknown, seen = new Set<object>()): string {
   if (value instanceof Error) return value.message || value.name;
   if (typeof value === 'string') return value;
@@ -133,6 +157,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [project, setProject] = useState<string | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState('');
+  const [reasoningEffort, setReasoningEffort] = useState('');
+  const [serviceTier, setServiceTier] = useState('');
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -165,6 +191,14 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       }
     }
   };
+  const applyAgentOptions = (value: unknown): void => {
+    const options = readAgentOptions(value);
+    setModels(options.models);
+    setModel(options.selection.model || '');
+    setReasoningEffort(options.selection.reasoningEffort || '');
+    setServiceTier(options.selection.serviceTier || '');
+    setConfigurationError(options.configurationError);
+  };
 
 
   useEffect(() => {
@@ -190,12 +224,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       loadTrace(id, seq);
       requestWithRetry(ctx, 'agent', 'getConversationOptions', id).then((options: unknown) => {
         if (disposed || seq !== loadSeqRef.current) return;
-        const typedOptions = options as { models?: ModelOption[]; defaultModel?: string; selectedModel?: string; configurationError?: string };
-        const available = Array.isArray(typedOptions?.models) ? typedOptions.models : [];
-        setModels(available);
-        setModel(typedOptions?.selectedModel || typedOptions?.defaultModel || available[0]?.id || '');
-        setConfigurationError(typedOptions?.configurationError || null);
-      }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载模型失败', err); setModels([]); setModel(''); setConfigurationError(`无法读取 Agent 配置：${readableErrorMessage(err)}`); } });
+        applyAgentOptions(options);
+      }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载模型失败', err); setModels([]); setModel(''); setReasoningEffort(''); setServiceTier(''); setConfigurationError(`无法读取 Agent 配置：${readableErrorMessage(err)}`); } });
     };
     const applyConversationUiState = (value: unknown, sequence = ++uiStateSequenceRef.current) => {
       if (disposed) return;
@@ -241,18 +271,15 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     let disposed = false;
     requestWithRetry(ctx, 'agent', 'getDraftOptions', source).then((options: unknown) => {
       if (disposed) return;
-      const typedOptions = options as { models?: ModelOption[]; defaultModel?: string; configurationError?: string };
-      const available = Array.isArray(typedOptions?.models) ? typedOptions.models : [];
-      setModels(available);
-      setModel(typedOptions?.defaultModel || available[0]?.id || '');
-      setConfigurationError(typedOptions?.configurationError || null);
-    }).catch((err: unknown) => { if (!disposed) { logError('加载草稿模型失败', err); setModels([]); setModel(''); setConfigurationError(`无法读取 Agent 配置：${readableErrorMessage(err)}`); } });
+      applyAgentOptions(options);
+    }).catch((err: unknown) => { if (!disposed) { logError('加载草稿模型失败', err); setModels([]); setModel(''); setReasoningEffort(''); setServiceTier(''); setConfigurationError(`无法读取 Agent 配置：${readableErrorMessage(err)}`); } });
     return () => { disposed = true; };
   }, [ctx, draft, source]);
 
   const send = async () => {
     if (!text.trim() || sending || sendingRef.current || loading || configurationError) return;
     let target = conversationId;
+    const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const processTurn = messages.filter((message) => message.role === 'user').length + 1;
     const processEntry: ToolProcessEntry = {
@@ -261,7 +288,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       step: 0,
       callId: processId,
       name: '请求模型',
-      arguments: JSON.stringify({ source, model: model || fallbackModel(source) }),
+      arguments: JSON.stringify({ source, ...selectedTurnOptions, ...(selectedTurnOptions.model ? {} : { model: fallbackModel(source) }) }),
       isError: false,
     };
     setLocalProcessEntries((current) => [...current, processEntry]);
@@ -272,7 +299,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     let pollPromise: Promise<void> | null = null;
     try {
       if (!target) {
-        const created = await ctx.message.request('agent', 'createConversation', source, project || undefined, model || undefined) as { id: string };
+        const created = await ctx.message.request('agent', 'createConversation', source, project || undefined, selectedTurnOptions) as { id: string };
         target = created.id;
         pendingConversationIdRef.current = target;
         const selectionSequence = ++uiStateSequenceRef.current;
@@ -290,7 +317,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         }
       };
       pollPromise = pollTrace();
-      await ctx.message.request('agent', 'sendMessage', target, optimistic.content, model || undefined);
+      await ctx.message.request('agent', 'sendMessage', target, optimistic.content, selectedTurnOptions);
       setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result: '模型已完成', isError: false } : entry));
       stopPolling = true;
       await pollPromise;
@@ -325,6 +352,15 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   const processEntries = [...toolEntries, ...localProcessEntries];
   const toolEntriesByTurn = groupEntriesByTurn(processEntries);
+  const selectedModelOption = models.find((item) => item.id === model);
+  const reasoningOptions = selectedModelOption?.reasoningEfforts?.length ? selectedModelOption.reasoningEfforts : (reasoningEffort ? [{ id: reasoningEffort, name: reasoningEffort }] : []);
+  const serviceTierOptions = selectedModelOption?.serviceTiers?.length ? selectedModelOption.serviceTiers : (serviceTier ? [{ id: serviceTier, name: serviceTier }] : []);
+  const selectModel = (nextModel: string): void => {
+    const next = models.find((item) => item.id === nextModel);
+    setModel(nextModel);
+    setReasoningEffort(optionValue(next?.reasoningEfforts, undefined, next?.defaultReasoningEffort));
+    setServiceTier(optionValue(next?.serviceTiers, undefined, next?.defaultServiceTier));
+  };
   const messageTurnMap = new Map<string, number>();
   const renderedProcessIds = new Set<string>();
   {
@@ -342,7 +378,9 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     <div className="composer-toolbar">
       <button type="button" className="composer-add" aria-label="添加上下文" title="添加上下文">＋</button>
       <div className="source-tabs" role="tablist" aria-label="选择 Agent">{(['codex', 'harbors'] as const).map((item) => <button key={item} type="button" role="tab" aria-selected={source === item} className={source === item ? 'selected' : ''} disabled={!draft && source !== item} onClick={() => void switchSource(item)}>{item === 'codex' ? '⌘ Codex' : '⚓ HubBert'}</button>)}</div>
-      <label className="model-picker">模型<select value={model} disabled={models.length < 2} onChange={(event) => setModel(event.target.value)}>{models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">{fallbackModel(source)}</option>}</select></label>
+      <label className="option-picker model-picker">模型<select value={model} disabled={models.length < 2} onChange={(event) => selectModel(event.target.value)}>{models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">{fallbackModel(source)}</option>}</select></label>
+      {reasoningOptions.length > 0 && <label className="option-picker reasoning-picker">推理深度<select value={reasoningEffort} disabled={reasoningOptions.length < 2} onChange={(event) => setReasoningEffort(event.target.value)}>{reasoningOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
+      {serviceTierOptions.length > 0 && <label className="option-picker service-tier-picker">服务档位<select value={serviceTier} disabled={serviceTierOptions.length < 2} onChange={(event) => setServiceTier(event.target.value)}>{serviceTierOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
       <button type="button" className="send-button" onClick={send} disabled={!text.trim() || loading || sending || Boolean(configurationError)} aria-label="发送消息">↑</button>
     </div>
   </div>;
