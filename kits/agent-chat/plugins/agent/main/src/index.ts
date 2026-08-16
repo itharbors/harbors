@@ -1,4 +1,4 @@
-import type { AgentAdapter, AgentChatMessage, AgentConversation, AgentSource } from './adapter/base.js';
+import type { AgentAdapter, AgentChatMessage, AgentConversation, AgentSource, AgentTraceEvent } from './adapter/base.js';
 import { CodexAdapter } from './adapter/codex.js';
 import { HarborsAdapter } from './adapter/harbors.js';
 
@@ -156,6 +156,11 @@ editor.plugin.define({
     async getMessages(conversationId: string) {
       await ensureMessages(conversationId);
       return copyMessages(conversationId);
+    },
+    async getConversationTrace(conversationId: string, turnId?: string): Promise<AgentTraceEvent[]> {
+      const route = parseConversationId(conversationId);
+      const trace = await requireAdapter(route.source).getConversationTrace?.(route.adapterId, turnId);
+      return (trace || []).map((event) => ({ ...event, data: { ...event.data } }));
     },
     async sendMessage(conversationId: string, content: string, model?: string) {
       if (!conversations.some((conversation) => conversation.id === conversationId)) {
