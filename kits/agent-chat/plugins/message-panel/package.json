@@ -13,18 +13,28 @@
       },
       "message": {
         "broadcast": {
-          "conversation.changed": ["panel.onConversationChanged"],
-          "conversation.ui.changed": ["panel.onConversationUiChanged"],
-          "message.delta": ["panel.onMessageDelta"],
-          "message.status": ["panel.onMessageStatus"]
+          "conversation.changed": [
+            "panel.onConversationChanged"
+          ],
+          "conversation.ui.changed": [
+            "panel.onConversationUiChanged"
+          ],
+          "message.delta": [
+            "panel.onMessageDelta"
+          ],
+          "message.status": [
+            "panel.onMessageStatus"
+          ]
         }
       }
     }
   },
   "dependencies": {
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "@chatscope/chat-ui-kit-react": "^2.1.1",
-    "@chatscope/chat-ui-kit-styles": "^1.4.0"
+    "@chatscope/chat-ui-kit-styles": "^1.4.0",
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   }
 }

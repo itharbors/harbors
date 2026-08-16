@@ -1,7 +1,17 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { marked } from 'marked';
+import DOMPurify from 'dompurify';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
 import { parseTraceEvents, groupEntriesByTurn, type ToolProcessEntry } from './trace-events.js';
 import './index.css';
+
+// 配置 marked：启用 GFM（表格、删除线、任务列表），换行符转为 <br>
+marked.setOptions({ gfm: true, breaks: true });
+
+function MarkdownMessage({ content }: { content: string }) {
+  const html = DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
+  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
+}
 
 type Source = 'codex' | 'harbors';
 interface MessageData { id: string; role: 'user' | 'assistant'; content: string; }
@@ -11,10 +21,11 @@ interface ConversationUiState { selectedConversationId?: string | null; draft?: 
 interface SelectOption { id: string; name: string; description?: string; }
 interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
 interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: string; }
-interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selection?: TurnOptions; configurationError?: string; }
+interface ContextUsage { model?: string; contextWindow: number; usedTokens: number; usageRatio: number; estimated?: boolean; }
+interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selection?: TurnOptions; contextUsage?: ContextUsage; configurationError?: string; }
 type PermissionOutcome = 'allowed-once' | 'rejected';
 interface PermissionRequest { requestId: string; conversationId: string; turn: number; step: number; toolName: string; currentMode: string; requestedMode?: string; justification?: string; }
-interface ProgressStatus { phase?: string; message?: string; turn?: number; step?: number; }
+interface ProgressStatus { phase?: string; message?: string; turn?: number; step?: number; contextUsage?: ContextUsage; }
 const REQUEST_RETRY_DELAYS = [0, 100, 250, 500, 1000];
 
 function sourceFromId(id: string): Source { return id.startsWith('harbors:') ? 'harbors' : 'codex'; }
@@ -25,7 +36,7 @@ function turnOptionsFor(model: string, reasoningEffort: string, serviceTier: str
 function optionValue(options: SelectOption[] | undefined, selected: string | undefined, fallback: string | undefined): string {
   return selected || fallback || options?.[0]?.id || '';
 }
-function readAgentOptions(value: unknown): { models: ModelOption[]; selection: TurnOptions; configurationError: string | null } {
+function readAgentOptions(value: unknown): { models: ModelOption[]; selection: TurnOptions; contextUsage: ContextUsage | null; configurationError: string | null } {
   const typed = value as AgentOptionsResponse | null;
   const models = Array.isArray(typed?.models) ? typed.models : [];
   const model = typed?.selection?.model || typed?.selectedModel || typed?.defaultModel || models[0]?.id || '';
@@ -37,6 +48,7 @@ function readAgentOptions(value: unknown): { models: ModelOption[]; selection: T
       reasoningEffort: optionValue(selectedModel?.reasoningEfforts, typed?.selection?.reasoningEffort || typed?.selectedReasoningEffort, selectedModel?.defaultReasoningEffort || typed?.defaultReasoningEffort),
       serviceTier: optionValue(selectedModel?.serviceTiers, typed?.selection?.serviceTier || typed?.selectedServiceTier, selectedModel?.defaultServiceTier || typed?.defaultServiceTier),
     },
+    contextUsage: readContextUsage(typed?.contextUsage),
     configurationError: typed?.configurationError || null,
   };
 }
@@ -104,50 +116,86 @@ function sendErrorMessage(error: unknown): string {
   }
   return `消息发送失败：${message}`;
 }
-function inlineMarkdown(value: string) {
-  return value.split(/(\*\*[^*]+\*\*|`[^`]+`)/g).filter(Boolean).map((part, index) => {
-    if (part.startsWith('**')) return <strong key={index}>{part.slice(2, -2)}</strong>;
-    if (part.startsWith('`')) return <code key={index}>{part.slice(1, -1)}</code>;
-    return part;
-  });
-}
-function MarkdownMessage({ content }: { content: string }) {
-  const sections = content.split(/```(?:\w+)?\n?/g);
-  return <>{sections.map((section, sectionIndex) => sectionIndex % 2 === 1 ? <pre key={sectionIndex}><code>{section.trim()}</code></pre> : section.split('\n').map((line, lineIndex) => {
-    const key = `${sectionIndex}-${lineIndex}`;
-    if (line.startsWith('### ')) return <h3 key={key}>{inlineMarkdown(line.slice(4))}</h3>;
-    if (line.startsWith('## ')) return <h2 key={key}>{inlineMarkdown(line.slice(3))}</h2>;
-    if (line.startsWith('# ')) return <h1 key={key}>{inlineMarkdown(line.slice(2))}</h1>;
-    if (/^[-*]\s+/u.test(line)) return <div key={key} className="markdown-list-item">• {inlineMarkdown(line.replace(/^[-*]\s+/u, ''))}</div>;
-    if (/^\d+\.\s+/u.test(line)) return <div key={key} className="markdown-list-item">{inlineMarkdown(line)}</div>;
-    return line ? <p key={key}>{inlineMarkdown(line)}</p> : <br key={key} />;
-  }))}</>;
+
+function readContextUsage(value: unknown): ContextUsage | null {
+  if (!value || typeof value !== 'object') return null;
+  const usage = value as Partial<ContextUsage>;
+  if (!Number.isFinite(usage.contextWindow) || !Number.isFinite(usage.usedTokens) || !Number.isFinite(usage.usageRatio) || usage.contextWindow! <= 0) return null;
+  return {
+    model: typeof usage.model === 'string' ? usage.model : undefined,
+    contextWindow: usage.contextWindow!,
+    usedTokens: Math.max(0, usage.usedTokens!),
+    usageRatio: Math.max(0, Math.min(1, usage.usageRatio!)),
+    ...(usage.estimated !== undefined ? { estimated: Boolean(usage.estimated) } : {}),
+  };
 }
 
+function ContextRing({ ratio, tokens, max }: { ratio: number; tokens: number; max: number }) {
+  const r = 14;
+  const circumference = 2 * Math.PI * r;
+  const clamped = Math.max(0, Math.min(1, ratio));
+  const offset = circumference * (1 - clamped);
+  const color = clamped >= 0.9 ? '#e88a8a' : clamped >= 0.7 ? '#e8c87a' : '#7db4ff';
+  const percent = Math.round(clamped * 100);
+  const title = max > 0 ? `上下文：${tokens} / ${max} tokens（${percent}%）` : `上下文：${percent}%`;
+  return (
+    <div className="context-ring" role="img" aria-label={title} title={title}>
+      <svg width="36" height="36" viewBox="0 0 36 36">
+        <circle cx="18" cy="18" r={r} fill="none" stroke="#3a4351" strokeWidth="3" />
+        <circle
+          cx="18" cy="18" r={r} fill="none" stroke={color} strokeWidth="3"
+          strokeLinecap="round"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          transform="rotate(-90 18 18)"
+          style={{ transition: 'stroke-dashoffset .3s ease, stroke .3s ease' }}
+        />
+      </svg>
+      <span className="context-ring-label">{percent}%</span>
+    </div>
+  );
+}
 
 function ToolProcessCard({ entry }: { entry: ToolProcessEntry }) {
+  const [expanded, setExpanded] = useState(false);
   const hasResult = entry.result !== undefined;
-  const statusLabel = entry.isError ? '失败' : hasResult ? '完成' : '执行中';
+  const statusLabel = entry.isError ? '已失败' : hasResult ? '已完成' : '处理中';
   const statusClass = entry.isError ? 'error' : hasResult ? 'success' : 'pending';
+  const toggle = () => setExpanded((value) => !value);
   return (
     <div className={`tool-process-card ${entry.isError ? 'error' : ''}`}>
-      <div className="tool-process-header">
-        <span className="tool-name">{entry.name}</span>
+      <div
+        className="tool-process-header"
+        role="button"
+        tabIndex={0}
+        onClick={toggle}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            toggle();
+          }
+        }}
+      >
         <span className={`tool-status ${statusClass}`}>{statusLabel}</span>
+        <span className="tool-name">{entry.name}</span>
       </div>
-      {entry.arguments && (
-        <details className="tool-arguments">
-          <summary>参数</summary>
-          <pre><code>{entry.arguments}</code></pre>
-        </details>
+      {expanded && (
+        <>
+          {entry.arguments && (
+            <div className="tool-arguments">
+              <div className="tool-section-title">参数</div>
+              <pre><code>{entry.arguments}</code></pre>
+            </div>
+          )}
+          <div className="tool-result">
+            {hasResult ? (
+              <pre><code>{entry.result}</code></pre>
+            ) : (
+              <span className="tool-result-pending">处理中…</span>
+            )}
+          </div>
+        </>
       )}
-      <div className="tool-result">
-        {hasResult ? (
-          <pre><code>{entry.result}</code></pre>
-        ) : (
-          <span className="tool-result-pending">执行中…</span>
-        )}
-      </div>
     </div>
   );
 }
@@ -185,6 +233,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
   const [serviceTier, setServiceTier] = useState('');
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
@@ -194,6 +243,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [localProcessEntries, setLocalProcessEntries] = useState<ToolProcessEntry[]>([]);
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [resolvingPermissionId, setResolvingPermissionId] = useState<string | null>(null);
+  const [stopping, setStopping] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
@@ -204,6 +254,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const applyUiStateRef = useRef<(value: unknown, sequence?: number) => void>(() => undefined);
   const sendingRef = useRef(false);
   const pendingConversationIdRef = useRef<string | null>(null);
+  const stopRequestedRef = useRef(false);
   const traceRequestSeqRef = useRef(0);
   const permissionRequestSeqRef = useRef(0);
   const loadTrace = async (id: string, seq: number): Promise<void> => {
@@ -226,6 +277,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setModel(options.selection.model || '');
     setReasoningEffort(options.selection.reasoningEffort || '');
     setServiceTier(options.selection.serviceTier || '');
+    setContextUsage(options.contextUsage);
     setConfigurationError(options.configurationError);
   };
   const loadPermissionRequests = async (id: string): Promise<void> => {
@@ -240,15 +292,15 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   };
 
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!shouldFollowLatestRef.current) return;
     const list = messageListRef.current;
     if (list) list.scrollTop = list.scrollHeight;
-  }, [conversationId, loading, messages, sending]);
+  }, [conversationId, loading, messages, sending, toolEntries, localProcessEntries, permissionRequests, activity]);
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setActivity(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setLoading(false); setSending(false); setStopping(false); setActivity(null); setContextUsage(null); setError(null); setConfigurationError(null); setToolEntries([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'codex'); setProject(draftData?.project || null); setDraft(true);
@@ -258,7 +310,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const preserveSending = sendingRef.current && (pendingConversationIdRef.current === id || conversationIdRef.current === id);
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); if (!preserveSending) { setSending(false); setStopping(false); setActivity(null); } setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setToolEntries([]); setLocalProcessEntries([]); }
       requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const loadedIds = new Set(loaded.map((message) => message.id)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !loadedIds.has(message.id))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
       loadTrace(id, seq);
       loadPermissionRequests(id);
@@ -305,6 +357,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         return;
       }
       if (!progress || typeof progress !== 'object') return;
+      if (progress.contextUsage !== undefined) setContextUsage(readContextUsage(progress.contextUsage));
       if (progress.phase === 'waiting_permission') {
         setActivity(progress.message || '等待权限确认…');
         void loadPermissionRequests(statusConversationId);
@@ -348,6 +401,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setLocalProcessEntries((current) => [...current, processEntry]);
     shouldFollowLatestRef.current = true;
     sendingRef.current = true;
+    stopRequestedRef.current = false;
     setSending(true); setActivity('正在准备对话…'); setError(null);
     let stopPolling = false;
     let pollPromise: Promise<void> | null = null;
@@ -380,13 +434,33 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (target === conversationIdRef.current) setMessages(Array.isArray(latest) ? latest as MessageData[] : []);
     } catch (err) {
       logError('发送消息失败', err);
-      setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result: sendErrorMessage(err), isError: true } : entry));
+      const result = stopRequestedRef.current ? '已停止当前对话' : sendErrorMessage(err);
+      setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result, isError: true } : entry));
     } finally {
       stopPolling = true;
       if (pollPromise) await pollPromise.catch(() => undefined);
       sendingRef.current = false;
+      stopRequestedRef.current = false;
       if (pendingConversationIdRef.current === target) pendingConversationIdRef.current = null;
-      setSending(false); setActivity(null);
+      setSending(false); setStopping(false); setActivity(null);
+    }
+  };
+
+  const stopConversation = async (): Promise<void> => {
+    const id = conversationIdRef.current;
+    if (!id || !sending || stopping) return;
+    stopRequestedRef.current = true;
+    setStopping(true);
+    setError(null);
+    try {
+      const stopped = await requestWithRetry(ctx, 'agent', 'stopConversation', id);
+      if (stopped !== true) throw new Error('当前会话没有可终止的执行，或当前 Agent 暂不支持终止');
+      setActivity('正在终止当前对话…');
+    } catch (err) {
+      stopRequestedRef.current = false;
+      setStopping(false);
+      logError('终止对话失败', err);
+      setError(`终止对话失败：${readableErrorMessage(err)}`);
     }
   };
 
@@ -453,7 +527,12 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       <label className="option-picker model-picker">模型<select value={model} disabled={models.length < 2} onChange={(event) => selectModel(event.target.value)}>{models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">{fallbackModel(source)}</option>}</select></label>
       {reasoningOptions.length > 0 && <label className="option-picker reasoning-picker">推理深度<select value={reasoningEffort} disabled={reasoningOptions.length < 2} onChange={(event) => setReasoningEffort(event.target.value)}>{reasoningOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
       {serviceTierOptions.length > 0 && <label className="option-picker service-tier-picker">服务档位<select value={serviceTier} disabled={serviceTierOptions.length < 2} onChange={(event) => setServiceTier(event.target.value)}>{serviceTierOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
-      <button type="button" className="send-button" onClick={send} disabled={!text.trim() || loading || sending || permissionRequests.length > 0 || Boolean(configurationError)} aria-label="发送消息">↑</button>
+      {contextUsage && <ContextRing ratio={contextUsage.usageRatio} tokens={contextUsage.usedTokens} max={contextUsage.contextWindow} />}
+      {sending && conversationId ? (
+        <button type="button" className="stop-button" onClick={() => void stopConversation()} disabled={stopping} aria-label="终止当前对话">{stopping ? '终止中…' : '终止'}</button>
+      ) : (
+        <button type="button" className="send-button" onClick={send} disabled={!text.trim() || loading || sending || permissionRequests.length > 0 || Boolean(configurationError)} aria-label="发送消息">↑</button>
+      )}
     </div>
   </div>;
 
