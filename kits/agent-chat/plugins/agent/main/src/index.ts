@@ -1,4 +1,5 @@
-import type { AgentAdapter, AgentChatMessage, AgentConversation, AgentSource, AgentTraceEvent } from './adapter/base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
+import { normalizeTurnOptions } from './adapter/base.js';
 import { CodexAdapter } from './adapter/codex.js';
 import { HarborsAdapter } from './adapter/harbors.js';
 
@@ -21,7 +22,31 @@ let conversations: Conversation[] = [];
 let messages = new Map<string, ChatMessage[]>();
 let loadedMessageIds = new Set<string>();
 let pendingMessageLoads = new Map<string, Promise<ChatMessage[]>>();
+let activeMessageIds = new Map<string, string>();
+interface PendingPermissionRequest {
+  requestId: string;
+  conversationId: string;
+  turn: number;
+  step: number;
+  toolName: string;
+  currentMode: AgentSandboxMode;
+  requestedMode?: AgentSandboxMode;
+  justification?: string;
+}
+
+interface PendingPermissionState {
+  request: PendingPermissionRequest;
+  resolve: (outcome: AgentPermissionOutcome) => void;
+  timer: ReturnType<typeof setTimeout>;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}
+
+let pendingPermissionRequests = new Map<string, PendingPermissionState>();
 let nextMsgId = 1;
+const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
+const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
+const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
 
 function requireAdapter(source: AgentSource): AgentAdapter {
   if (!adapters) throw new Error('[agent] adapters are not initialized');
@@ -29,7 +54,11 @@ function requireAdapter(source: AgentSource): AgentAdapter {
 }
 
 function createAdapters(): Record<AgentSource, AgentAdapter> {
-  return { codex: new CodexAdapter(), harbors: new HarborsAdapter() };
+  const result: Record<AgentSource, AgentAdapter> = { codex: new CodexAdapter(), harbors: new HarborsAdapter() };
+  (Object.keys(result) as AgentSource[]).forEach((source) => {
+    result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
+  });
+  return result;
 }
 
 function conversationId(source: AgentSource, adapterId: string): string { return `${source}:${adapterId}`; }
@@ -46,9 +75,33 @@ function copyConversations(): Conversation[] {
   return conversations.map((conversation) => ({ ...conversation }));
 }
 
-async function adapterOptions(source: AgentSource) {
-  if (source === 'harbors') return requireAdapter('harbors').getModels?.() || { models: [], defaultModel: '' };
-  return requireAdapter('codex').getModels?.() || { models: [{ id: 'default', name: 'Codex 默认模型' }], defaultModel: 'default' };
+async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
+  const result = source === 'harbors'
+    ? await (requireAdapter('harbors').getModels?.() || { models: [], defaultModel: '' })
+    : await (requireAdapter('codex').getModels?.() || { models: [{ id: 'default', name: 'Codex 默认模型' }], defaultModel: 'default' });
+  return {
+    ...result,
+    permissions: result.permissions || {
+      sandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
+      approvalPolicies: ['ask', 'never'],
+      defaultSandboxMode: DEFAULT_SANDBOX_MODE,
+      defaultApprovalPolicy: DEFAULT_APPROVAL_POLICY,
+    },
+  };
+}
+
+function selectedOptions(options: AgentOptions, settings: AgentTurnOptions): AgentTurnOptions {
+  const model = settings.model || options.defaultModel;
+  const modelOption = options.models.find((entry) => entry.id === model);
+  const reasoningEffort = settings.reasoningEffort || modelOption?.defaultReasoningEffort || options.defaultReasoningEffort;
+  const serviceTier = settings.serviceTier || modelOption?.defaultServiceTier || options.defaultServiceTier;
+  return {
+    model,
+    ...(reasoningEffort ? { reasoningEffort } : {}),
+    ...(serviceTier ? { serviceTier } : {}),
+    sandboxMode: settings.sandboxMode || options.permissions?.defaultSandboxMode || DEFAULT_SANDBOX_MODE,
+    approvalPolicy: settings.approvalPolicy || options.permissions?.defaultApprovalPolicy || DEFAULT_APPROVAL_POLICY,
+  };
 }
 
 function copyMessages(conversationId: string): ChatMessage[] {
@@ -84,7 +137,7 @@ async function refreshConversations(): Promise<Conversation[]> {
     return result.value.conversations.map((conversation) => {
       const id = conversationId(result.value.source, conversation.id);
       const local = localById.get(id);
-      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), id, adapterId: conversation.id, source: result.value.source, project: conversation.project || (result.value.source === 'harbors' ? 'Harbors' : '未归类项目'), lastMessage: local?.lastMessage };
+      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || (result.value.source === 'harbors' ? 'Harbors' : '未归类项目'), lastMessage: local?.lastMessage };
     });
   }).sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
   return copyConversations();
@@ -92,6 +145,73 @@ async function refreshConversations(): Promise<Conversation[]> {
 
 function broadcastConversations(): void {
   runtime?.message.broadcast('conversation.changed', copyConversations());
+}
+
+function broadcastMessageStatus(conversationId: string, messageId: string | undefined, status: AgentProgressStatus): void {
+  runtime?.message.broadcast('message.status', { conversationId, ...(messageId ? { messageId } : {}), status });
+}
+
+function requestPermission(request: AgentPermissionRequest): Promise<AgentPermissionOutcome> {
+  if (!runtime) return Promise.resolve('unavailable');
+  const { signal, ...payload } = request;
+  return new Promise<AgentPermissionOutcome>((resolve) => {
+    const finish = (outcome: AgentPermissionOutcome) => {
+      const pending = pendingPermissionRequests.get(request.requestId);
+      if (!pending) return;
+      clearTimeout(pending.timer);
+      if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
+      pendingPermissionRequests.delete(request.requestId);
+      broadcastMessageStatus(request.conversationId, activeMessageIds.get(request.conversationId), {
+        phase: outcome === 'cancelled' || outcome === 'unavailable' ? 'error' : 'running',
+        message: outcome === 'allowed-once' ? '权限已确认，继续执行…' : '权限请求已结束',
+        turn: request.turn,
+        step: request.step,
+      });
+      resolve(outcome);
+    };
+    const timer = setTimeout(() => finish('unavailable'), PERMISSION_REQUEST_TIMEOUT_MS);
+    const onAbort = () => finish('cancelled');
+    pendingPermissionRequests.set(request.requestId, {
+      request: payload,
+      resolve: finish,
+      timer,
+      signal,
+      onAbort,
+    });
+    broadcastMessageStatus(request.conversationId, activeMessageIds.get(request.conversationId), {
+      phase: 'waiting_permission',
+      message: '等待权限确认…',
+      turn: request.turn,
+      step: request.step,
+    });
+    if (signal) {
+      if (signal.aborted) { finish('cancelled'); return; }
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+  });
+}
+
+function resolvePermissionRequest(requestId: string, outcome: AgentPermissionOutcome): boolean {
+  if (!['allowed-once', 'rejected', 'cancelled', 'unavailable'].includes(outcome)) return false;
+  const pending = pendingPermissionRequests.get(requestId);
+  if (!pending) return false;
+  pending.resolve(outcome);
+  return true;
+}
+
+function clearPermissionRequests(outcome: AgentPermissionOutcome): void {
+  for (const pending of Array.from(pendingPermissionRequests.values())) pending.resolve(outcome);
+  pendingPermissionRequests.clear();
+}
+
+function assertSandboxMode(value: string): AgentSandboxMode {
+  if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
+  throw new Error(`[agent] invalid sandbox mode: ${value}`);
+}
+
+function assertApprovalPolicy(value: string): AgentApprovalPolicy {
+  if (value === 'ask' || value === 'never') return value;
+  throw new Error(`[agent] invalid approval policy: ${value}`);
 }
 
 editor.plugin.define({
@@ -107,6 +227,7 @@ editor.plugin.define({
       }
     },
     unload() {
+      clearPermissionRequests('cancelled');
       try {
         Object.values(adapters || {}).forEach((adapter) => adapter.stop());
       } catch (err) {
@@ -118,6 +239,8 @@ editor.plugin.define({
       messages = new Map();
       loadedMessageIds = new Set();
       pendingMessageLoads = new Map();
+      activeMessageIds = new Map();
+      pendingPermissionRequests = new Map();
       nextMsgId = 1;
     },
   },
@@ -126,17 +249,56 @@ editor.plugin.define({
       return refreshConversations();
     },
     async getDraftOptions(source: AgentSource) {
-      return adapterOptions(source);
+      const options = await adapterOptions(source);
+      const selection = selectedOptions(options, {});
+      return { ...options, selection, selectedModel: selection.model, ...(selection.reasoningEffort ? { selectedReasoningEffort: selection.reasoningEffort } : {}), ...(selection.serviceTier ? { selectedServiceTier: selection.serviceTier } : {}), selectedSandboxMode: selection.sandboxMode, selectedApprovalPolicy: selection.approvalPolicy };
     },
     async getConversationOptions(id: string) {
       const conversation = conversations.find((entry) => entry.id === id);
       if (!conversation) throw new Error('[agent] conversation does not exist');
       const options = await adapterOptions(conversation.source);
-      return { ...options, selectedModel: conversation.model || options.defaultModel };
+      const adapterSettings = await requireAdapter(conversation.source).getConversationSettings?.(conversation.adapterId) || {};
+      const selection = selectedOptions(options, { model: conversation.model, reasoningEffort: conversation.reasoningEffort, serviceTier: conversation.serviceTier, ...adapterSettings });
+      return { ...options, selection, selectedModel: selection.model, ...(selection.reasoningEffort ? { selectedReasoningEffort: selection.reasoningEffort } : {}), ...(selection.serviceTier ? { selectedServiceTier: selection.serviceTier } : {}), selectedSandboxMode: selection.sandboxMode, selectedApprovalPolicy: selection.approvalPolicy };
     },
-    async createConversation(source: AgentSource = 'codex', project?: string, model?: string) {
-      const result = await requireAdapter(source).createConversation(project, model);
-      const conv: Conversation = { ...result, id: conversationId(source, result.id), adapterId: result.id, source };
+    async getConversationPermissions(id: string): Promise<AgentPermissionState> {
+      const conversation = conversations.find((entry) => entry.id === id);
+      if (!conversation) throw new Error('[agent] conversation does not exist');
+      return requireAdapter(conversation.source).getConversationPermissions?.(conversation.adapterId) || {
+        sandboxMode: conversation.sandboxMode || DEFAULT_SANDBOX_MODE,
+        approvalPolicy: conversation.approvalPolicy || DEFAULT_APPROVAL_POLICY,
+      };
+    },
+    async setConversationPermissions(id: string, permissions: Partial<AgentPermissionState>): Promise<AgentPermissionState> {
+      const conversation = conversations.find((entry) => entry.id === id);
+      if (!conversation) throw new Error('[agent] conversation does not exist');
+      const validated = {
+        ...(permissions.sandboxMode ? { sandboxMode: assertSandboxMode(permissions.sandboxMode) } : {}),
+        ...(permissions.approvalPolicy ? { approvalPolicy: assertApprovalPolicy(permissions.approvalPolicy) } : {}),
+      };
+      const adapter = requireAdapter(conversation.source);
+      if (!adapter.setConversationPermissions) throw new Error(`[agent] ${conversation.source} adapter does not support permission settings`);
+      const result = await adapter.setConversationPermissions(conversation.adapterId, validated);
+      conversation.sandboxMode = result.sandboxMode;
+      conversation.approvalPolicy = result.approvalPolicy;
+      broadcastConversations();
+      return { ...result };
+    },
+    async getPendingPermissionRequests(conversationId: string): Promise<PendingPermissionRequest[]> {
+      if (!conversations.some((conversation) => conversation.id === conversationId)) {
+        throw new Error('[agent] conversation does not exist');
+      }
+      return Array.from(pendingPermissionRequests.values())
+        .filter(({ request }) => request.conversationId === conversationId)
+        .map(({ request }) => ({ ...request }));
+    },
+    async resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome }): Promise<boolean> {
+      return resolvePermissionRequest(input.requestId, input.outcome);
+    },
+    async createConversation(source: AgentSource = 'codex', project?: string, input?: AgentTurnInput) {
+      const options = normalizeTurnOptions(input);
+      const result = await requireAdapter(source).createConversation(project, options);
+      const conv: Conversation = { ...result, sandboxMode: result.sandboxMode || options.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: result.approvalPolicy || options.approvalPolicy || DEFAULT_APPROVAL_POLICY, id: conversationId(source, result.id), adapterId: result.id, source };
       conversations.unshift(conv);
       messages.set(conv.id, []);
       loadedMessageIds.add(conv.id);
@@ -162,7 +324,7 @@ editor.plugin.define({
       const trace = await requireAdapter(route.source).getConversationTrace?.(route.adapterId, turnId);
       return (trace || []).map((event) => ({ ...event, data: { ...event.data } }));
     },
-    async sendMessage(conversationId: string, content: string, model?: string) {
+    async sendMessage(conversationId: string, content: string, input?: AgentTurnInput) {
       if (!conversations.some((conversation) => conversation.id === conversationId)) {
         throw new Error('[agent] conversation does not exist');
       }
@@ -182,22 +344,36 @@ editor.plugin.define({
       };
       convMessages.push(aiMsg);
       let aiContent: string;
+      activeMessageIds.set(conversationId, aiMsg.id);
       try {
         const route = parseConversationId(conversationId);
-        aiContent = await requireAdapter(route.source).sendMessage(route.adapterId, content, model, (delta) => {
+        const options = normalizeTurnOptions(input);
+        aiContent = await requireAdapter(route.source).sendMessage(route.adapterId, content, options, (delta) => {
           aiMsg.content += delta;
           runtime?.message.broadcast('message.delta', { conversationId, messageId: aiMsg.id, content: aiMsg.content });
         }, (status) => {
-          runtime?.message.broadcast('message.status', { conversationId, messageId: aiMsg.id, status });
+          broadcastMessageStatus(conversationId, aiMsg.id, { phase: 'running', message: status });
         });
       } catch (err) {
+        broadcastMessageStatus(conversationId, aiMsg.id, { phase: 'error', message: err instanceof Error ? err.message : String(err) });
         const aiIndex = convMessages.indexOf(aiMsg);
         if (aiIndex !== -1) convMessages.splice(aiIndex, 1);
         throw err;
+      } finally {
+        activeMessageIds.delete(conversationId);
       }
       aiMsg.content = aiContent;
+      broadcastMessageStatus(conversationId, aiMsg.id, { phase: 'completed' });
       const local = conversations.find((conversation) => conversation.id === conversationId);
-      if (local) { local.lastMessage = aiContent; if (model) local.model = model; }
+      if (local) {
+        local.lastMessage = aiContent;
+        const options = normalizeTurnOptions(input);
+        if (options.model) local.model = options.model;
+        if (options.reasoningEffort) local.reasoningEffort = options.reasoningEffort;
+        if (options.serviceTier) local.serviceTier = options.serviceTier;
+        if (options.sandboxMode) local.sandboxMode = assertSandboxMode(options.sandboxMode);
+        if (options.approvalPolicy) local.approvalPolicy = assertApprovalPolicy(options.approvalPolicy);
+      }
       try {
         await refreshConversations();
       } catch (err) {

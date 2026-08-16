@@ -56,6 +56,8 @@ export interface ThreadInfo {
   recencyAt?: number;
   cwd?: string;
   model?: string;
+  reasoningEffort?: string;
+  serviceTier?: string;
 }
 
 /** thread/list 响应。 */
@@ -141,6 +143,12 @@ export function mapThreadToConversation(thread: ThreadInfo): AgentConversation {
   }
   if (thread.model?.trim()) {
     conversation.model = thread.model;
+  }
+  if (thread.reasoningEffort?.trim()) {
+    conversation.reasoningEffort = thread.reasoningEffort;
+  }
+  if (thread.serviceTier?.trim()) {
+    conversation.serviceTier = thread.serviceTier;
   }
 
   return conversation;

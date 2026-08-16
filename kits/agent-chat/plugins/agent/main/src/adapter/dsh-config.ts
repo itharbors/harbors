@@ -1,8 +1,9 @@
 import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import type { AgentModelOption } from './base.js';
 
-export interface RelayModel { id: string; name: string; }
+export interface RelayModel extends AgentModelOption {}
 export interface DshRelayConfig { baseUrl?: string; apiKeyEnv?: string; api?: string; models: RelayModel[]; defaultModel?: string; }
 
 /** Read only the pi-ai relay profile from DeepSeek Harness. Secrets stay in its referenced environment variable. */
