@@ -32,6 +32,97 @@ function mockRes(): {
 }
 
 describe('panel assets', () => {
+  it('keeps same-named panel assets scoped to the requested Kit runtime', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-runtime-scope-'));
+    const defaultDir = path.join(root, 'default');
+    const agentDir = path.join(root, 'agent');
+    for (const [directory, marker] of [[defaultDir, 'default'], [agentDir, 'agent']] as const) {
+      fs.mkdirSync(directory, { recursive: true });
+      fs.writeFileSync(path.join(directory, 'index.html'), `<html><head><link rel="stylesheet" href="./index.css?theme=dark&sessionId=stale"></head><body><img src="image.png">${marker}</body></html>`);
+      fs.writeFileSync(path.join(directory, 'index.css'), `@import "./theme.css?sessionId=stale"; @font-face { src: url('./font.woff2?v=1&sessionId=stale#font'); } body { background: url(image.png); } /* ${marker}-css */`);
+      fs.writeFileSync(path.join(directory, 'theme.css'), `/* ${marker}-theme */`);
+      fs.writeFileSync(path.join(directory, 'index.js'), `import 'react'; import { marker } from './chunk.js?v=1&sessionId=stale'; export default { marker };`);
+      fs.writeFileSync(path.join(directory, 'chunk.js'), `export { nested } from "./nested.js?sessionId=stale"; export const marker = '${marker}-js';`);
+      fs.writeFileSync(path.join(directory, 'nested.js'), `export const nested = '${marker}-nested';`);
+      fs.writeFileSync(path.join(directory, 'font.woff2'), `${marker}-font`);
+      fs.writeFileSync(path.join(directory, 'image.png'), `${marker}-image`);
+    }
+
+    const source = new Map();
+    for (const [sessionId, directory] of [['client::default', defaultDir], ['client::agent-chat', agentDir]] as const) {
+      source.set(sessionId, {
+        sessionId,
+        panel: {
+          getRegistration(name: string) {
+            return name === 'plugin-list.list' ? {
+              name,
+              module: path.join(directory, 'index.html'),
+              owner: 'plugin-list',
+              constraints: {},
+            } : undefined;
+          },
+        },
+        plugin: { listLoaded: () => ['plugin-list'] },
+        i18n: {
+          getVisibleSnapshot() {
+            return { locale: 'zh-CN', defaultLocale: 'zh-CN', version: 0, currentMessages: {}, defaultMessages: {} };
+          },
+        },
+      });
+    }
+
+    const router = createPanelAssetRouter(source as never);
+    const html = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.html?sessionId=client%3A%3Adefault&sessionId=client%3A%3Aagent-chat' } as never, html.res);
+    expect(html.statusCode()).toBe(200);
+    expect(html.body()).toContain('>agent</body>');
+    expect(html.body()).not.toContain('>default</body>');
+    expect(html.body()).toContain('const sessionId = "client::agent-chat";');
+    expect(html.body()).toContain('./index.css?theme=dark&sessionId=client%3A%3Aagent-chat');
+    expect(html.body()).toContain('src="image.png?sessionId=client%3A%3Aagent-chat"');
+    expect(html.body()).not.toContain('sessionId=stale');
+
+    const script = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.js?sessionId=client%3A%3Aagent-chat' } as never, script.res);
+    expect(script.statusCode()).toBe(200);
+    expect(script.body()).toContain("import 'react'");
+    expect(script.body()).not.toContain('react?sessionId=');
+    expect(script.body()).toContain("./chunk.js?v=1&sessionId=client%3A%3Aagent-chat");
+    expect(script.body()).not.toContain('sessionId=stale');
+
+    const chunk = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/chunk.js?v=1&sessionId=client%3A%3Aagent-chat' } as never, chunk.res);
+    expect(chunk.statusCode()).toBe(200);
+    expect(chunk.body()).toContain('agent-js');
+    expect(chunk.body()).not.toContain('default-js');
+    expect(chunk.body()).toContain('./nested.js?sessionId=client%3A%3Aagent-chat');
+
+    const nested = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/nested.js?sessionId=client%3A%3Aagent-chat' } as never, nested.res);
+    expect(nested.statusCode()).toBe(200);
+    expect(nested.body()).toContain('agent-nested');
+
+    const css = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.css?theme=dark&sessionId=client%3A%3Aagent-chat' } as never, css.res);
+    expect(css.statusCode()).toBe(200);
+    expect(css.body()).toContain('./theme.css?sessionId=client%3A%3Aagent-chat');
+    expect(css.body()).toContain("./font.woff2?v=1&sessionId=client%3A%3Aagent-chat#font");
+    expect(css.body()).toContain('image.png?sessionId=client%3A%3Aagent-chat');
+    expect(css.body()).not.toContain('sessionId=stale');
+
+    const font = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/font.woff2?v=1&sessionId=client%3A%3Aagent-chat' } as never, font.res);
+    expect(font.statusCode()).toBe(200);
+    expect(font.body()).toBe('agent-font');
+
+    const image = mockRes();
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/image.png?sessionId=client%3A%3Aagent-chat' } as never, image.res);
+    expect(image.statusCode()).toBe(200);
+    expect(image.body()).toBe('agent-image');
+
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
   it('serves only manifest-declared public asset directories', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-assets-'));
     const pluginDir = path.join(root, 'plugin');

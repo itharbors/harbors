@@ -60,6 +60,7 @@ async function responseFrom(
     contentType: headers.get('content-type'),
     contentLength: headers.get('content-length'),
     nosniff: headers.get('x-content-type-options'),
+    cacheControl: headers.get('cache-control'),
   };
 }
 
@@ -74,6 +75,7 @@ describe('createClientAssetRouter', () => {
     const root = fixture({
       'index.html': '<script src="/assets/index.js"></script>',
       'assets/index.js': 'export const ready = true;',
+      'assets/chunk-abcd1234.js': 'export const chunk = true;',
     });
     const router = createClientAssetRouter(root);
 
@@ -84,6 +86,7 @@ describe('createClientAssetRouter', () => {
       body: 'export const ready = true;',
       contentLength: String(Buffer.byteLength('export const ready = true;')),
       nosniff: 'nosniff',
+      cacheControl: 'no-cache',
     });
     expect(asset.contentType).toContain('application/javascript');
 
@@ -93,6 +96,7 @@ describe('createClientAssetRouter', () => {
       status: 200,
       body: '',
       contentLength: String(Buffer.byteLength('export const ready = true;')),
+      cacheControl: 'no-cache',
     });
     expect(head.contentType).toContain('application/javascript');
 
@@ -102,8 +106,25 @@ describe('createClientAssetRouter', () => {
       status: 200,
       body: '<script src="/assets/index.js"></script>',
       nosniff: 'nosniff',
+      cacheControl: 'no-cache',
     });
     expect(spa.contentType).toContain('text/html');
+
+    const spaHead = await responseFrom(router, 'HEAD', '/workspace/one');
+    expect(spaHead).toMatchObject({
+      handled: true,
+      status: 200,
+      body: '',
+      cacheControl: 'no-cache',
+    });
+
+    const hashedAsset = await responseFrom(router, 'GET', '/assets/chunk-abcd1234.js');
+    expect(hashedAsset).toMatchObject({
+      handled: true,
+      status: 200,
+      body: 'export const chunk = true;',
+      cacheControl: undefined,
+    });
 
     await expect(responseFrom(router, 'GET', '/assets/%2e%2e/index.html')).resolves.toMatchObject({
       handled: true,

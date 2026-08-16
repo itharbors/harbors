@@ -23,12 +23,8 @@ export default {
       setters['conversation.changed']?.(data);
       return data;
     },
-    onConversationSelected(data: unknown) {
-      setters['conversation.selected']?.(data);
-      return data;
-    },
-    onMessageSent(data: unknown) {
-      setters['message.sent']?.(data);
+    onConversationUiChanged(data: unknown) {
+      setters['conversation.ui.changed']?.(data);
       return data;
     },
   },

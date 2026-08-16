@@ -49,6 +49,25 @@ describe('createPanelAssetRouter', () => {
     expect(html).toContain('Panel module must default-export a PanelDefinition object');
     expect(html).toContain('window.__panelDefinition = definition;');
     expect(html).toContain('window.editor = {');
+    expect(html).toContain('function createPanelMessageRequestError(payload)');
+    expect(html).toContain('throw createPanelMessageRequestError(payload);');
+    expect(html).toContain('requestError.code = errorBody.code;');
+    expect(html).not.toContain("new Error(payload.error || 'Panel message request failed')");
+    const errorFactoryStart = html.indexOf('function createPanelMessageRequestError(payload)');
+    const errorFactoryEnd = html.indexOf('function encodePanelAssetPath', errorFactoryStart);
+    expect(errorFactoryStart).toBeGreaterThan(-1);
+    expect(errorFactoryEnd).toBeGreaterThan(errorFactoryStart);
+    const errorFactorySource = html.slice(errorFactoryStart, errorFactoryEnd);
+    const createPanelMessageRequestError = new Function(
+      `${errorFactorySource}; return createPanelMessageRequestError;`,
+    )() as (payload: unknown) => Error & { code?: string; details?: unknown };
+    const panelError = createPanelMessageRequestError({
+      error: { code: 'RELAY_AUTH_FAILED', message: 'Relay 认证失败', details: { token: 'must-not-leak' } },
+    });
+    expect(panelError.message).toBe('Relay 认证失败');
+    expect(panelError.code).toBe('RELAY_AUTH_FAILED');
+    expect(panelError).not.toHaveProperty('details');
+    expect(String(panelError)).not.toContain('[object Object]');
     expect(html).toContain('const panelFileRuntime = (');
     expect(html).toContain('file: panelFileRuntime,');
     expect(html).not.toContain('editor.panel.define');

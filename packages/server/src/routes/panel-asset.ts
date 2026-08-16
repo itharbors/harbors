@@ -21,10 +21,20 @@ function safeDecodeURIComponent(value: string): string | null {
   }
 }
 
+function getSessionId(url: URL): string | null {
+  const values = url.searchParams.getAll('sessionId');
+  return values.length > 0 ? values[values.length - 1] : null;
+}
+
 type PanelAssetSource = PanelModule | Map<string, Editor>;
 
-function getRegistration(source: PanelAssetSource, panelName: string): PanelRegistration | undefined {
+function getRegistration(
+  source: PanelAssetSource,
+  panelName: string,
+  sessionId: string | null = null,
+): PanelRegistration | undefined {
   if (source instanceof Map) {
+    if (sessionId) return source.get(sessionId)?.panel.getRegistration(panelName);
     for (const editor of source.values()) {
       const reg = editor.panel.getRegistration(panelName);
       if (reg) return reg;
@@ -91,16 +101,22 @@ function emptyI18nSnapshot(): I18nVisibleSnapshot {
   };
 }
 
-function createPanelRuntimeScript(panelName: string, panelPluginName: string, initialSnapshot: I18nVisibleSnapshot): string {
+function createPanelRuntimeScript(
+  panelName: string,
+  panelPluginName: string,
+  initialSnapshot: I18nVisibleSnapshot,
+  sessionId: string | null,
+): string {
   const panelLiteral = escapeForScript(panelName);
   const panelPluginLiteral = escapeForScript(panelPluginName);
+  const sessionLiteral = escapeForScript(sessionId ?? '');
   const snapshotLiteral = escapeForScript(JSON.stringify(initialSnapshot));
   const panelFileRuntimeFactory = PANEL_FILE_RUNTIME_FACTORY_SOURCE.replace(/<\/script/gi, '<\\/script');
 
   return `<script type="module">
     const panelName = ${panelLiteral};
     const panelPluginName = ${panelPluginLiteral};
-    const sessionId = new URLSearchParams(window.location.search).get('sessionId') || '';
+    const sessionId = ${sessionLiteral};
     const panelFileRuntime = (${panelFileRuntimeFactory})(window, document);
     window.__panelI18n = {
       snapshot: JSON.parse(${snapshotLiteral}),
@@ -141,6 +157,22 @@ function createPanelRuntimeScript(panelName: string, panelPluginName: string, in
       const snapshot = window.__panelI18n.snapshot;
       const raw = snapshot.currentMessages[key] ?? snapshot.defaultMessages[key] ?? key;
       return raw.replace(/\\{(\\w+)\\}/g, (_, name) => String(params[name] ?? \`{\${name}}\`));
+    }
+
+    function createPanelMessageRequestError(payload) {
+      const errorBody = payload && typeof payload.error === 'object' && payload.error !== null
+        ? payload.error
+        : null;
+      const message = errorBody && typeof errorBody.message === 'string' && errorBody.message
+        ? errorBody.message
+        : typeof payload?.error === 'string' && payload.error
+          ? payload.error
+          : 'Panel message request failed';
+      const requestError = new Error(message);
+      if (errorBody && typeof errorBody.code === 'string' && errorBody.code) {
+        requestError.code = errorBody.code;
+      }
+      return requestError;
     }
 
     function encodePanelAssetPath(relativePath) {
@@ -225,7 +257,7 @@ function createPanelRuntimeScript(panelName: string, panelPluginName: string, in
           });
           const payload = await response.json();
           if (!response.ok) {
-            throw new Error(payload.error || 'Panel message request failed');
+            throw createPanelMessageRequestError(payload);
           }
           return payload.result;
         },
@@ -307,7 +339,9 @@ function createPanelRuntimeScript(panelName: string, panelPluginName: string, in
       panelKey: panelName,
     };
 
-    const panelModule = await import('./index.js');
+    const panelModule = sessionId
+      ? await import(\`./index.js?sessionId=\${encodeURIComponent(sessionId)}\`)
+      : await import('./index.js');
     const definition = panelModule.default;
     if (!definition || typeof definition !== 'object') {
       throw new Error('Panel module must default-export a PanelDefinition object');
@@ -322,6 +356,88 @@ function injectRuntimeIntoHtml(html: string, runtimeScript: string): string {
     return html.replace(/<body(\s[^>]*)?>/i, (match) => `${match}\n${runtimeScript}`);
   }
   return `${runtimeScript}\n${html}`;
+}
+
+function isSessionIdQueryPart(part: string): boolean {
+  const separator = part.indexOf('=');
+  const rawName = separator === -1 ? part : part.slice(0, separator);
+  return safeDecodeURIComponent(rawName.replace(/\+/gu, ' ')) === 'sessionId';
+}
+
+function scopeRelativeAssetUrl(reference: string, sessionId: string | null): string {
+  if (!sessionId) return reference;
+
+  const hashIndex = reference.indexOf('#');
+  const hash = hashIndex === -1 ? '' : reference.slice(hashIndex);
+  const withoutHash = hashIndex === -1 ? reference : reference.slice(0, hashIndex);
+  const queryIndex = withoutHash.indexOf('?');
+  const pathname = queryIndex === -1 ? withoutHash : withoutHash.slice(0, queryIndex);
+  if (
+    !pathname
+    || pathname.startsWith('/')
+    || /^[a-z][a-z\d+.-]*:/iu.test(pathname)
+  ) return reference;
+
+  const query = queryIndex === -1 ? '' : withoutHash.slice(queryIndex + 1);
+  const queryParts = query
+    ? query.split('&').filter((part) => !isSessionIdQueryPart(part))
+    : [];
+  queryParts.push(`sessionId=${encodeURIComponent(sessionId)}`);
+  return `${pathname}?${queryParts.join('&')}${hash}`;
+}
+
+function scopeRelativePanelAssets(html: string, sessionId: string | null): string {
+  return html.replace(
+    /(\b(?:href|src)\s*=\s*)(["'])([^"']+)\2/giu,
+    (_match, prefix: string, quote: string, reference: string) => (
+      `${prefix}${quote}${scopeRelativeAssetUrl(reference, sessionId)}${quote}`
+    ),
+  );
+}
+
+function scopeJavaScriptImports(source: string, sessionId: string | null): string {
+  const scopeModuleSpecifier = (reference: string) => (
+    /^\.\.?\//u.test(reference)
+      ? scopeRelativeAssetUrl(reference, sessionId)
+      : reference
+  );
+  const scopeSpecifier = (
+    _match: string,
+    prefix: string,
+    quote: string,
+    reference: string,
+    suffix = '',
+  ) => `${prefix}${quote}${scopeModuleSpecifier(reference)}${quote}${suffix}`;
+
+  return source
+    .replace(/(\b(?:from|import)\s*)(["'])([^"']+)\2/gu, scopeSpecifier)
+    .replace(/(\bimport\s*\(\s*)(["'])([^"']+)\2(\s*\))/gu, scopeSpecifier);
+}
+
+function scopeCssAssets(source: string, sessionId: string | null): string {
+  const withImports = source.replace(
+    /(@import\s+)(["'])([^"']+)\2/giu,
+    (_match, prefix: string, quote: string, reference: string) => (
+      `${prefix}${quote}${scopeRelativeAssetUrl(reference, sessionId)}${quote}`
+    ),
+  );
+  return withImports.replace(
+    /(\burl\(\s*)(["']?)([^"'()]+)\2(\s*\))/giu,
+    (_match, prefix: string, quote: string, reference: string, suffix: string) => (
+      `${prefix}${quote}${scopeRelativeAssetUrl(reference.trim(), sessionId)}${quote}${suffix}`
+    ),
+  );
+}
+
+function readPanelAsset(filePath: string, sessionId: string | null): Buffer | string {
+  const extension = path.extname(filePath).toLowerCase();
+  if (extension !== '.css' && extension !== '.js' && extension !== '.mjs') {
+    return readFileSync(filePath);
+  }
+  const source = readFileSync(filePath, 'utf-8');
+  return extension === '.css'
+    ? scopeCssAssets(source, sessionId)
+    : scopeJavaScriptImports(source, sessionId);
 }
 
 export function createPanelAssetRouter(source: PanelAssetSource) {
@@ -346,7 +462,7 @@ export function createPanelAssetRouter(source: PanelAssetSource) {
         res.end(JSON.stringify({ error: 'Plugin asset not found' }));
         return;
       }
-      const editor = getEditorForPlugin(source, pluginName, url.searchParams.get('sessionId'));
+      const editor = getEditorForPlugin(source, pluginName, getSessionId(url));
       const filePath = editor ? resolvePluginAsset(editor, pluginName, filename) : null;
       if (!filePath) {
         res.statusCode = 404;
@@ -371,7 +487,8 @@ export function createPanelAssetRouter(source: PanelAssetSource) {
         return;
       }
 
-      const reg = getRegistration(source, panelName);
+      const sessionId = getSessionId(url);
+      const reg = getRegistration(source, panelName, sessionId);
       if (!reg) {
         res.statusCode = 404;
         res.setHeader('Content-Type', 'application/json');
@@ -389,11 +506,11 @@ export function createPanelAssetRouter(source: PanelAssetSource) {
       }
 
       if (relativePath === 'index.html') {
-        const editor = getEditor(source, panelName, url.searchParams.get('sessionId'));
+        const editor = getEditor(source, panelName, sessionId);
         const initialSnapshot = editor?.i18n.getVisibleSnapshot() ?? emptyI18nSnapshot();
         const html = injectRuntimeIntoHtml(
-          readFileSync(reg.module, 'utf-8'),
-          createPanelRuntimeScript(panelName, reg.owner, initialSnapshot),
+          scopeRelativePanelAssets(readFileSync(reg.module, 'utf-8'), sessionId),
+          createPanelRuntimeScript(panelName, reg.owner, initialSnapshot, sessionId),
         );
         res.statusCode = 200;
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -419,7 +536,7 @@ export function createPanelAssetRouter(source: PanelAssetSource) {
 
       res.statusCode = 200;
       res.setHeader('Content-Type', getContentType(realFilePath));
-      res.end(readFileSync(realFilePath));
+      res.end(readPanelAsset(realFilePath, sessionId));
       return;
     }
 

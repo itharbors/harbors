@@ -247,8 +247,8 @@ describe('Server Integration', () => {
       }),
     });
     expect(failed.status).toBe(500);
-    expect(await failed.json()).toMatchObject({
-      error: { code: 'INTERNAL_ERROR' },
+    expect(await failed.json()).toEqual({
+      error: { code: 'MESSAGE_REQUEST_FAILED', message: 'handler exploded', details: null },
     });
     consoleError.mockRestore();
   });

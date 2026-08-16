@@ -1,11 +1,19 @@
 import './panel';
 
+const DRAG_THRESHOLD = 12;
+
 export class PanelGroup extends HTMLElement {
   static observedAttributes = ['data-drop-edge', 'data-drop-target-tab-id', 'data-drop-placement'];
 
   private observer: MutationObserver | null = null;
   private suppressClickUntil = 0;
-  private touchTabIndex: number | null = null;
+  private pointerState: {
+    pointerId: number;
+    tabIndex: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null = null;
 
   connectedCallback() {
     if (!this.shadowRoot) {
@@ -69,7 +77,6 @@ export class PanelGroup extends HTMLElement {
         <button
           class="tab-item${active ? ' active' : ''}"
           type="button"
-          draggable="true"
           data-index="${index}"
           data-tab-id="${escapeAttr(tabId)}"
         >
@@ -103,6 +110,7 @@ export class PanelGroup extends HTMLElement {
         .tab-bar {
           display: flex;
           flex-shrink: 0;
+          touch-action: pan-x;
           height: var(--panel-group-tabs-height, 28px);
           min-width: 0;
           overflow-x: auto;
@@ -125,7 +133,8 @@ export class PanelGroup extends HTMLElement {
           white-space: nowrap;
           min-width: 0;
           cursor: pointer;
-          touch-action: manipulation;
+          user-select: none;
+          -webkit-user-drag: none;
           border-radius: var(--ce-tab-radius, var(--ce-radius-sm, 8px)) var(--ce-tab-radius, var(--ce-radius-sm, 8px)) 0 0;
         }
         .tab-item.active {
@@ -244,29 +253,53 @@ export class PanelGroup extends HTMLElement {
       </div>
     `;
 
-    const tabBar = this.shadowRoot!.querySelector('.tab-bar')!;
-    const activateTouchTab = (event: Event) => {
-      if (performance.now() < this.suppressClickUntil) return;
+    const tabBar = this.shadowRoot!.querySelector<HTMLElement>('.tab-bar')!;
+    tabBar.addEventListener('pointerdown', (event) => {
+      if (this.pointerState) return;
+
       const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
       if (!tab) return;
-      this.suppressClickUntil = performance.now() + 500;
-      this.activate(Number(tab.dataset.index || '0'));
-    };
-    tabBar.addEventListener('pointerup', (event) => {
-      activateTouchTab(event);
+
+      this.pointerState = {
+        pointerId: event.pointerId,
+        tabIndex: Number(tab.dataset.index || '0'),
+        startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+      };
+
+      try {
+        tab.setPointerCapture?.(event.pointerId);
+      } catch {
+        // Pointer capture is an enhancement; the gesture still works while the pointer stays in the tab bar.
+      }
     });
-    this.shadowRoot!.querySelectorAll<HTMLElement>('.tab-item').forEach((tab) => {
-      tab.addEventListener('touchstart', () => {
-        this.touchTabIndex = Number(tab.dataset.index || '0');
-      }, { passive: true });
-      tab.addEventListener('touchend', () => {
-        const index = this.touchTabIndex;
-        this.touchTabIndex = null;
-        if (index === null || performance.now() < this.suppressClickUntil) return;
+
+    tabBar.addEventListener('pointermove', (event) => {
+      const state = this.pointerState;
+      if (!state || state.pointerId !== event.pointerId || state.moved) return;
+
+      if (Math.hypot(event.clientX - state.startX, event.clientY - state.startY) >= DRAG_THRESHOLD) {
+        state.moved = true;
+      }
+    });
+
+    tabBar.addEventListener('pointerup', (event) => {
+      const state = this.pointerState;
+      if (!state || state.pointerId !== event.pointerId) return;
+
+      this.pointerState = null;
+      this.suppressClickUntil = performance.now() + 500;
+      if (state.moved) return;
+
+      this.activate(state.tabIndex);
+    });
+
+    tabBar.addEventListener('pointercancel', (event) => {
+      if (this.pointerState?.pointerId === event.pointerId) {
+        this.pointerState = null;
         this.suppressClickUntil = performance.now() + 500;
-        this.activate(index);
-      }, { passive: true });
-      tab.addEventListener('touchcancel', () => { this.touchTabIndex = null; }, { passive: true });
+      }
     });
 
     tabBar.addEventListener('click', (event) => {
