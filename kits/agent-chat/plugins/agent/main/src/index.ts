@@ -186,8 +186,6 @@ editor.plugin.define({
           runtime?.message.broadcast('message.status', { conversationId, messageId: aiMsg.id, status });
         });
       } catch (err) {
-        const index = convMessages.indexOf(userMsg);
-        if (index !== -1) convMessages.splice(index, 1);
         const aiIndex = convMessages.indexOf(aiMsg);
         if (aiIndex !== -1) convMessages.splice(aiIndex, 1);
         throw err;

@@ -53,6 +53,9 @@ export class HarborsAdapter implements AgentAdapter {
     if (model) session.model = model;
     session.messages.push({ id: randomUUID(), role: 'user', content, timestamp: now });
     if (session.title === '未命名对话') session.title = content.trim().slice(0, 48) || session.title;
+    // 先保存用户输入，避免工具循环、超时或进程中断时丢失用户消息。
+    session.updatedAt = now;
+    await this.save(session, this.abortController.signal);
     let response: string;
     try {
       response = await this.runTurn(session.messages, session.model, session.project, onStatus);
