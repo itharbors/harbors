@@ -289,73 +289,120 @@ html, body, #panel-root {
 .chat-message-content ul, .chat-message-content ol {
   padding-left: 1.3em;
 }
+.markdown-body {
+  color: #c8cfda;
+  line-height: 1.65;
+}
+.markdown-body p {
+  margin: .55em 0;
+}
 .markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
-  margin: .6em 0 .3em;
-  line-height: 1.3;
-  color: #f0f4fa;
+  margin: 1em 0 .4em;
+  line-height: 1.35;
+  color: #e7ebf2;
+  font-weight: 600;
+  letter-spacing: -.01em;
 }
 .markdown-body h1 {
   font-size: 1.4em;
 }
 .markdown-body h2 {
-  font-size: 1.25em;
+  padding-bottom: .35em;
+  border-bottom: 1px solid #303640;
+  font-size: 1.24em;
 }
 .markdown-body h3 {
-  font-size: 1.12em;
+  font-size: 1.1em;
+}
+.markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  font-size: 1em;
 }
 .markdown-body blockquote {
-  margin: .5em 0;
-  padding: .3em .9em;
-  border-left: 3px solid #4a6fa5;
-  background: rgba(74, 111, 165, .12);
-  color: #b8c4d4;
+  margin: .7em 0;
+  padding: .35em .95em;
+  border-left: 2px solid #6689c4;
+  background: rgba(102, 137, 196, .08);
+  color: #aeb8c6;
 }
 .markdown-body blockquote p {
   margin: .2em 0;
 }
 .markdown-body a {
-  color: #7db4ff;
+  color: #9fb7ff;
   text-decoration: underline;
+  text-decoration-color: rgba(159, 183, 255, .55);
   text-underline-offset: 2px;
 }
 .markdown-body a:hover {
-  color: #a9ccff;
+  color: #c2ceff;
+  text-decoration-color: currentColor;
 }
 .markdown-body hr {
-  margin: .8em 0;
+  margin: 1em 0;
   border: 0;
-  border-top: 1px solid #3a4351;
+  border-top: 1px solid #303640;
 }
 .markdown-body del {
-  color: #8a93a0;
+  color: #7f8998;
+}
+.markdown-body code {
+  border-radius: 4px;
+  background: rgba(142, 150, 170, .14);
+  padding: .14em .34em;
+  color: #d6c8ff;
+  font-size: .9em;
+}
+.markdown-body pre {
+  max-width: 100%;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  border: 1px solid #2e3440;
+  border-radius: 7px;
+  background: #16181d;
+  padding: 12px 13px;
+  color: #cbd3df;
+  line-height: 1.55;
+}
+.markdown-body pre code {
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  font-size: .88em;
 }
 .markdown-body table {
   width: 100%;
+  overflow: hidden;
   border-collapse: collapse;
-  margin: .5em 0;
+  margin: .7em 0;
   font-size: .92em;
 }
 .markdown-body th, .markdown-body td {
-  border: 1px solid #3a4351;
-  padding: 5px 9px;
+  border: 1px solid #303640;
+  padding: 6px 10px;
   text-align: left;
 }
 .markdown-body th {
-  background: #2a313d;
-  color: #e8eef7;
+  background: #242832;
+  color: #e4e8ef;
   font-weight: 600;
 }
 .markdown-body tr:nth-child(even) td {
-  background: rgba(255, 255, 255, .02);
+  background: rgba(255, 255, 255, .018);
 }
 .markdown-body ul, .markdown-body ol {
-  margin: .3em 0;
+  margin: .45em 0;
+  padding-left: 1.35em;
 }
 .markdown-body li {
-  margin: .15em 0;
+  margin: .2em 0;
+}
+.markdown-body li::marker {
+  color: #7f96c4;
 }
 .markdown-body input[type="checkbox"] {
   margin-right: .4em;
+  accent-color: #8ea8ef;
 }
 .new-thread-context {
   display: grid;
@@ -890,14 +937,14 @@ html, body, #panel-root {
 .agent-step .markdown-body {
   color: inherit;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.55;
 }
 .agent-step .markdown-body p {
-  margin: .2em 0;
+  margin: .3em 0;
 }
 .agent-step .markdown-body h1, .agent-step .markdown-body h2, .agent-step .markdown-body h3, .agent-step .markdown-body h4, .agent-step .markdown-body h5, .agent-step .markdown-body h6 {
   color: #b9c4d2;
-  margin: .45em 0 .2em;
+  margin: .6em 0 .25em;
 }
 .agent-step .markdown-body h1 {
   font-size: 1.22em;
@@ -909,23 +956,22 @@ html, body, #panel-root {
   font-size: 1.04em;
 }
 .agent-step .markdown-body code {
-  background: rgba(126, 157, 198, .1);
-  color: #b7c5d7;
+  background: rgba(142, 150, 170, .12);
+  color: #c9bbed;
 }
 .agent-step .markdown-body pre {
-  margin: .4em 0;
-  border: 0;
-  border-left: 2px solid #354356;
-  border-radius: 0;
-  background: rgba(10, 15, 22, .24);
-  padding: 7px 9px;
+  margin: .5em 0;
+  border: 1px solid #2e3440;
+  border-radius: 6px;
+  background: #16181d;
+  padding: 8px 10px;
   font-size: 11px;
-  line-height: 1.45;
+  line-height: 1.5;
 }
 .agent-step .markdown-body blockquote {
-  margin: .4em 0;
+  margin: .5em 0;
   border-left-color: #566b87;
-  background: rgba(74, 111, 165, .08);
+  background: rgba(74, 111, 165, .06);
   color: #9daaba;
 }
 .agent-final-response .chat-message-content {
@@ -1072,6 +1118,10 @@ html, body, #panel-root {
     *, ::before, ::after, ::backdrop {
       --tw-rotate-x: initial;
       --tw-rotate-y: initial;
+.agent-step .markdown-body h2 {
+  padding-bottom: .25em;
+  border-bottom-color: #303640;
+}
       --tw-rotate-z: initial;
       --tw-skew-x: initial;
       --tw-skew-y: initial;
