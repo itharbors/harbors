@@ -2,7 +2,7 @@ import { appendFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
 import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
@@ -59,6 +59,31 @@ interface SurfaceSelection {
   end: number;
   nodes: number[];
   shadowedTokenCount: number;
+}
+
+interface AnthropicUsage {
+  input_tokens?: unknown;
+  output_tokens?: unknown;
+  cache_creation_input_tokens?: unknown;
+  cache_read_input_tokens?: unknown;
+}
+
+interface OpenAiUsage {
+  prompt_tokens?: unknown;
+  completion_tokens?: unknown;
+  total_tokens?: unknown;
+  prompt_tokens_details?: { cached_tokens?: unknown };
+  completion_tokens_details?: { reasoning_tokens?: unknown };
+}
+
+interface AnthropicResponsePayload {
+  content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
+  usage?: AnthropicUsage;
+}
+
+interface OpenAiResponsePayload {
+  choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }>;
+  usage?: OpenAiUsage;
 }
 
 interface AppendEventOptions {
@@ -280,12 +305,14 @@ export class HarborsAdapter implements AgentAdapter {
     const model = session.model || config.modelId;
     const contextWindow = contextWindowFor(config.models, model);
     const usedTokens = measureSurface(session, config.api).totalTokens;
+    const tokenUsage = sumTokenUsage(session.events);
     return {
       model,
       contextWindow,
       usedTokens,
       usageRatio: Math.min(1, usedTokens / contextWindow),
       estimated: true,
+      ...(tokenUsage ? { tokenUsage } : {}),
     };
   }
 
@@ -339,11 +366,12 @@ export class HarborsAdapter implements AgentAdapter {
         const messages = toAnthropicMessages(session.events, session.surface);
         const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }) }, retry, session, turn, step, onStatus, signal);
         overflowRetries = 0;
-        const payload = await response.json() as { content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }> };
+        const payload = await response.json() as AnthropicResponsePayload;
         throwIfAborted(signal);
         const blocks = payload.content || [];
         const calls = blocks.filter((block) => block.type === 'tool_use' && block.id && block.name).map((call) => ({ id: call.id!, name: call.name!, input: call.input || {}, arguments: boundedJson(call.input || {}) }));
-        await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: blocks, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
+        const usage = normalizeAnthropicUsage(payload.usage);
+        await this.appendEvent(session, 'assistant/message', { turn, step, ...(usage ? { usage } : {}), message: { role: 'assistant', content: blocks, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
         if (!calls.length) {
           const text = blocks.filter((block) => block.type === 'text').map((block) => block.text || '').join('');
           if (!text) throw new Error('Harbors agent returned no text response');
@@ -392,12 +420,13 @@ export class HarborsAdapter implements AgentAdapter {
         const messages = toOpenAiMessages(session.events, session.surface);
         const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
         overflowRetries = 0;
-        const payload = await response.json() as { choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }> };
+        const payload = await response.json() as OpenAiResponsePayload;
         throwIfAborted(signal);
         const message = payload.choices?.[0]?.message;
         if (!message) throw new Error('Harbors agent returned no message');
         const calls = (message.tool_calls || []).filter((call) => call.id && call.function?.name).map((call) => ({ id: call.id!, name: call.function!.name!, input: parseToolArguments(call.function!.arguments), arguments: boundedText(call.function!.arguments || '{}') }));
-        await this.appendEvent(session, 'assistant/message', { turn, step, message: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
+        const usage = normalizeOpenAiUsage(payload.usage);
+        await this.appendEvent(session, 'assistant/message', { turn, step, ...(usage ? { usage } : {}), message: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
         if (!calls.length) {
           const text = textContent(message.content);
           if (!text) throw new Error('Harbors agent returned no text response');
@@ -539,12 +568,12 @@ export class HarborsAdapter implements AgentAdapter {
       const startEvent = await this.appendEvent(session, 'compaction/start', lifecycle);
       try {
         const summary = await this.summarizeContext(session, selection.nodes, model, turn, step, policy.maxTokens, onStatus, signal);
-        const summaryTextValue = frameSummary(summary);
+        const summaryTextValue = frameSummary(summary.text);
         const summaryTokens = estimateTextTokens(summaryTextValue);
         if (summaryTokens >= selection.shadowedTokenCount) {
           throw new Error(`summary is not smaller than the shadowed content (${summaryTokens} estimated tokens >= ${selection.shadowedTokenCount})`);
         }
-        const summaryEvent = await this.appendEvent(session, 'compaction/summary', { ...lifecycle, summary: summaryTextValue, provider: 'harbors', model, maxTokens: policy.maxTokens, shadowedTokenCount: selection.shadowedTokenCount });
+        const summaryEvent = await this.appendEvent(session, 'compaction/summary', { ...lifecycle, summary: summaryTextValue, provider: 'harbors', model, maxTokens: policy.maxTokens, shadowedTokenCount: selection.shadowedTokenCount, ...(summary.usage ? { usage: summary.usage } : {}) });
         await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: summaryTextValue }], source: { kind: 'plugin', plugin: 'agent', purpose: 'context-compaction' }, role: 'user', id: randomUUID() }, { surfaceOp: { op: 'replace', start: selection.start, end: selection.end }, sourceEventSeqs: [startEvent.seq, summaryEvent.seq, ...selection.nodes] });
         await this.appendEvent(session, 'compaction/end', lifecycle);
         changed = true;
@@ -578,7 +607,7 @@ export class HarborsAdapter implements AgentAdapter {
     return count;
   }
 
-  private async summarizeContext(session: StoredSession, nodes: number[], model: string, turn: number | null, step: number, maxTokens: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+  private async summarizeContext(session: StoredSession, nodes: number[], model: string, turn: number | null, step: number, maxTokens: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<{ text: string; usage?: AgentTokenUsage }> {
     const config = await this.config();
     if (!config.baseUrl || !config.apiKey) throw new Error('cannot compact context without a configured relay');
     const instruction = COMPACTION_INSTRUCTION;
@@ -594,12 +623,13 @@ export class HarborsAdapter implements AgentAdapter {
       ? { method: 'POST', headers: { 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: maxTokens, messages }) }
       : { method: 'POST', headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages }) };
     const response = await this.requestRelay(url, init, { ...config.retry, enabled: false }, session, turn, step, onStatus, signal);
-    const payload = await response.json() as { content?: Array<{ type?: string; text?: string }>; choices?: Array<{ message?: { content?: unknown } }> };
+    const payload = await response.json() as AnthropicResponsePayload & OpenAiResponsePayload;
+    const usage = config.api === 'anthropic-messages' ? normalizeAnthropicUsage(payload.usage) : normalizeOpenAiUsage(payload.usage);
     const output = config.api === 'anthropic-messages'
       ? (payload.content || []).filter((block) => block.type === 'text').map((block) => block.text || '').join('')
       : textContent(payload.choices?.[0]?.message?.content);
     if (!output.trim()) throw new Error('context compaction produced no summary');
-    return boundedSummary(output.trim());
+    return { text: boundedSummary(output.trim()), ...(usage ? { usage } : {}) };
   }
 
   private async config(): Promise<{ baseUrl: string; apiKey?: string; api: string; modelId: string; models: RelayModel[]; defaultModel?: string; retry: RelayRetryConfig }> {
@@ -835,6 +865,80 @@ function toAnthropicMessages(events: AgentTraceEvent[], surface: readonly number
 }
 
 function isAppendSurfaceEvent(event: AgentTraceEvent): boolean { return event.surfaceOp === undefined || event.surfaceOp === 'append'; }
+
+function normalizeAnthropicUsage(value: AnthropicUsage | undefined): AgentTokenUsage | undefined {
+  if (!value) return undefined;
+  return makeTokenUsage({
+    inputTokens: tokenNumber(value.input_tokens),
+    outputTokens: tokenNumber(value.output_tokens),
+    cacheReadTokens: tokenNumber(value.cache_read_input_tokens),
+    cacheWriteTokens: tokenNumber(value.cache_creation_input_tokens),
+  });
+}
+
+function normalizeOpenAiUsage(value: OpenAiUsage | undefined): AgentTokenUsage | undefined {
+  if (!value) return undefined;
+  const promptTokens = tokenNumber(value.prompt_tokens);
+  const cacheReadTokens = tokenNumber(value.prompt_tokens_details?.cached_tokens);
+  const completionTokens = tokenNumber(value.completion_tokens);
+  return makeTokenUsage({
+    // OpenAI 的 prompt_tokens 包含缓存 Token，这里拆成互斥字段。
+    inputTokens: promptTokens === undefined ? undefined : Math.max(0, promptTokens - (cacheReadTokens || 0)),
+    outputTokens: completionTokens,
+    totalTokens: tokenNumber(value.total_tokens),
+    cacheReadTokens,
+    reasoningTokens: tokenNumber(value.completion_tokens_details?.reasoning_tokens),
+  });
+}
+
+function makeTokenUsage(value: Partial<AgentTokenUsage>): AgentTokenUsage | undefined {
+  if (!Object.values(value).some((entry) => entry !== undefined)) return undefined;
+  const inputTokens = value.inputTokens || 0;
+  const outputTokens = value.outputTokens || 0;
+  const cacheReadTokens = value.cacheReadTokens || 0;
+  const cacheWriteTokens = value.cacheWriteTokens || 0;
+  return {
+    inputTokens,
+    outputTokens,
+    totalTokens: value.totalTokens ?? inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens,
+    ...(value.cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(value.cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(value.reasoningTokens !== undefined ? { reasoningTokens: value.reasoningTokens || 0 } : {}),
+  };
+}
+
+function tokenNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? Math.floor(value) : undefined;
+}
+
+function sumTokenUsage(events: AgentTraceEvent[]): AgentTokenUsage | undefined {
+  let total: AgentTokenUsage | undefined;
+  for (const event of events) {
+    if (event.type !== 'assistant/message' && event.type !== 'compaction/summary') continue;
+    const value = event.data.usage;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) continue;
+    const usage = makeTokenUsage({
+      inputTokens: tokenNumber((value as { inputTokens?: unknown }).inputTokens),
+      outputTokens: tokenNumber((value as { outputTokens?: unknown }).outputTokens),
+      totalTokens: tokenNumber((value as { totalTokens?: unknown }).totalTokens),
+      cacheReadTokens: tokenNumber((value as { cacheReadTokens?: unknown }).cacheReadTokens),
+      cacheWriteTokens: tokenNumber((value as { cacheWriteTokens?: unknown }).cacheWriteTokens),
+      reasoningTokens: tokenNumber((value as { reasoningTokens?: unknown }).reasoningTokens),
+    });
+    if (!usage) continue;
+    if (!total) {
+      total = { ...usage };
+      continue;
+    }
+    total.inputTokens += usage.inputTokens;
+    total.outputTokens += usage.outputTokens;
+    total.totalTokens += usage.totalTokens;
+    if (usage.cacheReadTokens !== undefined) total.cacheReadTokens = (total.cacheReadTokens || 0) + usage.cacheReadTokens;
+    if (usage.cacheWriteTokens !== undefined) total.cacheWriteTokens = (total.cacheWriteTokens || 0) + usage.cacheWriteTokens;
+    if (usage.reasoningTokens !== undefined) total.reasoningTokens = (total.reasoningTokens || 0) + usage.reasoningTokens;
+  }
+  return total;
+}
 
 function foldSurface(events: AgentTraceEvent[]): number[] {
   let surface: number[] = [];

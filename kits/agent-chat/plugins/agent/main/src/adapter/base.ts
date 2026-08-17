@@ -57,6 +57,16 @@ export interface AgentModelOption extends AgentOption {
   contextWindow?: number;
 }
 
+/** 单次模型请求的真实 Token 用量；字段名统一为 Harness 风格。 */
+export interface AgentTokenUsage {
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  reasoningTokens?: number;
+}
+
 /** 当前会话的上下文容量与估算占用。 */
 export interface AgentContextUsage {
   model: string;
@@ -64,6 +74,8 @@ export interface AgentContextUsage {
   usedTokens: number;
   usageRatio: number;
   estimated: true;
+  /** 已记录的模型请求累计用量；历史记录没有 provider usage 时省略。 */
+  tokenUsage?: AgentTokenUsage;
 }
 
 export interface AgentTurnOptions {
