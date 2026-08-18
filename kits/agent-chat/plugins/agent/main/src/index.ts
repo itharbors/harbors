@@ -1,4 +1,5 @@
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
+import { randomUUID } from 'node:crypto';
+import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
 import { HarborsAdapter } from './adapter/harbors.js';
 
@@ -14,14 +15,7 @@ interface Conversation extends AgentConversation {
   active?: boolean;
 }
 
-interface ChatMessage extends AgentChatMessage {
-  timestamp?: string;
-}
-
 let conversations: Conversation[] = [];
-let messages = new Map<string, ChatMessage[]>();
-let loadedMessageIds = new Set<string>();
-let pendingMessageLoads = new Map<string, Promise<ChatMessage[]>>();
 let activeMessageIds = new Map<string, string>();
 interface PendingPermissionRequest {
   requestId: string;
@@ -43,7 +37,6 @@ interface PendingPermissionState {
 }
 
 let pendingPermissionRequests = new Map<string, PendingPermissionState>();
-let nextMsgId = 1;
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
 const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
 const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
@@ -100,31 +93,6 @@ function selectedOptions(options: AgentOptions, settings: AgentTurnOptions): Age
     sandboxMode: settings.sandboxMode || options.permissions?.defaultSandboxMode || DEFAULT_SANDBOX_MODE,
     approvalPolicy: settings.approvalPolicy || options.permissions?.defaultApprovalPolicy || DEFAULT_APPROVAL_POLICY,
   };
-}
-
-function copyMessages(conversationId: string): ChatMessage[] {
-  return (messages.get(conversationId) || []).map((message) => ({ ...message }));
-}
-
-async function ensureMessages(conversationId: string): Promise<ChatMessage[]> {
-  if (loadedMessageIds.has(conversationId)) return messages.get(conversationId) || [];
-
-  const pending = pendingMessageLoads.get(conversationId);
-  if (pending) return pending;
-
-  const route = parseConversationId(conversationId);
-  const task = requireAdapter(route.source)
-    .getMessages(route.adapterId)
-    .then((result) => {
-      const loaded = result.map((message) => ({ ...message }));
-      messages.set(conversationId, loaded);
-      loadedMessageIds.add(conversationId);
-      return loaded;
-    })
-    .finally(() => pendingMessageLoads.delete(conversationId));
-
-  pendingMessageLoads.set(conversationId, task);
-  return task;
 }
 
 async function refreshConversations(): Promise<Conversation[]> {
@@ -243,15 +211,29 @@ editor.plugin.define({
       runtime = null;
       adapters = null;
       conversations = [];
-      messages = new Map();
-      loadedMessageIds = new Set();
-      pendingMessageLoads = new Map();
       activeMessageIds = new Map();
       pendingPermissionRequests = new Map();
-      nextMsgId = 1;
     },
   },
   methods: {
+    async listDirectory(dir?: string) {
+      const os = await import('node:os');
+      const fs = await import('node:fs/promises');
+      const path = await import('node:path');
+      const base = dir && dir.trim() ? path.resolve(dir) : (process.env.HARBORS_AGENT_WORKSPACE || process.cwd() || os.homedir());
+      let entries: import('node:fs').Dirent[] = [];
+      try {
+        entries = await fs.readdir(base, { withFileTypes: true });
+      } catch (err) {
+        throw new Error(`无法读取目录：${err instanceof Error ? err.message : String(err)}`);
+      }
+      const directories = entries
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.'))
+        .map((entry) => ({ name: entry.name, path: path.join(base, entry.name) }))
+        .sort((left, right) => left.name.localeCompare(right.name));
+      const parent = path.dirname(base);
+      return { path: base, parent: parent === base ? null : parent, home: os.homedir(), directories };
+    },
     async listConversations() {
       return refreshConversations();
     },
@@ -313,8 +295,6 @@ editor.plugin.define({
       const result = await requireAdapter(source).createConversation(project, options);
       const conv: Conversation = { ...result, sandboxMode: result.sandboxMode || options.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: result.approvalPolicy || options.approvalPolicy || DEFAULT_APPROVAL_POLICY, id: conversationId(source, result.id), adapterId: result.id, source };
       conversations.unshift(conv);
-      messages.set(conv.id, []);
-      loadedMessageIds.add(conv.id);
       broadcastConversations();
       return { ...conv };
     },
@@ -322,9 +302,6 @@ editor.plugin.define({
       const route = parseConversationId(id);
       await requireAdapter(route.source).deleteConversation(route.adapterId);
       conversations = conversations.filter((conversation) => conversation.id !== id);
-      messages.delete(id);
-      loadedMessageIds.delete(id);
-      pendingMessageLoads.delete(id);
       broadcastConversations();
       return id;
     },
@@ -340,10 +317,6 @@ editor.plugin.define({
       conversation.title = updated.title;
       broadcastConversations();
       return { ...conversation };
-    },
-    async getMessages(conversationId: string) {
-      await ensureMessages(conversationId);
-      return copyMessages(conversationId);
     },
     async getConversationTrace(conversationId: string, turnId?: string): Promise<AgentTraceEvent[]> {
       const route = parseConversationId(conversationId);
@@ -363,46 +336,30 @@ editor.plugin.define({
       if (!conversations.some((conversation) => conversation.id === conversationId)) {
         throw new Error('[agent] conversation does not exist');
       }
-      const convMessages = await ensureMessages(conversationId);
-      const userMsg: ChatMessage = {
-        id: `msg-${nextMsgId++}`,
-        role: 'user',
-        content,
-        timestamp: new Date().toISOString(),
-      };
-      convMessages.push(userMsg);
-      const aiMsg: ChatMessage = {
-        id: `msg-${nextMsgId++}`,
-        role: 'assistant',
-        content: '',
-        timestamp: new Date().toISOString(),
-      };
-      convMessages.push(aiMsg);
+      const aiMessageId = `msg-${randomUUID()}`;
+      let streamedContent = '';
       let aiContent: string;
-      activeMessageIds.set(conversationId, aiMsg.id);
+      activeMessageIds.set(conversationId, aiMessageId);
       const activeConv = conversations.find((conversation) => conversation.id === conversationId);
       if (activeConv) { activeConv.active = true; broadcastConversations(); }
       try {
         const route = parseConversationId(conversationId);
         const options = normalizeTurnOptions(input);
         aiContent = await requireAdapter(route.source).sendMessage(route.adapterId, content, options, (delta) => {
-          aiMsg.content += delta;
-          runtime?.message.broadcast('message.delta', { conversationId, messageId: aiMsg.id, content: aiMsg.content });
+          streamedContent += delta;
+          runtime?.message.broadcast('message.delta', { conversationId, messageId: aiMessageId, content: streamedContent });
         }, (status) => {
-          void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'running', message: status });
+          void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'running', message: status });
         });
       } catch (err) {
-        void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'error', message: err instanceof Error ? err.message : String(err) });
-        const aiIndex = convMessages.indexOf(aiMsg);
-        if (aiIndex !== -1) convMessages.splice(aiIndex, 1);
+        void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'error', message: err instanceof Error ? err.message : String(err) });
         throw err;
       } finally {
         activeMessageIds.delete(conversationId);
         const finishedConv = conversations.find((conversation) => conversation.id === conversationId);
         if (finishedConv) { finishedConv.active = false; broadcastConversations(); }
       }
-      aiMsg.content = aiContent;
-      void broadcastMessageStatusWithContext(conversationId, aiMsg.id, { phase: 'completed' });
+      void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'completed' });
       const local = conversations.find((conversation) => conversation.id === conversationId);
       if (local) {
         local.lastMessage = aiContent;
@@ -419,7 +376,7 @@ editor.plugin.define({
         console.error('[agent] failed to refresh conversation metadata:', err);
       }
       broadcastConversations();
-      return { ...aiMsg };
+      return { id: aiMessageId, role: 'assistant', content: aiContent };
     },
   },
 });

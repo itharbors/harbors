@@ -7,6 +7,7 @@ import { normalizeTurnOptions } from './base.js';
 import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
+import { loadWorkspaceInstructions } from './instructions.js';
 
 interface StoredSession {
   id: string;
@@ -19,7 +20,6 @@ interface StoredSession {
   approvalPolicy: AgentApprovalPolicy;
   createdAt: string;
   updatedAt: string;
-  messages: AgentChatMessage[];
   events: AgentTraceEvent[];
   /** Current model-visible event sequence, folded from the append-only log. */
   surface: number[];
@@ -166,7 +166,6 @@ export class HarborsAdapter implements AgentAdapter {
       approvalPolicy,
       createdAt: now.toISOString(),
       updatedAt: now.toISOString(),
-      messages: [],
       events: [],
       surface: [],
       logPath: this.logPathFor(id),
@@ -204,10 +203,6 @@ export class HarborsAdapter implements AgentAdapter {
     const session = await this.load(id);
     await this.appendEvent(session, 'session/title', { title: nextTitle, source: { kind: 'user' } });
     return toConversation(session);
-  }
-
-  async getMessages(id: string): Promise<AgentChatMessage[]> {
-    return (await this.load(id)).messages.map((message) => ({ ...message }));
   }
 
   async getConversationTrace(id: string, turnId?: string): Promise<AgentTraceEvent[]> {
@@ -351,6 +346,7 @@ export class HarborsAdapter implements AgentAdapter {
 
   private async runAnthropicToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, contextWindow: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
+    const systemPrompt = await loadWorkspaceInstructions(workspace);
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
     let overflowRetries = 0;
@@ -364,7 +360,7 @@ export class HarborsAdapter implements AgentAdapter {
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'anthropic-messages', ...turnSettings(session), ...permissionSettings(session) });
         const messages = toAnthropicMessages(session.events, session.surface);
-        const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages }) }, retry, session, turn, step, onStatus, signal);
+        const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages, ...(systemPrompt ? { system: systemPrompt } : {}) }) }, retry, session, turn, step, onStatus, signal);
         overflowRetries = 0;
         const payload = await response.json() as AnthropicResponsePayload;
         throwIfAborted(signal);
@@ -404,6 +400,7 @@ export class HarborsAdapter implements AgentAdapter {
 
   private async runOpenAiToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, contextWindow: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
+    const systemPrompt = await loadWorkspaceInstructions(workspace);
     const tools = hubbertTools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } }));
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
@@ -418,6 +415,7 @@ export class HarborsAdapter implements AgentAdapter {
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'openai-completions', ...turnSettings(session), ...permissionSettings(session) });
         const messages = toOpenAiMessages(session.events, session.surface);
+        if (systemPrompt) messages.unshift({ role: 'system', content: systemPrompt });
         const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
         overflowRetries = 0;
         const payload = await response.json() as OpenAiResponsePayload;
@@ -666,7 +664,7 @@ export class HarborsAdapter implements AgentAdapter {
     const events = lines.map((line) => JSON.parse(line) as AgentTraceEvent);
     const lastEvent = events.at(-1);
     const settings = settingsFromEvents(events, header);
-    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), messages: projectMessages(events), events, surface: foldSurface(events), logPath: path };
+    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), events, surface: foldSurface(events), logPath: path };
   }
 
   private async ensureLog(session: StoredSession): Promise<void> {
@@ -687,7 +685,6 @@ export class HarborsAdapter implements AgentAdapter {
       await appendFile(session.logPath!, `${JSON.stringify(event)}\n`, 'utf8');
       session.events.push(event);
       session.surface = applySurfaceEvent(session.surface, event);
-      session.messages = projectMessages(session.events);
       session.updatedAt = new Date(event.time).toISOString();
       if (type === 'session/title' && typeof data.title === 'string') session.title = data.title;
       result = event;
@@ -735,7 +732,7 @@ function updateToolFailureGuard(guard: ToolFailureGuard, calls: ToolCall[], resu
   return undefined;
 }
 
-function isParallelTool(name: string): boolean { return new Set(['list_files', 'list_skills', 'load_skill', 'read', 'tree', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write']).has(name); }
+function isParallelTool(name: string): boolean { return new Set(['list_files', 'list_skills', 'load_skill', 'read', 'read_image', 'glob', 'grep', 'web_search', 'web_fetch', 'todo_write']).has(name); }
 function parseToolArguments(value: string | undefined): Record<string, unknown> { if (!value) return {}; try { const parsed = JSON.parse(value) as unknown; return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {}; } catch { return {}; } }
 function boundedText(value: string): string { return value.length <= MAX_STORED_VALUE_CHARS ? value : `${value.slice(0, MAX_STORED_VALUE_CHARS)}\n...[truncated]`; }
 function boundedJson(value: unknown): string { try { return boundedText(JSON.stringify(value)); } catch { return '[unserializable]'; } }
@@ -1037,4 +1034,4 @@ function isContextOverflowError(error: unknown): boolean {
   return /context.{0,20}(length|window|limit|overflow)|too many tokens|maximum context/i.test(message);
 }
 function nextTurnNumber(events: AgentTraceEvent[]): number { return events.filter((event) => event.type === 'turn/start').length + 1; }
-function toConversation(session: StoredSession): AgentConversation { const last = session.messages.at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...turnSettings(session), ...permissionSettings(session), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }
+function toConversation(session: StoredSession): AgentConversation { const last = projectMessages(session.events).at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...turnSettings(session), ...permissionSettings(session), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }

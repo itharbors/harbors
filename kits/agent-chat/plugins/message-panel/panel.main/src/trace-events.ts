@@ -8,6 +8,15 @@ export interface TraceEvent {
   seq: number;
   time: number;
   data: Record<string, unknown>;
+  /** 事件进入模型可见 surface 的方式；用于区分被压缩替换的历史消息。 */
+  surfaceOp?: 'append' | { op: 'replace'; start: number; end: number };
+}
+
+/** 从轨迹派生的对话消息（与 agent.getMessages 返回结构对齐）。 */
+export interface SurfaceMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
 }
 
 /** 单个工具调用过程消息。 */
@@ -284,4 +293,41 @@ export function groupEntriesByTurn(entries: ToolProcessEntry[]): Map<number, Too
     groups.set(entry.turn, list);
   }
   return groups;
+}
+
+/** 提取 content（字符串或 [{type:'text',text}] 数组）的纯文本。 */
+function contentText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (!Array.isArray(value)) return '';
+  let text = '';
+  for (const block of value) {
+    if (block && typeof block === 'object' && (block as Record<string, unknown>).type === 'text') {
+      text += String((block as Record<string, unknown>).text ?? '');
+    }
+  }
+  return text;
+}
+
+/** 事件是否以 append 方式进入 surface（未被压缩替换）。 */
+function isAppendEvent(event: TraceEvent): boolean {
+  return event.surfaceOp === undefined || event.surfaceOp === 'append';
+}
+
+/**
+ * 从轨迹事件派生对话消息列表，与后端 agent.getMessages 的 projectMessages 逻辑对齐：
+ * - 仅取 surfaceOp 为 append 的 user/message 与 assistant/message（含被压缩替换前的历史原文，不含压缩摘要）。
+ */
+export function parseSurfaceMessages(events: TraceEvent[]): SurfaceMessage[] {
+  const messages: SurfaceMessage[] = [];
+  const ordered = [...events].sort((left, right) => left.seq - right.seq);
+  for (const event of ordered) {
+    if (event.type === 'user/message' && isAppendEvent(event)) {
+      messages.push({ id: String(event.data.id || `event-${event.seq}`), role: 'user', content: contentText(event.data.content) });
+    } else if (event.type === 'assistant/message' && isAppendEvent(event)) {
+      const message = event.data.message as Record<string, unknown> | undefined;
+      const content = contentText(message?.content);
+      if (content) messages.push({ id: String(message?.id || `event-${event.seq}`), role: 'assistant', content });
+    }
+  }
+  return messages;
 }

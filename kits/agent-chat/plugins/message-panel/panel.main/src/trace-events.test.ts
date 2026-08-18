@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseTraceEvents, parseTraceTurns, groupEntriesByTurn, MAX_TOOL_CONTENT_LENGTH, type TraceEvent } from './trace-events.ts';
+import { parseTraceEvents, parseTraceTurns, parseSurfaceMessages, groupEntriesByTurn, MAX_TOOL_CONTENT_LENGTH, type TraceEvent } from './trace-events.ts';
 
 function toolCall(seq: number, data: Partial<TraceEvent['data']> & { callId: string; name: string }): TraceEvent {
   return { type: 'tool/call', seq, time: seq, data: { turn: 1, step: 1, arguments: '{}', ...data } };
@@ -182,4 +182,39 @@ test('keeps model messages and tools in separate trace steps', () => {
   assert.equal(turns[0].steps[0].tools[0].name, 'read_file');
   assert.equal(turns[0].steps[1].assistant?.text, '文件内容如下。');
   assert.equal(turns[0].steps[1].assistant?.hasToolCalls, false);
+});
+
+test('parseSurfaceMessages 从轨迹派生 user 与 assistant 消息', () => {
+  const events: TraceEvent[] = [
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: '你好' }] } },
+    { type: 'step/start', seq: 2, time: 2, data: { turn: 1, step: 1 } },
+    { type: 'assistant/message', seq: 3, time: 3, surfaceOp: 'append', data: { turn: 1, step: 1, message: { id: 'a1', role: 'assistant', content: [{ type: 'text', text: '你好，有什么可以帮你？' }] } } },
+  ];
+  const messages = parseSurfaceMessages(events);
+  assert.deepEqual(messages, [
+    { id: 'u1', role: 'user', content: '你好' },
+    { id: 'a1', role: 'assistant', content: '你好，有什么可以帮你？' },
+  ]);
+});
+
+test('parseSurfaceMessages 忽略被压缩替换（surfaceOp=replace）的摘要消息', () => {
+  const events: TraceEvent[] = [
+    { type: 'user/message', seq: 0, time: 0, surfaceOp: 'append', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: '第一句' }] } },
+    { type: 'assistant/message', seq: 1, time: 1, surfaceOp: 'append', data: { message: { id: 'a1', role: 'assistant', content: '第一句的回复' } } },
+    // 压缩生成的摘要 user 消息用 replace 进入 surface，应被过滤（getMessages 也不返回它）
+    { type: 'user/message', seq: 2, time: 2, surfaceOp: { op: 'replace', start: 0, end: 1 }, data: { id: 'summary', role: 'user', content: [{ type: 'text', text: '<compacted-summary>...' }] } },
+    { type: 'user/message', seq: 3, time: 3, surfaceOp: 'append', data: { id: 'u2', role: 'user', content: [{ type: 'text', text: '第二句' }] } },
+  ];
+  const messages = parseSurfaceMessages(events);
+  assert.deepEqual(messages.map((message) => message.id), ['u1', 'a1', 'u2']);
+});
+
+test('parseSurfaceMessages 忽略空内容的 assistant 消息', () => {
+  const events: TraceEvent[] = [
+    { type: 'assistant/message', seq: 0, time: 0, surfaceOp: 'append', data: { message: { id: 'a1', role: 'assistant', content: '' } } },
+    { type: 'user/message', seq: 1, time: 1, surfaceOp: 'append', data: { id: 'u1', role: 'user', content: [{ type: 'text', text: '嗨' }] } },
+  ];
+  const messages = parseSurfaceMessages(events);
+  assert.deepEqual(messages.map((message) => message.id), ['u1']);
 });

@@ -8,6 +8,7 @@
       "message": {
         "request": {
           "listConversations": ["listConversations"],
+          "listDirectory": ["listDirectory"],
           "getDraftOptions": ["getDraftOptions"],
           "getConversationOptions": ["getConversationOptions"],
           "getConversationContext": ["getConversationContext"],
@@ -18,7 +19,6 @@
           "createConversation": ["createConversation"],
           "deleteConversation": ["deleteConversation"],
           "renameConversation": ["renameConversation"],
-          "getMessages": ["getMessages"],
           "getConversationTrace": ["getConversationTrace"],
           "sendMessage": ["sendMessage"],
           "stopConversation": ["stopConversation"]

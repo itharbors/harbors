@@ -7,6 +7,7 @@ type PluginItem = {
   loaded: boolean;
   panelCount: number;
   requestCount: number;
+  broadcastCount: number;
 };
 
 type PanelContext = {
@@ -59,80 +60,62 @@ export default {
 
       const renderPluginItem = (plugin: PluginItem): HTMLElement => {
         const item = document.createElement('article');
-        item.innerHTML = '<strong></strong><div class="meta"><span class="type"></span><div class="actions"><button class="btn-unload" type="button">关闭</button><button class="btn-load" type="button">启动</button></div></div><div class="feedback"></div>';
+        item.innerHTML = '<strong></strong><div class="meta"><div class="details"><span class="type"></span><span class="stats"></span></div><div class="actions"><button class="btn-restart" type="button">重启</button></div></div><div class="feedback" hidden></div>';
 
         const titleEl = item.querySelector('strong') as HTMLElement;
         const badge = document.createElement('span');
         badge.className = 'badge';
         badge.dataset.source = plugin.source;
         badge.textContent = labelOf(plugin);
-        titleEl.textContent = plugin.name;
-        titleEl.append(badge);
+        const nameEl = document.createElement('span');
+        nameEl.className = 'plugin-name';
+        nameEl.textContent = plugin.name;
+        titleEl.textContent = '';
+        titleEl.append(badge, nameEl);
 
         const typeEl = item.querySelector('.type') as HTMLElement;
-        const stateLabel = plugin.loaded ? '已加载' : '未加载';
-        typeEl.textContent = `${stateLabel} · ${plugin.panelCount} panels · ${plugin.requestCount} requests`;
+        const statsEl = item.querySelector('.stats') as HTMLElement;
+        const stateLabel = plugin.loaded ? '已加载' : '已关闭';
+        typeEl.textContent = stateLabel;
+        statsEl.textContent = `${plugin.panelCount} panels · ${plugin.requestCount} requests · ${plugin.broadcastCount} broadcasts`;
 
-        const unloadBtn = item.querySelector('.btn-unload') as HTMLButtonElement;
-        const loadBtn = item.querySelector('.btn-load') as HTMLButtonElement;
+        const restartBtn = item.querySelector('.btn-restart') as HTMLButtonElement;
         const feedback = item.querySelector('.feedback') as HTMLElement;
 
         const manageable = isOwnKitPlugin(plugin);
         if (!manageable) {
-          unloadBtn.disabled = true;
-          loadBtn.disabled = true;
-          unloadBtn.title = '仅当前 Kit 的非 builtin 插件可操作';
-          loadBtn.title = '仅当前 Kit 的非 builtin 插件可操作';
+          restartBtn.disabled = true;
+          restartBtn.title = '仅当前 Kit 的非 builtin 插件可操作';
         }
-        unloadBtn.disabled = unloadBtn.disabled || !plugin.loaded;
-        loadBtn.disabled = loadBtn.disabled || plugin.loaded;
 
         const setFeedback = (text: string, tone: 'info' | 'error' | 'success' = 'info') => {
           feedback.textContent = text;
           feedback.dataset.tone = tone;
+          feedback.hidden = !text;
         };
 
         const setBusy = (busy: boolean) => {
-          unloadBtn.disabled = busy || !manageable || !plugin.loaded;
-          loadBtn.disabled = busy || !manageable || plugin.loaded;
+          restartBtn.disabled = busy || !manageable;
         };
 
         const setState = (loaded: boolean) => {
           plugin.loaded = loaded;
-          typeEl.textContent = `${loaded ? '已加载' : '未加载'} · ${plugin.panelCount} panels · ${plugin.requestCount} requests`;
+          typeEl.textContent = loaded ? '已加载' : '已关闭';
           updateStatus();
         };
 
-        unloadBtn.addEventListener('click', async () => {
+        restartBtn.addEventListener('click', async () => {
           setBusy(true);
-          setFeedback('关闭中…', 'info');
+          setFeedback('');
           try {
-            const result = await context.message.request('plugin-list', 'unload', plugin.name) as LifecycleResult;
-            if (result.ok) {
-              setState(false);
-              setFeedback('已关闭', 'success');
-            } else {
-              setFeedback(`关闭失败: ${result.error ?? '未知错误'}`, 'error');
-            }
-          } catch (error) {
-            setFeedback(`关闭失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
-          }
-          setBusy(false);
-        });
-
-        loadBtn.addEventListener('click', async () => {
-          setBusy(true);
-          setFeedback('启动中…', 'info');
-          try {
-            const result = await context.message.request('plugin-list', 'load', plugin.name) as LifecycleResult;
+            const result = await context.message.request('plugin-list', 'restart', plugin.name) as LifecycleResult;
             if (result.ok) {
               setState(true);
-              setFeedback('已启动', 'success');
             } else {
-              setFeedback(`启动失败: ${result.error ?? '未知错误'}`, 'error');
+              setFeedback(`重启失败: ${result.error ?? '未知错误'}`, 'error');
             }
           } catch (error) {
-            setFeedback(`启动失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
+            setFeedback(`重启失败: ${error instanceof Error ? error.message : String(error)}`, 'error');
           }
           setBusy(false);
         });

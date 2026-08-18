@@ -172,9 +172,6 @@ export interface AgentAdapter {
   /** 重命名对话；返回更新后的会话摘要。不支持的 adapter 可省略。 */
   renameConversation?(id: string, title: string): Promise<AgentConversation>;
 
-  /** 获取对话历史消息 */
-  getMessages(conversationId: string): Promise<AgentChatMessage[]>;
-
   /** 获取会话最近一次使用的配置；不支持时返回空对象。 */
   getConversationSettings?(conversationId: string): Promise<AgentTurnOptions>;
 

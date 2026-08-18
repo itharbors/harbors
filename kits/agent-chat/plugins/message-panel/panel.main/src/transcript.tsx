@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useMemo, useState, type MouseEvent } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import type { ToolProcessEntry, TraceStep, TraceTurn } from "./trace-events.js";
@@ -36,6 +36,8 @@ interface TranscriptProps {
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
   sending: boolean;
+  onChangeProject?: () => void;
+  onLinkClick?: (info: { href: string; text: string }) => void;
 }
 
 function MarkdownMessage({ content }: { content: string }) {
@@ -292,7 +294,10 @@ function AssistantStep({
 
       {finalText && (
         <div className="agent-step-intent agent-final-response">
-          <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={finalText} /></div></div>
+          <div className="chat-message assistant">
+            <div className="chat-message-label assistant-label">Agent</div>
+            <div className="chat-message-content"><MarkdownMessage content={finalText} /></div>
+          </div>
         </div>
       )}
 
@@ -353,22 +358,36 @@ function TurnBlock({
 }
 
 export default function Transcript(props: TranscriptProps) {
-  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, sending } = props;
+  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, sending, onChangeProject, onLinkClick } = props;
   const displayTurns = useMemo(() => buildDisplayTurns(messages, traceTurns, localProcessEntries, turnOffset), [messages, traceTurns, localProcessEntries, turnOffset]);
 
+  // 事件委托：拦截 Markdown 渲染出的链接点击，阻止 panel 被跳转，转而广播出去交给外部处理
+  const handleClickCapture = (event: MouseEvent<HTMLDivElement>) => {
+    const anchor = (event.target as HTMLElement | null)?.closest?.("a");
+    if (!anchor) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const href = anchor.getAttribute("href") || "";
+    if (!href) return;
+    onLinkClick?.({ href, text: anchor.textContent || "" });
+  };
+
   return (
-    <div className={`chat-surface ${draft || messages.length === 0 ? "fresh" : ""}`}>
+    <div className={`chat-surface ${draft || messages.length === 0 ? "fresh" : ""}`} onClickCapture={handleClickCapture}>
       {(draft || messages.length === 0) && (
         <div className="new-thread-context">
           <span>▣ 当前项目</span>
-          <strong>{project ? project.split("/").filter(Boolean).slice(-2).join(" / ") : "本地项目"}</strong>
+          <strong title={project || undefined}>{project ? project.split("/").filter(Boolean).slice(-2).join(" / ") : "本地项目"}</strong>
+          {draft && onChangeProject && <button type="button" className="new-thread-change-project" onClick={onChangeProject}>更换目录</button>}
           <span>⚓ HubBert · {modelLabel}</span>
         </div>
       )}
 
       {displayTurns.map(({ user, turn }) => (
         <Fragment key={user.id}>
-          <div className="chat-message user"><div className="chat-message-content"><MarkdownMessage content={user.content} /></div></div>
+          <div className="chat-message user">
+            <div className="chat-message-content"><MarkdownMessage content={user.content} /></div>
+          </div>
           {turn.steps.length > 0 && (
             <TurnBlock
               turn={turn}

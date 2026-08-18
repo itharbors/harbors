@@ -16,6 +16,11 @@ editor.plugin.define({
         messages: [...messageLog],
       };
     },
+    clearMessages() {
+      messageLog.length = 0;
+      broadcastMessagesChanged();
+      return { timestamp: Date.now(), messages: [] };
+    },
     onAnyRequest(meta, ...args) {
       if (isInternalRequest(meta)) return;
       appendMessage({
@@ -45,7 +50,10 @@ const messageLog = [];
 
 function appendMessage(message) {
   messageLog.push(message);
+  broadcastMessagesChanged();
+}
 
+function broadcastMessagesChanged() {
   if (!runtime) return;
 
   isBroadcastingSnapshot = true;
