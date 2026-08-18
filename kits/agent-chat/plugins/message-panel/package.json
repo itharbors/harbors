@@ -22,6 +22,9 @@
           "conversation.ui.changed": [
             "panel.onConversationUiChanged"
           ],
+          "conversation.trace.append": [
+            "panel.onConversationTraceAppend"
+          ],
           "message.delta": [
             "panel.onMessageDelta"
           ],

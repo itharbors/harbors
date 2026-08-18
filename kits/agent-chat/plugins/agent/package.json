@@ -20,6 +20,8 @@
           "deleteConversation": ["deleteConversation"],
           "renameConversation": ["renameConversation"],
           "getConversationTrace": ["getConversationTrace"],
+          "getConversationTraceSince": ["getConversationTraceSince"],
+          "getConversationTracePage": ["getConversationTracePage"],
           "sendMessage": ["sendMessage"],
           "stopConversation": ["stopConversation"]
         }

@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type UIEvent } from 'react';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
-import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceTurn } from './trace-events.js';
+import { createTraceSyncRunGate, createTraceSyncState, mergeTraceEvents, mergeTracePage, readTraceEvent, scheduleTraceSyncRun, traceSyncFailureMessage, type TraceSyncState } from './trace-sync.js';
+import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import Transcript from './transcript.js';
 import './index.css';
 
@@ -20,8 +21,17 @@ interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; 
 type PermissionOutcome = 'allowed-once' | 'rejected';
 interface PermissionRequest { requestId: string; conversationId: string; turn: number; step: number; toolName: string; currentMode: string; requestedMode?: string; justification?: string; }
 interface ProgressStatus { phase?: string; message?: string; turn?: number; step?: number; contextUsage?: ContextUsage; }
+interface TraceAppendPayload { conversationId?: unknown; event?: unknown; cursor?: unknown; }
+interface TraceBatch { conversationId?: string; afterSeq?: number; cursor?: number; events?: unknown[]; }
+interface TracePageResponse { conversationId?: string; cursor?: number; events?: unknown[]; hasMore?: boolean; oldestSeq?: number; nextBeforeSeq?: number | null; }
 const REQUEST_RETRY_DELAYS = [0, 100, 250, 500, 1000];
-const MESSAGE_BATCH_SIZE = 40;
+const TRACE_TURN_PAGE_SIZE = 6;
+
+function readTraceEventList(value: unknown): { events: TraceEvent[]; invalid: boolean } {
+  const raw = Array.isArray(value) ? value : [];
+  const events = raw.map(readTraceEvent).filter((event): event is TraceEvent => event !== null);
+  return { events, invalid: events.length !== raw.length };
+}
 
 function sourceFromId(_id: string): Source { return 'harbors'; }
 function fallbackModel(_source: Source): string { return 'HubBert Relay'; }
@@ -340,7 +350,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [permissionRequests, setPermissionRequests] = useState<PermissionRequest[]>([]);
   const [resolvingPermissionId, setResolvingPermissionId] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
-  const [visibleMessageCount, setVisibleMessageCount] = useState(MESSAGE_BATCH_SIZE);
+  const [traceHasMore, setTraceHasMore] = useState(false);
+  const [traceOlderLoading, setTraceOlderLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
   const loadSeqRef = useRef(0);
@@ -353,32 +364,239 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const pendingConversationIdRef = useRef<string | null>(null);
   const stopRequestedRef = useRef(false);
   const traceRequestSeqRef = useRef(0);
+  const traceStateRef = useRef<TraceSyncState>(createTraceSyncState());
+  const traceSyncRunGateRef = useRef(createTraceSyncRunGate());
+  const traceSyncErrorRef = useRef<string | null>(null);
+  const tracePageRequestSeqRef = useRef(0);
+  const traceOlderLoadingRef = useRef(false);
+  const olderScrollAnchorRef = useRef<{ top: number; height: number } | null>(null);
   const permissionRequestSeqRef = useRef(0);
   const activeConversationsRef = useRef<Set<string>>(new Set());
   const sendingConversationRef = useRef<string | null>(null);
+
+  const resetTraceState = (id: string | null): void => {
+    traceRequestSeqRef.current += 1;
+    tracePageRequestSeqRef.current += 1;
+    traceOlderLoadingRef.current = false;
+    setTraceOlderLoading(false);
+    setTraceHasMore(false);
+    traceStateRef.current = createTraceSyncState(id);
+  };
+
+  const publishTraceState = (id: string, state: TraceSyncState): void => {
+    if (conversationIdRef.current !== id) return;
+    setTraceTurns(parseTraceTurns(state.events));
+    const derived = parseSurfaceMessages(state.events) as MessageData[];
+    setMessages((current) => {
+      const confirmed = new Set(derived.map((message) => `${message.role}\u0000${message.content}`));
+      // 保留仍在流式输出、轨迹尚未落盘的临时消息：给该会话发送时的乐观 user 消息（opt-）、以及 delta 推送的 assistant 消息（msg-）。
+      const keepOptimistic = sendingRef.current && sendingConversationRef.current === id
+        ? current.filter((message) => message.id.startsWith('opt-') && !confirmed.has(`${message.role}\u0000${message.content}`))
+        : [];
+      const keepStreaming = sendingRef.current && sendingConversationRef.current === id
+        ? current.filter((message) => message.id.startsWith('msg-') && message.role === 'assistant' && message.content && !confirmed.has(`${message.role}\u0000${message.content}`))
+        : [];
+      return [...derived, ...keepOptimistic, ...keepStreaming];
+    });
+  };
+
+  const applyTraceEvents = (id: string, events: TraceEvent[]) => {
+    if (conversationIdRef.current !== id) return null;
+    const current = traceStateRef.current.conversationId === id ? traceStateRef.current : createTraceSyncState(id);
+    const merged = mergeTraceEvents(current, events);
+    traceStateRef.current = merged;
+    setTraceHasMore(merged.hasMore);
+    publishTraceState(id, merged);
+    return merged;
+  };
+
   const loadTrace = async (id: string, seq: number): Promise<void> => {
     const requestSeq = ++traceRequestSeqRef.current;
+    let recoveryStarted = false;
     try {
-      const events = await requestWithRetry(ctx, 'agent', 'getConversationTrace', id);
-      if (seq !== loadSeqRef.current || requestSeq !== traceRequestSeqRef.current) return;
-      const list = Array.isArray(events) ? events : [];
-      setTraceTurns(parseTraceTurns(list as any[]));
-      // 消息直接从轨迹派生，无需再单独请求 getMessages
-      const derived = parseSurfaceMessages(list as any[]) as MessageData[];
-      setMessages((current) => {
-        const confirmed = new Set(derived.map((message) => `${message.role}\u0000${message.content}`));
-        // 保留仍在流式输出、轨迹尚未落盘的临时消息：给该会话发送时的乐观 user 消息（opt-）、以及 delta 推送的 assistant 消息（msg-）
-        const keepOptimistic = sendingRef.current && sendingConversationRef.current === id
-          ? current.filter((message) => message.id.startsWith('opt-') && !confirmed.has(`${message.role}\u0000${message.content}`))
-          : [];
-        const keepStreaming = current.filter((message) => message.id.startsWith('msg-') && message.role === 'assistant' && message.content && !confirmed.has(`${message.role}\u0000${message.content}`));
-        return [...derived, ...keepOptimistic, ...keepStreaming];
+      const page = await requestWithRetry(ctx, 'agent', 'getConversationTracePage', id, { turnLimit: TRACE_TURN_PAGE_SIZE }) as TracePageResponse;
+      if (seq !== loadSeqRef.current || requestSeq !== traceRequestSeqRef.current || conversationIdRef.current !== id) return;
+      if (page?.conversationId && page.conversationId !== id) throw new Error('轨迹快照会话不匹配');
+      const parsed = readTraceEventList(page?.events);
+      const list = parsed.events;
+      if (parsed.invalid) {
+        logError('轨迹快照包含非法事件，开始完整恢复', { conversationId: id });
+        recoveryStarted = true;
+        await recoverTraceSnapshot(id, seq, requestSeq);
+        return;
+      }
+      const current = traceStateRef.current.conversationId === id ? traceStateRef.current : createTraceSyncState(id);
+      const merged = mergeTracePage(current, {
+        cursor: Number.isSafeInteger(page?.cursor) ? page.cursor! : current.cursor,
+        events: list,
+        hasMore: page?.hasMore === true,
+        oldestSeq: Number.isSafeInteger(page?.oldestSeq) ? page.oldestSeq! : (list[0]?.seq ?? -1),
+        nextBeforeSeq: page?.nextBeforeSeq ?? null,
       });
+      if (merged.hasConflict || merged.hasGap) {
+        logError('轨迹快照包含冲突 seq 或页内缺口，开始完整恢复', { conversationId: id });
+        recoveryStarted = true;
+        await recoverTraceSnapshot(id, seq, requestSeq);
+        return;
+      }
+      traceStateRef.current = merged;
+      setTraceHasMore(merged.hasMore);
+      publishTraceState(id, merged);
+      if (Number.isSafeInteger(page?.cursor) && page.cursor! > merged.cursor) void syncTraceSince(id);
     } catch (err) {
       if (seq === loadSeqRef.current && requestSeq === traceRequestSeqRef.current) {
-        logError('加载轨迹失败', err);
+        if (!recoveryStarted) {
+          try {
+            await recoverTraceSnapshot(id, seq, requestSeq);
+            return;
+          } catch (recoveryError) {
+            logError('加载轨迹及完整恢复失败', recoveryError);
+            setError(`加载对话记录失败：${readableErrorMessage(recoveryError)}`);
+            return;
+          }
+        }
+        logError('完整恢复轨迹失败', err);
+        setError(`加载对话记录失败：${readableErrorMessage(err)}`);
       }
     }
+  };
+
+  async function recoverTraceSnapshot(id: string, seq: number, requestSeq: number): Promise<void> {
+    const batch = await requestWithRetry(ctx, 'agent', 'getConversationTraceSince', id, -1) as TraceBatch;
+    if (seq !== loadSeqRef.current || requestSeq !== traceRequestSeqRef.current || conversationIdRef.current !== id) return;
+    if (batch?.conversationId && batch.conversationId !== id) throw new Error('完整轨迹恢复会话不匹配');
+    const parsed = readTraceEventList(batch?.events);
+    if (parsed.invalid) throw new Error('完整轨迹恢复包含非法事件');
+    const events = parsed.events;
+    const cursor = Number.isSafeInteger(batch?.cursor) ? batch.cursor! : (events.at(-1)?.seq ?? -1);
+    // 恢复请求期间到达的更新仍需保留；cursor 以内由完整快照重新建立权威状态。
+    const concurrent = traceStateRef.current.conversationId === id
+      ? traceStateRef.current.events.filter((event) => event.seq > cursor)
+      : [];
+    const buffered = mergeTraceEvents(createTraceSyncState(id), concurrent);
+    const recovered = mergeTracePage(buffered, {
+      cursor,
+      events,
+      hasMore: false,
+      oldestSeq: events[0]?.seq ?? -1,
+      nextBeforeSeq: null,
+    });
+    if (recovered.hasConflict || recovered.hasGap) throw new Error('完整轨迹恢复后仍存在重复 seq 或缺口');
+    traceStateRef.current = recovered;
+    setTraceHasMore(false);
+    publishTraceState(id, recovered);
+  }
+
+  const loadOlderTrace = async (id: string): Promise<void> => {
+    if (conversationIdRef.current !== id || traceOlderLoadingRef.current) return;
+    const state = traceStateRef.current;
+    if (state.conversationId !== id || !state.hasMore || state.nextBeforeSeq === null) return;
+    const requestSeq = ++tracePageRequestSeqRef.current;
+    const list = messageListRef.current;
+    if (list) olderScrollAnchorRef.current = { top: list.scrollTop, height: list.scrollHeight };
+    traceOlderLoadingRef.current = true;
+    setTraceOlderLoading(true);
+    try {
+      const page = await requestWithRetry(ctx, 'agent', 'getConversationTracePage', id, { beforeSeq: state.nextBeforeSeq, turnLimit: TRACE_TURN_PAGE_SIZE }) as TracePageResponse;
+      if (conversationIdRef.current !== id || requestSeq !== tracePageRequestSeqRef.current) return;
+      if (page?.conversationId && page.conversationId !== id) throw new Error('历史轨迹页会话不匹配');
+      const parsed = readTraceEventList(page?.events);
+      if (parsed.invalid) throw new Error('历史轨迹页包含非法事件');
+      const events = parsed.events;
+      const current = traceStateRef.current;
+      const merged = mergeTracePage(current, {
+        cursor: Number.isSafeInteger(page?.cursor) ? page.cursor! : current.cursor,
+        events,
+        hasMore: page?.hasMore === true,
+        oldestSeq: Number.isSafeInteger(page?.oldestSeq) ? page.oldestSeq! : (events[0]?.seq ?? -1),
+        nextBeforeSeq: page?.nextBeforeSeq ?? null,
+      });
+      if (merged.hasConflict || merged.hasGap) {
+        const recoveryRequestSeq = ++traceRequestSeqRef.current;
+        await recoverTraceSnapshot(id, loadSeqRef.current, recoveryRequestSeq);
+        return;
+      }
+      traceStateRef.current = merged;
+      setTraceHasMore(merged.hasMore);
+      publishTraceState(id, merged);
+      if (Number.isSafeInteger(page?.cursor) && page.cursor! > merged.cursor) void syncTraceSince(id);
+    } catch (err) {
+      if (conversationIdRef.current === id && requestSeq === tracePageRequestSeqRef.current) {
+        logError('加载更早轨迹失败', err);
+        setError(`加载更早对话记录失败：${readableErrorMessage(err)}`);
+      }
+    } finally {
+      if (requestSeq === tracePageRequestSeqRef.current) {
+        traceOlderLoadingRef.current = false;
+        setTraceOlderLoading(false);
+      }
+    }
+  };
+
+  async function syncTraceSince(id: string): Promise<void> {
+    if (conversationIdRef.current !== id) return;
+    return scheduleTraceSyncRun(traceSyncRunGateRef.current, id, async () => {
+      let lastError: unknown;
+      for (let attempt = 0; attempt < 3 && conversationIdRef.current === id; attempt += 1) {
+        try {
+          const state = traceStateRef.current.conversationId === id ? traceStateRef.current : createTraceSyncState(id);
+          if (!state.initialized) return;
+          const batch = await requestWithRetry(ctx, 'agent', 'getConversationTraceSince', id, state.cursor) as TraceBatch;
+          if (conversationIdRef.current !== id) return;
+          if (batch?.conversationId && batch.conversationId !== id) throw new Error('增量轨迹会话不匹配');
+          const parsed = readTraceEventList(batch?.events);
+          if (parsed.invalid) throw new Error('增量轨迹包含非法事件');
+          const events = parsed.events;
+          const merged = applyTraceEvents(id, events);
+          const remoteCursor = Number.isSafeInteger(batch?.cursor) ? batch.cursor! : merged?.cursor;
+          if (merged?.hasConflict) throw new Error('增量轨迹包含冲突 seq');
+          if (merged && !merged.hasGap && (remoteCursor === undefined || remoteCursor <= merged.cursor)) return;
+        } catch (err) {
+          lastError = err;
+        }
+      }
+
+      // 补拉接口连续异常、返回缺口或冲突时，用完整快照恢复一次，避免静默丢失过程。
+      if (conversationIdRef.current === id) {
+        const requestSeq = ++traceRequestSeqRef.current;
+        try {
+          await recoverTraceSnapshot(id, loadSeqRef.current, requestSeq);
+        } catch (recoveryError) {
+          throw recoveryError || lastError;
+        }
+      }
+    }, () => {
+      const state = traceStateRef.current;
+      return conversationIdRef.current === id && state.conversationId === id && (state.hasConflict || ('hasGap' in state && state.hasGap === true));
+    }, () => {
+      if (conversationIdRef.current !== id || !traceSyncErrorRef.current) return;
+      const previous = traceSyncErrorRef.current;
+      traceSyncErrorRef.current = null;
+      setError((current) => current === previous ? null : current);
+    }, (err) => {
+      if (conversationIdRef.current === id) {
+        logError('同步增量轨迹失败', err);
+        const message = traceSyncFailureMessage(err);
+        traceSyncErrorRef.current = message;
+        setError(message);
+      }
+    });
+  }
+
+  const applyTraceAppend = (value: unknown): void => {
+    const payload = value as TraceAppendPayload | null;
+    if (!payload?.conversationId || String(payload.conversationId) !== conversationIdRef.current) return;
+    const event = readTraceEvent(payload.event);
+    if (!event) {
+      void syncTraceSince(String(payload.conversationId));
+      return;
+    }
+    if (Number.isSafeInteger(payload.cursor) && Number(payload.cursor) !== event.seq) {
+      void syncTraceSince(String(payload.conversationId));
+      return;
+    }
+    const merged = applyTraceEvents(String(payload.conversationId), [event]);
+    if (merged?.hasGap || merged?.hasConflict) void syncTraceSince(String(payload.conversationId));
   };
   const applyAgentOptions = (value: unknown): void => {
     const options = readAgentOptions(value);
@@ -405,44 +623,37 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
 
   useLayoutEffect(() => {
-    if (!shouldFollowLatestRef.current) return;
     const list = messageListRef.current;
-    if (list) list.scrollTop = list.scrollHeight;
-  }, [conversationId, loading, messages, sending, traceTurns, localProcessEntries, permissionRequests]);
+    const anchor = olderScrollAnchorRef.current;
+    if (list && anchor) {
+      list.scrollTop = anchor.top + list.scrollHeight - anchor.height;
+      olderScrollAnchorRef.current = null;
+      return;
+    }
+    if (list && shouldFollowLatestRef.current) list.scrollTop = list.scrollHeight;
+  }, [conversationId, loading, messages, sending, traceTurns, localProcessEntries, permissionRequests, traceHasMore, traceOlderLoading]);
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
     };
     const loadConversation = (id: string) => {
+      // UI state 的 revision 更新不代表切换会话；同一会话只靠 append 保持增量更新。
+      if (conversationIdRef.current === id) return;
       const seq = ++loadSeqRef.current;
+      if (traceStateRef.current.conversationId !== id) resetTraceState(id);
       // 该会话是否正在执行中：后端 active 集合 或 本地正在给它发送
       const targetActive = activeConversationsRef.current.has(id) || sendingConversationRef.current === id;
       const preserveSending = (sendingRef.current && sendingConversationRef.current === id) || targetActive;
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
-      // 消息与轨迹统一从 getConversationTrace 派生，切换会话只需拉一次轨迹
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
+      // 首次只拉最近完整 turn；更早 turn 由顶部滚动分页补入
       void loadTrace(id, seq).finally(() => { if (!disposed && seq === loadSeqRef.current) setLoading(false); });
       loadPermissionRequests(id);
-      // 切入正在执行中的会话时，启动轮询实时刷新进度，直到该会话不再执行、或用户切走
-      if (targetActive && sendingConversationRef.current !== id) {
-        void (async () => {
-          while (!disposed && seq === loadSeqRef.current && activeConversationsRef.current.has(id)) {
-            await wait(1500);
-            if (disposed || seq !== loadSeqRef.current) return;
-            await loadTrace(id, seq);
-          }
-          // 该会话结束后再拉一次最终轨迹
-          if (!disposed && seq === loadSeqRef.current && conversationIdRef.current === id) {
-            await loadTrace(id, seq);
-            if (!disposed && seq === loadSeqRef.current) { setSending(false); setStopping(false); }
-          }
-        })();
-      }
       requestWithRetry(ctx, 'agent', 'getConversationOptions', id).then((options: unknown) => {
         if (disposed || seq !== loadSeqRef.current) return;
         applyAgentOptions(options);
@@ -464,6 +675,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     };
     applyUiStateRef.current = applyConversationUiState;
     registerSetter('conversation.ui.changed', (value: unknown) => applyConversationUiState(value, ++uiStateSequenceRef.current));
+    registerSetter('conversation.trace.append', applyTraceAppend);
     registerSetter('conversation.changed', (value: unknown) => {
       if (disposed || !Array.isArray(value)) return;
       const list = value as ConversationData[];
@@ -479,6 +691,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
           setSending(true);
         } else if (sendingConversationRef.current !== current) {
           // 后端已结束，且本地也不是正在给该会话发送 → 解锁
+          void syncTraceSince(current);
           setSending(false);
           setStopping(false);
         }
@@ -503,6 +716,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (typeof progress === 'string') return;
       if (!progress || typeof progress !== 'object') return;
       if (progress.contextUsage !== undefined) setContextUsage(readContextUsage(progress.contextUsage));
+      if (progress.phase === 'completed' || progress.phase === 'error') void syncTraceSince(statusConversationId);
       if (progress.phase === 'waiting_permission') {
         void loadPermissionRequests(statusConversationId);
       }
@@ -545,6 +759,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     const currentActive = sending || (sendingRef.current && sendingConversationRef.current === conversationId) || (!!conversationId && activeConversationsRef.current.has(conversationId));
     if (!content || currentActive || loading || configurationError || permissionRequests.length > 0) return;
     let target = conversationId;
+    let traceCursorBeforeSend = traceStateRef.current.conversationId === target ? traceStateRef.current.cursor : -1;
     const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier, sandboxMode, approvalPolicy);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const processTurn = messages.filter((message) => message.role === 'user').length + 1;
@@ -563,8 +778,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     sendingConversationRef.current = target;
     stopRequestedRef.current = false;
     setSending(true); setError(null);
-    let stopPolling = false;
-    let pollPromise: Promise<void> | null = null;
     try {
       if (!target) {
         const created = await ctx.message.request('agent', 'createConversation', source, project || undefined, selectedTurnOptions) as { id: string };
@@ -574,34 +787,27 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         const selectionSequence = ++uiStateSequenceRef.current;
         const snapshot = await requestWithRetry(ctx, 'conversation-list', 'selectConversation', target);
         applyUiStateRef.current(snapshot, selectionSequence);
+        traceCursorBeforeSend = traceStateRef.current.conversationId === target ? traceStateRef.current.cursor : -1;
       }
       const optimistic: MessageData = { id: `opt-${Date.now()}`, role: 'user', content };
       setMessages((current) => [...current, optimistic]); setText(''); setPendingMessages([]);
-      const pollTrace = async () => {
-        while (!stopPolling) {
-          if (target && target === conversationIdRef.current) {
-            await loadTrace(target, loadSeqRef.current);
-          }
-          await wait(1500);
-        }
-      };
-      pollPromise = pollTrace();
       await ctx.message.request('agent', 'sendMessage', target, optimistic.content, selectedTurnOptions);
-      setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result: '模型已完成', isError: false } : entry));
-      stopPolling = true;
-      await pollPromise;
-      if (target === conversationIdRef.current) await loadTrace(target, loadSeqRef.current);
+      await syncTraceSince(target);
+      setLocalProcessEntries((current) => current.filter((entry) => entry.id !== processId));
     } catch (err) {
       logError('发送消息失败', err);
+      if (target) await syncTraceSince(target);
       const result = stopRequestedRef.current ? '已停止当前对话' : sendErrorMessage(err);
-      setLocalProcessEntries((current) => current.map((entry) => entry.id === processId ? { ...entry, result, isError: true } : entry));
+      const traceRecordedFailure = target === traceStateRef.current.conversationId && traceStateRef.current.cursor > traceCursorBeforeSend;
+      setLocalProcessEntries((current) => traceRecordedFailure
+        ? current.filter((entry) => entry.id !== processId)
+        : current.map((entry) => entry.id === processId ? { ...entry, result, isError: true } : entry));
     } finally {
-      stopPolling = true;
-      if (pollPromise) await pollPromise.catch(() => undefined);
       sendingRef.current = false;
       if (sendingConversationRef.current === target) sendingConversationRef.current = null;
       stopRequestedRef.current = false;
       if (pendingConversationIdRef.current === target) pendingConversationIdRef.current = null;
+      if (target && conversationIdRef.current === target && traceStateRef.current.conversationId === target) publishTraceState(target, traceStateRef.current);
       // 只有当前显示的仍是本次发送的会话时，才在此处解锁，避免误伤已切走的其他会话
       if (conversationIdRef.current === target) { setSending(false); setStopping(false); }
     }
@@ -786,16 +992,11 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     </div>
   </div>;
 
-  const visibleMessages = useMemo(
-    () => messages.slice(Math.max(0, messages.length - visibleMessageCount)),
-    [messages, visibleMessageCount],
-  );
-  const hiddenMessageCount = messages.length - visibleMessages.length;
-  const hiddenTurnCount = messages
-    .slice(0, hiddenMessageCount)
-    .filter((message) => message.role === 'user')
-    .length;
-  const loadOlderMessages = (): void => setVisibleMessageCount((count) => Math.min(messages.length, count + MESSAGE_BATCH_SIZE));
+  const handleMessageListScroll = (event: UIEvent<HTMLDivElement>): void => {
+    const list = event.currentTarget;
+    shouldFollowLatestRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
+    if (list.scrollTop <= 48 && conversationId && traceHasMore && !traceOlderLoadingRef.current) void loadOlderTrace(conversationId);
+  };
   return <div className="message-panel">
     {projectPickerOpen && (
       <DirectoryPicker
@@ -806,21 +1007,18 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       />
     )}
     {(error || configurationError) && <div role="alert" className="error-alert">{error || configurationError}</div>}
-    <div className="message-list-container" ref={messageListRef} onScroll={(event) => {
-      const list = event.currentTarget;
-      shouldFollowLatestRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
-    }}>
+    <div className="message-list-container" ref={messageListRef} onScroll={handleMessageListScroll}>
       {!conversationId && !draft ? <div className="empty-state"><div className="empty-state-card"><div className="empty-state-mark">✦</div><h2>选择或新建一个对话</h2><p>从左侧项目中继续工作，或点击"新对话"开始。</p></div></div> : (
         <>
-          {hiddenMessageCount > 0 && <button type="button" className="message-history-loader" onClick={loadOlderMessages}>加载更早的 {Math.min(hiddenMessageCount, MESSAGE_BATCH_SIZE)} 条消息</button>}
+          {traceHasMore && <button type="button" className="message-history-loader" onClick={() => conversationId && void loadOlderTrace(conversationId)} disabled={traceOlderLoading}>{traceOlderLoading ? '正在加载更早回合…' : '加载更早回合'}</button>}
           <Transcript
             draft={draft}
             project={project}
             modelLabel={models.find((item) => item.id === model)?.name || fallbackModel(source)}
-            messages={visibleMessages}
+            messages={messages}
             traceTurns={traceTurns}
             localProcessEntries={localProcessEntries}
-            turnOffset={hiddenTurnCount}
+            turnOffset={0}
             permissionRequests={permissionRequests}
             resolvingPermissionId={resolvingPermissionId}
             onResolvePermission={resolvePermission}

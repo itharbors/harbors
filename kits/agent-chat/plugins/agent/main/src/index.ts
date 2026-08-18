@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
 import { HarborsAdapter } from './adapter/harbors.js';
+import { paginateTraceEvents } from './adapter/trace-pagination.js';
 
 declare const editor: any;
 
@@ -50,6 +51,13 @@ function createAdapters(): Record<AgentSource, AgentAdapter> {
   const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter() };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
+    result[source].setTraceEventListener?.((adapterConversationId, event) => {
+      runtime?.message.broadcast('conversation.trace.append', {
+        conversationId: conversationId(source, adapterConversationId),
+        cursor: event.seq,
+        event: { ...event, data: { ...event.data } },
+      });
+    });
   });
   return result;
 }
@@ -62,6 +70,10 @@ function parseConversationId(id: string): { source: AgentSource; adapterId: stri
   const adapterId = id.slice(delimiter + 1);
   if (delimiter < 1 || !adapterId || source !== 'harbors') throw new Error('[agent] invalid conversation id');
   return { source, adapterId };
+}
+
+function normalizeTraceSeq(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= -1 ? value : -1;
 }
 
 function copyConversations(): Conversation[] {
@@ -204,7 +216,10 @@ editor.plugin.define({
     unload() {
       clearPermissionRequests('cancelled');
       try {
-        Object.values(adapters || {}).forEach((adapter) => adapter.stop());
+        Object.values(adapters || {}).forEach((adapter) => {
+          adapter.setTraceEventListener?.(undefined);
+          adapter.stop();
+        });
       } catch (err) {
         console.error('[agent] failed to stop adapter:', err);
       }
@@ -322,6 +337,47 @@ editor.plugin.define({
       const route = parseConversationId(conversationId);
       const trace = await requireAdapter(route.source).getConversationTrace?.(route.adapterId, turnId);
       return (trace || []).map((event) => ({ ...event, data: { ...event.data } }));
+    },
+    async getConversationTraceSince(conversationId: string, afterSeq?: number): Promise<AgentTraceBatch & { conversationId: string }> {
+      const route = parseConversationId(conversationId);
+      const normalizedAfterSeq = normalizeTraceSeq(afterSeq);
+      const adapter = requireAdapter(route.source);
+      const batch = await adapter.getConversationTraceSince?.(route.adapterId, normalizedAfterSeq);
+      if (batch) {
+        return {
+          conversationId,
+          afterSeq: batch.afterSeq,
+          cursor: batch.cursor,
+          events: batch.events.map((event) => ({ ...event, data: { ...event.data } })),
+        };
+      }
+      const trace = (await adapter.getConversationTrace?.(route.adapterId)) || [];
+      const events = trace.filter((event) => event.seq > normalizedAfterSeq);
+      return {
+        conversationId,
+        afterSeq: normalizedAfterSeq,
+        cursor: trace.at(-1)?.seq ?? normalizedAfterSeq,
+        events: events.map((event) => ({ ...event, data: { ...event.data } })),
+      };
+    },
+    async getConversationTracePage(conversationId: string, options?: AgentTracePageOptions): Promise<AgentTracePage & { conversationId: string }> {
+      const route = parseConversationId(conversationId);
+      const adapter = requireAdapter(route.source);
+      const page = await adapter.getConversationTracePage?.(route.adapterId, options);
+      if (page) {
+        return {
+          conversationId,
+          ...page,
+          events: page.events.map((event) => ({ ...event, data: { ...event.data } })),
+        };
+      }
+      const trace = (await adapter.getConversationTrace?.(route.adapterId)) || [];
+      const fallback = paginateTraceEvents(trace, options);
+      return {
+        conversationId,
+        ...fallback,
+        events: fallback.events.map((event) => ({ ...event, data: { ...event.data } })),
+      };
     },
     async stopConversation(conversationId: string): Promise<boolean> {
       if (!conversations.some((conversation) => conversation.id === conversationId)) {
