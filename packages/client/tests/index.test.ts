@@ -30,4 +30,14 @@ describe('client main entry', () => {
 
     expect(html).toContain('<meta name="theme-color" content="#111722">');
   });
+
+  it('offsets the app below the top safe area on coarse landscape displays', () => {
+    const html = fs.readFileSync(path.resolve('index.html'), 'utf-8');
+
+    expect(html).toContain('--app-viewport-safe-top: 0px;');
+    expect(html).toContain('@media (orientation: landscape) and (any-pointer: coarse)');
+    expect(html).toContain('max(20px, env(safe-area-inset-top, 0px))');
+    expect(html).toContain('box-sizing: border-box;');
+    expect(html).toContain('padding-top: var(--app-viewport-safe-top);');
+  });
 });

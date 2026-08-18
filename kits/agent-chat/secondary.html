@@ -5,8 +5,29 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Agent Chat Window</title>
     <style>
-      :root { --kit-viewport-height: 100svh; }
-      html, body, #app { width: 100%; height: var(--kit-viewport-height); min-height: 0; margin: 0; overflow: hidden; background: #171a21; }
+      :root {
+        --kit-viewport-width: 100vw;
+        --kit-viewport-height: 100svh;
+        --kit-viewport-offset-top: 0px;
+        --kit-viewport-offset-left: 0px;
+        --kit-viewport-safe-top: 0px;
+      }
+      @media (orientation: landscape) and (any-pointer: coarse) {
+        :root { --kit-viewport-safe-top: max(20px, env(safe-area-inset-top, 0px)); }
+      }
+      html, body { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; background: #171a21; }
+      #app {
+        position: absolute;
+        top: var(--kit-viewport-offset-top);
+        left: var(--kit-viewport-offset-left);
+        width: var(--kit-viewport-width);
+        height: var(--kit-viewport-height);
+        box-sizing: border-box;
+        padding-top: var(--kit-viewport-safe-top);
+        min-height: 0;
+        overflow: hidden;
+        background: #171a21;
+      }
       window-group-app { display: block; width: 100%; height: 100%; min-height: 0; }
       *, *::before, *::after { box-sizing: border-box; }
     </style>
@@ -17,13 +38,41 @@
     </div>
     <script>
       (() => {
-        const syncViewportHeight = () => {
-          const height = window.visualViewport?.height ?? window.innerHeight;
-          document.documentElement.style.setProperty('--kit-viewport-height', `${Math.round(height)}px`);
+        const root = document.documentElement;
+        let frameId = 0;
+
+        const sizeInPixels = (value, fallback) => {
+          const size = Number.isFinite(value) ? value : fallback;
+          return `${Math.max(1, Math.round(Number.isFinite(size) ? size : 1))}px`;
         };
-        syncViewportHeight();
-        window.visualViewport?.addEventListener('resize', syncViewportHeight);
-        window.addEventListener('resize', syncViewportHeight);
+
+        const offsetInPixels = (value) => {
+          return `${Math.max(0, Math.round(Number.isFinite(value) ? value : 0))}px`;
+        };
+
+        const syncViewport = () => {
+          frameId = 0;
+          const viewport = window.visualViewport;
+          root.style.setProperty('--kit-viewport-width', sizeInPixels(viewport?.width, window.innerWidth));
+          root.style.setProperty('--kit-viewport-height', sizeInPixels(viewport?.height, window.innerHeight));
+          root.style.setProperty('--kit-viewport-offset-top', offsetInPixels(viewport?.offsetTop));
+          root.style.setProperty('--kit-viewport-offset-left', offsetInPixels(viewport?.offsetLeft));
+        };
+
+        const scheduleViewportSync = () => {
+          if (frameId === 0) frameId = window.requestAnimationFrame(syncViewport);
+        };
+
+        const scheduleViewportCorrection = () => {
+          scheduleViewportSync();
+          window.requestAnimationFrame(scheduleViewportSync);
+        };
+
+        syncViewport();
+        window.visualViewport?.addEventListener('resize', scheduleViewportSync);
+        window.visualViewport?.addEventListener('scroll', scheduleViewportSync);
+        window.addEventListener('resize', scheduleViewportCorrection);
+        window.addEventListener('orientationchange', scheduleViewportCorrection);
       })();
     </script>
     <script type="module" src="/assets/index.js"></script>
