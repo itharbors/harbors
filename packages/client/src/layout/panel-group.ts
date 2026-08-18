@@ -14,6 +14,15 @@ export class PanelGroup extends HTMLElement {
     startY: number;
     moved: boolean;
   } | null = null;
+  private touchState: {
+    identifier: number;
+    tabIndex: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null = null;
+  private lastPointerActivation: { tabIndex: number; at: number } | null = null;
+  private lastTouchActivation: { tabIndex: number; at: number } | null = null;
 
   connectedCallback() {
     if (!this.shadowRoot) {
@@ -255,7 +264,12 @@ export class PanelGroup extends HTMLElement {
 
     const tabBar = this.shadowRoot!.querySelector<HTMLElement>('.tab-bar')!;
     tabBar.addEventListener('pointerdown', (event) => {
-      if (this.pointerState) return;
+      if (this.pointerState) {
+        // A primary pointerdown is also the recovery point for browsers which
+        // dropped the previous pointerup/pointercancel (notably Safari).
+        if (event.isPrimary !== true) return;
+        this.pointerState = null;
+      }
 
       const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
       if (!tab) return;
@@ -267,12 +281,6 @@ export class PanelGroup extends HTMLElement {
         startY: event.clientY,
         moved: false,
       };
-
-      try {
-        tab.setPointerCapture?.(event.pointerId);
-      } catch {
-        // Pointer capture is an enhancement; the gesture still works while the pointer stays in the tab bar.
-      }
     });
 
     tabBar.addEventListener('pointermove', (event) => {
@@ -289,18 +297,95 @@ export class PanelGroup extends HTMLElement {
       if (!state || state.pointerId !== event.pointerId) return;
 
       this.pointerState = null;
-      this.suppressClickUntil = performance.now() + 500;
-      if (state.moved) return;
+      if (state.moved) {
+        this.suppressClickUntil = performance.now() + 500;
+        return;
+      }
+
+      const now = performance.now();
+      if (
+        event.pointerType === 'touch'
+        && this.lastTouchActivation
+        && this.lastTouchActivation.tabIndex === state.tabIndex
+        && now - this.lastTouchActivation.at < 500
+      ) {
+        return;
+      }
 
       this.activate(state.tabIndex);
+      this.lastPointerActivation = { tabIndex: state.tabIndex, at: now };
+      this.suppressClickUntil = now + 500;
     });
 
     tabBar.addEventListener('pointercancel', (event) => {
       if (this.pointerState?.pointerId === event.pointerId) {
         this.pointerState = null;
-        this.suppressClickUntil = performance.now() + 500;
       }
     });
+
+    tabBar.addEventListener('touchstart', (event) => {
+      if (event.changedTouches.length === 0) return;
+      if (this.touchState) {
+        // A second touchstart can be the browser's continuation of the same
+        // contact. Keep it only while the tracked identifier is still down.
+        if (event.touches && findTouch(event.touches, this.touchState.identifier)) return;
+        this.touchState = null;
+      }
+      const touch = event.changedTouches[0];
+      const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
+      if (!tab) return;
+
+      this.touchState = {
+        identifier: touch.identifier,
+        tabIndex: Number(tab.dataset.index || '0'),
+        startX: touch.clientX,
+        startY: touch.clientY,
+        moved: false,
+      };
+    }, { passive: true });
+
+    tabBar.addEventListener('touchmove', (event) => {
+      const state = this.touchState;
+      if (!state) return;
+      const touch = findTouch(event.changedTouches, state.identifier);
+      if (!touch) return;
+      if (Math.hypot(touch.clientX - state.startX, touch.clientY - state.startY) >= DRAG_THRESHOLD) {
+        state.moved = true;
+      }
+    }, { passive: true });
+
+    tabBar.addEventListener('touchend', (event) => {
+      const state = this.touchState;
+      if (!state) return;
+      const touch = findTouch(event.changedTouches, state.identifier);
+      if (!touch) return;
+
+      this.touchState = null;
+      if (state.moved) {
+        this.suppressClickUntil = performance.now() + 500;
+        return;
+      }
+
+      const now = performance.now();
+      if (
+        this.lastPointerActivation
+        && this.lastPointerActivation.tabIndex === state.tabIndex
+        && now - this.lastPointerActivation.at < 500
+      ) {
+        return;
+      }
+
+      this.activate(state.tabIndex);
+      this.lastTouchActivation = { tabIndex: state.tabIndex, at: now };
+      this.suppressClickUntil = now + 500;
+    }, { passive: true });
+
+    tabBar.addEventListener('touchcancel', (event) => {
+      const state = this.touchState;
+      if (state && (event.changedTouches.length === 0 || findTouch(event.changedTouches, state.identifier))) {
+        this.touchState = null;
+      }
+    }, { passive: true });
 
     tabBar.addEventListener('click', (event) => {
       if (performance.now() < this.suppressClickUntil) return;
@@ -314,6 +399,8 @@ export class PanelGroup extends HTMLElement {
   }
 
   private activate(index: number) {
+    this.pointerState = null;
+    this.touchState = null;
     this.panels.forEach((panel, panelIndex) => {
       if (panelIndex === index) {
         panel.setAttribute('active', '');
@@ -344,6 +431,14 @@ export class PanelGroup extends HTMLElement {
       attributeFilter: ['active', 'title', 'data-tab-id'],
     });
   }
+}
+
+function findTouch(touches: TouchList, identifier: number): Touch | null {
+  for (let index = 0; index < touches.length; index += 1) {
+    const touch = touches.item(index);
+    if (touch?.identifier === identifier) return touch;
+  }
+  return null;
 }
 
 if (!customElements.get('ce-panel-group')) {

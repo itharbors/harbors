@@ -31,7 +31,7 @@ function createDragEvent(
 
 function createPointerEvent(
   type: string,
-  input: { clientX?: number; clientY?: number; pointerId?: number; pointerType?: string; bubbles?: boolean; composed?: boolean } = {},
+  input: { clientX?: number; clientY?: number; pointerId?: number; pointerType?: string; isPrimary?: boolean; bubbles?: boolean; composed?: boolean } = {},
 ): PointerEvent {
   const event = new PointerEventCtor(type, {
     clientX: input.clientX ?? 0,
@@ -41,6 +41,9 @@ function createPointerEvent(
   });
   Object.defineProperty(event, 'pointerId', { value: input.pointerId ?? 1 });
   Object.defineProperty(event, 'pointerType', { value: input.pointerType ?? 'mouse' });
+  if (input.isPrimary !== undefined) {
+    Object.defineProperty(event, 'isPrimary', { value: input.isPrimary });
+  }
   return event as PointerEvent;
 }
 
@@ -135,7 +138,7 @@ function createTouchDragHarness() {
   mockRect(targetTab, { left: 100, right: 180, top: 0, bottom: 32 });
   mockRect(content, { left: 100, right: 260, top: 32, bottom: 232 });
 
-  return { commitLayout, sourceTab };
+  return { commitLayout, sourceTab, controller, root };
 }
 
 describe('TabDragController', () => {
@@ -339,6 +342,141 @@ describe('TabDragController', () => {
 
     expect(commitLayout).toHaveBeenCalledTimes(1);
     expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
+  });
+
+  it('recovers a stale session on a new primary pointerdown', () => {
+    const { commitLayout, sourceTab, controller } = createTouchDragHarness();
+
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 30,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 30,
+      pointerType: 'touch',
+      clientX: 24,
+      clientY: 10,
+    }));
+    const shield = document.querySelector('[data-ce-tab-drag-shield]') as HTMLElement;
+    expect(shield).toBeInstanceOf(HTMLElement);
+
+    shield.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 31,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: 10,
+      clientY: 10,
+    }));
+    expect(commitLayout).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeNull();
+
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 32,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: 10,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 32,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    document.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 32,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+
+    expect(commitLayout).toHaveBeenCalledTimes(1);
+    controller.destroy();
+  });
+
+  it('does not let a non-primary pointer replace a stale session', () => {
+    const { commitLayout, sourceTab } = createTouchDragHarness();
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 40,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 41,
+      pointerType: 'touch',
+      isPrimary: false,
+      clientX: 10,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 41,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    document.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 41,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    expect(commitLayout).not.toHaveBeenCalled();
+
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 40,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    document.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 40,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    expect(commitLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not clear a drag when a primary pointerdown is outside a tab', () => {
+    const { commitLayout, sourceTab, root } = createTouchDragHarness();
+    sourceTab.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 50,
+      pointerType: 'touch',
+      clientX: 10,
+      clientY: 10,
+    }));
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 50,
+      pointerType: 'touch',
+      clientX: 24,
+      clientY: 10,
+    }));
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeInstanceOf(HTMLElement);
+
+    root.dispatchEvent(createPointerEvent('pointerdown', {
+      pointerId: 51,
+      pointerType: 'touch',
+      isPrimary: true,
+      clientX: 0,
+      clientY: 0,
+    }));
+    expect(document.querySelector('[data-ce-tab-drag-shield]')).toBeInstanceOf(HTMLElement);
+    document.dispatchEvent(createPointerEvent('pointermove', {
+      pointerId: 50,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    document.dispatchEvent(createPointerEvent('pointerup', {
+      pointerId: 50,
+      pointerType: 'touch',
+      clientX: 110,
+      clientY: 16,
+    }));
+    expect(commitLayout).toHaveBeenCalledTimes(1);
   });
 
   it('marks foreign-session targets as forbidden and does not commit', () => {
