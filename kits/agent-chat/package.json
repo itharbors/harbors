@@ -23,7 +23,9 @@
         "conversation-list",
         "message-panel",
         "agent",
-        "plugin-list"
+        "plugin-list",
+        "preview",
+        "message-debug"
       ]
     }
   },
