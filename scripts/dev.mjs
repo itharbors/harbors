@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import path from 'node:path';
+import { readdir, lstat, realpath } from 'node:fs/promises';
 import { normalizeKitArgument } from './lib/kit-path.mjs';
 import { createDevPages, createDevStackEnvironments } from './lib/dev-launcher.mjs';
 import { createPnpmSpawnSpec } from './lib/pnpm-spawn.mjs';
@@ -21,8 +22,8 @@ if (parsed.errors.length > 0) {
 
 const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
-const defaultKitDir = path.join(process.cwd(), 'kits', 'default');
-const kitSources = [{ directory: defaultKitDir, source: 'builtin' }];
+const kitsDir = path.join(process.cwd(), 'kits');
+const kitSources = await discoverKitSources(kitsDir);
 const stack = createDevStackEnvironments(
   baseEnv,
   requestedKit,
@@ -162,4 +163,20 @@ Examples:
   pnpm run dev:web -- --kit ./kits/<name>
   pnpm run dev:web -- --kit-path /absolute/path/to/kit
 `.trim());
+}
+
+async function discoverKitSources(kitsDir) {
+  const entries = await readdir(kitsDir, { withFileTypes: true });
+  const sources = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue;
+    const directory = path.join(kitsDir, entry.name);
+    const stat = await lstat(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+    sources.push({ directory: await realpath(directory), source: 'builtin' });
+  }
+  if (sources.length === 0) {
+    throw new Error(`No built-in Kits found in ${kitsDir}`);
+  }
+  return sources;
 }
