@@ -18,6 +18,9 @@
           "getSnapshot": [
             "getSnapshot"
           ],
+          "clearMessages": [
+            "clearMessages"
+          ],
           "openDebugPanel": [
             "openDebugPanel"
           ]

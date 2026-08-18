@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { readdir, readFile, rename, rm, stat } from 'node:fs/promises';
-import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync, existsSync, readdirSync } from 'node:fs';
+import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -22,7 +22,7 @@ export interface HubBertTool { name: string; description: string; input_schema: 
 
 export const hubbertTools: HubBertTool[] = [
   // —— 只读 / 检索 ——
-  { name: 'list_files', description: '列出工作区内目录中的文件（仅一层）。查看整个项目结构请用 tree。', input_schema: { type: 'object', properties: { path: { type: 'string', description: '相对工作区路径，可省略。' } } } },
+  { name: 'list_files', description: '列出工作区内目录中的文件（仅一层）。需要递归了解项目结构时，请结合 glob 或多次调用 list_files。', input_schema: { type: 'object', properties: { path: { type: 'string', description: '相对工作区路径，可省略。' } } } },
   {
     name: 'read',
     description: '读取工作区内的 UTF-8 文本文件，返回带行号的内容。使用 offset 和 limit 分段读取大文件。',
@@ -34,17 +34,6 @@ export const hubbertTools: HubBertTool[] = [
         limit: { type: 'number', description: '最多返回行数，默认 2000。' },
       },
       required: ['file_path'],
-    },
-  },
-  {
-    name: 'tree',
-    description: '递归列出目录结构，用于快速了解项目布局。默认忽略 .git、node_modules 等常见目录。',
-    input_schema: {
-      type: 'object',
-      properties: {
-        path: { type: 'string', description: '相对工作区的起始目录，默认工作区根。' },
-        depth: { type: 'number', description: '最大递归深度，默认 3，最大 8。' },
-      },
     },
   },
   {
@@ -63,30 +52,17 @@ export const hubbertTools: HubBertTool[] = [
   },
   {
     name: 'edit',
-    description: '对工作区内已有的 UTF-8 文本文件做字面量替换。默认 old_string 必须唯一出现；若有多处可设 replace_all 为 true。',
+    description: '对工作区内已有的 UTF-8 文本文件做字面量替换。单处替换传 old_string/new_string（默认 old_string 必须唯一，多处可设 replace_all）；一次改多处传 edits 数组，按顺序全部成功才写入（原子操作）。',
     input_schema: {
       type: 'object',
       properties: {
         file_path: { type: 'string', description: '相对工作区的文件路径。' },
-        old_string: { type: 'string', description: '要被替换的字面量文本。' },
+        old_string: { type: 'string', description: '要被替换的字面量文本（单处替换时必填）。' },
         new_string: { type: 'string', description: '替换后的文本，可为空字符串以删除匹配。' },
         replace_all: { type: 'boolean', description: '是否替换所有匹配，默认 false。' },
-        sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
-        justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
-      },
-      required: ['file_path', 'old_string', 'new_string'],
-    },
-  },
-  {
-    name: 'multi_edit',
-    description: '对同一个文件按顺序执行多处字面量替换，全部成功才写入（原子操作）。适合一次性改动同一文件的多个位置。',
-    input_schema: {
-      type: 'object',
-      properties: {
-        file_path: { type: 'string', description: '相对工作区的文件路径。' },
         edits: {
           type: 'array',
-          description: '按顺序执行的替换列表；每一项在前一项的结果上继续替换。',
+          description: '批量替换列表（与 old_string/new_string 二选一）；按顺序执行，每一项在前一项的结果上继续替换。',
           items: {
             type: 'object',
             properties: {
@@ -100,7 +76,7 @@ export const hubbertTools: HubBertTool[] = [
         sandbox_permissions: { type: 'string', enum: ['workspace-write', 'danger-full-access'], description: '仅在当前沙盒拒绝后，用于请求一次更宽的权限；必须同时提供 justification。' },
         justification: { type: 'string', description: '说明这次文件操作为什么需要更宽的权限。' },
       },
-      required: ['file_path', 'edits'],
+      required: ['file_path'],
     },
   },
   {
@@ -311,10 +287,8 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
   }
 
   if (name === 'read') return runRead(root, input, permission?.sandboxMode);
-  if (name === 'tree') return runTree(root, input, permission?.sandboxMode);
   if (name === 'write') return runExclusive(() => runWrite(root, input, permission, signal), signal);
   if (name === 'edit') return runExclusive(() => runEdit(root, input, permission, signal), signal);
-  if (name === 'multi_edit') return runExclusive(() => runMultiEdit(root, input, permission, signal), signal);
   if (name === 'move') return runExclusive(() => runMove(root, input, permission, signal), signal);
   if (name === 'delete') return runExclusive(() => runDelete(root, input, permission, signal), signal);
   if (name === 'glob') return runGlob(root, input, signal, permission?.sandboxMode);
@@ -387,51 +361,44 @@ async function runWrite(root: string, input: Record<string, unknown>, permission
   return `<path>${filePath}</path>\n<type>file</type>\n<content>\nFile written successfully\n</content>`;
 }
 
+interface EditItem { oldString: string; newString: string; replaceAll: boolean; }
+
+/** 解析 edit 的输入：优先用 edits 数组，否则退回单次 old_string/new_string。 */
+function parseEditItems(input: Record<string, unknown>): EditItem[] {
+  if (input.edits !== undefined) {
+    if (!Array.isArray(input.edits) || input.edits.length === 0) throw new Error('edits 必须是非空数组');
+    return input.edits.map((raw, index) => {
+      if (!raw || typeof raw !== 'object') throw new Error(`edits[${index}] 必须是对象`);
+      const item = raw as Record<string, unknown>;
+      const oldString = required(item.old_string, `edits[${index}].old_string`);
+      const newString = typeof item.new_string === 'string' ? item.new_string : '';
+      if (oldString === newString) throw new Error(`edits[${index}] 的 old_string 和 new_string 必须不同`);
+      return { oldString, newString, replaceAll: Boolean(item.replace_all) };
+    });
+  }
+  const oldString = required(input.old_string, 'old_string');
+  const newString = typeof input.new_string === 'string' ? input.new_string : '';
+  if (oldString === newString) throw new Error('old_string 和 new_string 必须不同');
+  return [{ oldString, newString, replaceAll: Boolean(input.replace_all) }];
+}
+
 async function runEdit(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
   const mode = await resolveToolMode('edit', input, permission, signal);
   const filePath = required(input.file_path, 'file_path');
-  const oldString = required(input.old_string, 'old_string');
-  const newString = typeof input.new_string === 'string' ? input.new_string : '';
-  const replaceAll = Boolean(input.replace_all);
-  if (oldString === newString) throw new Error('old_string 和 new_string 必须不同');
-  const target = resolveToolPath(root, filePath, mode);
-  const original = readFileSync(target, 'utf8');
-  const occurrences = countOccurrences(original, oldString);
-  if (occurrences === 0) throw new Error('未找到 old_string');
-  if (!replaceAll && occurrences > 1) throw new Error(`old_string 出现 ${occurrences} 次，请提供更具体的匹配或设置 replace_all 为 true`);
-  const updated = replaceAll ? original.split(oldString).join(newString) : original.replace(oldString, newString);
-  fsWriteFileSync(target, updated, 'utf8');
-  return `The file ${filePath} has been updated${replaceAll ? '. All occurrences were successfully replaced.' : ' successfully.'}`;
-}
-
-interface MultiEditItem { oldString: string; newString: string; replaceAll: boolean; }
-
-function parseMultiEdits(value: unknown): MultiEditItem[] {
-  if (!Array.isArray(value) || value.length === 0) throw new Error('edits 必须是非空数组');
-  return value.map((raw, index) => {
-    if (!raw || typeof raw !== 'object') throw new Error(`edits[${index}] 必须是对象`);
-    const item = raw as Record<string, unknown>;
-    const oldString = required(item.old_string, `edits[${index}].old_string`);
-    const newString = typeof item.new_string === 'string' ? item.new_string : '';
-    if (oldString === newString) throw new Error(`edits[${index}] 的 old_string 和 new_string 必须不同`);
-    return { oldString, newString, replaceAll: Boolean(item.replace_all) };
-  });
-}
-
-async function runMultiEdit(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
-  const mode = await resolveToolMode('multi_edit', input, permission, signal);
-  const filePath = required(input.file_path, 'file_path');
-  const edits = parseMultiEdits(input.edits);
+  const edits = parseEditItems(input);
   const target = resolveToolPath(root, filePath, mode);
   let content = readFileSync(target, 'utf8');
+  const batch = input.edits !== undefined;
   edits.forEach((item, index) => {
+    const label = batch ? `edits[${index}] ` : '';
     const occurrences = countOccurrences(content, item.oldString);
-    if (occurrences === 0) throw new Error(`edits[${index}] 未找到 old_string`);
-    if (!item.replaceAll && occurrences > 1) throw new Error(`edits[${index}] 的 old_string 出现 ${occurrences} 次，请提供更具体的匹配或设置 replace_all 为 true`);
+    if (occurrences === 0) throw new Error(`${label}未找到 old_string`);
+    if (!item.replaceAll && occurrences > 1) throw new Error(`${label}old_string 出现 ${occurrences} 次，请提供更具体的匹配或设置 replace_all 为 true`);
     content = item.replaceAll ? content.split(item.oldString).join(item.newString) : content.replace(item.oldString, item.newString);
   });
   fsWriteFileSync(target, content, 'utf8');
-  return `The file ${filePath} has been updated with ${edits.length} edit${edits.length === 1 ? '' : 's'}.`;
+  if (batch) return `The file ${filePath} has been updated with ${edits.length} edit${edits.length === 1 ? '' : 's'}.`;
+  return `The file ${filePath} has been updated${edits[0].replaceAll ? '. All occurrences were successfully replaced.' : ' successfully.'}`;
 }
 
 async function runMove(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
@@ -460,33 +427,6 @@ async function runDelete(root: string, input: Record<string, unknown>, permissio
   throwIfToolAborted(signal);
   await rm(target, { recursive, force: false });
   return `Deleted ${path}`;
-}
-
-function runTree(root: string, input: Record<string, unknown>, mode?: AgentSandboxMode): string {
-  const start = resolveToolPath(root, string(input.path), mode);
-  const maxDepth = Math.min(8, Math.max(1, Math.floor(Number(input.depth) || 3)));
-  const ignore = new Set(['.git', 'node_modules', '.pnpm-store', 'dist', '.cache', '.DS_Store']);
-  const lines: string[] = [];
-  const walk = (dir: string, prefix: string, depth: number): void => {
-    if (depth > maxDepth) return;
-    let entries;
-    try { entries = readdirSyncSorted(dir); } catch { return; }
-    const visible = entries.filter((entry) => !ignore.has(entry.name));
-    visible.forEach((entry, index) => {
-      const last = index === visible.length - 1;
-      lines.push(`${prefix}${last ? '└── ' : '├── '}${entry.name}${entry.isDirectory() ? '/' : ''}`);
-      if (entry.isDirectory()) walk(resolve(dir, entry.name), `${prefix}${last ? '    ' : '│   '}`, depth + 1);
-    });
-  };
-  walk(start, '', 1);
-  return cap(lines.join('\n') || '(empty)');
-}
-
-function readdirSyncSorted(dir: string): Array<{ name: string; isDirectory: () => boolean }> {
-  return readdirSync(dir, { withFileTypes: true }).sort((a, b) => {
-    if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
-    return a.name.localeCompare(b.name);
-  });
 }
 
 function runTodoWrite(input: Record<string, unknown>): string {
@@ -633,7 +573,7 @@ async function resolveToolMode(toolName: string, input: Record<string, unknown>,
 
 function requiredToolMode(toolName: string, currentMode: AgentSandboxMode): AgentSandboxMode | undefined {
   if (toolName === 'bash' && currentMode !== 'danger-full-access') return 'danger-full-access';
-  if (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit' || toolName === 'multi_edit' || toolName === 'move' || toolName === 'delete')) return 'workspace-write';
+  if (currentMode === 'read-only' && (toolName === 'write' || toolName === 'edit' || toolName === 'move' || toolName === 'delete')) return 'workspace-write';
   return undefined;
 }
 

@@ -12,6 +12,7 @@ type PanelDefinition = {
 const count = document.getElementById('message-count');
 const updated = document.getElementById('message-updated');
 const messagesContainer = document.getElementById('messages');
+const clearBtn = document.getElementById('clear-btn');
 
 const definition: PanelDefinition = {
   async mount(ctx) {
@@ -21,6 +22,15 @@ const definition: PanelDefinition = {
     } catch (err) {
       renderError(err);
     }
+
+    clearBtn?.addEventListener('click', async () => {
+      try {
+        const snapshot = await ctx.message.request('message-debug', 'clearMessages');
+        renderSnapshot(snapshot as MessageSnapshot);
+      } catch (err) {
+        renderError(err);
+      }
+    });
   },
   methods: {
     onMessagesChanged(messages: unknown) {

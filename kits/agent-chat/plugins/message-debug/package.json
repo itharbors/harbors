@@ -1,0 +1,46 @@
+{
+  "name": "message-debug",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "debug": {
+          "entry": "./panel.debug/dist/index.html",
+          "title": "消息调试"
+        }
+      },
+      "message": {
+        "request": {
+          "*": [
+            "onAnyRequest"
+          ],
+          "getSnapshot": [
+            "getSnapshot"
+          ],
+          "openDebugPanel": [
+            "openDebugPanel"
+          ]
+        },
+        "broadcast": {
+          "*": [
+            "onAnyBroadcast"
+          ],
+          "message-debug.messages.changed": [
+            "panel.onMessagesChanged"
+          ]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-message-debug-debug",
+          "message": "openDebugPanel",
+          "order": 1010,
+          "label": "消息调试"
+        }
+      ]
+    }
+  }
+}

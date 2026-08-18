@@ -11,17 +11,20 @@ main { display: flex; flex-direction: column; gap: 16px; padding: 10px 14px; ove
 article { min-width: 0; padding: 9px 10px; border: 1px solid #303642; border-radius: 7px; background: #202631; }
 article strong, article .type { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 article strong { display: flex; align-items: center; gap: 6px; color: #edf2ff; font-size: 12px; }
+article strong .plugin-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 article strong .badge { flex-shrink: 0; padding: 1px 6px; border-radius: 999px; font-size: 10px; font-weight: 600; line-height: 1.5; white-space: nowrap; }
 article strong .badge[data-source='builtin'] { background: rgba(96, 165, 250, 0.18); color: #93c5fd; }
 article strong .badge[data-source='kit'] { background: rgba(110, 231, 168, 0.18); color: #6ee7a8; }
 article strong .badge[data-source='external'] { background: rgba(248, 152, 152, 0.18); color: #f8b98b; }
-article .meta { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 5px; }
-article .type { color: #99a7bb; font-size: 11px; flex: 1; min-width: 0; }
+article .meta { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-top: 7px; }
+article .details { display: flex; flex: 1; min-width: 0; flex-direction: column; gap: 3px; }
+article .type { color: #d5deed; font-size: 11px; font-weight: 600; min-width: 0; }
+article .stats { color: #99a7bb; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 article .actions { display: flex; gap: 4px; flex-shrink: 0; }
 article .actions button { padding: 2px 8px; font-size: 11px; border: 1px solid #3a4252; border-radius: 5px; background: #2a3140; color: #cdd6e4; cursor: pointer; }
 article .actions button:hover:not(:disabled) { background: #353d4f; }
 article .actions button:disabled { opacity: 0.4; cursor: not-allowed; }
-article .feedback { margin-top: 6px; font-size: 11px; min-height: 14px; }
+article .feedback { margin-top: 6px; font-size: 11px; }
 article .feedback[data-tone='success'] { color: #6ee7a8; }
 article .feedback[data-tone='error'] { color: #f89898; }
 article .feedback[data-tone='info'] { color: #aab4c4; }

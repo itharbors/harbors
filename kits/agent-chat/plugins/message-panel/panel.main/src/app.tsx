@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
-import { parseTraceTurns, type ToolProcessEntry, type TraceTurn } from './trace-events.js';
+import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceTurn } from './trace-events.js';
 import Transcript from './transcript.js';
 import './index.css';
 
@@ -32,7 +32,7 @@ function normalizeApprovalPolicy(value: unknown): ApprovalPolicy | undefined {
   return undefined;
 }
 function approvalPolicyLabel(value: ApprovalPolicy): string {
-  return value === 'ask' ? '每次询问' : 'always';
+  return value === 'ask' ? '每次询问' : '始终';
 }
 function turnOptionsFor(model: string, reasoningEffort: string, serviceTier: string, sandboxMode: SandboxMode | '', approvalPolicy: ApprovalPolicy | ''): TurnOptions {
   return { ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), ...(serviceTier ? { serviceTier } : {}), ...(sandboxMode ? { sandboxMode } : {}), ...(approvalPolicy ? { approvalPolicy } : {}) };
@@ -160,12 +160,168 @@ function ContextRing({ ratio, tokens, max }: { ratio: number; tokens: number; ma
   );
 }
 
+interface DirEntry { name: string; path: string; }
+interface DirListing { path: string; parent: string | null; home: string; directories: DirEntry[]; }
+
+function DirectoryPicker({ ctx, initialPath, onCancel, onConfirm }: { ctx: any; initialPath: string | null; onCancel: () => void; onConfirm: (path: string) => void; }) {
+  const [listing, setListing] = useState<DirListing | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [manualPath, setManualPath] = useState('');
+
+  const browse = useCallback(async (dir?: string) => {
+    setLoading(true); setError(null);
+    try {
+      const result = await ctx.message.request('agent', 'listDirectory', dir) as DirListing;
+      setListing(result);
+      setManualPath(result.path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  }, [ctx]);
+
+  useEffect(() => { void browse(initialPath || undefined); }, [browse, initialPath]);
+
+  return (
+    <div className="dir-picker-overlay" onClick={onCancel}>
+      <div className="dir-picker" onClick={(event) => event.stopPropagation()}>
+        <div className="dir-picker-header">
+          <span>选择项目目录</span>
+          <button type="button" className="dir-picker-close" onClick={onCancel} aria-label="关闭">×</button>
+        </div>
+        <div className="dir-picker-path">
+          <input
+            type="text"
+            value={manualPath}
+            spellCheck={false}
+            onChange={(event) => setManualPath(event.target.value)}
+            onKeyDown={(event) => { if (event.key === 'Enter') void browse(manualPath.trim() || undefined); }}
+            placeholder="输入目录路径后回车"
+          />
+          <button type="button" onClick={() => void browse(manualPath.trim() || undefined)}>前往</button>
+        </div>
+        {error && <div className="dir-picker-error">{error}</div>}
+        <div className="dir-picker-list">
+          {listing?.parent && (
+            <button type="button" className="dir-picker-item up" onClick={() => void browse(listing.parent || undefined)}>
+              <span className="dir-picker-icon">↰</span> 上级目录
+            </button>
+          )}
+          {loading && <div className="dir-picker-loading">加载中…</div>}
+          {!loading && listing && listing.directories.length === 0 && <div className="dir-picker-empty">该目录下没有子目录</div>}
+          {!loading && listing?.directories.map((entry) => (
+            <button key={entry.path} type="button" className="dir-picker-item" onClick={() => void browse(entry.path)}>
+              <span className="dir-picker-icon">▸</span> {entry.name}
+            </button>
+          ))}
+        </div>
+        <div className="dir-picker-actions">
+          <button type="button" onClick={onCancel}>取消</button>
+          <button type="button" className="primary" disabled={!listing} onClick={() => listing && onConfirm(listing.path)}>选择当前目录</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+interface OptionItem { value: string; label: string; title?: string; }
+
+function OptionPicker({ label, icon, value, options, disabled, compact, className, onChange }: {
+  label: string;
+  icon: string;
+  value: string;
+  options: OptionItem[];
+  disabled?: boolean;
+  compact: boolean;
+  className?: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [coords, setCoords] = useState<{ left: number; bottom: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const current = options.find((item) => item.value === value);
+
+  const toggle = () => {
+    if (disabled) return;
+    if (open) { setOpen(false); return; }
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) setCoords({ left: rect.left, bottom: window.innerHeight - rect.top + 6 });
+    setOpen(true);
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (event: globalThis.MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const onKey = (event: KeyboardEvent) => { if (event.key === 'Escape') setOpen(false); };
+    const onScrollOrResize = () => setOpen(false);
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onScrollOrResize);
+    window.addEventListener('scroll', onScrollOrResize, true);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onScrollOrResize);
+      window.removeEventListener('scroll', onScrollOrResize, true);
+    };
+  }, [open]);
+
+  if (!compact) {
+    return (
+      <label className={`option-picker ${className || ''}`}>{label}
+        <select value={value} disabled={disabled || options.length < 2} onChange={(event) => onChange(event.target.value)}>
+          {options.length ? options.map((item) => <option key={item.value} value={item.value} title={item.title}>{item.label}</option>) : <option value="">{label}</option>}
+        </select>
+      </label>
+    );
+  }
+
+  return (
+    <div className={`option-picker compact ${className || ''}`} ref={rootRef}>
+      <button
+        type="button"
+        ref={buttonRef}
+        className={`option-icon-button ${open ? 'open' : ''}`}
+        disabled={disabled}
+        title={`${label}：${current?.label ?? ''}`}
+        aria-label={`${label}：${current?.label ?? ''}`}
+        onClick={toggle}
+      >
+        <span className="option-icon">{icon}</span>
+      </button>
+      {open && coords && (
+        <div className="option-popover" role="listbox" style={{ left: coords.left, bottom: coords.bottom }}>
+          <div className="option-popover-title">{label}</div>
+          {options.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              className={`option-popover-item ${item.value === value ? 'selected' : ''}`}
+              title={item.title}
+              onClick={() => { onChange(item.value); setOpen(false); }}
+            >
+              <span className="option-popover-check">{item.value === value ? '✓' : ''}</span>
+              {item.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App({ ctx, registerSetter }: { ctx: any; registerSetter: (key: string, setter: (data: any) => void) => void; }) {
   const [messages, setMessages] = useState<MessageData[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [source, setSource] = useState<Source>('harbors');
   const [draft, setDraft] = useState(false);
   const [project, setProject] = useState<string | null>(null);
+  const [projectPickerOpen, setProjectPickerOpen] = useState(false);
+  const [toolbarCompact, setToolbarCompact] = useState(false);
+  const toolbarRef = useRef<HTMLDivElement | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [model, setModel] = useState('');
   const [reasoningEffort, setReasoningEffort] = useState('');
@@ -176,6 +332,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [configurationError, setConfigurationError] = useState<string | null>(null);
   const [text, setText] = useState('');
+  const [pendingMessages, setPendingMessages] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [sending, setSending] = useState(false);
   const [traceTurns, setTraceTurns] = useState<TraceTurn[]>([]);
@@ -206,6 +363,17 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (seq !== loadSeqRef.current || requestSeq !== traceRequestSeqRef.current) return;
       const list = Array.isArray(events) ? events : [];
       setTraceTurns(parseTraceTurns(list as any[]));
+      // 消息直接从轨迹派生，无需再单独请求 getMessages
+      const derived = parseSurfaceMessages(list as any[]) as MessageData[];
+      setMessages((current) => {
+        const confirmed = new Set(derived.map((message) => `${message.role}\u0000${message.content}`));
+        // 保留仍在流式输出、轨迹尚未落盘的临时消息：给该会话发送时的乐观 user 消息（opt-）、以及 delta 推送的 assistant 消息（msg-）
+        const keepOptimistic = sendingRef.current && sendingConversationRef.current === id
+          ? current.filter((message) => message.id.startsWith('opt-') && !confirmed.has(`${message.role}\u0000${message.content}`))
+          : [];
+        const keepStreaming = current.filter((message) => message.id.startsWith('msg-') && message.role === 'assistant' && message.content && !confirmed.has(`${message.role}\u0000${message.content}`));
+        return [...derived, ...keepOptimistic, ...keepStreaming];
+      });
     } catch (err) {
       if (seq === loadSeqRef.current && requestSeq === traceRequestSeqRef.current) {
         logError('加载轨迹失败', err);
@@ -244,7 +412,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
@@ -257,8 +425,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
       setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setVisibleMessageCount(MESSAGE_BATCH_SIZE); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
-      requestWithRetry(ctx, 'agent', 'getMessages', id).then((data: unknown) => { if (!disposed && seq === loadSeqRef.current) { const loaded = Array.isArray(data) ? data as MessageData[] : []; setMessages((current) => { if (!preserveSending || !sendingRef.current) return loaded; const confirmed = new Set(loaded.map((message) => `${message.role}\u0000${message.content}`)); return [...loaded, ...current.filter((message) => message.id.startsWith('opt-') && !confirmed.has(`${message.role}\u0000${message.content}`))]; }); setLoading(false); } }).catch((err: unknown) => { if (!disposed && seq === loadSeqRef.current) { logError('加载消息失败', err); setError(`消息加载失败：${readableErrorMessage(err)}`); setLoading(false); } });
-      loadTrace(id, seq);
+      // 消息与轨迹统一从 getConversationTrace 派生，切换会话只需拉一次轨迹
+      void loadTrace(id, seq).finally(() => { if (!disposed && seq === loadSeqRef.current) setLoading(false); });
       loadPermissionRequests(id);
       // 切入正在执行中的会话时，启动轮询实时刷新进度，直到该会话不再执行、或用户切走
       if (targetActive && sendingConversationRef.current !== id) {
@@ -267,20 +435,11 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
             await wait(1500);
             if (disposed || seq !== loadSeqRef.current) return;
             await loadTrace(id, seq);
-            if (conversationIdRef.current === id) {
-              try {
-                const latest = await requestWithRetry(ctx, 'agent', 'getMessages', id);
-                if (!disposed && seq === loadSeqRef.current) setMessages(Array.isArray(latest) ? latest as MessageData[] : []);
-              } catch { /* 轮询期间的瞬时错误忽略 */ }
-            }
           }
-          // 该会话结束后拉取最终结果
+          // 该会话结束后再拉一次最终轨迹
           if (!disposed && seq === loadSeqRef.current && conversationIdRef.current === id) {
             await loadTrace(id, seq);
-            try {
-              const latest = await requestWithRetry(ctx, 'agent', 'getMessages', id);
-              if (!disposed && seq === loadSeqRef.current) { setMessages(Array.isArray(latest) ? latest as MessageData[] : []); setSending(false); setStopping(false); }
-            } catch { /* ignore */ }
+            if (!disposed && seq === loadSeqRef.current) { setSending(false); setStopping(false); }
           }
         })();
       }
@@ -366,9 +525,25 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     return () => { disposed = true; };
   }, [ctx, draft, source]);
 
-  const send = async () => {
+  useEffect(() => {
+    const node = toolbarRef.current;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    // 宽松模式下每个下拉约需 175px，加上发送按钮 / 上下文环约 130px 余量；不足则切换为图标模式
+    const measure = () => {
+      const count = node.querySelectorAll('.option-picker').length || 1;
+      const needed = count * 175 + 130;
+      setToolbarCompact(node.clientWidth < needed);
+    };
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    measure();
+    return () => observer.disconnect();
+  });
+
+  const send = async (contentOverride?: string) => {
+    const content = (contentOverride ?? [...pendingMessages, text].map((item) => item.trim()).filter(Boolean).join('\n')).trim();
     const currentActive = sending || (sendingRef.current && sendingConversationRef.current === conversationId) || (!!conversationId && activeConversationsRef.current.has(conversationId));
-    if (!text.trim() || currentActive || loading || configurationError || permissionRequests.length > 0) return;
+    if (!content || currentActive || loading || configurationError || permissionRequests.length > 0) return;
     let target = conversationId;
     const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier, sandboxMode, approvalPolicy);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -400,8 +575,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         const snapshot = await requestWithRetry(ctx, 'conversation-list', 'selectConversation', target);
         applyUiStateRef.current(snapshot, selectionSequence);
       }
-      const optimistic: MessageData = { id: `opt-${Date.now()}`, role: 'user', content: text };
-      setMessages((current) => [...current, optimistic]); setText('');
+      const optimistic: MessageData = { id: `opt-${Date.now()}`, role: 'user', content };
+      setMessages((current) => [...current, optimistic]); setText(''); setPendingMessages([]);
       const pollTrace = async () => {
         while (!stopPolling) {
           if (target && target === conversationIdRef.current) {
@@ -416,8 +591,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       stopPolling = true;
       await pollPromise;
       if (target === conversationIdRef.current) await loadTrace(target, loadSeqRef.current);
-      const latest = await ctx.message.request('agent', 'getMessages', target);
-      if (target === conversationIdRef.current) setMessages(Array.isArray(latest) ? latest as MessageData[] : []);
     } catch (err) {
       logError('发送消息失败', err);
       const result = stopRequestedRef.current ? '已停止当前对话' : sendErrorMessage(err);
@@ -504,6 +677,33 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     }
   };
 
+  const handleLinkClick = useCallback((info: { href: string; text: string }) => {
+    let protocol = '';
+    try { protocol = new URL(info.href, 'http://local/').protocol.replace(/:$/, ''); }
+    catch { protocol = info.href.startsWith('#') ? 'hash' : ''; }
+    // 已阻止默认跳转，广播交由外部插件按需处理（打开外链、在编辑器打开文件等）
+    ctx.message.broadcast('message-panel.link.clicked', {
+      href: info.href,
+      text: info.text,
+      protocol,
+      conversationId: conversationIdRef.current,
+      project,
+    });
+  }, [ctx, project]);
+
+  const switchProject = async (nextProject: string) => {
+    if (!draft || sending || !nextProject) return;
+    setError(null);
+    const commandSequence = ++uiStateSequenceRef.current;
+    try {
+      const snapshot = await requestWithRetry(ctx, 'conversation-list', 'startDraftConversation', source, nextProject);
+      applyUiStateRef.current(snapshot, commandSequence);
+    } catch (err) {
+      logError('切换项目目录失败', err);
+      setError(`切换项目目录失败：${readableErrorMessage(err)}`);
+    }
+  };
+
 
   const selectedModelOption = models.find((item) => item.id === model);
   const reasoningOptions = selectedModelOption?.reasoningEfforts?.length ? selectedModelOption.reasoningEfforts : (reasoningEffort ? [{ id: reasoningEffort, name: reasoningEffort }] : []);
@@ -514,20 +714,74 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setReasoningEffort(optionValue(next?.reasoningEfforts, undefined, next?.defaultReasoningEffort));
     setServiceTier(optionValue(next?.serviceTiers, undefined, next?.defaultServiceTier));
   };
+  const stageText = (): void => {
+    const trimmed = text.trim();
+    if (!trimmed) {
+      if (pendingMessages.length > 0) void send(pendingMessages.join('\n'));
+      return;
+    }
+    setPendingMessages((current) => [...current, trimmed]);
+    setText('');
+  };
   const composer = <div className="composer-shell">
-    <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); send(); } }} placeholder="随心输入，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 3} disabled={loading || sending || permissionRequests.length > 0} />
-    <div className="composer-toolbar">
-      <button type="button" className="composer-add" aria-label="添加上下文" title="添加上下文">＋</button>
-      <label className="option-picker model-picker">模型<select value={model} disabled={models.length < 2} onChange={(event) => selectModel(event.target.value)}>{models.length ? models.map((item) => <option key={item.id} value={item.id}>{item.name}</option>) : <option value="">{fallbackModel(source)}</option>}</select></label>
-      {reasoningOptions.length > 0 && <label className="option-picker reasoning-picker">推理深度<select value={reasoningEffort} disabled={reasoningOptions.length < 2} onChange={(event) => setReasoningEffort(event.target.value)}>{reasoningOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
-      {serviceTierOptions.length > 0 && <label className="option-picker service-tier-picker">服务档位<select value={serviceTier} disabled={serviceTierOptions.length < 2} onChange={(event) => setServiceTier(event.target.value)}>{serviceTierOptions.map((item) => <option key={item.id} value={item.id} title={item.description}>{item.name}</option>)}</select></label>}
-      {permissionOptions?.sandboxModes.length ? <label className="option-picker permission-picker">权限范围<select value={sandboxMode} disabled={sending} onChange={(event) => void updateConversationPermissions(event.target.value as SandboxMode, approvalPolicy)}>{permissionOptions.sandboxModes.map((item) => <option key={item} value={item}>{item === 'read-only' ? '只读' : item === 'workspace-write' ? '工作区可写' : '完全访问'}</option>)}</select></label> : null}
-      {permissionOptions?.approvalPolicies.length ? <label className="option-picker permission-picker">审批策略<select value={approvalPolicy} disabled={sending} onChange={(event) => void updateConversationPermissions(sandboxMode, event.target.value as ApprovalPolicy)}>{permissionOptions.approvalPolicies.map((item) => <option key={item} value={item} title={item === 'always' ? 'always：自动允许权限请求' : undefined}>{approvalPolicyLabel(item)}</option>)}</select></label> : null}
+    {pendingMessages.length > 0 && <div className="composer-pending" aria-label="待发送内容">
+      <div className="composer-pending-label">待发送 · {pendingMessages.length} 段</div>
+      {pendingMessages.map((item, index) => <div className="composer-pending-item" key={`${index}-${item}`}><span>{item}</span><button type="button" onClick={() => setPendingMessages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`移除第 ${index + 1} 段`}>×</button></div>)}
+    </div>}
+    <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); stageText(); } }} placeholder="随心输入，回车暂存；空白回车发送，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 2} disabled={loading || sending || permissionRequests.length > 0} />
+    <div className="composer-toolbar" ref={toolbarRef}>
+      <OptionPicker
+        label="模型"
+        icon="⚓"
+        className="model-picker"
+        compact={toolbarCompact}
+        value={model}
+        options={(models.length ? models : [{ id: '', name: fallbackModel(source) }]).map((item) => ({ value: item.id, label: item.name }))}
+        onChange={selectModel}
+      />
+      {reasoningOptions.length > 0 && <OptionPicker
+        label="推理深度"
+        icon="◇"
+        className="reasoning-picker"
+        compact={toolbarCompact}
+        value={reasoningEffort}
+        options={reasoningOptions.map((item) => ({ value: item.id, label: item.name, title: item.description }))}
+        onChange={setReasoningEffort}
+      />}
+      {serviceTierOptions.length > 0 && <OptionPicker
+        label="服务档位"
+        icon="⚡"
+        className="service-tier-picker"
+        compact={toolbarCompact}
+        value={serviceTier}
+        options={serviceTierOptions.map((item) => ({ value: item.id, label: item.name, title: item.description }))}
+        onChange={setServiceTier}
+      />}
+      {permissionOptions?.sandboxModes.length ? <OptionPicker
+        label="权限范围"
+        icon="◈"
+        className="permission-picker"
+        compact={toolbarCompact}
+        disabled={sending}
+        value={sandboxMode}
+        options={permissionOptions.sandboxModes.map((item) => ({ value: item, label: item === 'read-only' ? '只读' : item === 'workspace-write' ? '工作区可写' : '完全访问' }))}
+        onChange={(value) => void updateConversationPermissions(value as SandboxMode, approvalPolicy)}
+      /> : null}
+      {permissionOptions?.approvalPolicies.length ? <OptionPicker
+        label="审批策略"
+        icon="✓"
+        className="permission-picker"
+        compact={toolbarCompact}
+        disabled={sending}
+        value={approvalPolicy}
+        options={permissionOptions.approvalPolicies.map((item) => ({ value: item, label: approvalPolicyLabel(item), title: item === 'always' ? '始终：自动允许权限请求' : undefined }))}
+        onChange={(value) => void updateConversationPermissions(sandboxMode, value as ApprovalPolicy)}
+      /> : null}
       {contextUsage && <ContextRing ratio={contextUsage.usageRatio} tokens={contextUsage.usedTokens} max={contextUsage.contextWindow} />}
       {sending && conversationId ? (
-        <button type="button" className="stop-button" onClick={() => void stopConversation()} disabled={stopping} aria-label="终止当前对话">{stopping ? '终止中…' : '终止'}</button>
+        <button type="button" className="stop-button" onClick={() => void stopConversation()} disabled={stopping} title={stopping ? '终止中…' : '终止当前对话'} aria-label={stopping ? '终止中' : '终止当前对话'}><span className="stop-icon">■</span></button>
       ) : (
-        <button type="button" className="send-button" onClick={send} disabled={!text.trim() || loading || sending || permissionRequests.length > 0 || Boolean(configurationError)} aria-label="发送消息">↑</button>
+        <button type="button" className="send-button" onClick={() => void send()} disabled={(!text.trim() && pendingMessages.length === 0) || loading || sending || permissionRequests.length > 0 || Boolean(configurationError)} title="发送消息" aria-label="发送消息">↑</button>
       )}
     </div>
   </div>;
@@ -543,6 +797,14 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     .length;
   const loadOlderMessages = (): void => setVisibleMessageCount((count) => Math.min(messages.length, count + MESSAGE_BATCH_SIZE));
   return <div className="message-panel">
+    {projectPickerOpen && (
+      <DirectoryPicker
+        ctx={ctx}
+        initialPath={project}
+        onCancel={() => setProjectPickerOpen(false)}
+        onConfirm={(path) => { setProjectPickerOpen(false); void switchProject(path); }}
+      />
+    )}
     {(error || configurationError) && <div role="alert" className="error-alert">{error || configurationError}</div>}
     <div className="message-list-container" ref={messageListRef} onScroll={(event) => {
       const list = event.currentTarget;
@@ -563,6 +825,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
             resolvingPermissionId={resolvingPermissionId}
             onResolvePermission={resolvePermission}
             sending={sending}
+            onChangeProject={() => setProjectPickerOpen(true)}
+            onLinkClick={handleLinkClick}
           />
         </>
       )}

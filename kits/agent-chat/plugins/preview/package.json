@@ -1,0 +1,29 @@
+{
+  "name": "preview",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "preview": {
+          "entry": "./panel.preview/dist/index.html",
+          "title": "预览"
+        }
+      },
+      "message": {
+        "request": {
+          "readFile": ["readFile"]
+        },
+        "broadcast": {
+          "message-panel.link.clicked": ["onLinkClicked"],
+          "preview.content": ["panel.onPreviewContent"]
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9"
+  }
+}

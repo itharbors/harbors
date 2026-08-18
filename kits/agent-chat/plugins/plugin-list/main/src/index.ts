@@ -52,7 +52,7 @@ editor.plugin.define({
   methods: {
     getPluginSummary() {
       const currentKit = runtime.kit.getCurrent();
-      const kitPlugins = new Set(currentKit?.plugins ?? []);
+      const kitPlugins = new Set<string>(currentKit?.plugins ?? []);
       const loadedNames = new Set(runtime.plugin.listLoaded());
       const registeredPaths = runtime.plugin.listRegistered();
       const seen = new Set<string>();
@@ -73,6 +73,7 @@ editor.plugin.define({
           loaded: true,
           panelCount: Object.keys(contribute.panel ?? {}).length,
           requestCount: Object.keys(contribute.message?.request ?? {}).length,
+          broadcastCount: Object.keys(contribute.message?.broadcast ?? {}).length,
         });
       }
 
@@ -91,6 +92,7 @@ editor.plugin.define({
           loaded: false,
           panelCount: Object.keys(contribute.panel ?? {}).length,
           requestCount: Object.keys(contribute.message?.request ?? {}).length,
+          broadcastCount: Object.keys(contribute.message?.broadcast ?? {}).length,
         });
       }
 
