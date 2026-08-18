@@ -20,8 +20,31 @@
             "panel": "message-panel.main"
           },
           {
-            "type": "leaf",
-            "panel": "plugin-list.list"
+            "type": "vsplit",
+            "sizes": [
+              1,
+              260
+            ],
+            "children": [
+              {
+                "type": "leaf",
+                "panel": "preview.preview"
+              },
+              {
+                "type": "tab",
+                "activeIndex": 0,
+                "children": [
+                  {
+                    "type": "leaf",
+                    "panel": "plugin-list.list"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "message-debug.debug"
+                  }
+                ]
+              }
+            ]
           }
         ]
       }
