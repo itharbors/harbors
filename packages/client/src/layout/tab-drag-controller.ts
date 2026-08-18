@@ -23,6 +23,10 @@ export class TabDragController {
   private dragStartY = 0;
   private dragThreshold = DRAG_THRESHOLD;
   private dragPointerId: number | null = null;
+  private dragShieldPointerDownHandler = (event: PointerEvent) => {
+    if (event.isPrimary !== true) return;
+    this.resetPointerDrag();
+  };
   private moveHandler = (event: PointerEvent) => this.handlePointerMove(event);
   private upHandler = (event: PointerEvent) => this.handlePointerUp(event);
   private cancelHandler = (event: PointerEvent) => this.handlePointerCancel(event);
@@ -70,12 +74,18 @@ export class TabDragController {
   }
 
   private handlePointerDown = (event: PointerEvent) => {
-    if (this.dragPointerId !== null) return;
-
     const path = event.composedPath();
     const tabItem = path.find((node) => node instanceof HTMLElement && node.classList.contains('tab-item')) as HTMLElement | undefined;
     const group = path.find((node) => node instanceof HTMLElement && node.tagName.toLowerCase() === 'ce-panel-group') as HTMLElement | undefined;
     if (!tabItem || !group) return;
+
+    if (this.dragPointerId !== null || this.dragSession || this.dragging || this.dragShield) {
+      // Safari can lose the ending event for a pointer. A later primary
+      // pointerdown is a safe point to discard that stale gesture; an
+      // unmarked/non-primary pointer must never replace the active one.
+      if (event.isPrimary !== true) return;
+      this.resetPointerDrag();
+    }
 
     this.dragSession = {
       dragId: crypto.randomUUID(),
@@ -94,6 +104,15 @@ export class TabDragController {
 
     this.addDocumentListeners();
   };
+
+  private resetPointerDrag() {
+    this.removeDocumentListeners();
+    this.removeDragShield();
+    this.clearPreview();
+    this.dragSession = null;
+    this.dragging = false;
+    this.dragPointerId = null;
+  }
 
   private handleDragStart(event: DragEvent): void {
     const path = event.composedPath();
@@ -426,11 +445,13 @@ export class TabDragController {
       userSelect: 'none',
       touchAction: 'none',
     });
+    shield.addEventListener('pointerdown', this.dragShieldPointerDownHandler);
     this.root.ownerDocument.body.appendChild(shield);
     this.dragShield = shield;
   }
 
   private removeDragShield() {
+    this.dragShield?.removeEventListener('pointerdown', this.dragShieldPointerDownHandler);
     this.dragShield?.remove();
     this.dragShield = null;
   }
