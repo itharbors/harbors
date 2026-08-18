@@ -176,6 +176,9 @@
   }
 }
 @layer utilities {
+  .visible {
+    visibility: visible;
+  }
   .block {
     display: block;
   }

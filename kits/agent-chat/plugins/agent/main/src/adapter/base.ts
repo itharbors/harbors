@@ -156,6 +156,31 @@ export interface AgentTraceEvent {
   ignorable?: true;
 }
 
+/** 从指定事件游标之后补拉的轨迹批次。cursor 是该会话当前最后一个事件 seq。 */
+export interface AgentTraceBatch {
+  afterSeq: number;
+  cursor: number;
+  events: AgentTraceEvent[];
+}
+
+/** 轨迹尾部/向前分页参数；beforeSeq 是包含在结果上界内的旧事件游标。 */
+export interface AgentTracePageOptions {
+  beforeSeq?: number;
+  turnLimit?: number;
+}
+
+/** 按完整 turn 返回的轨迹页。events 始终按 seq 升序排列。 */
+export interface AgentTracePage {
+  cursor: number;
+  events: AgentTraceEvent[];
+  hasMore: boolean;
+  oldestSeq: number;
+  nextBeforeSeq: number | null;
+}
+
+/** 事件成功持久化后触发；监听器不能阻断事件写入。 */
+export type AgentTraceEventListener = (conversationId: string, event: AgentTraceEvent) => void;
+
 export interface AgentAdapter {
   /** 创建新对话 */
   createConversation(project?: string, options?: AgentTurnInput): Promise<AgentConversation>;
@@ -189,6 +214,15 @@ export interface AgentAdapter {
 
   /** 获取对话的 Agent 执行轨迹；不支持轨迹的 adapter 返回空数组。 */
   getConversationTrace?(conversationId: string, turnId?: string): Promise<AgentTraceEvent[]>;
+
+  /** 获取指定事件游标之后的轨迹；用于执行期间增量补拉和发现事件 gap 后恢复。 */
+  getConversationTraceSince?(conversationId: string, afterSeq?: number): Promise<AgentTraceBatch>;
+
+  /** 获取最近若干完整 turn，或按 beforeSeq 向前加载更早 turn。 */
+  getConversationTracePage?(conversationId: string, options?: AgentTracePageOptions): Promise<AgentTracePage>;
+
+  /** 设置事件持久化后的通知回调。 */
+  setTraceEventListener?(listener?: AgentTraceEventListener): void;
 
   /** 发送消息；支持的 adapter 会在回复完成前通过 onDelta 交付增量文本。 */
   sendMessage(conversationId: string, content: string, options?: AgentTurnInput, onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string>;

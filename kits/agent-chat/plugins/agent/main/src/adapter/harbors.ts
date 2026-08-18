@@ -1,13 +1,14 @@
-import { appendFile, mkdir, readdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { appendFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceEvent, AgentTurnInput, AgentTurnOptions } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
 import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
 import { resolveDshCredential } from './credentials.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
 import { loadWorkspaceInstructions } from './instructions.js';
+import { paginateTraceEvents } from './trace-pagination.js';
 
 interface StoredSession {
   id: string;
@@ -24,6 +25,8 @@ interface StoredSession {
   /** Current model-visible event sequence, folded from the append-only log. */
   surface: number[];
   logPath?: string;
+  persistedSize?: number;
+  persistedMtimeMs?: number;
 }
 
 interface SessionHeader {
@@ -128,6 +131,8 @@ const COMPACTION_INSTRUCTION = [
 const DEFAULT_RELAY_RETRY_CONFIG: RelayRetryConfig = { enabled: true, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 8_000 };
 const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
 const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
+const SESSION_LOCK_TIMEOUT_MS = 10_000;
+const SESSION_LOCK_STALE_MS = 30_000;
 
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
@@ -144,9 +149,18 @@ export class HarborsAdapter implements AgentAdapter {
   private readonly abortController = new AbortController();
   private readonly storageDir = resolve(process.env.HARBORS_AGENT_STORAGE_DIR || process.env.HARBORS_PI_AGENT_STORAGE_DIR || join(homedir(), '.harbors', 'pi-agent', 'sessions'));
   private eventWriteQueue: Promise<void> = Promise.resolve();
+  /** 同一会话只保留一个可变快照，避免并发 API 各自 load 后用过期 events.length 分配重复 seq。 */
+  private readonly sessions = new Map<string, StoredSession>();
+  private readonly sessionLoads = new Map<string, Promise<StoredSession>>();
+  private readonly sessionRefreshes = new Map<string, Promise<StoredSession>>();
   private permissionRequester?: AgentPermissionRequester;
+  private traceEventListener?: AgentTraceEventListener;
   private readonly activeTurnControllers = new Map<string, AbortController>();
   private readonly activeTurnCompletions = new Map<string, Promise<void>>();
+
+  setTraceEventListener(listener?: AgentTraceEventListener): void {
+    this.traceEventListener = listener;
+  }
 
   async createConversation(project?: string, input?: AgentTurnInput): Promise<AgentConversation> {
     throwIfAborted(this.abortController.signal);
@@ -172,6 +186,10 @@ export class HarborsAdapter implements AgentAdapter {
     };
     await mkdir(this.storageDir, { recursive: true });
     await writeFile(session.logPath, `${JSON.stringify(this.headerFor(session))}\n`, 'utf8');
+    const initialStat = await stat(session.logPath);
+    session.persistedSize = initialStat.size;
+    session.persistedMtimeMs = initialStat.mtimeMs;
+    this.sessions.set(id, session);
     await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
     await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
     return toConversation(session);
@@ -180,8 +198,8 @@ export class HarborsAdapter implements AgentAdapter {
   async listConversations(): Promise<AgentConversation[]> {
     await mkdir(this.storageDir, { recursive: true });
     const entries = await readdir(this.storageDir, { withFileTypes: true });
-    const paths = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl')).map((entry) => join(this.storageDir, entry.name));
-    const sessions = await Promise.all(paths.map((path) => this.loadByPath(path).catch(() => null)));
+    const ids = entries.filter((entry) => entry.isFile() && /^[a-f0-9-]{36}\.jsonl$/iu.test(entry.name)).map((entry) => entry.name.slice(0, -'.jsonl'.length));
+    const sessions = await Promise.all(ids.map((id) => this.refreshSession(id).catch(() => null)));
     return sessions.filter((session): session is StoredSession => session !== null).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).map(toConversation);
   }
 
@@ -193,6 +211,8 @@ export class HarborsAdapter implements AgentAdapter {
     const trashDir = join(this.storageDir, '.harbors-trash');
     await mkdir(trashDir, { recursive: true });
     await rename(source, join(trashDir, `${id}-${Date.now()}.jsonl`));
+    this.sessions.delete(id);
+    this.sessionLoads.delete(id);
   }
 
   async renameConversation(id: string, title: string): Promise<AgentConversation> {
@@ -206,8 +226,27 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationTrace(id: string, turnId?: string): Promise<AgentTraceEvent[]> {
-    const events = (await this.load(id)).events;
+    const events = (await this.refreshSession(id)).events;
     return events.filter((event) => !turnId || String(event.data.turn) === turnId).map((event) => ({ ...event, data: { ...event.data } }));
+  }
+
+  async getConversationTraceSince(id: string, afterSeq = -1): Promise<AgentTraceBatch> {
+    const session = await this.refreshSession(id);
+    const normalizedAfterSeq = normalizeTraceSeq(afterSeq);
+    return {
+      afterSeq: normalizedAfterSeq,
+      cursor: session.events.at(-1)?.seq ?? normalizedAfterSeq,
+      events: session.events.filter((event) => event.seq > normalizedAfterSeq).map((event) => ({ ...event, data: { ...event.data } })),
+    };
+  }
+
+  async getConversationTracePage(id: string, options?: AgentTracePageOptions): Promise<AgentTracePage> {
+    const session = await this.refreshSession(id);
+    const page = paginateTraceEvents(session.events, options);
+    return {
+      ...page,
+      events: page.events.map((event) => ({ ...event, data: { ...event.data } })),
+    };
   }
 
   async sendMessage(id: string, content: string, input?: AgentTurnInput, _onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string> {
@@ -215,21 +254,27 @@ export class HarborsAdapter implements AgentAdapter {
     if (this.activeTurnControllers.has(id)) throw new Error('该会话已有正在执行的 turn');
     const session = await this.load(id);
     const options = normalizeTurnOptions(input);
-    if (options.model) session.model = options.model;
-    if (options.reasoningEffort) session.reasoningEffort = options.reasoningEffort;
-    if (options.serviceTier) session.serviceTier = options.serviceTier;
     if (options.sandboxMode && options.sandboxMode !== session.sandboxMode) {
-      session.sandboxMode = assertSandboxMode(options.sandboxMode);
-      await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
+      await this.appendEvent(session, 'sandbox/mode', { mode: assertSandboxMode(options.sandboxMode) });
     }
     if (options.approvalPolicy && options.approvalPolicy !== session.approvalPolicy) {
-      session.approvalPolicy = assertApprovalPolicy(options.approvalPolicy);
-      await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
+      await this.appendEvent(session, 'approval/policy', { policy: assertApprovalPolicy(options.approvalPolicy) });
     }
-    const turn = nextTurnNumber(session.events);
     const userMessageId = randomUUID();
     if (session.title === '未命名对话') session.title = content.trim().slice(0, 48) || session.title;
-    await this.appendEvent(session, 'turn/start', { turn, ...turnSettings(session), ...permissionSettings(session) });
+    const turnStart = await this.appendEvent(session, 'turn/start', (current) => {
+      const model = options.model || current.model;
+      const reasoningEffort = options.reasoningEffort || current.reasoningEffort;
+      const serviceTier = options.serviceTier || current.serviceTier;
+      return {
+        turn: nextTurnNumber(current.events),
+        ...(model ? { model } : {}),
+        ...(reasoningEffort ? { reasoningEffort } : {}),
+        ...(serviceTier ? { serviceTier } : {}),
+        ...permissionSettings(current),
+      };
+    });
+    const turn = Number(turnStart.data.turn);
     await this.appendEvent(session, 'user/message', { content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId }, { surfaceOp: 'append' });
     if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
     const turnController = new AbortController();
@@ -284,7 +329,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationSettings(id: string): Promise<AgentTurnOptions> {
-    const session = await this.load(id);
+    const session = await this.refreshSession(id);
     return {
       ...(session.model ? { model: session.model } : {}),
       ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
@@ -295,7 +340,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationContext(id: string): Promise<AgentContextUsage> {
-    const session = await this.load(id);
+    const session = await this.refreshSession(id);
     const config = await this.config();
     const model = session.model || config.modelId;
     const contextWindow = contextWindowFor(config.models, model);
@@ -312,19 +357,17 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationPermissions(id: string): Promise<AgentPermissionState> {
-    const session = await this.load(id);
+    const session = await this.refreshSession(id);
     return { sandboxMode: session.sandboxMode, approvalPolicy: session.approvalPolicy };
   }
 
   async setConversationPermissions(id: string, permissions: Partial<AgentPermissionState>): Promise<AgentPermissionState> {
     const session = await this.load(id);
     if (permissions.sandboxMode && assertSandboxMode(permissions.sandboxMode) !== session.sandboxMode) {
-      session.sandboxMode = assertSandboxMode(permissions.sandboxMode);
-      await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
+      await this.appendEvent(session, 'sandbox/mode', { mode: assertSandboxMode(permissions.sandboxMode) });
     }
     if (permissions.approvalPolicy && assertApprovalPolicy(permissions.approvalPolicy) !== session.approvalPolicy) {
-      session.approvalPolicy = assertApprovalPolicy(permissions.approvalPolicy);
-      await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
+      await this.appendEvent(session, 'approval/policy', { policy: assertApprovalPolicy(permissions.approvalPolicy) });
     }
     return { sandboxMode: session.sandboxMode, approvalPolicy: session.approvalPolicy };
   }
@@ -654,17 +697,60 @@ export class HarborsAdapter implements AgentAdapter {
   private logPathFor(id: string): string { if (!/^[a-f0-9-]{36}$/iu.test(id)) throw new Error('Invalid Harbors conversation id'); return join(this.storageDir, `${id}.jsonl`); }
   private headerFor(session: StoredSession): SessionHeader { return { type: 'session', version: SESSION_FORMAT_VERSION, id: session.id, createdAt: Date.parse(session.createdAt), ...(session.project ? { cwd: session.project } : {}), ...turnSettings(session), ...permissionSettings(session) }; }
 
-  private async load(id: string): Promise<StoredSession> { return this.loadByPath(this.logPathFor(id)); }
+  private async load(id: string): Promise<StoredSession> {
+    const cached = this.sessions.get(id);
+    if (cached) return cached;
+    const pending = this.sessionLoads.get(id);
+    if (pending) return pending;
+    const load = this.loadByPath(this.logPathFor(id)).then((session) => {
+      this.sessions.set(id, session);
+      return session;
+    }).finally(() => {
+      this.sessionLoads.delete(id);
+    });
+    this.sessionLoads.set(id, load);
+    return load;
+  }
+
+  private async refreshSession(id: string): Promise<StoredSession> {
+    const session = await this.load(id);
+    const pending = this.sessionRefreshes.get(id);
+    if (pending) return pending;
+    const refresh = withSessionFileLock(session.logPath || this.logPathFor(id), async () => {
+      const persistedStat = await stat(session.logPath || this.logPathFor(id));
+      if (persistedStat.size !== session.persistedSize || persistedStat.mtimeMs !== session.persistedMtimeMs) {
+        reconcileStoredSession(session, await this.loadByPathUnlocked(session.logPath || this.logPathFor(id)));
+      }
+      return session;
+    }).finally(() => {
+      this.sessionRefreshes.delete(id);
+    });
+    this.sessionRefreshes.set(id, refresh);
+    return refresh;
+  }
 
   private async loadByPath(path: string): Promise<StoredSession> {
+    await mkdir(this.storageDir, { recursive: true });
+    return withSessionFileLock(path, () => this.loadByPathUnlocked(path));
+  }
+
+  private async loadByPathUnlocked(path: string): Promise<StoredSession> {
     const raw = await readFile(path, 'utf8');
-    const lines = raw.split(/\r?\n/u).filter(Boolean);
-    const header = JSON.parse(lines.shift() || '') as SessionHeader;
+    const parsed = parseSessionLog(raw, path);
+    const header = parsed.header;
     if (header.type !== 'session' || header.version !== SESSION_FORMAT_VERSION || !header.id) throw new Error(`Invalid Harbors session header: ${path}`);
-    const events = lines.map((line) => JSON.parse(line) as AgentTraceEvent);
+    const normalized = normalizeStoredTrace(parsed.events);
+    const events = normalized.events;
+    if (parsed.repairTrailingLine || normalized.repaired) {
+      const repaired = `${JSON.stringify(header)}\n${events.map((event) => JSON.stringify(event)).join('\n')}${events.length ? '\n' : ''}`;
+      const temporaryPath = `${path}.${process.pid}.${randomUUID()}.repair`;
+      await writeFile(temporaryPath, repaired, 'utf8');
+      await rename(temporaryPath, path);
+    }
+    const persistedStat = await stat(path);
     const lastEvent = events.at(-1);
     const settings = settingsFromEvents(events, header);
-    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), events, surface: foldSurface(events), logPath: path };
+    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), events, surface: foldSurface(events), logPath: path, persistedSize: persistedStat.size, persistedMtimeMs: persistedStat.mtimeMs };
   }
 
   private async ensureLog(session: StoredSession): Promise<void> {
@@ -675,19 +761,39 @@ export class HarborsAdapter implements AgentAdapter {
     const body = session.events.map((event) => JSON.stringify(event)).join('\n');
     await writeFile(logPath, `${header}\n${body}${body ? '\n' : ''}`, 'utf8');
     session.logPath = logPath;
+    const persistedStat = await stat(logPath);
+    session.persistedSize = persistedStat.size;
+    session.persistedMtimeMs = persistedStat.mtimeMs;
   }
 
-  private async appendEvent(session: StoredSession, type: string, data: Record<string, unknown>, options: AppendEventOptions = {}): Promise<AgentTraceEvent> {
+  private async appendEvent(session: StoredSession, type: string, dataInput: Record<string, unknown> | ((current: StoredSession) => Record<string, unknown>), options: AppendEventOptions = {}): Promise<AgentTraceEvent> {
     let result: AgentTraceEvent | undefined;
     const task = this.eventWriteQueue.then(async () => {
       await this.ensureLog(session);
-      const event: AgentTraceEvent = { type, seq: session.events.length, time: Date.now(), data, ...options };
-      await appendFile(session.logPath!, `${JSON.stringify(event)}\n`, 'utf8');
-      session.events.push(event);
-      session.surface = applySurfaceEvent(session.surface, event);
-      session.updatedAt = new Date(event.time).toISOString();
-      if (type === 'session/title' && typeof data.title === 'string') session.title = data.title;
-      result = event;
+      await withSessionFileLock(session.logPath!, async () => {
+        const persistedStat = await stat(session.logPath!);
+        if (persistedStat.size !== session.persistedSize || persistedStat.mtimeMs !== session.persistedMtimeMs) {
+          const fresh = await this.loadByPathUnlocked(session.logPath!);
+          reconcileStoredSession(session, fresh);
+        }
+        const data = typeof dataInput === 'function' ? dataInput(session) : dataInput;
+        const event: AgentTraceEvent = { type, seq: session.events.length, time: Date.now(), data, ...options };
+        const line = `${JSON.stringify(event)}\n`;
+        await appendFile(session.logPath!, line, 'utf8');
+        const nextStat = await stat(session.logPath!);
+        session.persistedSize = nextStat.size;
+        session.persistedMtimeMs = nextStat.mtimeMs;
+        session.events.push(event);
+        session.surface = applySurfaceEvent(session.surface, event);
+        session.updatedAt = new Date(event.time).toISOString();
+        applySessionEventState(session, event);
+        try {
+          this.traceEventListener?.(session.id, { ...event, data: { ...event.data } });
+        } catch (error) {
+          console.warn('[agent] trace event listener failed after persistence:', error);
+        }
+        result = event;
+      });
     });
     this.eventWriteQueue = task.then(() => undefined, () => undefined);
     await task;
@@ -697,6 +803,167 @@ export class HarborsAdapter implements AgentAdapter {
 
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; arguments: string; }
 interface ToolResult { content: string; isError: boolean; image?: HubBertToolImage; }
+
+interface ParsedSessionLog {
+  header: SessionHeader;
+  events: AgentTraceEvent[];
+  repairTrailingLine: boolean;
+}
+
+async function withSessionFileLock<T>(sessionPath: string, run: () => Promise<T>): Promise<T> {
+  const lockPath = `${sessionPath}.lock`;
+  const token = `${process.pid}:${randomUUID()}`;
+  const startedAt = Date.now();
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  while (!handle) {
+    try {
+      const candidate = await open(lockPath, 'wx');
+      try {
+        await candidate.writeFile(JSON.stringify({ token, createdAt: Date.now() }), 'utf8');
+        await candidate.sync();
+        handle = candidate;
+      } catch (error) {
+        await candidate.close().catch(() => undefined);
+        await unlink(lockPath).catch(() => undefined);
+        throw error;
+      }
+    } catch (error) {
+      if (!isNodeError(error, 'EEXIST')) throw error;
+      try {
+        const lockStat = await stat(lockPath);
+        if (Date.now() - lockStat.mtimeMs > SESSION_LOCK_STALE_MS) await unlink(lockPath);
+      } catch (lockError) {
+        if (!isNodeError(lockError, 'ENOENT')) throw lockError;
+      }
+      if (Date.now() - startedAt >= SESSION_LOCK_TIMEOUT_MS) throw new Error(`Timed out waiting for Harbors session lock: ${sessionPath}`);
+      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 10 + Math.floor(Math.random() * 20)));
+    }
+  }
+  try {
+    return await run();
+  } finally {
+    await handle.close().catch(() => undefined);
+    try {
+      const current = JSON.parse(await readFile(lockPath, 'utf8')) as { token?: unknown };
+      if (current.token === token) await unlink(lockPath);
+    } catch (error) {
+      if (!isNodeError(error, 'ENOENT')) console.warn('[agent] failed to release session lock:', error);
+    }
+  }
+}
+
+function isNodeError(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
+}
+
+function reconcileStoredSession(target: StoredSession, source: StoredSession): void {
+  target.title = source.title;
+  target.project = source.project;
+  target.model = source.model;
+  target.reasoningEffort = source.reasoningEffort;
+  target.serviceTier = source.serviceTier;
+  target.sandboxMode = source.sandboxMode;
+  target.approvalPolicy = source.approvalPolicy;
+  target.createdAt = source.createdAt;
+  target.updatedAt = source.updatedAt;
+  target.events = source.events;
+  target.surface = source.surface;
+  target.logPath = source.logPath;
+  target.persistedSize = source.persistedSize;
+  target.persistedMtimeMs = source.persistedMtimeMs;
+}
+
+function applySessionEventState(session: StoredSession, event: AgentTraceEvent): void {
+  const { data } = event;
+  if (event.type === 'session/title' && typeof data.title === 'string') session.title = data.title;
+  if (event.type === 'sandbox/mode' && typeof data.mode === 'string') session.sandboxMode = assertSandboxMode(data.mode);
+  if (event.type === 'approval/policy' && typeof data.policy === 'string') session.approvalPolicy = assertApprovalPolicy(data.policy);
+  if (event.type === 'turn/start' || event.type === 'request/context') {
+    if (typeof data.model === 'string' && data.model) session.model = data.model;
+    if (typeof data.reasoningEffort === 'string' && data.reasoningEffort) session.reasoningEffort = data.reasoningEffort;
+    if (typeof data.serviceTier === 'string' && data.serviceTier) session.serviceTier = data.serviceTier;
+    if (typeof data.sandboxMode === 'string') session.sandboxMode = assertSandboxMode(data.sandboxMode);
+    if (typeof data.approvalPolicy === 'string') session.approvalPolicy = assertApprovalPolicy(data.approvalPolicy);
+  }
+}
+
+function parseSessionLog(raw: string, path: string): ParsedSessionLog {
+  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
+  let header: SessionHeader;
+  try {
+    header = JSON.parse(lines.shift() || '') as SessionHeader;
+  } catch (error) {
+    throw new Error(`Invalid Harbors session header JSON: ${path}`, { cause: error });
+  }
+  const events: AgentTraceEvent[] = [];
+  let repairTrailingLine = false;
+  for (let index = 0; index < lines.length; index += 1) {
+    try {
+      const event = JSON.parse(lines[index]) as AgentTraceEvent;
+      if (!event || typeof event !== 'object' || typeof event.type !== 'string' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) {
+        throw new Error('event shape is invalid');
+      }
+      events.push(event);
+    } catch (error) {
+      const isInterruptedTail = index === lines.length - 1 && !raw.endsWith('\n');
+      if (!isInterruptedTail) throw new Error(`Invalid Harbors session event JSON at line ${index + 2}: ${path}`, { cause: error });
+      repairTrailingLine = true;
+    }
+  }
+  return { header, events, repairTrailingLine };
+}
+
+/**
+ * 旧版本可能让两个 StoredSession 快照各自用 events.length 分配 seq。
+ * 兼容读取时按物理行保留全部事件并重编号，不能让 Map-by-seq 静默吞掉其中一条。
+ */
+function normalizeStoredTrace(source: readonly AgentTraceEvent[]): { events: AgentTraceEvent[]; repaired: boolean } {
+  const canonicalSeqs = new Map<number, number[]>();
+  const surfaceCanonicalSeqs = new Map<number, number[]>();
+  let repaired = false;
+  const events = source.map((original, canonicalSeq) => {
+    const originalSeq = original.seq;
+    const resolveLatestSeq = (value: unknown, surfaceOnly = false): unknown => {
+      if (typeof value !== 'number' || !Number.isSafeInteger(value)) return value;
+      const candidates = (surfaceOnly ? surfaceCanonicalSeqs : canonicalSeqs).get(value);
+      return candidates?.at(-1) ?? value;
+    };
+    const resolveAllSeqs = (value: unknown, surfaceOnly = false): unknown => {
+      if (!Array.isArray(value)) return value;
+      return value.flatMap((entry) => {
+        if (typeof entry !== 'number' || !Number.isSafeInteger(entry)) return [entry];
+        return [...((surfaceOnly ? surfaceCanonicalSeqs : canonicalSeqs).get(entry) || [entry])];
+      });
+    };
+    const data = { ...original.data };
+    for (const key of ['messageSeqs', 'shadowedSeqs', 'nodes'] as const) {
+      if (key in data) data[key] = resolveAllSeqs(data[key], true);
+    }
+    if (data.shadowedRange && typeof data.shadowedRange === 'object' && !Array.isArray(data.shadowedRange)) {
+      const range = data.shadowedRange as { start?: unknown; end?: unknown };
+      data.shadowedRange = { ...range, start: resolveLatestSeq(range.start, true), end: resolveLatestSeq(range.end, true) };
+    }
+    const surfaceOp = original.surfaceOp && original.surfaceOp !== 'append'
+      ? { ...original.surfaceOp, start: Number(resolveLatestSeq(original.surfaceOp.start, true)), end: Number(resolveLatestSeq(original.surfaceOp.end, true)) }
+      : original.surfaceOp;
+    // sourceEventSeqs 遇到重复旧 seq 时展开为所有候选，明确保留来源而不是任意丢弃一条。
+    const sourceEventSeqs = original.sourceEventSeqs ? resolveAllSeqs(original.sourceEventSeqs) as number[] : undefined;
+    const event: AgentTraceEvent = {
+      ...original,
+      seq: canonicalSeq,
+      data,
+      ...(surfaceOp ? { surfaceOp } : {}),
+      ...(sourceEventSeqs ? { sourceEventSeqs } : {}),
+    };
+    if (originalSeq !== canonicalSeq || JSON.stringify(event) !== JSON.stringify(original)) repaired = true;
+    if (typeof originalSeq === 'number' && Number.isSafeInteger(originalSeq)) {
+      canonicalSeqs.set(originalSeq, [...(canonicalSeqs.get(originalSeq) || []), canonicalSeq]);
+      if (MODEL_SURFACE_TYPES.has(original.type)) surfaceCanonicalSeqs.set(originalSeq, [...(surfaceCanonicalSeqs.get(originalSeq) || []), canonicalSeq]);
+    }
+    return event;
+  });
+  return { events, repaired };
+}
 
 interface ToolFailureGuard {
   consecutive: number;
@@ -1032,6 +1299,9 @@ function isContextOverflowError(error: unknown): boolean {
   }
   const message = normalizeError(error).toLowerCase();
   return /context.{0,20}(length|window|limit|overflow)|too many tokens|maximum context/i.test(message);
+}
+function normalizeTraceSeq(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= -1 ? value : -1;
 }
 function nextTurnNumber(events: AgentTraceEvent[]): number { return events.filter((event) => event.type === 'turn/start').length + 1; }
 function toConversation(session: StoredSession): AgentConversation { const last = projectMessages(session.events).at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...turnSettings(session), ...permissionSettings(session), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }
