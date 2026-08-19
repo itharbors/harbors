@@ -1,4 +1,4 @@
-import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import type { ToolProcessEntry, TraceStep, TraceTurn } from "./trace-events.js";
@@ -792,38 +792,9 @@ const TranscriptTurnRow = memo(function TranscriptTurnRow({
   resolvingPermissionId,
   onResolvePermission,
 }: TranscriptTurnRowProps) {
-  const rowRef = useRef<HTMLDivElement>(null);
-  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
-  const [containmentEnabled, setContainmentEnabled] = useState(false);
-
-  useLayoutEffect(() => {
-    const row = rowRef.current;
-    if (!row) return;
-    const canObserveResize = typeof ResizeObserver !== "undefined";
-    const measure = () => {
-      const height = Math.ceil(row.getBoundingClientRect().height);
-      if (height <= 0) return;
-      setMeasuredHeight((current) => current === height ? current : height);
-      if (canObserveResize) setContainmentEnabled(true);
-    };
-
-    measure();
-    if (!canObserveResize) return;
-    const observer = new ResizeObserver(measure);
-    observer.observe(row);
-    return () => observer.disconnect();
-  }, []);
-
-  const shellStyle = measuredHeight === null
-    ? undefined
-    : { minBlockSize: `${measuredHeight}px`, minHeight: `${measuredHeight}px` };
-  const className = containmentEnabled && measuredHeight !== null
-    ? "transcript-turn-row transcript-turn-row-optimized"
-    : "transcript-turn-row";
-
   return (
-    <div className="transcript-turn-shell" style={shellStyle}>
-      <div ref={rowRef} className={className}>
+    <div className="transcript-turn-shell">
+      <div className="transcript-turn-row">
         <div className="chat-message user transcript-user-message">
           <div className="chat-message-content"><MarkdownMessage content={user.content} /></div>
         </div>
