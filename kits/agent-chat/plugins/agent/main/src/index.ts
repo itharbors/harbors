@@ -199,6 +199,7 @@ editor.plugin.define({
         getCatalog: () => runtime.message.request('model-service', 'getCatalog'),
         complete: (input: ModelServiceCompleteRequest) => runtime.message.request('model-service', 'complete', input),
         cancel: (requestId: string) => runtime.message.request('model-service', 'cancel', requestId),
+        webSearch: (query: string, _signal?: AbortSignal) => runtime.message.request('model-service', 'webSearch', query),
       };
       adapters = createAdapters(modelService);
       try {
@@ -225,6 +226,20 @@ editor.plugin.define({
     },
   },
   methods: {
+    getSetting(key: string, layer?: string) {
+      if (!key.startsWith('agent.')) throw new Error('[agent] setting key does not belong to agent');
+      return runtime?.config.get(key, layer);
+    },
+    setSetting(input: { key: string; value: unknown; layer?: string }) {
+      if (!input || typeof input.key !== 'string' || !input.key.startsWith('agent.')) throw new Error('[agent] setting key does not belong to agent');
+      runtime?.config.set(input.key, input.value, input.layer);
+      return { ok: true };
+    },
+    deleteSetting(input: { key: string; layer?: string }) {
+      if (!input || typeof input.key !== 'string' || !input.key.startsWith('agent.')) throw new Error('[agent] setting key does not belong to agent');
+      runtime?.config.delete(input.key, input.layer);
+      return { ok: true };
+    },
     async listDirectory(dir?: string) {
       const os = await import('node:os');
       const fs = await import('node:fs/promises');

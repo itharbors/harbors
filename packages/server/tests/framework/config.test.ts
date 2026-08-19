@@ -7,19 +7,26 @@ import {
 import type { ConfigLayerBackend, JsonValue } from '../../src/framework/config';
 
 class TestBackend implements ConfigLayerBackend {
-  private readonly values = new Map<string, JsonValue>();
+  private readonly values = new Map<string, Map<string, JsonValue>>();
   readonly destroy = vi.fn(() => this.values.clear());
 
-  get(key: string): JsonValue | undefined {
-    return this.values.get(key);
+  get(key: string, namespace = ''): JsonValue | undefined {
+    return this.values.get(namespace)?.get(key);
   }
 
-  set(key: string, value: JsonValue): void {
-    this.values.set(key, value);
+  set(key: string, value: JsonValue, namespace = ''): void {
+    let values = this.values.get(namespace);
+    if (!values) {
+      values = new Map();
+      this.values.set(namespace, values);
+    }
+    values.set(key, value);
   }
 
-  delete(key: string): void {
-    this.values.delete(key);
+  delete(key: string, namespace = ''): void {
+    const values = this.values.get(namespace);
+    values?.delete(key);
+    if (values?.size === 0) this.values.delete(namespace);
   }
 }
 
@@ -31,8 +38,10 @@ function activate(
     { name: 'project', priority: 20 },
   ],
   writeLayer = 'project',
+  kitId = 'kit-a',
 ) {
   return config.activate({
+    kitId,
     layers: layers.map((layer) => ({
       ...layer,
       backend: layer.backend ?? new TestBackend(),
@@ -125,6 +134,65 @@ describe('ConfigModule', () => {
     dispose();
     config.set('theme', 'light', 'project');
     expect(listener).toHaveBeenCalledTimes(2);
+  });
+
+  it('isolates plugin config values and subscriptions, without exposing owner rebinding', () => {
+    const config = new ConfigModule();
+    activate(config, [{ name: 'global', priority: 10 }], 'global').commit();
+    const first = config.bind({ kitId: 'kit-a', pluginName: 'plugin-a' });
+    const second = config.bind({ kitId: 'kit-a', pluginName: 'plugin-b' });
+    const firstListener = vi.fn();
+    const secondListener = vi.fn();
+    first.subscribe(firstListener);
+    second.subscribe(secondListener);
+
+    first.set('shared', 'a');
+    second.set('shared', 'b');
+
+    expect(first.get('shared')).toBe('a');
+    expect(second.get('shared')).toBe('b');
+    expect(firstListener).toHaveBeenCalledTimes(1);
+    expect(secondListener).toHaveBeenCalledTimes(1);
+    expect(Object.keys(first).sort()).toEqual(['delete', 'get', 'set', 'subscribe']);
+    expect((first as unknown as { bind?: unknown }).bind).toBeUndefined();
+    expect(() => (first as unknown as { set(key: string, value: JsonValue, owner: string): void })
+      .set('shared', 'forged', 'plugin-b')).toThrow(/Unknown config layer/u);
+    expect(second.get('shared')).toBe('b');
+  });
+
+  it('invalidates a bound facade after switching to another Kit', () => {
+    const config = new ConfigModule();
+    activate(config, [{ name: 'global', priority: 10 }], 'global', 'kit-a').commit();
+    const bound = config.bind({ kitId: 'kit-a', pluginName: 'plugin-a' });
+    bound.set('key', 'old');
+
+    activate(config, [{ name: 'global', priority: 10 }], 'global', 'kit-b').commit();
+
+    expect(() => bound.get('key')).toThrow(/not active/u);
+    expect(() => bound.set('key', 'stale')).toThrow(/not active/u);
+    expect(() => bound.delete('key')).toThrow(/not active/u);
+    expect(() => bound.subscribe(() => undefined)).toThrow(/not active/u);
+  });
+
+  it('does not deliver a previous Kit listener to a same-named plugin in the next Kit', () => {
+    const config = new ConfigModule();
+    activate(config, [{ name: 'global', priority: 10 }], 'global', 'kit-a').commit();
+    const previous = config.bind({ kitId: 'kit-a', pluginName: 'model-service' });
+    const previousListener = vi.fn();
+    previous.subscribe(previousListener);
+
+    activate(config, [{ name: 'global', priority: 10 }], 'global', 'kit-b').commit();
+    const current = config.bind({ kitId: 'kit-b', pluginName: 'model-service' });
+    const currentListener = vi.fn();
+    current.subscribe(currentListener);
+    current.set('provider', 'kit-b');
+
+    expect(previousListener).not.toHaveBeenCalled();
+    expect(currentListener).toHaveBeenCalledWith({
+      key: 'provider',
+      type: 'global',
+      action: 'set',
+    });
   });
 
   it('validates activation without changing the active configuration', () => {

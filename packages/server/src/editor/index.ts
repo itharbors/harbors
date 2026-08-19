@@ -16,9 +16,10 @@ import type { LayoutNode, WindowDescriptor } from '../framework/window/types';
 import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
 import { resolveConfigActivation } from '../config-storage';
+import { normalizeMessageRouteDeclaration } from '../framework/message/types';
 import path from 'node:path';
 import fs from 'node:fs';
-import type { PluginPathRoots, PluginSourceIdentity } from '@itharbors/magnet';
+import type { PluginConfigBindingHost, PluginPathRoots, PluginSourceIdentity } from '@itharbors/magnet';
 import {
   parseKitPackageManifest,
   parseRepositoryKitPackage,
@@ -66,6 +67,7 @@ interface ConfigStorageRoots {
 interface ActiveExternalPlugin {
   path: string;
   name: string;
+  kitId: string;
   legacyDataDirectories: readonly string[];
   credentials?: PluginCredentialVault;
 }
@@ -99,6 +101,9 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   const plugin = new PluginModule();
   const panel = new PanelModule();
   const config = new ConfigModule();
+  const configHost: PluginConfigBindingHost = {
+    bind: (kitId, pluginName) => config.bind({ kitId, pluginName }),
+  };
   const i18n = new I18nModule({
     defaultLocale: 'zh-CN',
     initialLocale: options.initialLocale ?? 'zh-CN',
@@ -144,6 +149,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     host: PluginRuntimeHost,
     legacyDataDirectories: readonly string[],
     credentials?: PluginCredentialVault,
+    kitId = kit.getCurrent()?.name ?? '__framework__',
   ): PluginLoadOptions {
     return {
       scope: 'session',
@@ -152,6 +158,8 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         roots: runtimePluginPathRoots,
         legacyDataDirectories,
       },
+      config: configHost,
+      kitId,
       credentials,
     };
   }
@@ -182,7 +190,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const errors: unknown[] = [];
     const loadedPlugins = plugin.listLoaded().flatMap((name) => {
       const info = plugin.getInfo(name);
-      return info ? [{ name: info.name, path: info.path, legacyDataDirectories: [] }] : [];
+      return info ? [{
+        name: info.name,
+        path: info.path,
+        kitId: info.source.kitId ?? '__framework__',
+        legacyDataDirectories: [],
+      }] : [];
     });
 
     try {
@@ -326,6 +339,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
       theme: normalizeKitTheme(pkg['ce-editor'].kit.theme, pkg.name),
       permissions: publication ? [...publication.permissions] : [],
+      permissionGrants: publication?.permissionGrants
+        ? Object.fromEntries(Object.entries(publication.permissionGrants).map(([permission, plugins]) => [
+          permission,
+          plugins ? [...plugins] : [],
+        ]))
+        : undefined,
       plugins,
       layouts,
       windowEntries: normalizedWindowEntries,
@@ -374,7 +393,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       await plugin.load(externalPlugin.path, pluginLoadOptions({
         ...editor,
         menu: runtimeMenu,
-      }, externalPlugin.legacyDataDirectories, externalPlugin.credentials));
+      }, externalPlugin.legacyDataDirectories, externalPlugin.credentials, externalPlugin.kitId));
       return externalPlugin;
     } catch (loadError) {
       try {
@@ -438,12 +457,14 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       const credentials = options.credentialVault
         && options.credentialVault.capability().mode === 'local'
         && descriptor.permissions?.includes('credentials')
+        && descriptor.permissionGrants?.credentials?.includes(info.name)
         && info.capabilities?.includes('credentials')
         ? options.credentialVault.bind(descriptor.name, info.name)
         : undefined;
       preparedPlugins.push({
         path: pluginPath,
         name: info.name,
+        kitId: descriptor.name,
         legacyDataDirectories,
         credentials,
       });
@@ -601,7 +622,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
           await plugin.load(pluginPath, pluginLoadOptions({
             ...editor,
             menu: runtimeMenu,
-          }, []));
+          }, [], undefined, kit.getCurrent()?.name ?? '__framework__'));
         } catch (err) {
           if (info) {
             panel.clearOwner(info.name);
@@ -634,15 +655,18 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       getInfo: (name: string) => panel.getInfo(name),
       getRegistration: (name: string) => panel.getRegistration(name),
       list: () => panel.list(),
+      subscribe: (listener) => panel.subscribe(listener),
       focus: (name: string) => panel.focus(name),
     },
     message: {
       registerRequest: (pluginName, name, handler, location = 'server', methods = []) =>
-        message.registerRequest(pluginName, name, handler, location, methods),
+        message.registerRequest(pluginName, name, handler, location, methods, routeCallers(plugin, pluginName, name)),
       registerBroadcast: (pluginName, topic, handler, location = 'server', methods = []) =>
         message.registerBroadcast(pluginName, topic, handler, location, methods),
       unregisterRequest: (pluginName, name) => message.unregisterRequest(pluginName, name),
       unregisterBroadcast: (pluginName, topic) => message.unregisterBroadcast(pluginName, topic),
+      requestFrom: (callerPlugin, pluginName, name, ...args) =>
+        message.requestFrom(callerPlugin, pluginName, name, ...args),
       queryRequest: (pluginName, name) => message.queryRequest(pluginName, name),
       queryBroadcast: (topic) => message.queryBroadcast(topic),
       request: (pluginName: string, name: string, ...args: unknown[]) => message.request(pluginName, name, ...args),
@@ -714,4 +738,11 @@ function normalizeMenuRoot(
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
+}
+
+function routeCallers(plugin: PluginModule, pluginName: string, messageName: string): string[] | undefined {
+  const info = plugin.getInfo(pluginName);
+  const declaration = info?.contribute?.message?.request?.[messageName];
+  if (declaration === undefined || Array.isArray(declaration)) return undefined;
+  return normalizeMessageRouteDeclaration(declaration).callers;
 }

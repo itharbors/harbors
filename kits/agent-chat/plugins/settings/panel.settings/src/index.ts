@@ -5,7 +5,7 @@ type PanelContext = {
 };
 
 type Layer = 'default' | 'global';
-type SettingControl = 'text' | 'textarea' | 'number' | 'toggle' | 'select';
+type SettingControl = 'text' | 'password' | 'textarea' | 'number' | 'toggle' | 'select';
 type SettingOption = { label: string; value: string | number };
 type SettingField = {
   key: string;
@@ -36,6 +36,10 @@ type SettingsViewModel = {
     fields: SettingFieldViewModel[];
   }>;
 };
+
+export function inputTypeForSetting(control: SettingControl): string {
+  return control === 'toggle' ? 'checkbox' : control === 'number' ? 'number' : control === 'password' ? 'password' : 'text';
+}
 
 let reloadPanel: (() => void) | null = null;
 
@@ -139,7 +143,7 @@ const definition = {
         } else {
           const input = document.createElement('input');
           input.id = id;
-          input.type = field.control === 'toggle' ? 'checkbox' : field.control === 'number' ? 'number' : 'text';
+          input.type = inputTypeForSetting(field.control);
           if (field.control === 'toggle') input.checked = value === true;
           else input.value = value == null ? '' : String(value);
           if (field.placeholder) input.placeholder = field.placeholder;

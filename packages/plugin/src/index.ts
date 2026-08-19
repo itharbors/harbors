@@ -13,6 +13,8 @@ import type {
   PluginLoadOptions,
   PluginRuntime,
   PluginRuntimeHost,
+  PluginConfig,
+  PluginConfigBindingHost,
 } from './runtime.js';
 import { PluginStatus } from './types.js';
 import { Plugin } from './plugin.js';
@@ -56,6 +58,8 @@ export type {
   PluginInfo,
   PluginKind,
   PluginLifecycle,
+  PluginMessageRoute,
+  PluginMessageRouteDeclaration,
   PluginSourceIdentity,
 } from './types.js';
 export type {
@@ -71,11 +75,27 @@ export type {
   PluginPathLoadConfiguration,
   PluginRuntime,
   PluginRuntimeHost,
+  PluginConfig,
+  PluginConfigBindingHost,
+  PluginConfigChangeEvent,
+  PluginConfigValue,
   PluginRuntimeMenuHost,
   PluginRuntimeMessageHost,
   PluginRuntimePanelHost,
   PluginRuntimePluginHost,
 } from './runtime.js';
+
+function unavailablePluginConfig(): PluginConfig {
+  const unavailable = (): never => {
+    throw new Error('Plugin config host is unavailable');
+  };
+  return {
+    get: unavailable,
+    set: unavailable,
+    delete: unavailable,
+    subscribe: unavailable,
+  };
+}
 
 function credentialOperationFailed(): Error & { readonly code: 'CREDENTIAL_OPERATION_FAILED' } {
   return Object.assign(new Error('Credential operation failed'), {
@@ -343,6 +363,8 @@ export class PluginModule {
               runtimeOptions.host,
               registeredPlugin.name,
               runtimePaths,
+              runtimeOptions.config,
+              runtimeOptions.kitId,
               credentialLease?.facade,
             );
         Object.freeze(lifecycleRuntime);
@@ -541,6 +563,8 @@ function createPluginRuntime(
   editor: PluginRuntimeHost,
   ownerName: string,
   paths: PluginPaths,
+  configHost?: PluginConfigBindingHost,
+  kitId?: string,
   credentials?: PluginCredentialVault,
 ): PluginRuntime {
   const menu = editor.menu;
@@ -563,6 +587,8 @@ function createPluginRuntime(
   syncManagedPluginPaths();
   const runtime: Omit<PluginRuntime, 'paths'> = {
     ...editor,
+    config: configHost?.bind(kitId ?? editor.kit.getCurrent()?.name ?? '', ownerName)
+      ?? unavailablePluginConfig(),
     application: {
       request: (pluginName, name, ...args) =>
         editor.application.request(pluginName, name, ...args),
@@ -657,7 +683,9 @@ function createPluginRuntime(
       unregisterBroadcast: (pluginName, topic) =>
         editor.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic),
       request: (pluginName, name, ...args) =>
-        editor.message.request(pluginName, name, ...args),
+        editor.message.requestFrom
+          ? editor.message.requestFrom(ownerName, pluginName, name, ...args)
+          : editor.message.request(pluginName, name, ...args),
       broadcast: (topic, ...args) => {
         assertBroadcastTopic(ownerName, topic);
         editor.message.broadcast(topic, ...args);

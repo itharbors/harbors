@@ -40,6 +40,28 @@ describe('parsePluginPackageManifest', () => {
     expect(parsePluginPackageManifest(legacy).schemaVersion).toBe(1);
   });
 
+  it('accepts object message routes with a unique non-empty caller allowlist', () => {
+    const input = structuredClone(manifest);
+    input['ce-editor'].contribute.message!.request = {
+      complete: { methods: ['complete'], callers: ['settings', 'model-service'] },
+    };
+    const parsed = parsePluginPackageManifest(input);
+    expect(parsed.contribute.message?.request?.complete).toEqual({
+      methods: ['complete'],
+      callers: ['settings', 'model-service'],
+    });
+  });
+
+  it.each([
+    { methods: ['complete'], callers: [] },
+    { methods: ['complete'], callers: ['settings', 'settings'] },
+    { methods: ['complete'], callers: [''] },
+  ])('rejects invalid message caller allowlists %#', (route) => {
+    const input = structuredClone(manifest);
+    input['ce-editor'].contribute.message!.request = { complete: route };
+    expect(() => parsePluginPackageManifest(input)).toThrow(/callers|duplicate|non-empty/i);
+  });
+
   it('preserves and deeply freezes unknown contributions', () => {
     const input = structuredClone(manifest);
     const settings = {

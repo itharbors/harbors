@@ -52,6 +52,27 @@ function providerKeys(provider: SettingsProvider): string[] {
   return provider.sections.flatMap((section) => section.fields.map((field) => field.key));
 }
 
+function ownerForKey(key: string): SettingsProvider | undefined {
+  return [...providers.values()].find((provider) => findSetting(provider, key));
+}
+
+function routesToOwner(provider: SettingsProvider | undefined): boolean {
+  return Boolean(provider && provider.owner !== 'settings' && typeof runtime?.message?.request === 'function');
+}
+
+async function routedViewModel() {
+  const values = new Map<string, unknown>();
+  for (const provider of providers.values()) {
+    if (!routesToOwner(provider)) continue;
+    for (const key of providerKeys(provider)) {
+      for (const layer of ['default', 'global'] as const) {
+        try { values.set(`${key}\0${layer}`, await runtime.message.request(provider.owner, 'getSetting', key, layer)); } catch { values.set(`${key}\0${layer}`, undefined); }
+      }
+    }
+  }
+  return buildSettingsViewModel(providers.values(), (key, layer: ConfigLayer) => values.has(`${key}\0${layer}`) ? values.get(`${key}\0${layer}`) : runtime.config.get(key, layer));
+}
+
 function updateProviderDefaults(previous: SettingsProvider | undefined, next: SettingsProvider): void {
   const oldKeys = new Set(previous ? providerKeys(previous) : []);
   const newKeys = new Set(providerKeys(next));
@@ -102,6 +123,13 @@ function registerProvider(pluginName: string, contribute: unknown): void {
         trackKey(field.key);
       }
     }
+    if (routesToOwner(provider)) {
+      for (const section of provider.sections) {
+        for (const field of section.fields) {
+          if (field.defaultValue !== undefined) void runtime.message.request(provider.owner, 'setSetting', { key: field.key, value: field.defaultValue, layer: 'default' }).catch((error: unknown) => console.error(`[settings] failed to write default for ${field.key}`, error));
+        }
+      }
+    }
     broadcast('settings.registry.changed', { action: previous ? 'replace' : 'attach', owner: pluginName });
   } catch (error) {
     console.error(`[settings] ignored invalid contribution from ${pluginName}`, error);
@@ -112,7 +140,10 @@ function unregisterProvider(pluginName: string): void {
   const provider = providers.get(pluginName);
   if (!provider) return;
   for (const section of provider.sections) {
-    for (const field of section.fields) runtime?.config.delete(field.key, 'default');
+    for (const field of section.fields) {
+      if (routesToOwner(provider)) void runtime.message.request(provider.owner, 'deleteSetting', { key: field.key, layer: 'default' }).catch(() => undefined);
+      else runtime?.config.delete(field.key, 'default');
+    }
   }
   providers.delete(pluginName);
   broadcast('settings.registry.changed', { action: 'detach', owner: pluginName });
@@ -176,20 +207,28 @@ editor.plugin.define({
     get(key: string, type?: string) {
       const currentRuntime = assertRuntime();
       const configType = assertConfigType(type);
+      const owner = ownerForKey(key);
+      if (routesToOwner(owner)) return currentRuntime.message.request(owner!.owner, 'getSetting', key, configType).then((value: unknown) => ({ key, type: type ?? null, value: value ?? null }));
       const value = configType ? currentRuntime.config.get(key, configType) : currentRuntime.config.get(key);
       return { key, type: type ?? null, value: value ?? null };
     },
 
     set(key: string, value: unknown, type?: string) {
       const currentRuntime = assertRuntime();
-      currentRuntime.config.set(key, value, assertConfigType(type));
+      const configType = assertConfigType(type);
+      const owner = ownerForKey(key);
+      if (routesToOwner(owner)) return currentRuntime.message.request(owner!.owner, 'setSetting', { key, value, layer: configType });
+      currentRuntime.config.set(key, value, configType);
       trackKey(key);
       return { ok: true, key };
     },
 
     delete(key: string, type?: string) {
       const currentRuntime = assertRuntime();
-      currentRuntime.config.delete(key, assertConfigType(type));
+      const configType = assertConfigType(type);
+      const owner = ownerForKey(key);
+      if (routesToOwner(owner)) return currentRuntime.message.request(owner!.owner, 'deleteSetting', { key, layer: configType });
+      currentRuntime.config.delete(key, configType);
       if (!type && DEFAULT_CONFIG_TYPES.every((configType) => currentRuntime.config.get(key, configType.name) === undefined)) knownKeys.delete(key);
       return { ok: true, key };
     },
@@ -210,6 +249,7 @@ editor.plugin.define({
 
     getViewModel() {
       const currentRuntime = assertRuntime();
+      if ([...providers.values()].some((provider) => routesToOwner(provider))) return routedViewModel();
       return buildSettingsViewModel(providers.values(), (key, layer: ConfigLayer) => currentRuntime.config.get(key, layer));
     },
 
@@ -218,6 +258,8 @@ editor.plugin.define({
       const request = assertValueRequest(input);
       const field = assertRegisteredField(request.key, request.layer);
       validateSettingValue(field, request.value);
+      const owner = ownerForKey(request.key);
+      if (routesToOwner(owner)) return currentRuntime.message.request(owner!.owner, 'setSetting', request);
       currentRuntime.config.set(request.key, request.value, request.layer);
       trackKey(request.key);
       return { ok: true, key: request.key, layer: request.layer };
@@ -227,6 +269,8 @@ editor.plugin.define({
       const currentRuntime = assertRuntime();
       const request = assertValueRequest(input);
       assertRegisteredField(request.key, request.layer);
+      const owner = ownerForKey(request.key);
+      if (routesToOwner(owner)) return currentRuntime.message.request(owner!.owner, 'deleteSetting', request);
       currentRuntime.config.delete(request.key, request.layer);
       return { ok: true, key: request.key, layer: request.layer };
     },

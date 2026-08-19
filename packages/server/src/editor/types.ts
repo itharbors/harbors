@@ -3,8 +3,14 @@ import type { EditorConfig } from '../framework/config';
 import type { EditorI18n } from '../framework/i18n/types';
 import type { MessageBroadcastRoute, MessageLocation, MessageRequestRoute } from '../framework/message/types';
 import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '../framework/menu/types';
-import type { PanelConstraints, PanelDefinition, PanelDescriptor, PanelRegistration } from '../framework/panel/types';
-import type { ContributeData, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, PluginSourceIdentity } from '@itharbors/magnet';
+import type {
+  PanelAvailabilityChangedEvent,
+  PanelConstraints,
+  PanelDefinition,
+  PanelDescriptor,
+  PanelRegistration,
+} from '../framework/panel/types';
+import type { ContributeData, PluginConfigBindingHost, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, PluginSourceIdentity } from '@itharbors/magnet';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
 import type { PanelFileRuntime, PluginCredentialVault } from '@itharbors/plugin-types';
 
@@ -22,6 +28,7 @@ export interface PluginRuntime {
     registerBroadcast(plugin: string, topic: string, handler: MessageBroadcastRoute['handler'], location?: MessageLocation, methods?: string[]): void;
     unregisterRequest(plugin: string, name: string): void;
     unregisterBroadcast(plugin: string, topic: string): void;
+    requestFrom?(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
     broadcast(topic: string, ...args: unknown[]): void;
   };
@@ -31,6 +38,7 @@ export interface PluginRuntime {
     getInfo(name: string): PanelDescriptor;
     getRegistration(name: string): PanelRegistration | undefined;
     list(): PanelDescriptor[];
+    subscribe(listener: (event: PanelAvailabilityChangedEvent) => void): () => void;
   };
   plugin: {
     define(definition: PluginDefinition): void;
@@ -180,6 +188,7 @@ export interface Editor {
     getInfo(name: string): PanelDescriptor;
     getRegistration(name: string): PanelRegistration | undefined;
     list(): PanelDescriptor[];
+    subscribe(listener: (event: PanelAvailabilityChangedEvent) => void): () => void;
     focus(name: string): void;
   };
   message: {
@@ -187,6 +196,7 @@ export interface Editor {
     registerBroadcast(plugin: string, topic: string, handler: MessageBroadcastRoute['handler'], location?: MessageLocation, methods?: string[]): void;
     unregisterRequest(plugin: string, name: string): void;
     unregisterBroadcast(plugin: string, topic: string): void;
+    requestFrom?(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
     queryRequest(plugin: string, name: string): MessageRequestRoute | undefined;
     queryBroadcast(topic: string): MessageBroadcastRoute[];
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
@@ -230,6 +240,8 @@ export type PluginLoadOptions =
       scope: 'session';
       host: PluginRuntimeHost;
       paths: PluginPathLoadConfiguration;
+      config?: PluginConfigBindingHost;
+      kitId?: string;
       credentials?: PluginCredentialVault;
     }
   | { scope: 'application'; host: ApplicationPluginRuntimeHost; paths: PluginPathLoadConfiguration };

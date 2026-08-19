@@ -38,6 +38,18 @@ test('validates select options, number bounds and the global layer', () => {
   assert.throws(() => validateSettingValue(field, 8), /at most/);
 });
 
+test('accepts password controls as string-only secret fields', () => {
+  const provider = validateSettingsContribution('agent', {
+    settings: {
+      schemaVersion: 1,
+      sections: [{ id: 'credentials', title: 'Credentials', fields: [{ key: 'agent.token', label: 'Token', control: 'password' }] }],
+    },
+  });
+  const field = provider.sections[0].fields[0];
+  validateSettingValue(field, 'secret');
+  assert.throws(() => validateSettingValue(field, 42), /must be a string/u);
+});
+
 test('resolves global then default values and reports provenance', () => {
   const provider = validateSettingsContribution('agent', contribution());
   const values = new Map([

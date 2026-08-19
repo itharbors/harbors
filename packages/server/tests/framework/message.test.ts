@@ -32,6 +32,33 @@ describe('MessageModule', () => {
     await expect(messageModule.request('math', 'add', 3, 4)).resolves.toBe(7);
   });
 
+  it('enforces caller ACLs without passing the caller to the handler', async () => {
+    const handler = vi.fn((value: unknown) => value);
+    messageModule.registerRequest('model-service', 'complete', handler, 'server', [], ['settings']);
+
+    await expect(messageModule.requestFrom('settings', 'model-service', 'complete', { prompt: 'hi' }))
+      .resolves.toEqual({ prompt: 'hi' });
+    expect(handler).toHaveBeenCalledWith({ prompt: 'hi' });
+    await expect(messageModule.requestFrom('agent', 'model-service', 'complete', { prompt: 'hi' }))
+      .rejects.toThrow(/not permitted/u);
+    await expect(messageModule.request('model-service', 'complete', { prompt: 'hi' }))
+      .rejects.toThrow(/not permitted/u);
+  });
+
+  it('rejects direct browser/host calls to caller-restricted routes', async () => {
+    const dispatch = vi.fn(async () => 'browser-result');
+    messageModule = new MessageModule({ dispatchBrowserRequest: dispatch });
+    messageModule.registerRequest('model-service', 'complete', () => 'unused', 'browser', ['panel.complete'], ['settings']);
+
+    await expect(messageModule.request('model-service', 'complete', '@scope/panel')).rejects.toThrow(/not permitted/u);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it('keeps legacy routes callable without a caller ACL', async () => {
+    messageModule.registerRequest('model-service', 'legacy', () => 'ok');
+    await expect(messageModule.request('model-service', 'legacy')).resolves.toBe('ok');
+  });
+
   it('dispatches browser request methods through the injected dispatcher', async () => {
     const dispatch = vi.fn(async (panel, method, args) => ({ panel, method, args }));
     messageModule = new MessageModule({ dispatchBrowserRequest: dispatch });

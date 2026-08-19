@@ -5,6 +5,31 @@ import type { ContributeData, PluginDefinition, PluginInfo, PluginSourceIdentity
 export type MessageLocation = 'server' | 'browser';
 export type PluginMethod = (...args: unknown[]) => unknown;
 
+export type PluginConfigValue =
+  | null
+  | boolean
+  | number
+  | string
+  | PluginConfigValue[]
+  | { [key: string]: PluginConfigValue };
+
+export interface PluginConfigChangeEvent {
+  key: string;
+  type: string;
+  action: 'set' | 'delete';
+}
+
+export interface PluginConfig {
+  get(key: string, layer?: string): PluginConfigValue | undefined;
+  set(key: string, value: PluginConfigValue, layer?: string): void;
+  delete(key: string, layer?: string): void;
+  subscribe(listener: (event: PluginConfigChangeEvent) => void): () => void;
+}
+
+export interface PluginConfigBindingHost {
+  bind(kitId: string, pluginName: string): PluginConfig;
+}
+
 export interface PluginRuntimePluginHost {
   define(definition: PluginDefinition): void;
   register?(path: string, options?: { source?: PluginSourceIdentity }): Promise<void>;
@@ -34,6 +59,8 @@ export interface PluginRuntimeMessageHost {
   ): void;
   unregisterRequest(plugin: string, name: string): void;
   unregisterBroadcast(plugin: string, topic: string): void;
+  /** Host-internal only; omitted from the runtime facade exposed to plugins. */
+  requestFrom?(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   broadcast(topic: string, ...args: unknown[]): void;
 }
@@ -71,6 +98,7 @@ export interface PluginRuntimeHost {
 
 export interface PluginRuntime extends PluginRuntimeHost {
   readonly paths: PluginPaths;
+  readonly config: PluginConfig;
   readonly credentials?: PluginCredentialVault;
 }
 
@@ -149,6 +177,8 @@ export type PluginLoadOptions =
       scope: 'session';
       host: PluginRuntimeHost;
       paths: PluginPathLoadConfiguration;
+      config?: PluginConfigBindingHost;
+      kitId?: string;
       credentials?: PluginCredentialVault;
     }
   | {

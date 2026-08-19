@@ -20,11 +20,18 @@ export interface ContributeData {
   panel?: Record<string, PanelContribution>;
   menu?: unknown[];
   message?: {
-    request?: Record<string, string[]>;
-    broadcast?: Record<string, string[]>;
+    request?: Record<string, PluginMessageRouteDeclaration>;
+    broadcast?: Record<string, PluginMessageRouteDeclaration>;
   };
   [key: string]: unknown;
 }
+
+export interface PluginMessageRoute {
+  methods: readonly string[];
+  callers?: readonly string[];
+}
+
+export type PluginMessageRouteDeclaration = readonly string[] | PluginMessageRoute;
 
 export interface PluginInfo {
   name: string;

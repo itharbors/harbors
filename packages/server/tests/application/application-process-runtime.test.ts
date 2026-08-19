@@ -1095,9 +1095,10 @@ describe('ApplicationRuntime process integration', () => {
         } } };
       };
       const message = manifest['ce-editor']?.contribute?.message;
+      const routeMethods = (route: string[] | { methods: string[] }) => Array.isArray(route) ? route : route.methods;
       harness.ensureDefinition(plugin.name, [
-        ...Object.values(message?.request ?? {}).flat(),
-        ...Object.values(message?.broadcast ?? {}).flat(),
+        ...Object.values(message?.request ?? {}).flatMap(routeMethods),
+        ...Object.values(message?.broadcast ?? {}).flatMap(routeMethods),
       ]);
     }
     return new ApplicationRuntime({

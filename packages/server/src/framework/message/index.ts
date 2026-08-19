@@ -28,13 +28,22 @@ export class MessageModule {
     handler: MessageRequestRoute['handler'],
     location: MessageLocation = 'server',
     methods: string[] = [],
+    callers?: string[],
   ): void {
     const key = requestKey(plugin, name);
     if (this.registry.request.has(key)) {
       throw new Error(`Message request route "${plugin}.${name}" is already registered`);
     }
+    if (callers !== undefined) {
+      if (callers.length === 0 || callers.some((caller) => typeof caller !== 'string' || caller.length === 0)) {
+        throw new Error(`Message request route "${plugin}.${name}" callers must be non-empty names`);
+      }
+      if (new Set(callers).size !== callers.length) {
+        throw new Error(`Message request route "${plugin}.${name}" callers contains duplicates`);
+      }
+    }
 
-    this.registry.request.set(key, { plugin, name, methods, handler, location });
+    this.registry.request.set(key, { plugin, name, methods, callers, handler, location });
   }
 
   registerBroadcast(
@@ -100,7 +109,27 @@ export class MessageModule {
   }
 
   async request(plugin: string, name: string, ...args: unknown[]): Promise<unknown> {
+    return this.dispatchRequest(undefined, plugin, name, args);
+  }
+
+  /** Host-internal request entry point carrying the trusted caller identity. */
+  async requestFrom(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown> {
+    return this.dispatchRequest(callerPlugin, plugin, name, args);
+  }
+
+  private async dispatchRequest(
+    callerPlugin: string | undefined,
+    plugin: string,
+    name: string,
+    args: unknown[],
+  ): Promise<unknown> {
     const route = this.queryRequest(plugin, name);
+    if (!route) {
+      throw new Error(`No request route registered for "${plugin}.${name}"`);
+    }
+    if (route.callers && (!callerPlugin || !route.callers.includes(callerPlugin))) {
+      throw new Error(`Message request "${plugin}.${name}" is not permitted for caller${callerPlugin ? ` "${callerPlugin}"` : ''}`);
+    }
     const wildcardRoutes = this.queryWildcardRequests();
 
     for (const wildcardRoute of wildcardRoutes) {
@@ -129,9 +158,6 @@ export class MessageModule {
       }
     }
 
-    if (!route) {
-      throw new Error(`No request route registered for "${plugin}.${name}"`);
-    }
     const panelMethod = route.methods.find((method) => method.startsWith('panel.'));
     if (route.location === 'browser') {
       if (!panelMethod) {
