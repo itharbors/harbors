@@ -40,7 +40,7 @@
                   },
                   {
                     "type": "leaf",
-                    "panel": "message-debug.debug"
+                    "panel": "debug.debug"
                   }
                 ]
               }
