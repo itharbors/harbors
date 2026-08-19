@@ -20,6 +20,15 @@ describe('Framework Integration', () => {
   const betaKit = createKitFixture({
     name: '@example/kit-beta',
     label: 'Beta Fixture',
+    config: {
+      schemaVersion: 1,
+      defaultsLayer: 'default',
+      writeLayer: 'global',
+      layers: [
+        { name: 'default', priority: 0, storage: null },
+        { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+      ],
+    },
     plugins: [{
       name: '@example/beta-panel',
       contribute: {
@@ -359,11 +368,8 @@ describe('Framework Integration', () => {
     await expect(defaultEditor.message.request('default-only', 'ping')).resolves.toBe('default');
     await expect(sqliteEditor.message.request('default-only', 'ping')).rejects.toThrow(/No request route registered/);
 
-    const configTypes = [{ name: 'global', priority: 0, scope: 'shared' as const }];
-    defaultEditor.config.registerTypes(configTypes);
-    sqliteEditor.config.registerTypes(configTypes);
-    defaultEditor.config.set('owner', 'default', 'global');
-    sqliteEditor.config.set('owner', 'sqlite', 'global');
+    defaultEditor.config.set('owner', 'default');
+    sqliteEditor.config.set('owner', 'sqlite');
     expect(defaultEditor.config.get('owner', 'global')).toBe('default');
     expect(sqliteEditor.config.get('owner', 'global')).toBe('sqlite');
 

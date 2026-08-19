@@ -26,6 +26,7 @@ import type { PluginPathRoots } from '@itharbors/magnet';
 import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
 import type { ApplicationPluginProcessRuntimeOptions } from './application/plugin-process/spawn';
 import { AuthManager } from './auth';
+import type { ConfigStorageRoots } from './app';
 
 type CredentialVaultRuntime = Pick<CredentialVault, 'bind' | 'capability' | 'recover' | 'close'>;
 
@@ -42,6 +43,7 @@ export interface ServerOptions {
   applicationPluginProcess?: ApplicationPluginProcessRuntimeOptions;
   notificationPort?: number;
   pluginPathRoots: PluginPathRoots;
+  configStorageRoots?: ConfigStorageRoots;
   clientAssetsRoot?: string;
   host?: string;
   applicationRuntime?: Pick<
@@ -111,6 +113,10 @@ export function createServer(options: ServerOptions) {
     throw new Error('Server requires at least one Kit source');
   }
   const pluginPathRoots = requirePluginPathRoots(options.pluginPathRoots);
+  const configStorageRoots = requireConfigStorageRoots(
+    options.configStorageRoots,
+    pluginPathRoots.applicationData,
+  );
   const dbPath = options.dbPath || ':memory:';
   const credentialVaultPromise: Promise<CredentialVaultRuntime | undefined> = options.credentialVault
     ? Promise.resolve(options.credentialVault)
@@ -163,6 +169,7 @@ export function createServer(options: ServerOptions) {
     applicationControlToken: options.applicationControlToken,
     clientAssetsRoot: options.clientAssetsRoot,
     pluginPathRoots,
+    configStorageRoots,
     credentialVault: () => recoveredCredentialVault,
     authManager: auth,
   }, broker);
@@ -321,6 +328,17 @@ function requirePluginPathRoots(roots: PluginPathRoots): PluginPathRoots {
     cache: path.resolve(roots.cache),
     temp: path.resolve(roots.temp),
   });
+}
+
+function requireConfigStorageRoots(
+  roots: ConfigStorageRoots | undefined,
+  fallback: string,
+): ConfigStorageRoots {
+  const candidate = roots?.['application-data'] ?? fallback;
+  if (typeof candidate !== 'string' || candidate.includes('\0') || !path.isAbsolute(candidate)) {
+    throw new Error('configStorageRoots.application-data must be an absolute path');
+  }
+  return Object.freeze({ 'application-data': path.resolve(candidate) });
 }
 
 function freezeAssemblySnapshot(assembly: AssemblyConfig): AssemblyConfig {

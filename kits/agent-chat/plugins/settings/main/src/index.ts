@@ -14,7 +14,6 @@ declare const editor: any;
 const DEFAULT_CONFIG_TYPES = [
   { name: 'default', priority: 0, scope: 'shared' },
   { name: 'global', priority: 10, scope: 'shared' },
-  { name: 'project', priority: 20, scope: 'editor' },
 ];
 
 let runtime: any = null;
@@ -22,15 +21,6 @@ let disposeConfigSubscription: (() => void) | null = null;
 const knownKeys = new Set<string>();
 const providers = new Map<string, SettingsProvider>();
 let suppressConfigBroadcast = false;
-
-function ensureConfigTypes(): void {
-  if (!runtime) return;
-  try {
-    runtime.config.registerTypes(DEFAULT_CONFIG_TYPES);
-  } catch {
-    // types 可能已由其他插件注册，忽略重复注册错误
-  }
-}
 
 function trackKey(key: string): void {
   knownKeys.add(key);
@@ -137,7 +127,7 @@ function assertValueRequest(input: unknown): { key: string; layer: SettingsLayer
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('settings value request must be an object');
   const value = input as Record<string, unknown>;
   if (typeof value.key !== 'string' || !value.key) throw new Error('settings value request key is required');
-  if (value.layer !== 'global' && value.layer !== 'project') throw new Error('settings value request layer must be global or project');
+  if (value.layer !== 'global') throw new Error('settings value request layer must be global');
   return { key: value.key, layer: value.layer, ...(Object.prototype.hasOwnProperty.call(value, 'value') ? { value: value.value } : {}) };
 }
 
@@ -148,11 +138,16 @@ function assertRegisteredField(key: string, layer: SettingsLayer) {
   return found.field;
 }
 
+function assertConfigType(type: unknown): 'default' | 'global' | undefined {
+  if (type === undefined) return undefined;
+  if (type !== 'default' && type !== 'global') throw new Error('settings config type must be default or global');
+  return type;
+}
+
 editor.plugin.define({
   lifecycle: {
     load(context: any) {
       runtime = context;
-      ensureConfigTypes();
       disposeConfigSubscription = runtime.config.subscribe(handleConfigChange);
     },
     unload() {
@@ -180,20 +175,21 @@ editor.plugin.define({
 
     get(key: string, type?: string) {
       const currentRuntime = assertRuntime();
-      const value = type ? currentRuntime.config.get(key, type) : currentRuntime.config.get(key);
+      const configType = assertConfigType(type);
+      const value = configType ? currentRuntime.config.get(key, configType) : currentRuntime.config.get(key);
       return { key, type: type ?? null, value: value ?? null };
     },
 
     set(key: string, value: unknown, type?: string) {
       const currentRuntime = assertRuntime();
-      currentRuntime.config.set(key, value, type);
+      currentRuntime.config.set(key, value, assertConfigType(type));
       trackKey(key);
       return { ok: true, key };
     },
 
     delete(key: string, type?: string) {
       const currentRuntime = assertRuntime();
-      currentRuntime.config.delete(key, type);
+      currentRuntime.config.delete(key, assertConfigType(type));
       if (!type && DEFAULT_CONFIG_TYPES.every((configType) => currentRuntime.config.get(key, configType.name) === undefined)) knownKeys.delete(key);
       return { ok: true, key };
     },

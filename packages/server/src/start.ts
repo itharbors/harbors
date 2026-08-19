@@ -4,9 +4,10 @@ import { createDefaultAssemblyConfig, discoverBuiltinKitSources } from './assemb
 import { ensureDataDir, resolveStartConfig } from './start-config.js';
 
 const rootDir = process.cwd();
-const { dataDir, dbPath, port, host } = resolveStartConfig(rootDir, process.env);
+const { dataDir, configDataDir, dbPath, port, host } = resolveStartConfig(rootDir, process.env);
 
 await ensureDataDir(dataDir);
+await ensureDataDir(configDataDir);
 await ensureDataDir(path.dirname(dbPath));
 
 const server = createServer({
@@ -19,6 +20,7 @@ const server = createServer({
     cache: path.join(dataDir, 'cache'),
     temp: path.join(dataDir, 'temp'),
   },
+  configStorageRoots: { 'application-data': configDataDir },
   host,
   port,
   clientAssetsRoot: path.join(rootDir, 'packages', 'client', 'dist'),

@@ -4,9 +4,10 @@
 - 文档默认使用中文。
 
 ## 开发验证
-- 默认使用 `npm run dev:web` 和基于浏览器的测试来开发、调试并完成 Framework 和 Kit 变更的验收。
+- 按功能单元选择局部验证：Plugin 变更验证目标 Plugin，Kit 变更验证目标 Kit，Framework 变更验证 Framework；跨边界变更取并集。
 - Harbors 仅支持一个 Web 宿主。不要在 Framework 或 Kit 代码中加入 Electron、桌面打包、原生窗口生命周期、托盘、更新器或桌面 IPC 相关的假设。
-- 通过针对性测试验证服务端变更，并在浏览器中验证可见的共享行为。
+- 服务端变更运行对应的针对性测试；UI、Kit 装配或共享可见行为必须使用 Web 浏览器验收。
+- 详细测试规则见 [测试指南](docs/guides/testing.md)。
 
 ## 模块开发边界
 - Kit 是装配包。开发一个 Kit 时，应在其文件夹内独立闭环完成；若需要改动超出该文件夹范围，大概率存在问题，需先询问用户。
@@ -24,7 +25,6 @@
 - 框架插件位于 `plugins/<name>`，Kit 专属插件位于 `kits/<kit>/plugins/<name>`。
 - 插件之间通过 request/broadcast 消息交互。
 - 仅支持 Web 宿主，不加入 Electron 或桌面宿主假设。
-- 使用 `npm run dev:web` 与浏览器进行验收。
 
 ## 任务编排
 - 排任务时可以以 Plugin 为单元，先定义各 Plugin 之间交互的协议，再分派给 Agent 实现。

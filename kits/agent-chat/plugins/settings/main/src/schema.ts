@@ -1,4 +1,4 @@
-export type SettingsLayer = 'global' | 'project';
+export type SettingsLayer = 'global';
 export type ConfigLayer = 'default' | SettingsLayer;
 export type SettingsControl = 'text' | 'textarea' | 'number' | 'toggle' | 'select';
 export type SettingsValue = string | number | boolean;
@@ -64,7 +64,7 @@ export class SettingsSchemaError extends Error {
 }
 
 const CONTROLS = new Set<SettingsControl>(['text', 'textarea', 'number', 'toggle', 'select']);
-const LAYERS = new Set<SettingsLayer>(['global', 'project']);
+const LAYERS = new Set<SettingsLayer>(['global']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -131,14 +131,14 @@ function normalizeField(owner: string, raw: unknown, fieldIndex: number): Settin
   if (!raw.key.startsWith(`${owner}.`)) throw new SettingsSchemaError(`field ${raw.key}.key must start with owner ${owner}.`);
 
   const control = raw.control as SettingsControl;
-  const layers = raw.layers === undefined ? ['global', 'project'] : raw.layers;
+  const layers = raw.layers === undefined ? ['global'] : raw.layers;
   if (!Array.isArray(layers) || layers.length === 0 || layers.some((layer) => typeof layer !== 'string' || !LAYERS.has(layer as SettingsLayer))) {
-    throw new SettingsSchemaError(`field ${raw.key}.layers must contain global and/or project`);
+    throw new SettingsSchemaError(`field ${raw.key}.layers must contain only global`);
   }
   const normalizedLayers = [...new Set(layers as SettingsLayer[])];
   const defaultLayer = raw.defaultLayer === undefined ? 'global' : raw.defaultLayer;
-  if (typeof defaultLayer !== 'string' || !LAYERS.has(defaultLayer as SettingsLayer) || !normalizedLayers.includes(defaultLayer as SettingsLayer)) {
-    throw new SettingsSchemaError(`field ${raw.key}.defaultLayer must be an allowed layer`);
+  if (typeof defaultLayer !== 'string' || defaultLayer !== 'global' || !normalizedLayers.includes('global')) {
+    throw new SettingsSchemaError(`field ${raw.key}.defaultLayer must be global`);
   }
 
   const options = raw.options;
@@ -256,10 +256,8 @@ export function buildSettingsViewModel(
           const perLayer = {
             default: normalizeViewValue(getValue(field.key, 'default')),
             global: normalizeViewValue(getValue(field.key, 'global')),
-            project: normalizeViewValue(getValue(field.key, 'project')),
           };
           const candidates: Array<[SettingsLayer | 'default', SettingsValue | null]> = [
-            ['project', perLayer.project],
             ['global', perLayer.global],
             ['default', perLayer.default],
           ];

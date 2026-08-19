@@ -80,6 +80,146 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(kitManifest)).toEqual(kitManifest);
   });
 
+  it('parses an optional configuration declaration without changing schemaVersion', () => {
+    const manifest = {
+      ...kitManifest,
+      config: {
+        schemaVersion: 1,
+        defaultsLayer: 'kit-defaults',
+        writeLayer: 'global',
+        layers: [
+          { name: 'kit-defaults', priority: 0, storage: null },
+          { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+        ],
+      },
+    } as const;
+
+    expect(parseKitPackageManifest(manifest)).toEqual(manifest);
+  });
+
+  it('rejects an unsupported configuration schema version independently of the manifest version', () => {
+    const config = {
+      schemaVersion: 2,
+      defaultsLayer: 'kit-defaults',
+      writeLayer: 'global',
+      layers: [
+        { name: 'kit-defaults', priority: 0, storage: null },
+        { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+      ],
+    };
+
+    expect(() => parseKitPackageManifest({ ...kitManifest, config })).toThrow(/config\.schemaVersion/i);
+  });
+
+  it.each([
+    ['duplicate layer names', {
+      layers: [
+        { name: 'defaults', priority: 0, storage: null },
+        { name: 'defaults', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+      ],
+    }],
+    ['duplicate priorities', {
+      layers: [
+        { name: 'defaults', priority: 0, storage: null },
+        { name: 'global', priority: 0, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+      ],
+    }],
+    ['undeclared defaults layer', {
+      defaultsLayer: 'missing',
+      layers: [{ name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } }],
+    }],
+    ['persistent defaults layer', {
+      layers: [{ name: 'defaults', priority: 0, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } }],
+    }],
+    ['memory write layer', {
+      layers: [
+        { name: 'defaults', priority: 0, storage: null },
+        { name: 'global', priority: 10, storage: null },
+      ],
+    }],
+  ])('rejects invalid configuration declaration: %s', (_label, partial) => {
+    const config = {
+      schemaVersion: 1,
+      defaultsLayer: 'defaults',
+      writeLayer: 'global',
+      ...partial,
+    };
+    expect(() => parseKitPackageManifest({ ...kitManifest, config })).toThrow(/config/i);
+  });
+
+  it.each([
+    '/absolute/config.sqlite',
+    '\\absolute\\config.sqlite',
+    'C:/absolute/config.sqlite',
+    'config/../config.sqlite',
+    'config/./config.sqlite',
+    'config//config.sqlite',
+    '',
+  ])('rejects unsafe configuration storage path %s', (path) => {
+    const config = {
+      schemaVersion: 1,
+      defaultsLayer: 'defaults',
+      writeLayer: 'global',
+      layers: [
+        { name: 'defaults', priority: 0, storage: null },
+        { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path } },
+      ],
+    };
+    expect(() => parseKitPackageManifest({ ...kitManifest, config })).toThrow(/path/i);
+  });
+
+  it.each([
+    ['empty layer name', ''],
+    ['path separator in layer name', 'settings/global'],
+    ['backslash in layer name', 'settings\\global'],
+    ['whitespace in layer name', 'settings global'],
+  ])('rejects unsafe configuration layer name: %s', (_label, name) => {
+    const config = {
+      schemaVersion: 1,
+      defaultsLayer: name,
+      writeLayer: 'global',
+      layers: [
+        { name, priority: 0, storage: null },
+        { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+      ],
+    };
+    expect(() => parseKitPackageManifest({ ...kitManifest, config })).toThrow(/name/i);
+  });
+
+  it.each([
+    ['fractional priority', 1.5],
+    ['infinite priority', Infinity],
+    ['NaN priority', NaN],
+  ])('rejects non-finite or non-integer priority: %s', (_label, priority) => {
+    const config = {
+      schemaVersion: 1,
+      defaultsLayer: 'defaults',
+      writeLayer: 'global',
+      layers: [
+        { name: 'defaults', priority: 0, storage: null },
+        { name: 'global', priority, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+      ],
+    };
+    expect(() => parseKitPackageManifest({ ...kitManifest, config })).toThrow(/priority/i);
+  });
+
+  it.each([
+    ['unknown driver', { driver: 'json', root: 'application-data', path: 'config.sqlite' }],
+    ['unknown root', { driver: 'sqlite', root: 'project', path: 'config.sqlite' }],
+    ['extra storage field', { driver: 'sqlite', root: 'application-data', path: 'config.sqlite', extra: true }],
+  ])('rejects unsupported storage declaration: %s', (_label, storage) => {
+    const config = {
+      schemaVersion: 1,
+      defaultsLayer: 'defaults',
+      writeLayer: 'global',
+      layers: [
+        { name: 'defaults', priority: 0, storage: null },
+        { name: 'global', priority: 10, storage },
+      ],
+    };
+    expect(() => parseKitPackageManifest({ ...kitManifest, config })).toThrow(/storage|driver|root/i);
+  });
+
   it('accepts preview versions with a SemVer prerelease segment', () => {
     const preview = {
       ...kitManifest,

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest';
 import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { Editor } from '../../src/editor/types';
 import type { LayoutNode } from '../../src/framework/window/types';
@@ -7,30 +7,105 @@ import os from 'node:os';
 import path from 'node:path';
 import { testAssembly, testKitFixture } from '../helpers/assembly';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+import { createKitFixture } from '../../src/framework/__tests__/kit-fixture';
+import type { KitConfigDeclaration } from '@itharbors/kit-core';
+import { ConfigNotActivatedError } from '../../src/framework/config';
 
 const createEditor = (
   sessionId: string,
   options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+) => {
+  const pluginPathRoots = createTestPluginPathRoots();
+  return createEditorWithOptions(sessionId, {
+    ...options,
+    pluginPathRoots,
+    configStorageRoots: options.configStorageRoots ?? {
+      'application-data': pluginPathRoots.applicationData,
+    },
+  });
+};
 
-const CONFIG_TYPES = [
-  { name: 'default', priority: 0, scope: 'shared' },
-  { name: 'global', priority: 10, scope: 'shared' },
-  { name: 'project', priority: 20, scope: 'editor' },
-] as const;
+const CONFIG_DECLARATION: KitConfigDeclaration = {
+  schemaVersion: 1,
+  defaultsLayer: 'default',
+  writeLayer: 'global',
+  layers: [
+    { name: 'default', priority: 0, storage: null },
+    { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
+  ],
+};
+
+const configKitFixture = createKitFixture({
+  name: '@example/config-kit',
+  plugins: [],
+  mainPanel: null,
+  config: CONFIG_DECLARATION,
+});
+const configProbeKitFixture = createKitFixture({
+  name: '@example/config-probe-kit',
+  plugins: [{
+    name: '@example/config-probe',
+    code: `
+      editor.plugin.define({
+        lifecycle: {
+          load(runtime) {
+            globalThis.__configWasActiveBeforePluginLoad = true;
+            runtime.config.get('probe');
+          },
+        },
+      });
+    `,
+  }],
+  mainPanel: null,
+  config: CONFIG_DECLARATION,
+});
+const failingConfigKitFixture = createKitFixture({
+  name: '@example/failing-config-kit',
+  plugins: [{
+    name: '@example/config-failing-plugin',
+    code: `
+      editor.plugin.define({
+        lifecycle: { load() { throw new Error('config plugin load failed'); } },
+      });
+    `,
+  }],
+  mainPanel: null,
+  config: CONFIG_DECLARATION,
+});
+const noConfigKitFixture = createKitFixture({
+  name: '@example/no-config-kit',
+  plugins: [],
+  mainPanel: null,
+});
+const editorAssembly = {
+  ...testAssembly,
+  kitSources: [
+    ...testAssembly.kitSources,
+    ...[configKitFixture, configProbeKitFixture, failingConfigKitFixture, noConfigKitFixture]
+      .map((fixture) => ({ directory: fixture.directory, source: 'explicit' as const })),
+  ],
+};
 
 describe('createEditor', () => {
   let editor: Editor;
   let tmpDir: string;
 
   beforeEach(() => {
-    editor = createEditor('test-session', { assembly: testAssembly });
+    editor = createEditor('test-session', { assembly: editorAssembly });
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-builtin-test-'));
   });
 
   afterEach(() => {
     delete (globalThis as typeof globalThis & { __editorDisposeCount?: number }).__editorDisposeCount;
     fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+  afterAll(async () => {
+    await Promise.all([
+      configKitFixture.dispose(),
+      configProbeKitFixture.dispose(),
+      failingConfigKitFixture.dispose(),
+      noConfigKitFixture.dispose(),
+    ]);
   });
 
   it('creates an Editor with sessionId and public module APIs', () => {
@@ -47,20 +122,25 @@ describe('createEditor', () => {
     expect(typeof editor.menu.trigger).toBe('function');
   });
 
-  it('isolates every config scope across workspace editors', () => {
-    const left = createEditor('session-config-left', { assembly: testAssembly });
-    const right = createEditor('session-config-right', { assembly: testAssembly });
+  it('shares persistent global config for the same Kit across editors', async () => {
+    const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-config-shared-'));
+    const left = createEditor('session-config-left', {
+      assembly: { ...testAssembly, kitSources: [...testAssembly.kitSources, { directory: configKitFixture.directory, source: 'explicit' }] },
+      configStorageRoots: { 'application-data': applicationData },
+    });
+    const right = createEditor('session-config-right', {
+      assembly: { ...testAssembly, kitSources: [...testAssembly.kitSources, { directory: configKitFixture.directory, source: 'explicit' }] },
+      configStorageRoots: { 'application-data': applicationData },
+    });
 
-    left.config.registerTypes([...CONFIG_TYPES]);
-    right.config.registerTypes([...CONFIG_TYPES]);
+    await left.kit.load(configKitFixture.name);
+    await right.kit.load(configKitFixture.name);
+    left.config.set('theme', 'dark');
 
-    left.config.set('theme', 'dark', 'global');
-    left.config.set('theme', 'light', 'project');
-
-    expect(right.config.get('theme')).toBeUndefined();
-    expect(right.config.get('theme', 'global')).toBeUndefined();
-    expect(right.config.get('theme', 'project')).toBeUndefined();
-    expect(left.config.get('theme')).toBe('light');
+    expect(right.config.get('theme')).toBe('dark');
+    expect(right.config.get('theme', 'global')).toBe('dark');
+    await Promise.all([left.dispose(), right.dispose()]);
+    fs.rmSync(applicationData, { recursive: true, force: true });
   });
 
   it('panel.register formats descriptors', () => {
@@ -148,13 +228,12 @@ describe('createEditor', () => {
 
     const spy = vi.spyOn(editor.message, 'broadcast');
 
-    editor.config.registerTypes([...CONFIG_TYPES]);
-    editor.config.set('theme', 'dark', 'project');
+    await editor.kit.load(configKitFixture.directory);
+    editor.config.set('theme', 'dark');
 
     expect(spy).toHaveBeenCalledWith('config.changed', {
       key: 'theme',
-      type: 'project',
-      scope: 'editor',
+      type: 'global',
       action: 'set',
       value: 'dark',
       resolvedValue: 'dark',
@@ -170,10 +249,37 @@ describe('createEditor', () => {
 
     const spy = vi.spyOn(editor.message, 'broadcast');
 
-    editor.config.registerTypes([...CONFIG_TYPES]);
-    editor.config.set('theme', 'dark', 'project');
+    await editor.kit.load(configKitFixture.directory);
+    editor.config.set('theme', 'dark');
 
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('activates Kit config before loading external Kit plugins', async () => {
+    delete (globalThis as typeof globalThis & { __configWasActiveBeforePluginLoad?: boolean }).__configWasActiveBeforePluginLoad;
+
+    await editor.kit.load(configProbeKitFixture.directory);
+
+    expect((globalThis as typeof globalThis & { __configWasActiveBeforePluginLoad?: boolean }).__configWasActiveBeforePluginLoad).toBe(true);
+  });
+
+  it('rolls back Kit config when external plugin loading fails', async () => {
+    await editor.kit.load(configKitFixture.directory);
+    editor.config.set('theme', 'old');
+
+    await expect(editor.kit.switchKit(failingConfigKitFixture.name)).rejects.toThrow('config plugin load failed');
+
+    expect(editor.config.get('theme')).toBe('old');
+    expect(editor.kit.getCurrent()?.name).toBe(configKitFixture.name);
+  });
+
+  it('deactivates config when switching to a Kit without a config declaration', async () => {
+    await editor.kit.load(configKitFixture.directory);
+    editor.config.set('theme', 'old');
+
+    await editor.kit.switchKit(noConfigKitFixture.name);
+
+    expect(() => editor.config.get('theme')).toThrow(ConfigNotActivatedError);
   });
 
   it('loads the default kit with built-in menu state', async () => {

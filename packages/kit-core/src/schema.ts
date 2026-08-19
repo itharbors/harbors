@@ -1,6 +1,7 @@
 import semver from 'semver';
 
 import {
+  KIT_CONFIG_SCHEMA_VERSION,
   KIT_PACKAGE_SCHEMA_VERSION,
   KIT_PERMISSIONS,
   type InstalledKitRecord,
@@ -11,7 +12,10 @@ import {
   type KitRevocationAction,
   type KitArchitecture,
   type KitChannel,
+  type ConfigLayerDefinition,
+  type ConfigStorage,
   type KitPackageManifest,
+  type KitConfigDeclaration,
   type KitPermission,
   type KitPlatform,
   type KitRequirements,
@@ -27,6 +31,7 @@ type UnknownRecord = Record<string, unknown>;
 const KIT_ID_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$/;
+const CONFIG_LAYER_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]*$/u;
 
 function record(value: unknown, context: string): UnknownRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -132,6 +137,96 @@ function kitId(value: unknown, context: string): string {
   return parsed;
 }
 
+function configLayerName(value: unknown, context: string): string {
+  const parsed = stringValue(value, context);
+  if (!CONFIG_LAYER_NAME_PATTERN.test(parsed) || parsed === '.' || parsed === '..') {
+    throw new Error(`${context} must be a safe non-empty layer name`);
+  }
+  return parsed;
+}
+
+function configStoragePath(value: unknown, context: string): string {
+  const parsed = stringValue(value, context);
+  if (
+    parsed.startsWith('/')
+    || parsed.startsWith('\\')
+    || /^[A-Za-z]:[\\/]/u.test(parsed)
+    || /^[A-Za-z]:/u.test(parsed)
+    || /[\\\0\p{Cc}\p{Zl}\p{Zp}]/u.test(parsed)
+  ) {
+    throw new Error(`${context} must be a relative path without backslashes`);
+  }
+  const segments = parsed.split('/');
+  if (segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')) {
+    throw new Error(`${context} must not contain empty, . or .. path segments`);
+  }
+  return parsed;
+}
+
+function parseConfigStorage(value: unknown, context: string): ConfigStorage {
+  if (value === null) return null;
+  const input = record(value, context);
+  exactKeys(input, ['driver', 'root', 'path'], context);
+  return {
+    driver: enumValue(input.driver, ['sqlite'], `${context}.driver`),
+    root: enumValue(input.root, ['application-data'], `${context}.root`),
+    path: configStoragePath(input.path, `${context}.path`),
+  };
+}
+
+function parseConfigLayer(value: unknown, index: number): ConfigLayerDefinition {
+  const context = `config.layers[${index}]`;
+  const input = record(value, context);
+  exactKeys(input, ['name', 'priority', 'storage'], context);
+  if (!Number.isFinite(input.priority) || !Number.isInteger(input.priority)) {
+    throw new Error(`${context}.priority must be a finite integer`);
+  }
+  return {
+    name: configLayerName(input.name, `${context}.name`),
+    priority: input.priority as number,
+    storage: parseConfigStorage(input.storage, `${context}.storage`),
+  };
+}
+
+function parseConfig(value: unknown): KitConfigDeclaration {
+  const input = record(value, 'config');
+  exactKeys(input, ['schemaVersion', 'defaultsLayer', 'writeLayer', 'layers'], 'config');
+  if (input.schemaVersion !== KIT_CONFIG_SCHEMA_VERSION) {
+    throw new Error(`config.schemaVersion must equal ${KIT_CONFIG_SCHEMA_VERSION}`);
+  }
+  if (!Array.isArray(input.layers) || input.layers.length === 0) {
+    throw new Error('config.layers must be a non-empty array');
+  }
+
+  const layers = input.layers.map(parseConfigLayer);
+  const names = new Set<string>();
+  const priorities = new Set<number>();
+  for (const layer of layers) {
+    if (names.has(layer.name)) throw new Error(`config.layers contains duplicate name: ${layer.name}`);
+    if (priorities.has(layer.priority)) {
+      throw new Error(`config.layers contains duplicate priority: ${layer.priority}`);
+    }
+    names.add(layer.name);
+    priorities.add(layer.priority);
+  }
+
+  const defaultsLayer = configLayerName(input.defaultsLayer, 'config.defaultsLayer');
+  const writeLayer = configLayerName(input.writeLayer, 'config.writeLayer');
+  const defaults = layers.find((layer) => layer.name === defaultsLayer);
+  const writable = layers.find((layer) => layer.name === writeLayer);
+  if (!defaults) throw new Error(`config.defaultsLayer is not declared: ${defaultsLayer}`);
+  if (!writable) throw new Error(`config.writeLayer is not declared: ${writeLayer}`);
+  if (defaults.storage !== null) throw new Error('config.defaultsLayer must use storage=null');
+  if (writable.storage === null) throw new Error('config.writeLayer must use persistent storage');
+
+  return {
+    schemaVersion: KIT_CONFIG_SCHEMA_VERSION,
+    defaultsLayer,
+    writeLayer,
+    layers,
+  };
+}
+
 function parseChannel(value: unknown, context: string): KitChannel {
   return enumValue(value, ['stable', 'preview'], context);
 }
@@ -207,6 +302,7 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
     'target',
     'permissions',
     'entry',
+    'config',
   ], 'Kit package manifest');
 
   if (input.schemaVersion !== KIT_PACKAGE_SCHEMA_VERSION) {
@@ -238,6 +334,7 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
     target: parseTarget(input.target, permissions),
     permissions,
     entry,
+    ...(input.config === undefined ? {} : { config: parseConfig(input.config) }),
   };
 }
 

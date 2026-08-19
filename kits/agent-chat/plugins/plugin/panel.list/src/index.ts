@@ -47,7 +47,7 @@ export default {
     const status = root.querySelector('header span');
     const list = root.querySelector('main');
     try {
-      const summary = await context.message.request('plugin-list', 'getPluginSummary') as PluginSummary;
+      const summary = await context.message.request('plugin', 'getPluginSummary') as PluginSummary;
       const plugins = summary.plugins ?? [];
       const loadedCount = summary.loadedCount ?? plugins.filter((plugin) => plugin.loaded).length;
       const updateStatus = () => {
@@ -108,7 +108,7 @@ export default {
           setBusy(true);
           setFeedback('');
           try {
-            const result = await context.message.request('plugin-list', 'restart', plugin.name) as LifecycleResult;
+            const result = await context.message.request('plugin', 'restart', plugin.name) as LifecycleResult;
             if (result.ok) {
               setState(true);
             } else {
