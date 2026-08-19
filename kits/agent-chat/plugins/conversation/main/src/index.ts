@@ -20,6 +20,7 @@ interface ConversationDraft {
 
 interface ConversationState {
   selectedConversationId: string | null;
+  selectedProject?: string;
   draft: ConversationDraft | null;
   running: boolean;
   generation: string;
@@ -82,8 +83,12 @@ function isRunning(id: string | null): boolean {
 }
 
 function copyState(): ConversationState {
+  const selectedProject = state.selectedConversationId
+    ? conversations.find((conversation) => conversation.id === state.selectedConversationId)?.project
+    : undefined;
   return {
     selectedConversationId: state.selectedConversationId,
+    ...(selectedProject ? { selectedProject } : {}),
     draft: state.draft ? { ...state.draft } : null,
     running: isRunning(state.selectedConversationId),
     generation: state.generation,

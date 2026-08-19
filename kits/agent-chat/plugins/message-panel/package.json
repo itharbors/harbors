@@ -15,6 +15,9 @@
         }
       },
       "message": {
+        "request": {
+          "normalizeLink": ["normalizeLink"]
+        },
         "broadcast": {
           "agent.conversation.changed": [
             "panel.onConversationChanged"
