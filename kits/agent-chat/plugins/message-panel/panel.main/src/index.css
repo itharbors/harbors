@@ -240,6 +240,27 @@ html, body, #panel-root {
   justify-content: flex-end;
   align-items: center;
 }
+.transcript-turn-shell {
+  width: 100%;
+  min-width: 0;
+  align-self: stretch;
+}
+.transcript-turn-row {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  flex-direction: column;
+  gap: 8px;
+  align-self: stretch;
+}
+.transcript-turn-row-optimized {
+  box-sizing: content-box;
+  width: 100%;
+  margin-left: -2px;
+  padding-left: 2px;
+  content-visibility: auto;
+  contain: layout paint;
+}
 .chat-message {
   display: flex;
   min-width: 0;

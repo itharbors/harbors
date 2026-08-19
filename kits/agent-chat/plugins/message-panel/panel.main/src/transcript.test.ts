@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { buildDisplayTurns, nextDisplayTurn, shouldCollapseTurn, type MessageData } from './transcript.js';
+import { buildDisplayTurns, createDisplayTurnProjector, createMarkdownHtmlCache, nextDisplayTurn, renderMarkdownHtml, shouldCollapseTurn, type MessageData } from './transcript.js';
 import { parseSurfaceMessages, parseTraceTurns, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import { createTraceSyncState, mergeTracePage } from './trace-sync.js';
 
@@ -31,6 +31,60 @@ function traceTurn(turn: number, tools: ToolProcessEntry[] = []): TraceTurn {
     steps: [{ turn, step: 1, tools, completed: true }],
   };
 }
+
+test('markdown cache renders unchanged content only once', () => {
+  let parseCount = 0;
+  let sanitizeCount = 0;
+  const cache = createMarkdownHtmlCache((content) => {
+    parseCount += 1;
+    const sanitized = `<p>${content}</p>`;
+    sanitizeCount += 1;
+    return sanitized;
+  });
+
+  assert.equal(cache.get('same message'), '<p>same message</p>');
+  assert.equal(cache.get('same message'), '<p>same message</p>');
+  assert.equal(parseCount, 1);
+  assert.equal(sanitizeCount, 1);
+  assert.equal(cache.size(), 1);
+});
+
+test('markdown cache evicts the least recently used entry at capacity', () => {
+  let renderCount = 0;
+  const cache = createMarkdownHtmlCache((content) => {
+    renderCount += 1;
+    return `<p>${content}</p>`;
+  }, 2);
+
+  cache.get('a');
+  cache.get('b');
+  cache.get('a');
+  cache.get('c');
+  assert.equal(cache.size(), 2);
+  assert.equal(renderCount, 3);
+
+  cache.get('a');
+  cache.get('b');
+  assert.equal(renderCount, 4);
+  assert.equal(cache.size(), 2);
+});
+
+test('markdown cache uses renderMarkdownHtml and sanitizes a hit only once', () => {
+  let sanitizeCount = 0;
+  const cache = createMarkdownHtmlCache((content) => renderMarkdownHtml(content, (dirty, config) => {
+    sanitizeCount += 1;
+    assert.deepEqual(config, { ADD_ATTR: ['data-original-href'] });
+    return dirty.replace(/<script[\s\S]*?<\/script>/gi, '');
+  }));
+  const content = '[safe link](https://example.com)\n\n<script>alert(1)</script>';
+
+  const first = cache.get(content);
+  const second = cache.get(content);
+  assert.equal(first, second);
+  assert.equal(sanitizeCount, 1);
+  assert.match(first, /data-original-href="https:\/\/example\.com"/);
+  assert.doesNotMatch(first, /<script/i);
+});
 
 test('paged turns 39-44 keep their real numbers and attach turn 40 tools', () => {
   const turns = [39, 40, 41, 42, 43, 44];
@@ -184,4 +238,122 @@ test('legacy surface-only conversation retains final-response fallback', () => {
   assert.equal(turn.status, 'completed');
   assert.equal(turn.steps[0].assistant?.text, 'world');
   assert.equal(shouldCollapseTurn(turn), true);
+});
+
+test('projector reuses old rows and steps when only the latest assistant changes', () => {
+  const projector = createDisplayTurnProjector();
+  const messages = messagesForTurns([1, 2]);
+  const firstTrace = traceTurn(1);
+  firstTrace.steps[0].assistant = { id: 'assistant-1', seq: 1, turn: 1, step: 1, text: 'one', hasToolCalls: false };
+  const secondTrace = traceTurn(2);
+  secondTrace.steps[0].assistant = { id: 'assistant-2', seq: 2, turn: 2, step: 1, text: 'two', hasToolCalls: false };
+  const first = projector.project(messages, [firstTrace, secondTrace], [], 0);
+
+  const updatedSecondTrace = traceTurn(2);
+  updatedSecondTrace.steps[0].assistant = { id: 'assistant-2', seq: 2, turn: 2, step: 1, text: 'two updated', hasToolCalls: false };
+  const unchangedFirstTrace = traceTurn(1);
+  unchangedFirstTrace.steps[0].assistant = { id: 'assistant-1', seq: 1, turn: 1, step: 1, text: 'one', hasToolCalls: false };
+  const second = projector.project(messages, [unchangedFirstTrace, updatedSecondTrace], [], 0);
+
+  assert.strictEqual(second[0], first[0]);
+  assert.strictEqual(second[0]?.user, first[0]?.user);
+  assert.strictEqual(second[0]?.turn, first[0]?.turn);
+  assert.notStrictEqual(second[1], first[1]);
+  assert.notStrictEqual(second[1]?.turn, first[1]?.turn);
+});
+
+test('projector reuses existing rows and users when older history is prepended', () => {
+  const projector = createDisplayTurnProjector();
+  const currentMessages = messagesForTurns([2, 3]);
+  const currentTrace = [traceTurn(2), traceTurn(3)];
+  const first = projector.project(currentMessages, currentTrace, [], 0);
+  const historyMessages = [...messagesForTurns([1]), ...currentMessages];
+  const second = projector.project(historyMessages, [traceTurn(1), ...currentTrace], [], 0);
+
+  assert.strictEqual(second[1], first[0]);
+  assert.strictEqual(second[2], first[1]);
+  assert.strictEqual(second[1]?.user, first[0]?.user);
+  assert.strictEqual(second[2]?.user, first[1]?.user);
+  assert.strictEqual(second[1]?.turn, first[0]?.turn);
+  assert.strictEqual(second[2]?.turn, first[1]?.turn);
+});
+
+test('changing one tool result updates only that turn and its changed step', () => {
+  const projector = createDisplayTurnProjector();
+  const firstTrace = {
+    turn: 1,
+    steps: [
+      { turn: 1, step: 1, tools: [tool(1, 1, 1)], completed: true },
+      { turn: 1, step: 2, tools: [], completed: true },
+    ],
+  } satisfies TraceTurn;
+  const first = projector.project(messagesForTurns([1, 2]), [firstTrace, traceTurn(2)], [], 0);
+
+  const changedTool = { ...tool(1, 1, 1), result: 'changed' };
+  const changedTrace = {
+    turn: 1,
+    steps: [
+      { turn: 1, step: 1, tools: [changedTool], completed: true },
+      { turn: 1, step: 2, tools: [], completed: true },
+    ],
+  } satisfies TraceTurn;
+  const second = projector.project(messagesForTurns([1, 2]), [changedTrace, traceTurn(2)], [], 0);
+
+  assert.notStrictEqual(second[0], first[0]);
+  assert.notStrictEqual(second[0]?.turn, first[0]?.turn);
+  assert.notStrictEqual(second[0]?.turn.steps[0], first[0]?.turn.steps[0]);
+  assert.strictEqual(second[0]?.turn.steps[1], first[0]?.turn.steps[1]);
+  assert.strictEqual(second[1], first[1]);
+});
+
+test('conversation active changes only the latest incomplete turn', () => {
+  const projector = createDisplayTurnProjector();
+  const trace = [traceTurn(1), traceTurn(2)];
+  trace[0]!.steps[0]!.completed = false;
+  trace[1]!.steps[0]!.completed = false;
+  const inactive = projector.project(messagesForTurns([1, 2]), trace, [], 0, false);
+  const active = projector.project(messagesForTurns([1, 2]), trace, [], 0, true);
+
+  assert.strictEqual(inactive[0]?.turn.status, 'interrupted');
+  assert.strictEqual(inactive[1]?.turn.status, 'interrupted');
+  assert.strictEqual(active[0], inactive[0]);
+  assert.notStrictEqual(active[1], inactive[1]);
+  assert.strictEqual(active[1]?.turn.status, 'running');
+});
+
+test('same-step local requests reuse one newly created step and keep the last request', () => {
+  const firstRequest: ToolProcessEntry = {
+    id: 'request-1',
+    turn: 1,
+    step: 2,
+    callId: 'request-1',
+    name: '请求模型',
+    arguments: '{}',
+    isError: false,
+  };
+  const lastRequest: ToolProcessEntry = { ...firstRequest, id: 'request-2', callId: 'request-2' };
+  const turn = buildDisplayTurns(
+    [{ id: 'user-1', role: 'user', content: 'hello', turn: 1 }],
+    [],
+    [firstRequest, lastRequest],
+    0,
+  )[0]?.turn;
+
+  assert.equal(turn?.steps.length, 1);
+  assert.strictEqual(turn?.steps[0]?.localRequest, lastRequest);
+});
+
+test('projector preserves both rows when consecutive users share a turn', () => {
+  const projector = createDisplayTurnProjector();
+  const messages: MessageData[] = [
+    { id: 'user-1a', role: 'user', content: 'first', turn: 1 },
+    { id: 'user-1b', role: 'user', content: 'second', turn: 1 },
+  ];
+  const first = projector.project(messages, [], [], 0);
+  const second = projector.project(messages, [], [], 0);
+
+  assert.equal(first.length, 2);
+  assert.notStrictEqual(first[0], first[1]);
+  assert.strictEqual(second[0], first[0]);
+  assert.strictEqual(second[1], first[1]);
 });
