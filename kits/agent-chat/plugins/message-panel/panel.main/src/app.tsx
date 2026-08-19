@@ -9,7 +9,7 @@ type Source = 'harbors';
 interface MessageData { id: string; role: 'user' | 'assistant'; content: string; }
 interface ConversationData { id: string; active?: boolean; }
 interface DraftData { source?: Source; project?: string; }
-interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; generation?: string; revision?: number; }
+interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; running?: boolean; generation?: string; revision?: number; }
 interface SelectOption { id: string; name: string; description?: string; }
 interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -372,6 +372,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const olderScrollAnchorRef = useRef<{ top: number; height: number } | null>(null);
   const permissionRequestSeqRef = useRef(0);
   const activeConversationsRef = useRef<Set<string>>(new Set());
+  const conversationsMapRef = useRef<Map<string, ConversationData>>(new Map());
   const sendingConversationRef = useRef<string | null>(null);
 
   const resetTraceState = (id: string | null): void => {
@@ -666,6 +667,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const revision = typeof state?.revision === 'number' ? state.revision : null;
       if (!acceptConversationUiState(uiStateGateRef.current, { sequence, generation, revision })) return;
       if (state?.selectedConversationId) {
+        if (state.running) activeConversationsRef.current.add(String(state.selectedConversationId));
+        else activeConversationsRef.current.delete(String(state.selectedConversationId));
         loadConversation(String(state.selectedConversationId));
       } else if (state?.draft) {
         enterDraft(state.draft);
@@ -674,17 +677,30 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       }
     };
     applyUiStateRef.current = applyConversationUiState;
-    registerSetter('conversation.ui.changed', (value: unknown) => applyConversationUiState(value, ++uiStateSequenceRef.current));
+    registerSetter('conversation.selected', (value: unknown) => applyConversationUiState(value, ++uiStateSequenceRef.current));
     registerSetter('conversation.trace.append', applyTraceAppend);
     registerSetter('conversation.changed', (value: unknown) => {
-      if (disposed || !Array.isArray(value)) return;
-      const list = value as ConversationData[];
+      if (disposed || !value || typeof value !== 'object') return;
+      const payload = value as { action?: string; id?: string; conversation?: ConversationData };
+      if (typeof payload.id !== 'string' || !payload.action) return;
+      const { action, id } = payload;
+      const map = conversationsMapRef.current;
+      if (action === 'create') {
+        if (payload.conversation && !map.has(id)) map.set(id, payload.conversation);
+      } else if (action === 'delete') {
+        map.delete(id);
+      } else if (action === 'rename' || action === 'update') {
+        if (payload.conversation) map.set(id, { ...map.get(id), ...payload.conversation });
+      }
       // 维护「正在执行中的会话」集合，作为发送锁的真相来源
-      const nextActive = new Set(list.filter((conversation) => conversation.active).map((conversation) => conversation.id));
+      const nextActive = new Set<string>();
+      for (const [convId, conv] of map) {
+        if (conv.active) nextActive.add(convId);
+      }
       activeConversationsRef.current = nextActive;
       const current = conversationIdRef.current;
       // 当前会话被删除时清空
-      if (current && !list.some((conversation) => conversation.id === current)) { clearConversation(); return; }
+      if (current && action === 'delete' && id === current) { clearConversation(); return; }
       // 根据后端状态同步当前会话的发送锁
       if (current) {
         if (nextActive.has(current)) {
@@ -723,7 +739,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (progress.phase === 'completed' || progress.phase === 'error') void loadPermissionRequests(statusConversationId);
     });
     const initialUiStateSequence = uiStateSequenceRef.current;
-    requestWithRetry(ctx, 'conversation-list', 'getConversationUiState').then((value: unknown) => applyConversationUiState(value, initialUiStateSequence)).catch((err: unknown) => {
+    requestWithRetry(ctx, 'conversation', 'getState').then((value: unknown) => applyConversationUiState(value, initialUiStateSequence)).catch((err: unknown) => {
       if (!disposed) logError('加载对话界面状态失败', err);
     });
     return () => { disposed = true; };
@@ -785,7 +801,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         sendingConversationRef.current = target;
         pendingConversationIdRef.current = target;
         const selectionSequence = ++uiStateSequenceRef.current;
-        const snapshot = await requestWithRetry(ctx, 'conversation-list', 'selectConversation', target);
+        const snapshot = await requestWithRetry(ctx, 'conversation', 'select', target);
         applyUiStateRef.current(snapshot, selectionSequence);
         traceCursorBeforeSend = traceStateRef.current.conversationId === target ? traceStateRef.current.cursor : -1;
       }
@@ -875,7 +891,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setError(null);
     const commandSequence = ++uiStateSequenceRef.current;
     try {
-      const snapshot = await requestWithRetry(ctx, 'conversation-list', 'startDraftConversation', nextSource, project || undefined);
+      const snapshot = await requestWithRetry(ctx, 'conversation', 'select', null, project ? { project } : undefined);
       applyUiStateRef.current(snapshot, commandSequence);
     } catch (err) {
       logError('切换 Agent 失败', err);
@@ -902,7 +918,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setError(null);
     const commandSequence = ++uiStateSequenceRef.current;
     try {
-      const snapshot = await requestWithRetry(ctx, 'conversation-list', 'startDraftConversation', source, nextProject);
+      const snapshot = await requestWithRetry(ctx, 'conversation', 'select', null, { project: nextProject });
       applyUiStateRef.current(snapshot, commandSequence);
     } catch (err) {
       logError('切换项目目录失败', err);

@@ -3,14 +3,14 @@ import { createRoot } from 'react-dom/client';
 import App from './app.js';
 
 const setters: Record<string, (data: any) => void> = {};
-let cachedConversationUiState: unknown;
-let hasCachedConversationUiState = false;
+let cachedConversationSelected: unknown;
+let hasCachedConversationSelected = false;
 const cachedTraceAppends: unknown[] = [];
 
 function registerSetter(key: string, setter: (data: any) => void): void {
   setters[key] = setter;
-  if (key === 'conversation.ui.changed' && hasCachedConversationUiState) {
-    setter(cachedConversationUiState);
+  if (key === 'conversation.selected' && hasCachedConversationSelected) {
+    setter(cachedConversationSelected);
   }
   if (key === 'conversation.trace.append' && cachedTraceAppends.length > 0) {
     const pending = cachedTraceAppends.splice(0);
@@ -35,10 +35,10 @@ export default {
       setters['conversation.changed']?.(data);
       return data;
     },
-    onConversationUiChanged(data: unknown) {
-      cachedConversationUiState = data;
-      hasCachedConversationUiState = true;
-      setters['conversation.ui.changed']?.(data);
+    onConversationSelected(data: unknown) {
+      cachedConversationSelected = data;
+      hasCachedConversationSelected = true;
+      setters['conversation.selected']?.(data);
       return data;
     },
     onConversationTraceAppend(data: unknown) {

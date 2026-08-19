@@ -16,6 +16,14 @@ interface Conversation extends AgentConversation {
   active?: boolean;
 }
 
+type ConversationChangedAction = 'create' | 'delete' | 'rename' | 'update';
+
+interface ConversationChangedPayload {
+  id: string;
+  action: ConversationChangedAction;
+  conversation?: Conversation;
+}
+
 let conversations: Conversation[] = [];
 let activeMessageIds = new Map<string, string>();
 interface PendingPermissionRequest {
@@ -76,8 +84,9 @@ function normalizeTraceSeq(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= -1 ? value : -1;
 }
 
-function copyConversations(): Conversation[] {
-  return conversations.map((conversation) => ({ ...conversation }));
+function broadcastConversationChanged(action: ConversationChangedAction, id: string, conversation?: Conversation): void {
+  const payload: ConversationChangedPayload = { id, action, ...(conversation ? { conversation: { ...conversation } } : {}) };
+  runtime?.message.broadcast('conversation.changed', payload);
 }
 
 async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
@@ -118,11 +127,7 @@ async function refreshConversations(): Promise<Conversation[]> {
       return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage, active: activeMessageIds.has(id) };
     });
   }).sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
-  return copyConversations();
-}
-
-function broadcastConversations(): void {
-  runtime?.message.broadcast('conversation.changed', copyConversations());
+  return conversations.map((conversation) => ({ ...conversation }));
 }
 
 async function broadcastMessageStatusWithContext(conversationId: string, messageId: string | undefined, status: AgentProgressStatus): Promise<void> {
@@ -208,7 +213,6 @@ editor.plugin.define({
       adapters = createAdapters();
       try {
         await refreshConversations();
-        broadcastConversations();
       } catch (err) {
         console.error('[agent] failed to load conversations:', err);
       }
@@ -291,7 +295,7 @@ editor.plugin.define({
       const result = await adapter.setConversationPermissions(conversation.adapterId, validated);
       conversation.sandboxMode = result.sandboxMode;
       conversation.approvalPolicy = result.approvalPolicy;
-      broadcastConversations();
+      broadcastConversationChanged('update', id, conversation);
       return { ...result };
     },
     async getPendingPermissionRequests(conversationId: string): Promise<PendingPermissionRequest[]> {
@@ -310,14 +314,14 @@ editor.plugin.define({
       const result = await requireAdapter(source).createConversation(project, options);
       const conv: Conversation = { ...result, sandboxMode: result.sandboxMode || options.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: result.approvalPolicy || options.approvalPolicy || DEFAULT_APPROVAL_POLICY, id: conversationId(source, result.id), adapterId: result.id, source };
       conversations.unshift(conv);
-      broadcastConversations();
+      broadcastConversationChanged('create', conv.id, conv);
       return { ...conv };
     },
     async deleteConversation(id: string) {
       const route = parseConversationId(id);
       await requireAdapter(route.source).deleteConversation(route.adapterId);
       conversations = conversations.filter((conversation) => conversation.id !== id);
-      broadcastConversations();
+      broadcastConversationChanged('delete', id);
       return id;
     },
     async renameConversation(id: string, title: string) {
@@ -330,7 +334,7 @@ editor.plugin.define({
       const route = parseConversationId(id);
       const updated = await adapter.renameConversation(route.adapterId, trimmed);
       conversation.title = updated.title;
-      broadcastConversations();
+      broadcastConversationChanged('rename', id, conversation);
       return { ...conversation };
     },
     async getConversationTrace(conversationId: string, turnId?: string): Promise<AgentTraceEvent[]> {
@@ -397,7 +401,7 @@ editor.plugin.define({
       let aiContent: string;
       activeMessageIds.set(conversationId, aiMessageId);
       const activeConv = conversations.find((conversation) => conversation.id === conversationId);
-      if (activeConv) { activeConv.active = true; broadcastConversations(); }
+      if (activeConv) { activeConv.active = true; broadcastConversationChanged('update', conversationId, activeConv); }
       try {
         const route = parseConversationId(conversationId);
         const options = normalizeTurnOptions(input);
@@ -413,7 +417,7 @@ editor.plugin.define({
       } finally {
         activeMessageIds.delete(conversationId);
         const finishedConv = conversations.find((conversation) => conversation.id === conversationId);
-        if (finishedConv) { finishedConv.active = false; broadcastConversations(); }
+        if (finishedConv) { finishedConv.active = false; broadcastConversationChanged('update', conversationId, finishedConv); }
       }
       void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'completed' });
       const local = conversations.find((conversation) => conversation.id === conversationId);
@@ -431,7 +435,7 @@ editor.plugin.define({
       } catch (err) {
         console.error('[agent] failed to refresh conversation metadata:', err);
       }
-      broadcastConversations();
+      if (local) broadcastConversationChanged('update', conversationId, local);
       return { id: aiMessageId, role: 'assistant', content: aiContent };
     },
   },

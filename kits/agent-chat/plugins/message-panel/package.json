@@ -19,8 +19,8 @@
           "conversation.changed": [
             "panel.onConversationChanged"
           ],
-          "conversation.ui.changed": [
-            "panel.onConversationUiChanged"
+          "conversation.selected": [
+            "panel.onConversationSelected"
           ],
           "conversation.trace.append": [
             "panel.onConversationTraceAppend"
