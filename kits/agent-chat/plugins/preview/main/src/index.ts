@@ -1,5 +1,7 @@
 import { readFile } from 'node:fs/promises';
-import { extname, isAbsolute, resolve } from 'node:path';
+import { basename, extname } from 'node:path';
+
+import { filePathFromPreviewLink, validatePreviewLink } from './uri.js';
 
 declare const editor: any;
 
@@ -48,26 +50,6 @@ function detectLanguage(filePath: string): string {
   return map[ext] || 'plaintext';
 }
 
-function resolveFilePath(href: string, project?: string): string | null {
-  // 去掉可能的 file:// 前缀
-  let cleaned = href;
-  if (cleaned.startsWith('file://')) {
-    cleaned = cleaned.slice('file://'.length);
-  }
-  // 去掉查询参数和 hash
-  cleaned = cleaned.split('?')[0].split('#')[0];
-  if (!cleaned) return null;
-
-  if (isAbsolute(cleaned)) {
-    return cleaned;
-  }
-  // 相对路径基于项目目录解析
-  if (project) {
-    return resolve(project, cleaned);
-  }
-  return resolve(cleaned);
-}
-
 async function readTextFile(filePath: string): Promise<string> {
   const buffer = await readFile(filePath);
   return buffer.toString('utf-8');
@@ -75,13 +57,23 @@ async function readTextFile(filePath: string): Promise<string> {
 
 editor.plugin.define({
   methods: {
-    async readFile(href: string, project?: string): Promise<PreviewContent> {
-      const filePath = resolveFilePath(href, project);
-      if (!filePath) {
+    async readFile(payload: unknown): Promise<PreviewContent> {
+      const validation = validatePreviewLink(payload);
+      if ('error' in validation) {
+        const href = validation.originalHref || (typeof payload === 'object' && payload !== null && 'href' in payload
+          ? String((payload as { href?: unknown }).href || '') : '');
         return {
           kind: 'unsupported',
           title: href,
-          error: '无法解析的文件路径',
+          error: validation.error,
+        };
+      }
+      const filePath = filePathFromPreviewLink(payload);
+      if (!filePath) {
+        return {
+          kind: 'unsupported',
+          title: validation.link.originalHref,
+          error: validation.link.protocol === 'file' ? '无法解析的文件 URI' : '仅支持预览 file URI',
         };
       }
       try {
@@ -95,7 +87,7 @@ editor.plugin.define({
           return {
             kind: 'file',
             path: filePath,
-            title: filePath.split('/').pop(),
+            title: basename(filePath),
             language: 'image',
             content: dataUrl,
           };
@@ -105,7 +97,7 @@ editor.plugin.define({
           return {
             kind: 'file',
             path: filePath,
-            title: filePath.split('/').pop(),
+            title: basename(filePath),
             language: detectLanguage(filePath),
             content,
           };
@@ -113,14 +105,14 @@ editor.plugin.define({
         return {
           kind: 'unsupported',
           path: filePath,
-          title: filePath.split('/').pop(),
+          title: basename(filePath),
           error: `不支持预览的文件类型：${ext || '未知'}`,
         };
       } catch (err) {
         return {
           kind: 'file',
           path: filePath,
-          title: filePath.split('/').pop(),
+          title: basename(filePath),
           error: err instanceof Error ? err.message : String(err),
         };
       }

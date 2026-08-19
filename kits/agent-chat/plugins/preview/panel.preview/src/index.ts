@@ -1,6 +1,8 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 
+import { validatePreviewLink, type PreviewLinkPayload } from './uri.js';
+
 marked.setOptions({ gfm: true, breaks: true });
 
 interface PreviewContent {
@@ -147,14 +149,6 @@ function renderEmpty(): void {
   `;
 }
 
-interface LinkClickedPayload {
-  href: string;
-  text?: string;
-  protocol?: string;
-  conversationId?: string;
-  project?: string;
-}
-
 function safeRenderContent(content: PreviewContent): void {
   try {
     renderContent(content);
@@ -169,14 +163,18 @@ function safeRenderContent(content: PreviewContent): void {
 
 async function handleLinkClicked(data: unknown): Promise<void> {
   if (!ctx) return;
-  const payload = data as LinkClickedPayload;
-  if (!payload || typeof payload.href !== 'string' || !payload.href) return;
+  const validation = validatePreviewLink(data);
+  if ('error' in validation) {
+    safeRenderContent({
+      kind: 'unsupported',
+      title: validation.originalHref || '预览失败',
+      error: validation.error,
+    });
+    return;
+  }
+  const payload = validation.link;
 
-  // 仅当 href 本身是绝对的 http(s) URL 时才当作外链用 iframe 预览。
-  // 注意：不能依赖 message-panel 传来的 protocol，相对路径会被 new URL(base)
-  // 补成 http，从而把本地文件误判为外链。
-  const isExternalUrl = /^https?:\/\//i.test(payload.href);
-  if (isExternalUrl) {
+  if (payload.protocol === 'http' || payload.protocol === 'https') {
     safeRenderContent({
       kind: 'url',
       url: payload.href,
@@ -186,14 +184,21 @@ async function handleLinkClicked(data: unknown): Promise<void> {
   }
 
   // 文件：先显示加载中，再主动向自己后端请求内容
-  const fallbackTitle = payload.text || payload.href.split('/').pop() || '文件';
+  const fallbackTitle = payload.text || payload.url.pathname.split('/').pop() || '文件';
   safeRenderContent({ kind: 'file', path: payload.href, title: fallbackTitle });
   try {
+    // URL 仅是本地校验结果，不跨消息边界传递；请求 payload 保持规范字段。
+    const filePayload: PreviewLinkPayload = {
+      href: payload.href,
+      originalHref: payload.originalHref,
+      protocol: payload.protocol,
+      ...(payload.text !== undefined ? { text: payload.text } : {}),
+      ...(payload.conversationId !== undefined ? { conversationId: payload.conversationId } : {}),
+    };
     const result = await ctx.message.request(
       'preview',
       'readFile',
-      payload.href,
-      payload.project,
+      filePayload,
     ) as PreviewContent;
     safeRenderContent(result);
   } catch (err) {

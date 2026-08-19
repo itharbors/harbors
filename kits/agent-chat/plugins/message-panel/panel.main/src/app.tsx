@@ -3,6 +3,7 @@ import { acceptConversationUiState, createConversationUiStateGate } from './ui-s
 import { createTraceSyncRunGate, createTraceSyncState, mergeTraceEvents, mergeTracePage, readTraceEvent, scheduleTraceSyncRun, traceSyncFailureMessage, type TraceSyncState } from './trace-sync.js';
 import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import Transcript, { nextDisplayTurn } from './transcript.js';
+import { captureLinkClick, createLinkClickedPayload, createLinkClickSequenceGate } from './link-click.js';
 import { applyMessageDeltaUpdates, createMessageDeltaScheduler, shouldIgnorePendingBottomScroll, type MessageDeltaUpdate } from './update-scheduler.js';
 import './index.css';
 
@@ -10,7 +11,7 @@ type Source = 'harbors';
 interface MessageData { id: string; role: 'user' | 'assistant'; content: string; turn?: number; }
 interface ConversationData { id: string; active?: boolean; }
 interface DraftData { source?: Source; project?: string; }
-interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; running?: boolean; generation?: string; revision?: number; }
+interface ConversationUiState { selectedConversationId?: string | null; selectedProject?: string | null; draft?: DraftData | null; running?: boolean; generation?: string; revision?: number; }
 interface SelectOption { id: string; name: string; description?: string; }
 interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
@@ -355,6 +356,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const [traceOlderLoading, setTraceOlderLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const conversationIdRef = useRef<string | null>(null);
+  const projectRef = useRef<string | null>(null);
+  const linkClickSequenceRef = useRef(createLinkClickSequenceGate());
   const loadSeqRef = useRef(0);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowLatestRef = useRef(true);
@@ -664,14 +667,19 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     });
     messageDeltaSchedulerRef.current = messageDeltaScheduler;
     const cancelPendingMessageDeltas = (): void => { messageDeltaScheduler.cancel(); };
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; cancelPendingMessageDeltas(); cancelBottomScroll(); olderScrollAnchorRef.current = null; shouldFollowLatestRef.current = true; conversationIdRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; cancelPendingMessageDeltas(); cancelBottomScroll(); olderScrollAnchorRef.current = null; shouldFollowLatestRef.current = true; conversationIdRef.current = null; projectRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
-      clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
+      const nextProject = draftData?.project || null;
+      clearConversation(); setSource(draftData?.source || 'harbors'); projectRef.current = nextProject; setProject(nextProject); setDraft(true);
     };
-    const loadConversation = (id: string) => {
+    const loadConversation = (id: string, selectedProject: string | null) => {
       // UI state 的 revision 更新不代表切换会话；同一会话只靠 append 保持增量更新。
-      if (conversationIdRef.current === id) return;
+      if (conversationIdRef.current === id) {
+        projectRef.current = selectedProject;
+        setProject(selectedProject);
+        return;
+      }
       cancelPendingMessageDeltas();
       cancelBottomScroll();
       olderScrollAnchorRef.current = null;
@@ -682,7 +690,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       const preserveSending = (sendingRef.current && sendingConversationRef.current === id) || targetActive;
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); setProject(null); setLoading(true); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); projectRef.current = selectedProject; setProject(selectedProject); setLoading(true); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
       // 首次只拉最近完整 turn；更早 turn 由顶部滚动分页补入
       void loadTrace(id, seq).finally(() => { if (!disposed && seq === loadSeqRef.current) setLoading(false); });
       loadPermissionRequests(id);
@@ -700,7 +708,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (state?.selectedConversationId) {
         if (state.running) activeConversationsRef.current.add(String(state.selectedConversationId));
         else activeConversationsRef.current.delete(String(state.selectedConversationId));
-        loadConversation(String(state.selectedConversationId));
+        loadConversation(String(state.selectedConversationId), typeof state.selectedProject === 'string' && state.selectedProject ? state.selectedProject : null);
       } else if (state?.draft) {
         enterDraft(state.draft);
       } else {
@@ -938,18 +946,21 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   };
 
   const handleLinkClick = useCallback((info: { href: string; text: string }) => {
-    let protocol = '';
-    try { protocol = new URL(info.href, 'http://local/').protocol.replace(/:$/, ''); }
-    catch { protocol = info.href.startsWith('#') ? 'hash' : ''; }
-    // 已阻止默认跳转，广播交由外部插件按需处理（打开外链、在编辑器打开文件等）
-    ctx.message.broadcast('message-panel.link.clicked', {
-      href: info.href,
-      text: info.text,
-      protocol,
-      conversationId: conversationIdRef.current,
-      project,
-    });
-  }, [ctx, project]);
+    // Capture the render state synchronously: a fast conversation/project switch
+    // must not change the context attached to this click while the request runs.
+    const snapshot = captureLinkClick(info, conversationIdRef.current, projectRef.current);
+    const clickSequence = linkClickSequenceRef.current.next();
+    void ctx.message.request('message-panel', 'normalizeLink', snapshot.href, snapshot.selectedProject)
+      .then((normalized: unknown) => {
+        if (!linkClickSequenceRef.current.isCurrent(clickSequence)) return;
+        if (!normalized || typeof normalized !== 'object') throw new Error('链接规范化返回无效结果');
+        // 已阻止默认跳转；只有 main 完成 Node 侧规范化后才广播。
+        ctx.message.broadcast('message-panel.link.clicked', createLinkClickedPayload(normalized as Parameters<typeof createLinkClickedPayload>[0], snapshot));
+      })
+      .catch((error: unknown) => {
+        if (linkClickSequenceRef.current.isCurrent(clickSequence)) logError('链接规范化失败', error);
+      });
+  }, [ctx]);
 
   const switchProject = async (nextProject: string) => {
     if (!draft || sending || !nextProject) return;
