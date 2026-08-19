@@ -2,10 +2,8 @@ import { appendFile, mkdir, open, readdir, readFile, rename, stat, unlink, write
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
-import { readDshRelayConfig, type RelayModel } from './dsh-config.js';
-import { resolveDshCredential } from './credentials.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
 import { loadWorkspaceInstructions } from './instructions.js';
 import { paginateTraceEvents } from './trace-pagination.js';
@@ -42,13 +40,6 @@ interface SessionHeader {
   approvalPolicy?: AgentApprovalPolicy;
 }
 
-interface RelayRetryConfig {
-  enabled: boolean;
-  maxRetries: number;
-  baseDelayMs: number;
-  maxDelayMs: number;
-}
-
 interface CompactionPolicy {
   thresholdRatio: number;
   retainRatio: number;
@@ -64,29 +55,51 @@ interface SurfaceSelection {
   shadowedTokenCount: number;
 }
 
-interface AnthropicUsage {
-  input_tokens?: unknown;
-  output_tokens?: unknown;
-  cache_creation_input_tokens?: unknown;
-  cache_read_input_tokens?: unknown;
+export interface ModelServiceMessage {
+  role: 'user' | 'assistant' | 'tool';
+  content: unknown;
+  toolCallId?: string;
+  toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+  isError?: boolean;
 }
 
-interface OpenAiUsage {
-  prompt_tokens?: unknown;
-  completion_tokens?: unknown;
-  total_tokens?: unknown;
-  prompt_tokens_details?: { cached_tokens?: unknown };
-  completion_tokens_details?: { reasoning_tokens?: unknown };
+export interface ModelServiceCompleteRequest {
+  requestId: string;
+  purpose: 'turn' | 'compaction';
+  model?: string;
+  system?: string;
+  messages: ModelServiceMessage[];
+  tools?: unknown[];
+  maxOutputTokens?: number;
+  retryMode?: 'default' | 'disabled';
 }
 
-interface AnthropicResponsePayload {
-  content?: Array<{ type?: string; text?: string; id?: string; name?: string; input?: Record<string, unknown> }>;
-  usage?: AnthropicUsage;
+export interface ModelServiceCompleteResponse {
+  requestId: string;
+  model: string;
+  message: { role: 'assistant'; content: unknown; toolCalls?: Array<{ id: string; name: string; arguments: string }> };
+  usage?: AgentTokenUsage;
 }
 
-interface OpenAiResponsePayload {
-  choices?: Array<{ message?: { content?: unknown; tool_calls?: Array<{ id?: string; type?: string; function?: { name?: string; arguments?: string } }> } }>;
-  usage?: OpenAiUsage;
+export interface ModelServiceCatalog {
+  models: Array<{
+    id: string;
+    name: string;
+    description?: string;
+    contextWindow?: number;
+    reasoningEfforts?: string[] | AgentOptions['models'][number]['reasoningEfforts'];
+    serviceTiers?: string[] | AgentOptions['models'][number]['serviceTiers'];
+    defaultReasoningEffort?: string;
+    defaultServiceTier?: string;
+  }>;
+  defaultModel: string;
+  configurationError?: string | { message?: string };
+}
+
+export interface ModelServiceClient {
+  getCatalog(): Promise<ModelServiceCatalog>;
+  complete(request: ModelServiceCompleteRequest): Promise<ModelServiceCompleteResponse>;
+  cancel(requestId: string): Promise<unknown>;
 }
 
 interface AppendEventOptions {
@@ -94,13 +107,6 @@ interface AppendEventOptions {
   sourceEventSeqs?: number[];
 }
 
-class RelayRequestError extends Error {
-  constructor(readonly status: number, readonly body: string) {
-    super(`Harbors relay request failed (${status}): ${body.slice(0, 500)}`);
-  }
-}
-
-const REQUEST_TIMEOUT_MS = 5 * 60_000;
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
 const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
@@ -128,7 +134,6 @@ const COMPACTION_INSTRUCTION = [
   '## Next Step',
   '## Critical Context',
 ].join('\n');
-const DEFAULT_RELAY_RETRY_CONFIG: RelayRetryConfig = { enabled: true, maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 8_000 };
 const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
 const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
 const SESSION_LOCK_TIMEOUT_MS = 10_000;
@@ -139,12 +144,9 @@ function throwIfAborted(signal: AbortSignal): void {
   throw signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped');
 }
 
-function requestSignal(signal: AbortSignal): AbortSignal {
-  return AbortSignal.any([signal, AbortSignal.timeout(REQUEST_TIMEOUT_MS)]);
-}
-
 /** Harbors 自主管理的 agent：参考 Harness，用只追加事件日志维护 session/turn。 */
 export class HarborsAdapter implements AgentAdapter {
+  constructor(private readonly modelService: ModelServiceClient) {}
   private stopped = false;
   private readonly abortController = new AbortController();
   private readonly storageDir = resolve(process.env.HARBORS_AGENT_STORAGE_DIR || process.env.HARBORS_PI_AGENT_STORAGE_DIR || join(homedir(), '.harbors', 'pi-agent', 'sessions'));
@@ -305,7 +307,11 @@ export class HarborsAdapter implements AgentAdapter {
     if (!controller) return false;
     controller.abort(new Error('用户已停止当前对话'));
     const completion = this.activeTurnCompletions.get(id);
-    if (completion) await Promise.race([completion, new Promise<void>((resolve) => setTimeout(resolve, STOP_SETTLE_TIMEOUT_MS))]);
+    if (completion) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([completion, new Promise<void>((resolve) => { timer = setTimeout(resolve, STOP_SETTLE_TIMEOUT_MS); })]);
+      if (timer) clearTimeout(timer);
+    }
     return true;
   }
 
@@ -318,14 +324,14 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getModels(): Promise<AgentOptions> {
-    const config = await this.config();
-    const models = config.models.length ? config.models : [{ id: config.modelId, name: config.modelId }];
-    const configurationError = !config.baseUrl
-      ? 'HubBert 未找到 Relay 地址：请检查 ~/.dsh/settings.yaml 或 HARBORS_RELAY_BASE_URL。'
-      : !config.apiKey
-        ? 'HubBert 缺少 DSH Relay 凭据：请在启动 Harbors 前设置 ~/.dsh/settings.yaml 中 apiKeyEnv 指向的环境变量。'
-        : undefined;
-    return { models, defaultModel: config.defaultModel || models[0].id, ...(configurationError ? { configurationError } : {}) };
+    const catalog = await this.modelService.getCatalog();
+    const models: AgentModelOption[] = catalog.models.map((model) => ({
+      ...model,
+      ...(model.reasoningEfforts ? { reasoningEfforts: model.reasoningEfforts.map((option) => typeof option === 'string' ? { id: option, name: option } : option) } : {}),
+      ...(model.serviceTiers ? { serviceTiers: model.serviceTiers.map((option) => typeof option === 'string' ? { id: option, name: option } : option) } : {}),
+    }));
+    const configurationError = typeof catalog.configurationError === 'string' ? catalog.configurationError : catalog.configurationError?.message;
+    return { models, defaultModel: catalog.defaultModel, ...(configurationError ? { configurationError } : {}) };
   }
 
   async getConversationSettings(id: string): Promise<AgentTurnOptions> {
@@ -341,10 +347,10 @@ export class HarborsAdapter implements AgentAdapter {
 
   async getConversationContext(id: string): Promise<AgentContextUsage> {
     const session = await this.refreshSession(id);
-    const config = await this.config();
-    const model = session.model || config.modelId;
-    const contextWindow = contextWindowFor(config.models, model);
-    const usedTokens = measureSurface(session, config.api).totalTokens;
+    const catalog = await this.modelService.getCatalog();
+    const model = session.model || catalog.defaultModel || catalog.models[0]?.id || 'unknown';
+    const contextWindow = contextWindowFor(catalog.models, model);
+    const usedTokens = measureSurface(session).totalTokens;
     const tokenUsage = sumTokenUsage(session.events);
     return {
       model,
@@ -375,19 +381,15 @@ export class HarborsAdapter implements AgentAdapter {
   setPermissionRequester(requester?: AgentPermissionRequester): void { this.permissionRequester = requester; }
 
   private async runTurn(session: StoredSession, turn: number, signal: AbortSignal, onStatus?: (status: string) => void): Promise<string> {
-    const config = await this.config();
+    const catalog = await this.modelService.getCatalog();
     throwIfAborted(signal);
-    const { baseUrl, apiKey, api, modelId, retry } = config;
-    if (!baseUrl) throw new Error('HubBert agent requires HARBORS_RELAY_BASE_URL or ~/.dsh/settings.yaml');
-    if (!apiKey) throw new Error('HubBert agent requires HARBORS_RELAY_API_KEY or the DSH apiKeyEnv environment variable');
-    const model = session.model || modelId;
-    const contextWindow = contextWindowFor(config.models, model);
-    if (api === 'anthropic-messages') return this.runAnthropicToolLoop(session, turn, baseUrl, apiKey, model, contextWindow, retry, onStatus, signal);
-    if (api === 'openai-completions') return this.runOpenAiToolLoop(session, turn, baseUrl, apiKey, model, contextWindow, retry, onStatus, signal);
-    throw new Error(`Unsupported Harbors relay API: ${api}`);
+    const model = session.model || catalog.defaultModel || catalog.models[0]?.id;
+    if (!model) throw new Error(typeof catalog.configurationError === 'string' ? catalog.configurationError : catalog.configurationError?.message || 'model-service 未配置可用模型');
+    const contextWindow = contextWindowFor(catalog.models, model);
+    return this.runModelToolLoop(session, turn, model, contextWindow, onStatus, signal);
   }
 
-  private async runAnthropicToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, contextWindow: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+  private async runModelToolLoop(session: StoredSession, turn: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
     const systemPrompt = await loadWorkspaceInstructions(workspace);
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
@@ -400,74 +402,18 @@ export class HarborsAdapter implements AgentAdapter {
       await this.appendEvent(session, 'step/start', { turn, step });
       try {
         throwIfAborted(signal);
-        onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
-        await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'anthropic-messages', ...turnSettings(session), ...permissionSettings(session) });
-        const messages = toAnthropicMessages(session.events, session.surface);
-        const response = await this.requestRelay(`${baseUrl}/v1/messages`, { method: 'POST', headers: { 'x-api-key': apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: 16_384, tools: hubbertTools, messages, ...(systemPrompt ? { system: systemPrompt } : {}) }) }, retry, session, turn, step, onStatus, signal);
+        onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求模型服务…');
+        await this.appendEvent(session, 'request/context', { turn, step, provider: 'model-service', model, ...turnSettings(session), ...permissionSettings(session) });
+        const requestId = randomUUID();
+        const messages = toModelServiceMessages(session.events, session.surface);
+        const response = await this.completeModel({ requestId, purpose: 'turn', model, system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default' }, signal);
         overflowRetries = 0;
-        const payload = await response.json() as AnthropicResponsePayload;
         throwIfAborted(signal);
-        const blocks = payload.content || [];
-        const calls = blocks.filter((block) => block.type === 'tool_use' && block.id && block.name).map((call) => ({ id: call.id!, name: call.name!, input: call.input || {}, arguments: boundedJson(call.input || {}) }));
-        const usage = normalizeAnthropicUsage(payload.usage);
-        await this.appendEvent(session, 'assistant/message', { turn, step, ...(usage ? { usage } : {}), message: { role: 'assistant', content: blocks, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
-        if (!calls.length) {
-          const text = blocks.filter((block) => block.type === 'text').map((block) => block.text || '').join('');
-          if (!text) throw new Error('Harbors agent returned no text response');
-          throwIfAborted(signal);
-          await this.appendEvent(session, 'step/end', { turn, step });
-          return text;
-        }
-        for (const call of calls) await this.appendEvent(session, 'tool/call', { turn, step, callId: call.id, name: call.name, arguments: call.arguments });
-        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
-        const guardReason = updateToolFailureGuard(failureGuard, calls, results);
-        if (guardReason) {
-          await this.appendEvent(session, 'turn/stop', { turn, step, reason: { kind: 'tool-loop-guard', message: guardReason } });
-          onStatus?.(`检测到工具失败循环，已自动停止：${guardReason}`);
-          throw new ToolLoopGuardError(guardReason);
-        }
-        await this.appendEvent(session, 'step/end', { turn, step });
-        step += 1;
-      } catch (error) {
-        await this.appendEvent(session, 'step/end', { turn, step }).catch(() => undefined);
-        if (isContextOverflowError(error) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
-          overflowRetries += 1;
-          if (await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, true)) {
-            continue;
-          }
-        }
-        throw error;
-      }
-    }
-  }
-
-  private async runOpenAiToolLoop(session: StoredSession, turn: number, baseUrl: string, apiKey: string, model: string, contextWindow: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
-    const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
-    const systemPrompt = await loadWorkspaceInstructions(workspace);
-    const tools = hubbertTools.map((tool) => ({ type: 'function', function: { name: tool.name, description: tool.description, parameters: tool.input_schema } }));
-    // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
-    let step = 1;
-    let overflowRetries = 0;
-    const failureGuard = createToolFailureGuard();
-    while (true) {
-      throwIfAborted(signal);
-      await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
-      await this.appendEvent(session, 'step/start', { turn, step });
-      try {
-        throwIfAborted(signal);
-        onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求 HubBert…');
-        await this.appendEvent(session, 'request/context', { turn, step, provider: 'harbors', model, api: 'openai-completions', ...turnSettings(session), ...permissionSettings(session) });
-        const messages = toOpenAiMessages(session.events, session.surface);
-        if (systemPrompt) messages.unshift({ role: 'system', content: systemPrompt });
-        const response = await this.requestRelay(`${baseUrl}/chat/completions`, { method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages, tools }) }, retry, session, turn, step, onStatus, signal);
-        overflowRetries = 0;
-        const payload = await response.json() as OpenAiResponsePayload;
-        throwIfAborted(signal);
-        const message = payload.choices?.[0]?.message;
-        if (!message) throw new Error('Harbors agent returned no message');
-        const calls = (message.tool_calls || []).filter((call) => call.id && call.function?.name).map((call) => ({ id: call.id!, name: call.function!.name!, input: parseToolArguments(call.function!.arguments), arguments: boundedText(call.function!.arguments || '{}') }));
-        const usage = normalizeOpenAiUsage(payload.usage);
-        await this.appendEvent(session, 'assistant/message', { turn, step, ...(usage ? { usage } : {}), message: { role: 'assistant', content: message.content ?? null, tool_calls: message.tool_calls, source: { kind: 'model', provider: 'harbors', model }, id: randomUUID() } }, { surfaceOp: 'append' });
+        const message = response.message;
+        const calls = (message.toolCalls || []).filter((call) => call.id && call.name).map((call) => ({ id: call.id, name: call.name, input: parseToolArguments(call.arguments), arguments: boundedText(call.arguments) }));
+        const usage = response.usage;
+        const traceToolCalls = message.toolCalls?.map((call) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }));
+        await this.appendEvent(session, 'assistant/message', { turn, step, ...(usage ? { usage } : {}), message: { role: 'assistant', content: message.content, ...(traceToolCalls ? { tool_calls: traceToolCalls } : {}), source: { kind: 'model', provider: 'model-service', model: response.model }, id: randomUUID() } }, { surfaceOp: 'append' });
         if (!calls.length) {
           const text = textContent(message.content);
           if (!text) throw new Error('Harbors agent returned no text response');
@@ -498,32 +444,21 @@ export class HarborsAdapter implements AgentAdapter {
     }
   }
 
-  private async requestRelay(url: string, init: RequestInit, retry: RelayRetryConfig, session: StoredSession, turn: number | null, step: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<Response> {
-    let retries = 0;
-    while (true) {
-      throwIfAborted(signal);
-      try {
-        const response = await fetch(url, { ...init, signal: requestSignal(signal) });
-        if (response.ok) return response;
-        const body = await response.text();
-        if (!retry.enabled || retries >= retry.maxRetries || !isRetryableStatus(response.status)) throw new RelayRequestError(response.status, body);
-        retries += 1;
-        await this.waitBeforeRetry(session, turn, step, retries, retry, onStatus, signal, { status: response.status, retryAfterMs: parseRetryAfter(response.headers.get('retry-after'), retry.maxDelayMs) });
-      } catch (error) {
-        if (signal.aborted) throw error;
-        if (!retry.enabled || retries >= retry.maxRetries || !isRetryableNetworkError(error)) throw error;
-        retries += 1;
-        await this.waitBeforeRetry(session, turn, step, retries, retry, onStatus, signal, { error: normalizeError(error) });
-      }
+  private async completeModel(request: ModelServiceCompleteRequest, signal: AbortSignal): Promise<ModelServiceCompleteResponse> {
+    throwIfAborted(signal);
+    let cancelled = false;
+    const onAbort = () => {
+      cancelled = true;
+      void this.modelService.cancel(request.requestId).catch(() => undefined);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    try {
+      const response = await this.modelService.complete(request);
+      if (cancelled) throw signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped');
+      return response;
+    } finally {
+      signal.removeEventListener('abort', onAbort);
     }
-  }
-
-  private async waitBeforeRetry(session: StoredSession, turn: number | null, step: number, attempt: number, retry: RelayRetryConfig, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, reason: { status?: number; error?: string; retryAfterMs?: number }): Promise<void> {
-    const delayMs = reason.retryAfterMs ?? retryDelayMs(attempt, retry);
-    const { retryAfterMs: _retryAfterMs, ...eventReason } = reason;
-    await this.appendEvent(session, 'request/retry', { turn, step, attempt, maxRetries: retry.maxRetries, delayMs, ...eventReason });
-    onStatus?.(`Relay 请求暂时失败，${delayMs}ms 后重试（${attempt}/${retry.maxRetries}）…`);
-    await delayWithAbort(delayMs, signal);
   }
 
   private async executeToolCalls(calls: ToolCall[], workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number): Promise<ToolResult[]> {
@@ -597,7 +532,7 @@ export class HarborsAdapter implements AgentAdapter {
     const attempts = force ? 1 : 2;
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       throwIfAborted(signal);
-      const measurement = measureSurface(session, 'anthropic-messages');
+      const measurement = measureSurface(session);
       const thresholdTokens = Math.floor(contextWindow * policy.thresholdRatio);
       if (!force && measurement.totalTokens < thresholdTokens) return changed;
       const retainTokens = policy.retainTokens ?? Math.floor(contextWindow * policy.retainRatio);
@@ -649,49 +584,13 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async summarizeContext(session: StoredSession, nodes: number[], model: string, turn: number | null, step: number, maxTokens: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<{ text: string; usage?: AgentTokenUsage }> {
-    const config = await this.config();
-    if (!config.baseUrl || !config.apiKey) throw new Error('cannot compact context without a configured relay');
     const instruction = COMPACTION_INSTRUCTION;
-    const sourceMessages = config.api === 'anthropic-messages'
-      ? toAnthropicMessages(session.events, nodes)
-      : toOpenAiMessages(session.events, nodes);
-    const messages = config.api === 'anthropic-messages'
-      ? [...sourceMessages, { role: 'user' as const, content: [{ type: 'text', text: instruction }] }]
-      : [...sourceMessages, { role: 'user', content: instruction }];
+    const messages = [...toModelServiceMessages(session.events, nodes), { role: 'user' as const, content: instruction }];
     onStatus?.('正在生成上下文摘要…');
-    const url = config.api === 'anthropic-messages' ? `${config.baseUrl}/v1/messages` : `${config.baseUrl}/chat/completions`;
-    const init: RequestInit = config.api === 'anthropic-messages'
-      ? { method: 'POST', headers: { 'x-api-key': config.apiKey, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' }, body: JSON.stringify({ model, max_tokens: maxTokens, messages }) }
-      : { method: 'POST', headers: { authorization: `Bearer ${config.apiKey}`, 'content-type': 'application/json' }, body: JSON.stringify({ model, stream: false, messages }) };
-    const response = await this.requestRelay(url, init, { ...config.retry, enabled: false }, session, turn, step, onStatus, signal);
-    const payload = await response.json() as AnthropicResponsePayload & OpenAiResponsePayload;
-    const usage = config.api === 'anthropic-messages' ? normalizeAnthropicUsage(payload.usage) : normalizeOpenAiUsage(payload.usage);
-    const output = config.api === 'anthropic-messages'
-      ? (payload.content || []).filter((block) => block.type === 'text').map((block) => block.text || '').join('')
-      : textContent(payload.choices?.[0]?.message?.content);
+    const response = await this.completeModel({ requestId: randomUUID(), purpose: 'compaction', model, messages, maxOutputTokens: maxTokens, retryMode: 'disabled' }, signal);
+    const output = textContent(response.message.content);
     if (!output.trim()) throw new Error('context compaction produced no summary');
-    return { text: boundedSummary(output.trim()), ...(usage ? { usage } : {}) };
-  }
-
-  private async config(): Promise<{ baseUrl: string; apiKey?: string; api: string; modelId: string; models: RelayModel[]; defaultModel?: string; retry: RelayRetryConfig }> {
-    const dsh = await readDshRelayConfig();
-    const baseUrl = (process.env.HARBORS_RELAY_BASE_URL || process.env.PI_AGENT_BASE_URL || dsh.baseUrl || '').replace(/\/$/u, '');
-    const apiKey = process.env.HARBORS_RELAY_API_KEY || process.env.PI_AGENT_API_KEY || (await resolveDshCredential(dsh.apiKeyEnv))?.value;
-    const modelId = process.env.HARBORS_RELAY_MODEL || process.env.PI_AGENT_MODEL || dsh.defaultModel || dsh.models[0]?.id || 'deepseek-chat';
-    return {
-      baseUrl,
-      apiKey,
-      api: process.env.HARBORS_RELAY_API || process.env.PI_AGENT_API || dsh.api || 'openai-completions',
-      modelId,
-      models: dsh.models,
-      defaultModel: dsh.defaultModel,
-      retry: {
-        enabled: parseBooleanEnv(process.env.HARBORS_RELAY_RETRY_ENABLED || process.env.PI_AGENT_RETRY_ENABLED, DEFAULT_RELAY_RETRY_CONFIG.enabled),
-        maxRetries: parseIntegerEnv(process.env.HARBORS_RELAY_MAX_RETRIES || process.env.PI_AGENT_MAX_RETRIES, DEFAULT_RELAY_RETRY_CONFIG.maxRetries, 0, 10),
-        baseDelayMs: parseIntegerEnv(process.env.HARBORS_RELAY_RETRY_BASE_DELAY_MS || process.env.PI_AGENT_RETRY_BASE_DELAY_MS, DEFAULT_RELAY_RETRY_CONFIG.baseDelayMs, 0, 60_000),
-        maxDelayMs: parseIntegerEnv(process.env.HARBORS_RELAY_RETRY_MAX_DELAY_MS || process.env.PI_AGENT_RETRY_MAX_DELAY_MS, DEFAULT_RELAY_RETRY_CONFIG.maxDelayMs, 0, 300_000),
-      },
-    };
+    return { text: boundedSummary(output.trim()), ...(response.usage ? { usage: response.usage } : {}) };
   }
 
   private logPathFor(id: string): string { if (!/^[a-f0-9-]{36}$/iu.test(id)) throw new Error('Invalid Harbors conversation id'); return join(this.storageDir, `${id}.jsonl`); }
@@ -1047,25 +946,6 @@ function assertApprovalPolicy(value: string): AgentApprovalPolicy {
   throw new Error(`Invalid approval policy: ${value}`);
 }
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean { if (!value) return fallback; if (/^(?:1|true|yes|on)$/iu.test(value)) return true; if (/^(?:0|false|no|off)$/iu.test(value)) return false; return fallback; }
-function parseIntegerEnv(value: string | undefined, fallback: number, min: number, max: number): number { const parsed = Number(value); return Number.isInteger(parsed) ? Math.min(max, Math.max(min, parsed)) : fallback; }
-function isRetryableStatus(status: number): boolean { return status === 408 || status === 429 || status === 500 || status === 502 || status === 503 || status === 504; }
-function isRetryableNetworkError(error: unknown): boolean { return error instanceof TypeError || (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')); }
-function parseRetryAfter(value: string | null, maxDelayMs: number): number | undefined {
-  if (!value) return undefined;
-  const seconds = Number(value);
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(maxDelayMs, Math.round(seconds * 1_000));
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? Math.min(maxDelayMs, Math.max(0, timestamp - Date.now())) : undefined;
-}
-function retryDelayMs(attempt: number, retry: RelayRetryConfig): number { const exponential = Math.min(retry.maxDelayMs, retry.baseDelayMs * (2 ** Math.max(0, attempt - 1))); return exponential === 0 ? 0 : Math.max(1, Math.round(exponential * (0.75 + Math.random() * 0.5))); }
-async function delayWithAbort(delayMs: number, signal: AbortSignal): Promise<void> {
-  if (delayMs <= 0) { throwIfAborted(signal); return; }
-  await new Promise<void>((resolve, reject) => {
-    const timer = setTimeout(() => { signal.removeEventListener('abort', onAbort); resolve(); }, delayMs);
-    const onAbort = () => { clearTimeout(timer); reject(signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped')); };
-    signal.addEventListener('abort', onAbort, { once: true });
-  });
-}
 function textContent(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content)) return content.map((part) => textContent(part)).join('');
@@ -1095,65 +975,53 @@ function projectMessages(events: AgentTraceEvent[]): AgentChatMessage[] {
 
 function titleFromEvents(events: AgentTraceEvent[]): string { const title = [...events].reverse().find((event) => event.type === 'session/title' && typeof event.data.title === 'string'); if (title) return String(title.data.title); const user = events.find((event) => event.type === 'user/message'); return user ? textContent(user.data.content).trim().slice(0, 48) || '未命名对话' : '未命名对话'; }
 
-function toOpenAiMessages(events: AgentTraceEvent[], surface: readonly number[]): Array<Record<string, unknown>> {
-  const messages: Array<Record<string, unknown>> = [];
+function toModelServiceMessages(events: AgentTraceEvent[], surface: readonly number[]): ModelServiceMessage[] {
+  const messages: ModelServiceMessage[] = [];
   for (const seq of surface) {
     const event = events[seq];
     if (!event) continue;
-    if (event.type === 'user/message') messages.push({ role: 'user', content: textContent(event.data.content) });
-    else if (event.type === 'assistant/message') { const message = event.data.message; if (message && typeof message === 'object' && 'tool_calls' in message) messages.push({ role: 'assistant', content: (message as { content?: unknown }).content ?? null, tool_calls: (message as { tool_calls?: unknown }).tool_calls }); else messages.push({ role: 'assistant', content: textContent(messageContent(message)) }); }
+    if (event.type === 'user/message') messages.push({ role: 'user', content: neutralMessageContent(event.data.content) });
+    else if (event.type === 'assistant/message') {
+      const message = event.data.message;
+      const toolCalls = message && typeof message === 'object' && Array.isArray((message as { tool_calls?: unknown }).tool_calls)
+        ? ((message as { tool_calls: Array<{ id?: unknown; name?: unknown; arguments?: unknown; function?: { name?: unknown; arguments?: unknown } }> }).tool_calls || []).flatMap((call) => {
+          const name = call.function?.name ?? call.name;
+          const args = call.function?.arguments ?? call.arguments;
+          return call.id && name ? [{ id: String(call.id), name: String(name), arguments: String(args || '{}') }] : [];
+        })
+        : undefined;
+      messages.push({ role: 'assistant', content: neutralMessageContent(messageContent(message)), ...(toolCalls?.length ? { toolCalls } : {}) });
+    }
     else if (event.type === 'tool/result') {
       const source = messageSource(event.data.message);
-      messages.push({ role: 'tool', tool_call_id: String(source.callId || ''), content: textContent(messageContent(event.data.message)) });
-      if (event.data.image && isHubBertToolImage(event.data.image)) messages.push({ role: 'user', content: [{ type: 'text', text: textContent(messageContent(event.data.message)) }, openAiImagePart(event.data.image)] });
+      const toolText = textContent(messageContent(event.data.message));
+      const image = event.data.image;
+      const toolContent = isToolImage(image) ? [{ type: 'text', text: toolText }, { type: 'image', mediaType: image.mediaType, data: image.base64 }] : toolText;
+      const messageObject = event.data.message && typeof event.data.message === 'object' ? event.data.message as Record<string, unknown> : undefined;
+      const messageError = Array.isArray(messageObject?.content) && messageObject.content.some((block) => block && typeof block === 'object' && (block as Record<string, unknown>).isError === true);
+      messages.push({ role: 'tool', toolCallId: String(source.callId || ''), content: toolContent, ...(event.data.error || messageError ? { isError: true } : {}) });
     }
   }
   return messages;
 }
 
-function toAnthropicMessages(events: AgentTraceEvent[], surface: readonly number[]): Array<{ role: 'user' | 'assistant'; content: unknown }> {
-  const messages: Array<{ role: 'user' | 'assistant'; content: unknown }> = [];
-  for (const seq of surface) {
-    const event = events[seq];
-    if (!event) continue;
-    if (event.type === 'user/message') messages.push({ role: 'user', content: event.data.content });
-    else if (event.type === 'assistant/message') messages.push({ role: 'assistant', content: messageContent(event.data.message) });
-    else if (event.type === 'tool/result') {
-      const source = messageSource(event.data.message);
-      const content: unknown[] = [{ type: 'text', text: textContent(messageContent(event.data.message)) }];
-      if (event.data.image && isHubBertToolImage(event.data.image)) content.push(anthropicImageBlock(event.data.image));
-      messages.push({ role: 'user', content: [{ type: 'tool_result', tool_use_id: String(source.callId || ''), ...(event.data.error ? { is_error: true } : {}), content }] });
-    }
-  }
-  return messages;
+function neutralMessageContent(value: unknown): unknown {
+  if (typeof value === 'string' || value === null) return value;
+  if (!Array.isArray(value)) return textContent(value);
+  return value.flatMap((part) => {
+    if (!part || typeof part !== 'object') return [];
+    const block = part as Record<string, unknown>;
+    if (block.type === 'text' && typeof block.text === 'string') return [{ type: 'text', text: block.text }];
+    if (block.type === 'image' && typeof block.mediaType === 'string' && typeof block.data === 'string') return [{ type: 'image', mediaType: block.mediaType, data: block.data }];
+    return [part];
+  });
+}
+
+function isToolImage(value: unknown): value is HubBertToolImage {
+  return !!value && typeof value === 'object' && typeof (value as { mediaType?: unknown }).mediaType === 'string' && typeof (value as { base64?: unknown }).base64 === 'string';
 }
 
 function isAppendSurfaceEvent(event: AgentTraceEvent): boolean { return event.surfaceOp === undefined || event.surfaceOp === 'append'; }
-
-function normalizeAnthropicUsage(value: AnthropicUsage | undefined): AgentTokenUsage | undefined {
-  if (!value) return undefined;
-  return makeTokenUsage({
-    inputTokens: tokenNumber(value.input_tokens),
-    outputTokens: tokenNumber(value.output_tokens),
-    cacheReadTokens: tokenNumber(value.cache_read_input_tokens),
-    cacheWriteTokens: tokenNumber(value.cache_creation_input_tokens),
-  });
-}
-
-function normalizeOpenAiUsage(value: OpenAiUsage | undefined): AgentTokenUsage | undefined {
-  if (!value) return undefined;
-  const promptTokens = tokenNumber(value.prompt_tokens);
-  const cacheReadTokens = tokenNumber(value.prompt_tokens_details?.cached_tokens);
-  const completionTokens = tokenNumber(value.completion_tokens);
-  return makeTokenUsage({
-    // OpenAI 的 prompt_tokens 包含缓存 Token，这里拆成互斥字段。
-    inputTokens: promptTokens === undefined ? undefined : Math.max(0, promptTokens - (cacheReadTokens || 0)),
-    outputTokens: completionTokens,
-    totalTokens: tokenNumber(value.total_tokens),
-    cacheReadTokens,
-    reasoningTokens: tokenNumber(value.completion_tokens_details?.reasoning_tokens),
-  });
-}
 
 function makeTokenUsage(value: Partial<AgentTokenUsage>): AgentTokenUsage | undefined {
   if (!Object.values(value).some((entry) => entry !== undefined)) return undefined;
@@ -1225,7 +1093,7 @@ function estimateEventTokens(event: AgentTraceEvent): number {
 
 function estimateTextTokens(text: string): number { return Math.ceil(text.length / 4) + 4; }
 
-function measureSurface(session: StoredSession, _api: string): { totalTokens: number; nodes: number[] } {
+function measureSurface(session: StoredSession): { totalTokens: number; nodes: number[] } {
   const surfaceTokens = session.surface.reduce((total, seq) => {
     const event = session.events[seq];
     return event ? total + estimateEventTokens(event) : total;
@@ -1273,11 +1141,6 @@ function pruneToolResultEvent(event: AgentTraceEvent): { data: Record<string, un
   return { data: { ...event.data, message: nextMessage }, charsBefore: text.length, charsAfter: nextText.length };
 }
 
-function anthropicImageBlock(image: HubBertToolImage): Record<string, unknown> { return { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.base64 } }; }
-function openAiImagePart(image: HubBertToolImage): Record<string, unknown> { return { type: 'image_url', image_url: { url: `data:${image.mediaType};base64,${image.base64}` } }; }
-function isHubBertToolImage(value: unknown): value is HubBertToolImage {
-  return !!value && typeof value === 'object' && typeof (value as { mediaType?: unknown }).mediaType === 'string' && typeof (value as { base64?: unknown }).base64 === 'string';
-}
 function frameSummary(summary: string): string {
   return `This is an automatically generated checkpoint. Treat it as established background and continue from the messages that follow.\n\n${COMPACTION_SUMMARY_OPEN}\n${summary}\n${COMPACTION_SUMMARY_CLOSE}`;
 }
@@ -1286,17 +1149,12 @@ function boundedSummary(value: string): string {
   return value.length <= max ? value : `${value.slice(0, max)}\n...[summary truncated]`;
 }
 function compactionPolicy(): CompactionPolicy { return { ...DEFAULT_COMPACTION_POLICY }; }
-function contextWindowFor(models: RelayModel[], model: string): number {
+function contextWindowFor(models: Array<{ id: string; contextWindow?: number }>, model: string): number {
   const configured = models.find((entry) => entry.id === model)?.contextWindow;
-  const env = parseIntegerEnv(process.env.HARBORS_RELAY_CONTEXT_WINDOW || process.env.PI_AGENT_CONTEXT_WINDOW, DEFAULT_CONTEXT_WINDOW, 1_024, 10_000_000);
-  return configured || env;
+  return configured || DEFAULT_CONTEXT_WINDOW;
 }
 function isContextOverflowError(error: unknown): boolean {
-  if (error instanceof RelayRequestError) {
-    if (error.status === 413) return true;
-    if (error.status !== 400) return false;
-    return /context.{0,40}(length|window|limit|overflow)|too many tokens|maximum context|token.{0,20}limit/i.test(error.body);
-  }
+  if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'MODEL_SERVICE_CONTEXT_OVERFLOW') return true;
   const message = normalizeError(error).toLowerCase();
   return /context.{0,20}(length|window|limit|overflow)|too many tokens|maximum context/i.test(message);
 }

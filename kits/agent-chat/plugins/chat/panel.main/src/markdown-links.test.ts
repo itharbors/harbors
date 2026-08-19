@@ -36,7 +36,7 @@ test("preserves relative and https targets exactly", () => {
 });
 
 test("preserves a custom protocol for consumers while navigation uses a safe placeholder", () => {
-  const href = "harbors://plugin/open?id=message-panel";
+  const href = "harbors://plugin/open?id=chat";
   const anchor = renderLink(`[open plugin](${href})`);
 
   assert.equal(originalLinkTarget(anchor), href);
@@ -48,7 +48,7 @@ test("broadcast data may contain javascript but executable navigation stays sani
   const href = "javascript:alert(1)";
   const anchor = renderLink(`[unsafe](<${href}>)`);
 
-  // Message Panel只广播原始字符串，由消费者决定协议；DOM 中没有可执行 href。
+  // Chat 只广播原始字符串，由消费者决定协议；DOM 中没有可执行 href。
   assert.equal(originalLinkTarget(anchor), href);
   assert.equal(anchor.getAttribute("data-original-href"), href);
   assert.equal(anchor.getAttribute("href"), "#");

@@ -119,6 +119,7 @@ html, body, #panel-root {
 
 .preview-markdown {
   color: #c8cfda;
+  font-size: 13px;
   line-height: 1.65;
 }
 

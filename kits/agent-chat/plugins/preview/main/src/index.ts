@@ -31,23 +31,23 @@ const IMAGE_EXTENSIONS = new Set([
   '.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.ico', '.avif',
 ]);
 
+const LANGUAGE_MAP: Record<string, string> = {
+  '.js': 'javascript', '.jsx': 'jsx', '.mjs': 'javascript', '.cjs': 'javascript',
+  '.ts': 'typescript', '.tsx': 'tsx', '.mts': 'typescript', '.cts': 'typescript',
+  '.css': 'css', '.scss': 'scss', '.less': 'less',
+  '.html': 'html', '.htm': 'html', '.xml': 'xml', '.svg': 'xml',
+  '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml',
+  '.md': 'markdown', '.markdown': 'markdown',
+  '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
+  '.java': 'java', '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
+  '.cs': 'csharp', '.php': 'php', '.swift': 'swift', '.kt': 'kotlin',
+  '.scala': 'scala', '.sql': 'sql', '.graphql': 'graphql', '.gql': 'graphql',
+  '.vue': 'vue', '.svelte': 'svelte', '.sh': 'bash', '.bash': 'bash',
+  '.zsh': 'bash', '.ini': 'ini', '.cfg': 'ini', '.conf': 'ini',
+};
+
 function detectLanguage(filePath: string): string {
-  const ext = extname(filePath).toLowerCase();
-  const map: Record<string, string> = {
-    '.js': 'javascript', '.jsx': 'jsx', '.mjs': 'javascript', '.cjs': 'javascript',
-    '.ts': 'typescript', '.tsx': 'tsx', '.mts': 'typescript', '.cts': 'typescript',
-    '.css': 'css', '.scss': 'scss', '.less': 'less',
-    '.html': 'html', '.htm': 'html', '.xml': 'xml', '.svg': 'xml',
-    '.json': 'json', '.yaml': 'yaml', '.yml': 'yaml', '.toml': 'toml',
-    '.md': 'markdown', '.markdown': 'markdown',
-    '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
-    '.java': 'java', '.c': 'c', '.cpp': 'cpp', '.h': 'c', '.hpp': 'cpp',
-    '.cs': 'csharp', '.php': 'php', '.swift': 'swift', '.kt': 'kotlin',
-    '.scala': 'scala', '.sql': 'sql', '.graphql': 'graphql', '.gql': 'graphql',
-    '.vue': 'vue', '.svelte': 'svelte', '.sh': 'bash', '.bash': 'bash',
-    '.zsh': 'bash', '.ini': 'ini', '.cfg': 'ini', '.conf': 'ini',
-  };
-  return map[ext] || 'plaintext';
+  return LANGUAGE_MAP[extname(filePath).toLowerCase()] || 'plaintext';
 }
 
 async function readTextFile(filePath: string): Promise<string> {
@@ -80,8 +80,7 @@ editor.plugin.define({
         const ext = extname(filePath).toLowerCase();
         if (IMAGE_EXTENSIONS.has(ext)) {
           // 图片转 base64 供面板渲染
-          const fs = await import('node:fs/promises');
-          const buffer = await fs.readFile(filePath);
+          const buffer = await readFile(filePath);
           const mime = ext === '.jpg' ? 'image/jpeg' : `image/${ext.slice(1)}`;
           const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`;
           return {
@@ -110,7 +109,7 @@ editor.plugin.define({
         };
       } catch (err) {
         return {
-          kind: 'file',
+          kind: 'unsupported',
           path: filePath,
           title: basename(filePath),
           error: err instanceof Error ? err.message : String(err),

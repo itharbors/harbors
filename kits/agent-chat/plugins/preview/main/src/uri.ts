@@ -28,7 +28,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * Validate the URI metadata supplied by Message Panel without resolving a
+ * Validate the URI metadata supplied by Chat without resolving a
  * relative value against an implicit base URL.
  */
 export function validatePreviewLink(value: unknown): PreviewLinkValidation {

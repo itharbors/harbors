@@ -2,7 +2,7 @@
 
 html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; }
 *, *::before, *::after { box-sizing: border-box; }
-.message-panel { display: flex; min-height: 0; height: 100%; flex-direction: column; background: #171a21; color: #e8ecf3; }
+.chat { display: flex; min-height: 0; height: 100%; flex-direction: column; background: #171a21; color: #e8ecf3; }
 .message-list-container { display: flex; min-width: 0; min-height: 0; flex: 1; flex-direction: column; overflow-x: hidden; overflow-y: auto; padding: 22px clamp(20px, 5vw, 72px); }
 .chat-surface { display: flex; width: min(100%, 920px); min-width: 0; min-height: 0; flex-direction: column; gap: 8px; margin-top: auto; margin-right: auto; margin-left: auto; }
 .chat-surface.fresh { justify-content: flex-end; align-items: center; }

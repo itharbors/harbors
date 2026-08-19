@@ -17,7 +17,7 @@
           },
           {
             "type": "leaf",
-            "panel": "message-panel.main"
+            "panel": "chat.main"
           },
           {
             "type": "vsplit",
@@ -27,8 +27,18 @@
             ],
             "children": [
               {
-                "type": "leaf",
-                "panel": "preview.preview"
+                "type": "tab",
+                "activeIndex": 0,
+                "children": [
+                  {
+                    "type": "leaf",
+                    "panel": "preview.preview"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "settings.settings"
+                  }
+                ]
               },
               {
                 "type": "tab",
@@ -41,10 +51,6 @@
                   {
                     "type": "leaf",
                     "panel": "debug.debug"
-                  },
-                  {
-                    "type": "leaf",
-                    "panel": "settings.settings"
                   }
                 ]
               }
@@ -54,5 +60,5 @@
       }
     }
   ],
-  "activePanel": "message-panel.main"
+  "activePanel": "chat.main"
 }

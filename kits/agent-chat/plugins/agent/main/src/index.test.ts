@@ -28,7 +28,16 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
   };
   const runtime = {
     config: { get(key: string) { return values[key]; } },
-    message: { broadcast() {} },
+    message: {
+      broadcast() {},
+      async request(target: string, method: string, input?: any) {
+        assert.equal(target, 'model-service');
+        if (method === 'getCatalog') return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' };
+        if (method === 'complete') return { requestId: input.requestId, model: input.model || 'test-model', message: { role: 'assistant', content: 'ok' } };
+        if (method === 'cancel') return { status: 'cancelled' };
+        throw new Error(`unexpected model-service method: ${method}`);
+      },
+    },
   };
 
   try {

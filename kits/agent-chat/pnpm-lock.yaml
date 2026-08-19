@@ -35,7 +35,7 @@ importers:
 
   plugins/debug: {}
 
-  plugins/message-panel:
+  plugins/chat:
     dependencies:
       '@ai-sdk/react':
         specifier: 4.0.69
@@ -74,6 +74,8 @@ importers:
       tailwindcss:
         specifier: ^4.3.3
         version: 4.3.3
+
+  plugins/model-service: {}
 
   plugins/plugin: {}
 

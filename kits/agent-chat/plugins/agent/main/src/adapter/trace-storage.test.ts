@@ -4,13 +4,19 @@ import { mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { HarborsAdapter } from './harbors.js';
+import { HarborsAdapter, type ModelServiceClient } from './harbors.js';
+
+const modelService: ModelServiceClient = {
+  async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
+  async complete(request) { return { requestId: request.requestId, model: request.model || 'test-model', message: { role: 'assistant', content: 'ok' } }; },
+  async cancel() { return { status: 'cancelled' }; },
+};
 
 async function withStorage(run: (directory: string, adapter: HarborsAdapter) => Promise<void>): Promise<void> {
   const directory = await mkdtemp(join(tmpdir(), 'harbors-agent-trace-'));
   const previous = process.env.HARBORS_AGENT_STORAGE_DIR;
   process.env.HARBORS_AGENT_STORAGE_DIR = directory;
-  const adapter = new HarborsAdapter();
+  const adapter = new HarborsAdapter(modelService);
   try {
     await run(directory, adapter);
   } finally {
@@ -47,19 +53,7 @@ test('并发 API 共享同一会话快照并连续分配 seq', async () => {
 
 test('两个 adapter 并发发送、改名和改权限时跨实例连续写盘', async () => {
   await withStorage(async (directory, first) => {
-    const second = new HarborsAdapter();
-    const previousFetch = globalThis.fetch;
-    const previousRelay = {
-      baseUrl: process.env.HARBORS_RELAY_BASE_URL,
-      apiKey: process.env.HARBORS_RELAY_API_KEY,
-      api: process.env.HARBORS_RELAY_API,
-      model: process.env.HARBORS_RELAY_MODEL,
-    };
-    process.env.HARBORS_RELAY_BASE_URL = 'https://relay.invalid';
-    process.env.HARBORS_RELAY_API_KEY = 'test-key';
-    process.env.HARBORS_RELAY_API = 'openai-completions';
-    process.env.HARBORS_RELAY_MODEL = 'test-model';
-    globalThis.fetch = async () => new Response(JSON.stringify({ choices: [{ message: { content: 'ok' } }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+    const second = new HarborsAdapter(modelService);
     try {
       const conversation = await first.createConversation('/workspace');
       await second.getConversationTrace(conversation.id);
@@ -78,11 +72,6 @@ test('两个 adapter 并发发送、改名和改权限时跨实例连续写盘',
       assert.deepEqual((await second.getConversationTrace(conversation.id)).map((event) => event.seq), lines.map((event) => event.seq));
     } finally {
       second.stop();
-      globalThis.fetch = previousFetch;
-      restoreEnv('HARBORS_RELAY_BASE_URL', previousRelay.baseUrl);
-      restoreEnv('HARBORS_RELAY_API_KEY', previousRelay.apiKey);
-      restoreEnv('HARBORS_RELAY_API', previousRelay.api);
-      restoreEnv('HARBORS_RELAY_MODEL', previousRelay.model);
     }
   });
 });
@@ -150,10 +139,6 @@ test('重复 seq 中非 surface 事件不会劫持 compaction replace 引用', a
   });
 });
 
-function restoreEnv(name: string, value: string | undefined): void {
-  if (value === undefined) delete process.env[name];
-  else process.env[name] = value;
-}
 
 test('尾部中断行可恢复，刷新分页拼接与全量轨迹一致', async () => {
   await withStorage(async (directory, adapter) => {
