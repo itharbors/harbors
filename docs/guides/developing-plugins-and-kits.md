@@ -101,6 +101,119 @@ editor.plugin.define({
 manifest 的 request method 名称必须与 `definition.methods` 对应。贡献控制器会把它们
 注册到 MessageModule。
 
+### 向其他插件开放能力
+
+插件之间通过消息交互，不要直接导入其他插件的模块。开放能力有两种方式：
+
+- `request`：定向调用，有且只有一个目标插件，调用方通过返回值拿到结果。
+- `broadcast`：广播通知，没有返回值，同一 topic 可以有多个订阅者。
+
+Server 插件在 `lifecycle.load(ctx)` 中拿到的 runtime 提供两个方法：
+
+```typescript
+runtime.message.request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>
+runtime.message.broadcast(topic: string, ...args: unknown[]): void
+```
+
+#### request：提供方与调用方
+
+提供方在 manifest 的 `contribute.message.request` 中把对外暴露的 route 名称映射到
+`definition.methods` 里的方法名。值是方法名数组，通常一个 route 对应一个方法。
+
+```json
+{
+  "name": "@example/state-provider",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "getState": ["getState"],
+          "setValue": ["setValue"]
+        }
+      }
+    }
+  }
+}
+```
+
+```typescript
+editor.plugin.define({
+  methods: {
+    getState() {
+      return state;
+    },
+    setValue(value: number) {
+      state = { value };
+      return state;
+    }
+  }
+});
+```
+
+调用方通过 `runtime.message.request` 指定目标插件和 route 名称，返回 Promise：
+
+```typescript
+const state = await runtime.message.request("@example/state-provider", "getState");
+await runtime.message.request("@example/state-provider", "setValue", 42);
+```
+
+`request` 是唯一目标的调用：route 名称在目标插件内必须唯一，且只有声明该 route 的插件会响应。
+
+#### broadcast：发布方与订阅方
+
+订阅方在 manifest 的 `contribute.message.broadcast` 中把 topic 映射到本插件的
+`definition.methods`。发布方调用 `runtime.message.broadcast(topic, ...args)` 时，所有
+订阅该 topic 的插件方法都会被调用，没有返回值。
+
+```json
+{
+  "name": "@example/state-consumer",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "broadcast": {
+          "state.changed": ["onStateChanged"]
+        }
+      }
+    }
+  }
+}
+```
+
+```typescript
+editor.plugin.define({
+  methods: {
+    onStateChanged(state: unknown) {
+      render(state);
+    }
+  }
+});
+```
+
+发布方不需要在 manifest 中声明 topic，直接调用即可：
+
+```typescript
+runtime.message.broadcast("state.changed", state);
+```
+
+同一 topic 可以有多个订阅者；broadcast 不保证顺序，也不会把订阅者的返回值回传给发布方。
+
+#### attach / detach 与自定义贡献类型
+
+`lifecycle.attach(pluginName, contribute)` 和 `lifecycle.detach(pluginName)` 是贡献点
+控制器接收静态 manifest 贡献的底层机制。Framework 在加载插件时，会把该插件的
+`contribute` 交给所有已加载插件的 `attach`，同时把已加载插件的 `contribute` 交给该插件的
+`attach`；卸载时对所有相关插件调用 `detach(pluginName)` 清理。普通业务插件不需要直接
+调用这两个方法。
+
+当前 manifest parser 只允许 `contribute.panel`、`contribute.menu` 和
+`contribute.message` 三类贡献。不要在 manifest 中使用 `contribute.foo` 之类的自定义键，
+解析时会被拒绝。
+
+面向普通业务插件，优先用 `message` 开放能力。如果确实需要新的贡献类型，必须在
+Framework 层共同扩展：manifest schema 与类型、对应的控制器、以及 owner 清理协议，
+否则贡献无法被正确注册和卸载。
+
 ### Panel
 
 `index.html` 只提供文档结构和同目录样式：
