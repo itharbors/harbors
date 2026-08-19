@@ -16,7 +16,8 @@
           "readFile": ["readFile"]
         },
         "broadcast": {
-          "chat.link.clicked": ["panel.onLinkClicked"]
+          "chat.link.clicked": ["panel.onLinkClicked"],
+          "conversation.selected": ["panel.onConversationSelected"]
         }
       }
     }
