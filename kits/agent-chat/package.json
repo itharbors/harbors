@@ -25,7 +25,8 @@
         "agent",
         "plugin-list",
         "preview",
-        "debug"
+        "debug",
+        "settings"
       ]
     }
   },

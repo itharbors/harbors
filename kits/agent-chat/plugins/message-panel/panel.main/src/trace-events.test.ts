@@ -184,6 +184,52 @@ test('keeps model messages and tools in separate trace steps', () => {
   assert.equal(turns[0].steps[1].assistant?.hasToolCalls, false);
 });
 
+test('preserves thinking blocks for a completed step without tool calls', () => {
+  const turns = parseTraceTurns([
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 40 } },
+    { type: 'step/start', seq: 1, time: 1, data: { turn: 40, step: 1 } },
+    { type: 'assistant/message', seq: 2, time: 2, data: { turn: 40, step: 1, message: { content: [{ type: 'thinking', thinking: '分析过程' }, { type: 'text', text: '最终回复' }] } } },
+    { type: 'step/end', seq: 3, time: 3, data: { turn: 40, step: 1 } },
+  ]);
+  assert.equal(turns[0]?.steps[0]?.assistant?.thinking, '分析过程');
+  assert.equal(turns[0]?.steps[0]?.assistant?.text, '最终回复');
+  assert.equal(turns[0]?.steps[0]?.assistant?.hasToolCalls, false);
+});
+
+test('parses completed and failed turn terminal states', () => {
+  const completed = parseTraceTurns([
+    { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
+    { type: 'turn/end', seq: 1, time: 1, data: { turn: 1, reason: { kind: 'completed' } } },
+  ]);
+  const failed = parseTraceTurns([
+    { type: 'turn/start', seq: 2, time: 2, data: { turn: 2 } },
+    { type: 'turn/end', seq: 3, time: 3, data: { turn: 2, reason: { kind: 'error', error: { message: 'model failed' } } } },
+  ]);
+
+  assert.deepEqual(completed[0].terminal, { status: 'completed', seq: 1 });
+  assert.deepEqual(failed[0].terminal, { status: 'failed', seq: 3, reason: 'model failed' });
+});
+
+test('identifies a trailing model request without step or turn end', () => {
+  const events: TraceEvent[] = [{ type: 'turn/start', seq: 79, time: 79, data: { turn: 2 } }];
+  for (let step = 1; step <= 21; step += 1) {
+    events.push(
+      { type: 'step/start', seq: 80 + step * 3, time: step, data: { turn: 2, step } },
+      { type: 'request/context', seq: 81 + step * 3, time: step, data: { turn: 2, step, model: 'test-model' } },
+      { type: 'step/end', seq: 82 + step * 3, time: step, data: { turn: 2, step } },
+    );
+  }
+  events.push(
+    { type: 'step/start', seq: 255, time: 255, data: { turn: 2, step: 22 } },
+    { type: 'request/context', seq: 256, time: 256, data: { turn: 2, step: 22, model: 'test-model' } },
+  );
+
+  const turn = parseTraceTurns(events)[0];
+  assert.equal(turn.terminal, undefined);
+  assert.deepEqual(turn.trailingIncompleteStep, { step: 22, phase: 'model_request' });
+  assert.equal(turn.steps.at(-1)?.completed, false);
+});
+
 test('parseSurfaceMessages 从轨迹派生 user 与 assistant 消息', () => {
   const events: TraceEvent[] = [
     { type: 'turn/start', seq: 0, time: 0, data: { turn: 1 } },
@@ -193,8 +239,8 @@ test('parseSurfaceMessages 从轨迹派生 user 与 assistant 消息', () => {
   ];
   const messages = parseSurfaceMessages(events);
   assert.deepEqual(messages, [
-    { id: 'u1', role: 'user', content: '你好' },
-    { id: 'a1', role: 'assistant', content: '你好，有什么可以帮你？' },
+    { id: 'u1', role: 'user', content: '你好', turn: 1 },
+    { id: 'a1', role: 'assistant', content: '你好，有什么可以帮你？', turn: 1 },
   ]);
 });
 

@@ -17,6 +17,8 @@ export interface SurfaceMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** 消息所属的真实 trace turn；分页显示不能再用当前页内序号推断。 */
+  turn?: number;
 }
 
 /** 单个工具调用过程消息。 */
@@ -41,12 +43,14 @@ export interface ModelProcessEntry {
   turn: number;
   step: number;
   text: string;
+  thinking?: string;
   hasToolCalls: boolean;
 }
 
 export interface TraceStep {
   turn: number;
   step: number;
+  startSeq?: number;
   requestSeq?: number;
   model?: string;
   assistant?: ModelProcessEntry;
@@ -54,10 +58,15 @@ export interface TraceStep {
   completed: boolean;
 }
 
+export type TraceTurnTerminalStatus = 'completed' | 'failed';
+export type TraceIncompletePhase = 'step_started' | 'model_request' | 'model_response' | 'tool_execution';
+
 export interface TraceTurn {
   turn: number;
   steps: TraceStep[];
   error?: ToolProcessEntry;
+  terminal?: { status: TraceTurnTerminalStatus; seq: number; reason?: string };
+  trailingIncompleteStep?: { step: number; phase: TraceIncompletePhase };
 }
 
 /** 渲染时的最大字符数，避免超长参数/结果撑爆页面。 */
@@ -144,11 +153,12 @@ function resolveResultCallId(data: Record<string, unknown>): string | undefined 
   return undefined;
 }
 
-function assistantMessageDetails(value: unknown): { text: string; hasToolCalls: boolean } {
-  if (!value || typeof value !== 'object') return { text: '', hasToolCalls: false };
+function assistantMessageDetails(value: unknown): { text: string; thinking: string; hasToolCalls: boolean } {
+  if (!value || typeof value !== 'object') return { text: '', thinking: '', hasToolCalls: false };
   const message = value as Record<string, unknown>;
   const content = message.content;
   let text = '';
+  let thinking = '';
   let hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
   if (typeof content === 'string') text = content;
   else if (Array.isArray(content)) {
@@ -156,10 +166,11 @@ function assistantMessageDetails(value: unknown): { text: string; hasToolCalls: 
       if (!block || typeof block !== 'object') continue;
       const part = block as Record<string, unknown>;
       if (part.type === 'text') text += String(part.text ?? '');
+      if (part.type === 'thinking') thinking += String(part.thinking ?? '');
       if (part.type === 'tool_use' || part.type === 'tool_call') hasToolCalls = true;
     }
   }
-  return { text: truncate(text), hasToolCalls };
+  return { text: truncate(text), thinking: truncate(thinking), hasToolCalls };
 }
 
 /**
@@ -242,10 +253,24 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
 
   for (const event of orderedEvents) {
     const turn = Number(event.data.turn) || 0;
+    if (event.type === 'turn/start' || event.type === 'turn/end') {
+      const turnEntry = turns.get(turn) || { turn, steps: [] };
+      if (!turns.has(turn)) turns.set(turn, turnEntry);
+      if (event.type === 'turn/end') {
+        const failure = extractTurnEndError(event.data);
+        turnEntry.terminal = {
+          status: failure ? 'failed' : 'completed',
+          seq: event.seq,
+          ...(failure ? { reason: failure } : {}),
+        };
+      }
+    }
     if (event.type === 'step/start' || event.type === 'request/context' || event.type === 'assistant/message' || event.type === 'step/end' || event.type === 'tool/call') {
       const step = Number(event.data.step) || 0;
       const current = ensureStep(turn, step);
-      if (event.type === 'request/context') {
+      if (event.type === 'step/start') {
+        current.startSeq = event.seq;
+      } else if (event.type === 'request/context') {
         current.requestSeq = event.seq;
         if (typeof event.data.model === 'string' && event.data.model) current.model = event.data.model;
       } else if (event.type === 'assistant/message') {
@@ -256,6 +281,7 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
           turn,
           step,
           text: details.text,
+          ...(details.thinking ? { thinking: details.thinking } : {}),
           hasToolCalls: details.hasToolCalls,
         };
       } else if (event.type === 'step/end') {
@@ -276,10 +302,22 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
 
   return [...turns.values()]
     .sort((left, right) => left.turn - right.turn)
-    .map((turn) => ({
-      ...turn,
-      steps: turn.steps.sort((left, right) => left.step - right.step),
-    }));
+    .map((turn) => {
+      const sortedSteps = turn.steps.sort((left, right) => left.step - right.step);
+      const trailing = sortedSteps.at(-1);
+      let trailingIncompleteStep: TraceTurn['trailingIncompleteStep'];
+      if (trailing && !trailing.completed) {
+        const phase: TraceIncompletePhase = trailing.tools.some((tool) => tool.result === undefined)
+          ? 'tool_execution'
+          : trailing.assistant
+            ? 'model_response'
+            : trailing.requestSeq !== undefined
+              ? 'model_request'
+              : 'step_started';
+        trailingIncompleteStep = { step: trailing.step, phase };
+      }
+      return { ...turn, steps: sortedSteps, ...(trailingIncompleteStep ? { trailingIncompleteStep } : {}) };
+    });
 }
 
 /**
@@ -320,13 +358,21 @@ function isAppendEvent(event: TraceEvent): boolean {
 export function parseSurfaceMessages(events: TraceEvent[]): SurfaceMessage[] {
   const messages: SurfaceMessage[] = [];
   const ordered = [...events].sort((left, right) => left.seq - right.seq);
+  let currentTurn: number | undefined;
   for (const event of ordered) {
+    const eventTurn = Number(event.data.turn);
+    if (Number.isSafeInteger(eventTurn) && eventTurn > 0) currentTurn = eventTurn;
+    if (event.type === 'turn/start') {
+      continue;
+    }
     if (event.type === 'user/message' && isAppendEvent(event)) {
-      messages.push({ id: String(event.data.id || `event-${event.seq}`), role: 'user', content: contentText(event.data.content) });
+      const resolvedTurn = Number.isSafeInteger(eventTurn) && eventTurn > 0 ? eventTurn : currentTurn;
+      messages.push({ id: String(event.data.id || `event-${event.seq}`), role: 'user', content: contentText(event.data.content), ...(resolvedTurn ? { turn: resolvedTurn } : {}) });
     } else if (event.type === 'assistant/message' && isAppendEvent(event)) {
       const message = event.data.message as Record<string, unknown> | undefined;
       const content = contentText(message?.content);
-      if (content) messages.push({ id: String(message?.id || `event-${event.seq}`), role: 'assistant', content });
+      const resolvedTurn = Number.isSafeInteger(eventTurn) && eventTurn > 0 ? eventTurn : currentTurn;
+      if (content) messages.push({ id: String(message?.id || `event-${event.seq}`), role: 'assistant', content, ...(resolvedTurn ? { turn: resolvedTurn } : {}) });
     }
   }
   return messages;

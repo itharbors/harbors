@@ -2,11 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type UIEvent
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
 import { createTraceSyncRunGate, createTraceSyncState, mergeTraceEvents, mergeTracePage, readTraceEvent, scheduleTraceSyncRun, traceSyncFailureMessage, type TraceSyncState } from './trace-sync.js';
 import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
-import Transcript from './transcript.js';
+import Transcript, { nextDisplayTurn } from './transcript.js';
 import './index.css';
 
 type Source = 'harbors';
-interface MessageData { id: string; role: 'user' | 'assistant'; content: string; }
+interface MessageData { id: string; role: 'user' | 'assistant'; content: string; turn?: number; }
 interface ConversationData { id: string; active?: boolean; }
 interface DraftData { source?: Source; project?: string; }
 interface ConversationUiState { selectedConversationId?: string | null; draft?: DraftData | null; running?: boolean; generation?: string; revision?: number; }
@@ -732,6 +732,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (typeof progress === 'string') return;
       if (!progress || typeof progress !== 'object') return;
       if (progress.contextUsage !== undefined) setContextUsage(readContextUsage(progress.contextUsage));
+      // 面板可能在会话已经开始后才收到 conversation.changed；progress 是当前回合运行态的直接信号。
+      if (progress.phase === 'running' || progress.phase === 'waiting_permission') setSending(true);
       if (progress.phase === 'completed' || progress.phase === 'error') void syncTraceSince(statusConversationId);
       if (progress.phase === 'waiting_permission') {
         void loadPermissionRequests(statusConversationId);
@@ -778,7 +780,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     let traceCursorBeforeSend = traceStateRef.current.conversationId === target ? traceStateRef.current.cursor : -1;
     const selectedTurnOptions = turnOptionsFor(model, reasoningEffort, serviceTier, sandboxMode, approvalPolicy);
     const processId = `send-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-    const processTurn = messages.filter((message) => message.role === 'user').length + 1;
+    const processTurn = nextDisplayTurn(messages, traceTurns);
     const processEntry: ToolProcessEntry = {
       id: processId,
       turn: processTurn,
@@ -950,7 +952,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       <div className="composer-pending-label">待发送 · {pendingMessages.length} 段</div>
       {pendingMessages.map((item, index) => <div className="composer-pending-item" key={`${index}-${item}`}><span>{item}</span><button type="button" onClick={() => setPendingMessages((current) => current.filter((_, itemIndex) => itemIndex !== index))} aria-label={`移除第 ${index + 1} 段`}>×</button></div>)}
     </div>}
-    <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); stageText(); } }} placeholder="随心输入，回车暂存；空白回车发送，Shift + Enter 换行" rows={draft || messages.length === 0 ? 5 : 2} disabled={loading || sending || permissionRequests.length > 0} />
+    <textarea value={text} onChange={(event) => setText(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); stageText(); } }} placeholder="随心输入，回车暂存；空白回车发送，Shift + Enter 换行" rows={draft ? 5 : 2} disabled={loading || sending || permissionRequests.length > 0} />
     <div className="composer-toolbar" ref={toolbarRef}>
       <OptionPicker
         label="模型"
@@ -1026,6 +1028,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     <div className="message-list-container" ref={messageListRef} onScroll={handleMessageListScroll}>
       {!conversationId && !draft ? <div className="empty-state"><div className="empty-state-card"><div className="empty-state-mark">✦</div><h2>选择或新建一个对话</h2><p>从左侧项目中继续工作，或点击"新对话"开始。</p></div></div> : (
         <>
+          {loading && !draft && messages.length === 0 && traceTurns.length === 0 && <div className="conversation-loading">正在加载对话…</div>}
           {traceHasMore && <button type="button" className="message-history-loader" onClick={() => conversationId && void loadOlderTrace(conversationId)} disabled={traceOlderLoading}>{traceOlderLoading ? '正在加载更早回合…' : '加载更早回合'}</button>}
           <Transcript
             draft={draft}
@@ -1039,6 +1042,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
             resolvingPermissionId={resolvingPermissionId}
             onResolvePermission={resolvePermission}
             sending={sending}
+            conversationActive={Boolean(conversationId && activeConversationsRef.current.has(conversationId))}
             onChangeProject={() => setProjectPickerOpen(true)}
             onLinkClick={handleLinkClick}
           />

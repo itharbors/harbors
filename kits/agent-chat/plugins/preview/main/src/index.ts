@@ -3,16 +3,6 @@ import { extname, isAbsolute, resolve } from 'node:path';
 
 declare const editor: any;
 
-let runtime: any;
-
-interface LinkClickedPayload {
-  href: string;
-  text: string;
-  protocol: string;
-  conversationId?: string;
-  project?: string;
-}
-
 interface PreviewContent {
   kind: 'file' | 'url' | 'unsupported';
   path?: string;
@@ -84,16 +74,16 @@ async function readTextFile(filePath: string): Promise<string> {
 }
 
 editor.plugin.define({
-  lifecycle: {
-    load(ctx: any) {
-      runtime = ctx;
-    },
-    unload() {
-      runtime = null;
-    },
-  },
   methods: {
-    async readFile(filePath: string): Promise<PreviewContent> {
+    async readFile(href: string, project?: string): Promise<PreviewContent> {
+      const filePath = resolveFilePath(href, project);
+      if (!filePath) {
+        return {
+          kind: 'unsupported',
+          title: href,
+          error: '无法解析的文件路径',
+        };
+      }
       try {
         const ext = extname(filePath).toLowerCase();
         if (IMAGE_EXTENSIONS.has(ext)) {
@@ -134,31 +124,6 @@ editor.plugin.define({
           error: err instanceof Error ? err.message : String(err),
         };
       }
-    },
-
-    onLinkClicked(payload: LinkClickedPayload) {
-      if (!runtime) return;
-      const { href, protocol, project } = payload;
-
-      // 处理 http/https 链接
-      if (protocol === 'http' || protocol === 'https') {
-        runtime.message.broadcast('preview.content', {
-          kind: 'url',
-          url: href,
-          title: payload.text || href,
-        } satisfies PreviewContent);
-        return;
-      }
-
-      // 处理文件路径
-      const filePath = resolveFilePath(href, project);
-      if (!filePath) return;
-
-      runtime.message.broadcast('preview.content', {
-        kind: 'file',
-        path: filePath,
-        title: payload.text || filePath.split('/').pop(),
-      } satisfies PreviewContent);
     },
   },
 });

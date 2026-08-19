@@ -41,6 +41,10 @@
                   {
                     "type": "leaf",
                     "panel": "debug.debug"
+                  },
+                  {
+                    "type": "leaf",
+                    "panel": "settings.settings"
                   }
                 ]
               }

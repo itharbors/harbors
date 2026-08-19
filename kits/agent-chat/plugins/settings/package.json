@@ -1,0 +1,37 @@
+{
+  "name": "settings",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "panel": {
+        "settings": {
+          "entry": "./panel.settings/dist/index.html",
+          "title": "设置"
+        }
+      },
+      "message": {
+        "request": {
+          "getTypes": ["getTypes"],
+          "get": ["get"],
+          "set": ["set"],
+          "delete": ["delete"],
+          "list": ["list"]
+        },
+        "broadcast": {
+          "config.changed": ["onConfigChanged"]
+        }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-settings-settings",
+          "message": "openSettingsPanel",
+          "order": 1000,
+          "label": "设置"
+        }
+      ]
+    }
+  }
+}

@@ -108,6 +108,10 @@ function renderSnapshot(snapshot: MessageSnapshot = {}) {
     name.title = messageParts.name;
     name.textContent = messageParts.name;
 
+    const time = document.createElement('div');
+    time.className = 'message-time';
+    time.textContent = message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : '';
+
     const detail = document.createElement('div');
     detail.className = 'message-detail';
 
@@ -121,7 +125,7 @@ function renderSnapshot(snapshot: MessageSnapshot = {}) {
     });
 
     detail.append(payload);
-    summary.append(type, name);
+    summary.append(type, name, time);
     rowHeader.append(toggle, summary);
     row.append(rowHeader, detail);
     container.append(row);

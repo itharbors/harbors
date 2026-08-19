@@ -49,7 +49,7 @@ let isBroadcastingSnapshot = false;
 const messageLog = [];
 
 function appendMessage(message) {
-  messageLog.push(message);
+  messageLog.push({ ...message, timestamp: Date.now() });
   broadcastMessagesChanged();
 }
 
@@ -76,7 +76,7 @@ function formatBroadcast(meta) {
 }
 
 function isInternalRequest(meta) {
-  return meta?.plugin === PLUGIN_NAME && meta?.name === 'getSnapshot';
+  return meta?.plugin === PLUGIN_NAME && (meta?.name === 'getSnapshot' || meta?.name === 'clearMessages');
 }
 
 function isInternalBroadcast(meta) {

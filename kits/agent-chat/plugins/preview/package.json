@@ -16,8 +16,7 @@
           "readFile": ["readFile"]
         },
         "broadcast": {
-          "message-panel.link.clicked": ["onLinkClicked"],
-          "preview.content": ["panel.onPreviewContent"]
+          "message-panel.link.clicked": ["panel.onLinkClicked"]
         }
       }
     }
