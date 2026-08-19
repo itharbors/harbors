@@ -109,6 +109,53 @@ describe('MessageModule', () => {
     expect(wildcardHandler).toHaveBeenCalledWith({ plugin: 'demo', name: 'runTest' }, 'payload');
   });
 
+  it('does not await a pending wildcard request observer', async () => {
+    const message = new MessageModule();
+    message.registerRequest('observer', '*', () => new Promise(() => undefined));
+    message.registerRequest('demo', 'runTest', async () => 'exact');
+
+    await expect(message.request('demo', 'runTest')).resolves.toBe('exact');
+  });
+
+  it('isolates throwing and rejecting wildcard request observers', async () => {
+    const message = new MessageModule();
+    message.registerRequest('throwing-observer', '*', () => {
+      throw new Error('observer throw');
+    });
+    message.registerRequest('rejecting-observer', '*', async () => {
+      throw new Error('observer reject');
+    });
+    message.registerRequest('demo', 'runTest', async () => 'exact');
+
+    await expect(message.request('demo', 'runTest')).resolves.toBe('exact');
+  });
+
+  it('does not let wildcard observers mask an exact request error', async () => {
+    const message = new MessageModule();
+    message.registerRequest('observer', '*', () => new Promise(() => undefined));
+    message.registerRequest('demo', 'runTest', async () => {
+      throw new Error('exact failure');
+    });
+
+    await expect(message.request('demo', 'runTest')).rejects.toThrow('exact failure');
+  });
+
+  it('dispatches wildcard request panel methods as one enriched event', async () => {
+    const panelDispatch = vi.fn();
+    const message = new MessageModule({ dispatchPanelBroadcast: panelDispatch });
+    message.registerRequest('observer', '*', () => undefined, 'server', ['panel.onRequest']);
+    message.registerRequest('demo', 'runTest', async (value) => value);
+
+    await expect(message.request('demo', 'runTest', { id: 1 })).resolves.toEqual({ id: 1 });
+    expect(panelDispatch).toHaveBeenCalledTimes(1);
+    expect(panelDispatch).toHaveBeenCalledWith(
+      'observer',
+      '',
+      'onRequest',
+      [{ plugin: 'demo', name: 'runTest' }, { id: 1 }],
+    );
+  });
+
   it('notifies wildcard broadcast listeners alongside exact topic listeners', () => {
     const message = new MessageModule();
     const exactHandler = vi.fn();
@@ -121,6 +168,36 @@ describe('MessageModule', () => {
 
     expect(exactHandler).toHaveBeenCalledWith({ id: 1 });
     expect(wildcardHandler).toHaveBeenCalledWith({ topic: '@demo.assets.changed' }, { id: 1 });
+  });
+
+  it('dispatches wildcard broadcast panel methods once with topic metadata', () => {
+    const panelDispatch = vi.fn();
+    const message = new MessageModule({ dispatchPanelBroadcast: panelDispatch });
+    message.registerBroadcast('observer', '*', () => undefined, 'server', ['panel.onBroadcast']);
+
+    message.broadcast('@demo.assets.changed', { id: 1 });
+
+    expect(panelDispatch).toHaveBeenCalledTimes(1);
+    expect(panelDispatch).toHaveBeenCalledWith(
+      'observer',
+      '@demo.assets.changed',
+      'onBroadcast',
+      [{ topic: '@demo.assets.changed' }, { id: 1 }],
+    );
+  });
+
+  it('isolates wildcard broadcast panel dispatch failures', () => {
+    const exactHandler = vi.fn();
+    const message = new MessageModule({
+      dispatchPanelBroadcast: () => {
+        throw new Error('panel unavailable');
+      },
+    });
+    message.registerBroadcast('observer', '*', () => undefined, 'server', ['panel.onBroadcast']);
+    message.registerBroadcast('demo', '@demo.assets.changed', exactHandler);
+
+    expect(() => message.broadcast('@demo.assets.changed', { id: 1 })).not.toThrow();
+    expect(exactHandler).toHaveBeenCalledWith({ id: 1 });
   });
 
   it('registers request and broadcast routes from contribute.message.request and contribute.message.broadcast', async () => {

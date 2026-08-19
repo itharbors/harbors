@@ -1,5 +1,5 @@
 {
-  "name": "message-debug",
+  "name": "debug",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
@@ -14,10 +14,7 @@
       "message": {
         "request": {
           "*": [
-            "onAnyRequest"
-          ],
-          "getSnapshot": [
-            "getSnapshot"
+            "panel.onRequest"
           ],
           "openDebugPanel": [
             "openDebugPanel"
@@ -25,17 +22,14 @@
         },
         "broadcast": {
           "*": [
-            "onAnyBroadcast"
-          ],
-          "message-debug.messages.changed": [
-            "panel.onMessagesChanged"
+            "panel.onBroadcast"
           ]
         }
       },
       "menu": [
         {
           "type": "menu",
-          "id": "view/panels/ce-message-debug-debug",
+          "id": "view/panels/ce-debug-debug",
           "message": "openDebugPanel",
           "order": 1010,
           "label": "消息调试"

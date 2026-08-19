@@ -105,8 +105,25 @@ export class MessageModule {
 
     for (const wildcardRoute of wildcardRoutes) {
       if (wildcardRoute.location !== 'server') continue;
+      const meta = { plugin, name };
+      for (const method of wildcardRoute.methods) {
+        if (!method.startsWith('panel.')) continue;
+        try {
+          this.options.dispatchPanelBroadcast?.(
+            wildcardRoute.plugin,
+            '',
+            method.slice('panel.'.length),
+            [meta, ...args],
+          );
+        } catch {
+          // Wildcard request listeners are observational only.
+        }
+      }
       try {
-        await wildcardRoute.handler({ plugin, name }, ...args);
+        const result = wildcardRoute.handler(meta, ...args);
+        if (result && typeof (result as Promise<unknown>).then === 'function') {
+          void Promise.resolve(result).catch(() => undefined);
+        }
       } catch {
         // Wildcard request listeners are observational only.
       }
@@ -146,14 +163,23 @@ export class MessageModule {
     const routes = this.queryMatchingBroadcasts(topic);
 
     for (const route of routes) {
+      const routeArgs = isWildcardRoute(route) ? [{ topic }, ...args] : args;
       for (const method of route.methods) {
         if (method.startsWith('panel.')) {
-          this.options.dispatchPanelBroadcast?.(route.plugin, topic, method.slice('panel.'.length), args);
+          try {
+            this.options.dispatchPanelBroadcast?.(
+              route.plugin,
+              topic,
+              method.slice('panel.'.length),
+              routeArgs,
+            );
+          } catch {
+            // Broadcast is fire-and-forget.
+          }
           continue;
         }
         if (route.location !== 'server') continue;
         try {
-          const routeArgs = isWildcardRoute(route) ? [{ topic }, ...args] : args;
           void route.handler(...routeArgs);
         } catch {
           // Broadcast is fire-and-forget.
@@ -162,7 +188,6 @@ export class MessageModule {
       if (route.methods.length > 0) continue;
       if (route.location !== 'server') continue;
       try {
-        const routeArgs = isWildcardRoute(route) ? [{ topic }, ...args] : args;
         void route.handler(...routeArgs);
       } catch {
         // Broadcast is fire-and-forget.
