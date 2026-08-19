@@ -12,7 +12,7 @@
       },
       "message": {
         "broadcast": {
-          "plugin.selected": [
+          "plugin-list.selected": [
             "panel.onPluginSelected"
           ]
         },

@@ -678,8 +678,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     };
     applyUiStateRef.current = applyConversationUiState;
     registerSetter('conversation.selected', (value: unknown) => applyConversationUiState(value, ++uiStateSequenceRef.current));
-    registerSetter('conversation.trace.append', applyTraceAppend);
-    registerSetter('conversation.changed', (value: unknown) => {
+    registerSetter('agent.conversation.trace.append', applyTraceAppend);
+    registerSetter('agent.conversation.changed', (value: unknown) => {
       if (disposed || !value || typeof value !== 'object') return;
       const payload = value as { action?: string; id?: string; conversation?: ConversationData };
       if (typeof payload.id !== 'string' || !payload.action) return;
@@ -713,7 +713,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         }
       }
     });
-    registerSetter('message.delta', (value: unknown) => {
+    registerSetter('agent.message.delta', (value: unknown) => {
       const delta = value as { conversationId?: string; messageId?: string; content?: string } | null;
       if (!disposed && delta?.conversationId === conversationIdRef.current && delta.messageId) {
         setMessages((current) => {
@@ -724,7 +724,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         });
       }
     });
-    registerSetter('message.status', (value: unknown) => {
+    registerSetter('agent.message.status', (value: unknown) => {
       const payload = value as { conversationId?: string; status?: string | ProgressStatus } | null;
       const statusConversationId = payload?.conversationId;
       if (disposed || !statusConversationId || statusConversationId !== conversationIdRef.current) return;

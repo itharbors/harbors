@@ -49,6 +49,12 @@ describe('createPanelAssetRouter', () => {
     expect(html).toContain('Panel module must default-export a PanelDefinition object');
     expect(html).toContain('window.__panelDefinition = definition;');
     expect(html).toContain('window.editor = {');
+    expect(html).toContain("const prefix = panelPluginName + '.';");
+    expect(html).toContain("if (typeof topic !== 'string')");
+    expect(html).toContain("if (topic === '*')");
+    expect(html).toContain('if (!topic.startsWith(prefix))');
+    expect(html).toContain("'Panel \"' + panelPluginName");
+    expect(html).toContain("' + prefix + '\"'");
     expect(html).toContain('function createPanelMessageRequestError(payload)');
     expect(html).toContain('throw createPanelMessageRequestError(payload);');
     expect(html).toContain('requestError.code = errorBody.code;');

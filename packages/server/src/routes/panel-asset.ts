@@ -262,6 +262,22 @@ function createPanelRuntimeScript(
           return payload.result;
         },
         broadcast(topic, ...args) {
+          const prefix = panelPluginName + '.';
+          if (typeof topic !== 'string') {
+            throw new Error(
+              'Panel "' + panelPluginName + '" broadcast topic must be a string with expected prefix "' + prefix + '"',
+            );
+          }
+          if (topic === '*') {
+            throw new Error(
+              'Panel "' + panelPluginName + '" cannot broadcast wildcard topic "*"; expected prefix "' + prefix + '"',
+            );
+          }
+          if (!topic.startsWith(prefix)) {
+            throw new Error(
+              'Panel "' + panelPluginName + '" broadcast topic "' + topic + '" must start with expected prefix "' + prefix + '"',
+            );
+          }
           void fetch('/api/message/broadcast', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },

@@ -634,7 +634,7 @@ describe('application plugin process runner', () => {
       let runtime;
       globalThis.editor.plugin.define({
         lifecycle: { load(value) { runtime = value; } },
-        methods: { publish() { runtime.message.broadcast('changed', { value: 1 }); return 'queued'; } },
+        methods: { publish() { runtime.message.broadcast('fixture-plugin.changed', { value: 1 }); return 'queued'; } },
       });
     `);
     const harness = createHarness({ runtimeCommandError: new Error('host rejected command') });
@@ -646,6 +646,27 @@ describe('application plugin process runner', () => {
     expect(harness.sent).toContainEqual(expect.objectContaining({
       kind: 'event', event: 'fatal', payload: { message: 'host rejected command' },
     }));
+  });
+
+  it('rejects broadcast topics that do not start with the plugin name before enqueueing', async () => {
+    const entryPath = await pluginEntry(`
+      let runtime;
+      globalThis.editor.plugin.define({
+        lifecycle: { load(value) { runtime = value; } },
+        methods: {
+          publishWrongPrefix() { runtime.message.broadcast('other.changed', { value: 1 }); },
+          publishWildcard() { runtime.message.broadcast('*', { value: 1 }); },
+        },
+      });
+    `);
+    const harness = createHarness();
+    await harness.request('initialize', initializePayload(entryPath));
+
+    await expect(harness.request('invoke', { target: 'method', method: 'publishWrongPrefix', args: [] }))
+      .rejects.toThrow(/must start with "fixture-plugin\."/);
+    await expect(harness.request('invoke', { target: 'method', method: 'publishWildcard', args: [] }))
+      .rejects.toThrow(/cannot broadcast to wildcard topic/);
+    expect(harness.runtimeCommands).toEqual([]);
   });
 
   it('normalizes a hostile post-load RPC rejection before reporting one fatal error', async () => {
@@ -930,7 +951,7 @@ describe('application plugin process runner', () => {
       globalThis.editor.plugin.define({ lifecycle: {
         load(value) {
           runtime = value;
-          globalThis.runnerLateMutation = () => runtime.message.broadcast('late', { value: 3 });
+          globalThis.runnerLateMutation = () => runtime.message.broadcast('fixture-plugin.late', { value: 3 });
         },
         unload() {
           runtime.service.unregister('cleanup');

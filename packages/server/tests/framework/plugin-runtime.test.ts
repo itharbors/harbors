@@ -422,7 +422,13 @@ describe('PluginModule', () => {
         },
         methods: {
           emit() {
-            runtime.message.broadcast('config.changed', { key: 'theme' });
+            runtime.message.broadcast('dynamic-broadcast.changed', { key: 'theme' });
+          },
+          emitWrongPrefix() {
+            runtime.message.broadcast('other.changed', { key: 'theme' });
+          },
+          emitWildcard() {
+            runtime.message.broadcast('*', { key: 'theme' });
           },
         },
       });
@@ -437,7 +443,13 @@ describe('PluginModule', () => {
 
     plugin.callPlugin('dynamic-broadcast', 'emit');
 
-    expect(spy).toHaveBeenCalledWith('config.changed', { key: 'theme' });
+    expect(spy).toHaveBeenCalledWith('dynamic-broadcast.changed', { key: 'theme' });
+
+    expect(() => plugin.callPlugin('dynamic-broadcast', 'emitWrongPrefix'))
+      .toThrow(/must start with "dynamic-broadcast\."/);
+    expect(() => plugin.callPlugin('dynamic-broadcast', 'emitWildcard'))
+      .toThrow(/cannot broadcast to wildcard topic/);
+    expect(spy).toHaveBeenCalledTimes(1);
   });
 
   it('loads plugins with an explicit menu runtime host contract', async () => {

@@ -20,7 +20,7 @@ export default {
   },
   methods: {
     onConversationChanged(data: unknown) {
-      setters['conversation.changed']?.(data);
+      setters['agent.conversation.changed']?.(data);
       return data;
     },
     onConversationSelected(data: unknown) {

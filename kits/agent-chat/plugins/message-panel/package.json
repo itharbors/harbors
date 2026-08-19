@@ -16,19 +16,19 @@
       },
       "message": {
         "broadcast": {
-          "conversation.changed": [
+          "agent.conversation.changed": [
             "panel.onConversationChanged"
           ],
           "conversation.selected": [
             "panel.onConversationSelected"
           ],
-          "conversation.trace.append": [
+          "agent.conversation.trace.append": [
             "panel.onConversationTraceAppend"
           ],
-          "message.delta": [
+          "agent.message.delta": [
             "panel.onMessageDelta"
           ],
-          "message.status": [
+          "agent.message.status": [
             "panel.onMessageStatus"
           ]
         }

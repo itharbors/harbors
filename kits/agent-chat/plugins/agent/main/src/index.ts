@@ -60,7 +60,7 @@ function createAdapters(): Record<AgentSource, AgentAdapter> {
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
     result[source].setTraceEventListener?.((adapterConversationId, event) => {
-      runtime?.message.broadcast('conversation.trace.append', {
+      runtime?.message.broadcast('agent.conversation.trace.append', {
         conversationId: conversationId(source, adapterConversationId),
         cursor: event.seq,
         event: { ...event, data: { ...event.data } },
@@ -86,7 +86,7 @@ function normalizeTraceSeq(value: unknown): number {
 
 function broadcastConversationChanged(action: ConversationChangedAction, id: string, conversation?: Conversation): void {
   const payload: ConversationChangedPayload = { id, action, ...(conversation ? { conversation: { ...conversation } } : {}) };
-  runtime?.message.broadcast('conversation.changed', payload);
+  runtime?.message.broadcast('agent.conversation.changed', payload);
 }
 
 async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
@@ -138,7 +138,7 @@ async function broadcastMessageStatusWithContext(conversationId: string, message
   } catch (error) {
     console.warn('[agent] failed to read context usage:', error);
   }
-  runtime?.message.broadcast('message.status', { conversationId, ...(messageId ? { messageId } : {}), status: { ...status, ...(contextUsage ? { contextUsage } : {}) } });
+  runtime?.message.broadcast('agent.message.status', { conversationId, ...(messageId ? { messageId } : {}), status: { ...status, ...(contextUsage ? { contextUsage } : {}) } });
 }
 
 function requestPermission(request: AgentPermissionRequest): Promise<AgentPermissionOutcome> {
@@ -407,7 +407,7 @@ editor.plugin.define({
         const options = normalizeTurnOptions(input);
         aiContent = await requireAdapter(route.source).sendMessage(route.adapterId, content, options, (delta) => {
           streamedContent += delta;
-          runtime?.message.broadcast('message.delta', { conversationId, messageId: aiMessageId, content: streamedContent });
+          runtime?.message.broadcast('agent.message.delta', { conversationId, messageId: aiMessageId, content: streamedContent });
         }, (status) => {
           void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'running', message: status });
         });

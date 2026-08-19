@@ -172,7 +172,7 @@ describe('ApplicationRuntime process integration', () => {
       const target = createPlugin('target', '@scope/target', {
         message: {
           request: { status: ['status'] },
-          broadcast: { 'static-refresh': ['refreshOne', 'refreshTwo'] },
+          broadcast: { '@scope/source.static-refresh': ['refreshOne', 'refreshTwo'] },
         },
       });
       const harness = new SupervisorHarness();
@@ -228,12 +228,12 @@ describe('ApplicationRuntime process integration', () => {
       expect(targetSupervisor.snapshots.at(-1)?.serviceSnapshot).toEqual({ revision: { value: 1 } });
 
       await sourceSupervisor.command({
-        target: 'message', operation: 'register-broadcast', owner: '@scope/forged', topic: 'refresh',
+        target: 'message', operation: 'register-broadcast', owner: '@scope/forged', topic: '@scope/source.refresh',
         handlerId: 'handler-broadcast', location: 'server', methods: ['refreshOne', 'refreshTwo'],
       });
-      await sourceSupervisor.command({ target: 'message', operation: 'broadcast', topic: 'refresh', args: ['event'] });
+      await sourceSupervisor.command({ target: 'message', operation: 'broadcast', topic: '@scope/source.refresh', args: ['event'] });
       await sourceSupervisor.command({
-        target: 'message', operation: 'broadcast', topic: 'static-refresh', args: ['static-event'],
+        target: 'message', operation: 'broadcast', topic: '@scope/source.static-refresh', args: ['static-event'],
       });
       await flushMicrotasks();
       expect(sourceSupervisor.handlerInvocations.filter((item) => item.handlerId === 'handler-broadcast')).toEqual([{
@@ -246,7 +246,7 @@ describe('ApplicationRuntime process integration', () => {
 
       sourceSupervisor.rejectHandlerIds.add('handler-reject');
       await sourceSupervisor.command({
-        target: 'message', operation: 'register-broadcast', owner: '@scope/forged', topic: 'rejecting',
+        target: 'message', operation: 'register-broadcast', owner: '@scope/forged', topic: '@scope/source.rejecting',
         handlerId: 'handler-reject', location: 'server', methods: ['refreshOne', 'refreshTwo'],
       });
       const unhandledRejections: unknown[] = [];
@@ -254,13 +254,23 @@ describe('ApplicationRuntime process integration', () => {
       process.on('unhandledRejection', onUnhandledRejection);
       try {
         await sourceSupervisor.command({
-          target: 'message', operation: 'broadcast', topic: 'rejecting', args: ['event'],
+          target: 'message', operation: 'broadcast', topic: '@scope/source.rejecting', args: ['event'],
         });
         await flushEventLoop();
       } finally {
         process.off('unhandledRejection', onUnhandledRejection);
       }
       expect(unhandledRejections).toEqual([]);
+
+      await expect(sourceSupervisor.command({
+        target: 'message', operation: 'broadcast', topic: '@scope/target.refresh', args: ['event'],
+      })).rejects.toThrow(/must start with "@scope\/source\."/);
+      await expect(sourceSupervisor.command({
+        target: 'message', operation: 'broadcast', topic: 'refresh', args: ['event'],
+      })).rejects.toThrow(/must start with "@scope\/source\."/);
+      await expect(sourceSupervisor.command({
+        target: 'message', operation: 'broadcast', topic: '*', args: ['event'],
+      })).rejects.toThrow(/cannot broadcast to wildcard topic/);
 
       await expect(sourceSupervisor.command({
         target: 'message', operation: 'request', plugin: target.name, name: 'status', args: ['ok'],
@@ -298,7 +308,7 @@ describe('ApplicationRuntime process integration', () => {
         target: 'message', operation: 'unregister-request', owner: '@scope/forged', name: 'identity',
       });
       await sourceSupervisor.command({
-        target: 'message', operation: 'unregister-broadcast', owner: '@scope/forged', topic: 'refresh',
+        target: 'message', operation: 'unregister-broadcast', owner: '@scope/forged', topic: '@scope/source.refresh',
       });
       await sourceSupervisor.command({
         target: 'service', operation: 'unregister', owner: '@scope/forged', name: 'revision',
