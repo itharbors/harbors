@@ -12,8 +12,26 @@
 - Kit 是装配包。开发一个 Kit 时，应在其文件夹内独立闭环完成；若需要改动超出该文件夹范围，大概率存在问题，需先询问用户。
 - Plugin 是独立的业务单元。开发 Plugin 时，不应修改其文件夹之外的代码；若需要改动超出该文件夹范围，大概率存在问题，需先询问用户。
 
+## 插件开发
+插件开发的核心文档入口：
+- 开发指南：`docs/guides/developing-plugins-and-kits.md`
+- 插件运行时模型：`docs/architecture/plugin-runtime-model.md`
+- 核心原则：`docs/architecture/core-principles.md`
+- Kit 与会话模型：`docs/architecture/kit-and-session-model.md`
+- 开发工作流：`docs/guides/development-workflow.md`
+
+关键开发约束：
+- 框架插件位于 `plugins/<name>`，Kit 专属插件位于 `kits/<kit>/plugins/<name>`。
+- 插件之间通过 request/broadcast 消息交互。
+- 仅支持 Web 宿主，不加入 Electron 或桌面宿主假设。
+- 使用 `npm run dev:web` 与浏览器进行验收。
+
 ## 任务编排
 - 排任务时可以以 Plugin 为单元，先定义各 Plugin 之间交互的协议，再分派给 Agent 实现。
+
+## 消息交互约定
+- 插件交互和业务交互统一通过消息完成，消息分为广播（通知）和定向请求两种。
+- 讨论业务方案时，应明确消息通知的顺序和完整链路，包括触发方、接收方，以及哪些环节使用广播、哪些环节使用定向请求。
 
 ## 提交信息
 请严格使用以下标题格式之一：
