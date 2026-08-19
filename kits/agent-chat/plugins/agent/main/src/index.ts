@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
-import { HarborsAdapter } from './adapter/harbors.js';
+import { HarborsAdapter, type ModelServiceClient, type ModelServiceCompleteRequest } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
 import { adapterPermissionDefaults, configuredPermissionDefaults, DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE, isApprovalPolicy, isSandboxMode, selectedOptions, withPermissionDefaults } from './permissions.js';
 
@@ -53,8 +53,8 @@ function requireAdapter(source: AgentSource): AgentAdapter {
   return adapters[source];
 }
 
-function createAdapters(): Record<AgentSource, AgentAdapter> {
-  const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter() };
+function createAdapters(modelService: ModelServiceClient): Record<AgentSource, AgentAdapter> {
+  const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter(modelService) };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
     result[source].setTraceEventListener?.((adapterConversationId, event) => {
@@ -195,7 +195,12 @@ editor.plugin.define({
   lifecycle: {
     async load(ctx: any) {
       runtime = ctx;
-      adapters = createAdapters();
+      const modelService: ModelServiceClient = {
+        getCatalog: () => runtime.message.request('model-service', 'getCatalog'),
+        complete: (input: ModelServiceCompleteRequest) => runtime.message.request('model-service', 'complete', input),
+        cancel: (requestId: string) => runtime.message.request('model-service', 'cancel', requestId),
+      };
+      adapters = createAdapters(modelService);
       try {
         await refreshConversations();
       } catch (err) {

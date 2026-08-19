@@ -21,7 +21,8 @@
       },
       "plugin": [
         "conversation",
-        "message-panel",
+        "chat",
+        "model-service",
         "agent",
         "plugin",
         "preview",

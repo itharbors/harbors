@@ -950,12 +950,12 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     // must not change the context attached to this click while the request runs.
     const snapshot = captureLinkClick(info, conversationIdRef.current, projectRef.current);
     const clickSequence = linkClickSequenceRef.current.next();
-    void ctx.message.request('message-panel', 'normalizeLink', snapshot.href, snapshot.selectedProject)
+    void ctx.message.request('chat', 'normalizeLink', snapshot.href, snapshot.selectedProject)
       .then((normalized: unknown) => {
         if (!linkClickSequenceRef.current.isCurrent(clickSequence)) return;
         if (!normalized || typeof normalized !== 'object') throw new Error('链接规范化返回无效结果');
         // 已阻止默认跳转；只有 main 完成 Node 侧规范化后才广播。
-        ctx.message.broadcast('message-panel.link.clicked', createLinkClickedPayload(normalized as Parameters<typeof createLinkClickedPayload>[0], snapshot));
+        ctx.message.broadcast('chat.link.clicked', createLinkClickedPayload(normalized as Parameters<typeof createLinkClickedPayload>[0], snapshot));
       })
       .catch((error: unknown) => {
         if (linkClickSequenceRef.current.isCurrent(clickSequence)) logError('链接规范化失败', error);
@@ -1065,7 +1065,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     if (list.scrollTop <= 48 && conversationId && traceHasMore && !traceOlderLoadingRef.current) void loadOlderTrace(conversationId);
   };
   const cancelPendingBottomScrollForUser = (): void => { cancelBottomScroll(); };
-  return <div className="message-panel">
+  return <div className="chat">
     {projectPickerOpen && (
       <DirectoryPicker
         ctx={ctx}

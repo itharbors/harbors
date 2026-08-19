@@ -1,0 +1,17 @@
+{
+  "name": "model-service",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "contribute": {
+      "message": {
+        "request": {
+          "getCatalog": ["getCatalog"],
+          "complete": ["complete"],
+          "cancel": ["cancel"]
+        }
+      }
+    }
+  }
+}

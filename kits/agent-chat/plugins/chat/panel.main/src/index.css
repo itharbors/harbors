@@ -213,7 +213,7 @@ html, body, #panel-root {
 *, *::before, *::after {
   box-sizing: border-box;
 }
-.message-panel {
+.chat {
   display: flex;
   min-height: 0;
   height: 100%;
