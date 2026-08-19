@@ -179,6 +179,9 @@
   .visible {
     visibility: visible;
   }
+  .relative {
+    position: relative;
+  }
   .block {
     display: block;
   }
@@ -958,6 +961,12 @@ html, body, #panel-root {
   font-size: 13px;
   line-height: 1.55;
 }
+.conversation-loading {
+  align-self: center;
+  margin: auto;
+  color: #7c8898;
+  font-size: 13px;
+}
 .error-alert {
   border-bottom: 1px solid #7d3c3c;
   background: #3a2226;
@@ -1204,11 +1213,44 @@ html, body, #panel-root {
 .agent-turn-title {
   flex: 0 0 auto;
 }
+.agent-turn-status {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 1px 6px;
+  background: #29303b;
+  color: #9daaba;
+  font-size: 10px;
+  font-weight: 600;
+}
+.agent-turn-status.running {
+  background: #24334a;
+  color: #8fb8f2;
+}
+.agent-turn-status.completed {
+  background: #24372f;
+  color: #87c7a6;
+}
+.agent-turn-status.interrupted {
+  background: #3b3224;
+  color: #ddb879;
+}
+.agent-turn-status.failed {
+  background: #3a2429;
+  color: #e69aa3;
+}
 .agent-turn-hint {
   flex: 0 0 auto;
   color: #6b7789;
   font-weight: 500;
   font-size: 10.5px;
+}
+.agent-turn-interrupted {
+  margin-top: 5px;
+  border-left: 2px solid #a57c3c;
+  padding: 5px 8px;
+  color: #c8a76f;
+  font-size: 11px;
+  line-height: 1.5;
 }
 .agent-cycle {
   display: flex;

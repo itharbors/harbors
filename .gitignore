@@ -23,3 +23,4 @@ tsconfig.tsbuildinfo
 /packages/native-credential-vault/build/
 /.cache/harbors-kit-installs/
 /docs/tasks/*/.work/
+.codex/better-harness/

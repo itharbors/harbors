@@ -22,7 +22,13 @@ interface PanelContext {
 let ctx: PanelContext | null = null;
 
 function renderMarkdown(content: string): string {
-  return DOMPurify.sanitize(marked.parse(content, { async: false }) as string);
+  try {
+    const html = marked.parse(content, { async: false });
+    return DOMPurify.sanitize(typeof html === 'string' ? html : String(html));
+  } catch {
+    // 渲染失败时降级为纯文本展示，避免面板白屏
+    return `<pre class="preview-code"><code>${escapeHtml(content)}</code></pre>`;
+  }
 }
 
 function escapeHtml(text: string): string {
@@ -141,24 +147,61 @@ function renderEmpty(): void {
   `;
 }
 
-async function handlePreviewContent(data: unknown): Promise<void> {
-  if (!ctx) return;
-  const content = data as PreviewContent;
+interface LinkClickedPayload {
+  href: string;
+  text?: string;
+  protocol?: string;
+  conversationId?: string;
+  project?: string;
+}
 
-  // 如果是文件但还没有内容，先显示加载中，再请求读取
-  if (content.kind === 'file' && content.path && content.content === undefined) {
-    renderContent({ ...content, title: content.title || content.path.split('/').pop() });
-    try {
-      const result = await ctx.message.request('preview', 'readFile', content.path) as PreviewContent;
-      renderContent(result);
-    } catch (err) {
-      renderContent({
-        ...content,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  } else {
+function safeRenderContent(content: PreviewContent): void {
+  try {
     renderContent(content);
+  } catch (err) {
+    renderContent({
+      kind: 'unsupported',
+      title: content.title || '预览失败',
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function handleLinkClicked(data: unknown): Promise<void> {
+  if (!ctx) return;
+  const payload = data as LinkClickedPayload;
+  if (!payload || typeof payload.href !== 'string' || !payload.href) return;
+
+  // 仅当 href 本身是绝对的 http(s) URL 时才当作外链用 iframe 预览。
+  // 注意：不能依赖 message-panel 传来的 protocol，相对路径会被 new URL(base)
+  // 补成 http，从而把本地文件误判为外链。
+  const isExternalUrl = /^https?:\/\//i.test(payload.href);
+  if (isExternalUrl) {
+    safeRenderContent({
+      kind: 'url',
+      url: payload.href,
+      title: payload.text || payload.href,
+    });
+    return;
+  }
+
+  // 文件：先显示加载中，再主动向自己后端请求内容
+  const fallbackTitle = payload.text || payload.href.split('/').pop() || '文件';
+  safeRenderContent({ kind: 'file', path: payload.href, title: fallbackTitle });
+  try {
+    const result = await ctx.message.request(
+      'preview',
+      'readFile',
+      payload.href,
+      payload.project,
+    ) as PreviewContent;
+    safeRenderContent(result);
+  } catch (err) {
+    safeRenderContent({
+      kind: 'unsupported',
+      title: fallbackTitle,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
@@ -168,8 +211,8 @@ export default {
     renderEmpty();
   },
   methods: {
-    onPreviewContent(data: unknown) {
-      void handlePreviewContent(data);
+    onLinkClicked(data: unknown) {
+      void handleLinkClicked(data);
       return data;
     },
   },

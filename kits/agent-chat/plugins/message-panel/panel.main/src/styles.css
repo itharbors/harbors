@@ -123,6 +123,7 @@ html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; o
 .empty-state-mark { color: #8db8ff; font-size: 24px; }
 .empty-state-card h2 { margin: 12px 0 7px; color: #edf2f8; font-size: 17px; }
 .empty-state-card p { margin: 0; color: #aeb8c6; font-size: 13px; line-height: 1.55; }
+.conversation-loading { align-self: center; margin: auto; color: #7c8898; font-size: 13px; }
 .error-alert { border-bottom: 1px solid #7d3c3c; background: #3a2226; color: #ffc6c8; padding: 8px 14px; font-size: 13px; }
 @media (max-width: 720px) { .message-list-container { padding: 14px; } .message-input-container { padding: 10px 14px 14px; } .new-thread-context span:last-child { margin-left: 0; } }
 
@@ -163,7 +164,13 @@ html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; o
 .agent-turn-caret { display: inline-block; flex: 0 0 auto; font-size: 13px; line-height: 1; transition: transform .15s ease; transform: rotate(90deg); }
 .agent-step.collapsed .agent-turn-caret { transform: rotate(0deg); }
 .agent-turn-title { flex: 0 0 auto; }
+.agent-turn-status { flex: 0 0 auto; border-radius: 999px; padding: 1px 6px; background: #29303b; color: #9daaba; font-size: 10px; font-weight: 600; }
+.agent-turn-status.running { background: #24334a; color: #8fb8f2; }
+.agent-turn-status.completed { background: #24372f; color: #87c7a6; }
+.agent-turn-status.interrupted { background: #3b3224; color: #ddb879; }
+.agent-turn-status.failed { background: #3a2429; color: #e69aa3; }
 .agent-turn-hint { flex: 0 0 auto; color: #6b7789; font-weight: 500; font-size: 10.5px; }
+.agent-turn-interrupted { margin-top: 5px; border-left: 2px solid #a57c3c; padding: 5px 8px; color: #c8a76f; font-size: 11px; line-height: 1.5; }
 .agent-cycle { display: flex; min-width: 0; flex-direction: column; gap: 4px; padding: 0; }
 .agent-step-tools { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
 .agent-step-error { overflow-wrap: anywhere; border: 1px solid #713c43; border-radius: 8px; background: #351f25; padding: 7px 9px; color: #e6aeb2; font-size: 11px; line-height: 1.45; white-space: pre-wrap; }

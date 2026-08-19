@@ -33,7 +33,7 @@ importers:
         specifier: ^18.3.1
         version: 18.3.1(react@18.3.1)
 
-  plugins/message-debug: {}
+  plugins/debug: {}
 
   plugins/message-panel:
     dependencies:
@@ -85,6 +85,8 @@ importers:
       marked:
         specifier: ^18.0.9
         version: 18.0.9
+
+  plugins/settings: {}
 
 packages:
 
