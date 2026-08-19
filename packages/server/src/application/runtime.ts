@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { ApplicationHostMode, NotificationInput } from '../editor/types';
 import { MenuModule } from '../framework/menu';
 import { MessageModule } from '../framework/message';
+import { normalizeMessageRouteDeclaration } from '../framework/message/types';
 import { PluginModule, createPluginPaths, type PluginPathRoots, type PluginPaths } from '@itharbors/magnet';
 import type { ContributeData, PluginInfo } from '@itharbors/magnet';
 import type {
@@ -442,12 +443,17 @@ export class ApplicationRuntime {
         switch (command.operation) {
           case 'register-request':
             assertServerRoute(pluginName, command.location, command.methods);
+            const declaredRequest = this.prepared.get(pluginName)?.contribute?.message?.request?.[command.name];
+            const requestCallers = declaredRequest === undefined
+              ? undefined
+              : normalizeMessageRouteDeclaration(declaredRequest).callers;
             this.message.registerRequest(
               pluginName,
               command.name,
               (...args) => this.requireSupervisor(pluginName).invokeHandler(command.handlerId, args),
               'server',
               command.methods,
+              requestCallers,
             );
             return null;
           case 'register-broadcast':
@@ -475,7 +481,7 @@ export class ApplicationRuntime {
             this.message.unregisterBroadcast(pluginName, command.topic);
             return null;
           case 'request':
-            return this.message.request(command.plugin, command.name, ...command.args);
+            return this.message.requestFrom(pluginName, command.plugin, command.name, ...command.args);
           case 'broadcast':
             assertBroadcastTopic(pluginName, command.topic);
             this.message.broadcast(command.topic, ...command.args);
@@ -543,8 +549,8 @@ export class ApplicationRuntime {
     if (!definition) throw new TypeError(`Application plugin "${pluginName}" has no definition metadata`);
     const methods = new Set(definition.methods);
     const declaredMethods = [
-      ...Object.values(contribute?.message?.request ?? {}).flat(),
-      ...Object.values(contribute?.message?.broadcast ?? {}).flat(),
+      ...Object.values(contribute?.message?.request ?? {}).flatMap((route) => normalizeMessageRouteDeclaration(route).methods),
+      ...Object.values(contribute?.message?.broadcast ?? {}).flatMap((route) => normalizeMessageRouteDeclaration(route).methods),
     ];
     for (const method of declaredMethods) {
       if (!methods.has(method)) {
@@ -568,16 +574,19 @@ export class ApplicationRuntime {
     if (this.staticAttached.has(pluginName)) return;
     if (contribute) {
       this.menu.attach(pluginName, contribute);
-      for (const [messageName, methods] of Object.entries(contribute.message?.request ?? {})) {
+      for (const [messageName, declaration] of Object.entries(contribute.message?.request ?? {})) {
+        const { methods, callers } = normalizeMessageRouteDeclaration(declaration);
         this.message.registerRequest(
           pluginName,
           messageName,
           (...args) => this.callContributedMethod(pluginName, messageName, methods, args),
           'server',
           methods,
+          callers,
         );
       }
-      for (const [topic, methods] of Object.entries(contribute.message?.broadcast ?? {})) {
+      for (const [topic, declaration] of Object.entries(contribute.message?.broadcast ?? {})) {
+        const { methods } = normalizeMessageRouteDeclaration(declaration);
         for (const method of methods) {
           this.message.registerBroadcast(
             pluginName,
@@ -1040,7 +1049,8 @@ function assertApplicationContributions(pluginName: string, contribute: Contribu
     ...Object.values(contribute.message?.request ?? {}),
     ...Object.values(contribute.message?.broadcast ?? {}),
   ]) {
-    if (!Array.isArray(methods) || methods.length === 0 || methods.some((method) => (
+    const normalized = normalizeMessageRouteDeclaration(methods);
+    if (normalized.methods.length === 0 || normalized.methods.some((method) => (
       typeof method !== 'string' || method.startsWith('panel.')
     ))) {
       throw new Error(`Application plugin "${pluginName}" can contribute only server message methods`);

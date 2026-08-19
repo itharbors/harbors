@@ -8,16 +8,8 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-'));
   const previousEnv = {
     storage: process.env.HARBORS_AGENT_STORAGE_DIR,
-    baseUrl: process.env.HARBORS_RELAY_BASE_URL,
-    apiKey: process.env.HARBORS_RELAY_API_KEY,
-    api: process.env.HARBORS_RELAY_API,
-    model: process.env.HARBORS_RELAY_MODEL,
   };
   process.env.HARBORS_AGENT_STORAGE_DIR = storageDir;
-  process.env.HARBORS_RELAY_BASE_URL = 'https://relay.invalid';
-  process.env.HARBORS_RELAY_API_KEY = 'test-key';
-  process.env.HARBORS_RELAY_API = 'openai-completions';
-  process.env.HARBORS_RELAY_MODEL = 'test-model';
 
   let plugin: any;
   (globalThis as any).editor = { plugin: { define(value: any) { plugin = value; } } };
@@ -57,10 +49,6 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
   } finally {
     await plugin.lifecycle.unload();
     restoreEnv('HARBORS_AGENT_STORAGE_DIR', previousEnv.storage);
-    restoreEnv('HARBORS_RELAY_BASE_URL', previousEnv.baseUrl);
-    restoreEnv('HARBORS_RELAY_API_KEY', previousEnv.apiKey);
-    restoreEnv('HARBORS_RELAY_API', previousEnv.api);
-    restoreEnv('HARBORS_RELAY_MODEL', previousEnv.model);
     await rm(storageDir, { recursive: true, force: true });
   }
 });

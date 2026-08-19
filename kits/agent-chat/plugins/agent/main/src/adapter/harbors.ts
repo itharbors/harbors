@@ -100,6 +100,7 @@ export interface ModelServiceClient {
   getCatalog(): Promise<ModelServiceCatalog>;
   complete(request: ModelServiceCompleteRequest): Promise<ModelServiceCompleteResponse>;
   cancel(requestId: string): Promise<unknown>;
+  webSearch?(query: string, signal?: AbortSignal): Promise<string>;
 }
 
 interface AppendEventOptions {
@@ -488,6 +489,7 @@ export class HarborsAdapter implements AgentAdapter {
         step,
         sandboxMode: session.sandboxMode,
         approvalPolicy: session.approvalPolicy,
+        webSearch: this.modelService.webSearch,
         requestPermission: ({ toolName, currentMode, requestedMode, justification, signal: requestSignal }) => this.requestPermission(session, turn, step, call.id, toolName, currentMode, requestedMode, justification, requestSignal),
       });
       const toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };

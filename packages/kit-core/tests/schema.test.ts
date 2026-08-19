@@ -295,6 +295,29 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest(manifest).permissions).toEqual(['network', 'credentials']);
   });
 
+  it('accepts explicit permission grants for named plugins', () => {
+    const manifest = {
+      ...kitManifest,
+      permissions: ['credentials'],
+      permissionGrants: { credentials: ['model-service', '@scope/other'] },
+    } as const;
+
+    expect(parseKitPackageManifest(manifest).permissionGrants).toEqual(manifest.permissionGrants);
+  });
+
+  it.each([
+    { permissionGrants: { credentials: ['model-service', 'model-service'] } },
+    { permissions: ['network'], permissionGrants: { credentials: ['model-service'] } },
+    { permissions: ['credentials'], permissionGrants: { credentials: 'model-service' } },
+    { permissions: ['credentials'], permissionGrants: { unknown: ['model-service'] } },
+  ])('rejects invalid permission grants %#', (fields) => {
+    expect(() => parseKitPackageManifest({
+      ...kitManifest,
+      permissions: ['credentials'],
+      ...fields,
+    })).toThrow(/permissionGrants|permission|duplicate/i);
+  });
+
   it('rejects unknown and duplicate permissions', () => {
     expect(() => parseKitPackageManifest({
       ...kitManifest,

@@ -5,8 +5,6 @@ import { homedir } from 'node:os';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentSandboxMode } from './base.js';
-import { readDshRelayConfig } from './dsh-config.js';
-import { resolveDshCredential } from './credentials.js';
 
 const exec = promisify(execFile);
 const MAX_OUTPUT = 12_000;
@@ -242,6 +240,7 @@ export interface HubBertToolPermissionContext extends AgentPermissionState {
   turn: number;
   step: number;
   requestPermission?: (request: Omit<AgentPermissionRequest, 'requestId' | 'conversationId' | 'turn' | 'step' | 'signal'> & { signal?: AbortSignal }) => Promise<AgentPermissionOutcome>;
+  webSearch?: (query: string, signal?: AbortSignal) => Promise<string>;
 }
 
 class SandboxPermissionRequiredError extends Error {
@@ -295,7 +294,7 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
   if (name === 'grep') return runGrep(root, input, signal, permission?.sandboxMode);
   if (name === 'bash') return runExclusive(() => runBash(root, input, signal, permission), signal);
   if (name === 'todo_write') return runTodoWrite(input);
-  if (name === 'web_search') return runWebSearch(input, signal);
+  if (name === 'web_search') return runWebSearch(input, signal, permission?.webSearch);
   if (name === 'web_fetch') return runWebFetch(input, signal);
 
   throw new Error(`不支持的工具：${name}`);
@@ -639,10 +638,11 @@ function countOccurrences(value: string, search: string): number {
 
 function cap(value: string): string { return value.length > MAX_OUTPUT ? `${value.slice(0, MAX_OUTPUT)}\n…输出已截断` : value; }
 
-async function runWebSearch(input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {
+async function runWebSearch(input: Record<string, unknown>, signal?: AbortSignal, delegatedSearch?: (query: string, signal?: AbortSignal) => Promise<string>): Promise<string> {
   const query = required(input.query, 'query');
+  if (delegatedSearch) return delegatedSearch(query, signal);
   const endpoint = process.env.HARBORS_WEB_SEARCH_URL;
-  if (!endpoint) return runNativeWebSearch(query, signal);
+  if (!endpoint) throw new Error('未配置 web_search：请先在 Model Service 中配置可用 Provider');
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'content-type': 'application/json', accept: 'application/json' },
@@ -652,34 +652,6 @@ async function runWebSearch(input: Record<string, unknown>, signal?: AbortSignal
   if (!response.ok) throw new Error(`web_search 请求失败（HTTP ${response.status}）：${(await response.text()).slice(0, 500)}`);
   const payload = await response.json() as unknown;
   return cap(formatSearchPayload(payload));
-}
-
-async function runNativeWebSearch(query: string, signal?: AbortSignal): Promise<string> {
-  const config = await readDshRelayConfig();
-  const baseUrl = (process.env.HARBORS_WEB_SEARCH_BASE_URL || process.env.HARBORS_RELAY_BASE_URL || config.baseUrl || '').replace(/\/$/u, '');
-  const apiKey = process.env.HARBORS_WEB_SEARCH_API_KEY || process.env.HARBORS_RELAY_API_KEY || (await resolveDshCredential(config.apiKeyEnv))?.value;
-  if (!baseUrl || !apiKey) throw new Error('未配置 web_search：请设置 HARBORS_WEB_SEARCH_URL，或配置 DSH Relay 的 baseURL/apiKeyEnv');
-  const model = process.env.HARBORS_WEB_SEARCH_MODEL || process.env.HARBORS_RELAY_MODEL || config.defaultModel || 'deepseek-v4-flash';
-  const endpoint = baseUrl.endsWith('/v1') ? `${baseUrl}/messages` : `${baseUrl}/v1/messages`;
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: { 'x-api-key': apiKey, authorization: `Bearer ${apiKey}`, 'anthropic-version': '2023-06-01', 'content-type': 'application/json', accept: 'application/json' },
-    body: JSON.stringify({
-      model,
-      max_tokens: 4096,
-      messages: [{ role: 'user', content: [{ type: 'text', text: `Perform a web search for the query: ${query}` }] }],
-      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 5 }],
-    }),
-    signal: requestTimeoutSignal(signal, WEB_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`web_search 请求失败（HTTP ${response.status}）：${(await response.text()).slice(0, 500)}`);
-  const payload = await response.json() as { content?: Array<Record<string, unknown>> };
-  const sources = (payload.content || []).flatMap((block) => {
-    if (block.type !== 'web_search_tool_result' || !Array.isArray(block.content)) return [];
-    return (block.content as Array<Record<string, unknown>>).filter((item) => item.type === 'web_search_result').map((item) => ({ title: item.title, url: item.url, snippet: item.snippet || item.description }));
-  });
-  if (!sources.length) throw new Error('web_search 服务未返回结构化搜索结果');
-  return cap(formatSearchPayload(sources));
 }
 
 async function runWebFetch(input: Record<string, unknown>, signal?: AbortSignal): Promise<string> {

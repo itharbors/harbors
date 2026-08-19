@@ -78,7 +78,7 @@ export function resolveConfigActivation(
         backend: resolveConfigLayerBackend(kitId, layer, options),
       });
     }
-    return { layers, writeLayer: declaration.writeLayer };
+    return { kitId, layers, writeLayer: declaration.writeLayer };
   } catch (error) {
     for (const layer of layers) layer.backend.destroy?.();
     throw error;
@@ -100,28 +100,20 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
     const database = new Database(databasePath);
     try {
       database.pragma('journal_mode = WAL');
-      database.exec(`
-        CREATE TABLE IF NOT EXISTS config_values (
-          kit_id TEXT NOT NULL,
-          layer_name TEXT NOT NULL,
-          key TEXT NOT NULL,
-          value_json TEXT NOT NULL,
-          PRIMARY KEY (kit_id, layer_name, key)
-        )
-      `);
+      ensureNamespacedSchema(database);
       this.statementGet = database.prepare(`
         SELECT value_json
         FROM config_values
-        WHERE kit_id = ? AND layer_name = ? AND key = ?
+        WHERE kit_id = ? AND plugin_name = ? AND layer_name = ? AND key = ?
       `);
       this.statementSet = database.prepare(`
-        INSERT INTO config_values (kit_id, layer_name, key, value_json)
-        VALUES (?, ?, ?, ?)
-        ON CONFLICT (kit_id, layer_name, key) DO UPDATE SET value_json = excluded.value_json
+        INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT (kit_id, plugin_name, layer_name, key) DO UPDATE SET value_json = excluded.value_json
       `);
       this.statementDelete = database.prepare(`
         DELETE FROM config_values
-        WHERE kit_id = ? AND layer_name = ? AND key = ?
+        WHERE kit_id = ? AND plugin_name = ? AND layer_name = ? AND key = ?
       `);
       this.database = database;
     } catch (error) {
@@ -130,9 +122,9 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
     }
   }
 
-  get(key: string): JsonValue | undefined {
+  get(key: string, namespace = ''): JsonValue | undefined {
     this.assertOpen();
-    const row = this.statementGet.get(this.kitId, this.layerName, key) as { value_json?: unknown } | undefined;
+    const row = this.statementGet.get(this.kitId, namespace, this.layerName, key) as { value_json?: unknown } | undefined;
     if (!row) return undefined;
     if (typeof row.value_json !== 'string') {
       throw new ConfigStorageCorruptError(`Config row for "${key}" has a non-string JSON value`);
@@ -140,15 +132,15 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
     return parseStoredJson(row.value_json, this.kitId, this.layerName, key);
   }
 
-  set(key: string, value: JsonValue): void {
+  set(key: string, value: JsonValue, namespace = ''): void {
     this.assertOpen();
     assertJsonValue(value);
-    this.statementSet.run(this.kitId, this.layerName, key, JSON.stringify(value));
+    this.statementSet.run(this.kitId, namespace, this.layerName, key, JSON.stringify(value));
   }
 
-  delete(key: string): void {
+  delete(key: string, namespace = ''): void {
     this.assertOpen();
-    this.statementDelete.run(this.kitId, this.layerName, key);
+    this.statementDelete.run(this.kitId, namespace, this.layerName, key);
   }
 
   destroy(): void {
@@ -160,6 +152,46 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
   private assertOpen(): void {
     if (this.closed) throw new ConfigStorageClosedError();
   }
+}
+
+function ensureNamespacedSchema(database: Database.Database): void {
+  const existing = database.prepare(`
+    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'config_values'
+  `).get() as { name?: string } | undefined;
+  if (!existing) {
+    database.exec(`
+      CREATE TABLE config_values (
+        kit_id TEXT NOT NULL,
+        plugin_name TEXT NOT NULL,
+        layer_name TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        PRIMARY KEY (kit_id, plugin_name, layer_name, key)
+      )
+    `);
+    return;
+  }
+
+  const columns = database.prepare('PRAGMA table_info(config_values)').all() as Array<{ name?: string }>;
+  if (columns.some((column) => column.name === 'plugin_name')) return;
+
+  // Keep the old table as a legacy copy. Its values are imported into the
+  // empty namespace so existing EditorConfig consumers remain readable.
+  database.transaction(() => {
+    database.exec(`
+      ALTER TABLE config_values RENAME TO config_values_legacy;
+      CREATE TABLE config_values (
+        kit_id TEXT NOT NULL,
+        plugin_name TEXT NOT NULL,
+        layer_name TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        PRIMARY KEY (kit_id, plugin_name, layer_name, key)
+      );
+      INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json)
+        SELECT kit_id, '', layer_name, key, value_json FROM config_values_legacy;
+    `);
+  })();
 }
 
 function resolveSqlitePath(applicationDataRoot: string, storage: Exclude<ConfigStorage, null>): string {

@@ -4,10 +4,37 @@
   "type": "module",
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "capabilities": ["credentials"],
     "contribute": {
+      "settings": {
+        "schemaVersion": 1,
+        "sections": [
+          {
+            "id": "model-service.provider",
+            "title": "模型服务",
+            "description": "Token 只写入凭据库，普通配置不包含密钥。",
+            "fields": [
+              { "key": "model-service.providerId", "label": "Provider ID", "control": "text" },
+              { "key": "model-service.providerName", "label": "Provider 名称", "control": "text" },
+              { "key": "model-service.protocol", "label": "协议", "control": "select", "options": [{ "value": "openai-chat-completions", "label": "OpenAI Chat Completions" }, { "value": "anthropic-messages", "label": "Anthropic Messages" }] },
+              { "key": "model-service.baseUrl", "label": "Provider 地址", "control": "text" },
+              { "key": "model-service.models", "label": "模型列表（JSON）", "control": "textarea" },
+              { "key": "model-service.defaultModel", "label": "默认模型", "control": "text" },
+              { "key": "model-service.secret", "label": "Token", "control": "password", "description": "仅在保存时写入凭据库，不会回显。" }
+            ]
+          }
+        ]
+      },
       "message": {
         "request": {
           "getCatalog": ["getCatalog"],
+          "getSettings": { "methods": ["getSettings"], "callers": ["settings"] },
+          "getSetting": { "methods": ["getSetting"], "callers": ["settings"] },
+          "setSetting": { "methods": ["setSetting"], "callers": ["settings"] },
+          "deleteSetting": { "methods": ["deleteSetting"], "callers": ["settings"] },
+          "saveProvider": { "methods": ["saveProvider"], "callers": ["settings"] },
+          "deleteProvider": { "methods": ["deleteProvider"], "callers": ["settings"] },
+          "webSearch": ["webSearch"],
           "complete": ["complete"],
           "cancel": ["cancel"]
         }

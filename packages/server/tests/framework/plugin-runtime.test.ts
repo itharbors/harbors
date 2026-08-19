@@ -6,7 +6,7 @@ import { PluginModule } from '@itharbors/magnet';
 import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import type { PluginRuntimeHost } from '../../src/editor/types';
 import type { ApplicationPluginRuntimeHost } from '../../src/editor/types';
-import type { PluginPathRoots } from '@itharbors/magnet';
+import type { PluginConfig, PluginConfigBindingHost, PluginPathRoots } from '@itharbors/magnet';
 import { testAssembly } from '../helpers/assembly';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
@@ -183,6 +183,41 @@ describe('PluginModule', () => {
     expect(plugin.getInfo('capable')).toMatchObject({ capabilities: ['credentials'] });
     await expect(plugin.register(duplicateDir, { kind: 'external' })).rejects.toThrow(/capabilit/i);
     expect(plugin.getInfo('duplicate')).toBeUndefined();
+  });
+
+  it('injects a bound config facade instead of the host EditorConfig', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-config-facade-'));
+    const pluginDir = mkPlugin(root, 'config-reader', 'config-reader', `
+      let config;
+      editor.plugin.define({
+        lifecycle: { load(runtime) { config = runtime.config; } },
+        methods: {
+          keys() { return Object.keys(config).sort(); },
+          read(key) { return config.get(key); },
+        },
+      });
+    `);
+    const plugin = new PluginModule();
+    const facade: PluginConfig = {
+      get: vi.fn(() => 'scoped-value'),
+      set: vi.fn(),
+      delete: vi.fn(),
+      subscribe: vi.fn(() => () => undefined),
+    };
+    const binding: PluginConfigBindingHost = { bind: vi.fn(() => facade) };
+    const host = withRuntimeMenu(createEditor('config-facade-editor', { assembly }));
+
+    await plugin.register(pluginDir, { kind: 'external' });
+    await plugin.load(pluginDir, {
+      ...sessionLoadOptions(host),
+      config: binding,
+      kitId: 'kit-config-facade',
+    });
+
+    expect(binding.bind).toHaveBeenCalledWith('kit-config-facade', 'config-reader');
+    expect(plugin.callPlugin('config-reader', 'keys')).toEqual(['delete', 'get', 'set', 'subscribe']);
+    expect(plugin.callPlugin('config-reader', 'read', 'key')).toBe('scoped-value');
+    expect(host.config).not.toBe(facade);
   });
 
   it('injects credentials only into a capable Session plugin and revokes retained access on unload', async () => {

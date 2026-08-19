@@ -5,7 +5,12 @@ export type {
   PluginDefinition,
   PluginInfo,
   PluginLifecycle,
+  PluginMessageRoute,
+  PluginMessageRouteDeclaration,
   PluginRuntime,
+  PluginConfig,
+  PluginConfigChangeEvent,
+  PluginConfigValue,
 } from '@itharbors/magnet';
 export * from './panel.js';
 export type {

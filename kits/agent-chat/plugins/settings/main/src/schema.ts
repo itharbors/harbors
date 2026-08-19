@@ -1,6 +1,6 @@
 export type SettingsLayer = 'global';
 export type ConfigLayer = 'default' | SettingsLayer;
-export type SettingsControl = 'text' | 'textarea' | 'number' | 'toggle' | 'select';
+export type SettingsControl = 'text' | 'password' | 'textarea' | 'number' | 'toggle' | 'select';
 export type SettingsValue = string | number | boolean;
 
 export interface SettingsOption {
@@ -63,7 +63,7 @@ export class SettingsSchemaError extends Error {
   }
 }
 
-const CONTROLS = new Set<SettingsControl>(['text', 'textarea', 'number', 'toggle', 'select']);
+const CONTROLS = new Set<SettingsControl>(['text', 'password', 'textarea', 'number', 'toggle', 'select']);
 const LAYERS = new Set<SettingsLayer>(['global']);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -104,7 +104,7 @@ function isSettingsValue(value: unknown): value is SettingsValue {
 
 function validateFieldValue(field: Pick<SettingsField, 'control' | 'options' | 'min' | 'max' | 'step'>, value: unknown): string | undefined {
   if (!isSettingsValue(value)) return 'value must be a string, finite number, or boolean';
-  if (field.control === 'text' || field.control === 'textarea') {
+  if (field.control === 'text' || field.control === 'password' || field.control === 'textarea') {
     return typeof value === 'string' ? undefined : `${field.control} value must be a string`;
   }
   if (field.control === 'toggle') return typeof value === 'boolean' ? undefined : 'toggle value must be a boolean';

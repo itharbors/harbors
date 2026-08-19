@@ -13,6 +13,7 @@ export const KIT_PERMISSIONS = [
 
 export type KitChannel = 'stable' | 'preview';
 export type KitPermission = typeof KIT_PERMISSIONS[number];
+export type KitPermissionGrants = Partial<Record<KitPermission, string[]>>;
 export type KitPlatform = 'any' | 'darwin' | 'linux' | 'win32';
 export type KitArchitecture = 'any' | 'arm64' | 'x64';
 
@@ -58,6 +59,7 @@ export interface KitPackageManifest {
   requires: KitRequirements;
   target: KitTarget;
   permissions: KitPermission[];
+  permissionGrants?: KitPermissionGrants;
   entry: 'package.json';
   config?: KitConfigDeclaration;
 }

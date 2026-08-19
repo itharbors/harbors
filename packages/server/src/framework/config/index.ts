@@ -4,11 +4,14 @@ import type {
   ConfigChangeEvent,
   ConfigLayerBackend,
   ConfigLayerDefinition,
+  ConfigOwner,
   EditorConfig,
   JsonValue,
+  PluginConfig,
 } from './types';
 
 export const CONFIG_NOT_ACTIVATED = 'CONFIG_NOT_ACTIVATED';
+export const CONFIG_OWNER_NOT_ACTIVE = 'CONFIG_OWNER_NOT_ACTIVE';
 
 export class ConfigNotActivatedError extends Error {
   readonly code = CONFIG_NOT_ACTIVATED;
@@ -19,19 +22,35 @@ export class ConfigNotActivatedError extends Error {
   }
 }
 
+export class ConfigOwnerNotActiveError extends Error {
+  readonly code = CONFIG_OWNER_NOT_ACTIVE;
+
+  constructor(kitId: string) {
+    super(`Config owner is not active for Kit "${kitId}"`);
+    this.name = 'ConfigOwnerNotActiveError';
+  }
+}
+
 export class MemoryConfigLayerBackend implements ConfigLayerBackend {
-  private readonly values = new Map<string, JsonValue>();
+  private readonly values = new Map<string, Map<string, JsonValue>>();
 
-  get(key: string): JsonValue | undefined {
-    return this.values.get(key);
+  get(key: string, namespace = ''): JsonValue | undefined {
+    return this.values.get(namespace)?.get(key);
   }
 
-  set(key: string, value: JsonValue): void {
-    this.values.set(key, value);
+  set(key: string, value: JsonValue, namespace = ''): void {
+    let values = this.values.get(namespace);
+    if (!values) {
+      values = new Map();
+      this.values.set(namespace, values);
+    }
+    values.set(key, value);
   }
 
-  delete(key: string): void {
-    this.values.delete(key);
+  delete(key: string, namespace = ''): void {
+    const values = this.values.get(namespace);
+    values?.delete(key);
+    if (values?.size === 0) this.values.delete(namespace);
   }
 
   destroy(): void {
@@ -44,6 +63,7 @@ export function createMemoryConfigLayerBackend(): ConfigLayerBackend {
 }
 
 interface ConfigState {
+  activeKitId: string | undefined;
   layers: Map<string, ConfigLayerDefinition>;
   orderedLayers: ConfigLayerDefinition[];
   writeLayer: string | undefined;
@@ -55,6 +75,7 @@ export class ConfigModule implements EditorConfig {
   private orderedLayers: ConfigLayerDefinition[] = [];
   private writeLayer: string | undefined;
   private pendingActivation: ConfigActivationTransaction | undefined;
+  private activeKitId: string | undefined;
 
   /**
    * Installs host-selected layers and returns a one-shot Kit-switch handle.
@@ -66,11 +87,13 @@ export class ConfigModule implements EditorConfig {
     if (this.pendingActivation) throw new Error('Config activation already pending');
 
     const previous: ConfigState = {
+      activeKitId: this.activeKitId,
       layers: this.layers,
       orderedLayers: this.orderedLayers,
       writeLayer: this.writeLayer,
     };
     const next: ConfigState = {
+      activeKitId: activation.kitId,
       layers: new Map(nextLayers.map((layer) => [layer.name, layer])),
       orderedLayers: [...nextLayers].sort((left, right) => right.priority - left.priority),
       writeLayer: activation.writeLayer,
@@ -79,6 +102,7 @@ export class ConfigModule implements EditorConfig {
     this.layers = next.layers;
     this.orderedLayers = next.orderedLayers;
     this.writeLayer = next.writeLayer;
+    this.activeKitId = next.activeKitId;
 
     let settled = false;
     const transaction: ConfigActivationTransaction = {
@@ -95,6 +119,7 @@ export class ConfigModule implements EditorConfig {
         this.layers = previous.layers;
         this.orderedLayers = previous.orderedLayers;
         this.writeLayer = previous.writeLayer;
+        this.activeKitId = previous.activeKitId;
         destroyBackendsExcept(next.layers, previous.layers);
       },
     };
@@ -110,11 +135,13 @@ export class ConfigModule implements EditorConfig {
     if (this.pendingActivation) throw new Error('Config activation already pending');
 
     const previous: ConfigState = {
+      activeKitId: this.activeKitId,
       layers: this.layers,
       orderedLayers: this.orderedLayers,
       writeLayer: this.writeLayer,
     };
     const next: ConfigState = {
+      activeKitId: undefined,
       layers: new Map(),
       orderedLayers: [],
       writeLayer: undefined,
@@ -123,6 +150,7 @@ export class ConfigModule implements EditorConfig {
     this.layers = next.layers;
     this.orderedLayers = next.orderedLayers;
     this.writeLayer = next.writeLayer;
+    this.activeKitId = next.activeKitId;
 
     let settled = false;
     const transaction: ConfigActivationTransaction = {
@@ -139,6 +167,7 @@ export class ConfigModule implements EditorConfig {
         this.layers = previous.layers;
         this.orderedLayers = previous.orderedLayers;
         this.writeLayer = previous.writeLayer;
+        this.activeKitId = previous.activeKitId;
       },
     };
     this.pendingActivation = transaction;
@@ -169,6 +198,27 @@ export class ConfigModule implements EditorConfig {
     this.emit({ key, type: layer.name, action: 'delete' });
   }
 
+  /** Creates the only config surface that is safe to expose to a plugin. */
+  bind(owner: ConfigOwner): PluginConfig {
+    assertOwner(owner);
+    const pluginName = owner.pluginName;
+    const kitId = owner.kitId;
+    return {
+      get: (key, layer) => this.getScoped(kitId, pluginName, key, layer),
+      set: (key, value, layer) => this.setScoped(kitId, pluginName, key, value, layer),
+      delete: (key, layer) => this.deleteScoped(kitId, pluginName, key, layer),
+      subscribe: (listener) => {
+        this.requireOwnerKit(kitId);
+        return this.subscribe((event) => {
+          const activeForOwner = kitId === '__framework__' || this.activeKitId === kitId;
+          if (activeForOwner && event.pluginName === pluginName) {
+            listener({ key: event.key, type: event.type, action: event.action });
+          }
+        });
+      },
+    };
+  }
+
   subscribe(listener: (event: ConfigChangeEvent) => void): () => void {
     this.listeners.add(listener);
     let disposed = false;
@@ -187,6 +237,7 @@ export class ConfigModule implements EditorConfig {
     this.layers = new Map();
     this.orderedLayers = [];
     this.writeLayer = undefined;
+    this.activeKitId = undefined;
     destroyBackends(current);
   }
 
@@ -202,12 +253,41 @@ export class ConfigModule implements EditorConfig {
     return layer;
   }
 
+  private getScoped(kitId: string, pluginName: string, key: string, type?: string): JsonValue | undefined {
+    this.requireOwnerKit(kitId);
+    if (type !== undefined) return this.requireLayer(type).backend.get(key, pluginName);
+    this.requireActivated();
+    for (const layer of this.orderedLayers) {
+      const value = layer.backend.get(key, pluginName);
+      if (value !== undefined) return value;
+    }
+    return undefined;
+  }
+
+  private setScoped(kitId: string, pluginName: string, key: string, value: JsonValue, type?: string): void {
+    this.requireOwnerKit(kitId);
+    this.assertJsonValue(value);
+    const layer = this.requireLayer(type ?? this.writeLayer);
+    layer.backend.set(key, value, pluginName);
+    this.emit({ key, type: layer.name, action: 'set', pluginName });
+  }
+
+  private deleteScoped(kitId: string, pluginName: string, key: string, type?: string): void {
+    this.requireOwnerKit(kitId);
+    const layer = this.requireLayer(type ?? this.writeLayer);
+    layer.backend.delete(key, pluginName);
+    this.emit({ key, type: layer.name, action: 'delete', pluginName });
+  }
+
   private validateActivation(activation: ConfigActivation): ConfigLayerDefinition[] {
     if (!activation || !Array.isArray(activation.layers) || activation.layers.length === 0) {
       throw new Error('Config layers must not be empty');
     }
     if (typeof activation.writeLayer !== 'string' || activation.writeLayer.length === 0) {
       throw new Error('Config writeLayer must be a non-empty string');
+    }
+    if (activation.kitId !== undefined && (typeof activation.kitId !== 'string' || activation.kitId.length === 0)) {
+      throw new Error('Config kitId must be a non-empty string');
     }
 
     const names = new Set<string>();
@@ -237,6 +317,13 @@ export class ConfigModule implements EditorConfig {
     return layers;
   }
 
+  private requireOwnerKit(kitId: string): void {
+    // The built-in config service is host-owned and follows the active Kit.
+    if (kitId === '__framework__') return;
+    this.requireActivated();
+    if (this.activeKitId !== kitId) throw new ConfigOwnerNotActiveError(kitId);
+  }
+
   private emit(event: ConfigChangeEvent): void {
     for (const listener of this.listeners) listener(event);
   }
@@ -255,6 +342,13 @@ export class ConfigModule implements EditorConfig {
     if (Array.isArray(value)) return value.every((item) => this.isJsonValue(item));
     if (typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype) return false;
     return Object.values(value).every((item) => this.isJsonValue(item));
+  }
+}
+
+function assertOwner(owner: ConfigOwner): void {
+  if (!owner || typeof owner.kitId !== 'string' || owner.kitId.length === 0
+    || typeof owner.pluginName !== 'string' || owner.pluginName.length === 0) {
+    throw new Error('Config owner must contain non-empty kitId and pluginName');
   }
 }
 

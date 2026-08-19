@@ -10,7 +10,8 @@
     "protocolVersion": 1
   },
   "target": { "platform": "any", "arch": "any" },
-  "permissions": [],
+  "permissions": ["credentials"],
+  "permissionGrants": { "credentials": ["model-service"] },
   "config": {
     "schemaVersion": 1,
     "defaultsLayer": "default",

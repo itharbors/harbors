@@ -7,9 +7,10 @@ export type JsonValue =
   | { [key: string]: JsonValue };
 
 export interface ConfigLayerBackend {
-  get(key: string): JsonValue | undefined;
-  set(key: string, value: JsonValue): void;
-  delete(key: string): void;
+  /** The namespace is host-only; it is never part of the plugin API. */
+  get(key: string, namespace?: string): JsonValue | undefined;
+  set(key: string, value: JsonValue, namespace?: string): void;
+  delete(key: string, namespace?: string): void;
   destroy?(): void;
 }
 
@@ -20,6 +21,8 @@ export interface ConfigLayerDefinition {
 }
 
 export interface ConfigActivation {
+  /** Host-selected Kit identity for the active layer set. */
+  kitId?: string;
   layers: readonly ConfigLayerDefinition[];
   writeLayer: string;
 }
@@ -33,6 +36,19 @@ export interface ConfigChangeEvent {
   key: string;
   type: string;
   action: 'set' | 'delete';
+  pluginName?: string;
+}
+
+export interface PluginConfig {
+  get(key: string, layer?: string): JsonValue | undefined;
+  set(key: string, value: JsonValue, layer?: string): void;
+  delete(key: string, layer?: string): void;
+  subscribe(listener: (event: ConfigChangeEvent) => void): () => void;
+}
+
+export interface ConfigOwner {
+  kitId: string;
+  pluginName: string;
 }
 
 export interface EditorConfig {

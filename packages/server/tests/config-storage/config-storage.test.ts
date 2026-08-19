@@ -80,6 +80,61 @@ describe('config storage resolver', () => {
     otherLayer.destroy?.();
   });
 
+  it('isolates the plugin namespace in the SQLite four-part key', () => {
+    const root = temporaryRoot();
+    const layer = sqliteLayer();
+    const first = resolveConfigLayerBackend('kit-a', layer, { roots: { 'application-data': root } });
+    const second = resolveConfigLayerBackend('kit-a', layer, { roots: { 'application-data': root } });
+    first.set('shared', 'first', 'plugin-a');
+    second.set('shared', 'second', 'plugin-b');
+
+    expect(first.get('shared', 'plugin-a')).toBe('first');
+    expect(first.get('shared', 'plugin-b')).toBe('second');
+    expect(first.get('shared')).toBeUndefined();
+
+    first.destroy?.();
+    second.destroy?.();
+    const database = new Database(path.join(root, 'config.sqlite'), { readonly: true });
+    expect(database.prepare('SELECT kit_id, plugin_name, layer_name, key FROM config_values ORDER BY plugin_name').all())
+      .toEqual([
+        { kit_id: 'kit-a', plugin_name: 'plugin-a', layer_name: 'global', key: 'shared' },
+        { kit_id: 'kit-a', plugin_name: 'plugin-b', layer_name: 'global', key: 'shared' },
+      ]);
+    database.close();
+  });
+
+  it('migrates legacy rows without deleting them and is idempotent', () => {
+    const root = temporaryRoot();
+    const databasePath = path.join(root, 'config.sqlite');
+    const database = new Database(databasePath);
+    database.exec(`
+      CREATE TABLE config_values (
+        kit_id TEXT NOT NULL,
+        layer_name TEXT NOT NULL,
+        key TEXT NOT NULL,
+        value_json TEXT NOT NULL,
+        PRIMARY KEY (kit_id, layer_name, key)
+      );
+    `);
+    database.prepare('INSERT INTO config_values VALUES (?, ?, ?, ?)')
+      .run('kit-a', 'global', 'legacy', JSON.stringify({ preserved: true }));
+    database.close();
+
+    const first = resolveConfigLayerBackend('kit-a', sqliteLayer(), { roots: { 'application-data': root } });
+    expect(first.get('legacy')).toEqual({ preserved: true });
+    first.destroy?.();
+    const second = resolveConfigLayerBackend('kit-a', sqliteLayer(), { roots: { 'application-data': root } });
+    expect(second.get('legacy')).toEqual({ preserved: true });
+    second.destroy?.();
+
+    const reopened = new Database(databasePath, { readonly: true });
+    expect(reopened.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'config_values_legacy'").get())
+      .toEqual({ count: 1 });
+    expect(reopened.prepare('SELECT COUNT(*) AS count FROM config_values WHERE kit_id = ? AND plugin_name = ?').get('kit-a', ''))
+      .toEqual({ count: 1 });
+    reopened.close();
+  });
+
   it('uses WAL mode', () => {
     const root = temporaryRoot();
     const layer = sqliteLayer();
@@ -97,8 +152,8 @@ describe('config storage resolver', () => {
     const backend = resolveConfigLayerBackend('kit-a', layer, { roots: { 'application-data': root } });
     backend.destroy?.();
     const database = new Database(path.join(root, 'config.sqlite'));
-    database.prepare('INSERT INTO config_values (kit_id, layer_name, key, value_json) VALUES (?, ?, ?, ?)')
-      .run('kit-a', 'global', 'broken', '{not-json');
+    database.prepare('INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json) VALUES (?, ?, ?, ?, ?)')
+      .run('kit-a', '', 'global', 'broken', '{not-json');
     database.close();
 
     const reopened = resolveConfigLayerBackend('kit-a', layer, { roots: { 'application-data': root } });

@@ -1,4 +1,5 @@
 import semver from 'semver';
+import type { PluginMessageRoute, PluginMessageRouteDeclaration } from './types.js';
 
 export const PLUGIN_PACKAGE_SCHEMA_VERSION = 1 as const;
 export const PLUGIN_CAPABILITIES = ['credentials', 'plugin-lifecycle'] as const;
@@ -20,8 +21,8 @@ export interface PluginContributionManifest {
   readonly panel?: Readonly<Record<string, PluginPanelManifest>>;
   readonly menu?: readonly unknown[];
   readonly message?: Readonly<{
-    request?: Readonly<Record<string, readonly string[]>>;
-    broadcast?: Readonly<Record<string, readonly string[]>>;
+    request?: Readonly<Record<string, PluginMessageRouteDeclaration>>;
+    broadcast?: Readonly<Record<string, PluginMessageRouteDeclaration>>;
   }>;
   readonly [key: string]: unknown;
 }
@@ -86,11 +87,25 @@ function stringArray(value: unknown, context: string): string[] {
   return result;
 }
 
-function parseMessageRoutes(value: unknown, context: string): Record<string, readonly string[]> {
+function parseMessageRoute(value: unknown, context: string): PluginMessageRouteDeclaration {
+  if (Array.isArray(value)) return Object.freeze(stringArray(value, context));
+  const input = record(value, context);
+  exactKeys(input, ['methods', 'callers'], context);
+  const methods = stringArray(input.methods, `${context}.methods`);
+  if (input.callers === undefined) return Object.freeze({ methods });
+  const callers = stringArray(input.callers, `${context}.callers`);
+  if (callers.length === 0) throw new Error(`${context}.callers must not be empty`);
+  if (callers.some((caller) => !PACKAGE_NAME_PATTERN.test(caller))) {
+    throw new Error(`${context}.callers must contain valid plugin names`);
+  }
+  return Object.freeze({ methods, callers } satisfies PluginMessageRoute);
+}
+
+function parseMessageRoutes(value: unknown, context: string): Record<string, PluginMessageRouteDeclaration> {
   const input = record(value, context);
   return Object.freeze(Object.fromEntries(Object.entries(input).map(([name, routes]) => [
     nonEmptyString(name, `${context} route name`),
-    Object.freeze(stringArray(routes, `${context}.${name}`)),
+    parseMessageRoute(routes, `${context}.${name}`),
   ])));
 }
 

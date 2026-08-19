@@ -20,11 +20,19 @@ function createCredentialKit(
   directory: string,
   id: string,
   permissions: unknown,
-  options: { manifestId?: string; manifestVersion?: string } = {},
+  options: {
+    manifestId?: string;
+    manifestVersion?: string;
+    permissionGrants?: unknown;
+  } = {},
 ): string {
   const kitDir = path.join(root, directory);
   const pluginsDir = path.join(kitDir, 'plugins');
   fs.mkdirSync(pluginsDir, { recursive: true });
+  const defaultPermissionGrants = Array.isArray(permissions)
+    && permissions.includes('credentials')
+    ? { credentials: ['@scope/mysql-core'] }
+    : undefined;
   writeJson(path.join(kitDir, 'package.json'), {
     name: id,
     version: '1.0.0',
@@ -45,6 +53,9 @@ function createCredentialKit(
     requires: { harbors: '*', kitApi: '*', protocolVersion: 1 },
     target: { platform: 'any', arch: 'any' },
     permissions,
+    ...(options.permissionGrants === undefined
+      ? (defaultPermissionGrants ? { permissionGrants: defaultPermissionGrants } : {})
+      : { permissionGrants: options.permissionGrants }),
     entry: 'package.json',
   });
   writeJson(path.join(kitDir, 'layout.json'), { windows: [] });
@@ -298,6 +309,9 @@ describe('KitModule', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-credential-gates-'));
     temporaryRoots.push(root);
     const ownerKit = createCredentialKit(root, 'owner', '@scope/kit-owner', ['credentials']);
+    const noGrantKit = createCredentialKit(root, 'no-grant', '@scope/kit-no-grant', ['credentials'], {
+      permissionGrants: {},
+    });
     const noPermissionKit = createCredentialKit(root, 'no-permission', '@scope/kit-no-permission', []);
     const otherKit = createCredentialKit(root, 'other', '@scope/kit-other', ['credentials']);
     const databasePath = path.join(root, 'credentials.sqlite');
@@ -321,6 +335,7 @@ describe('KitModule', () => {
       })
     );
     const owner = createVaultEditor('owner', ownerKit, vault);
+    const noGrant = createVaultEditor('no-grant', noGrantKit, vault);
     const noPermission = createVaultEditor('no-permission', noPermissionKit, vault);
     const otherOwner = createVaultEditor('other-owner', otherKit, vault);
     const offMode = createVaultEditor('off-mode', ownerKit, offVault);
@@ -328,6 +343,7 @@ describe('KitModule', () => {
 
     await Promise.all([
       owner.kit.load(),
+      noGrant.kit.load(),
       noPermission.kit.load(),
       otherOwner.kit.load(),
       offMode.kit.load(),
@@ -343,6 +359,7 @@ describe('KitModule', () => {
     expect(owner.plugin.callPlugin('@scope/mysql-explorer', 'hasCredentials')).toBe(false);
     expect((owner as unknown as { credentials?: unknown }).credentials).toBeUndefined();
     expect(noPermission.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
+    expect(noGrant.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
     expect(offMode.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
     expect(multiUserMode.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(false);
     await expect(otherOwner.plugin.callPlugin('@scope/mysql-core', 'get', ownerProfile.id))

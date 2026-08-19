@@ -17,6 +17,7 @@ import {
   type KitPackageManifest,
   type KitConfigDeclaration,
   type KitPermission,
+  type KitPermissionGrants,
   type KitPlatform,
   type KitRequirements,
   type KitTarget,
@@ -290,6 +291,33 @@ function parsePermissions(value: unknown): KitPermission[] {
   return permissions;
 }
 
+function parsePermissionGrants(value: unknown, permissions: readonly KitPermission[]): KitPermissionGrants {
+  const input = record(value, 'permissionGrants');
+  const grants: KitPermissionGrants = {};
+  for (const [permission, rawPlugins] of Object.entries(input)) {
+    if (!KIT_PERMISSIONS.includes(permission as KitPermission)) {
+      throw new Error(`permissionGrants contains unknown permission: ${permission}`);
+    }
+    if (!permissions.includes(permission as KitPermission)) {
+      throw new Error(`permissionGrants.${permission} requires the matching Kit permission`);
+    }
+    if (!Array.isArray(rawPlugins)) {
+      throw new Error(`permissionGrants.${permission} must be an array`);
+    }
+    const plugins = rawPlugins.map((plugin, index) => {
+      if (typeof plugin !== 'string' || plugin.length === 0) {
+        throw new Error(`permissionGrants.${permission}[${index}] must be a non-empty plugin name`);
+      }
+      return plugin;
+    });
+    if (new Set(plugins).size !== plugins.length) {
+      throw new Error(`permissionGrants.${permission} contains duplicate plugins`);
+    }
+    grants[permission as KitPermission] = plugins;
+  }
+  return grants;
+}
+
 export function parseKitPackageManifest(value: unknown): KitPackageManifest {
   const input = record(value, 'Kit package manifest');
   exactKeys(input, [
@@ -301,6 +329,7 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
     'requires',
     'target',
     'permissions',
+    'permissionGrants',
     'entry',
     'config',
   ], 'Kit package manifest');
@@ -319,6 +348,9 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
     throw new Error('preview channel requires a SemVer prerelease segment');
   }
   const permissions = parsePermissions(input.permissions);
+  const permissionGrants = input.permissionGrants === undefined
+    ? undefined
+    : parsePermissionGrants(input.permissionGrants, permissions);
   const entry = input.entry;
   if (entry !== 'package.json') {
     throw new Error('entry must equal package.json');
@@ -333,6 +365,7 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
     requires: parseRequirements(input.requires),
     target: parseTarget(input.target, permissions),
     permissions,
+    ...(permissionGrants === undefined ? {} : { permissionGrants }),
     entry,
     ...(input.config === undefined ? {} : { config: parseConfig(input.config) }),
   };
@@ -401,7 +434,10 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
   if (assets[0].attestationUrl !== undefined && assets[0].attestationUrl !== sourceAttestationUrl) {
     throw new Error('release source attestationUrl must match the first release asset');
   }
-  const permissionProjection = JSON.stringify([...assets[0].manifest.permissions].sort());
+  const permissionProjection = JSON.stringify({
+    permissions: [...assets[0].manifest.permissions].sort(),
+    permissionGrants: normalizePermissionGrants(assets[0].manifest.permissionGrants),
+  });
   for (const asset of assets) {
     const manifest = asset.manifest;
     if (
@@ -412,7 +448,10 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
     ) {
       throw new Error(`release asset ${asset.name} has a mismatched release identity`);
     }
-    if (JSON.stringify([...manifest.permissions].sort()) !== permissionProjection) {
+    if (JSON.stringify({
+      permissions: [...manifest.permissions].sort(),
+      permissionGrants: normalizePermissionGrants(manifest.permissionGrants),
+    }) !== permissionProjection) {
       throw new Error(`release asset ${asset.name} has mismatched permissions`);
     }
   }
@@ -432,6 +471,12 @@ export function parseReleaseManifest(value: unknown): ReleaseManifest {
     },
     assets,
   };
+}
+
+function normalizePermissionGrants(grants: KitPermissionGrants | undefined): unknown {
+  if (!grants) return undefined;
+  return Object.fromEntries(Object.entries(grants).sort(([left], [right]) => left.localeCompare(right))
+    .map(([permission, plugins]) => [permission, [...(plugins ?? [])].sort()]));
 }
 
 function isoDate(value: unknown, context: string): string {
