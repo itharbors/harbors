@@ -4,285 +4,269 @@ type PanelContext = {
   };
 };
 
-type ConfigEntry = {
+type Layer = 'default' | 'global' | 'project';
+type SettingControl = 'text' | 'textarea' | 'number' | 'toggle' | 'select';
+type SettingOption = { label: string; value: string | number };
+type SettingField = {
   key: string;
-  value: unknown;
-  perType: Record<string, unknown>;
+  label: string;
+  description?: string;
+  control: SettingControl;
+  defaultValue?: string | number | boolean;
+  layers: Array<'global' | 'project'>;
+  defaultLayer: 'global' | 'project';
+  options?: SettingOption[];
+  placeholder?: string;
+  min?: number;
+  max?: number;
+  step?: number;
+};
+type SettingFieldViewModel = {
+  owner: string;
+  section: string;
+  field: SettingField;
+  resolvedValue: string | number | boolean | null;
+  resolvedLayer: Layer | null;
+  perLayer: Record<Layer, string | number | boolean | null>;
+};
+type SettingsViewModel = {
+  sections: Array<{
+    owner: string;
+    section: { id: string; title: string; description?: string };
+    fields: SettingFieldViewModel[];
+  }>;
 };
 
-type ConfigListResult = {
-  entries: ConfigEntry[];
-};
+let reloadPanel: (() => void) | null = null;
 
-type ValueKind = 'string' | 'number' | 'boolean' | 'null' | 'object' | 'array';
-
-function detectKind(value: unknown): ValueKind {
-  if (value === null) return 'null';
-  if (Array.isArray(value)) return 'array';
-  return typeof value as ValueKind;
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
-function parseValue(raw: string, kind: ValueKind): unknown {
-  switch (kind) {
-    case 'string':
-      return raw;
-    case 'number': {
-      const n = Number(raw);
-      return Number.isFinite(n) ? n : raw;
-    }
-    case 'boolean':
-      return raw === 'true' || raw === '1';
-    case 'null':
-      return null;
-    case 'array':
-    case 'object':
-      try {
-        return JSON.parse(raw);
-      } catch {
-        return raw;
-      }
-    default:
-      return raw;
-  }
+function layerLabel(layer: Layer): string {
+  return layer === 'project' ? '当前项目' : layer === 'global' ? '全局' : '默认值';
 }
 
-function formatValue(value: unknown): string {
-  if (value === null) return 'null';
-  if (typeof value === 'string') return value;
-  return JSON.stringify(value);
+function sourceLabel(layer: Layer | null): string {
+  return layerLabel(layer ?? 'default');
+}
+
+function valueForLayer(model: SettingFieldViewModel, layer: Layer): string | number | boolean | null {
+  return model.perLayer[layer] ?? model.resolvedValue;
 }
 
 const definition = {
   async mount(ctx: PanelContext) {
     const root = document.getElementById('panel-root');
     if (!root) return;
+    root.innerHTML = '<header class="panel-header"><div class="header-copy"><h1>设置</h1><p class="header-subtitle">插件配置</p></div><button id="refresh-btn" class="refresh-button" type="button"><span aria-hidden="true">↻</span>刷新</button></header><main id="settings-list" aria-live="polite"></main>';
+    const list = root.querySelector('#settings-list') as HTMLElement;
+    const refreshButton = root.querySelector('#refresh-btn') as HTMLButtonElement;
 
-    root.innerHTML = `
-      <header>
-        <h1>设置</h1>
-        <button id="refresh-btn" type="button">刷新</button>
-      </header>
-      <section class="add-section">
-        <input id="new-key" type="text" placeholder="配置键名" />
-        <select id="new-kind">
-          <option value="string">字符串</option>
-          <option value="number">数字</option>
-          <option value="boolean">布尔</option>
-          <option value="object">JSON</option>
-        </select>
-        <span id="new-value-host"></span>
-        <button id="add-btn" type="button">添加</button>
-      </section>
-      <main id="settings-list">
-        <p class="loading">正在读取…</p>
-      </main>
-    `;
-
-    const listEl = root.querySelector('#settings-list') as HTMLElement;
-    const refreshBtn = root.querySelector('#refresh-btn') as HTMLButtonElement;
-    const newKeyInput = root.querySelector('#new-key') as HTMLInputElement;
-    const newKindSelect = root.querySelector('#new-kind') as HTMLSelectElement;
-    const newValueHost = root.querySelector('#new-value-host') as HTMLElement;
-    const addBtn = root.querySelector('#add-btn') as HTMLButtonElement;
-
-    // 根据类型渲染新增配置的值输入控件
-    function renderNewValueInput() {
-      const kind = newKindSelect.value as ValueKind;
-      newValueHost.innerHTML = '';
-      let input: HTMLElement;
-      if (kind === 'boolean') {
-        input = document.createElement('label');
-        input.className = 'checkbox-label';
-        const cb = document.createElement('input');
-        cb.type = 'checkbox';
-        cb.id = 'new-value';
-        const span = document.createElement('span');
-        span.textContent = 'false';
-        cb.addEventListener('change', () => {
-          span.textContent = cb.checked ? 'true' : 'false';
-        });
-        input.append(cb, span);
-      } else if (kind === 'object' || kind === 'array') {
-        input = document.createElement('textarea');
-        (input as HTMLTextAreaElement).id = 'new-value';
-        (input as HTMLTextAreaElement).placeholder = 'JSON 值';
-        (input as HTMLTextAreaElement).rows = 2;
-      } else {
-        input = document.createElement('input');
-        (input as HTMLInputElement).id = 'new-value';
-        (input as HTMLInputElement).type = kind === 'number' ? 'number' : 'text';
-        (input as HTMLInputElement).placeholder = '配置值';
-      }
-      newValueHost.append(input);
+    function showMessage(message: string, kind: 'loading' | 'empty' | 'error') {
+      const element = document.createElement('p');
+      element.className = kind;
+      element.textContent = message;
+      list.replaceChildren(element);
     }
 
-    function getNewValue(): unknown {
-      const kind = newKindSelect.value as ValueKind;
-      if (kind === 'boolean') {
-        const cb = newValueHost.querySelector('#new-value') as HTMLInputElement;
-        return cb.checked;
+    function renderField(model: SettingFieldViewModel): HTMLElement {
+      const field = model.field;
+      const item = document.createElement('article');
+      item.className = 'setting-field';
+
+      const heading = document.createElement('div');
+      heading.className = 'field-heading';
+      const text = document.createElement('div');
+      const label = document.createElement('label');
+      label.className = 'field-label';
+      label.textContent = field.label;
+      const id = `setting-${field.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
+      label.htmlFor = id;
+      text.append(label);
+      if (field.description) {
+        const description = document.createElement('p');
+        description.className = 'field-description';
+        description.textContent = field.description;
+        text.append(description);
       }
-      const el = newValueHost.querySelector('#new-value') as HTMLInputElement | HTMLTextAreaElement;
-      return parseValue(el.value, kind);
-    }
+      const source = document.createElement('span');
+      source.className = 'field-source';
+      source.textContent = `当前来自 ${sourceLabel(model.resolvedLayer)}`;
+      heading.append(text, source);
 
-    renderNewValueInput();
-    newKindSelect.addEventListener('change', renderNewValueInput);
-
-    async function loadSettings() {
-      listEl.innerHTML = '<p class="loading">正在读取…</p>';
-      try {
-        const result = (await ctx.message.request('settings', 'list')) as ConfigListResult;
-        renderEntries(result.entries);
-      } catch (err) {
-        listEl.innerHTML = `<p class="error">${err instanceof Error ? err.message : String(err)}</p>`;
+      const controls = document.createElement('div');
+      controls.className = 'field-controls';
+      const layerSelect = document.createElement('select');
+      layerSelect.className = 'layer-select';
+      layerSelect.setAttribute('aria-label', `${field.label} 保存层`);
+      for (const layer of field.layers) {
+        const option = document.createElement('option');
+        option.value = layer;
+        option.textContent = layerLabel(layer);
+        layerSelect.append(option);
       }
-    }
+      const selectedLayer = field.defaultLayer;
+      layerSelect.value = selectedLayer;
 
-    function renderEntries(entries: ConfigEntry[]) {
-      if (entries.length === 0) {
-        listEl.innerHTML = '<p class="empty">暂无配置项</p>';
-        return;
-      }
+      const valueHost = document.createElement('div');
+      valueHost.className = 'value-host';
+      let valueControl: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
+      let resetButton: HTMLButtonElement | null = null;
 
-      const fragment = document.createDocumentFragment();
-      for (const entry of entries) {
-        const item = document.createElement('article');
-        item.className = 'setting-item';
-        const kind = detectKind(entry.value);
-        item.innerHTML = `
-          <div class="setting-header">
-            <span class="setting-key"></span>
-            <span class="setting-kind"></span>
-            <button class="btn-delete" type="button">删除</button>
-          </div>
-          <div class="setting-body">
-            <span class="value-host"></span>
-            <button class="btn-save" type="button">保存</button>
-          </div>
-          <div class="setting-feedback" hidden></div>
-        `;
-
-        const keyEl = item.querySelector('.setting-key') as HTMLElement;
-        const kindEl = item.querySelector('.setting-kind') as HTMLElement;
-        const valueHost = item.querySelector('.value-host') as HTMLElement;
-        const saveBtn = item.querySelector('.btn-save') as HTMLButtonElement;
-        const deleteBtn = item.querySelector('.btn-delete') as HTMLButtonElement;
-        const feedback = item.querySelector('.setting-feedback') as HTMLElement;
-
-        keyEl.textContent = entry.key;
-        kindEl.textContent = kind;
-        kindEl.dataset.kind = kind;
-
-        // 根据类型渲染值输入控件
-        let valueControl: HTMLElement;
-        if (kind === 'boolean') {
-          valueControl = document.createElement('label');
-          valueControl.className = 'checkbox-label';
-          const cb = document.createElement('input');
-          cb.type = 'checkbox';
-          cb.checked = entry.value === true;
-          const span = document.createElement('span');
-          span.textContent = cb.checked ? 'true' : 'false';
-          cb.addEventListener('change', () => {
-            span.textContent = cb.checked ? 'true' : 'false';
-          });
-          valueControl.append(cb, span);
-        } else if (kind === 'null') {
-          valueControl = document.createElement('span');
-          valueControl.className = 'null-value';
-          valueControl.textContent = 'null';
-        } else if (kind === 'object' || kind === 'array') {
-          valueControl = document.createElement('textarea');
-          (valueControl as HTMLTextAreaElement).className = 'setting-value';
-          (valueControl as HTMLTextAreaElement).value = formatValue(entry.value);
-          (valueControl as HTMLTextAreaElement).rows = 2;
+      function renderValueControl() {
+        valueHost.replaceChildren();
+        if (resetButton) resetButton.disabled = model.perLayer[layerSelect.value as Layer] === null;
+        const value = valueForLayer(model, layerSelect.value as Layer);
+        if (field.control === 'textarea') {
+          const textarea = document.createElement('textarea');
+          textarea.id = id;
+          textarea.rows = 2;
+          textarea.value = typeof value === 'string' ? value : value == null ? '' : String(value);
+          if (field.placeholder) textarea.placeholder = field.placeholder;
+          valueControl = textarea;
+        } else if (field.control === 'select') {
+          const select = document.createElement('select');
+          select.id = id;
+          for (const entry of field.options ?? []) {
+            const option = document.createElement('option');
+            option.value = String(entry.value);
+            option.textContent = entry.label;
+            option.selected = entry.value === value;
+            select.append(option);
+          }
+          valueControl = select;
         } else {
-          valueControl = document.createElement('input');
-          (valueControl as HTMLInputElement).className = 'setting-value';
-          (valueControl as HTMLInputElement).type = kind === 'number' ? 'number' : 'text';
-          (valueControl as HTMLInputElement).value = formatValue(entry.value);
+          const input = document.createElement('input');
+          input.id = id;
+          input.type = field.control === 'toggle' ? 'checkbox' : field.control === 'number' ? 'number' : 'text';
+          if (field.control === 'toggle') input.checked = value === true;
+          else input.value = value == null ? '' : String(value);
+          if (field.placeholder) input.placeholder = field.placeholder;
+          if (field.min !== undefined) input.min = String(field.min);
+          if (field.max !== undefined) input.max = String(field.max);
+          if (field.step !== undefined) input.step = String(field.step);
+          valueControl = input;
         }
         valueHost.append(valueControl);
-
-        const setFeedback = (text: string, tone: 'info' | 'error' | 'success' = 'info') => {
-          feedback.textContent = text;
-          feedback.dataset.tone = tone;
-          feedback.hidden = !text;
-        };
-
-        const getCurrentValue = (): unknown => {
-          if (kind === 'boolean') {
-            const cb = valueHost.querySelector('input[type="checkbox"]') as HTMLInputElement;
-            return cb.checked;
-          }
-          if (kind === 'null') return null;
-          const el = valueHost.querySelector('.setting-value') as HTMLInputElement | HTMLTextAreaElement;
-          return parseValue(el.value, kind);
-        };
-
-        saveBtn.addEventListener('click', async () => {
-          saveBtn.disabled = true;
-          setFeedback('');
-          try {
-            const parsed = getCurrentValue();
-            await ctx.message.request('settings', 'set', entry.key, parsed);
-            setFeedback('已保存', 'success');
-          } catch (err) {
-            setFeedback(`保存失败: ${err instanceof Error ? err.message : String(err)}`, 'error');
-          } finally {
-            saveBtn.disabled = false;
-          }
-        });
-
-        deleteBtn.addEventListener('click', async () => {
-          deleteBtn.disabled = true;
-          setFeedback('');
-          try {
-            await ctx.message.request('settings', 'delete', entry.key);
-            item.remove();
-            if (listEl.childElementCount === 0) {
-              listEl.innerHTML = '<p class="empty">暂无配置项</p>';
-            }
-          } catch (err) {
-            setFeedback(`删除失败: ${err instanceof Error ? err.message : String(err)}`, 'error');
-            deleteBtn.disabled = false;
-          }
-        });
-
-        fragment.append(item);
       }
-      listEl.replaceChildren(fragment);
+      renderValueControl();
+      layerSelect.addEventListener('change', renderValueControl);
+
+      const actions = document.createElement('div');
+      actions.className = 'field-actions';
+      const save = document.createElement('button');
+      save.type = 'button';
+      save.className = 'save-button';
+      save.textContent = '保存';
+      const reset = document.createElement('button');
+      reset.type = 'button';
+      reset.className = 'reset-button';
+      reset.textContent = '重置';
+      resetButton = reset;
+      reset.disabled = model.perLayer[selectedLayer] === null;
+      const feedback = document.createElement('span');
+      feedback.className = 'field-feedback';
+
+      function setFeedback(message: string, kind: 'success' | 'error') {
+        feedback.textContent = message;
+        feedback.dataset.kind = kind;
+      }
+
+      save.addEventListener('click', async () => {
+        save.disabled = true;
+        feedback.textContent = '';
+        try {
+          let value: string | number | boolean;
+          if (field.control === 'toggle') value = (valueControl as HTMLInputElement).checked;
+          else if (field.control === 'number') value = Number(valueControl.value);
+          else if (field.control === 'select') value = (field.options ?? []).find((option) => String(option.value) === (valueControl as HTMLSelectElement).value)?.value as string | number;
+          else value = valueControl.value;
+          await ctx.message.request('settings', 'setValue', { key: field.key, layer: layerSelect.value, value });
+          setFeedback('已保存', 'success');
+          await loadSettings();
+        } catch (error) {
+          setFeedback(errorText(error), 'error');
+        } finally {
+          save.disabled = false;
+        }
+      });
+
+      reset.addEventListener('click', async () => {
+        reset.disabled = true;
+        feedback.textContent = '';
+        try {
+          await ctx.message.request('settings', 'resetValue', { key: field.key, layer: layerSelect.value });
+          await loadSettings();
+        } catch (error) {
+          setFeedback(errorText(error), 'error');
+          reset.disabled = false;
+        }
+      });
+
+      actions.append(save, reset, feedback);
+      const footer = document.createElement('div');
+      footer.className = 'field-footer';
+      footer.append(layerSelect, actions);
+      controls.append(valueHost, footer);
+      item.append(heading, controls);
+      return item;
     }
 
-    refreshBtn.addEventListener('click', loadSettings);
-
-    addBtn.addEventListener('click', async () => {
-      const key = newKeyInput.value.trim();
-      if (!key) return;
-      addBtn.disabled = true;
-      try {
-        const value = getNewValue();
-        await ctx.message.request('settings', 'set', key, value);
-        newKeyInput.value = '';
-        renderNewValueInput();
-        await loadSettings();
-      } catch (err) {
-        alert(`添加失败: ${err instanceof Error ? err.message : String(err)}`);
-      } finally {
-        addBtn.disabled = false;
+    function renderViewModel(model: SettingsViewModel) {
+      if (model.sections.length === 0) {
+        showMessage('暂无插件设置', 'empty');
+        return;
       }
-    });
+      const fragment = document.createDocumentFragment();
+      for (const group of model.sections) {
+        const section = document.createElement('section');
+        section.className = 'settings-section';
+        const sectionHeading = document.createElement('div');
+        sectionHeading.className = 'section-heading';
+        const title = document.createElement('h3');
+        title.textContent = group.section.title;
+        const owner = document.createElement('code');
+        owner.className = 'section-owner';
+        owner.textContent = group.owner;
+        sectionHeading.append(title, owner);
+        section.append(sectionHeading);
+        if (group.section.description) {
+          const description = document.createElement('p');
+          description.className = 'section-description';
+          description.textContent = group.section.description;
+          section.append(description);
+        }
+        for (const field of group.fields) section.append(renderField(field));
+        fragment.append(section);
+      }
+      list.replaceChildren(fragment);
+    }
 
+    async function loadSettings() {
+      showMessage('正在读取…', 'loading');
+      try {
+        renderViewModel(await ctx.message.request('settings', 'getViewModel') as SettingsViewModel);
+      } catch (error) {
+        showMessage(errorText(error), 'error');
+      }
+    }
+
+    reloadPanel = () => { void loadSettings(); };
+    refreshButton.addEventListener('click', () => { void loadSettings(); });
     await loadSettings();
+  },
+
+  unmount() {
+    reloadPanel = null;
   },
 
   methods: {
     onConfigChanged() {
-      const root = document.getElementById('panel-root');
-      if (!root) return;
-      const refreshBtn = root.querySelector('#refresh-btn') as HTMLButtonElement | null;
-      refreshBtn?.click();
+      reloadPanel?.();
+    },
+    onRegistryChanged() {
+      reloadPanel?.();
     },
   },
 };

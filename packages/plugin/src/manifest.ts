@@ -23,6 +23,7 @@ export interface PluginContributionManifest {
     request?: Readonly<Record<string, readonly string[]>>;
     broadcast?: Readonly<Record<string, readonly string[]>>;
   }>;
+  readonly [key: string]: unknown;
 }
 
 export interface PluginPackageManifest {
@@ -133,6 +134,78 @@ function cloneJsonArray(value: unknown, context: string): readonly unknown[] {
   }
 }
 
+const MAX_CONTRIBUTE_DEPTH = 32;
+
+function cloneJsonContribution(value: unknown, context: string, depth = 0, active = new WeakSet<object>()): unknown {
+  if (depth > MAX_CONTRIBUTE_DEPTH) {
+    throw new Error(`${context} exceeds the maximum nesting depth of ${MAX_CONTRIBUTE_DEPTH}`);
+  }
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') {
+    if (Number.isFinite(value)) return value;
+    throw new Error(`${context} must contain only JSON-safe values`);
+  }
+  if (typeof value !== 'object') {
+    throw new Error(`${context} must contain only JSON-safe values`);
+  }
+  if (active.has(value)) {
+    throw new Error(`${context} must not contain circular references`);
+  }
+  active.add(value);
+  try {
+    if (Array.isArray(value)) {
+      if (Object.getPrototypeOf(value) !== Array.prototype) {
+        throw new Error(`${context} must contain only ordinary arrays`);
+      }
+      const keys = Reflect.ownKeys(value);
+      const length = value.length;
+      if (keys.some((key) => typeof key !== 'string' || (key !== 'length' && !/^\d+$/u.test(key)))) {
+        throw new Error(`${context} must contain only JSON-safe arrays`);
+      }
+      if (keys.length !== length + 1 || !keys.includes('length')) {
+        throw new Error(`${context} must not contain sparse or extended arrays`);
+      }
+      const result: unknown[] = [];
+      for (let index = 0; index < length; index += 1) {
+        if (!Object.prototype.hasOwnProperty.call(value, String(index))) {
+          throw new Error(`${context} must not contain sparse arrays`);
+        }
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !('value' in descriptor)) {
+          throw new Error(`${context} must contain only data values`);
+        }
+        result.push(cloneJsonContribution(descriptor.value, `${context}[${index}]`, depth + 1, active));
+      }
+      return Object.freeze(result);
+    }
+    if (Object.getPrototypeOf(value) !== Object.prototype) {
+      throw new Error(`${context} must contain only ordinary objects`);
+    }
+    const keys = Reflect.ownKeys(value);
+    if (keys.some((key) => typeof key !== 'string'
+      || !Object.prototype.propertyIsEnumerable.call(value, key))) {
+      throw new Error(`${context} must contain only enumerable string fields`);
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      if (typeof key !== 'string') throw new Error(`${context} must contain only string fields`);
+      const descriptor = Object.getOwnPropertyDescriptor(value, key);
+      if (!descriptor || !('value' in descriptor)) {
+        throw new Error(`${context}.${key} must be a data value`);
+      }
+      Object.defineProperty(result, key, {
+        configurable: true,
+        enumerable: true,
+        value: cloneJsonContribution(descriptor.value, `${context}.${key}`, depth + 1, active),
+        writable: true,
+      });
+    }
+    return Object.freeze(result);
+  } finally {
+    active.delete(value);
+  }
+}
+
 export function parsePluginPackageManifest(value: unknown): PluginPackageManifest {
   const pkg = record(value, 'Plugin package manifest');
   const name = nonEmptyString(pkg.name, 'Plugin package name');
@@ -174,7 +247,6 @@ export function parsePluginPackageManifest(value: unknown): PluginPackageManifes
   const contributeInput = ceEditor.contribute === undefined
     ? {}
     : record(ceEditor.contribute, `Plugin ${name} contribute`);
-  exactKeys(contributeInput, ['panel', 'menu', 'message'], `Plugin ${name} contribute`);
   const panelInput = contributeInput.panel === undefined
     ? undefined
     : record(contributeInput.panel, `Plugin ${name} panels`);
@@ -196,6 +268,12 @@ export function parsePluginPackageManifest(value: unknown): PluginPackageManifes
       broadcast: parseMessageRoutes(messageInput.broadcast, `Plugin ${name} message.broadcast`),
     }),
   });
+  const unknownContributions = Object.fromEntries(Object.entries(contributeInput)
+    .filter(([key]) => !['panel', 'menu', 'message'].includes(key))
+    .map(([key, contribution]) => [
+      key,
+      cloneJsonContribution(contribution, `Plugin ${name} contribute.${key}`),
+    ]));
 
   return Object.freeze({
     schemaVersion: PLUGIN_PACKAGE_SCHEMA_VERSION,
@@ -205,6 +283,7 @@ export function parsePluginPackageManifest(value: unknown): PluginPackageManifes
     capabilities: Object.freeze(capabilities),
     assets: Object.freeze({ public: Object.freeze(publicAssets) }),
     contribute: Object.freeze({
+      ...unknownContributions,
       ...(panels === undefined ? {} : { panel: panels }),
       ...(contributeInput.menu === undefined ? {} : {
         menu: cloneJsonArray(contributeInput.menu, `Plugin ${name} menu`),
