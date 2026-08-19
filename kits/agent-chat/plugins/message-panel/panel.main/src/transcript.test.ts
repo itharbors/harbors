@@ -1,8 +1,15 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { buildDisplayTurns, createDisplayTurnProjector, createMarkdownHtmlCache, nextDisplayTurn, renderMarkdownHtml, shouldCollapseTurn, type MessageData } from './transcript.js';
 import { parseSurfaceMessages, parseTraceTurns, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import { createTraceSyncState, mergeTracePage } from './trace-sync.js';
+
+test('transcript rows do not use content-visibility lazy rendering', async () => {
+  const styles = await readFile(new URL('./styles.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(styles, /content-visibility\s*:/);
+  assert.doesNotMatch(styles, /transcript-turn-row-optimized/);
+});
 
 function messagesForTurns(turns: number[]): MessageData[] {
   return turns.flatMap((turn) => [
