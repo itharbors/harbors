@@ -206,13 +206,32 @@ runtime.message.broadcast("state.changed", state);
 `attach`；卸载时对所有相关插件调用 `detach(pluginName)` 清理。普通业务插件不需要直接
 调用这两个方法。
 
-当前 manifest parser 只允许 `contribute.panel`、`contribute.menu` 和
-`contribute.message` 三类贡献。不要在 manifest 中使用 `contribute.foo` 之类的自定义键，
-解析时会被拒绝。
+`contribute` 的顶层键开放扩展。Framework 对已知的 `panel`、`menu` 和 `message` 贡献仍
+执行严格校验；未知贡献只接受 JSON 安全的数据，并会被深拷贝、冻结后原样保留。没有消费
+者处理的未知贡献会被忽略，不会导致 manifest 被拒绝。JSON 安全数据应只包含 `null`、布尔
+值、数字、字符串、数组和对象，不包含函数、`BigInt`、循环引用等值。开放贡献数据本身不
+会赋予插件新的宿主权限。
 
-面向普通业务插件，优先用 `message` 开放能力。如果确实需要新的贡献类型，必须在
-Framework 层共同扩展：manifest schema 与类型、对应的控制器、以及 owner 清理协议，
-否则贡献无法被正确注册和卸载。
+消费者通过 `lifecycle.attach(pluginName, contribute)` 注册贡献，并使用真实的
+`pluginName` 做 owner 隔离。对同一 owner 的重复 `attach` 必须幂等，不应重复注册；
+`lifecycle.detach(pluginName)` 必须清理该 owner 注册的全部贡献。Framework 在加载和卸载
+插件时负责调用这些生命周期方法，普通业务插件不需要直接调用它们。
+
+例如，Settings 消费者可以处理如下扩展：
+
+```json
+{
+  "contribute": {
+    "settings": {
+      "schemaVersion": 1,
+      "sections": []
+    }
+  }
+}
+```
+
+`settings` 的 section 结构由其自身协议定义；其他消费者也应在自己的边界内校验和清理
+对应贡献。
 
 ### Panel
 

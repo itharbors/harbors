@@ -3,6 +3,7 @@ import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConvers
 import { normalizeTurnOptions } from './adapter/base.js';
 import { HarborsAdapter } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
+import { adapterPermissionDefaults, configuredPermissionDefaults, DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE, isApprovalPolicy, isSandboxMode, selectedOptions, withPermissionDefaults } from './permissions.js';
 
 declare const editor: any;
 
@@ -47,9 +48,6 @@ interface PendingPermissionState {
 
 let pendingPermissionRequests = new Map<string, PendingPermissionState>();
 const PERMISSION_REQUEST_TIMEOUT_MS = 60_000;
-const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
-const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
-
 function requireAdapter(source: AgentSource): AgentAdapter {
   if (!adapters) throw new Error('[agent] adapters are not initialized');
   return adapters[source];
@@ -90,29 +88,16 @@ function broadcastConversationChanged(action: ConversationChangedAction, id: str
 }
 
 async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
-  const result = (await (requireAdapter('harbors').getModels?.() || { models: [], defaultModel: '' })) as AgentOptions;
+  const result = (await (requireAdapter(source).getModels?.() || { models: [], defaultModel: '' })) as AgentOptions;
+  const permissions = adapterPermissionDefaults(result);
   return {
     ...result,
-    permissions: result.permissions || {
-      sandboxModes: ['read-only', 'workspace-write', 'danger-full-access'],
-      approvalPolicies: ['ask', 'always'],
-      defaultSandboxMode: DEFAULT_SANDBOX_MODE,
-      defaultApprovalPolicy: DEFAULT_APPROVAL_POLICY,
+    permissions: {
+      sandboxModes: result.permissions?.sandboxModes || ['read-only', 'workspace-write', 'danger-full-access'],
+      approvalPolicies: result.permissions?.approvalPolicies || ['ask', 'always'],
+      defaultSandboxMode: permissions.sandboxMode,
+      defaultApprovalPolicy: permissions.approvalPolicy,
     },
-  };
-}
-
-function selectedOptions(options: AgentOptions, settings: AgentTurnOptions): AgentTurnOptions {
-  const model = settings.model || options.defaultModel;
-  const modelOption = options.models.find((entry) => entry.id === model);
-  const reasoningEffort = settings.reasoningEffort || modelOption?.defaultReasoningEffort || options.defaultReasoningEffort;
-  const serviceTier = settings.serviceTier || modelOption?.defaultServiceTier || options.defaultServiceTier;
-  return {
-    model,
-    ...(reasoningEffort ? { reasoningEffort } : {}),
-    ...(serviceTier ? { serviceTier } : {}),
-    sandboxMode: settings.sandboxMode || options.permissions?.defaultSandboxMode || DEFAULT_SANDBOX_MODE,
-    approvalPolicy: settings.approvalPolicy || options.permissions?.defaultApprovalPolicy || DEFAULT_APPROVAL_POLICY,
   };
 }
 
@@ -258,7 +243,8 @@ editor.plugin.define({
     },
     async getDraftOptions(source: AgentSource) {
       const options = await adapterOptions(source);
-      const selection = selectedOptions(options, {});
+      const defaults = configuredPermissionDefaults(runtime?.config, adapterPermissionDefaults(options));
+      const selection = selectedOptions(options, {}, defaults);
       return { ...options, selection, selectedModel: selection.model, ...(selection.reasoningEffort ? { selectedReasoningEffort: selection.reasoningEffort } : {}), ...(selection.serviceTier ? { selectedServiceTier: selection.serviceTier } : {}), selectedSandboxMode: selection.sandboxMode, selectedApprovalPolicy: selection.approvalPolicy };
     },
     async getConversationOptions(id: string) {
@@ -267,7 +253,8 @@ editor.plugin.define({
       const options = await adapterOptions(conversation.source);
       const adapterSettings = await requireAdapter(conversation.source).getConversationSettings?.(conversation.adapterId) || {};
       const contextUsage = await requireAdapter(conversation.source).getConversationContext?.(conversation.adapterId);
-      const selection = selectedOptions(options, { model: conversation.model, reasoningEffort: conversation.reasoningEffort, serviceTier: conversation.serviceTier, ...adapterSettings });
+      // Existing sessions keep their adapter-persisted permissions; global defaults only affect drafts/new sessions.
+      const selection = selectedOptions(options, { model: conversation.model, reasoningEffort: conversation.reasoningEffort, serviceTier: conversation.serviceTier, ...adapterSettings }, adapterPermissionDefaults(options));
       return { ...options, ...(contextUsage ? { contextUsage } : {}), selection, selectedModel: selection.model, ...(selection.reasoningEffort ? { selectedReasoningEffort: selection.reasoningEffort } : {}), ...(selection.serviceTier ? { selectedServiceTier: selection.serviceTier } : {}), selectedSandboxMode: selection.sandboxMode, selectedApprovalPolicy: selection.approvalPolicy };
     },
     async getConversationContext(id: string): Promise<AgentContextUsage | undefined> {
@@ -310,7 +297,12 @@ editor.plugin.define({
       return resolvePermissionRequest(input.requestId, input.outcome);
     },
     async createConversation(source: AgentSource = 'harbors', project?: string, input?: AgentTurnInput) {
-      const options = normalizeTurnOptions(input);
+      const adapterOptionsResult = await adapterOptions(source);
+      const defaults = configuredPermissionDefaults(runtime?.config, adapterPermissionDefaults(adapterOptionsResult));
+      const options = withPermissionDefaults(input, defaults);
+      if (!isSandboxMode(options.sandboxMode) || !isApprovalPolicy(options.approvalPolicy)) {
+        throw new Error('[agent] invalid permission defaults');
+      }
       const result = await requireAdapter(source).createConversation(project, options);
       const conv: Conversation = { ...result, sandboxMode: result.sandboxMode || options.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: result.approvalPolicy || options.approvalPolicy || DEFAULT_APPROVAL_POLICY, id: conversationId(source, result.id), adapterId: result.id, source };
       conversations.unshift(conv);

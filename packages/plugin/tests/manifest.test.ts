@@ -40,6 +40,57 @@ describe('parsePluginPackageManifest', () => {
     expect(parsePluginPackageManifest(legacy).schemaVersion).toBe(1);
   });
 
+  it('preserves and deeply freezes unknown contributions', () => {
+    const input = structuredClone(manifest);
+    const settings = {
+      appearance: { theme: 'dark', density: 0.9 },
+      flags: [true, null, { enabled: false }],
+    };
+    (input['ce-editor'].contribute as Record<string, unknown>).settings = settings;
+
+    const parsed = parsePluginPackageManifest(input);
+    expect(parsed.contribute.settings).toEqual(settings);
+    expect(Object.isFrozen(parsed.contribute.settings)).toBe(true);
+    expect(Object.isFrozen((parsed.contribute.settings as { appearance: object }).appearance)).toBe(true);
+    expect(Object.isFrozen((parsed.contribute.settings as { flags: readonly unknown[] }).flags)).toBe(true);
+    expect(Object.isFrozen(
+      (parsed.contribute.settings as { flags: readonly [{ enabled: object }] }).flags[2],
+    )).toBe(true);
+
+    settings.appearance.theme = 'light';
+    expect((parsed.contribute.settings as { appearance: { theme: string } }).appearance.theme).toBe('dark');
+  });
+
+  function withUnknownContribution(value: unknown) {
+    const input = structuredClone(manifest);
+    (input['ce-editor'].contribute as Record<string, unknown>).settings = value;
+    return input;
+  }
+
+  it.each([
+    [undefined, /JSON-safe/],
+    [() => 'not data', /JSON-safe/],
+    [Symbol('not data'), /JSON-safe/],
+    [1n, /JSON-safe/],
+    [Number.NaN, /JSON-safe/],
+    [Number.POSITIVE_INFINITY, /JSON-safe/],
+    [(() => { const value: Record<string, unknown> = {}; value.self = value; return value; })(), /circular/],
+    [(() => { const value: unknown[] = []; value.length = 1; return value; })(), /sparse/],
+    [Object.create({ inherited: true }), /ordinary objects/],
+  ])('rejects unsafe unknown contributions %#', (value, pattern) => {
+    expect(() => parsePluginPackageManifest(withUnknownContribution(value))).toThrow(pattern);
+  });
+
+  it('keeps the known contribution validators strict', () => {
+    const invalidPanel = structuredClone(manifest);
+    invalidPanel['ce-editor'].contribute.panel.demo.entry = '../outside.html';
+    expect(() => parsePluginPackageManifest(invalidPanel)).toThrow(/portable relative/i);
+
+    const invalidMessage = structuredClone(manifest);
+    (invalidMessage['ce-editor'].contribute.message as Record<string, unknown>).extra = {};
+    expect(() => parsePluginPackageManifest(invalidMessage)).toThrow(/unexpected field/i);
+  });
+
   it.each([
     [{ ...manifest, version: 'latest' }, /SemVer/i],
     [{ ...manifest, main: '../index.js' }, /portable relative/i],
