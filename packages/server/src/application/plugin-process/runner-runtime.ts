@@ -232,8 +232,10 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
       },
       request: (plugin: string, name: string, ...args: unknown[]) =>
         requestCommand({ target: 'message', operation: 'request', plugin, name, args }),
-      broadcast: (topic: string, ...args: unknown[]) =>
-        enqueueCommand({ target: 'message', operation: 'broadcast', topic, args }),
+      broadcast: (topic: string, ...args: unknown[]) => {
+        assertBroadcastTopic(options.pluginName, topic);
+        enqueueCommand({ target: 'message', operation: 'broadcast', topic, args });
+      },
     }),
     service: Object.freeze({
       register: (name: string, value: unknown) =>
@@ -271,6 +273,19 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
       enterTerminal();
     },
   };
+}
+
+function assertBroadcastTopic(ownerName: string, topic: unknown): asserts topic is string {
+  if (typeof topic !== "string" || topic.length === 0) {
+    throw new Error(`Plugin "${ownerName}" broadcast topic must be a non-empty string`);
+  }
+  if (topic === "*") {
+    throw new Error(`Plugin "${ownerName}" cannot broadcast to wildcard topic "*"; wildcard is reserved for subscription only`);
+  }
+  const prefix = `${ownerName}.`;
+  if (!topic.startsWith(prefix)) {
+    throw new Error(`Plugin "${ownerName}" broadcast topic "${topic}" must start with "${prefix}"`);
+  }
 }
 
 function routeKey(owner: string, route: string): string {

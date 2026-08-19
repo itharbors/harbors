@@ -658,8 +658,10 @@ function createPluginRuntime(
         editor.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic),
       request: (pluginName, name, ...args) =>
         editor.message.request(pluginName, name, ...args),
-      broadcast: (topic, ...args) =>
-        editor.message.broadcast(topic, ...args),
+      broadcast: (topic, ...args) => {
+        assertBroadcastTopic(ownerName, topic);
+        editor.message.broadcast(topic, ...args);
+      },
     },
   };
   return { ...runtime, paths, ...(credentials ? { credentials } : {}) };
@@ -762,7 +764,10 @@ function createApplicationPluginRuntime(
       unregisterBroadcast: (pluginName, topic) =>
         application.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic),
       request: (pluginName, name, ...args) => application.message.request(pluginName, name, ...args),
-      broadcast: (topic, ...args) => application.message.broadcast(topic, ...args),
+      broadcast: (topic, ...args) => {
+        assertBroadcastTopic(ownerName, topic);
+        application.message.broadcast(topic, ...args);
+      },
     },
     service: {
       register: (name, value) => application.service.register(ownerName, name, value),
@@ -792,6 +797,19 @@ function resolveOwner(requestedOwner: string, runtimeOwner: string, delegateOwne
     return requestedOwner;
   }
   throw new Error(`Plugin "${runtimeOwner}" cannot register as "${requestedOwner}"`);
+}
+
+function assertBroadcastTopic(ownerName: string, topic: unknown): asserts topic is string {
+  if (typeof topic !== "string" || topic.length === 0) {
+    throw new Error(`Plugin "${ownerName}" broadcast topic must be a non-empty string`);
+  }
+  if (topic === "*") {
+    throw new Error(`Plugin "${ownerName}" cannot broadcast to wildcard topic "*"; wildcard is reserved for subscription only`);
+  }
+  const prefix = `${ownerName}.`;
+  if (!topic.startsWith(prefix)) {
+    throw new Error(`Plugin "${ownerName}" broadcast topic "${topic}" must start with "${prefix}"`);
+  }
 }
 
 function inferPanelOwner(panelName: string): string | undefined {

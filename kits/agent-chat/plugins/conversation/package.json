@@ -19,7 +19,7 @@
           "select": ["select"]
         },
         "broadcast": {
-          "conversation.changed": ["onConversationChanged", "panel.onConversationChanged"],
+          "agent.conversation.changed": ["onConversationChanged", "panel.onConversationChanged"],
           "conversation.selected": ["panel.onConversationSelected"]
         }
       }

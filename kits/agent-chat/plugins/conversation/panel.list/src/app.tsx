@@ -176,7 +176,7 @@ export default function App({
       return true;
     };
 
-    registerSetter('conversation.changed', (data: unknown) => {
+    registerSetter('agent.conversation.changed', (data: unknown) => {
       sequenceRef.current += 1;
       if (!disposed) applyConversationChanged(data);
     });

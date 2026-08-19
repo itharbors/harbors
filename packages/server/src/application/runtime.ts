@@ -477,6 +477,7 @@ export class ApplicationRuntime {
           case 'request':
             return this.message.request(command.plugin, command.name, ...command.args);
           case 'broadcast':
+            assertBroadcastTopic(pluginName, command.topic);
             this.message.broadcast(command.topic, ...command.args);
             return null;
         }
@@ -1044,6 +1045,19 @@ function assertApplicationContributions(pluginName: string, contribute: Contribu
     ))) {
       throw new Error(`Application plugin "${pluginName}" can contribute only server message methods`);
     }
+  }
+}
+
+function assertBroadcastTopic(ownerName: string, topic: unknown): asserts topic is string {
+  if (typeof topic !== "string" || topic.length === 0) {
+    throw new Error(`Plugin "${ownerName}" broadcast topic must be a non-empty string`);
+  }
+  if (topic === "*") {
+    throw new Error(`Plugin "${ownerName}" cannot broadcast to wildcard topic "*"; wildcard is reserved for subscription only`);
+  }
+  const prefix = `${ownerName}.`;
+  if (!topic.startsWith(prefix)) {
+    throw new Error(`Plugin "${ownerName}" broadcast topic "${topic}" must start with "${prefix}"`);
   }
 }
 

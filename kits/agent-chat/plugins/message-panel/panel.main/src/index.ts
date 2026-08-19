@@ -12,7 +12,7 @@ function registerSetter(key: string, setter: (data: any) => void): void {
   if (key === 'conversation.selected' && hasCachedConversationSelected) {
     setter(cachedConversationSelected);
   }
-  if (key === 'conversation.trace.append' && cachedTraceAppends.length > 0) {
+  if (key === 'agent.conversation.trace.append' && cachedTraceAppends.length > 0) {
     const pending = cachedTraceAppends.splice(0);
     for (const value of pending) setter(value);
   }
@@ -32,7 +32,7 @@ export default {
   },
   methods: {
     onConversationChanged(data: unknown) {
-      setters['conversation.changed']?.(data);
+      setters['agent.conversation.changed']?.(data);
       return data;
     },
     onConversationSelected(data: unknown) {
@@ -42,7 +42,7 @@ export default {
       return data;
     },
     onConversationTraceAppend(data: unknown) {
-      const setter = setters['conversation.trace.append'];
+      const setter = setters['agent.conversation.trace.append'];
       if (setter) setter(data);
       else {
         cachedTraceAppends.push(data);
@@ -51,11 +51,11 @@ export default {
       return data;
     },
     onMessageDelta(data: unknown) {
-      setters['message.delta']?.(data);
+      setters['agent.message.delta']?.(data);
       return data;
     },
     onMessageStatus(data: unknown) {
-      setters['message.status']?.(data);
+      setters['agent.message.status']?.(data);
       return data;
     },
   },

@@ -2,7 +2,7 @@ declare const editor: any;
 
 let runtime;
 let selectedPluginName;
-const SELECTED_TOPIC = 'plugin.selected';
+const SELECTED_TOPIC = 'plugin-list.selected';
 
 editor.plugin.define({
   lifecycle: {
