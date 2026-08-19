@@ -28,8 +28,9 @@
 2. [Kit 与会话模型](./architecture/kit-and-session-model.md)
 3. [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md)
 4. [开发工作流](./guides/development-workflow.md)
-5. [Kit 制品与本地安装](./guides/kit-artifacts.md)
-6. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
+5. [测试指南](./guides/testing.md)
+6. [Kit 制品与本地安装](./guides/kit-artifacts.md)
+7. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
 
 ## 文档地图
 
@@ -44,6 +45,7 @@
 | [UI 系统](./architecture/ui-system.md) | Web Components、主题与 iframe 如何协作？ |
 | [Task 档案与生命周期](./tasks/README.md) | 可交付变更如何建档、推进、收口、确认完成与恢复？ |
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
+| [测试指南](./guides/testing.md) | 如何按功能单元选择测试范围并完成验收？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
 | [Kit 制品、Registry 与本地安装](./guides/kit-artifacts.md) | 如何校验、发现、下载和事务安装 Kit 制品？ |
 | `kits/<name>/README.md` | 某个 Kit 的能力、生命周期和所有权边界是什么？ |

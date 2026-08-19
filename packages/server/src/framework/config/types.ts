@@ -6,32 +6,38 @@ export type JsonValue =
   | JsonValue[]
   | { [key: string]: JsonValue };
 
-export type ConfigScope = 'shared' | 'editor';
+export interface ConfigLayerBackend {
+  get(key: string): JsonValue | undefined;
+  set(key: string, value: JsonValue): void;
+  delete(key: string): void;
+  destroy?(): void;
+}
 
-export interface ConfigTypeDefinition {
+export interface ConfigLayerDefinition {
   name: string;
   priority: number;
-  scope: ConfigScope;
+  backend: ConfigLayerBackend;
+}
+
+export interface ConfigActivation {
+  layers: readonly ConfigLayerDefinition[];
+  writeLayer: string;
+}
+
+export interface ConfigActivationTransaction {
+  commit(): void;
+  rollback(): void;
 }
 
 export interface ConfigChangeEvent {
   key: string;
   type: string;
-  scope: ConfigScope;
   action: 'set' | 'delete';
 }
 
 export interface EditorConfig {
-  registerTypes(types: ConfigTypeDefinition[]): void;
   get(key: string, type?: string): JsonValue | undefined;
   set(key: string, value: JsonValue, type?: string): void;
   delete(key: string, type?: string): void;
   subscribe(listener: (event: ConfigChangeEvent) => void): () => void;
-}
-
-export type ConfigLayerStore = Map<string, Map<string, JsonValue>>;
-
-export interface ConfigStores {
-  sharedStore: ConfigLayerStore;
-  editorStore: ConfigLayerStore;
 }

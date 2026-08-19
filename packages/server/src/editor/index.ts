@@ -1,7 +1,7 @@
 import type { Editor, PluginLoadOptions, PluginRuntimeHost } from './types';
 import type { MenuContributionNode, MenuPlatform, NormalizedMenuResult } from '../framework/menu/types';
 import { ConfigModule } from '../framework/config';
-import type { ConfigLayerStore } from '../framework/config';
+import type { ConfigActivationTransaction } from '../framework/config';
 import { I18nModule } from '../framework/i18n/index';
 import type { KitDescriptor, KitLayoutConfig, KitLayoutInputConfig } from '../framework/kit/types';
 import type { PanelConstraints } from '../framework/panel/types';
@@ -15,6 +15,7 @@ import { WindowManager } from '../framework/window/index';
 import type { LayoutNode, WindowDescriptor } from '../framework/window/types';
 import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
+import { resolveConfigActivation } from '../config-storage';
 import path from 'node:path';
 import fs from 'node:fs';
 import type { PluginPathRoots, PluginSourceIdentity } from '@itharbors/magnet';
@@ -22,6 +23,7 @@ import {
   parseKitPackageManifest,
   parseRepositoryKitPackage,
 } from '@itharbors/kit-core';
+import type { KitConfigDeclaration } from '@itharbors/kit-core';
 import type { PluginCredentialVault } from '@itharbors/plugin-types';
 import type { CredentialVault } from '../credentials/vault';
 
@@ -57,6 +59,10 @@ interface KitPackageJson {
   harbors?: unknown;
 }
 
+interface ConfigStorageRoots {
+  'application-data': string;
+}
+
 interface ActiveExternalPlugin {
   path: string;
   name: string;
@@ -79,19 +85,20 @@ interface CreateEditorOptions {
   initialLocale?: string;
   platform?: MenuPlatform;
   pluginPathRoots: PluginPathRoots;
+  configStorageRoots?: ConfigStorageRoots;
   credentialVault?: CredentialVaultBindingSource;
 }
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
   const assembly = options.assembly;
   const runtimePluginPathRoots = options.pluginPathRoots;
+  const configStorageRoots = options.configStorageRoots ?? {
+    'application-data': runtimePluginPathRoots.applicationData,
+  };
   let activeKitDirectory: string | undefined;
   const plugin = new PluginModule();
   const panel = new PanelModule();
-  const config = new ConfigModule({
-    sharedStore: new Map(),
-    editorStore: new Map(),
-  });
+  const config = new ConfigModule();
   const i18n = new I18nModule({
     defaultLocale: 'zh-CN',
     initialLocale: options.initialLocale ?? 'zh-CN',
@@ -256,6 +263,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     descriptor: KitDescriptor;
     kitPath: string;
     legacyDataDirectories: string[];
+    config?: KitConfigDeclaration;
   }> {
     const { resolveKit } = await import('../plugin/resolver');
     const kitPath = await resolveKit(kitNameOrPath, {
@@ -323,7 +331,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       windowEntries: normalizedWindowEntries,
     };
 
-    return { descriptor, kitPath, legacyDataDirectories };
+    return { descriptor, kitPath, legacyDataDirectories, config: publication?.config };
   }
 
   async function unloadExternalPlugins(pluginsToUnload: ActiveExternalPlugin[]): Promise<void> {
@@ -407,7 +415,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     await ensureCorePluginsLoaded();
 
     const { resolvePlugin } = await import('../plugin/resolver');
-    const { descriptor, kitPath, legacyDataDirectories } = await resolveAndReadKit(kitNameOrPath);
+    const {
+      descriptor,
+      kitPath,
+      legacyDataDirectories,
+      config: configDeclaration,
+    } = await resolveAndReadKit(kitNameOrPath);
     const preparedPlugins: ActiveExternalPlugin[] = [];
     for (const pluginName of descriptor.plugins) {
       const pluginPath = await resolvePlugin(pluginName, pluginResolveContext(path.join(kitPath, 'plugins')));
@@ -441,14 +454,38 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       defaultWindows: descriptor.layouts.default.windows,
       secondaryEntry: descriptor.windowEntries.secondary,
     });
+    let configTransaction: ConfigActivationTransaction | undefined;
 
     try {
       await unloadActiveExternalPlugins();
+      if (configDeclaration) {
+        const activation = resolveConfigActivation(
+          descriptor.name,
+          configDeclaration,
+          { roots: configStorageRoots },
+        );
+        try {
+          configTransaction = config.activate(activation);
+        } catch (error) {
+          for (const layer of activation.layers) layer.backend.destroy?.();
+          throw error;
+        }
+      } else {
+        configTransaction = config.deactivate();
+      }
       for (const preparedPlugin of preparedPlugins) {
         loadedPlugins.push(await loadExternalPlugin(preparedPlugin));
       }
+      configTransaction.commit();
     } catch (switchError) {
       const rollbackErrors: unknown[] = [];
+      if (configTransaction) {
+        try {
+          configTransaction.rollback();
+        } catch (error) {
+          rollbackErrors.push(error);
+        }
+      }
       try {
         await cleanupLoadedExternalPlugins(loadedPlugins);
       } catch (error) {

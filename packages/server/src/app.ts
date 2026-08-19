@@ -42,6 +42,10 @@ import { getDeviceId, isLocalRequest } from './auth';
 
 type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
+export interface ConfigStorageRoots {
+  'application-data': string;
+}
+
 export interface AppOptions {
   assembly: AssemblyConfig;
   applicationRuntime: Pick<
@@ -51,6 +55,7 @@ export interface AppOptions {
   applicationControlToken?: string;
   clientAssetsRoot?: string;
   pluginPathRoots: PluginPathRoots;
+  configStorageRoots?: ConfigStorageRoots;
   credentialVault?: () => CredentialVaultBindingSource | undefined;
   authManager?: AuthManager;
 }
@@ -76,6 +81,9 @@ export function createApp(
     const editor = createEditor(runtimeSessionId, {
         assembly,
         pluginPathRoots: appOptions.pluginPathRoots,
+        configStorageRoots: appOptions.configStorageRoots ?? {
+          'application-data': appOptions.pluginPathRoots.applicationData,
+        },
         credentialVault,
         applicationRequest: (plugin, name, ...args) => (
           appOptions.applicationRuntime.request(plugin, name, ...args)

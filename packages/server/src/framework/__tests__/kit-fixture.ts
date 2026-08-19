@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { KitConfigDeclaration } from '@itharbors/kit-core';
 
 export interface TestKitPlugin {
   name: string;
@@ -14,6 +15,7 @@ export interface TestKitFixtureOptions {
   label?: string;
   plugins?: TestKitPlugin[];
   mainPanel?: string | null;
+  config?: KitConfigDeclaration;
 }
 
 export interface TestKitFixture {
@@ -152,6 +154,20 @@ export function createKitFixture(options: TestKitFixtureOptions = {}): TestKitFi
       scripts: { build: 'build', test: 'test' },
     },
   });
+  if (options.config) {
+    writeJson(path.join(directory, 'kit.json'), {
+      schemaVersion: 1,
+      id: name,
+      version: '1.0.0',
+      channel: 'stable',
+      publisher: 'example',
+      requires: { harbors: '*', kitApi: '*', protocolVersion: 1 },
+      target: { platform: 'any', arch: 'any' },
+      permissions: [],
+      entry: 'package.json',
+      config: options.config,
+    });
+  }
   return {
     directory,
     name,

@@ -4,7 +4,7 @@ type PanelContext = {
   };
 };
 
-type Layer = 'default' | 'global' | 'project';
+type Layer = 'default' | 'global';
 type SettingControl = 'text' | 'textarea' | 'number' | 'toggle' | 'select';
 type SettingOption = { label: string; value: string | number };
 type SettingField = {
@@ -13,8 +13,8 @@ type SettingField = {
   description?: string;
   control: SettingControl;
   defaultValue?: string | number | boolean;
-  layers: Array<'global' | 'project'>;
-  defaultLayer: 'global' | 'project';
+  layers: Array<'global'>;
+  defaultLayer: 'global';
   options?: SettingOption[];
   placeholder?: string;
   min?: number;
@@ -44,7 +44,7 @@ function errorText(error: unknown): string {
 }
 
 function layerLabel(layer: Layer): string {
-  return layer === 'project' ? '当前项目' : layer === 'global' ? '全局' : '默认值';
+  return layer === 'global' ? '全局' : '默认值';
 }
 
 function sourceLabel(layer: Layer | null): string {

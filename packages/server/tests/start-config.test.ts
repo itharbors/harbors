@@ -26,6 +26,11 @@ describe('resolveStartConfig', () => {
     expect(config.dbPath).toBe(path.join(rootDir, ".data", "harbors.db"));
   });
 
+  it('resolves config storage under the injected user home directory', () => {
+    const config = resolveStartConfig('/project', {}, '/users/tester');
+    expect(config.configDataDir).toBe('/users/tester/.harbors');
+  });
+
   it('falls back to the default dbPath when DB_PATH is an empty string', () => {
     const rootDir = '/project';
     const config = resolveStartConfig(rootDir, { DB_PATH: "" });

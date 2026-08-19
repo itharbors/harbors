@@ -1,4 +1,5 @@
 export const KIT_PACKAGE_SCHEMA_VERSION = 1 as const;
+export const KIT_CONFIG_SCHEMA_VERSION = 1 as const;
 export const KIT_API_VERSION = '1.0.0' as const;
 export const KIT_PERMISSIONS = [
   'network',
@@ -27,6 +28,27 @@ export interface KitRequirements {
   protocolVersion: number;
 }
 
+export interface ConfigSqliteStorage {
+  driver: 'sqlite';
+  root: 'application-data';
+  path: string;
+}
+
+export type ConfigStorage = null | ConfigSqliteStorage;
+
+export interface ConfigLayerDefinition {
+  name: string;
+  priority: number;
+  storage: ConfigStorage;
+}
+
+export interface KitConfigDeclaration {
+  schemaVersion: typeof KIT_CONFIG_SCHEMA_VERSION;
+  defaultsLayer: string;
+  writeLayer: string;
+  layers: ConfigLayerDefinition[];
+}
+
 export interface KitPackageManifest {
   schemaVersion: 1;
   id: string;
@@ -37,6 +59,7 @@ export interface KitPackageManifest {
   target: KitTarget;
   permissions: KitPermission[];
   entry: 'package.json';
+  config?: KitConfigDeclaration;
 }
 
 export interface ReleaseAsset {

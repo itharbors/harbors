@@ -29,7 +29,7 @@ start 脚本会基于 `origin/main` 创建隔离分支与 worktree，并自动�
 已经存在而分支上没有 Task，必须先补建并填写，再继续或 finish；可在该 worktree 运行真实 CLI：
 
 ```bash
-pnpm run task:status -- init feature safe-login
+pnpm run task:status init feature safe-login
 ```
 
 ### 3. 设计与计划
@@ -47,17 +47,17 @@ ADR 或设计文档。
 初始 Task 已将 requirements 标记为完成并进入 design。按实际工作运行状态命令：
 
 ```bash
-pnpm run task:status -- complete <task-id> design
-pnpm run task:status -- start <task-id> implementation
+pnpm run task:status complete <task-id> design
+pnpm run task:status start <task-id> implementation
 # 对进行中的 implementation，默认完成；若确认无需实施，用下一行注释中的 skip 替代 complete
-pnpm run task:status -- complete <task-id> implementation
-# pnpm run task:status -- skip <task-id> implementation
-pnpm run task:status -- start <task-id> verification
-pnpm run task:status -- block <task-id> verification
-pnpm run task:status -- resume <task-id> verification
-pnpm run task:status -- complete <task-id> verification
-pnpm run task:status -- start <task-id> consolidation
-pnpm run task:status -- check <task-id>
+pnpm run task:status complete <task-id> implementation
+# pnpm run task:status skip <task-id> implementation
+pnpm run task:status start <task-id> verification
+pnpm run task:status block <task-id> verification
+pnpm run task:status resume <task-id> verification
+pnpm run task:status complete <task-id> verification
+pnpm run task:status start <task-id> consolidation
+pnpm run task:status check <task-id>
 ```
 
 每次验证保留实际命令和结果。Task CLI 的聚焦测试与仓库快速预检是：
@@ -77,8 +77,8 @@ pnpm run check:preflight
 完整且内部 stages 终态后，必须通过 `--ready-for-pr` ready gate：
 
 ```bash
-pnpm run task:status -- complete <task-id> consolidation
-pnpm run task:status -- check <task-id> --ready-for-pr
+pnpm run task:status complete <task-id> consolidation
+pnpm run task:status check <task-id> --ready-for-pr
 ```
 
 提交全部变更、保持 worktree clean，并在仓库外准备包含 `## Summary` 和 `## Testing` 的 body 文件。
@@ -89,7 +89,7 @@ bash .agents/skills/change-workflow/scripts/finish-change.sh \
   "添加安全登录" /absolute/path/to/pr-body.md
 ```
 
-finish 会重新执行 ready gate 和各自边界检查，只创建或恢复当前仓库拥有且 base/head 身份一致的 open PR；同名 fork PR 不会被编辑或记录。已记录 PR 关闭且未合并时可安全替换并更新编号，已合并或身份不符时 fail closed。finish 在 PR body 添加指向 pre-PR
+finish 会重新执行 ready gate 和当前根 `check` 全仓门禁，只创建或恢复当前仓库拥有且 base/head 身份一致的 open PR；同名 fork PR 不会被编辑或记录。已记录 PR 关闭且未合并时可安全替换并更新编号，已合并或身份不符时 fail closed。finish 在 PR body 添加指向 pre-PR
 commit 上 `summary.md` 的不可变链接，回写 PR 编号，自动提交该 status 变化并二次 push。第一次调用在
 PR 创建后失败时，修复外部原因后重跑相同 finish 命令；它只恢复已验证的 open PR 和精确的自动
 status 写回状态，不把其他 dirty changes 当作可恢复状态。
@@ -98,7 +98,7 @@ status 写回状态，不把其他 dirty changes 当作可恢复状态。
 implementation、verification 或 consolidation，例如：
 
 ```bash
-pnpm run task:status -- rewind <task-id> implementation
+pnpm run task:status rewind <task-id> implementation
 ```
 
 之后重新实现、验证、更新 `summary.md`、完成各 stages，并再次运行 ready gate 与 finish。
@@ -178,8 +178,8 @@ Kit 选择页   http://localhost:49380/
 ## 指定 Kit
 
 ```bash
-pnpm run dev -- --kit ./kits/<name>
-pnpm run dev -- --kit <package-name>
+pnpm run dev:web -- --kit ./kits/<name>
+pnpm run dev:web -- --kit <package-name>
 ```
 
 `--kit`、`--kit-path` 和 `--kitPath` 都被 Web 开发脚本接受。路径必须包含有效 package；
@@ -228,27 +228,48 @@ Kit 的运行时测试如果需要创建真实 Editor，只能从 `@itharbors/se
 
 ## 测试
 
-```bash
-pnpm test
-```
+测试按受影响的功能单元边界选择，不要默认运行全仓测试。完整的测试分层、放置约定和命令见
+[统一测试指南](./testing.md)。
 
-根测试先运行 Server，再运行 Client。也可分包执行：
+按变更范围选择对应命令：
 
-```bash
-pnpm --filter @itharbors/server run test
-pnpm --filter @itharbors/client run test
-```
+- Framework 包级测试：
 
-Client 的 test script 会先 typecheck，再通过包装脚本从 Client workspace 运行 Vitest。
-Server 集成测试需要打开本机临时端口；在严格沙箱中可能因监听权限失败。
+  ```bash
+  pnpm --filter @itharbors/server run test
+  pnpm --filter @itharbors/client run test
+  ```
 
-只运行单个测试文件时，应从对应 workspace 或使用它的配置，避免根目录 Vitest 同时发现
-Server 与 Client 两套环境：
+  只运行单个测试文件时，从对应 workspace 执行，避免根目录 Vitest 同时发现 Server 与 Client
+  两套环境：
 
-```bash
-pnpm --filter @itharbors/client run test -- tests/core/transport.test.ts
-pnpm --filter @itharbors/server run test -- tests/framework/message.test.ts
-```
+  ```bash
+  pnpm --filter @itharbors/client run test -- tests/core/transport.test.ts
+  pnpm --filter @itharbors/server run test -- tests/framework/message.test.ts
+  ```
+
+- 单个 Plugin 构建与校验：
+
+  ```bash
+  node scripts/ce-plugin.mjs build plugins/<name>
+  node scripts/ce-plugin.mjs check plugins/<name>
+  ```
+
+- 单个 Kit 构建与校验（可传 slug）：
+
+  ```bash
+  pnpm run kits:test <slug>
+  pnpm run kits:check <slug>
+  ```
+
+全仓测试 `pnpm test` 会依次运行 Framework、所有 Kit 和 workflow 测试；它不是局部 Plugin 或
+Kit 验证的默认要求。Client 的 test script 会先 typecheck，再通过包装脚本
+从 Client workspace 运行 Vitest。Server 集成测试需要打开本机临时端口；在严格沙箱中可能因
+监听权限失败。
+
+局部验证按变更边界选择：只修改单个 Plugin 时选择该 Plugin 的测试（若有）以及构建与产物校验；
+只修改 Kit 根配置或跨 Plugin 装配时选择目标 Kit 的验证；只修改 Framework 时选择受影响的
+Framework 测试。跨边界变更取这些范围的并集，不因局部变更自动扩大到全仓。
 
 ## 清理
 
@@ -379,15 +400,14 @@ finish 会重新执行 ready gate 与 `pnpm run check` 全量门禁，普通 pus
 
 ## 提交前最小检查
 
-根检查是有限时长命令，不会启动开发服务器：
+提交前检查按受影响边界选择，不要对所有局部变更默认执行 Framework 全量测试。完整分层与
+命令见[统一测试指南](./testing.md)。
 
-```bash
-pnpm run check
-```
-
+`pnpm run check` 是当前全仓最终门禁，不作为局部 Plugin、Kit 或 Framework 开发的默认检查。
 它只构建一次 Framework，再运行 Framework 与 workflow 测试，并以一次 `kits:check` 完成所有
-Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。独立的 `pnpm test`、
-`kits:test` 与 `plugins:check` 仍保留各自的完整语义，但根门禁不会重复组合它们。
+Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。`finish-change.sh`
+在收口时也会执行当前根 `check` 脚本，因此 finish 仍是当前全仓最终门禁流程的一部分。这里的
+Framework 测试是全仓门禁的组成部分，不改变局部 Plugin/Kit 验证要求。
 
 需求开发循环优先运行聚焦测试和紧凑预检：
 
@@ -396,22 +416,24 @@ pnpm run check:preflight
 ```
 
 预检执行全仓 Kit 架构审计和关键 workflow/元数据测试，成功时使用紧凑 reporter；它用于快速
-反馈，不替代 `pnpm run check`。通用变更提交完成后直接调用 `finish-change.sh`，由完成流程运行
-最终全量门禁；不要在没有新代码变化时先手动重复同一轮全量检查。
+反馈，不替代 `pnpm run check`。
 
-`pnpm run kits:boundary`
-会独立审计完整源码树；`pnpm run kits:boundary -- <slug>` 只审计目标 Kit，不会被无关 Kit 的临时损坏拖累。
-审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失 lockfile、Framework 产品特判和静态产品清单。
-按变更范围快速
-迭代时可拆分执行，但提交前不要少于：
+按变更范围选择对应的最小检查：
 
-```bash
-pnpm run kits:boundary
-pnpm --filter @itharbors/server run test
-pnpm --filter @itharbors/client run test
-pnpm run plugins:check
-git diff --check
-```
+- 仅修改 Framework 包：运行受影响包的测试，例如 `pnpm --filter @itharbors/server run test`、
+  `pnpm --filter @itharbors/client run test`。
+- 仅修改单个 Plugin：若有 Plugin 测试则显式运行；并按需执行构建与产物校验，例如
+  `node scripts/ce-plugin.mjs build plugins/<name>` 后
+  `node scripts/ce-plugin.mjs check plugins/<name>`。这两个 `ce-plugin` 命令不执行 Plugin
+  测试或 runtime smoke，当前也不存在统一的 `pnpm run test:plugin`。
+- 仅修改单个 Kit：运行该 Kit 的构建与校验，例如 `pnpm run kits:test <slug>`、
+  `pnpm run kits:check <slug>`。当前 Kit 声明的 `test:kit` 主要是 `validate`，不要把它
+  解释为已有 Kit assembly 测试。
 
-修改插件时先 `plugins:build` 再 `plugins:check`。修改架构行为时同步检查
+`pnpm run kits:boundary` 会独立审计完整源码树；`pnpm run kits:boundary <slug>` 只审计
+目标 Kit，不会被无关 Kit 的临时损坏拖累。审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失
+lockfile、Framework 产品特判和静态产品清单。
+
+通用变更提交完成后直接调用 `finish-change.sh`，由完成流程运行最终全量门禁；不要在没有新
+代码变化时先手动重复同一轮全量检查。修改架构行为时同步检查
 [文档维护指南](./maintaining-docs.md)。

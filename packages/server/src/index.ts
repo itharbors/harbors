@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { homedir } from 'node:os';
 import { createServer, parseKitSources } from './server';
 import { startServerUntilShutdown } from './process-lifecycle';
 import { captureApplicationHostSecrets } from './application/host-environment';
@@ -38,6 +39,7 @@ const { start, stop } = createServer({
     temp: process.env.HARBORS_PLUGIN_TEMP_ROOT
       ?? path.join(APPLICATION_DATA_ROOT, 'plugins', 'temp'),
   },
+  configStorageRoots: { 'application-data': path.join(homedir(), '.harbors') },
   host: HOST,
 });
 

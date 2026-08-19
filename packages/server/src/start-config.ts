@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { mkdir } from 'node:fs/promises';
+import { homedir } from 'node:os';
 
 export interface StartEnv {
   DB_PATH?: string;
@@ -9,6 +10,7 @@ export interface StartEnv {
 
 export interface StartConfig {
   dataDir: string;
+  configDataDir: string;
   dbPath: string;
   port: number;
   host: string;
@@ -28,14 +30,19 @@ const DEFAULT_DB_FILENAME = 'harbors.db';
  * Passing `env` explicitly keeps the logic deterministic and testable without
  * mutating `process.env`.
  */
-export function resolveStartConfig(rootDir: string, env: StartEnv = process.env): StartConfig {
+export function resolveStartConfig(
+  rootDir: string,
+  env: StartEnv = process.env,
+  homeDirectory: string = homedir(),
+): StartConfig {
   const dataDir = path.join(rootDir, '.data');
+  const configDataDir = path.join(homeDirectory, '.harbors');
   const dbPath = env.DB_PATH
     ? path.resolve(env.DB_PATH)
     : path.join(dataDir, DEFAULT_DB_FILENAME);
   const port = Number(env.HARBORS_SERVER_PORT) || DEFAULT_PORT;
   const host = env.HARBORS_BIND_HOST || DEFAULT_HOST;
-  return { dataDir, dbPath, port, host };
+  return { dataDir, configDataDir, dbPath, port, host };
 }
 
 /**

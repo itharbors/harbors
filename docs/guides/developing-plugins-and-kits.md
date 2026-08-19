@@ -288,6 +288,43 @@ node scripts/ce-plugin.mjs check path/to/my-plugin
 
 构建会编译 main 与 Panel TypeScript、复制 Panel HTML/CSS/资源并校验产物。
 
+### 测试
+
+Plugin 单元测试与源码并置，放在 `main/src/` 或 `panel.main/src/` 同级的 `*.test.ts` 中，
+不需要移动到独立目录。完整的测试分层、放置约定和命令见
+[统一测试指南](./testing.md)。
+
+当前开发验证分为以下几类，不要混用：
+
+1. Plugin 单元 / 组件测试：覆盖单个插件的方法、消息处理和状态逻辑，与源码并置。当前不
+   存在统一的 `pnpm run test:plugin` 入口；若某个 Plugin 提供测试脚本，应显式运行该脚本，
+   不要假定 build 或 workspace runner 会自动发现并运行 Plugin 测试。
+2. Plugin runtime smoke：需要真实 Plugin runtime 时使用的轻量验证。`ce-plugin build` 只
+   构建 Plugin，`ce-plugin check` 只校验 manifest 与构建产物；二者都不是 Plugin 测试，也
+   不是 runtime smoke。
+3. Kit 构建与校验：`pnpm run kits:test <slug>` 和 `pnpm run kits:check <slug>` 支持
+   按 slug 选择 Kit。当前 Kit 声明的 `test:kit` 主要执行 `validate`，这些命令不代表仓库
+   已有 Kit assembly 测试。
+4. 浏览器验收：UI、Kit 装配或其他可见行为按需使用唯一的 Web 宿主，在浏览器中完成最终
+   验收。
+
+局部开发按 Plugin、Kit、Framework 的变更边界选择验证；跨边界变更取受影响边界的并集。
+
+单个 Plugin 的构建与产物校验命令：
+
+```bash
+node scripts/ce-plugin.mjs build plugins/<name>
+node scripts/ce-plugin.mjs check plugins/<name>
+```
+
+Kit 级构建与校验可传 slug：
+
+```bash
+pnpm run kits:test <slug>
+pnpm run kits:check <slug>
+```
+
+
 ## 公开静态资源
 
 在 manifest 中声明允许公开的根：
@@ -500,9 +537,25 @@ Node `process.execPath` 启动，不要依赖手工生成或历史残留的 `pac
 
 ## 验证 Kit
 
+Kit 验证分为构建 / 校验和按需的浏览器验收两层。完整分层与命令见
+[统一测试指南](./testing.md)。
+
+先构建 Kit 内插件，再运行 Kit 级构建与校验：
+
 ```bash
 node scripts/ce-plugin.mjs build kits/my-kit/plugins/my-plugin
-pnpm run dev -- --kit ./kits/my-kit
+pnpm run kits:test my-kit
+pnpm run kits:check my-kit
+```
+
+`pnpm run kits:test <slug>` 会执行该 Kit 声明的测试脚本；当前 `test:kit` 主要是
+`validate`，不应据此声称已有 Kit assembly 测试。`pnpm run kits:check <slug>` 完成 build、
+test、validate 和本地产物检查。
+
+浏览器验收使用 Web 宿主，不包含 Electron 或桌面宿主假设：
+
+```bash
+pnpm run dev:web -- --kit ./kits/my-kit
 ```
 
 `--kit` 是直达快捷方式：它把外部 Kit 临时追加到 Catalog，并在服务就绪后只自动打开该 Kit；

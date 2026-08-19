@@ -78,12 +78,15 @@ test('docs navigation and guides define the six-stage Task lifecycle using real 
     'feature', 'bug', 'optimize', 'docs', 'refactor', 'test', 'chore',
     'task.md', 'status.json', 'summary.md', '.work/',
     '同机', '跨机', 'rewind', 'PR_URL', 'merged', 'required checks', 'main', 'Codex 会话',
-    'pnpm run task:status --',
     'pnpm run test:task-status',
     'pnpm run test:preflight',
     'start-change.sh',
     'finish-change.sh',
   ]) assert.ok(development.includes(expected), expected);
+  for (const action of ['init', 'start', 'complete', 'skip', 'block', 'resume', 'check', 'rewind']) {
+    assert.match(development, new RegExp(`pnpm run task:status ${action}(?:\\s|$)`, 'u'), action);
+  }
+  assert.doesNotMatch(development, /pnpm run task:status --(?:\s|$)/u);
   assert.match(development, /PR (?:已创建|已建)[^。]{0,100}(?:不代表|不是)[^。]{0,30}(?:需求|Task|任务)完成/u);
   assert.match(development, /summary\.md[^。]{0,120}--ready-for-pr/iu);
   assert.match(development, /PR[^。]{0,100}(?:回写|记录)[^。]{0,30}(?:编号|PR 号)[^。]{0,80}(?:二次|再次)[^。]{0,20}push/iu);

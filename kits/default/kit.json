@@ -11,5 +11,18 @@
   },
   "target": { "platform": "any", "arch": "any" },
   "permissions": [],
+  "config": {
+    "schemaVersion": 1,
+    "defaultsLayer": "default",
+    "writeLayer": "global",
+    "layers": [
+      { "name": "default", "priority": 0, "storage": null },
+      {
+        "name": "global",
+        "priority": 10,
+        "storage": { "driver": "sqlite", "root": "application-data", "path": "config.sqlite" }
+      }
+    ]
+  },
   "entry": "package.json"
 }
