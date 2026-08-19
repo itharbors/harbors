@@ -20,6 +20,7 @@ interface ConversationDraft {
 interface ConversationUiState {
   selectedConversationId: string | null;
   draft: ConversationDraft | null;
+  running: boolean;
   generation: string;
   revision: number;
 }
@@ -27,6 +28,7 @@ interface ConversationUiState {
 const EMPTY_UI_STATE: ConversationUiState = {
   selectedConversationId: null,
   draft: null,
+  running: false,
   generation: '',
   revision: 0,
 };
@@ -55,6 +57,21 @@ function projectLabel(project: string | undefined): string {
   if (project === 'Harbors') return 'Harbors Agent';
   const parts = project.split('/').filter(Boolean);
   return parts.length > 1 ? parts.slice(-2).join(' / ') : project;
+}
+
+function normalizeConversation(value: unknown): ConversationData | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Partial<ConversationData>;
+  if (typeof record.id !== 'string' || typeof record.title !== 'string') return null;
+  return {
+    id: record.id,
+    title: record.title,
+    ...(typeof record.lastMessage === 'string' ? { lastMessage: record.lastMessage } : {}),
+    ...(typeof record.preview === 'string' ? { preview: record.preview } : {}),
+    source: 'harbors',
+    ...(typeof record.project === 'string' ? { project: record.project } : {}),
+    ...(typeof record.active === 'boolean' ? { active: record.active } : {}),
+  };
 }
 
 export default function App({
@@ -110,6 +127,29 @@ export default function App({
       return list;
     };
 
+    const applyConversationChanged = (value: unknown) => {
+      if (!value || typeof value !== 'object') return;
+      const payload = value as { action?: string; id?: string; conversation?: unknown };
+      if (typeof payload.id !== 'string' || !payload.action) return;
+      const { action, id } = payload;
+      setConversations((prev) => {
+        if (action === 'create') {
+          const conversation = normalizeConversation(payload.conversation);
+          if (conversation && !prev.some((item) => item.id === id)) return [conversation, ...prev];
+          return prev;
+        }
+        if (action === 'delete') {
+          return prev.filter((item) => item.id !== id);
+        }
+        if (action === 'rename' || action === 'update') {
+          const conversation = normalizeConversation(payload.conversation);
+          if (!conversation) return prev;
+          return prev.map((item) => item.id === id ? { ...item, ...conversation } : item);
+        }
+        return prev;
+      });
+    };
+
     const applyUiState = (value: unknown, arrivalSequence = ++uiStateArrivalSequenceRef.current) => {
       if (!value || typeof value !== 'object') return false;
       const state = value as Partial<ConversationUiState>;
@@ -121,6 +161,7 @@ export default function App({
           && state.draft.source === 'harbors'
           ? { source: state.draft.source, ...(typeof state.draft.project === 'string' ? { project: state.draft.project } : {}) }
           : null,
+        running: typeof state.running === 'boolean' ? state.running : false,
         generation,
         revision: typeof state.revision === 'number' ? state.revision : 0,
       };
@@ -137,9 +178,9 @@ export default function App({
 
     registerSetter('conversation.changed', (data: unknown) => {
       sequenceRef.current += 1;
-      if (!disposed) applyList(data);
+      if (!disposed) applyConversationChanged(data);
     });
-    registerSetter('conversation.ui.changed', (data: unknown) => {
+    registerSetter('conversation.selected', (data: unknown) => {
       sequenceRef.current += 1;
       if (!disposed) {
         if (applyUiState(data, ++uiStateArrivalSequenceRef.current)) setError(null);
@@ -150,7 +191,7 @@ export default function App({
     const initialUiRequestSequence = ++uiStateArrivalSequenceRef.current;
     Promise.all([
       requestWithRetry('加载对话列表', () => ctx.message.request('agent', 'listConversations')),
-      requestWithRetry('加载会话状态', () => ctx.message.request('conversation-list', 'getConversationUiState')),
+      requestWithRetry('加载会话状态', () => ctx.message.request('conversation', 'getState')),
     ]).then(([listResult, uiStateResult]) => {
       if (disposed || listResult.disposed || uiStateResult.disposed) return;
 
@@ -176,7 +217,7 @@ export default function App({
     try {
       // 忽略初始化中的旧选择结果，避免它覆盖刚进入的草稿态。
       sequenceRef.current += 1;
-      await ctx.message.request('conversation-list', 'startDraftConversation');
+      await ctx.message.request('conversation', 'select', null);
       setError(null);
     } catch (err) {
       console.error('Failed to create conversation:', describeError(err));
@@ -186,7 +227,7 @@ export default function App({
 
   const handleSelect = async (id: string) => {
     try {
-      await ctx.message.request('conversation-list', 'selectConversation', id);
+      await ctx.message.request('conversation', 'select', id);
       setError(null);
     } catch (err) {
       console.error('Failed to select conversation:', describeError(err));

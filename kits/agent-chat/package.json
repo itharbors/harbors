@@ -20,7 +20,7 @@
         "secondary": "secondary.html"
       },
       "plugin": [
-        "conversation-list",
+        "conversation",
         "message-panel",
         "agent",
         "plugin-list",

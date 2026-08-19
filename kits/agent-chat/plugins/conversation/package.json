@@ -1,5 +1,5 @@
 {
-  "name": "conversation-list",
+  "name": "conversation",
   "version": "0.0.1",
   "type": "module",
   "main": "./main/dist/index.js",
@@ -15,13 +15,12 @@
       },
       "message": {
         "request": {
-          "getConversationUiState": ["getConversationUiState"],
-          "selectConversation": ["selectConversation"],
-          "startDraftConversation": ["startDraftConversation"]
+          "getState": ["getState"],
+          "select": ["select"]
         },
         "broadcast": {
-          "conversation.changed": ["onAgentConversationChanged", "panel.onConversationChanged"],
-          "conversation.ui.changed": ["panel.onConversationUiChanged"]
+          "conversation.changed": ["onConversationChanged", "panel.onConversationChanged"],
+          "conversation.selected": ["panel.onConversationSelected"]
         }
       }
     }
