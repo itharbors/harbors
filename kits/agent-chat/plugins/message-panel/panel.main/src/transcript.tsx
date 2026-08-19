@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import type { ToolProcessEntry, TraceStep, TraceTurn } from "./trace-events.js";
@@ -63,6 +63,10 @@ function markdownRenderer(): Renderer {
 
 type HtmlSanitizer = (dirty: string, config: { ADD_ATTR: string[] }) => string;
 
+type MarkdownHtmlRenderer = (content: string) => string;
+
+const MARKDOWN_CACHE_MAX_ENTRIES = 256;
+
 export function renderMarkdownHtml(
   content: string,
   sanitize: HtmlSanitizer = (dirty, config) => String(DOMPurify.sanitize(dirty, config)),
@@ -71,6 +75,38 @@ export function renderMarkdownHtml(
   // 原始目标仅作为数据保留；真实 href 是不可外跳的安全占位，HTML 结构仍由 DOMPurify 清理。
   return sanitize(rendered, { ADD_ATTR: ["data-original-href"] });
 }
+
+export function createMarkdownHtmlCache(
+  render: MarkdownHtmlRenderer = renderMarkdownHtml,
+  maxEntries = MARKDOWN_CACHE_MAX_ENTRIES,
+): { get: (content: string) => string; clear: () => void; size: () => number } {
+  const entries = new Map<string, string>();
+  const capacity = Math.max(1, Math.floor(maxEntries));
+
+  return {
+    get(content) {
+      if (entries.has(content)) {
+        const cached = entries.get(content)!;
+        entries.delete(content);
+        entries.set(content, cached);
+        return cached;
+      }
+
+      const rendered = render(content);
+      entries.set(content, rendered);
+      if (entries.size > capacity) entries.delete(entries.keys().next().value!);
+      return rendered;
+    },
+    clear() {
+      entries.clear();
+    },
+    size() {
+      return entries.size;
+    },
+  };
+}
+
+const markdownHtmlCache = createMarkdownHtmlCache();
 
 export function originalLinkTarget(anchor: Pick<Element, "getAttribute">): string {
   return anchor.getAttribute("data-original-href") || anchor.getAttribute("href") || "";
@@ -161,10 +197,10 @@ export function createMarkdownLinkActivationController(
   };
 }
 
-function MarkdownMessage({ content }: { content: string }) {
-  const html = renderMarkdownHtml(content);
+const MarkdownMessage = memo(function MarkdownMessage({ content }: { content: string }) {
+  const html = useMemo(() => markdownHtmlCache.get(content), [content]);
   return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
-}
+});
 
 function parseJson(value: string): unknown {
   if (!value) return {};
@@ -228,7 +264,8 @@ function toolEntryToPart(entry: ToolProcessEntry): ToolPart {
   };
 }
 
-function ToolPartView({ part }: { part: ToolPart }) {
+const ToolPartView = memo(function ToolPartView({ entry }: { entry: ToolProcessEntry }) {
+  const part = useMemo(() => toolEntryToPart(entry), [entry]);
   const toolName = getToolNameFromPartType(part.type);
   const isError = part.state === "output-error";
   const isDone = part.state === "output-available";
@@ -266,16 +303,16 @@ function ToolPartView({ part }: { part: ToolPart }) {
       )}
     </details>
   );
-}
+});
 
-function PermissionRequestCard({
+const PermissionRequestCard = memo(function PermissionRequestCard({
   request,
   resolving,
-  onResolve,
+  onResolvePermission,
 }: {
   request: PermissionRequest;
   resolving: boolean;
-  onResolve: (outcome: PermissionOutcome) => void;
+  onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
 }) {
   const modeLabel = (mode?: string): string =>
     ({
@@ -298,13 +335,13 @@ function PermissionRequestCard({
       </div>
       {request.justification && <p className="permission-card-justification">{request.justification}</p>}
       <div className="permission-card-actions">
-        <button type="button" onClick={() => onResolve("rejected")} disabled={resolving}>
+        <button type="button" onClick={() => void onResolvePermission(request.requestId, "rejected")} disabled={resolving}>
           拒绝
         </button>
         <button
           type="button"
           className="approve"
-          onClick={() => onResolve("allowed-once")}
+          onClick={() => void onResolvePermission(request.requestId, "allowed-once")}
           disabled={resolving}
         >
           允许一次
@@ -312,7 +349,7 @@ function PermissionRequestCard({
       </div>
     </div>
   );
-}
+});
 
 interface DisplayStep extends TraceStep {
   localRequest?: ToolProcessEntry;
@@ -342,64 +379,276 @@ function assistantTextsAfter(messages: MessageData[], userIndex: number): { text
   return { texts, nextIndex };
 }
 
+export type DisplayTurnRow = { user: MessageData; turn: DisplayTurn };
+
+function displayTurnRowKey(turn: number, user: MessageData): string {
+  return `${turn}\u0000${user.id}`;
+}
+
+export interface DisplayTurnProjector {
+  project: (
+    messages: MessageData[],
+    traceTurns: TraceTurn[],
+    localProcessEntries: ToolProcessEntry[],
+    turnOffset: number,
+    conversationActive?: boolean,
+  ) => DisplayTurnRow[];
+}
+
+function sameMessage(left: MessageData, right: MessageData): boolean {
+  return left.id === right.id
+    && left.role === right.role
+    && left.content === right.content
+    && left.turn === right.turn;
+}
+
+function sameToolEntry(left: ToolProcessEntry | undefined, right: ToolProcessEntry | undefined): boolean {
+  if (!left || !right) return left === right;
+  return left.id === right.id
+    && left.seq === right.seq
+    && left.turn === right.turn
+    && left.step === right.step
+    && left.callId === right.callId
+    && left.name === right.name
+    && left.arguments === right.arguments
+    && left.result === right.result
+    && left.isError === right.isError;
+}
+
+function sameAssistant(
+  left: TraceStep["assistant"] | undefined,
+  right: TraceStep["assistant"] | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return left.id === right.id
+    && left.seq === right.seq
+    && left.turn === right.turn
+    && left.step === right.step
+    && left.text === right.text
+    && left.thinking === right.thinking
+    && left.hasToolCalls === right.hasToolCalls;
+}
+
+function sameTraceStep(left: TraceStep | undefined, right: TraceStep | undefined): boolean {
+  if (!left || !right) return left === right;
+  if (left.turn !== right.turn
+    || left.step !== right.step
+    || left.startSeq !== right.startSeq
+    || left.requestSeq !== right.requestSeq
+    || left.model !== right.model
+    || left.completed !== right.completed
+    || !sameAssistant(left.assistant, right.assistant)
+    || left.tools.length !== right.tools.length) return false;
+  for (let index = 0; index < left.tools.length; index += 1) {
+    if (!sameToolEntry(left.tools[index], right.tools[index])) return false;
+  }
+  return true;
+}
+
+function sameIncomplete(
+  left: TraceTurn["trailingIncompleteStep"] | undefined,
+  right: TraceTurn["trailingIncompleteStep"] | undefined,
+): boolean {
+  return left?.step === right?.step && left?.phase === right?.phase;
+}
+
+function sameTerminal(
+  left: TraceTurn["terminal"] | undefined,
+  right: TraceTurn["terminal"] | undefined,
+): boolean {
+  return left?.status === right?.status && left?.seq === right?.seq && left?.reason === right?.reason;
+}
+
+function sameDisplayStep(left: DisplayStep | undefined, right: DisplayStep | undefined): boolean {
+  if (!left || !right) return left === right;
+  return sameTraceStep(left, right) && sameToolEntry(left.localRequest, right.localRequest);
+}
+
+function indexTraceTurns(traceTurns: TraceTurn[]): Map<number, TraceTurn> {
+  const byTurn = new Map<number, TraceTurn>();
+  for (const traceTurn of traceTurns) {
+    // Preserve Array.prototype.find semantics if malformed input contains duplicates.
+    if (!byTurn.has(traceTurn.turn)) byTurn.set(traceTurn.turn, traceTurn);
+  }
+  return byTurn;
+}
+
+function indexLocalRequests(localProcessEntries: ToolProcessEntry[]): Map<number, ToolProcessEntry[]> {
+  const byTurn = new Map<number, ToolProcessEntry[]>();
+  for (const entry of localProcessEntries) {
+    if (entry.name !== "请求模型") continue;
+    const requests = byTurn.get(entry.turn);
+    if (requests) requests.push(entry);
+    else byTurn.set(entry.turn, [entry]);
+  }
+  return byTurn;
+}
+
+function reconcileSteps(
+  previous: DisplayTurn | undefined,
+  sourceTurn: TraceTurn | undefined,
+  localRequests: ToolProcessEntry[],
+  fallbackAssistant: TraceStep["assistant"] | undefined,
+  turn: number,
+): DisplayStep[] {
+  const sourceSteps = sourceTurn?.steps || [];
+  const steps: DisplayStep[] = sourceSteps.map((sourceStep) => ({ ...sourceStep, tools: [...sourceStep.tools] }));
+  const sourceStepIndexes = new Map<number, number>();
+  for (let index = 0; index < sourceSteps.length; index += 1) {
+    if (!sourceStepIndexes.has(sourceSteps[index]!.step)) sourceStepIndexes.set(sourceSteps[index]!.step, index);
+  }
+
+  for (const localRequest of localRequests) {
+    const sourceIndex = sourceStepIndexes.get(localRequest.step);
+    let step = sourceIndex === undefined ? undefined : steps[sourceIndex];
+    if (!step) {
+      step = { turn, step: localRequest.step || 1, tools: [], completed: false };
+      steps.push(step);
+      // Keep the first matching step indexed so later local requests preserve Array.find semantics.
+      sourceStepIndexes.set(step.step, steps.length - 1);
+    }
+    step.localRequest = localRequest;
+  }
+
+  // 结构化 trace 存在时只信任其中的 assistant/turn 终态；surface fallback 仅兼容完全无 trace 的旧会话。
+  if (!sourceTurn && fallbackAssistant) {
+    const step = steps.at(-1) || { turn, step: 1, tools: [], completed: false };
+    if (!steps.includes(step)) steps.push(step);
+    step.assistant = { ...fallbackAssistant, step: step.step };
+  }
+  if (sourceTurn?.error && steps.length === 0) steps.push({ turn, step: 1, tools: [], completed: false });
+  steps.sort((left, right) => left.step - right.step);
+
+  const previousByStep = new Map<number, DisplayStep[]>();
+  for (const step of previous?.steps || []) {
+    const sameStep = previousByStep.get(step.step);
+    if (sameStep) sameStep.push(step);
+    else previousByStep.set(step.step, [step]);
+  }
+  const consumed = new Map<number, number>();
+  return steps.map((step) => {
+    const candidates = previousByStep.get(step.step);
+    const candidateIndex = consumed.get(step.step) || 0;
+    const previousStep = candidates?.[candidateIndex];
+    consumed.set(step.step, candidateIndex + 1);
+    return previousStep && sameDisplayStep(previousStep, step) ? previousStep : step;
+  });
+}
+
+function projectTurn(
+  previous: DisplayTurn | undefined,
+  user: MessageData,
+  sourceTurn: TraceTurn | undefined,
+  localRequests: ToolProcessEntry[],
+  assistantTexts: string[],
+  turn: number,
+  runningTurn: number | undefined,
+): DisplayTurn {
+  const hasLegacyFinal = !sourceTurn && assistantTexts.length > 0;
+  const fallbackAssistant = hasLegacyFinal
+    ? { id: `live-assistant-${user.id}`, seq: Number.MAX_SAFE_INTEGER, turn, step: 1, text: assistantTexts.at(-1) || "", hasToolCalls: false }
+    : undefined;
+  const steps = reconcileSteps(previous, sourceTurn, localRequests, fallbackAssistant, turn);
+  const status: DisplayTurn["status"] = sourceTurn?.terminal?.status === "failed"
+    ? "failed"
+    : sourceTurn?.terminal?.status === "completed" || hasLegacyFinal
+      ? "completed"
+      : runningTurn === turn
+        ? "running"
+        : "interrupted";
+  const error = previous?.error && sameToolEntry(previous.error, sourceTurn?.error) ? previous.error : sourceTurn?.error;
+  const terminal = previous?.terminal && sameTerminal(previous.terminal, sourceTurn?.terminal)
+    ? previous.terminal
+    : sourceTurn?.terminal;
+  const trailingIncompleteStep = previous?.trailingIncompleteStep && sameIncomplete(previous.trailingIncompleteStep, sourceTurn?.trailingIncompleteStep)
+    ? previous.trailingIncompleteStep
+    : sourceTurn?.trailingIncompleteStep;
+  if (previous
+    && previous.turn === turn
+    && previous.steps.length === steps.length
+    && previous.steps.every((step, index) => step === steps[index])
+    && previous.error === error
+    && previous.terminal === terminal
+    && previous.trailingIncompleteStep === trailingIncompleteStep
+    && previous.hasStructuredTrace === Boolean(sourceTurn)
+    && previous.status === status) return previous;
+  return { turn, steps, error, terminal, trailingIncompleteStep, hasStructuredTrace: Boolean(sourceTurn), status };
+}
+
+export function createDisplayTurnProjector(): DisplayTurnProjector {
+  let previousRows = new Map<string, DisplayTurnRow>();
+
+  return {
+    project(messages, traceTurns, localProcessEntries, turnOffset, conversationActive = false) {
+      const traceByTurn = indexTraceTurns(traceTurns);
+      const localRequestsByTurn = indexLocalRequests(localProcessEntries);
+      const pending: Array<{ user: MessageData; sourceTurn?: TraceTurn; localRequests: ToolProcessEntry[]; assistantTexts: string[]; turn: number }> = [];
+      let turnNumber = turnOffset;
+      for (let index = 0; index < messages.length; index += 1) {
+        const message = messages[index];
+        if (message.role !== "user") continue;
+        const messageTurn = Number(message.turn);
+        turnNumber = Number.isSafeInteger(messageTurn) && messageTurn > 0 ? messageTurn : turnNumber + 1;
+        const assistant = assistantTextsAfter(messages, index);
+        pending.push({
+          user: message,
+          sourceTurn: traceByTurn.get(turnNumber),
+          localRequests: localRequestsByTurn.get(turnNumber) || [],
+          assistantTexts: assistant.texts,
+          turn: turnNumber,
+        });
+        index = assistant.nextIndex - 1;
+      }
+
+      let runningTurn: number | undefined;
+      if (conversationActive) {
+        for (let index = pending.length - 1; index >= 0; index -= 1) {
+          const item = pending[index]!;
+          const hasLegacyFinal = !item.sourceTurn && item.assistantTexts.length > 0;
+          const isInterrupted = !hasLegacyFinal
+            && item.sourceTurn?.terminal?.status !== "completed"
+            && item.sourceTurn?.terminal?.status !== "failed";
+          if (isInterrupted) {
+            runningTurn = item.turn;
+            break;
+          }
+        }
+      }
+
+      const nextRows = new Map<string, DisplayTurnRow>();
+      const result = pending.map((item) => {
+        const rowKey = displayTurnRowKey(item.turn, item.user);
+        const previous = previousRows.get(rowKey);
+        const projectedTurn = projectTurn(
+          previous?.turn,
+          item.user,
+          item.sourceTurn,
+          item.localRequests,
+          item.assistantTexts,
+          item.turn,
+          runningTurn,
+        );
+        const stableUser = previous && sameMessage(previous.user, item.user) ? previous.user : item.user;
+        const row = previous && stableUser === previous.user && projectedTurn === previous.turn
+          ? previous
+          : { user: stableUser, turn: projectedTurn };
+        nextRows.set(rowKey, row);
+        return row;
+      });
+      previousRows = nextRows;
+      return result;
+    },
+  };
+}
+
 export function buildDisplayTurns(
   messages: MessageData[],
   traceTurns: TraceTurn[],
   localProcessEntries: ToolProcessEntry[],
   turnOffset: number,
   conversationActive = false,
-): Array<{ user: MessageData; turn: DisplayTurn }> {
-  const result: Array<{ user: MessageData; turn: DisplayTurn }> = [];
-  let turnNumber = turnOffset;
-  for (let index = 0; index < messages.length; index += 1) {
-    const message = messages[index];
-    if (message.role !== "user") continue;
-    const messageTurn = Number(message.turn);
-    turnNumber = Number.isSafeInteger(messageTurn) && messageTurn > 0 ? messageTurn : turnNumber + 1;
-    const assistant = assistantTextsAfter(messages, index);
-    const sourceTurn = traceTurns.find((item) => item.turn === turnNumber);
-    const steps: DisplayStep[] = (sourceTurn?.steps || []).map((step) => ({ ...step, tools: [...step.tools] }));
-    const localRequests = localProcessEntries.filter((entry) => entry.turn === turnNumber && entry.name === "请求模型");
-    for (const localRequest of localRequests) {
-      let step = steps.find((item) => item.step === localRequest.step);
-      if (!step) {
-        step = { turn: turnNumber, step: localRequest.step || 1, tools: [], completed: false };
-        steps.push(step);
-      }
-      step.localRequest = localRequest;
-    }
-
-    // 结构化 trace 存在时只信任其中的 assistant/turn 终态；surface fallback 仅兼容完全无 trace 的旧会话。
-    if (!sourceTurn && assistant.texts.length > 0) {
-      const step = steps.at(-1) || { turn: turnNumber, step: 1, tools: [], completed: false };
-      if (!steps.includes(step)) steps.push(step);
-      step.assistant = { id: `live-assistant-${message.id}`, seq: Number.MAX_SAFE_INTEGER, turn: turnNumber, step: step.step, text: assistant.texts.at(-1) || "", hasToolCalls: false };
-    }
-    if (sourceTurn?.error && steps.length === 0) steps.push({ turn: turnNumber, step: 1, tools: [], completed: false });
-    steps.sort((left, right) => left.step - right.step);
-    const hasLegacyFinal = !sourceTurn && assistant.texts.length > 0;
-    const status: DisplayTurn["status"] = sourceTurn?.terminal?.status === "failed"
-      ? "failed"
-      : sourceTurn?.terminal?.status === "completed" || hasLegacyFinal
-        ? "completed"
-        : "interrupted";
-    result.push({
-      user: message,
-      turn: {
-        turn: turnNumber,
-        steps,
-        error: sourceTurn?.error,
-        terminal: sourceTurn?.terminal,
-        trailingIncompleteStep: sourceTurn?.trailingIncompleteStep,
-        hasStructuredTrace: Boolean(sourceTurn),
-        status,
-      },
-    });
-    index = assistant.nextIndex - 1;
-  }
-  const latestIncomplete = [...result].reverse().find((item) => item.turn.status === "interrupted");
-  if (conversationActive && latestIncomplete) latestIncomplete.turn.status = "running";
-  return result;
+): DisplayTurnRow[] {
+  return createDisplayTurnProjector().project(messages, traceTurns, localProcessEntries, turnOffset, conversationActive);
 }
 
 export function nextDisplayTurn(messages: MessageData[], traceTurns: TraceTurn[]): number {
@@ -407,14 +656,13 @@ export function nextDisplayTurn(messages: MessageData[], traceTurns: TraceTurn[]
   return latestKnownTurn > 0 ? latestKnownTurn + 1 : messages.filter((message) => message.role === "user").length + 1;
 }
 
-function AssistantStep({
+const AssistantStep = memo(function AssistantStep({
   step,
   turn,
   turnError,
   permissionRequests,
   resolvingPermissionId,
   onResolvePermission,
-  sending,
   collapsed,
   turnStatus,
 }: {
@@ -424,7 +672,6 @@ function AssistantStep({
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
-  sending: boolean;
   collapsed: boolean;
   turnStatus: DisplayTurn["status"];
 }) {
@@ -452,7 +699,7 @@ function AssistantStep({
 
       {!hideProcess && step.tools.length > 0 && (
         <div className="agent-step-tools">
-          {step.tools.map((part) => <div key={part.callId || part.id}><ToolPartView part={toolEntryToPart(part)} /></div>)}
+          {step.tools.map((part) => <div key={part.callId || part.id}><ToolPartView entry={part} /></div>)}
         </div>
       )}
 
@@ -466,26 +713,24 @@ function AssistantStep({
       )}
 
       {stepPermissions.map((requestItem) => (
-        <div key={requestItem.requestId}><PermissionRequestCard request={requestItem} resolving={resolvingPermissionId === requestItem.requestId} onResolve={(outcome) => void onResolvePermission(requestItem.requestId, outcome)} /></div>
+        <div key={requestItem.requestId}><PermissionRequestCard request={requestItem} resolving={resolvingPermissionId === requestItem.requestId} onResolvePermission={onResolvePermission} /></div>
       ))}
 
       {!hideProcess && turnError && <div className="agent-step-error">{turnError.result}</div>}
     </div>
   );
-}
+});
 
-function TurnBlock({
+const TurnBlock = memo(function TurnBlock({
   turn,
   permissionRequests,
   resolvingPermissionId,
   onResolvePermission,
-  sending,
 }: {
   turn: DisplayTurn;
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
-  sending: boolean;
 }) {
   // 只有明确完成且存在真实最终回复时默认折叠；运行、中断和失败都默认展开过程。
   const hasFinalResponse = shouldCollapseTurn(turn);
@@ -518,7 +763,6 @@ function TurnBlock({
             permissionRequests={permissionRequests}
             resolvingPermissionId={resolvingPermissionId}
             onResolvePermission={onResolvePermission}
-            sending={sending}
             collapsed={collapsed}
             turnStatus={turn.status}
           />
@@ -529,11 +773,96 @@ function TurnBlock({
       )}
     </div>
   );
+});
+
+const EMPTY_PERMISSION_REQUESTS: PermissionRequest[] = [];
+
+interface TranscriptTurnRowProps {
+  user: MessageData;
+  turn: DisplayTurn;
+  permissionRequests: PermissionRequest[];
+  resolvingPermissionId: string | null;
+  onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
 }
+
+const TranscriptTurnRow = memo(function TranscriptTurnRow({
+  user,
+  turn,
+  permissionRequests,
+  resolvingPermissionId,
+  onResolvePermission,
+}: TranscriptTurnRowProps) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null);
+  const [containmentEnabled, setContainmentEnabled] = useState(false);
+
+  useLayoutEffect(() => {
+    const row = rowRef.current;
+    if (!row) return;
+    const canObserveResize = typeof ResizeObserver !== "undefined";
+    const measure = () => {
+      const height = Math.ceil(row.getBoundingClientRect().height);
+      if (height <= 0) return;
+      setMeasuredHeight((current) => current === height ? current : height);
+      if (canObserveResize) setContainmentEnabled(true);
+    };
+
+    measure();
+    if (!canObserveResize) return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(row);
+    return () => observer.disconnect();
+  }, []);
+
+  const shellStyle = measuredHeight === null
+    ? undefined
+    : { minBlockSize: `${measuredHeight}px`, minHeight: `${measuredHeight}px` };
+  const className = containmentEnabled && measuredHeight !== null
+    ? "transcript-turn-row transcript-turn-row-optimized"
+    : "transcript-turn-row";
+
+  return (
+    <div className="transcript-turn-shell" style={shellStyle}>
+      <div ref={rowRef} className={className}>
+        <div className="chat-message user transcript-user-message">
+          <div className="chat-message-content"><MarkdownMessage content={user.content} /></div>
+        </div>
+        {(turn.hasStructuredTrace || turn.steps.length > 0) && (
+          <TurnBlock
+            turn={turn}
+            permissionRequests={permissionRequests}
+            resolvingPermissionId={resolvingPermissionId}
+            onResolvePermission={onResolvePermission}
+          />
+        )}
+      </div>
+    </div>
+  );
+});
 
 export default function Transcript(props: TranscriptProps) {
   const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, sending, conversationActive, onChangeProject, onLinkClick } = props;
-  const displayTurns = useMemo(() => buildDisplayTurns(messages, traceTurns, localProcessEntries, turnOffset, conversationActive || sending), [messages, traceTurns, localProcessEntries, turnOffset, conversationActive, sending]);
+  const displayTurnProjectorRef = useRef<DisplayTurnProjector | null>(null);
+  if (!displayTurnProjectorRef.current) displayTurnProjectorRef.current = createDisplayTurnProjector();
+  const displayTurns = useMemo(
+    () => displayTurnProjectorRef.current!.project(messages, traceTurns, localProcessEntries, turnOffset, conversationActive || sending),
+    [messages, traceTurns, localProcessEntries, turnOffset, conversationActive, sending],
+  );
+  const permissionRequestsByTurn = useMemo(() => {
+    const grouped = new Map<number, PermissionRequest[]>();
+    for (const request of permissionRequests) {
+      const requests = grouped.get(request.turn);
+      if (requests) requests.push(request);
+      else grouped.set(request.turn, [request]);
+    }
+    return grouped;
+  }, [permissionRequests]);
+  const onResolvePermissionRef = useRef(onResolvePermission);
+  onResolvePermissionRef.current = onResolvePermission;
+  const stableResolvePermission = useMemo(
+    () => (requestId: string, outcome: PermissionOutcome) => onResolvePermissionRef.current(requestId, outcome),
+    [],
+  );
   const surfaceRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -565,22 +894,20 @@ export default function Transcript(props: TranscriptProps) {
         </div>
       )}
 
-      {displayTurns.map(({ user, turn }) => (
-        <Fragment key={user.id}>
-          <div className="chat-message user">
-            <div className="chat-message-content"><MarkdownMessage content={user.content} /></div>
-          </div>
-          {(turn.hasStructuredTrace || turn.steps.length > 0) && (
-            <TurnBlock
-              turn={turn}
-              permissionRequests={permissionRequests}
-              resolvingPermissionId={resolvingPermissionId}
-              onResolvePermission={onResolvePermission}
-              sending={sending}
-            />
-          )}
-        </Fragment>
-      ))}
+      {displayTurns.map(({ user, turn }) => {
+        const turnPermissionRequests = permissionRequestsByTurn.get(turn.turn) || EMPTY_PERMISSION_REQUESTS;
+        const turnResolvingPermissionId = turnPermissionRequests.some((request) => request.requestId === resolvingPermissionId)
+          ? resolvingPermissionId
+          : null;
+        return <TranscriptTurnRow
+          key={user.id}
+          user={user}
+          turn={turn}
+          permissionRequests={turnPermissionRequests}
+          resolvingPermissionId={turnResolvingPermissionId}
+          onResolvePermission={stableResolvePermission}
+        />;
+      })}
 
     </div>
   );

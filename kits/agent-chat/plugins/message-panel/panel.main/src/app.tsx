@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type UIEvent } from 'react';
+import { createElement, useCallback, useEffect, useLayoutEffect, useRef, useState, type UIEvent } from 'react';
 import { acceptConversationUiState, createConversationUiStateGate } from './ui-state-gate.js';
 import { createTraceSyncRunGate, createTraceSyncState, mergeTraceEvents, mergeTracePage, readTraceEvent, scheduleTraceSyncRun, traceSyncFailureMessage, type TraceSyncState } from './trace-sync.js';
 import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import Transcript, { nextDisplayTurn } from './transcript.js';
+import { applyMessageDeltaUpdates, createMessageDeltaScheduler, shouldIgnorePendingBottomScroll, type MessageDeltaUpdate } from './update-scheduler.js';
 import './index.css';
 
 type Source = 'harbors';
@@ -370,6 +371,9 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const tracePageRequestSeqRef = useRef(0);
   const traceOlderLoadingRef = useRef(false);
   const olderScrollAnchorRef = useRef<{ top: number; height: number } | null>(null);
+  const messageDeltaSchedulerRef = useRef<ReturnType<typeof createMessageDeltaScheduler> | null>(null);
+  const bottomScrollFrameRef = useRef<number | null>(null);
+  const bottomScrollGenerationRef = useRef(0);
   const permissionRequestSeqRef = useRef(0);
   const activeConversationsRef = useRef<Set<string>>(new Set());
   const conversationsMapRef = useRef<Map<string, ConversationData>>(new Map());
@@ -382,6 +386,14 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setTraceOlderLoading(false);
     setTraceHasMore(false);
     traceStateRef.current = createTraceSyncState(id);
+  };
+
+  const cancelBottomScroll = (): void => {
+    bottomScrollGenerationRef.current += 1;
+    if (bottomScrollFrameRef.current !== null) {
+      window.cancelAnimationFrame(bottomScrollFrameRef.current);
+      bottomScrollFrameRef.current = null;
+    }
   };
 
   const publishTraceState = (id: string, state: TraceSyncState): void => {
@@ -627,16 +639,32 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     const list = messageListRef.current;
     const anchor = olderScrollAnchorRef.current;
     if (list && anchor) {
+      cancelBottomScroll();
+      // 请求开始时 layout effect 也会运行一次；等历史页提交并结束 loading 后再消费 anchor，避免提前清空。
+      if (traceOlderLoading) return;
       list.scrollTop = anchor.top + list.scrollHeight - anchor.height;
       olderScrollAnchorRef.current = null;
       return;
     }
-    if (list && shouldFollowLatestRef.current) list.scrollTop = list.scrollHeight;
+    if (!list || !shouldFollowLatestRef.current || bottomScrollFrameRef.current !== null) return;
+    const generation = bottomScrollGenerationRef.current;
+    bottomScrollFrameRef.current = window.requestAnimationFrame(() => {
+      bottomScrollFrameRef.current = null;
+      if (generation !== bottomScrollGenerationRef.current || olderScrollAnchorRef.current || !shouldFollowLatestRef.current) return;
+      const currentList = messageListRef.current;
+      if (currentList) currentList.scrollTop = currentList.scrollHeight;
+    });
   }, [conversationId, loading, messages, sending, traceTurns, localProcessEntries, permissionRequests, traceHasMore, traceOlderLoading]);
 
   useEffect(() => {
     let disposed = false;
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; shouldFollowLatestRef.current = true; conversationIdRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const messageDeltaScheduler = createMessageDeltaScheduler((updates: MessageDeltaUpdate[]) => {
+      if (disposed) return;
+      setMessages((current) => applyMessageDeltaUpdates(current, updates) as MessageData[]);
+    });
+    messageDeltaSchedulerRef.current = messageDeltaScheduler;
+    const cancelPendingMessageDeltas = (): void => { messageDeltaScheduler.cancel(); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; cancelPendingMessageDeltas(); cancelBottomScroll(); olderScrollAnchorRef.current = null; shouldFollowLatestRef.current = true; conversationIdRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       clearConversation(); setSource(draftData?.source || 'harbors'); setProject(draftData?.project || null); setDraft(true);
@@ -644,6 +672,9 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     const loadConversation = (id: string) => {
       // UI state 的 revision 更新不代表切换会话；同一会话只靠 append 保持增量更新。
       if (conversationIdRef.current === id) return;
+      cancelPendingMessageDeltas();
+      cancelBottomScroll();
+      olderScrollAnchorRef.current = null;
       const seq = ++loadSeqRef.current;
       if (traceStateRef.current.conversationId !== id) resetTraceState(id);
       // 该会话是否正在执行中：后端 active 集合 或 本地正在给它发送
@@ -707,6 +738,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
           setSending(true);
         } else if (sendingConversationRef.current !== current) {
           // 后端已结束，且本地也不是正在给该会话发送 → 解锁
+          messageDeltaScheduler.flush();
           void syncTraceSince(current);
           setSending(false);
           setStopping(false);
@@ -716,12 +748,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     registerSetter('agent.message.delta', (value: unknown) => {
       const delta = value as { conversationId?: string; messageId?: string; content?: string } | null;
       if (!disposed && delta?.conversationId === conversationIdRef.current && delta.messageId) {
-        setMessages((current) => {
-          const found = current.some((message) => message.id === delta.messageId);
-          return found
-            ? current.map((message) => message.id === delta.messageId ? { ...message, content: delta.content || '' } : message)
-            : [...current, { id: delta.messageId!, role: 'assistant', content: delta.content || '' }];
-        });
+        messageDeltaScheduler.enqueue({ messageId: delta.messageId, content: typeof delta.content === 'string' ? delta.content : '' });
       }
     });
     registerSetter('agent.message.status', (value: unknown) => {
@@ -734,7 +761,11 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       if (progress.contextUsage !== undefined) setContextUsage(readContextUsage(progress.contextUsage));
       // 面板可能在会话已经开始后才收到 conversation.changed；progress 是当前回合运行态的直接信号。
       if (progress.phase === 'running' || progress.phase === 'waiting_permission') setSending(true);
-      if (progress.phase === 'completed' || progress.phase === 'error') void syncTraceSince(statusConversationId);
+      if (progress.phase === 'completed' || progress.phase === 'error') {
+        // completed/error 可能紧跟最后一个 delta 到达，先提交当前帧队列再补拉轨迹。
+        messageDeltaScheduler.flush();
+        void syncTraceSince(statusConversationId);
+      }
       if (progress.phase === 'waiting_permission') {
         void loadPermissionRequests(statusConversationId);
       }
@@ -744,7 +775,12 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     requestWithRetry(ctx, 'conversation', 'getState').then((value: unknown) => applyConversationUiState(value, initialUiStateSequence)).catch((err: unknown) => {
       if (!disposed) logError('加载对话界面状态失败', err);
     });
-    return () => { disposed = true; };
+    return () => {
+      disposed = true;
+      messageDeltaScheduler.cancel();
+      if (messageDeltaSchedulerRef.current === messageDeltaScheduler) messageDeltaSchedulerRef.current = null;
+      cancelBottomScroll();
+    };
   }, [ctx, registerSetter]);
 
   useEffect(() => {
@@ -1012,9 +1048,12 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   const handleMessageListScroll = (event: UIEvent<HTMLDivElement>): void => {
     const list = event.currentTarget;
+    // DOM 布局变化可能在待执行的 RAF 前触发被动 scroll；不能因此取消原本的底部跟随。
+    if (shouldIgnorePendingBottomScroll(bottomScrollFrameRef.current !== null, 'passive')) return;
     shouldFollowLatestRef.current = list.scrollHeight - list.scrollTop - list.clientHeight < 48;
     if (list.scrollTop <= 48 && conversationId && traceHasMore && !traceOlderLoadingRef.current) void loadOlderTrace(conversationId);
   };
+  const cancelPendingBottomScrollForUser = (): void => { cancelBottomScroll(); };
   return <div className="message-panel">
     {projectPickerOpen && (
       <DirectoryPicker
@@ -1025,27 +1064,36 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       />
     )}
     {(error || configurationError) && <div role="alert" className="error-alert">{error || configurationError}</div>}
-    <div className="message-list-container" ref={messageListRef} onScroll={handleMessageListScroll}>
+    <div
+      className="message-list-container"
+      ref={messageListRef}
+      onScroll={handleMessageListScroll}
+      onWheel={cancelPendingBottomScrollForUser}
+      onPointerDown={cancelPendingBottomScrollForUser}
+      onTouchStart={cancelPendingBottomScrollForUser}
+      onKeyDown={cancelPendingBottomScrollForUser}
+    >
       {!conversationId && !draft ? <div className="empty-state"><div className="empty-state-card"><div className="empty-state-mark">✦</div><h2>选择或新建一个对话</h2><p>从左侧项目中继续工作，或点击"新对话"开始。</p></div></div> : (
         <>
           {loading && !draft && messages.length === 0 && traceTurns.length === 0 && <div className="conversation-loading">正在加载对话…</div>}
           {traceHasMore && <button type="button" className="message-history-loader" onClick={() => conversationId && void loadOlderTrace(conversationId)} disabled={traceOlderLoading}>{traceOlderLoading ? '正在加载更早回合…' : '加载更早回合'}</button>}
-          <Transcript
-            draft={draft}
-            project={project}
-            modelLabel={models.find((item) => item.id === model)?.name || fallbackModel(source)}
-            messages={messages}
-            traceTurns={traceTurns}
-            localProcessEntries={localProcessEntries}
-            turnOffset={0}
-            permissionRequests={permissionRequests}
-            resolvingPermissionId={resolvingPermissionId}
-            onResolvePermission={resolvePermission}
-            sending={sending}
-            conversationActive={Boolean(conversationId && activeConversationsRef.current.has(conversationId))}
-            onChangeProject={() => setProjectPickerOpen(true)}
-            onLinkClick={handleLinkClick}
-          />
+          {createElement(Transcript, {
+            key: conversationId ? `conversation:${conversationId}` : draft ? `draft:${source}:${project || ''}` : 'empty',
+            draft,
+            project,
+            modelLabel: models.find((item) => item.id === model)?.name || fallbackModel(source),
+            messages,
+            traceTurns,
+            localProcessEntries,
+            turnOffset: 0,
+            permissionRequests,
+            resolvingPermissionId,
+            onResolvePermission: resolvePermission,
+            sending,
+            conversationActive: Boolean(conversationId && activeConversationsRef.current.has(conversationId)),
+            onChangeProject: () => setProjectPickerOpen(true),
+            onLinkClick: handleLinkClick,
+          })}
         </>
       )}
     </div>
