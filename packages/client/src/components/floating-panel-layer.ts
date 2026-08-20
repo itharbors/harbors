@@ -7,6 +7,8 @@ export interface FloatingPanelState {
   title: string;
   titleKey?: string;
   src: string;
+  availability?: 'available' | 'unavailable';
+  revision?: number;
   state: 'open' | 'minimized';
   position?: { x: number; y: number };
   edge?: 'left' | 'right' | 'bottom';
@@ -16,6 +18,7 @@ export class FloatingPanelLayer extends HTMLElement {
   static observedAttributes = ['data-state'];
 
   private disposeI18n: (() => void) | null = null;
+  private suppressAttributeRender = false;
   private handleClick = (event: Event) => this.handleShadowClick(event);
 
   private get items(): FloatingPanelState[] {
@@ -53,9 +56,42 @@ export class FloatingPanelLayer extends HTMLElement {
   }
 
   attributeChangedCallback(): void {
-    if (this.shadowRoot) {
+    if (this.shadowRoot && !this.suppressAttributeRender) {
       this.render();
     }
+  }
+
+  /** Update only the affected floating panel after a plugin availability event. */
+  updatePanelAvailability(input: {
+    panelName: string;
+    src: string;
+    state: 'available' | 'unavailable';
+    revision: number;
+  }): void {
+    const nextItems = this.items.map((item) => item.panelName === input.panelName
+      ? {
+        ...item,
+        src: input.state === 'available' ? input.src : '',
+        availability: input.state,
+        revision: input.revision,
+      }
+      : item);
+
+    this.suppressAttributeRender = true;
+    this.setAttribute('data-state', JSON.stringify(nextItems));
+    this.suppressAttributeRender = false;
+
+    this.shadowRoot?.querySelectorAll<HTMLElement>(`ce-panel[data-panel-name="${escapeSelector(input.panelName)}"]`)
+      .forEach((panel) => {
+        panel.setAttribute('data-panel-revision', String(input.revision));
+        if (input.state === 'unavailable') {
+          panel.removeAttribute('src');
+          panel.setAttribute('availability', 'unavailable');
+        } else {
+          panel.setAttribute('availability', 'available');
+          panel.setAttribute('src', input.src);
+        }
+      });
   }
 
   private render(): void {
@@ -164,7 +200,9 @@ export class FloatingPanelLayer extends HTMLElement {
               data-panel-name="${escapeAttr(item.panelName)}"
               title="${escapeAttr(item.title)}"
               ${item.titleKey ? `title-i18n="${escapeAttr(item.titleKey)}"` : ''}
-              src="${escapeAttr(item.src)}"
+              ${item.availability === 'unavailable' ? 'availability="unavailable"' : ''}
+              ${item.revision !== undefined ? `data-panel-revision="${item.revision}"` : ''}
+              ${item.availability === 'unavailable' ? '' : `src="${escapeAttr(item.src)}"`}
             ></ce-panel>
           </ce-panel-group>
         </div>
@@ -229,6 +267,11 @@ function isFloatingPanelState(value: unknown): value is FloatingPanelState {
     && typeof item.title === 'string'
     && typeof item.src === 'string'
     && (item.state === 'open' || item.state === 'minimized');
+}
+
+function escapeSelector(value: string): string {
+  if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
+  return value.replace(/([\\"\[\]#.])/g, '\\$1');
 }
 
 function renderChipPosition(edge: 'left' | 'right' | 'bottom', index: number): string {

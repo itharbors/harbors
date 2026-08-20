@@ -382,6 +382,32 @@ describe('createEditor', () => {
     expect(() => editor.panel.getInfo('panel-plugin.editor')).toThrow(/not registered/);
   });
 
+  it('emits panel availability when a contributed panel plugin is unloaded and loaded', async () => {
+    const pluginDir = createPlugin('panel-lifecycle-plugin', {
+      panel: {
+        editor: { entry: './panel/dist/index.html' },
+      },
+    });
+    const events: Array<{ state: string; panel: { name: string }; revision: number }> = [];
+    editor.panel.subscribe((event) => events.push(event));
+
+    await editor.plugin.register(pluginDir);
+    await editor.plugin.load(pluginDir);
+    events.length = 0;
+
+    await editor.plugin.unload(pluginDir);
+    await editor.plugin.load(pluginDir);
+
+    expect(events.map((event) => ({
+      state: event.state,
+      name: event.panel.name,
+      revision: event.revision,
+    }))).toEqual([
+      { state: 'unavailable', name: 'panel-lifecycle-plugin.editor', revision: 2 },
+      { state: 'available', name: 'panel-lifecycle-plugin.editor', revision: 3 },
+    ]);
+  });
+
   it('registers contributed messages through the built-in message plugin', async () => {
     const pluginDir = createPlugin(
       'message-plugin',

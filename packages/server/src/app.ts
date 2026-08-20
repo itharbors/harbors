@@ -126,6 +126,12 @@ export function createApp(
           kitMenuTree: editor.menu.getKitState().tree,
         });
     });
+    editor.panel.subscribe((event) => {
+      channel.broadcast(runtimeSessionId, {
+        type: 'panel-availability-changed',
+        ...event,
+      });
+    });
     try {
       await editor.kit.load(options.kit ?? options.kitName ?? options.kitPath ?? assembly.defaultKit);
       return editor;

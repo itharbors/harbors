@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { PanelModule } from '../../src/framework/panel/index';
 
 describe('PanelModule', () => {
@@ -30,5 +30,59 @@ describe('PanelModule', () => {
     panelModule.register('a.panel', '/a');
     panelModule.unregister('a.panel');
     expect(panelModule.list()).toEqual([]);
+  });
+
+  it('emits availability events with monotonically increasing revisions', () => {
+    const events: unknown[] = [];
+    panelModule.subscribe((event) => events.push(event));
+
+    panelModule.register('owner.first', '/first', { title: 'First' }, 'owner');
+    panelModule.register('owner.second', '/second', {}, 'owner');
+    panelModule.clearOwner('owner');
+
+    expect(events).toEqual([
+      {
+        panel: {
+          name: 'owner.first',
+          entry: '/api/assets/panel/owner.first/index.html',
+          title: 'First',
+        },
+        state: 'available',
+        revision: 1,
+      },
+      {
+        panel: {
+          name: 'owner.second',
+          entry: '/api/assets/panel/owner.second/index.html',
+        },
+        state: 'available',
+        revision: 2,
+      },
+      {
+        panel: {
+          name: 'owner.first',
+          entry: '/api/assets/panel/owner.first/index.html',
+          title: 'First',
+        },
+        state: 'unavailable',
+        revision: 3,
+      },
+      {
+        panel: {
+          name: 'owner.second',
+          entry: '/api/assets/panel/owner.second/index.html',
+        },
+        state: 'unavailable',
+        revision: 4,
+      },
+    ]);
+  });
+
+  it('does not emit when unregistering a missing panel', () => {
+    const listener = vi.fn();
+    panelModule.subscribe(listener);
+
+    expect(() => panelModule.unregister('missing')).toThrow(/not registered/);
+    expect(listener).not.toHaveBeenCalled();
   });
 });

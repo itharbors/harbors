@@ -35,6 +35,8 @@ export class EditorApp extends HTMLElement {
   private workspacePath: string = '—';
   private bootstrap: BootstrapInfo | null = null;
   private panelMap = new Map<string, BootstrapInfo['panels'][number]>();
+  private readonly panelRevisions = new Map<string, number>();
+  private readonly panelAvailability = new Map<string, 'available' | 'unavailable'>();
   private layout: EditorLayoutNode | null = null;
   private dragController: TabDragController | null = null;
   private hostThemeTokens: ThemeTokens = DEFAULT_THEME_TOKENS;
@@ -209,6 +211,9 @@ export class EditorApp extends HTMLElement {
         ...(bootstrap.theme ?? {}),
       };
       this.panelMap = new Map(bootstrap.panels.map((panel) => [panel.name, panel]));
+      this.panelRevisions.clear();
+      this.panelAvailability.clear();
+      bootstrap.panels.forEach((panel) => this.panelAvailability.set(panel.name, 'available'));
       this.floatingPanels = this.createBootstrapFloatingPanels(bootstrap);
       this.layout = null;
       this.defaultLayoutSignature = null;
@@ -229,6 +234,9 @@ export class EditorApp extends HTMLElement {
       }
       if (event.type === 'panel-dispatch') {
         this.dispatchPanelEvent(event);
+      }
+      if ((event as { type?: string }).type === 'panel-availability-changed') {
+        this.handlePanelAvailabilityChanged(event);
       }
       if (event.type === 'locale-changed' || event.type === 'messages-changed') {
         this.handleI18nEvent(event);
@@ -451,13 +459,17 @@ export class EditorApp extends HTMLElement {
   }): FloatingPanelState | null {
     const panel = this.panelMap.get(input.panelName);
     if (!panel) return null;
+    const availability = this.panelAvailability.get(input.panelName) ?? 'available';
+    const revision = this.panelRevisions.get(input.panelName);
 
     return {
       id: input.id,
       panelName: input.panelName,
       title: panel.titleKey ? i18nStore.t(panel.titleKey) : (panel.title ?? panel.name),
       titleKey: panel.titleKey,
-      src: this.withSession(panel.entry),
+      src: availability === 'unavailable' ? '' : this.withSession(panel.entry, revision),
+      availability,
+      revision,
       state: input.state,
       position: input.state === 'open'
         ? { x: 80 + input.index * 24, y: 64 + input.index * 24 }
@@ -629,6 +641,79 @@ export class EditorApp extends HTMLElement {
     }
   }
 
+  private handlePanelAvailabilityChanged(event: object): void {
+    const record = event as Record<string, unknown>;
+    if (!isPanelAvailabilityChangedEvent(record)) return;
+
+    const previousRevision = this.panelRevisions.get(record.panel.name);
+    if (previousRevision !== undefined && record.revision <= previousRevision) return;
+    this.panelRevisions.set(record.panel.name, record.revision);
+    this.panelAvailability.set(record.panel.name, record.state);
+
+    if (record.state === 'available') {
+      this.panelMap.set(record.panel.name, record.panel);
+      if (this.bootstrap) {
+        this.bootstrap = {
+          ...this.bootstrap,
+          panels: this.bootstrap.panels.map((panel) => (
+            panel.name === record.panel.name ? record.panel : panel
+          )),
+        };
+      }
+    }
+
+    const descriptor = this.panelMap.get(record.panel.name) ?? record.panel;
+    if (!this.panelMap.has(record.panel.name)) {
+      this.panelMap.set(record.panel.name, descriptor);
+    }
+    const src = record.state === 'available'
+      ? this.withSession(descriptor.entry, record.revision)
+      : '';
+    this.querySelectorAll<HTMLElement>('ce-panel').forEach((panel) => {
+      if (panel.getAttribute('data-panel-name') !== record.panel.name) return;
+      this.applyPanelAvailabilityToElement(panel, src, record.state, record.revision);
+    });
+
+    const floatingLayer = this.querySelector('floating-panel-layer') as (HTMLElement & {
+      updatePanelAvailability?: (input: {
+        panelName: string;
+        src: string;
+        state: 'available' | 'unavailable';
+        revision: number;
+      }) => void;
+    }) | null;
+    floatingLayer?.updatePanelAvailability?.({
+      panelName: record.panel.name,
+      src,
+      state: record.state,
+      revision: record.revision,
+    });
+    this.floatingPanels = this.floatingPanels.map((panel) => panel.panelName === record.panel.name
+      ? {
+        ...panel,
+        src,
+        availability: record.state,
+        revision: record.revision,
+      }
+      : panel);
+  }
+
+  private applyPanelAvailabilityToElement(
+    panel: HTMLElement,
+    src: string,
+    state: 'available' | 'unavailable',
+    revision: number,
+  ): void {
+    panel.setAttribute('data-panel-revision', String(revision));
+    if (state === 'unavailable') {
+      panel.removeAttribute('src');
+      panel.setAttribute('availability', 'unavailable');
+      return;
+    }
+    panel.setAttribute('availability', 'available');
+    panel.setAttribute('src', src);
+  }
+
   private clearIframeThemeBindings(): void {
     for (const dispose of this.iframeThemeBindings.values()) {
       dispose();
@@ -774,7 +859,7 @@ export class EditorApp extends HTMLElement {
           data-tab-id="${escapeAttr(tab.tabId)}"
           data-panel-name="${escapeAttr(tab.panelName)}"
           ${active ? 'active ' : ''}
-          ${tab.src ? `src="${escapeAttr(this.withSession(tab.src))}"` : ''}
+          ${this.renderPanelSourceAttributes(tab.panelName, tab.src)}
           style="min-width:0;min-height:0;background:transparent;"
         ></ce-panel>
       `;
@@ -811,7 +896,7 @@ export class EditorApp extends HTMLElement {
         data-panel-name="${escapeAttr(node.panelName)}"
         ${fixed}
         style="${style}"
-        ${node.src ? `src="${escapeAttr(this.withSession(node.src))}"` : ''}
+        ${this.renderPanelSourceAttributes(node.panelName, node.src)}
       ></ce-panel>
     `;
   }
@@ -844,9 +929,20 @@ export class EditorApp extends HTMLElement {
     `;
   }
 
-  private withSession(entry: string): string {
+  private renderPanelSourceAttributes(panelName: string, entry?: string): string {
+    const revision = this.panelRevisions.get(panelName);
+    const unavailable = this.panelAvailability.get(panelName) === 'unavailable';
+    const revisionAttribute = revision === undefined ? '' : `data-panel-revision="${revision}"`;
+    const availabilityAttribute = unavailable ? 'availability="unavailable"' : '';
+    const currentEntry = this.panelMap.get(panelName)?.entry ?? entry;
+    const src = currentEntry && !unavailable ? this.withSession(currentEntry, revision) : '';
+    return `${availabilityAttribute} ${revisionAttribute} ${src ? `src="${escapeAttr(src)}"` : ''}`;
+  }
+
+  private withSession(entry: string, revision?: number): string {
     const url = new URL(entry, window.location.origin || 'http://localhost');
     url.searchParams.set('sessionId', this.bootstrap?.sessionId ?? this.session?.sessionId ?? '');
+    if (revision !== undefined) url.searchParams.set('panelRevision', String(revision));
     return `${url.pathname}${url.search}`;
   }
 
@@ -1047,6 +1143,24 @@ function isFloatingPanelPayload(value: unknown): value is {
       || payload.state === 'minimized'
       || payload.state === 'closed'
     );
+}
+
+function isPanelAvailabilityChangedEvent(value: Record<string, unknown>): value is {
+  type: 'panel-availability-changed';
+  panel: BootstrapInfo['panels'][number];
+  state: 'available' | 'unavailable';
+  revision: number;
+} {
+  const panel = value.panel;
+  if (!panel || typeof panel !== 'object') return false;
+  const descriptor = panel as { name?: unknown; entry?: unknown };
+  return value.type === 'panel-availability-changed'
+    && typeof descriptor.name === 'string'
+    && typeof descriptor.entry === 'string'
+    && (value.state === 'available' || value.state === 'unavailable')
+    && typeof value.revision === 'number'
+    && Number.isFinite(value.revision)
+    && value.revision >= 0;
 }
 
 function isOpenPanelResultPayload(value: unknown): value is {

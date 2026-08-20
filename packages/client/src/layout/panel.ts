@@ -1,7 +1,7 @@
 import { i18nStore } from '../i18n/store';
 
 export class Panel extends HTMLElement {
-  static observedAttributes = ['src', 'chromeless', 'type', 'title-i18n', 'aria-label-i18n'];
+  static observedAttributes = ['src', 'chromeless', 'type', 'availability', 'title-i18n', 'aria-label-i18n'];
 
   private disposeI18n: (() => void) | null = null;
 
@@ -60,7 +60,8 @@ export class Panel extends HTMLElement {
     const src = this.getAttribute('src');
     const type = this.getAttribute('type') || 'iframe';
     const isSimple = type === 'simple';
-    const shouldRenderIframe = Boolean(src);
+    const unavailable = this.getAttribute('availability') === 'unavailable';
+    const shouldRenderIframe = Boolean(src) && !unavailable;
     const chromeless = this.hasAttribute('chromeless') || isSimple;
 
     this.shadowRoot!.innerHTML = `
@@ -138,6 +139,16 @@ export class Panel extends HTMLElement {
           min-height: 0;
           overflow: hidden;
         }
+        .unavailable {
+          display: flex;
+          flex: 1;
+          align-items: center;
+          justify-content: center;
+          min-width: 0;
+          min-height: 0;
+          color: var(--ce-text-secondary, #888);
+          font-size: var(--ce-font-sm, 13px);
+        }
         iframe {
           width: 100%;
           height: 100%;
@@ -162,7 +173,9 @@ export class Panel extends HTMLElement {
         </div>
       `}
       <div class="content">
-        ${shouldRenderIframe ? `<iframe src="${escapeAttr(src!)}" sandbox="allow-scripts allow-same-origin" allowtransparency="true" style="background: transparent"></iframe>` : '<slot></slot>'}
+        ${shouldRenderIframe
+          ? `<iframe src="${escapeAttr(src!)}" sandbox="allow-scripts allow-same-origin" allowtransparency="true" style="background: transparent"></iframe>`
+          : unavailable ? '<div class="unavailable">插件未加载</div>' : '<slot></slot>'}
       </div>
     `;
   }
