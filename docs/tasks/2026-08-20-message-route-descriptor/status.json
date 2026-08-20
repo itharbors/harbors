@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-20-message-route-descriptor",
+  "type": "feature",
+  "updatedAt": "2026-08-20T14:30:48.108Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": null
+}

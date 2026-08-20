@@ -18,7 +18,7 @@ export function attach(pluginName: string, contribute: any) {
   };
 
   for (const [messageName, methods] of Object.entries(requests ?? {})) {
-    const methodList = Array.isArray(methods) ? methods : (typeof methods === 'string' ? [methods] : []);
+    const methodList = routeMethods(methods);
     if (methodList.length === 0) continue;
 
     runtime.message.registerRequest(
@@ -34,7 +34,7 @@ export function attach(pluginName: string, contribute: any) {
   }
 
   for (const [topic, methods] of Object.entries(broadcasts ?? {})) {
-    const methodList = Array.isArray(methods) ? methods : (typeof methods === 'string' ? [methods] : []);
+    const methodList = routeMethods(methods);
     if (methodList.length === 0) continue;
 
     runtime.message.registerBroadcast(
@@ -48,6 +48,17 @@ export function attach(pluginName: string, contribute: any) {
   }
 
   registered.set(pluginName, state);
+}
+
+function routeMethods(route: unknown): string[] {
+  if (typeof route === 'string') return route.length > 0 ? [route] : [];
+
+  const methods = route !== null && typeof route === 'object' && !Array.isArray(route)
+    ? (route as { methods?: unknown }).methods
+    : route;
+  if (!Array.isArray(methods) || methods.length === 0) return [];
+  if (methods.some((method) => typeof method !== 'string' || method.length === 0)) return [];
+  return [...methods];
 }
 
 export function detach(pluginName: string) {
