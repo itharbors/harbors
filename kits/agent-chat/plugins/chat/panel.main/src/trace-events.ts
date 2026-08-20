@@ -170,7 +170,8 @@ function assistantMessageDetails(value: unknown): { text: string; thinking: stri
       if (part.type === 'tool_use' || part.type === 'tool_call') hasToolCalls = true;
     }
   }
-  return { text: truncate(text), thinking: truncate(thinking), hasToolCalls };
+  // assistant 的最终回复文本不截断；只有思考过程（thinking）和工具参数/结果需要限制长度。
+  return { text, thinking: truncate(thinking), hasToolCalls };
 }
 
 /**
