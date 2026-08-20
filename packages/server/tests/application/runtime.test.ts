@@ -106,7 +106,7 @@ describe('ApplicationRuntime', () => {
 
   it('publishes only a stable credential capability snapshot in bootstrap events', async () => {
     const credentialStatusLoader = vi.fn(async () => ({
-      mode: 'local' as const,
+      mode: 'on' as const,
       status: 'unavailable' as const,
       reason: 'CREDENTIALS_LOCKED' as const,
     }));
@@ -114,21 +114,21 @@ describe('ApplicationRuntime', () => {
       plugins: [],
       hostMode: 'desktop',
       pluginPathRoots: pluginPathRoots(),
-      credentialMode: 'local',
+      credentialMode: 'on',
       credentialStatusLoader,
     });
     const snapshots: unknown[] = [];
     runtime.subscribe((event) => snapshots.push(event.bootstrap.credentials));
 
     expect(runtime.getBootstrap().credentials).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
     const bootstrap = await runtime.start();
 
     expect(bootstrap.credentials).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_LOCKED',
     });
@@ -143,7 +143,7 @@ describe('ApplicationRuntime', () => {
       plugins: [],
       hostMode: 'desktop',
       pluginPathRoots: pluginPathRoots(),
-      credentialMode: 'local',
+      credentialMode: 'on',
       credentialStatusLoader: async () => {
         throw new Error('native keyring /tmp/private-account failed');
       },
@@ -152,7 +152,7 @@ describe('ApplicationRuntime', () => {
     const bootstrap = await runtime.start();
 
     expect(bootstrap.credentials).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
@@ -163,15 +163,15 @@ describe('ApplicationRuntime', () => {
   it.each([
     [
       'a mismatched off mode',
-      'local',
+      'on',
       { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
-      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+      { mode: 'on', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
     ],
     [
-      'a mismatched multi-user mode',
-      'local',
-      { mode: 'multi-user', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
-      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+      'a mismatched on mode',
+      'off',
+      { mode: 'on', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+      { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
     ],
     [
       'off mode reported available',
@@ -180,16 +180,16 @@ describe('ApplicationRuntime', () => {
       { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
     ],
     [
-      'multi-user mode reported available',
-      'multi-user',
-      { mode: 'multi-user', status: 'available' },
-      { mode: 'multi-user', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+      'on mode reported available',
+      'on',
+      { mode: 'on', status: 'available' },
+      { mode: 'on', status: 'available' },
     ],
     [
-      'local mode with a disabled reason',
-      'local',
-      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
-      { mode: 'local', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
+      'on mode with a disabled reason',
+      'on',
+      { mode: 'on', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' },
+      { mode: 'on', status: 'unavailable', reason: 'CREDENTIALS_UNAVAILABLE' },
     ],
   ] as const)('normalizes %s against immutable configured mode', async (
     _label,
@@ -216,7 +216,7 @@ describe('ApplicationRuntime', () => {
       plugins: [],
       hostMode: 'desktop',
       pluginPathRoots: pluginPathRoots(),
-      credentialMode: 'local',
+      credentialMode: 'on',
       credentialStatusLoader: async () => {
         await Promise.resolve();
         options.credentialMode = 'off';
@@ -228,7 +228,7 @@ describe('ApplicationRuntime', () => {
     const bootstrap = await runtime.start();
 
     expect(bootstrap.credentials).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
@@ -237,7 +237,7 @@ describe('ApplicationRuntime', () => {
 
   it('copies the credential status loader reference during construction', async () => {
     const originalLoader = vi.fn(async () => ({
-      mode: 'local' as const,
+      mode: 'on' as const,
       status: 'unavailable' as const,
       reason: 'CREDENTIALS_LOCKED' as const,
     }));
@@ -245,17 +245,17 @@ describe('ApplicationRuntime', () => {
       plugins: [],
       hostMode: 'desktop',
       pluginPathRoots: pluginPathRoots(),
-      credentialMode: 'local',
+      credentialMode: 'on',
       credentialStatusLoader: originalLoader,
     };
     const runtime = new ApplicationRuntime(options);
-    options.credentialStatusLoader = async () => ({ mode: 'local', status: 'available' });
+    options.credentialStatusLoader = async () => ({ mode: 'on', status: 'available' });
 
     const bootstrap = await runtime.start();
 
     expect(originalLoader).toHaveBeenCalledOnce();
     expect(bootstrap.credentials).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_LOCKED',
     });

@@ -732,7 +732,7 @@ function createRevocableCredentialVault(credentials: PluginCredentialVault): {
   return {
     facade: {
       capability: () => run(() => credentials.capability()).catch(() => ({
-            mode: 'local',
+            mode: 'on',
             status: 'unavailable',
             reason: 'CREDENTIALS_UNAVAILABLE',
           })),

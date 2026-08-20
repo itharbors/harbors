@@ -56,9 +56,9 @@ function mappedNativeError(error: unknown): ReturnType<typeof credentialError> {
 export async function createNativeKeyringAdapter(
   options: NativeKeyringOptions = {}
 ): Promise<KeyringAdapter> {
-  const mode = options.mode ?? 'local';
+  const mode = options.mode ?? 'on';
   if (mode === 'off') throw credentialError('CREDENTIALS_DISABLED');
-  if (mode !== 'local') throw credentialError('CREDENTIALS_UNAVAILABLE');
+  if (mode !== 'on') throw credentialError('CREDENTIALS_UNAVAILABLE');
 
   let module: KeyringModule;
   try {

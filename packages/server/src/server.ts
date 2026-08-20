@@ -23,7 +23,7 @@ import { discoverApplicationPlugins } from './application/catalog';
 import { ApplicationRuntime } from './application/runtime';
 import type { ApplicationHostMode } from './editor/types';
 import type { PluginPathRoots } from '@itharbors/magnet';
-import { createLocalCredentialVault, type CredentialVault } from './credentials/vault';
+import { createCredentialVault, type CredentialVault } from './credentials/vault';
 import type { ApplicationPluginProcessRuntimeOptions } from './application/plugin-process/spawn';
 import { AuthManager } from './auth';
 import type { ConfigStorageRoots } from './app';
@@ -102,9 +102,7 @@ export function parseKitSources(value: string | undefined): AssemblyKitSource[] 
 export function createServer(options: ServerOptions) {
   const applicationHostMode = options.applicationHostMode ?? 'web';
   const credentialMode: CredentialMode = resolveCredentialMode({
-    hostMode: applicationHostMode,
     requested: options.credentialMode,
-    bindHost: options.host,
   });
   if (!options.assembly && (!options.kitSources || options.kitSources.length === 0)) {
     throw new Error('Server requires at least one Kit source');
@@ -120,8 +118,8 @@ export function createServer(options: ServerOptions) {
   const dbPath = options.dbPath || ':memory:';
   const credentialVaultPromise: Promise<CredentialVaultRuntime | undefined> = options.credentialVault
     ? Promise.resolve(options.credentialVault)
-    : credentialMode === 'local'
-      ? createLocalCredentialVault({ dbPath })
+    : credentialMode === 'on'
+      ? createCredentialVault({ mode: 'on', dbPath })
       : Promise.resolve(undefined);
   const store = new SessionStore(dbPath);
   const manager = new SessionManager(store);
@@ -153,7 +151,11 @@ export function createServer(options: ServerOptions) {
     credentialMode,
     credentialStatusLoader: async () => (
       (await credentialVaultPromise)?.capability()
-      ?? { mode: 'off', status: 'unavailable', reason: 'CREDENTIALS_DISABLED' }
+      ?? {
+        mode: credentialMode,
+        status: 'unavailable',
+        reason: credentialMode === 'off' ? 'CREDENTIALS_DISABLED' : 'CREDENTIALS_UNAVAILABLE',
+      }
     ),
   });
   const {
@@ -196,7 +198,7 @@ export function createServer(options: ServerOptions) {
   };
 
   const startInternal = async (port?: number): Promise<number> => {
-    if (credentialMode === 'local') {
+    if (credentialMode === 'on') {
       const credentialVault = await credentialVaultPromise;
       await credentialVault?.recover();
       recoveredCredentialVault = credentialVault;

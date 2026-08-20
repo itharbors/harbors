@@ -1,4 +1,4 @@
-export type CredentialMode = 'off' | 'local' | 'multi-user';
+export type CredentialMode = 'off' | 'on';
 
 export type CredentialCapabilitySnapshot =
   | { mode: CredentialMode; status: 'available' }

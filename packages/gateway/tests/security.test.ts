@@ -6,27 +6,26 @@ import {
 } from '../src/security.js';
 
 describe('gateway credential security', () => {
-  it('keeps an ordinary Web gateway off by default', () => {
-    expect(resolveGatewayCredentialMode({})).toBe('off');
+  it('enables credentials by default', () => {
+    expect(resolveGatewayCredentialMode({})).toBe('on');
   });
 
-  it('accepts explicitly loopback-bound local mode', () => {
+  it.each(['off', 'on'])('accepts the supported mode %s', (requested) => {
     expect(resolveGatewayCredentialMode({
-      HARBORS_HOST_MODE: 'web',
-      HARBORS_CREDENTIAL_MODE: 'local',
-      HARBORS_BIND_HOST: '127.0.0.1',
-    })).toBe('local');
+      HARBORS_CREDENTIAL_MODE: requested,
+    })).toBe(requested);
   });
 
-  it('rejects local mode when only request-derived loopback values are present', () => {
+  it('does not use the listener address to restrict credentials', () => {
     expect(() => resolveGatewayCredentialMode({
-      HARBORS_HOST_MODE: 'web',
-      HARBORS_CREDENTIAL_MODE: 'local',
-      REMOTE_ADDR: '127.0.0.1',
-      HTTP_HOST: '127.0.0.1',
-      HTTP_FORWARDED: 'for=127.0.0.1;host=127.0.0.1',
-      HTTP_X_FORWARDED_FOR: '127.0.0.1',
-    })).toThrow(/loopback/i);
+      HARBORS_CREDENTIAL_MODE: 'on',
+    })).not.toThrow();
+  });
+
+  it('rejects unknown credential modes', () => {
+    expect(() => resolveGatewayCredentialMode({
+      HARBORS_CREDENTIAL_MODE: 'shared',
+    })).toThrow(/invalid credential mode/i);
   });
 
   it.each([

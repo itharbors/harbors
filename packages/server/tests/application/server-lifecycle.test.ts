@@ -109,7 +109,7 @@ describe('application server lifecycle', () => {
         events.push('credentials:recover');
         releaseRecovery = resolve;
       })),
-      capability: vi.fn(() => ({ mode: 'local' as const, status: 'available' as const })),
+      capability: vi.fn(() => ({ mode: 'on' as const, status: 'available' as const })),
       bind: vi.fn(),
       close: vi.fn(async () => { events.push('credentials:close'); }),
     };
@@ -239,7 +239,7 @@ describe('application server lifecycle', () => {
   it('binds the desktop web Host to every IPv4 interface and protects application mutations', async () => {
     const credentialVault = {
       recover: vi.fn(async () => undefined),
-      capability: vi.fn(() => ({ mode: 'local' as const, status: 'available' as const })),
+      capability: vi.fn(() => ({ mode: 'on' as const, status: 'available' as const })),
       bind: vi.fn(),
       close: vi.fn(async () => undefined),
     };
@@ -281,7 +281,7 @@ describe('application server lifecycle', () => {
     await Promise.all([server.stop(), server.stop()]);
 
     expect(address.address).toBe('0.0.0.0');
-    expect(server.credentialMode).toBe('local');
+    expect(server.credentialMode).toBe('on');
     expect(credentialVault.recover).toHaveBeenCalledOnce();
     expect(credentialVault.close).toHaveBeenCalledOnce();
     expect(unauthorized.status).toBe(403);
@@ -290,22 +290,12 @@ describe('application server lifecycle', () => {
     expect(retryBody).toMatchObject({ error: { code: 'APPLICATION_PLUGIN_NOT_FOUND' } });
   });
 
-  it('rejects local credentials before listening when the bind is not explicit loopback', () => {
-    expect(() => createServer({
-      assembly: testAssembly,
-      applicationHostMode: 'web',
-      credentialMode: 'local',
-    })).toThrow(/loopback/i);
-  });
-
-  it('resolves and exposes one immutable local credential mode for desktop startup', async () => {
+  it('resolves and exposes one immutable enabled credential mode for startup', async () => {
     const server = createServer({
       assembly: testAssembly,
-      applicationHostMode: 'desktop',
-      host: '::1',
     });
 
-    expect(server.credentialMode).toBe('local');
+    expect(server.credentialMode).toBe('on');
     expect(() => {
       (server as unknown as { credentialMode: string }).credentialMode = 'off';
     }).toThrow(TypeError);
@@ -352,7 +342,7 @@ describe('application server lifecycle', () => {
       subscribe: vi.fn(() => () => undefined),
       dispose: vi.fn(async () => undefined),
     };
-    const server = createServer({ assembly: testAssembly, applicationRuntime });
+    const server = createServer({ assembly: testAssembly, credentialMode: 'off', applicationRuntime });
 
     const starting = server.start(0);
     const stopping = server.stop();
