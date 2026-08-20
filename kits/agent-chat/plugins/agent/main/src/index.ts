@@ -191,6 +191,72 @@ function assertApprovalPolicy(value: string): AgentApprovalPolicy {
   throw new Error(`[agent] invalid approval policy: ${value}`);
 }
 
+const AGENT_SANDBOX_MODE_KEY = 'agent.defaults.sandboxMode';
+const AGENT_APPROVAL_POLICY_KEY = 'agent.defaults.approvalPolicy';
+
+interface AgentSettings {
+  sandboxMode: AgentSandboxMode;
+  approvalPolicy: AgentApprovalPolicy;
+  global: {
+    sandboxMode: boolean;
+    approvalPolicy: boolean;
+  };
+}
+
+function readGlobalSetting(key: string): { value: unknown; configured: boolean } {
+  try {
+    const value = runtime?.config?.get?.(key, 'global');
+    return { value, configured: value !== undefined };
+  } catch {
+    return { value: undefined, configured: false };
+  }
+}
+
+function getSettings(): AgentSettings {
+  const sandboxMode = readGlobalSetting(AGENT_SANDBOX_MODE_KEY);
+  const approvalPolicy = readGlobalSetting(AGENT_APPROVAL_POLICY_KEY);
+  return {
+    sandboxMode: isSandboxMode(sandboxMode.value) ? sandboxMode.value : DEFAULT_SANDBOX_MODE,
+    approvalPolicy: isApprovalPolicy(approvalPolicy.value) ? approvalPolicy.value : DEFAULT_APPROVAL_POLICY,
+    global: {
+      sandboxMode: sandboxMode.configured && isSandboxMode(sandboxMode.value),
+      approvalPolicy: approvalPolicy.configured && isApprovalPolicy(approvalPolicy.value),
+    },
+  };
+}
+
+function assertSettingsInput(input: unknown): { sandboxMode: AgentSandboxMode; approvalPolicy: AgentApprovalPolicy } {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('[agent] settings must be an object');
+  const value = input as Record<string, unknown>;
+  const keys = Object.keys(value).sort();
+  if (keys.length !== 2 || keys[0] !== 'approvalPolicy' || keys[1] !== 'sandboxMode') {
+    throw new Error('[agent] settings must contain only sandboxMode and approvalPolicy');
+  }
+  if (!isSandboxMode(value.sandboxMode)) throw new Error(`[agent] invalid sandbox mode: ${String(value.sandboxMode)}`);
+  if (!isApprovalPolicy(value.approvalPolicy)) throw new Error(`[agent] invalid approval policy: ${String(value.approvalPolicy)}`);
+  return { sandboxMode: value.sandboxMode, approvalPolicy: value.approvalPolicy };
+}
+
+function saveSettings(input: unknown): AgentSettings {
+  const settings = assertSettingsInput(input);
+  if (!runtime?.config?.set) throw new Error('[agent] config is unavailable');
+  runtime.config.set(AGENT_SANDBOX_MODE_KEY, settings.sandboxMode, 'global');
+  runtime.config.set(AGENT_APPROVAL_POLICY_KEY, settings.approvalPolicy, 'global');
+  const persisted = getSettings();
+  if (persisted.sandboxMode !== settings.sandboxMode || persisted.approvalPolicy !== settings.approvalPolicy
+    || !persisted.global.sandboxMode || !persisted.global.approvalPolicy) {
+    throw new Error('[agent] settings were not persisted');
+  }
+  return persisted;
+}
+
+function resetSettings(): AgentSettings {
+  if (!runtime?.config?.delete) throw new Error('[agent] config is unavailable');
+  runtime.config.delete(AGENT_SANDBOX_MODE_KEY, 'global');
+  runtime.config.delete(AGENT_APPROVAL_POLICY_KEY, 'global');
+  return getSettings();
+}
+
 editor.plugin.define({
   lifecycle: {
     async load(ctx: any) {
@@ -226,20 +292,9 @@ editor.plugin.define({
     },
   },
   methods: {
-    getSetting(key: string, layer?: string) {
-      if (!key.startsWith('agent.')) throw new Error('[agent] setting key does not belong to agent');
-      return runtime?.config.get(key, layer);
-    },
-    setSetting(input: { key: string; value: unknown; layer?: string }) {
-      if (!input || typeof input.key !== 'string' || !input.key.startsWith('agent.')) throw new Error('[agent] setting key does not belong to agent');
-      runtime?.config.set(input.key, input.value, input.layer);
-      return { ok: true };
-    },
-    deleteSetting(input: { key: string; layer?: string }) {
-      if (!input || typeof input.key !== 'string' || !input.key.startsWith('agent.')) throw new Error('[agent] setting key does not belong to agent');
-      runtime?.config.delete(input.key, input.layer);
-      return { ok: true };
-    },
+    getSettings,
+    saveSettings,
+    resetSettings,
     async listDirectory(dir?: string) {
       const os = await import('node:os');
       const fs = await import('node:fs/promises');

@@ -33,6 +33,9 @@
           ],
           "agent.message.status": [
             "panel.onMessageStatus"
+          ],
+          "model-service.catalog.changed": [
+            "panel.onModelCatalogChanged"
           ]
         }
       }

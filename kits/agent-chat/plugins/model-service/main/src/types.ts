@@ -37,6 +37,14 @@ export interface ModelCatalog {
   };
 }
 
+export type ModelCatalogChangedReason = 'provider-saved' | 'provider-deleted' | 'credential-reset';
+
+export interface ModelCatalogChangedPayload {
+  revision: number;
+  reason: ModelCatalogChangedReason;
+  catalog: ModelCatalog;
+}
+
 export interface TextContentBlock { type: 'text'; text: string; }
 export interface ImageContentBlock { type: 'image'; mediaType: string; data: string; }
 export type ContentBlock = TextContentBlock | ImageContentBlock | Record<string, unknown>;

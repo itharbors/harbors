@@ -27,7 +27,9 @@ export interface RelayConfig {
 export interface ConfigReader { get<T = unknown>(key: string, layer?: string): T | undefined; set?(key: string, value: unknown, layer?: string): void; }
 export interface CredentialReader {
   get(id: string): Promise<{ profile: { id: string }; secret: string }>;
-  put?(input: { id?: string; label: string; metadata: Record<string, string | number | boolean | null>; secret: string }): Promise<{ id: string }>;
+  /** The bound runtime returns a CredentialProfile. Keep the reader tolerant of
+   * older/runtime bridges that wrap that profile in `{ profile }`. */
+  put?(input: { id?: string; label: string; metadata: Record<string, string | number | boolean | null>; secret: string }): Promise<unknown>;
   delete?(id: string): Promise<void>;
 }
 
@@ -58,6 +60,12 @@ export async function readRelayConfig(configReader: ConfigReader | undefined, cr
 }
 export function toSafeConfig(config: ModelServiceConfig): { defaultProviderId?: string; providers: Array<Omit<ModelProvider, 'credentialId'> & { credentialConfigured: boolean }> } {
   return { ...(config.defaultProviderId ? { defaultProviderId: config.defaultProviderId } : {}), providers: config.providers.map(({ credentialId, ...provider }) => ({ ...provider, credentialConfigured: Boolean(credentialId) })) };
+}
+export function credentialIdFromPutResult(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  if (typeof value.id === 'string' && value.id) return value.id;
+  const profile = value.profile;
+  return isRecord(profile) && typeof profile.id === 'string' && profile.id ? profile.id : undefined;
 }
 function relayConfig(provider: ModelProvider, credential: string): RelayConfig {
   const api = provider.protocol === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';

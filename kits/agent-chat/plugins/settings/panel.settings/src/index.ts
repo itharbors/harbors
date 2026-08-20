@@ -1,274 +1,145 @@
 type PanelContext = {
+  sessionId: string;
   message: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   };
 };
 
-type Layer = 'default' | 'global';
-type SettingControl = 'text' | 'password' | 'textarea' | 'number' | 'toggle' | 'select';
-type SettingOption = { label: string; value: string | number };
-type SettingField = {
-  key: string;
-  label: string;
-  description?: string;
-  control: SettingControl;
-  defaultValue?: string | number | boolean;
-  layers: Array<'global'>;
-  defaultLayer: 'global';
-  options?: SettingOption[];
-  placeholder?: string;
-  min?: number;
-  max?: number;
-  step?: number;
-};
-type SettingFieldViewModel = {
+export type SettingsPage = {
   owner: string;
-  section: string;
-  field: SettingField;
-  resolvedValue: string | number | boolean | null;
-  resolvedLayer: Layer | null;
-  perLayer: Record<Layer, string | number | boolean | null>;
-};
-type SettingsViewModel = {
-  sections: Array<{
-    owner: string;
-    section: { id: string; title: string; description?: string };
-    fields: SettingFieldViewModel[];
-  }>;
+  panel: string;
+  title: string;
+  order: number;
+  entry: string;
 };
 
-export function inputTypeForSetting(control: SettingControl): string {
-  return control === 'toggle' ? 'checkbox' : control === 'number' ? 'number' : control === 'password' ? 'password' : 'text';
-}
-
-let reloadPanel: (() => void) | null = null;
+type PageRequest = {
+  type: 'settings-page-request';
+  requestId: string;
+  name: string;
+  args: unknown[];
+};
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function layerLabel(layer: Layer): string {
-  return layer === 'global' ? '全局' : '默认值';
+/** Add the host session to an embedded settings page while retaining existing query parameters. */
+export function appendSessionId(entry: string, sessionId: string, base = typeof document === 'undefined' ? 'http://settings.local/' : document.baseURI): string {
+  const url = new URL(entry, base);
+  url.searchParams.set('sessionId', sessionId);
+  if (/^[a-z][a-z\d+.-]*:/i.test(entry)) return url.toString();
+  return `${url.pathname}${url.search}${url.hash}`;
 }
 
-function sourceLabel(layer: Layer | null): string {
-  return layerLabel(layer ?? 'default');
+function isPageRequest(value: unknown): value is PageRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const request = value as Record<string, unknown>;
+  return request.type === 'settings-page-request'
+    && typeof request.requestId === 'string'
+    && request.requestId.length > 0
+    && typeof request.name === 'string'
+    && request.name.length > 0
+    && Array.isArray(request.args);
 }
 
-function valueForLayer(model: SettingFieldViewModel, layer: Layer): string | number | boolean | null {
-  return model.perLayer[layer] ?? model.resolvedValue;
-}
+let reloadPanel: (() => void) | null = null;
+let disposePanel: (() => void) | null = null;
 
 const definition = {
   async mount(ctx: PanelContext) {
     const root = document.getElementById('panel-root');
     if (!root) return;
-    root.innerHTML = '<header class="panel-header"><div class="header-copy"><h1>设置</h1><p class="header-subtitle">插件配置</p></div><button id="refresh-btn" class="refresh-button" type="button"><span aria-hidden="true">↻</span>刷新</button></header><main id="settings-list" aria-live="polite"></main>';
-    const list = root.querySelector('#settings-list') as HTMLElement;
-    const refreshButton = root.querySelector('#refresh-btn') as HTMLButtonElement;
+    root.innerHTML = '<main class="settings-shell"><nav id="settings-pages" aria-label="设置页面"></nav><section id="settings-content" aria-live="polite"></section></main>';
+    const pageList = root.querySelector('#settings-pages') as HTMLElement;
+    const content = root.querySelector('#settings-content') as HTMLElement;
+    let currentPages: SettingsPage[] = [];
+    let selectedPanel: string | null = null;
+    let currentFrame: HTMLIFrameElement | null = null;
+    const sourceOwners = new Map<Window, string>();
 
-    function showMessage(message: string, kind: 'loading' | 'empty' | 'error') {
+    const showMessage = (message: string, kind: 'loading' | 'empty' | 'error') => {
       const element = document.createElement('p');
       element.className = kind;
       element.textContent = message;
-      list.replaceChildren(element);
-    }
+      content.replaceChildren(element);
+    };
 
-    function renderField(model: SettingFieldViewModel): HTMLElement {
-      const field = model.field;
-      const item = document.createElement('article');
-      item.className = 'setting-field';
-
-      const heading = document.createElement('div');
-      heading.className = 'field-heading';
-      const text = document.createElement('div');
-      const label = document.createElement('label');
-      label.className = 'field-label';
-      label.textContent = field.label;
-      const id = `setting-${field.key.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
-      label.htmlFor = id;
-      text.append(label);
-      if (field.description) {
-        const description = document.createElement('p');
-        description.className = 'field-description';
-        description.textContent = field.description;
-        text.append(description);
-      }
-      const source = document.createElement('span');
-      source.className = 'field-source';
-      source.textContent = `当前来自 ${sourceLabel(model.resolvedLayer)}`;
-      heading.append(text, source);
-
-      const controls = document.createElement('div');
-      controls.className = 'field-controls';
-      const layerSelect = document.createElement('select');
-      layerSelect.className = 'layer-select';
-      layerSelect.setAttribute('aria-label', `${field.label} 保存层`);
-      for (const layer of field.layers) {
-        const option = document.createElement('option');
-        option.value = layer;
-        option.textContent = layerLabel(layer);
-        layerSelect.append(option);
-      }
-      const selectedLayer = field.defaultLayer;
-      layerSelect.value = selectedLayer;
-
-      const valueHost = document.createElement('div');
-      valueHost.className = 'value-host';
-      let valueControl: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
-      let resetButton: HTMLButtonElement | null = null;
-
-      function renderValueControl() {
-        valueHost.replaceChildren();
-        if (resetButton) resetButton.disabled = model.perLayer[layerSelect.value as Layer] === null;
-        const value = valueForLayer(model, layerSelect.value as Layer);
-        if (field.control === 'textarea') {
-          const textarea = document.createElement('textarea');
-          textarea.id = id;
-          textarea.rows = 2;
-          textarea.value = typeof value === 'string' ? value : value == null ? '' : String(value);
-          if (field.placeholder) textarea.placeholder = field.placeholder;
-          valueControl = textarea;
-        } else if (field.control === 'select') {
-          const select = document.createElement('select');
-          select.id = id;
-          for (const entry of field.options ?? []) {
-            const option = document.createElement('option');
-            option.value = String(entry.value);
-            option.textContent = entry.label;
-            option.selected = entry.value === value;
-            select.append(option);
-          }
-          valueControl = select;
-        } else {
-          const input = document.createElement('input');
-          input.id = id;
-          input.type = inputTypeForSetting(field.control);
-          if (field.control === 'toggle') input.checked = value === true;
-          else input.value = value == null ? '' : String(value);
-          if (field.placeholder) input.placeholder = field.placeholder;
-          if (field.min !== undefined) input.min = String(field.min);
-          if (field.max !== undefined) input.max = String(field.max);
-          if (field.step !== undefined) input.step = String(field.step);
-          valueControl = input;
-        }
-        valueHost.append(valueControl);
-      }
-      renderValueControl();
-      layerSelect.addEventListener('change', renderValueControl);
-
-      const actions = document.createElement('div');
-      actions.className = 'field-actions';
-      const save = document.createElement('button');
-      save.type = 'button';
-      save.className = 'save-button';
-      save.textContent = '保存';
-      const reset = document.createElement('button');
-      reset.type = 'button';
-      reset.className = 'reset-button';
-      reset.textContent = '重置';
-      resetButton = reset;
-      reset.disabled = model.perLayer[selectedLayer] === null;
-      const feedback = document.createElement('span');
-      feedback.className = 'field-feedback';
-
-      function setFeedback(message: string, kind: 'success' | 'error') {
-        feedback.textContent = message;
-        feedback.dataset.kind = kind;
-      }
-
-      save.addEventListener('click', async () => {
-        save.disabled = true;
-        feedback.textContent = '';
-        try {
-          let value: string | number | boolean;
-          if (field.control === 'toggle') value = (valueControl as HTMLInputElement).checked;
-          else if (field.control === 'number') value = Number(valueControl.value);
-          else if (field.control === 'select') value = (field.options ?? []).find((option) => String(option.value) === (valueControl as HTMLSelectElement).value)?.value as string | number;
-          else value = valueControl.value;
-          await ctx.message.request('settings', 'setValue', { key: field.key, layer: layerSelect.value, value });
-          setFeedback('已保存', 'success');
-          await loadSettings();
-        } catch (error) {
-          setFeedback(errorText(error), 'error');
-        } finally {
-          save.disabled = false;
-        }
-      });
-
-      reset.addEventListener('click', async () => {
-        reset.disabled = true;
-        feedback.textContent = '';
-        try {
-          await ctx.message.request('settings', 'resetValue', { key: field.key, layer: layerSelect.value });
-          await loadSettings();
-        } catch (error) {
-          setFeedback(errorText(error), 'error');
-          reset.disabled = false;
-        }
-      });
-
-      actions.append(save, reset, feedback);
-      const footer = document.createElement('div');
-      footer.className = 'field-footer';
-      footer.append(layerSelect, actions);
-      controls.append(valueHost, footer);
-      item.append(heading, controls);
-      return item;
-    }
-
-    function renderViewModel(model: SettingsViewModel) {
-      if (model.sections.length === 0) {
-        showMessage('暂无插件设置', 'empty');
+    const renderPage = (page: SettingsPage | undefined) => {
+      sourceOwners.clear();
+      currentFrame = null;
+      content.replaceChildren();
+      if (!page) {
+        showMessage('暂无插件设置页面', 'empty');
         return;
       }
-      const fragment = document.createDocumentFragment();
-      for (const group of model.sections) {
-        const section = document.createElement('section');
-        section.className = 'settings-section';
-        const sectionHeading = document.createElement('div');
-        sectionHeading.className = 'section-heading';
-        const title = document.createElement('h3');
-        title.textContent = group.section.title;
-        const owner = document.createElement('code');
-        owner.className = 'section-owner';
-        owner.textContent = group.owner;
-        sectionHeading.append(title, owner);
-        section.append(sectionHeading);
-        if (group.section.description) {
-          const description = document.createElement('p');
-          description.className = 'section-description';
-          description.textContent = group.section.description;
-          section.append(description);
-        }
-        for (const field of group.fields) section.append(renderField(field));
-        fragment.append(section);
-      }
-      list.replaceChildren(fragment);
-    }
+      selectedPanel = page.panel;
+      const frame = document.createElement('iframe');
+      frame.className = 'settings-page-frame';
+      frame.title = page.title;
+      frame.src = appendSessionId(page.entry, ctx.sessionId);
+      frame.setAttribute('allow', 'clipboard-read; clipboard-write');
+      currentFrame = frame;
+      content.append(frame);
+      // Register only the currently rendered frame. event.source is checked against this exact Window.
+      if (frame.contentWindow) sourceOwners.set(frame.contentWindow, page.owner);
+    };
 
-    async function loadSettings() {
+    const renderPages = () => {
+      pageList.replaceChildren();
+      for (const page of currentPages) {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'settings-page-link';
+        button.textContent = page.title;
+        button.dataset.panel = page.panel;
+        button.setAttribute('aria-pressed', String(page.panel === selectedPanel));
+        button.addEventListener('click', () => {
+          selectedPanel = page.panel;
+          renderPages();
+        });
+        pageList.append(button);
+      }
+      const selected = currentPages.find((page) => page.panel === selectedPanel) ?? currentPages[0];
+      if (selected && selected.panel !== selectedPanel) selectedPanel = selected.panel;
+      renderPage(selected);
+    };
+
+    const loadPages = async () => {
+      sourceOwners.clear();
+      currentFrame = null;
       showMessage('正在读取…', 'loading');
       try {
-        renderViewModel(await ctx.message.request('settings', 'getViewModel') as SettingsViewModel);
+        const result = await ctx.message.request('settings', 'getPages');
+        currentPages = Array.isArray(result) ? result as SettingsPage[] : [];
+        renderPages();
       } catch (error) {
         showMessage(errorText(error), 'error');
       }
-    }
+    };
 
-    reloadPanel = () => { void loadSettings(); };
-    refreshButton.addEventListener('click', () => { void loadSettings(); });
-    await loadSettings();
+    const onWindowMessage = (event: MessageEvent) => {
+      if (!isPageRequest(event.data) || !event.source) return;
+      const owner = sourceOwners.get(event.source as Window);
+      if (!owner || !currentFrame || event.source !== currentFrame.contentWindow) return;
+      void ctx.message.request('settings', 'requestPage', { owner, name: event.data.name, args: event.data.args })
+        .then((result) => (event.source as Window).postMessage({ type: 'settings-page-response', requestId: event.data.requestId, result }, '*'))
+        .catch((error) => (event.source as Window).postMessage({ type: 'settings-page-response', requestId: event.data.requestId, error: errorText(error) }, '*'));
+    };
+
+    window.addEventListener('message', onWindowMessage);
+    disposePanel = () => window.removeEventListener('message', onWindowMessage);
+    reloadPanel = () => { void loadPages(); };
+    await loadPages();
   },
 
   unmount() {
+    disposePanel?.();
+    disposePanel = null;
     reloadPanel = null;
   },
 
   methods: {
-    onConfigChanged() {
-      reloadPanel?.();
-    },
     onRegistryChanged() {
       reloadPanel?.();
     },

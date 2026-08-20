@@ -2,109 +2,78 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 type RuntimeDefinition = {
-  lifecycle: {
-    load(context: unknown): void;
-    unload(): void;
-    attach(pluginName: string, contribute: unknown): void;
-    detach(pluginName: string): void;
-  };
+  lifecycle: { load(context: unknown): void; unload(): void; attach(pluginName: string, contribute: unknown): void; detach(pluginName: string): void };
   methods: Record<string, (...args: any[]) => any>;
 };
 
 let definition: RuntimeDefinition | undefined;
 (globalThis as any).editor = { plugin: { define(value: RuntimeDefinition) { definition = value; } } };
-await import('./index.ts?settings-integration');
+await import('./index.ts?settings-v2');
 
-test('applies defaults, replaces atomically, validates methods, and preserves overrides on detach', () => {
+test('registers, sorts, detaches, and routes only declared page requests', async () => {
   assert.ok(definition);
-  const stores = new Map([
-    ['default', new Map<string, unknown>()],
-    ['global', new Map<string, unknown>()],
-  ]);
-  const listeners = new Set<(event: unknown) => void>();
-  let failDefaultKey: string | undefined;
+  const requested: unknown[][] = [];
   const broadcasts: unknown[][] = [];
-  const config = {
-    subscribe(listener: (event: unknown) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
+  const runtime = {
+    panel: { getInfo(name: string) {
+      if (name === 'alpha.settings') return { name, entry: '/alpha.html' };
+      if (name === 'beta.settings') return { name, entry: '/beta.html' };
+      throw new Error(`missing panel ${name}`);
+    } },
+    message: {
+      request(...args: unknown[]) { requested.push(args); return Promise.resolve({ ok: true }); },
+      broadcast(...args: unknown[]) { broadcasts.push(args); },
     },
-    get(key: string, type?: string) {
-      if (type) return stores.get(type)?.get(key);
-      for (const layer of ['global', 'default']) {
-        const value = stores.get(layer)?.get(key);
-        if (value !== undefined) return value;
-      }
-      return undefined;
-    },
-    set(key: string, value: unknown, type = 'global') {
-      if (type === 'default' && key === failDefaultKey) throw new Error('simulated default write failure');
-      stores.get(type)?.set(key, value);
-      for (const listener of listeners) listener({ key, type, action: 'set' });
-    },
-    delete(key: string, type = 'global') {
-      stores.get(type)?.delete(key);
-      for (const listener of listeners) listener({ key, type, action: 'delete' });
-    },
+    window: { openPanel() { return { opened: true }; } },
   };
-  const runtime = { config, message: { broadcast(...args: unknown[]) { broadcasts.push(args); } }, window: { openPanel() {} } };
   definition.lifecycle.load(runtime);
+  definition.lifecycle.attach('alpha', { panel: { settings: {} }, settings: { schemaVersion: 2, panel: 'settings', title: 'Z 页面', order: 2, requests: ['read'] } });
+  definition.lifecycle.attach('beta', { panel: { settings: {} }, settings: { schemaVersion: 2, panel: 'settings', title: 'A 页面', order: 1, requests: ['write'] } });
+  assert.deepEqual(definition.methods.getPages(), [
+    { owner: 'beta', panel: 'beta.settings', title: 'A 页面', order: 1, entry: '/beta.html' },
+    { owner: 'alpha', panel: 'alpha.settings', title: 'Z 页面', order: 2, entry: '/alpha.html' },
+  ]);
+  await definition.methods.requestPage({ owner: 'alpha', name: 'read', args: [1, 'two'] });
+  assert.deepEqual(requested[0], ['alpha', 'read', 1, 'two']);
+  assert.throws(() => definition.methods.requestPage({ owner: 'alpha', name: 'write', args: [] }), /not allowed/);
+  assert.throws(() => definition.methods.requestPage({ owner: 'missing', name: 'read', args: [] }), /not registered/);
+  assert.throws(() => definition.methods.requestPage({ owner: 'alpha', name: 'read', args: 'bad' }), /args must be an array/);
+  definition.lifecycle.detach('beta');
+  assert.deepEqual(definition.methods.getPages().map((page: any) => page.owner), ['alpha']);
+  assert.ok(broadcasts.some(([topic, event]) => topic === 'settings.registry.changed' && (event as any).action === 'detach'));
+  definition.lifecycle.unload();
+});
 
-  const first = {
-    settings: {
-      schemaVersion: 1,
-      sections: [{ id: 'model', title: 'Model', fields: [{ key: 'agent.model', label: 'Model', control: 'text', defaultValue: 'first' }] }],
-    },
+test('rejects missing and cross-owner panels without touching config', () => {
+  assert.ok(definition);
+  const runtime = {
+    panel: { getInfo() { throw new Error('not registered'); } },
+    message: { request() { return Promise.resolve(); }, broadcast() {} },
+    window: { openPanel() {} },
+    get config() { throw new Error('Settings must not access config'); },
   };
-  definition.lifecycle.attach('agent', first);
-  assert.equal(definition.methods.getViewModel().sections[0].fields[0].resolvedValue, 'first');
+  definition.lifecycle.load(runtime);
+  definition.lifecycle.attach('alpha', { panel: { other: {} }, settings: { schemaVersion: 2, panel: 'settings', title: '坏页面', requests: [] } });
+  definition.lifecycle.attach('alpha', { panel: { settings: {} }, settings: { schemaVersion: 2, panel: 'settings', title: '坏页面', requests: [] } });
+  assert.deepEqual(definition.methods.getPages(), []);
+  definition.lifecycle.unload();
+});
 
-  const replacement = {
-    settings: {
-      schemaVersion: 1,
-      sections: [{ id: 'model', title: 'Model', fields: [
-        { key: 'agent.model', label: 'Model', control: 'text', defaultValue: 'second' },
-        { key: 'agent.count', label: 'Count', control: 'number', min: 1, max: 5, layers: ['global'], defaultValue: 2 },
-      ] }],
-    },
+test('does not require the panel host during attach and resolves entries on getPages', () => {
+  assert.ok(definition);
+  let available = false;
+  const runtime = {
+    panel: { getInfo(name: string) {
+      if (!available) throw new Error('panel host not ready');
+      return { name, entry: '/late.html' };
+    } },
+    message: { request() { return Promise.resolve(); }, broadcast() {} },
+    window: { openPanel() {} },
   };
-  definition.lifecycle.attach('agent', replacement);
-  assert.equal(stores.get('default')?.get('agent.model'), 'second');
-  assert.equal(stores.get('default')?.get('agent.count'), 2);
-  assert.throws(() => definition.methods.setValue({ key: 'agent.count', layer: 'project', value: 3 }), /layer must be global/);
-  assert.throws(() => definition.methods.setValue({ key: 'agent.count', layer: 'global', value: 8 }), /at most/);
-  definition.methods.setValue({ key: 'agent.count', layer: 'global', value: 4 });
-  definition.methods.resetValue({ key: 'agent.count', layer: 'global' });
-
-  definition.methods.setValue({ key: 'agent.model', layer: 'global', value: 'global-before-replace' });
-  definition.lifecycle.attach('agent', {
-    settings: {
-      schemaVersion: 1,
-      sections: [{ id: 'model', title: 'Model', fields: [{ key: 'agent.model', label: 'Model', control: 'text' }] }],
-    },
-  });
-  assert.equal(stores.get('default')?.has('agent.model'), false);
-  assert.equal(stores.get('global')?.get('agent.model'), 'global-before-replace');
-
-  failDefaultKey = 'agent.fail';
-  const beforeFailure = definition.methods.getViewModel();
-  definition.lifecycle.attach('agent', {
-    settings: {
-      schemaVersion: 1,
-      sections: [{ id: 'failed', title: 'Failed', fields: [
-        { key: 'agent.model', label: 'Model', control: 'text', defaultValue: 'third' },
-        { key: 'agent.fail', label: 'Fail', control: 'text', defaultValue: 'boom' },
-      ] }],
-    },
-  });
-  assert.equal(stores.get('default')?.has('agent.model'), false);
-  assert.equal(stores.get('default')?.has('agent.fail'), false);
-  assert.deepEqual(definition.methods.getViewModel(), beforeFailure);
-  failDefaultKey = undefined;
-
-  definition.lifecycle.detach('agent');
-  assert.equal(stores.get('default')?.has('agent.model'), false);
-  assert.equal(stores.get('global')?.get('agent.model'), 'global-before-replace');
-  assert.ok(broadcasts.some(([topic]) => topic === 'settings.registry.changed'));
+  definition.lifecycle.load(runtime);
+  definition.lifecycle.attach('late', { panel: { settings: {} }, settings: { schemaVersion: 2, panel: 'settings', title: '稍后可用', requests: [] } });
+  assert.deepEqual(definition.methods.getPages(), []);
+  available = true;
+  assert.deepEqual(definition.methods.getPages(), [{ owner: 'late', panel: 'late.settings', title: '稍后可用', order: 0, entry: '/late.html' }]);
   definition.lifecycle.unload();
 });
