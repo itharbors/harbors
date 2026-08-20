@@ -90,7 +90,7 @@ export class CredentialVault {
       options.unavailableReason ??
       (options.mode === 'off'
         ? 'CREDENTIALS_DISABLED'
-        : options.mode !== 'local' || !options.store || !options.keyring
+        : options.mode !== 'on' || !options.store || !options.keyring
           ? 'CREDENTIALS_UNAVAILABLE'
           : undefined);
   }
@@ -530,7 +530,7 @@ export class CredentialVault {
       this.unavailableReason = 'CREDENTIALS_DISABLED';
       return this.capability();
     }
-    if (this.mode !== 'local' || !this.store) {
+    if (this.mode !== 'on' || !this.store) {
       this.unavailableReason = 'CREDENTIALS_UNAVAILABLE';
       return this.capability();
     }
@@ -633,8 +633,8 @@ export async function createCredentialVault(
   options: CreateCredentialVaultOptions
 ): Promise<CredentialVault> {
   if (options.mode === 'off') return new CredentialVault({ mode: 'off' });
-  if (options.mode !== 'local') {
-    return new CredentialVault({ mode: options.mode, unavailableReason: 'CREDENTIALS_UNAVAILABLE' });
+  if (options.mode !== 'on') {
+    throw new Error('Invalid credential mode');
   }
 
   let store: CredentialStore;
@@ -645,18 +645,18 @@ export async function createCredentialVault(
     } else if (databasePath) {
       store = new CredentialStore(databasePath);
     } else {
-      return new CredentialVault({ mode: 'local', unavailableReason: 'CREDENTIALS_UNAVAILABLE' });
+      return new CredentialVault({ mode: 'on', unavailableReason: 'CREDENTIALS_UNAVAILABLE' });
     }
   } catch {
-    return new CredentialVault({ mode: 'local', unavailableReason: 'CREDENTIALS_UNAVAILABLE' });
+    return new CredentialVault({ mode: 'on', unavailableReason: 'CREDENTIALS_UNAVAILABLE' });
   }
   const vault = new CredentialVault({
-    mode: 'local',
+    mode: 'on',
     store,
     keyring: options.keyring,
     keyringFactory: options.keyring
       ? undefined
-      : () => createNativeKeyringAdapter({ mode: 'local', load: options.loadKeyring }),
+      : () => createNativeKeyringAdapter({ mode: 'on', load: options.loadKeyring }),
     unavailableReason: options.keyring ? undefined : 'CREDENTIALS_UNAVAILABLE',
     randomUuid: options.randomUuid,
   });
@@ -664,8 +664,8 @@ export async function createCredentialVault(
   return vault;
 }
 
-export async function createLocalCredentialVault(
+export async function createEnabledCredentialVault(
   options: Omit<CreateCredentialVaultOptions, 'mode'>
 ): Promise<CredentialVault> {
-  return createCredentialVault({ ...options, mode: 'local' });
+  return createCredentialVault({ ...options, mode: 'on' });
 }

@@ -110,7 +110,7 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
 
 function credentialFacadeDouble() {
   return {
-    capability: vi.fn(async () => ({ mode: 'local' as const, status: 'available' as const })),
+    capability: vi.fn(async () => ({ mode: 'on' as const, status: 'available' as const })),
     available: vi.fn(async () => true),
     list: vi.fn(async () => []),
     get: vi.fn(),

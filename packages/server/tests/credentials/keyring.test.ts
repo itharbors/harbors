@@ -23,7 +23,7 @@ function nativeError(code: string, nativeText: string): Error & { code: string }
 describe('native credential adapter', () => {
   it('probes the fixed service with a read-only reserved non-profile account', async () => {
     const module = nativeModule();
-    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
+    const adapter = await createNativeKeyringAdapter({ mode: 'on', load: async () => module });
 
     await probeKeyringAdapter(adapter);
 
@@ -40,7 +40,7 @@ describe('native credential adapter', () => {
 
   it('passes only the fixed service, opaque account, and secret to the native module', async () => {
     const module = nativeModule({ getPassword: vi.fn(() => 'stored-value') });
-    const adapter = await createNativeKeyringAdapter({ mode: 'local', load: async () => module });
+    const adapter = await createNativeKeyringAdapter({ mode: 'on', load: async () => module });
 
     await expect(adapter.get('opaque-account')).resolves.toBe('stored-value');
     await adapter.set('opaque-account', 'new-value');
@@ -68,7 +68,7 @@ describe('native credential adapter', () => {
   it('maps a missing or malformed native module to a fixed unavailable error', async () => {
     const nativeText = 'Cannot find native binding at /private/native/path';
     const missingError = await createNativeKeyringAdapter({
-      mode: 'local',
+      mode: 'on',
       load: async () => { throw new Error(nativeText); },
     }).catch((reason: unknown) => reason);
 
@@ -78,7 +78,7 @@ describe('native credential adapter', () => {
     });
     expect(String(missingError)).not.toContain(nativeText);
     await expect(createNativeKeyringAdapter({
-      mode: 'local',
+      mode: 'on',
       load: async () => ({}) as KeyringModule,
     })).rejects.toMatchObject({ code: 'CREDENTIALS_UNAVAILABLE' });
   });

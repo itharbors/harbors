@@ -14,7 +14,7 @@ import { credentialError } from '../../src/credentials/errors';
 import {
   CredentialVault,
   createCredentialVault,
-  createLocalCredentialVault,
+  createEnabledCredentialVault,
 } from '../../src/credentials/vault';
 
 const kitId = '@itharbors/kit-mysql';
@@ -71,7 +71,7 @@ describe('CredentialVault', () => {
     keyring = new FakeKeyring();
     uuids = [profileId, oldVersion, newVersion, thirdVersion];
     vault = new CredentialVault({
-      mode: 'local',
+      mode: 'on',
       store,
       keyring,
       randomUuid: () => {
@@ -93,7 +93,7 @@ describe('CredentialVault', () => {
     vault.close();
 
     expect(vault.capability()).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
@@ -146,7 +146,7 @@ describe('CredentialVault', () => {
 
     await expect(bound.get(profile.id)).rejects.toMatchObject({ code: 'CREDENTIALS_LOCKED' });
     expect(vault.capability()).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_LOCKED',
     });
@@ -157,13 +157,13 @@ describe('CredentialVault', () => {
       profile: { id: profile.id },
       secret: 'saved-value',
     });
-    await expect(bound.capability()).resolves.toEqual({ mode: 'local', status: 'available' });
+    await expect(bound.capability()).resolves.toEqual({ mode: 'on', status: 'available' });
   });
 
   it('creates, reads, updates, and deletes a profile without persisting its secret', async () => {
     const bound = vault.bind(kitId, pluginName);
 
-    expect(vault.capability()).toEqual({ mode: 'local', status: 'available' });
+    expect(vault.capability()).toEqual({ mode: 'on', status: 'available' });
     await expect(bound.available()).resolves.toBe(true);
     const profile = await bound.put({
       label: '生产库',
@@ -309,7 +309,7 @@ describe('CredentialVault', () => {
 
     vault.close();
     store = new CredentialStore(databasePath);
-    vault = new CredentialVault({ mode: 'local', store, keyring });
+    vault = new CredentialVault({ mode: 'on', store, keyring });
     await vault.recover();
 
     await expect(vault.bind(kitId, pluginName).get(profileId)).resolves.toMatchObject({
@@ -493,7 +493,7 @@ describe('CredentialVault', () => {
 
     vault.close();
     store = new CredentialStore(databasePath);
-    vault = new CredentialVault({ mode: 'local', store, keyring });
+    vault = new CredentialVault({ mode: 'on', store, keyring });
     await vault.recover();
     await vault.recover();
 
@@ -757,9 +757,9 @@ describe('CredentialVault', () => {
       throw new Error('missing native module details');
     });
 
-    vault = await createCredentialVault({ mode: 'local', databasePath, loadKeyring: missingLoad });
+    vault = await createCredentialVault({ mode: 'on', databasePath, loadKeyring: missingLoad });
     expect(vault.capability()).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
@@ -803,9 +803,9 @@ describe('CredentialVault', () => {
         deletePassword(): boolean { return false; },
       }));
 
-      vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
+      vault = await createCredentialVault({ mode: 'on', store, loadKeyring: load });
 
-      expect(vault.capability()).toEqual({ mode: 'local', status: 'unavailable', reason });
+      expect(vault.capability()).toEqual({ mode: 'on', status: 'unavailable', reason });
       expect(constructions).toEqual([['com.itharbors.credentials.v1', CREDENTIAL_HEALTH_ACCOUNT]]);
       expect(load).toHaveBeenCalledOnce();
     },
@@ -827,17 +827,17 @@ describe('CredentialVault', () => {
       setPassword(): void {},
       deletePassword(): boolean { return false; },
     }));
-    vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
+    vault = await createCredentialVault({ mode: 'on', store, loadKeyring: load });
     const bound = vault.bind(kitId, pluginName);
 
     expect(vault.capability()).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
     backendAvailable = true;
 
-    await expect(bound.capability()).resolves.toEqual({ mode: 'local', status: 'available' });
+    await expect(bound.capability()).resolves.toEqual({ mode: 'on', status: 'available' });
     await expect(bound.list()).resolves.toEqual([]);
     expect(load).toHaveBeenCalledOnce();
   });
@@ -855,16 +855,16 @@ describe('CredentialVault', () => {
         deletePassword(): boolean { return false; },
       };
     });
-    vault = await createCredentialVault({ mode: 'local', store, loadKeyring: load });
+    vault = await createCredentialVault({ mode: 'on', store, loadKeyring: load });
     const bound = vault.bind(kitId, pluginName);
 
     expect(vault.capability()).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
 
-    await expect(bound.capability()).resolves.toEqual({ mode: 'local', status: 'available' });
+    await expect(bound.capability()).resolves.toEqual({ mode: 'on', status: 'available' });
     expect(load).toHaveBeenCalledTimes(2);
   });
 
@@ -888,7 +888,7 @@ describe('CredentialVault', () => {
       async set() {},
       async delete() {},
     };
-    vault = await createCredentialVault({ mode: 'local', store, keyring: retainedKeyring });
+    vault = await createCredentialVault({ mode: 'on', store, keyring: retainedKeyring });
     const bound = vault.bind(kitId, pluginName);
     const closeStore = vi.spyOn(store, 'close');
 
@@ -899,14 +899,14 @@ describe('CredentialVault', () => {
     releaseRetry();
 
     await expect(capability).resolves.toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_LOCKED',
     });
     await expect(listing).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
     await vi.waitFor(() => expect(closeStore).toHaveBeenCalledOnce());
     await expect(bound.capability()).resolves.toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_LOCKED',
     });
@@ -918,25 +918,25 @@ describe('CredentialVault', () => {
     const invalidDatabasePath = directory;
 
     const result = await createCredentialVault({
-      mode: 'local',
+      mode: 'on',
       databasePath: invalidDatabasePath,
       keyring,
     }).catch((reason: unknown) => reason);
 
     expect(result).toBeInstanceOf(CredentialVault);
     expect((result as CredentialVault).capability()).toEqual({
-      mode: 'local',
+      mode: 'on',
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
     vault = result as CredentialVault;
   });
 
-  it('accepts the Task 3 dbPath factory contract for a local vault', async () => {
+  it('accepts the dbPath factory contract for an enabled vault', async () => {
     vault.close();
 
-    vault = await createLocalCredentialVault({ dbPath: databasePath, keyring });
+    vault = await createEnabledCredentialVault({ dbPath: databasePath, keyring });
 
-    expect(vault.capability()).toEqual({ mode: 'local', status: 'available' });
+    expect(vault.capability()).toEqual({ mode: 'on', status: 'available' });
   });
 });

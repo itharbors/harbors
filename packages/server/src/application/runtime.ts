@@ -1164,7 +1164,7 @@ function sanitizeCredentialStatus(
   if (!value || value.mode !== configuredMode) {
     return unavailableCredentialStatus(configuredMode);
   }
-  if (configuredMode === 'local' && value.status === 'available') {
+  if (configuredMode === 'on' && value.status === 'available') {
     return { mode: configuredMode, status: 'available' };
   }
   if (value.status === 'unavailable') {
@@ -1172,12 +1172,9 @@ function sanitizeCredentialStatus(
       return { mode: configuredMode, status: 'unavailable', reason: value.reason };
     }
     if (
-      configuredMode === 'local'
+      configuredMode === 'on'
       && ['CREDENTIALS_UNAVAILABLE', 'CREDENTIALS_LOCKED'].includes(value.reason)
     ) {
-      return { mode: configuredMode, status: 'unavailable', reason: value.reason };
-    }
-    if (configuredMode === 'multi-user' && value.reason === 'CREDENTIALS_UNAVAILABLE') {
       return { mode: configuredMode, status: 'unavailable', reason: value.reason };
     }
   }
