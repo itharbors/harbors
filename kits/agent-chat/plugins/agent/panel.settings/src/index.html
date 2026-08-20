@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="stylesheet" href="./index.css" />
+  </head>
+  <body>
+    <main id="panel-root" aria-labelledby="settings-title">
+      <header class="panel-header">
+        <div>
+          <p class="eyebrow">AGENT</p>
+          <h1 id="settings-title">Agent 设置</h1>
+          <p class="subtitle">默认权限仅影响新对话。</p>
+        </div>
+      </header>
+      <form id="settings-form">
+        <section class="settings-card" aria-labelledby="permissions-title">
+          <h2 id="permissions-title">新对话权限</h2>
+          <label class="field">
+            <span class="field-label">默认沙盒模式</span>
+            <select id="sandbox-mode" name="sandboxMode">
+              <option value="read-only">只读</option>
+              <option value="workspace-write">工作区可写</option>
+              <option value="danger-full-access">完全访问</option>
+            </select>
+            <span class="field-help">控制 Agent 对工作区文件的访问范围。</span>
+          </label>
+          <label class="field">
+            <span class="field-label">默认审批策略</span>
+            <select id="approval-policy" name="approvalPolicy">
+              <option value="ask">每次询问</option>
+              <option value="always">始终允许</option>
+            </select>
+            <span class="field-help">控制需要额外权限的操作是否先询问。</span>
+          </label>
+        </section>
+        <div class="actions">
+          <button id="reset-button" class="secondary" type="button">恢复默认</button>
+          <button id="save-button" class="primary" type="submit">保存设置</button>
+        </div>
+        <p id="status" class="status" role="status" aria-live="polite"></p>
+      </form>
+    </main>
+    <script type="module" src="./index.js"></script>
+  </body>
+</html>

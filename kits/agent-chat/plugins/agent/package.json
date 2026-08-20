@@ -5,51 +5,27 @@
   "main": "./main/dist/index.cjs",
   "ce-editor": {
     "contribute": {
+      "panel": {
+        "settings": {
+          "entry": "./panel.settings/dist/index.html",
+          "title": "Agent 设置"
+        }
+      },
       "settings": {
-        "schemaVersion": 1,
-        "sections": [
-          {
-            "id": "agent.defaults",
-            "title": "Agent 默认设置",
-            "description": "只影响新对话",
-            "fields": [
-              {
-                "key": "agent.defaults.sandboxMode",
-                "label": "默认沙盒模式",
-                "control": "select",
-                "layers": ["global"],
-                "defaultLayer": "global",
-                "defaultValue": "workspace-write",
-                "options": [
-                  { "value": "read-only", "label": "只读" },
-                  { "value": "workspace-write", "label": "工作区可写" },
-                  { "value": "danger-full-access", "label": "完全访问" }
-                ]
-              },
-              {
-                "key": "agent.defaults.approvalPolicy",
-                "label": "默认审批策略",
-                "control": "select",
-                "layers": ["global"],
-                "defaultLayer": "global",
-                "defaultValue": "ask",
-                "options": [
-                  { "value": "ask", "label": "每次询问" },
-                  { "value": "always", "label": "始终允许" }
-                ]
-              }
-            ]
-          }
-        ]
+        "schemaVersion": 2,
+        "panel": "settings",
+        "title": "Agent",
+        "order": 10,
+        "requests": ["getSettings", "saveSettings", "resetSettings"]
       },
       "message": {
         "request": {
           "listConversations": ["listConversations"],
           "listDirectory": ["listDirectory"],
           "getDraftOptions": ["getDraftOptions"],
-          "getSetting": ["getSetting"],
-          "setSetting": ["setSetting"],
-          "deleteSetting": ["deleteSetting"],
+          "getSettings": { "methods": ["getSettings"], "callers": ["settings"] },
+          "saveSettings": { "methods": ["saveSettings"], "callers": ["settings"] },
+          "resetSettings": { "methods": ["resetSettings"], "callers": ["settings"] },
           "getConversationOptions": ["getConversationOptions"],
           "getConversationContext": ["getConversationContext"],
           "getConversationPermissions": ["getConversationPermissions"],

@@ -13,17 +13,10 @@
       },
       "message": {
         "request": {
-          "getTypes": ["getTypes"],
-          "get": ["get"],
-          "set": ["set"],
-          "delete": ["delete"],
-          "list": ["list"],
-          "getViewModel": ["getViewModel"],
-          "setValue": ["setValue"],
-          "resetValue": ["resetValue"]
+          "getPages": ["getPages"],
+          "requestPage": ["requestPage"]
         },
         "broadcast": {
-          "settings.config.changed": ["panel.onConfigChanged"],
           "settings.registry.changed": ["panel.onRegistryChanged"]
         }
       },

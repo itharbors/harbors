@@ -5,6 +5,7 @@ import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type Trac
 import Transcript, { nextDisplayTurn } from './transcript.js';
 import { captureLinkClick, createLinkClickedPayload, createLinkClickSequenceGate } from './link-click.js';
 import { applyMessageDeltaUpdates, createMessageDeltaScheduler, shouldIgnorePendingBottomScroll, type MessageDeltaUpdate } from './update-scheduler.js';
+import { readModelCatalogPayload, selectModelForCatalog, type ModelCatalogOption } from './model-catalog.js';
 import './index.css';
 
 type Source = 'harbors';
@@ -13,7 +14,7 @@ interface ConversationData { id: string; active?: boolean; }
 interface DraftData { source?: Source; project?: string; }
 interface ConversationUiState { selectedConversationId?: string | null; selectedProject?: string | null; draft?: DraftData | null; running?: boolean; generation?: string; revision?: number; }
 interface SelectOption { id: string; name: string; description?: string; }
-interface ModelOption extends SelectOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
+interface ModelOption extends ModelCatalogOption { reasoningEfforts?: SelectOption[]; serviceTiers?: SelectOption[]; defaultReasoningEffort?: string; defaultServiceTier?: string; }
 type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
 type ApprovalPolicy = 'ask' | 'always';
 interface PermissionOptions { sandboxModes: SandboxMode[]; approvalPolicies: ApprovalPolicy[]; defaultSandboxMode: SandboxMode; defaultApprovalPolicy: ApprovalPolicy; }
@@ -626,6 +627,13 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setContextUsage(options.contextUsage);
     setConfigurationError(options.configurationError);
   };
+  const applyModelCatalogBroadcast = (value: unknown): void => {
+    const payload = readModelCatalogPayload(value);
+    if (!payload) return;
+    setModels(payload.catalog.models);
+    setModel((current) => selectModelForCatalog(current, payload.catalog));
+    setConfigurationError(payload.catalog.configurationError || null);
+  };
   const loadPermissionRequests = useCallback(async (id: string): Promise<void> => {
     const requestSeq = ++permissionRequestSeqRef.current;
     try {
@@ -718,6 +726,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     applyUiStateRef.current = applyConversationUiState;
     registerSetter('conversation.selected', (value: unknown) => applyConversationUiState(value, ++uiStateSequenceRef.current));
     registerSetter('agent.conversation.trace.append', applyTraceAppend);
+    registerSetter('model-service.catalog.changed', applyModelCatalogBroadcast);
     registerSetter('agent.conversation.changed', (value: unknown) => {
       if (disposed || !value || typeof value !== 'object') return;
       const payload = value as { action?: string; id?: string; conversation?: ConversationData };

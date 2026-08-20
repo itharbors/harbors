@@ -19,7 +19,17 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
     'agent.defaults.approvalPolicy': 'always',
   };
   const runtime = {
-    config: { get(key: string) { return values[key]; } },
+    config: {
+      get(key: string) { return values[key]; },
+      set(key: string, value: unknown, layer?: string) {
+        assert.equal(layer, 'global');
+        values[key] = value;
+      },
+      delete(key: string, layer?: string) {
+        assert.equal(layer, 'global');
+        delete values[key];
+      },
+    },
     message: {
       broadcast() {},
       async request(target: string, method: string, input?: any) {
@@ -46,6 +56,40 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
     const existingOptions = await plugin.methods.getConversationOptions(existing.id);
     assert.equal(existingOptions.selection.sandboxMode, 'read-only');
     assert.equal(existingOptions.selection.approvalPolicy, 'ask');
+
+    assert.deepEqual(plugin.methods.getSettings(), {
+      sandboxMode: 'danger-full-access',
+      approvalPolicy: 'always',
+      global: { sandboxMode: true, approvalPolicy: true },
+    });
+    const saved = plugin.methods.saveSettings({ sandboxMode: 'read-only', approvalPolicy: 'ask' });
+    assert.deepEqual(values, {
+      'agent.defaults.sandboxMode': 'read-only',
+      'agent.defaults.approvalPolicy': 'ask',
+    });
+    assert.deepEqual(saved, {
+      sandboxMode: 'read-only',
+      approvalPolicy: 'ask',
+      global: { sandboxMode: true, approvalPolicy: true },
+    });
+    // The method must return the values read back from config, not merely the submitted draft.
+    assert.deepEqual(plugin.methods.getSettings(), saved);
+    const configSet = runtime.config.set;
+    runtime.config.set = () => {};
+    assert.throws(() => plugin.methods.saveSettings({ sandboxMode: 'danger-full-access', approvalPolicy: 'always' }), /not persisted/);
+    runtime.config.set = configSet;
+    assert.throws(() => plugin.methods.saveSettings({ sandboxMode: 'invalid', approvalPolicy: 'ask' }), /invalid sandbox mode/);
+    assert.throws(() => plugin.methods.saveSettings({ sandboxMode: 'read-only', approvalPolicy: 'ask', extra: true }), /only sandboxMode and approvalPolicy/);
+    assert.deepEqual(plugin.methods.getSettings(), {
+      sandboxMode: 'read-only',
+      approvalPolicy: 'ask',
+      global: { sandboxMode: true, approvalPolicy: true },
+    });
+    assert.deepEqual(plugin.methods.resetSettings(), {
+      sandboxMode: 'workspace-write',
+      approvalPolicy: 'ask',
+      global: { sandboxMode: false, approvalPolicy: false },
+    });
   } finally {
     await plugin.lifecycle.unload();
     restoreEnv('HARBORS_AGENT_STORAGE_DIR', previousEnv.storage);

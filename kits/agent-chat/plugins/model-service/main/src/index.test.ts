@@ -45,11 +45,31 @@ function makeDraftHarness() {
   return { config, credentials, stored, read: () => serviceValue as { providers: ModelProvider[]; defaultProviderId?: string } };
 }
 
+function makeBroadcastRecorder() {
+  const events: Array<{ topic: string; payload: unknown }> = [];
+  return {
+    events,
+    message: { broadcast(topic: string, payload: unknown) { events.push({ topic, payload }); } },
+  };
+}
+
 test('catalog uses bound config and hides credential metadata', async () => {
   const catalog = await makeService(async () => response({})).getCatalog();
   assert.equal(catalog.defaultModel, 'test-model');
   assert.equal(catalog.models[0]?.id, 'test-model');
   assert.doesNotMatch(JSON.stringify(catalog), /fake-secret|credential-1/u);
+});
+
+test('settings snapshot includes all providers and exposes only credentialConfigured', () => {
+  const first = makeProvider({ id: 'first', credentialId: 'credential-first' });
+  const second = makeProvider({ id: 'second', credentialId: '' });
+  const service = new ModelService({ config: makeConfig(first, { providers: [first, second] }) });
+  const snapshot = service.getSettings();
+  assert.deepEqual(snapshot.providers.map((provider) => provider.id), ['first', 'second']);
+  assert.equal(snapshot.providers[0]?.credentialConfigured, true);
+  assert.equal(snapshot.providers[1]?.credentialConfigured, false);
+  assert.equal('credentialId' in snapshot.providers[0]!, false);
+  assert.doesNotMatch(JSON.stringify(snapshot), /credential-first|fake-secret-never-returned/u);
 });
 
 test('reports stable configuration errors for missing address and credential', async () => {
@@ -163,26 +183,110 @@ test('stable error codes cover unsupported protocol, invalid response, network, 
   await assert.rejects(timed.complete({ ...input, requestId: 'timeout' }), (error: any) => error.code === 'MODEL_SERVICE_TIMEOUT' || error.code === 'MODEL_SERVICE_CANCELLED');
 });
 
-test('逐字段保存允许先写地址再写 Token，调用前才要求完整配置', async () => {
+test('保存 Provider 支持先保存地址，再保存 Token，并返回安全快照', async () => {
   const harness = makeDraftHarness();
   const service = new ModelService({ config: harness.config, credentials: harness.credentials, fetch: async () => response({ choices: [{ message: { content: 'ok' } }] }) });
-  await service.setSetting({ key: 'model-service.baseUrl', value: 'https://provider.invalid', layer: 'global' });
+  const saved = await service.saveProvider({ id: 'draft', name: 'Draft', baseUrl: 'https://provider.invalid', models: [{ id: 'm' }] });
+  assert.equal(saved.providers[0]?.baseUrl, 'https://provider.invalid');
   assert.equal(harness.stored.length, 0);
-  await service.setSetting({ key: 'model-service.secret', value: secret, layer: 'global' });
+  await service.saveProvider({ id: 'draft', name: 'Draft', baseUrl: 'https://provider.invalid', models: [{ id: 'm' }], secret });
   assert.equal(harness.stored.length, 1);
   assert.equal(harness.read().providers[0]?.credentialId, 'credential-1');
   assert.equal((await service.complete(input)).message.content, 'ok');
 });
 
-test('逐字段保存允许先写 Token 再写地址，并保留已写入 credentialId', async () => {
+test('保存 Provider 不带新 Token 时保留已写入 credentialId', async () => {
   const harness = makeDraftHarness();
   const service = new ModelService({ config: harness.config, credentials: harness.credentials, fetch: async () => response({ choices: [{ message: { content: 'ok' } }] }) });
-  await service.setSetting({ key: 'model-service.secret', value: secret, layer: 'global' });
+  await service.saveProvider({ id: 'draft', name: 'Draft', secret });
   assert.equal(harness.stored.length, 1);
   assert.equal(harness.read().providers[0]?.baseUrl, '');
-  await service.setSetting({ key: 'model-service.baseUrl', value: 'https://provider.invalid', layer: 'global' });
+  await service.saveProvider({ id: 'draft', name: 'Draft', baseUrl: 'https://provider.invalid' });
   assert.equal(harness.read().providers[0]?.credentialId, 'credential-1');
   assert.equal((await service.complete(input)).message.content, 'ok');
+});
+
+test('保存后从绑定 Config 和 Credential Vault 重读，后续请求使用已保存凭据', async () => {
+  const harness = makeDraftHarness();
+  const credentialReads: string[] = [];
+  let storedCredential: { id: string; secret: string } | undefined;
+  const credentials: CredentialReader = {
+    async get(id) {
+      credentialReads.push(id);
+      return { profile: { id }, secret: storedCredential?.secret || '' };
+    },
+    async put(value) {
+      storedCredential = { id: value.id || 'credential-reread', secret: value.secret };
+      return { id: storedCredential.id, label: value.label, metadata: value.metadata, createdAt: 'created', updatedAt: 'updated' };
+    },
+  };
+  let authorization = '';
+  const service = new ModelService({
+    config: harness.config,
+    credentials,
+    fetch: async (_url, init) => {
+      authorization = (init?.headers as Record<string, string>).authorization;
+      return response({ choices: [{ message: { content: 'ok' } }] });
+    },
+  });
+  const saved = await service.saveProvider({ id: 'reread', name: 'Reread', baseUrl: 'https://reread.invalid', models: [{ id: 'm' }], secret });
+  assert.equal(saved.providers[0]?.id, 'reread');
+  assert.equal(harness.read().providers[0]?.credentialId, 'credential-reread');
+  await service.complete({ ...input, requestId: 'reread-request' });
+  assert.deepEqual(credentialReads, ['credential-reread']);
+  assert.equal(authorization, `Bearer ${secret}`);
+});
+
+test('兼容凭据库桥接返回的 profile 包装形状，并保持 credentialId 与 Vault profile 对齐', async () => {
+  const harness = makeDraftHarness();
+  const profileId = 'credential-profile-wrapper';
+  let reads = 0;
+  const credentials: CredentialReader = {
+    async get(id) {
+      reads += 1;
+      return { profile: { id }, secret };
+    },
+    async put(value) {
+      return { profile: { id: profileId, label: value.label, metadata: value.metadata, createdAt: 'created', updatedAt: 'updated' } };
+    },
+  };
+  let authorization = '';
+  const service = new ModelService({
+    config: harness.config,
+    credentials,
+    fetch: async (_url, init) => {
+      authorization = (init?.headers as Record<string, string>).authorization;
+      return response({ choices: [{ message: { content: 'ok' } }] });
+    },
+  });
+
+  const saved = await service.saveProvider({ id: 'wrapped', name: 'Wrapped', baseUrl: 'https://wrapped.invalid', models: [{ id: 'm' }], secret });
+  assert.equal(harness.read().providers[0]?.credentialId, profileId);
+  assert.equal(saved.providers[0]?.credentialConfigured, true);
+  await service.complete({ ...input, requestId: 'wrapped-request' });
+  assert.equal(reads, 1);
+  assert.equal(authorization, `Bearer ${secret}`);
+});
+
+test('凭据库返回缺少 profile ID 时不写入不完整配置', async () => {
+  const harness = makeDraftHarness();
+  const service = new ModelService({ config: harness.config, credentials: { async get(id) { return { profile: { id }, secret }; }, async put() { return { profile: {} }; } } });
+  await assert.rejects(service.saveProvider({ id: 'missing-profile-id', name: 'Missing profile ID', secret }), (error: any) => {
+    assert.equal(error.code, 'MODEL_SERVICE_NOT_CONFIGURED');
+    return true;
+  });
+  assert.deepEqual(harness.read().providers, []);
+});
+
+test('Vault 保存失败时不泄漏 Token', async () => {
+  const harness = makeDraftHarness();
+  const service = new ModelService({ config: harness.config, credentials: { async get(id) { return { profile: { id }, secret }; }, async put() { throw new Error(`vault failure ${secret}`); } } });
+  await assert.rejects(service.saveProvider({ id: 'save-failed', name: 'Save failed', secret }), (error: any) => {
+    assert.equal(error.code, 'MODEL_SERVICE_NOT_CONFIGURED');
+    assert.doesNotMatch(String(error), /vault failure|fake-secret-never-returned/u);
+    return true;
+  });
+  assert.deepEqual(harness.read().providers, []);
 });
 
 test('修改 providerId 会迁移旧 Provider、credentialId 和默认 Provider', async () => {
@@ -195,7 +299,7 @@ test('修改 providerId 会迁移旧 Provider、credentialId 和默认 Provider'
     async delete(id) { deleted = id; },
   };
   const service = new ModelService({ config: harness.config, credentials, fetch: async () => response({ choices: [{ message: { content: 'ok' } }] }) });
-  await service.setSetting({ key: 'model-service.providerId', value: 'new-provider', layer: 'global' });
+  await service.saveProvider({ id: 'new-provider', previousId: oldProvider.id, name: oldProvider.name, baseUrl: oldProvider.baseUrl, models: oldProvider.models });
   const saved = harness.read();
   assert.deepEqual(saved.providers.map((provider) => provider.id), ['new-provider']);
   assert.equal(saved.providers[0]?.credentialId, 'credential-old');
@@ -214,16 +318,103 @@ test('删除没有 credentialId 的草稿不会调用凭据库删除', async () 
   assert.equal(deleteCalls, 0);
 });
 
+test('删除 Provider 的 Vault 失败时不修改配置且不泄漏底层错误', async () => {
+  const provider = makeProvider({ id: 'failed-delete', credentialId: 'credential-delete' });
+  const harness = makeDraftHarness();
+  harness.config.set?.('service', { providers: [provider], defaultProviderId: provider.id }, 'global');
+  const service = new ModelService({ config: harness.config, credentials: { async get(id) { return { profile: { id }, secret }; }, async delete() { throw new Error(`vault failure ${secret}`); } } });
+  await assert.rejects(service.deleteProvider(provider.id), (error: any) => {
+    assert.equal(error.code, 'MODEL_SERVICE_NOT_CONFIGURED');
+    assert.doesNotMatch(String(error), /vault failure|fake-secret-never-returned/u);
+    return true;
+  });
+  assert.equal(harness.read().providers[0]?.credentialId, provider.credentialId);
+});
+
 test('重置 Token 会先删除 Vault 凭据，再清空当前 Provider 的 credentialId', async () => {
   const provider = makeProvider({ id: 'reset-provider', credentialId: 'credential-reset' });
   const harness = makeDraftHarness();
   harness.config.set?.('service', { providers: [provider], defaultProviderId: provider.id }, 'global');
   let deleted = '';
   const service = new ModelService({ config: harness.config, credentials: { async get(id) { return { profile: { id }, secret }; }, async delete(id) { deleted = id; } } });
-  await service.deleteSetting({ key: 'model-service.secret' });
+  await service.resetProviderCredential({ providerId: 'reset-provider' });
   assert.equal(deleted, 'credential-reset');
   assert.equal(harness.read().providers[0]?.credentialId, '');
   assert.equal(harness.read().providers[0]?.baseUrl, provider.baseUrl);
+});
+
+test('Provider 配置变更成功后每次广播一次安全 Catalog，并递增 revision', async () => {
+  const harness = makeDraftHarness();
+  let deleteCalls = 0;
+  const recorder = makeBroadcastRecorder();
+  const service = new ModelService({
+    config: harness.config,
+    credentials: {
+      async get(id) { return { profile: { id }, secret }; },
+      async put(value) { return { id: value.id || 'credential-broadcast' }; },
+      async delete() { deleteCalls += 1; },
+    },
+    message: recorder.message,
+  });
+
+  await service.saveProvider({ id: 'broadcast-provider', name: 'Broadcast', baseUrl: 'https://broadcast.invalid', models: [{ id: 'broadcast-model' }], secret });
+  await service.resetProviderCredential({ providerId: 'broadcast-provider' });
+  await service.deleteProvider('broadcast-provider');
+
+  assert.equal(deleteCalls, 1);
+  assert.deepEqual(recorder.events.map((event) => event.topic), [
+    'model-service.catalog.changed',
+    'model-service.catalog.changed',
+    'model-service.catalog.changed',
+  ]);
+  const payloads = recorder.events.map((event) => event.payload as { revision: number; reason: string; catalog: unknown });
+  assert.deepEqual(payloads.map((payload) => ({ revision: payload.revision, reason: payload.reason })), [
+    { revision: 1, reason: 'provider-saved' },
+    { revision: 2, reason: 'credential-reset' },
+    { revision: 3, reason: 'provider-deleted' },
+  ]);
+  assert.deepEqual(payloads[0]?.catalog, {
+    models: [{ id: 'broadcast-model', name: 'broadcast-model' }],
+    defaultModel: 'broadcast-model',
+  });
+  assert.deepEqual(payloads[1]?.catalog, {
+    models: [{ id: 'broadcast-model', name: 'broadcast-model' }],
+    defaultModel: 'broadcast-model',
+    configurationError: { code: 'MISSING_CREDENTIAL', message: '模型服务未配置凭据' },
+  });
+  assert.deepEqual(payloads[2]?.catalog, { models: [], defaultModel: '', configurationError: { code: 'MISSING_BASE_URL', message: '模型服务未配置 Provider 地址' } });
+  assert.doesNotMatch(JSON.stringify(recorder.events), /fake-secret-never-returned|credential-broadcast|credentialId|token/iu);
+});
+
+test('凭据或配置持久化失败时不广播 Catalog 变更', async () => {
+  const recorder = makeBroadcastRecorder();
+  const failingConfig: ConfigReader = {
+    get<T>(key: string): T | undefined { return key === 'service' ? { providers: [] } as T : undefined; },
+    set() { throw new Error('config write failed'); },
+  };
+  const service = new ModelService({
+    config: failingConfig,
+    credentials: { async get(id) { return { profile: { id }, secret }; }, async put(value) { return { id: value.id || 'credential-failed-write' }; } },
+    message: recorder.message,
+  });
+  await assert.rejects(service.saveProvider({ id: 'failed-write', baseUrl: 'https://failed.invalid', models: [{ id: 'm' }], secret }));
+  assert.equal(recorder.events.length, 0);
+});
+
+test('广播 Catalog 会按 Vault 实际读取结果报告失效凭据', async () => {
+  const harness = makeDraftHarness();
+  const recorder = makeBroadcastRecorder();
+  const service = new ModelService({
+    config: harness.config,
+    credentials: {
+      async get() { throw new Error('credential is locked'); },
+      async put(value) { return { id: value.id || 'credential-locked' }; },
+    },
+    message: recorder.message,
+  });
+  await service.saveProvider({ id: 'locked-provider', baseUrl: 'https://locked.invalid', models: [{ id: 'm' }], secret });
+  const payload = recorder.events[0]?.payload as { catalog: { configurationError?: { code: string } } };
+  assert.equal(payload.catalog.configurationError?.code, 'MISSING_CREDENTIAL');
 });
 
 test('重置空 credentialId 幂等且不会调用 Vault 删除', async () => {
@@ -232,8 +423,8 @@ test('重置空 credentialId 幂等且不会调用 Vault 删除', async () => {
   harness.config.set?.('service', { providers: [provider], defaultProviderId: provider.id }, 'global');
   let deleteCalls = 0;
   const service = new ModelService({ config: harness.config, credentials: { async get(id) { return { profile: { id }, secret }; }, async delete() { deleteCalls += 1; } } });
-  await service.deleteSetting({ key: 'model-service.secret' });
-  await service.deleteSetting({ key: 'model-service.secret' });
+  await service.resetProviderCredential({ providerId: 'empty-provider' });
+  await service.resetProviderCredential({ providerId: 'empty-provider' });
   assert.equal(deleteCalls, 0);
   assert.equal(harness.read().providers[0]?.credentialId, '');
 });
@@ -243,7 +434,7 @@ test('Vault 删除失败时保留 credentialId 且不泄漏底层错误', async 
   const harness = makeDraftHarness();
   harness.config.set?.('service', { providers: [provider], defaultProviderId: provider.id }, 'global');
   const service = new ModelService({ config: harness.config, credentials: { async get(id) { return { profile: { id }, secret }; }, async delete() { throw new Error(`vault failure ${secret}`); } } });
-  await assert.rejects(service.deleteSetting({ key: 'model-service.secret' }), (error: any) => {
+  await assert.rejects(service.resetProviderCredential({ providerId: 'failed-reset' }), (error: any) => {
     assert.equal(error.code, 'MODEL_SERVICE_NOT_CONFIGURED');
     assert.doesNotMatch(String(error), /vault failure|fake-secret-never-returned/u);
     return true;

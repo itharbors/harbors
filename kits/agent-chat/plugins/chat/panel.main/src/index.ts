@@ -6,6 +6,8 @@ const setters: Record<string, (data: any) => void> = {};
 let cachedConversationSelected: unknown;
 let hasCachedConversationSelected = false;
 const cachedTraceAppends: unknown[] = [];
+let cachedModelCatalog: unknown;
+let hasCachedModelCatalog = false;
 
 function registerSetter(key: string, setter: (data: any) => void): void {
   setters[key] = setter;
@@ -15,6 +17,9 @@ function registerSetter(key: string, setter: (data: any) => void): void {
   if (key === 'agent.conversation.trace.append' && cachedTraceAppends.length > 0) {
     const pending = cachedTraceAppends.splice(0);
     for (const value of pending) setter(value);
+  }
+  if (key === 'model-service.catalog.changed' && hasCachedModelCatalog) {
+    setter(cachedModelCatalog);
   }
 }
 
@@ -56,6 +61,12 @@ export default {
     },
     onMessageStatus(data: unknown) {
       setters['agent.message.status']?.(data);
+      return data;
+    },
+    onModelCatalogChanged(data: unknown) {
+      cachedModelCatalog = data;
+      hasCachedModelCatalog = true;
+      setters['model-service.catalog.changed']?.(data);
       return data;
     },
   },

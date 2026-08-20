@@ -1,7 +1,7 @@
 import { buildRequest, normalizeResponse } from './protocol.js';
-import { readModelServiceConfig, readRelayConfig, toSafeConfig, type ConfigReader, type CredentialReader, type ModelProvider, type ModelServiceConfig, type RelayConfig } from './config.js';
+import { credentialIdFromPutResult, readModelServiceConfig, readRelayConfig, toSafeConfig, type ConfigReader, type CredentialReader, type ModelProvider, type ModelServiceConfig, type RelayConfig } from './config.js';
 import { ModelServiceError } from './types.js';
-import type { CancelOutput, CompleteInput, CompleteOutput, ModelCatalog, ModelCatalogEntry } from './types.js';
+import type { CancelOutput, CompleteInput, CompleteOutput, ModelCatalog, ModelCatalogChangedPayload, ModelCatalogChangedReason, ModelCatalogEntry } from './types.js';
 
 declare const editor: any;
 
@@ -14,88 +14,33 @@ interface RequestEntry {
   timeout?: ReturnType<typeof setTimeout>;
 }
 
+interface ModelServiceMessage {
+  broadcast(topic: string, ...args: unknown[]): void;
+}
+
 export class ModelService {
   private readonly active = new Map<string, RequestEntry>();
   private readonly completed = new Set<string>();
   private readonly completedOrder: string[] = [];
   private stopped = false;
+  private catalogRevision = 0;
 
-  constructor(private readonly options: { fetch?: typeof fetch; config?: ConfigReader; credentials?: CredentialReader; requestTimeoutMs?: number } = {}) {}
+  constructor(private readonly options: { fetch?: typeof fetch; config?: ConfigReader; credentials?: CredentialReader; message?: ModelServiceMessage; requestTimeoutMs?: number } = {}) {}
 
-  load(context?: { config?: ConfigReader; credentials?: CredentialReader }): void {
+  load(context?: { config?: ConfigReader; credentials?: CredentialReader; message?: ModelServiceMessage }): void {
     this.stopped = false;
     if (context?.config) this.options.config = context.config;
     if (context?.credentials) this.options.credentials = context.credentials;
+    if (context) this.options.message = context.message;
   }
 
   async getCatalog(): Promise<ModelCatalog> {
     const config = await this.config();
-    const models: ModelCatalogEntry[] = config?.models?.length ? config.models.map((model) => ({ ...model, ...(model.contextWindow === undefined && config.contextWindow ? { contextWindow: config.contextWindow } : {}), ...(model.reasoningEfforts ? { reasoningEfforts: [...model.reasoningEfforts] } : {}), ...(model.serviceTiers ? { serviceTiers: [...model.serviceTiers] } : {}) })) : [];
-    const configurationError = !config?.baseUrl
-      ? { code: 'MISSING_BASE_URL' as const, message: '模型服务未配置 Provider 地址' }
-      : !config.credential
-        ? { code: 'MISSING_CREDENTIAL' as const, message: '模型服务未配置凭据' }
-        : undefined;
-    return { models, defaultModel: config?.defaultModel || models[0]?.id || '', ...(configurationError ? { configurationError } : {}) };
+    return catalogFromRelayConfig(config);
   }
 
   getSettings(): ReturnType<typeof toSafeConfig> {
     return toSafeConfig(readModelServiceConfig(this.options.config));
-  }
-
-  getSetting(key: string): unknown {
-    const config = readModelServiceConfig(this.options.config);
-    const provider = config.providers.find((item) => item.id === config.defaultProviderId) || config.providers[0];
-    if (key === 'model-service.defaultProviderId') return config.defaultProviderId;
-    if (!provider) return undefined;
-    const values: Record<string, unknown> = { 'model-service.providerId': provider.id, 'model-service.providerName': provider.name, 'model-service.protocol': provider.protocol, 'model-service.baseUrl': provider.baseUrl, 'model-service.models': JSON.stringify(provider.models), 'model-service.defaultModel': provider.defaultModel || '' };
-    return values[key];
-  }
-
-  async setSetting(input: unknown): Promise<ReturnType<typeof toSafeConfig>> {
-    if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务配置无效');
-    const value = input as { key?: unknown; value?: unknown };
-    if (typeof value.key !== 'string') throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务配置键无效');
-    if (value.key === 'model-service.defaultProviderId') {
-      const current = readModelServiceConfig(this.options.config);
-      this.writeConfig({ ...current, ...(typeof value.value === 'string' && value.value ? { defaultProviderId: value.value } : {}) });
-      return toSafeConfig(readModelServiceConfig(this.options.config));
-    }
-    const current = readModelServiceConfig(this.options.config);
-    const provider = current.providers.find((item) => item.id === current.defaultProviderId) || current.providers[0];
-    const draft: Record<string, unknown> = provider ? { ...provider, models: provider.models } : { id: 'default', name: 'Provider', protocol: 'openai-chat-completions', baseUrl: '', models: [] };
-    if (value.key === 'model-service.providerId' && typeof value.value === 'string') {
-      if (typeof draft.id === 'string' && draft.id !== value.value) draft.previousId = draft.id;
-      draft.id = value.value;
-    }
-    if (value.key === 'model-service.providerName' && typeof value.value === 'string') draft.name = value.value;
-    if (value.key === 'model-service.protocol' && typeof value.value === 'string') draft.protocol = value.value;
-    if (value.key === 'model-service.baseUrl' && typeof value.value === 'string') draft.baseUrl = value.value;
-    if (value.key === 'model-service.models' && typeof value.value === 'string') { try { draft.models = JSON.parse(value.value); } catch { throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型列表必须是有效 JSON'); } }
-    if (value.key === 'model-service.defaultModel' && typeof value.value === 'string') draft.defaultModel = value.value;
-    if (value.key === 'model-service.secret' && typeof value.value === 'string') draft.secret = value.value;
-    return this.saveProvider(draft);
-  }
-
-  async deleteSetting(input: { key?: string }): Promise<{ ok: true }> {
-    if (input?.key === 'model-service.secret') {
-      const current = readModelServiceConfig(this.options.config);
-      const provider = current.providers.find((item) => item.id === current.defaultProviderId) || current.providers[0];
-      if (!provider?.credentialId) return { ok: true };
-      if (!this.options.credentials?.delete) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据不可用');
-      try {
-        await this.options.credentials.delete(provider.credentialId);
-      } catch {
-        throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据删除失败');
-      }
-      this.writeConfig({ ...current, providers: current.providers.map((item) => item.id === provider.id ? { ...item, credentialId: '' } : item) });
-      return { ok: true };
-    }
-    if (input?.key === 'model-service.providerId') {
-      const provider = readModelServiceConfig(this.options.config).providers[0];
-      if (provider) return this.deleteProvider(provider.id);
-    }
-    return { ok: true };
   }
 
   async saveProvider(input: unknown): Promise<ReturnType<typeof toSafeConfig>> {
@@ -112,8 +57,15 @@ export class ModelService {
     let credentialId = previous?.credentialId || '';
     if (secret) {
       if (!this.options.credentials?.put) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据不可用');
-      const profile = await this.options.credentials.put({ id: credentialId || undefined, label: name, metadata: { providerId: id, protocol }, secret });
-      credentialId = profile.id;
+      let profile: unknown;
+      try {
+        profile = await this.options.credentials.put({ id: credentialId || undefined, label: name, metadata: { providerId: id, protocol }, secret });
+      } catch {
+        throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据保存失败');
+      }
+      const savedCredentialId = credentialIdFromPutResult(profile);
+      if (!savedCredentialId) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据保存失败');
+      credentialId = savedCredentialId;
     }
     const models = normalizeModels(value.models);
     const provider: ModelProvider = { id, name, protocol, baseUrl, credentialId, models, ...(typeof value.defaultModel === 'string' && value.defaultModel ? { defaultModel: value.defaultModel } : {}), ...(value.options && typeof value.options === 'object' && !Array.isArray(value.options) ? { options: value.options as ModelProvider['options'] } : {}) };
@@ -124,15 +76,50 @@ export class ModelService {
         : id;
     const next: ModelServiceConfig = { providers: [...current.providers.filter((item) => item.id !== id && item.id !== previous?.id), provider], defaultProviderId };
     this.writeConfig(next);
-    return toSafeConfig(next);
+    const saved = toSafeConfig(readModelServiceConfig(this.options.config));
+    await this.broadcastCatalogChanged('provider-saved');
+    // Return the value read back through the bound Config implementation. Some
+    // hosts normalize or persist config asynchronously, so returning `next`
+    // would make the panel look saved before the runtime sees the stored value.
+    return saved;
   }
 
   async deleteProvider(id: string): Promise<{ ok: true }> {
     const current = readModelServiceConfig(this.options.config);
     const provider = current.providers.find((item) => item.id === id);
-    if (provider?.credentialId && this.options.credentials?.delete) await this.options.credentials.delete(provider.credentialId);
+    if (provider?.credentialId) {
+      if (!this.options.credentials?.delete) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据不可用');
+      try {
+        await this.options.credentials.delete(provider.credentialId);
+      } catch {
+        throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据删除失败');
+      }
+    }
     this.writeConfig({ providers: current.providers.filter((item) => item.id !== id), ...(current.defaultProviderId === id ? {} : current.defaultProviderId ? { defaultProviderId: current.defaultProviderId } : {}) });
+    await this.broadcastCatalogChanged('provider-deleted');
     return { ok: true };
+  }
+
+  async resetProviderCredential(input: unknown): Promise<ReturnType<typeof toSafeConfig>> {
+    if (!input || typeof input !== 'object' || Array.isArray(input) || typeof (input as { providerId?: unknown }).providerId !== 'string' || !(input as { providerId: string }).providerId) {
+      throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务 Provider 无效');
+    }
+    const providerId = (input as { providerId: string }).providerId;
+    const current = readModelServiceConfig(this.options.config);
+    const provider = current.providers.find((item) => item.id === providerId);
+    if (!provider) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务 Provider 不存在');
+    if (!provider.credentialId) return toSafeConfig(current);
+    if (!this.options.credentials?.delete) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据不可用');
+    try {
+      await this.options.credentials.delete(provider.credentialId);
+    } catch {
+      throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务凭据删除失败');
+    }
+    const next = { ...current, providers: current.providers.map((item) => item.id === providerId ? { ...item, credentialId: '' } : item) };
+    this.writeConfig(next);
+    const saved = toSafeConfig(readModelServiceConfig(this.options.config));
+    await this.broadcastCatalogChanged('credential-reset');
+    return saved;
   }
 
   async webSearch(query: string, signal?: AbortSignal): Promise<string> {
@@ -204,6 +191,16 @@ export class ModelService {
   private writeConfig(config: ModelServiceConfig): void {
     if (!this.options.config?.set) throw new ModelServiceError('MODEL_SERVICE_NOT_CONFIGURED', '模型服务配置不可写');
     this.options.config.set('service', config, 'global');
+  }
+
+  private async broadcastCatalogChanged(reason: ModelCatalogChangedReason): Promise<void> {
+    const message = this.options.message;
+    if (!message) return;
+    // Use the same Vault-backed path as getCatalog so a stale/locked credential
+    // is represented by MISSING_CREDENTIAL instead of credentialId presence.
+    const catalog = await this.getCatalog();
+    const payload: ModelCatalogChangedPayload = { revision: ++this.catalogRevision, reason, catalog };
+    message.broadcast('model-service.catalog.changed', payload);
   }
 
   private async request(url: string, init: RequestInit, config: RelayConfig, disabled: boolean, entry: RequestEntry): Promise<Response> {
@@ -308,11 +305,9 @@ if (typeof editor !== 'undefined') {
     methods: {
       getCatalog: () => service.getCatalog(),
       getSettings: () => service.getSettings(),
-      getSetting: (key: string) => service.getSetting(key),
-      setSetting: (input: unknown) => service.setSetting(input),
-      deleteSetting: (input: { key?: string }) => service.deleteSetting(input),
       saveProvider: (input: unknown) => service.saveProvider(input),
       deleteProvider: (id: string) => service.deleteProvider(id),
+      resetProviderCredential: (input: unknown) => service.resetProviderCredential(input),
       webSearch: (query: string) => service.webSearch(query),
       complete: (input: CompleteInput) => service.complete(input),
       cancel: (requestId: string) => service.cancel(requestId),
@@ -323,3 +318,13 @@ if (typeof editor !== 'undefined') {
 export * from './types.js';
 export { buildRequest, normalizeResponse } from './protocol.js';
 export { readModelServiceConfig, readRelayConfig, toSafeConfig } from './config.js';
+
+function catalogFromRelayConfig(config: RelayConfig | undefined, credentialConfigured = Boolean(config?.credential)): ModelCatalog {
+  const models: ModelCatalogEntry[] = config?.models?.length ? config.models.map((model) => ({ ...model, ...(model.contextWindow === undefined && config.contextWindow ? { contextWindow: config.contextWindow } : {}), ...(model.reasoningEfforts ? { reasoningEfforts: [...model.reasoningEfforts] } : {}), ...(model.serviceTiers ? { serviceTiers: [...model.serviceTiers] } : {}) })) : [];
+  const configurationError = !config?.baseUrl
+    ? { code: 'MISSING_BASE_URL' as const, message: '模型服务未配置 Provider 地址' }
+    : !credentialConfigured
+      ? { code: 'MISSING_CREDENTIAL' as const, message: '模型服务未配置凭据' }
+      : undefined;
+  return { models, defaultModel: config?.defaultModel || models[0]?.id || '', ...(configurationError ? { configurationError } : {}) };
+}
