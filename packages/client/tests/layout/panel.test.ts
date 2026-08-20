@@ -27,6 +27,21 @@ describe('ce-panel', () => {
     expect(el.shadowRoot!.querySelector('.content slot')).not.toBeNull();
   });
 
+  it('shows an unavailable placeholder without retaining an iframe', () => {
+    const el = document.createElement('ce-panel') as Panel;
+    el.setAttribute('src', '/editor');
+    document.body.appendChild(el);
+
+    const iframe = el.shadowRoot!.querySelector('iframe');
+    expect(iframe).not.toBeNull();
+
+    el.setAttribute('availability', 'unavailable');
+    el.removeAttribute('src');
+
+    expect(el.shadowRoot!.querySelector('iframe')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.unavailable')?.textContent).toBe('插件未加载');
+  });
+
   it('creates iframe when src is set', () => {
     const el = document.createElement('ce-panel') as Panel;
     el.setAttribute('src', '/editor?file=test.ts');

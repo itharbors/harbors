@@ -1,5 +1,5 @@
 import type { I18nChangeEvent, I18nVisibleSnapshot, MenuTreeNode } from './bootstrap.js';
-import type { WindowDescriptor } from './layout.js';
+import type { PanelDescriptor, WindowDescriptor } from './layout.js';
 import type { ProtocolVersion } from './version.js';
 
 export interface ProtocolEnvelope {
@@ -37,6 +37,13 @@ export interface MenuChangedSSEEvent extends ProtocolEnvelope {
   kitMenuTree: MenuTreeNode[];
 }
 
+export interface PanelAvailabilityChangedSSEEvent extends ProtocolEnvelope {
+  type: 'panel-availability-changed';
+  panel: PanelDescriptor;
+  state: 'available' | 'unavailable';
+  revision: number;
+}
+
 export type I18nChangedSSEEvent = ProtocolEnvelope & I18nChangeEvent & {
   i18n: I18nVisibleSnapshot;
   menuTree: MenuTreeNode[];
@@ -50,6 +57,7 @@ export type SSEEnvelope =
   | PanelDispatchSSEEvent
   | LayoutChangedSSEEvent
   | MenuChangedSSEEvent
+  | PanelAvailabilityChangedSSEEvent
   | I18nChangedSSEEvent;
 
 type WithoutProtocolVersion<T> = T extends ProtocolEnvelope

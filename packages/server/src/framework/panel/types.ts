@@ -15,7 +15,16 @@ export interface PanelRegistration {
   owner: string;
 }
 
-export type { PanelDescriptor } from '@itharbors/plugin-types';
+import type { PanelDescriptor } from '@itharbors/plugin-types';
+export type { PanelDescriptor };
+
+export type PanelAvailabilityState = 'available' | 'unavailable';
+
+export interface PanelAvailabilityChangedEvent {
+  panel: PanelDescriptor;
+  state: PanelAvailabilityState;
+  revision: number;
+}
 
 export interface PanelDefinition {
   mount?(ctx: import('../../editor/types').PanelRuntime): void | Promise<void>;

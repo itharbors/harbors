@@ -1,15 +1,28 @@
-import type { PanelConstraints, PanelDescriptor, PanelRegistration } from './types';
+import type {
+  PanelAvailabilityChangedEvent,
+  PanelConstraints,
+  PanelDescriptor,
+  PanelRegistration,
+} from './types';
 
 export class PanelModule {
   private panelMap = new Map<string, PanelRegistration>();
   private dispatcher?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
+  private revision = 0;
+  private readonly listeners = new Set<(event: PanelAvailabilityChangedEvent) => void>();
 
   register(name: string, modulePath: string, constraints: PanelConstraints = {}, owner = inferPanelOwner(name)): void {
-    this.panelMap.set(name, {
+    const registration = {
       name,
       module: modulePath,
       constraints,
       owner,
+    } satisfies PanelRegistration;
+    this.panelMap.set(name, registration);
+    this.emit({
+      panel: this.toDescriptor(registration),
+      state: 'available',
+      revision: ++this.revision,
     });
   }
 
@@ -17,7 +30,13 @@ export class PanelModule {
     if (!this.panelMap.has(name)) {
       throw new Error(`Panel "${name}" is not registered`);
     }
+    const registration = this.panelMap.get(name)!;
     this.panelMap.delete(name);
+    this.emit({
+      panel: this.toDescriptor(registration),
+      state: 'unavailable',
+      revision: ++this.revision,
+    });
   }
 
   getInfo(name: string): PanelDescriptor {
@@ -32,10 +51,17 @@ export class PanelModule {
     return this.panelMap.get(name);
   }
 
+  subscribe(listener: (event: PanelAvailabilityChangedEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
+  }
+
   clearOwner(owner: string): void {
     for (const [name, reg] of this.panelMap) {
       if (reg.owner === owner) {
-        this.panelMap.delete(name);
+        this.unregister(name);
       }
     }
   }
@@ -65,6 +91,13 @@ export class PanelModule {
   destroy(): void {
     this.panelMap.clear();
     this.dispatcher = undefined;
+    this.listeners.clear();
+  }
+
+  private emit(event: PanelAvailabilityChangedEvent): void {
+    for (const listener of this.listeners) {
+      listener(event);
+    }
   }
 
   private toDescriptor(reg: PanelRegistration): PanelDescriptor {

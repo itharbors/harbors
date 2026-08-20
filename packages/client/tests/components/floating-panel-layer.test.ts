@@ -126,4 +126,41 @@ describe('floating-panel-layer', () => {
 
     layer.remove();
   });
+
+  it('updates only the affected floating iframe for availability changes', async () => {
+    const layer = document.createElement('floating-panel-layer');
+    layer.setAttribute('data-state', JSON.stringify([
+      {
+        id: 'p-1',
+        panelName: '@itharbors/log.log',
+        title: 'Log',
+        src: '/log?sessionId=s1',
+        state: 'open',
+      },
+      {
+        id: 'p-2',
+        panelName: '@itharbors/plugin-list.list',
+        title: 'List',
+        src: '/list?sessionId=s1',
+        state: 'open',
+      },
+    ]));
+    document.body.appendChild(layer);
+    await Promise.resolve();
+
+    const panels = Array.from(layer.shadowRoot!.querySelectorAll('ce-panel'));
+    const otherIframe = panels[1].shadowRoot!.querySelector('iframe');
+    (layer as HTMLElement & { updatePanelAvailability: (input: unknown) => void }).updatePanelAvailability({
+      panelName: '@itharbors/log.log',
+      src: '/log?sessionId=s1&panelRevision=2',
+      state: 'unavailable',
+      revision: 2,
+    });
+
+    expect(panels[0].shadowRoot!.querySelector('iframe')).toBeNull();
+    expect(panels[0].shadowRoot!.querySelector('.unavailable')?.textContent).toBe('插件未加载');
+    expect(panels[1].shadowRoot!.querySelector('iframe')).toBe(otherIframe);
+
+    layer.remove();
+  });
 });

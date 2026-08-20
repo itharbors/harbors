@@ -22,6 +22,7 @@ vi.stubGlobal('crypto', { randomUUID: () => 'mock-uuid-1234' });
 // Mock location
 Object.defineProperty(window, 'location', {
   value: {
+    pathname: '/',
     search: '?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault',
     href: 'http://localhost:8080/?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault',
   },
@@ -166,6 +167,7 @@ describe('EditorApp default layout', () => {
     MockEventSource.instances.length = 0;
     window.localStorage.clear();
     window.sessionStorage.clear();
+    window.location.pathname = '/';
     window.location.search = '?session=existing-id';
     window.location.href = 'http://localhost:8080/?session=existing-id';
     bootstrapResponse = () => Promise.resolve(createJsonResponse(bootstrapPayload));
@@ -1427,6 +1429,106 @@ describe('EditorApp default layout', () => {
       args: ['hello'],
       requestId: 'req-1',
     }, '*');
+  });
+
+  it('replaces only the affected iframe across panel unavailable and available events', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const targetPanel = Array.from(el.querySelectorAll('ce-panel')).find(
+      (panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log',
+    ) as HTMLElement | undefined;
+    const unrelatedPanel = Array.from(el.querySelectorAll('ce-panel')).find(
+      (panel) => panel.getAttribute('data-panel-name') === '@itharbors/plugin-list.list',
+    ) as HTMLElement | undefined;
+    expect(targetPanel).toBeDefined();
+    expect(unrelatedPanel).toBeDefined();
+
+    const targetIframe = targetPanel!.shadowRoot!.querySelector('iframe');
+    const unrelatedIframe = unrelatedPanel!.shadowRoot!.querySelector('iframe');
+    expect(targetIframe).not.toBeNull();
+    expect(unrelatedIframe).not.toBeNull();
+
+    const source = MockEventSource.instances.at(-1);
+    expect(source).toBeDefined();
+
+    source!.onmessage?.({
+      data: JSON.stringify({
+        protocolVersion: 1,
+        type: 'panel-availability-changed',
+        panel: {
+          name: '@itharbors/log.log',
+          entry: '/api/assets/panel/%40itharbors%2Flog.log/index.html',
+        },
+        state: 'unavailable',
+        revision: 1,
+      }),
+    });
+
+    expect(targetPanel!.shadowRoot!.querySelector('iframe')).toBeNull();
+    expect(targetPanel!.shadowRoot!.querySelector('.unavailable')?.textContent).toBe('插件未加载');
+    expect(unrelatedPanel!.shadowRoot!.querySelector('iframe')).toBe(unrelatedIframe);
+
+    source!.onmessage?.({
+      data: JSON.stringify({
+        protocolVersion: 1,
+        type: 'panel-availability-changed',
+        panel: {
+          name: '@itharbors/log.log',
+          entry: '/api/assets/panel/%40itharbors%2Flog.log/index.html',
+        },
+        state: 'available',
+        revision: 2,
+      }),
+    });
+
+    const restoredIframe = targetPanel!.shadowRoot!.querySelector('iframe');
+    expect(restoredIframe).not.toBeNull();
+    expect(restoredIframe).not.toBe(targetIframe);
+    expect(restoredIframe?.getAttribute('src')).toBe(
+      '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelRevision=2',
+    );
+    expect(unrelatedPanel!.shadowRoot!.querySelector('iframe')).toBe(unrelatedIframe);
+  });
+
+  it('ignores duplicate or stale panel availability revisions', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const targetPanel = Array.from(el.querySelectorAll('ce-panel')).find(
+      (panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log',
+    ) as HTMLElement | undefined;
+    expect(targetPanel).toBeDefined();
+    const source = MockEventSource.instances.at(-1);
+    expect(source).toBeDefined();
+
+    const sendAvailability = (state: 'available' | 'unavailable', revision: number) => {
+      source!.onmessage?.({
+        data: JSON.stringify({
+          protocolVersion: 1,
+          type: 'panel-availability-changed',
+          panel: {
+            name: '@itharbors/log.log',
+            entry: '/api/assets/panel/%40itharbors%2Flog.log/index.html',
+          },
+          state,
+          revision,
+        }),
+      });
+    };
+
+    sendAvailability('available', 2);
+    const currentIframe = targetPanel!.shadowRoot!.querySelector('iframe');
+    expect(currentIframe).not.toBeNull();
+
+    sendAvailability('unavailable', 2);
+    sendAvailability('unavailable', 1);
+
+    expect(targetPanel!.getAttribute('availability')).toBe('available');
+    expect(targetPanel!.shadowRoot!.querySelector('iframe')).toBe(currentIframe);
+    expect(targetPanel!.getAttribute('data-panel-revision')).toBe('2');
   });
 
   it('relays dispatch results only from a rendered panel iframe', async () => {
