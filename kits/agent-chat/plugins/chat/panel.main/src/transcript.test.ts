@@ -80,7 +80,7 @@ test('markdown cache uses renderMarkdownHtml and sanitizes a hit only once', () 
   let sanitizeCount = 0;
   const cache = createMarkdownHtmlCache((content) => renderMarkdownHtml(content, (dirty, config) => {
     sanitizeCount += 1;
-    assert.deepEqual(config, { ADD_ATTR: ['data-original-href'] });
+    assert.deepEqual(config, { ADD_ATTR: ['data-original-href', 'data-lang', 'data-code'], ADD_TAGS: ['div'] });
     return dirty.replace(/<script[\s\S]*?<\/script>/gi, '');
   }));
   const content = '[safe link](https://example.com)\n\n<script>alert(1)</script>';

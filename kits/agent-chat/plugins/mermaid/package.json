@@ -1,0 +1,19 @@
+{
+  "name": "mermaid",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "assets": {
+      "public": ["./assets"]
+    },
+    "contribute": {
+      "chat": {
+        "markdownRenderer": {
+          "languages": ["mermaid"],
+          "entry": "./renderer.js"
+        }
+      }
+    }
+  }
+}

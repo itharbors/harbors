@@ -1003,6 +1003,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setPendingMessages((current) => [...current, trimmed]);
     setText('');
   };
+
   const composer = <div className="composer-shell">
     {pendingMessages.length > 0 && <div className="composer-pending" aria-label="待发送内容">
       <div className="composer-pending-label">待发送 · {pendingMessages.length} 段</div>
@@ -1113,6 +1114,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
             conversationActive: Boolean(conversationId && activeConversationsRef.current.has(conversationId)),
             onChangeProject: () => setProjectPickerOpen(true),
             onLinkClick: handleLinkClick,
+            messageRequest: ctx.message.request,
           })}
         </>
       )}
