@@ -27,7 +27,8 @@
         "plugin",
         "preview",
         "debug",
-        "settings"
+        "settings",
+        "mermaid"
       ]
     }
   },

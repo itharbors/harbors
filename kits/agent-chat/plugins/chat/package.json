@@ -16,7 +16,12 @@
       },
       "message": {
         "request": {
-          "normalizeLink": ["normalizeLink"]
+          "normalizeLink": [
+            "normalizeLink"
+          ],
+          "getMarkdownRenderers": [
+            "getMarkdownRenderers"
+          ]
         },
         "broadcast": {
           "agent.conversation.changed": [

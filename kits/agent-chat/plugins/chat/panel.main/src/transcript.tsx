@@ -40,6 +40,7 @@ interface TranscriptProps {
   conversationActive: boolean;
   onChangeProject?: () => void;
   onLinkClick?: (info: { href: string; text: string }) => void;
+  messageRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
 }
 
 function escapeHtmlAttribute(value: string): string {
@@ -50,6 +51,9 @@ function escapeHtmlAttribute(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+// 已注册的代码块渲染器语言集合
+const registeredRendererLanguages = new Set<string>();
+
 function markdownRenderer(): Renderer {
   const renderer = new Renderer();
   renderer.link = function ({ href, title, tokens }) {
@@ -58,10 +62,19 @@ function markdownRenderer(): Renderer {
     // 始终保留锚点的可点击语义，但绝不把未经消费者确认的目标交给浏览器导航。
     return `<a href="#" data-original-href="${escapedHref}"${titleAttribute}>${this.parser.parseInline(tokens)}</a>`;
   };
+  renderer.code = function ({ text, lang }) {
+    // 如果该语言有注册的渲染器，输出占位 div，由 useEffect 异步渲染
+    if (lang && registeredRendererLanguages.has(lang)) {
+      const encoded = escapeHtmlAttribute(text);
+      return `<div class="markdown-code-block-renderer" data-lang="${escapeHtmlAttribute(lang)}" data-code="${encoded}"></div>`;
+    }
+    // 其他代码块走默认渲染
+    return false as unknown as string;
+  };
   return renderer;
 }
 
-type HtmlSanitizer = (dirty: string, config: { ADD_ATTR: string[] }) => string;
+type HtmlSanitizer = (dirty: string, config: { ADD_ATTR: string[]; ADD_TAGS?: string[] }) => string;
 
 type MarkdownHtmlRenderer = (content: string) => string;
 
@@ -73,7 +86,11 @@ export function renderMarkdownHtml(
 ): string {
   const rendered = marked.parse(content, { async: false, renderer: markdownRenderer() }) as string;
   // 原始目标仅作为数据保留；真实 href 是不可外跳的安全占位，HTML 结构仍由 DOMPurify 清理。
-  return sanitize(rendered, { ADD_ATTR: ["data-original-href"] });
+  // 允许 div 和 data-* 属性用于代码块渲染器占位。
+  return sanitize(rendered, {
+    ADD_ATTR: ["data-original-href", "data-lang", "data-code"],
+    ADD_TAGS: ["div"],
+  });
 }
 
 export function createMarkdownHtmlCache(
@@ -197,9 +214,119 @@ export function createMarkdownLinkActivationController(
   };
 }
 
-const MarkdownMessage = memo(function MarkdownMessage({ content }: { content: string }) {
-  const html = useMemo(() => markdownHtmlCache.get(content), [content]);
-  return <div className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
+// 已加载的渲染器模块缓存
+const loadedRendererModules = new Map<string, { load?: () => void | Promise<void>; unload?: () => void | Promise<void>; execute: (code: string) => string | Promise<string> }>();
+// 渲染器信息缓存：language -> { plugin, entry }
+const rendererInfoByLanguage = new Map<string, { plugin: string; entry: string }>();
+let renderersFetchPromise: Promise<void> | null = null;
+
+async function fetchRenderers(messageRequest: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>): Promise<void> {
+  if (renderersFetchPromise) return renderersFetchPromise;
+  renderersFetchPromise = (async () => {
+    try {
+      const result = await messageRequest('chat', 'getMarkdownRenderers');
+      if (Array.isArray(result)) {
+        for (const renderer of result) {
+          const { plugin, languages, entry } = renderer as { plugin: string; languages: string[]; entry: string };
+          for (const lang of languages) {
+            rendererInfoByLanguage.set(lang, { plugin, entry });
+            registeredRendererLanguages.add(lang);
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+  })();
+  return renderersFetchPromise;
+}
+
+async function loadRendererModule(language: string): Promise<{ execute: (code: string) => string | Promise<string> } | null> {
+  const info = rendererInfoByLanguage.get(language);
+  if (!info) return null;
+
+  const cached = loadedRendererModules.get(info.plugin);
+  if (cached) return cached;
+
+  try {
+    const entry = info.entry.replace(/^\.\//, '');
+    const url = `/api/assets/plugin/${encodeURIComponent(info.plugin)}/${encodeURIComponent(entry)}`;
+    const mod = await import(/* @vite-ignore */ url);
+    loadedRendererModules.set(info.plugin, mod);
+    if (mod.load) await mod.load();
+    return mod;
+  } catch (err) {
+    console.error(`[markdown-renderer] failed to load renderer for ${language}:`, err);
+    return null;
+  }
+}
+
+const MarkdownMessage = memo(function MarkdownMessage({ content, messageRequest }: { content: string; messageRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown> }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [html, setHtml] = useState(() => markdownHtmlCache.get(content));
+
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      // 先获取渲染器列表，填充 registeredRendererLanguages
+      if (messageRequest) {
+        await fetchRenderers(messageRequest);
+      }
+
+      if (cancelled) return;
+
+      // 检查 content 中是否包含已注册语言的代码块
+      const hasRegisteredLanguage = Array.from(registeredRendererLanguages).some((lang) =>
+        content.includes(`\`\`\`${lang}`),
+      );
+
+      // 如果有已注册语言的代码块，需要重新渲染 markdown
+      // （因为第一次渲染时这些语言可能还没注册，走了默认代码块）
+      if (hasRegisteredLanguage) {
+        markdownHtmlCache.clear();
+        const newHtml = markdownHtmlCache.get(content);
+        setHtml(newHtml);
+
+        // 等待 DOM 更新后再处理占位 div
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        if (cancelled) return;
+      }
+
+      const container = containerRef.current;
+      if (!container) return;
+
+      const placeholderNodes = container.querySelectorAll<HTMLDivElement>('.markdown-code-block-renderer');
+      if (placeholderNodes.length === 0) return;
+
+      for (const node of placeholderNodes) {
+        if (cancelled) return;
+        const lang = node.getAttribute('data-lang') || '';
+        const code = node.getAttribute('data-code') || '';
+
+        const mod = await loadRendererModule(lang);
+        if (!mod) {
+          // 渲染器不可用，降级为普通代码块
+          node.outerHTML = `<pre><code>${escapeHtmlAttribute(code)}</code></pre>`;
+          continue;
+        }
+
+        try {
+          const rendered = await mod.execute(code);
+          node.outerHTML = rendered;
+        } catch (err) {
+          console.error(`[markdown-renderer] failed to execute renderer for ${lang}:`, err);
+          node.outerHTML = `<pre><code>${escapeHtmlAttribute(code)}</code></pre>`;
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [content, messageRequest]);
+
+  return <div ref={containerRef} className="markdown-body" dangerouslySetInnerHTML={{ __html: html }} />;
 });
 
 function parseJson(value: string): unknown {
@@ -665,6 +792,7 @@ const AssistantStep = memo(function AssistantStep({
   onResolvePermission,
   collapsed,
   turnStatus,
+  messageRequest,
 }: {
   step: DisplayStep;
   turn: number;
@@ -674,6 +802,7 @@ const AssistantStep = memo(function AssistantStep({
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
   collapsed: boolean;
   turnStatus: DisplayTurn["status"];
+  messageRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
 }) {
   const request = step.localRequest;
   const isFinalResponse = turnStatus === "completed" && step.assistant && !step.assistant.hasToolCalls;
@@ -693,7 +822,7 @@ const AssistantStep = memo(function AssistantStep({
 
       {!hideProcess && thinkingText && (
         <div className="agent-step-intent">
-          <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={thinkingText} /></div></div>
+          <div className="chat-message assistant"><div className="chat-message-content"><MarkdownMessage content={thinkingText} messageRequest={messageRequest} /></div></div>
         </div>
       )}
 
@@ -707,7 +836,7 @@ const AssistantStep = memo(function AssistantStep({
         <div className="agent-step-intent agent-final-response">
           <div className="chat-message assistant">
             <div className="chat-message-label assistant-label">Agent</div>
-            <div className="chat-message-content"><MarkdownMessage content={finalText} /></div>
+            <div className="chat-message-content"><MarkdownMessage content={finalText} messageRequest={messageRequest} /></div>
           </div>
         </div>
       )}
@@ -726,11 +855,13 @@ const TurnBlock = memo(function TurnBlock({
   permissionRequests,
   resolvingPermissionId,
   onResolvePermission,
+  messageRequest,
 }: {
   turn: DisplayTurn;
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
+  messageRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
 }) {
   // 只有明确完成且存在真实最终回复时默认折叠；运行、中断和失败都默认展开过程。
   const hasFinalResponse = shouldCollapseTurn(turn);
@@ -765,6 +896,7 @@ const TurnBlock = memo(function TurnBlock({
             onResolvePermission={onResolvePermission}
             collapsed={collapsed}
             turnStatus={turn.status}
+            messageRequest={messageRequest}
           />
         </Fragment>
       ))}
@@ -783,6 +915,7 @@ interface TranscriptTurnRowProps {
   permissionRequests: PermissionRequest[];
   resolvingPermissionId: string | null;
   onResolvePermission: (requestId: string, outcome: PermissionOutcome) => Promise<void>;
+  messageRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
 }
 
 const TranscriptTurnRow = memo(function TranscriptTurnRow({
@@ -791,12 +924,13 @@ const TranscriptTurnRow = memo(function TranscriptTurnRow({
   permissionRequests,
   resolvingPermissionId,
   onResolvePermission,
+  messageRequest,
 }: TranscriptTurnRowProps) {
   return (
     <div className="transcript-turn-shell">
       <div className="transcript-turn-row">
         <div className="chat-message user transcript-user-message">
-          <div className="chat-message-content"><MarkdownMessage content={user.content} /></div>
+          <div className="chat-message-content"><MarkdownMessage content={user.content} messageRequest={messageRequest} /></div>
         </div>
         {(turn.hasStructuredTrace || turn.steps.length > 0) && (
           <TurnBlock
@@ -804,6 +938,7 @@ const TranscriptTurnRow = memo(function TranscriptTurnRow({
             permissionRequests={permissionRequests}
             resolvingPermissionId={resolvingPermissionId}
             onResolvePermission={onResolvePermission}
+            messageRequest={messageRequest}
           />
         )}
       </div>
@@ -812,7 +947,7 @@ const TranscriptTurnRow = memo(function TranscriptTurnRow({
 });
 
 export default function Transcript(props: TranscriptProps) {
-  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, sending, conversationActive, onChangeProject, onLinkClick } = props;
+  const { draft, project, modelLabel, messages, traceTurns, localProcessEntries, turnOffset, permissionRequests, resolvingPermissionId, onResolvePermission, sending, conversationActive, onChangeProject, onLinkClick, messageRequest } = props;
   const displayTurnProjectorRef = useRef<DisplayTurnProjector | null>(null);
   if (!displayTurnProjectorRef.current) displayTurnProjectorRef.current = createDisplayTurnProjector();
   const displayTurns = useMemo(
@@ -877,6 +1012,7 @@ export default function Transcript(props: TranscriptProps) {
           permissionRequests={turnPermissionRequests}
           resolvingPermissionId={turnResolvingPermissionId}
           onResolvePermission={stableResolvePermission}
+          messageRequest={messageRequest}
         />;
       })}
 
