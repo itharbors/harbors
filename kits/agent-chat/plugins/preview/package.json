@@ -13,7 +13,10 @@
       },
       "message": {
         "request": {
-          "readFile": ["readFile"]
+          "readFile": ["readFile"],
+          "fetchWebPage": ["fetchWebPage"],
+          "openProxyPage": ["openProxyPage"],
+          "closeProxyPage": ["closeProxyPage"]
         },
         "broadcast": {
           "chat.link.clicked": ["panel.onLinkClicked"],
