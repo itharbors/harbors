@@ -4,6 +4,7 @@ import { BrowserRequestBroker } from '../../src/framework/browser-request-broker
 import { createBootstrapRouter } from '../../src/routes/bootstrap';
 import { createMessageBroadcastRouter } from '../../src/routes/message-broadcast';
 import { createMessageRequestRouter } from '../../src/routes/message-request';
+import { createPanelRequestCapability } from '../../src/routes/panel-request-capability';
 import { createMessageResultRouter } from '../../src/routes/message-result';
 import { createMenuTriggerRouter } from '../../src/routes/menu-trigger';
 import { createPanelAssetRouter } from '../../src/routes/panel-asset';
@@ -20,6 +21,7 @@ import { testAssembly, testKitFixture } from '../helpers/assembly';
 import { HttpError } from '../../src/http/errors';
 import { sendHttpError } from '../../src/http/json';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+import { MessageModule } from '../../src/framework/message';
 
 const createEditor = (
   sessionId: string,
@@ -407,7 +409,10 @@ describe('framework routes', () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load(testKitFixture.name);
 
-    const router = createPanelAssetRouter(new Map([['s1', editor]]));
+    const capability = createPanelRequestCapability(Buffer.from('panel-asset-capability-test-secret'));
+    const router = createPanelAssetRouter(new Map([['s1', editor]]), {
+      panelRequestCapability: capability,
+    });
     const { res, body, statusCode } = mockRes();
     router(mockReq('GET', `/api/assets/panel/${encodeURIComponent(testKitFixture.primaryPanel)}/index.html?sessionId=s1`), res);
 
@@ -416,6 +421,12 @@ describe('framework routes', () => {
     expect(html).toContain('async openPanel(panelName)');
     expect(html).toContain("fetch('/api/panel/open'");
     expect(html).toContain("fetch('/api/panel-instance/fallback'");
+    const token = html.match(/let panelCapability = "([^"]+)";/u)?.[1];
+    expect(token).toBeTruthy();
+    expect(capability.verify(token!, 's1')).toMatchObject({
+      panelName: testKitFixture.primaryPanel,
+      ownerPlugin: expect.any(String),
+    });
   });
 
   it('message request returns handler result', async () => {
@@ -426,6 +437,87 @@ describe('framework routes', () => {
     await router(mockReq('POST', '/api/message/request?sessionId=s1', { plugin: 'calc', name: 'double', args: [21] }), res);
     expect(statusCode()).toBe(200);
     expect(JSON.parse(await body()).result).toBe(42);
+  });
+
+  it('message request derives a trusted caller from the panel capability', async () => {
+    const message = new MessageModule();
+    message.registerRequest(
+      'model-service',
+      'complete',
+      (...args) => ({ args }),
+      'server',
+      [],
+      ['owner-plugin'],
+    );
+    message.registerRequest('legacy', 'read', () => 'legacy-ok');
+    const editor = { message } as never;
+    const capability = createPanelRequestCapability(Buffer.from('panel-capability-test-secret'));
+    const router = createMessageRequestRouter(new Map([['s1', editor]]), {
+      panelRequestCapability: capability,
+    });
+    const valid = mockRes();
+    await router(mockReq('POST', '/api/message/request?sessionId=s1', {
+      plugin: 'model-service',
+      name: 'complete',
+      args: [{ prompt: 'hi' }],
+      panelCapability: capability.issue({
+        sessionId: 's1',
+        panelName: 'owner-plugin.settings',
+        ownerPlugin: 'owner-plugin',
+      }),
+    }), valid.res);
+    expect(valid.statusCode()).toBe(200);
+    expect(JSON.parse(await valid.body())).toEqual({ result: { args: [{ prompt: 'hi' }] } });
+
+    const legacy = mockRes();
+    await router(mockReq('POST', '/api/message/request?sessionId=s1', {
+      plugin: 'legacy',
+      name: 'read',
+    }), legacy.res);
+    expect(legacy.statusCode()).toBe(200);
+    expect(JSON.parse(await legacy.body())).toEqual({ result: 'legacy-ok' });
+
+    const invalidCapability = mockRes();
+    await invokeRoute(
+      router,
+      mockReq('POST', '/api/message/request?sessionId=s1', {
+        plugin: 'model-service',
+        name: 'complete',
+        panelCapability: 'forged-capability',
+      }),
+      invalidCapability.res,
+    );
+    expect(invalidCapability.statusCode()).toBe(403);
+    expect(JSON.parse(await invalidCapability.body())).toEqual({
+      error: {
+        code: 'PANEL_CAPABILITY_INVALID',
+        message: 'Panel capability is invalid or expired',
+        details: null,
+      },
+    });
+
+    for (const body of [
+      { plugin: 'model-service', name: 'complete', callerPlugin: 'owner-plugin' },
+      {
+        plugin: 'model-service',
+        name: 'complete',
+        callerPlugin: 'owner-plugin',
+        panelCapability: capability.issue({
+          sessionId: 's1',
+          panelName: 'attacker-plugin.panel',
+          ownerPlugin: 'attacker-plugin',
+        }),
+      },
+    ]) {
+      const rejected = mockRes();
+      await invokeRoute(
+        router,
+        mockReq('POST', '/api/message/request?sessionId=s1', body),
+        rejected.res,
+      );
+      expect(rejected.statusCode()).toBe(500);
+      expect(JSON.parse(await rejected.body()).error.code).toBe('MESSAGE_REQUEST_FAILED');
+    }
   });
 
   it('message request returns safe plugin error codes and messages without details', async () => {

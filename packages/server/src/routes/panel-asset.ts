@@ -6,6 +6,7 @@ import type { I18nVisibleSnapshot } from '../framework/i18n/types';
 import type { PanelModule } from '../framework/panel';
 import type { PanelRegistration } from '../framework/panel/types';
 import { PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
+import type { PanelRequestCapability } from './panel-request-capability';
 
 export { createPanelFileRuntime, PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
 
@@ -106,10 +107,12 @@ function createPanelRuntimeScript(
   panelPluginName: string,
   initialSnapshot: I18nVisibleSnapshot,
   sessionId: string | null,
+  panelCapability?: string,
 ): string {
   const panelLiteral = escapeForScript(panelName);
   const panelPluginLiteral = escapeForScript(panelPluginName);
   const sessionLiteral = escapeForScript(sessionId ?? '');
+  const panelCapabilityLiteral = panelCapability ? escapeForScript(panelCapability) : 'undefined';
   const snapshotLiteral = escapeForScript(JSON.stringify(initialSnapshot));
   const panelFileRuntimeFactory = PANEL_FILE_RUNTIME_FACTORY_SOURCE.replace(/<\/script/gi, '<\\/script');
 
@@ -117,6 +120,8 @@ function createPanelRuntimeScript(
     const panelName = ${panelLiteral};
     const panelPluginName = ${panelPluginLiteral};
     const sessionId = ${sessionLiteral};
+    let panelCapability = ${panelCapabilityLiteral};
+    let panelCapabilityRefreshPromise = null;
     const panelFileRuntime = (${panelFileRuntimeFactory})(window, document);
     window.__panelI18n = {
       snapshot: JSON.parse(${snapshotLiteral}),
@@ -173,6 +178,28 @@ function createPanelRuntimeScript(
         requestError.code = errorBody.code;
       }
       return requestError;
+    }
+
+    async function refreshPanelCapability() {
+      if (panelCapabilityRefreshPromise) return panelCapabilityRefreshPromise;
+      panelCapabilityRefreshPromise = (async () => {
+        try {
+          const response = await fetch(window.location.href, { cache: 'no-store' });
+          if (!response.ok) return false;
+          const html = await response.text();
+          const match = html.match(/(?:const|let) panelCapability = ("(?:\\\\.|[^"\\\\])*");/u);
+          if (!match) return false;
+          const nextCapability = JSON.parse(match[1]);
+          if (typeof nextCapability !== 'string' || !nextCapability) return false;
+          panelCapability = nextCapability;
+          return true;
+        } catch {
+          return false;
+        }
+      })().finally(() => {
+        panelCapabilityRefreshPromise = null;
+      });
+      return panelCapabilityRefreshPromise;
     }
 
     function encodePanelAssetPath(relativePath) {
@@ -250,12 +277,39 @@ function createPanelRuntimeScript(
       },
       message: {
         async request(plugin, name, ...args) {
-          const response = await fetch('/api/message/request', {
+          let capabilityRetryAttempted = false;
+          const requestBody = () => JSON.stringify({
+            sessionId,
+            plugin,
+            name,
+            args,
+            ...(panelCapability ? { panelCapability } : {}),
+          });
+          let response = await fetch('/api/message/request', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ sessionId, plugin, name, args }),
+            body: requestBody(),
           });
-          const payload = await response.json();
+          let payload = await response.json();
+          const errorCode = payload?.error && typeof payload.error === 'object'
+            ? payload.error.code
+            : undefined;
+          if (
+            response.status === 403
+            && errorCode === 'PANEL_CAPABILITY_INVALID'
+            && panelCapability
+            && !capabilityRetryAttempted
+          ) {
+            capabilityRetryAttempted = true;
+            if (await refreshPanelCapability()) {
+              response = await fetch('/api/message/request', {
+                method: 'POST',
+                headers: { 'content-type': 'application/json' },
+                body: requestBody(),
+              });
+              payload = await response.json();
+            }
+          }
           if (!response.ok) {
             throw createPanelMessageRequestError(payload);
           }
@@ -456,7 +510,10 @@ function readPanelAsset(filePath: string, sessionId: string | null): Buffer | st
     : scopeJavaScriptImports(source, sessionId);
 }
 
-export function createPanelAssetRouter(source: PanelAssetSource) {
+export function createPanelAssetRouter(
+  source: PanelAssetSource,
+  options: { panelRequestCapability?: PanelRequestCapability } = {},
+) {
   return function panelAssetRouter(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url || '/', 'http://localhost');
     const panelMatch = url.pathname.match(/^\/api\/assets\/panel\/([^/]+)\/(.+)$/);
@@ -526,9 +583,22 @@ export function createPanelAssetRouter(source: PanelAssetSource) {
         const initialSnapshot = editor?.i18n.getVisibleSnapshot() ?? emptyI18nSnapshot();
         const html = injectRuntimeIntoHtml(
           scopeRelativePanelAssets(readFileSync(reg.module, 'utf-8'), sessionId),
-          createPanelRuntimeScript(panelName, reg.owner, initialSnapshot, sessionId),
+          createPanelRuntimeScript(
+            panelName,
+            reg.owner,
+            initialSnapshot,
+            sessionId,
+            sessionId && options.panelRequestCapability
+              ? options.panelRequestCapability.issue({
+                sessionId,
+                panelName,
+                ownerPlugin: reg.owner,
+              })
+              : undefined,
+          ),
         );
         res.statusCode = 200;
+        res.setHeader('Cache-Control', 'no-store');
         res.setHeader('Content-Type', 'text/html; charset=utf-8');
         res.end(html);
         return;

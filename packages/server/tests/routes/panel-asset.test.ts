@@ -38,12 +38,13 @@ describe('createPanelAssetRouter', () => {
     const panel = new PanelModule();
     panel.register('@scope/demo.preview', panelPath);
     const router = createPanelAssetRouter(panel);
-    const { res, body, statusCode } = mockRes();
+    const { res, body, statusCode, header } = mockRes();
 
     router(mockReq('GET', '/api/assets/panel/%40scope%2Fdemo.preview/index.html'), res);
 
     const html = body();
     expect(statusCode()).toBe(200);
+    expect(header('Cache-Control')).toBe('no-store');
     expect(html).toContain("await import('./index.js')");
     expect(html).toContain('const definition = panelModule.default;');
     expect(html).toContain('Panel module must default-export a PanelDefinition object');
@@ -56,6 +57,13 @@ describe('createPanelAssetRouter', () => {
     expect(html).toContain("'Panel \"' + panelPluginName");
     expect(html).toContain("' + prefix + '\"'");
     expect(html).toContain('function createPanelMessageRequestError(payload)');
+    expect(html).toContain('async function refreshPanelCapability()');
+    expect(html).toContain("fetch(window.location.href, { cache: 'no-store' })");
+    expect(html).toContain('(?:const|let) panelCapability');
+    expect(html).toContain('let panelCapabilityRefreshPromise = null;');
+    expect(html).toContain('let capabilityRetryAttempted = false;');
+    expect(html).toContain('panelCapabilityRefreshPromise = null;');
+    expect(html).toContain("errorCode === 'PANEL_CAPABILITY_INVALID'");
     expect(html).toContain('throw createPanelMessageRequestError(payload);');
     expect(html).toContain('requestError.code = errorBody.code;');
     expect(html).not.toContain("new Error(payload.error || 'Panel message request failed')");
@@ -78,6 +86,132 @@ describe('createPanelAssetRouter', () => {
     expect(html).toContain('file: panelFileRuntime,');
     expect(html).not.toContain('editor.panel.define');
     expect(html).not.toContain('/api/assets/panel-module/');
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('refreshes the injected capability from a no-store HTML response', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-refresh-test-'));
+    const panelPath = path.join(tmpDir, 'index.js');
+    fs.writeFileSync(panelPath, 'export default { methods: {} };');
+    const panel = new PanelModule();
+    panel.register('@scope/demo.preview', panelPath);
+    const router = createPanelAssetRouter(panel);
+    const { res, body } = mockRes();
+
+    router(mockReq('GET', '/api/assets/panel/%40scope%2Fdemo.preview/index.html'), res);
+    const html = body();
+    const refreshStart = html.indexOf('async function refreshPanelCapability()');
+    const refreshEnd = html.indexOf('function encodePanelAssetPath', refreshStart);
+    expect(refreshStart).toBeGreaterThan(-1);
+    expect(refreshEnd).toBeGreaterThan(refreshStart);
+    const refreshSource = html.slice(refreshStart, refreshEnd);
+    let fetchCalls = 0;
+    const runtime = new Function('fetch', 'window', `
+      let panelCapability = 'stale';
+      let panelCapabilityRefreshPromise = null;
+      ${refreshSource}
+      return { refreshPanelCapability, getCapability: () => panelCapability };
+    `)(
+      async () => {
+        fetchCalls += 1;
+        return {
+          ok: true,
+          text: async () => '<script>let panelCapability = "fresh";</script>',
+        };
+      },
+      { location: { href: '/api/assets/panel/%40scope%2Fdemo.preview/index.html' } },
+    ) as { refreshPanelCapability(): Promise<boolean>; getCapability(): string };
+
+    await expect(runtime.refreshPanelCapability()).resolves.toBe(true);
+    expect(runtime.getCapability()).toBe('fresh');
+    expect(fetchCalls).toBe(1);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('refreshes once in the generated request runtime and does not loop on a second 403', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-request-refresh-test-'));
+    const panelPath = path.join(tmpDir, 'index.js');
+    fs.writeFileSync(panelPath, 'export default { methods: {} };');
+    const panel = new PanelModule();
+    panel.register('@scope/demo.preview', panelPath);
+    const router = createPanelAssetRouter(panel);
+    const { res, body } = mockRes();
+
+    router(mockReq('GET', '/api/assets/panel/%40scope%2Fdemo.preview/index.html'), res);
+    const html = body();
+    const refreshStart = html.indexOf('async function refreshPanelCapability()');
+    const refreshEnd = html.indexOf('function encodePanelAssetPath', refreshStart);
+    const requestStart = html.indexOf('async request(plugin, name, ...args) {');
+    const requestEnd = html.indexOf('\n        },\n        broadcast', requestStart);
+    expect(refreshStart).toBeGreaterThan(-1);
+    expect(refreshEnd).toBeGreaterThan(refreshStart);
+    expect(requestStart).toBeGreaterThan(-1);
+    expect(requestEnd).toBeGreaterThan(requestStart);
+    const refreshSource = html.slice(refreshStart, refreshEnd);
+    const requestSource = `${html.slice(requestStart, requestEnd).trim()} }`;
+    const errorStart = html.indexOf('function createPanelMessageRequestError(payload)');
+    const errorEnd = html.indexOf('\n\n    async function refreshPanelCapability', errorStart);
+    expect(errorStart).toBeGreaterThan(-1);
+    expect(errorEnd).toBeGreaterThan(errorStart);
+    const errorSource = html.slice(errorStart, errorEnd);
+
+    const makeRequest = (fetchImpl: (url: string, options?: RequestInit) => Promise<unknown>) => new Function(
+      'fetch',
+      'window',
+      `
+        const sessionId = 'test-session';
+        let panelCapability = 'stale';
+        let panelCapabilityRefreshPromise = null;
+        ${errorSource}
+        ${refreshSource}
+        return ({ ${requestSource} }).request;
+      `,
+    )(fetchImpl, { location: { href: '/api/assets/panel/%40scope%2Fdemo.preview/index.html' } }) as (
+      plugin: string,
+      name: string,
+      ...args: unknown[]
+    ) => Promise<unknown>;
+    const response = (status: number, payload: unknown) => ({
+      status,
+      ok: status >= 200 && status < 300,
+      json: async () => payload,
+    });
+
+    const successfulCalls: Array<{ url: string; options?: RequestInit }> = [];
+    const successfulRequest = makeRequest(async (url, options) => {
+      successfulCalls.push({ url, options });
+      if (successfulCalls.length === 1) {
+        return response(403, { error: { code: 'PANEL_CAPABILITY_INVALID', message: 'expired' } });
+      }
+      if (successfulCalls.length === 2) {
+        return {
+          ok: true,
+          text: async () => '<script>let panelCapability = "fresh";</script>',
+        };
+      }
+      return response(200, { result: 'ok' });
+    });
+    await expect(successfulRequest('owner', 'read')).resolves.toBe('ok');
+    expect(successfulCalls).toHaveLength(3);
+    expect(JSON.parse(String(successfulCalls[0].options?.body)).panelCapability).toBe('stale');
+    expect(JSON.parse(String(successfulCalls[2].options?.body)).panelCapability).toBe('fresh');
+
+    const loopingCalls: Array<{ url: string; options?: RequestInit }> = [];
+    const loopingRequest = makeRequest(async (url, options) => {
+      loopingCalls.push({ url, options });
+      if (loopingCalls.length === 2) {
+        return {
+          ok: true,
+          text: async () => '<script>let panelCapability = "fresh";</script>',
+        };
+      }
+      return response(403, { error: { code: 'PANEL_CAPABILITY_INVALID', message: 'still expired' } });
+    });
+    await expect(loopingRequest('owner', 'read')).rejects.toMatchObject({
+      code: 'PANEL_CAPABILITY_INVALID',
+    });
+    expect(loopingCalls).toHaveLength(3);
+
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 

@@ -4,8 +4,10 @@ import { sendJson } from './utils';
 import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isOptionalArray, isOptionalString, isRecord } from '../http/validation';
+import type { PanelRequestCapability } from './panel-request-capability';
 
 const MESSAGE_REQUEST_FAILED = 'MESSAGE_REQUEST_FAILED';
+export const PANEL_CAPABILITY_INVALID = 'PANEL_CAPABILITY_INVALID';
 const MAX_EXPOSED_ERROR_MESSAGE_LENGTH = 1024;
 const SAFE_ERROR_CODE = /^[A-Z][A-Z0-9_]{0,127}$/u;
 
@@ -32,7 +34,10 @@ function normalizeMessageRequestError(error: unknown): HttpError {
   return new HttpError(status, code, message);
 }
 
-export function createMessageRequestRouter(editorMap: Map<string, Editor>) {
+export function createMessageRequestRouter(
+  editorMap: Map<string, Editor>,
+  options: { panelRequestCapability?: PanelRequestCapability } = {},
+) {
   return async function messageRequestRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
@@ -53,9 +58,29 @@ export function createMessageRequestRouter(editorMap: Map<string, Editor>) {
     if (!editor.message.queryRequest(body.plugin, body.name)) {
       throw new HttpError(404, 'MESSAGE_ROUTE_NOT_FOUND', 'Message route not found');
     }
+    const panelCapability = body.panelCapability;
+    const hasPanelCapability = panelCapability !== undefined;
+    const panelClaims = hasPanelCapability && options.panelRequestCapability
+      ? options.panelRequestCapability.verify(panelCapability, sessionId)
+      : undefined;
+    if (hasPanelCapability && !panelClaims) {
+      throw new HttpError(403, PANEL_CAPABILITY_INVALID, 'Panel capability is invalid or expired');
+    }
     let result: unknown;
     try {
-      result = await editor.message.request(body.plugin, body.name, ...(body.args ?? []));
+      if (panelClaims) {
+        if (!editor.message.requestFrom) {
+          throw new Error('Trusted panel message request dispatch is not configured');
+        }
+        result = await editor.message.requestFrom(
+          panelClaims.ownerPlugin,
+          body.plugin,
+          body.name,
+          ...(body.args ?? []),
+        );
+      } else {
+        result = await editor.message.request(body.plugin, body.name, ...(body.args ?? []));
+      }
     } catch (error) {
       throw normalizeMessageRequestError(error);
     }
@@ -68,10 +93,12 @@ function isMessageRequestInput(value: unknown): value is {
   plugin: string;
   name: string;
   args?: unknown[];
+  panelCapability?: string;
 } {
   return isRecord(value)
     && isOptionalString(value.sessionId)
     && isNonEmptyString(value.plugin)
     && isNonEmptyString(value.name)
-    && isOptionalArray(value.args);
+    && isOptionalArray(value.args)
+    && isOptionalString(value.panelCapability);
 }

@@ -39,6 +39,7 @@ import {
 import { createAuthRouter } from './routes/auth';
 import type { AuthManager } from './auth';
 import { getDeviceId, isLocalRequest } from './auth';
+import { createPanelRequestCapability } from './routes/panel-request-capability';
 
 type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
@@ -174,8 +175,9 @@ export function createApp(
   });
   const bootstrapRouter = createBootstrapRouter(editorMap);
   const i18nRouter = createI18nRouter(editorMap);
-  const panelAssetRouter = createPanelAssetRouter(editorMap);
-  const messageRequestRouter = createMessageRequestRouter(editorMap);
+  const panelRequestCapability = createPanelRequestCapability();
+  const panelAssetRouter = createPanelAssetRouter(editorMap, { panelRequestCapability });
+  const messageRequestRouter = createMessageRequestRouter(editorMap, { panelRequestCapability });
   const messageBroadcastRouter = createMessageBroadcastRouter(editorMap);
   const messageResultRouter = createMessageResultRouter(broker);
   const menuTriggerRouter = createMenuTriggerRouter(editorMap);

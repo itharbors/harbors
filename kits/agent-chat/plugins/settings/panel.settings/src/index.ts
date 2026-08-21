@@ -13,13 +13,6 @@ export type SettingsPage = {
   entry: string;
 };
 
-type PageRequest = {
-  type: 'settings-page-request';
-  requestId: string;
-  name: string;
-  args: unknown[];
-};
-
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -32,19 +25,7 @@ export function appendSessionId(entry: string, sessionId: string, base = typeof 
   return `${url.pathname}${url.search}${url.hash}`;
 }
 
-function isPageRequest(value: unknown): value is PageRequest {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
-  const request = value as Record<string, unknown>;
-  return request.type === 'settings-page-request'
-    && typeof request.requestId === 'string'
-    && request.requestId.length > 0
-    && typeof request.name === 'string'
-    && request.name.length > 0
-    && Array.isArray(request.args);
-}
-
 let reloadPanel: (() => void) | null = null;
-let disposePanel: (() => void) | null = null;
 
 const definition = {
   async mount(ctx: PanelContext) {
@@ -55,8 +36,6 @@ const definition = {
     const content = root.querySelector('#settings-content') as HTMLElement;
     let currentPages: SettingsPage[] = [];
     let selectedPanel: string | null = null;
-    let currentFrame: HTMLIFrameElement | null = null;
-    const sourceOwners = new Map<Window, string>();
 
     const showMessage = (message: string, kind: 'loading' | 'empty' | 'error') => {
       const element = document.createElement('p');
@@ -66,8 +45,6 @@ const definition = {
     };
 
     const renderPage = (page: SettingsPage | undefined) => {
-      sourceOwners.clear();
-      currentFrame = null;
       content.replaceChildren();
       if (!page) {
         showMessage('暂无插件设置页面', 'empty');
@@ -79,10 +56,7 @@ const definition = {
       frame.title = page.title;
       frame.src = appendSessionId(page.entry, ctx.sessionId);
       frame.setAttribute('allow', 'clipboard-read; clipboard-write');
-      currentFrame = frame;
       content.append(frame);
-      // Register only the currently rendered frame. event.source is checked against this exact Window.
-      if (frame.contentWindow) sourceOwners.set(frame.contentWindow, page.owner);
     };
 
     const renderPages = () => {
@@ -106,8 +80,6 @@ const definition = {
     };
 
     const loadPages = async () => {
-      sourceOwners.clear();
-      currentFrame = null;
       showMessage('正在读取…', 'loading');
       try {
         const result = await ctx.message.request('settings', 'getPages');
@@ -118,24 +90,11 @@ const definition = {
       }
     };
 
-    const onWindowMessage = (event: MessageEvent) => {
-      if (!isPageRequest(event.data) || !event.source) return;
-      const owner = sourceOwners.get(event.source as Window);
-      if (!owner || !currentFrame || event.source !== currentFrame.contentWindow) return;
-      void ctx.message.request('settings', 'requestPage', { owner, name: event.data.name, args: event.data.args })
-        .then((result) => (event.source as Window).postMessage({ type: 'settings-page-response', requestId: event.data.requestId, result }, '*'))
-        .catch((error) => (event.source as Window).postMessage({ type: 'settings-page-response', requestId: event.data.requestId, error: errorText(error) }, '*'));
-    };
-
-    window.addEventListener('message', onWindowMessage);
-    disposePanel = () => window.removeEventListener('message', onWindowMessage);
     reloadPanel = () => { void loadPages(); };
     await loadPages();
   },
 
   unmount() {
-    disposePanel?.();
-    disposePanel = null;
     reloadPanel = null;
   },
 
