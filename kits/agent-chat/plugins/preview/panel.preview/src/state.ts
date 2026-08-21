@@ -6,6 +6,17 @@ export interface PreviewContent {
   language?: string;
   content?: string;
   error?: string;
+  snapshotHtml?: string;
+  snapshotError?: string;
+  mode?: 'direct' | 'snapshot';
+  snapshotLoading?: boolean;
+  directAllowed?: boolean;
+  proxySessionId?: string;
+  proxyPort?: number;
+  proxyPath?: string;
+  proxyUrl?: string;
+  proxyError?: string;
+  proxyLoading?: boolean;
 }
 
 export interface PreviewTab {
@@ -128,6 +139,20 @@ export function resolvePreviewTab(
 
   const tabs = session.tabs.slice();
   tabs[index] = { ...tabs[index], content };
+  return { ...state, sessions: { ...state.sessions, [sessionKey]: { ...session, tabs } } };
+}
+
+export function updatePreviewTab(
+  state: PreviewState,
+  sessionKey: string,
+  tabId: string,
+  update: Partial<Pick<PreviewTab, 'content' | 'requestId'>>,
+): PreviewState {
+  const session = getPreviewSession(state, sessionKey);
+  const index = session.tabs.findIndex((tab) => tab.id === tabId);
+  if (index < 0) return state;
+  const tabs = session.tabs.slice();
+  tabs[index] = { ...tabs[index], ...update };
   return { ...state, sessions: { ...state.sessions, [sessionKey]: { ...session, tabs } } };
 }
 

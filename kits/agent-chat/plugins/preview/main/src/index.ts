@@ -2,8 +2,12 @@ import { readFile } from 'node:fs/promises';
 import { basename, extname } from 'node:path';
 
 import { filePathFromPreviewLink, validatePreviewLink } from './uri.js';
+import { ProxyService } from './proxy/server.js';
+import { fetchWebPage } from './web.js';
 
 declare const editor: any;
+
+const proxyService = new ProxyService();
 
 interface PreviewContent {
   kind: 'file' | 'url' | 'unsupported';
@@ -13,6 +17,10 @@ interface PreviewContent {
   language?: string;
   content?: string;
   error?: string;
+  snapshotHtml?: string;
+  snapshotBaseUrl?: string;
+  mode?: 'direct' | 'snapshot';
+  directAllowed?: boolean;
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -55,7 +63,12 @@ async function readTextFile(filePath: string): Promise<string> {
   return buffer.toString('utf-8');
 }
 
-editor.plugin.define({
+const definition = {
+  lifecycle: {
+    async unload() {
+      await proxyService.close();
+    },
+  },
   methods: {
     async readFile(payload: unknown): Promise<PreviewContent> {
       const validation = validatePreviewLink(payload);
@@ -93,6 +106,17 @@ editor.plugin.define({
         }
         if (TEXT_EXTENSIONS.has(ext) || !ext) {
           const content = await readTextFile(filePath);
+          if (ext === '.html' || ext === '.htm') {
+            return {
+              kind: 'url',
+              url: validation.link.href,
+              title: basename(filePath),
+              snapshotHtml: content,
+              snapshotBaseUrl: validation.link.href,
+              mode: 'snapshot',
+              directAllowed: false,
+            };
+          }
           return {
             kind: 'file',
             path: filePath,
@@ -116,5 +140,18 @@ editor.plugin.define({
         };
       }
     },
+    async fetchWebPage(payload: unknown) {
+      return fetchWebPage(payload);
+    },
+    async openProxyPage(payload: unknown) {
+      return proxyService.openProxyPage(payload);
+    },
+    async closeProxyPage(payload: unknown) {
+      return proxyService.closeProxyPage(payload);
+    },
   },
-});
+};
+
+if (typeof editor !== 'undefined' && editor?.plugin?.define) editor.plugin.define(definition);
+
+export { definition };
