@@ -93,6 +93,23 @@ test('markdown cache uses renderMarkdownHtml and sanitizes a hit only once', () 
   assert.doesNotMatch(first, /<script/i);
 });
 
+test('unregistered fenced code uses the default renderer instead of literal false', () => {
+  const html = renderMarkdownHtml('```text\nhello\n```', (dirty) => dirty);
+
+  assert.match(html, /<pre><code class="language-text">hello\n<\/code><\/pre>/);
+  assert.doesNotMatch(html, /^false$/);
+});
+
+test('registered Mermaid fenced code uses a renderer placeholder', () => {
+  const code = 'graph TD\nA-->B';
+  const html = renderMarkdownHtml(`\`\`\`mermaid\n${code}\n\`\`\``, (dirty) => dirty, new Set(['mermaid']));
+
+  assert.match(html, /class="markdown-code-block-renderer"/);
+  assert.match(html, /data-lang="mermaid"/);
+  assert.match(html, /data-code="graph TD\nA--&gt;B"/);
+  assert.notEqual(html, 'false');
+});
+
 test('paged turns 39-44 keep their real numbers and attach turn 40 tools', () => {
   const turns = [39, 40, 41, 42, 43, 44];
   const turn40Tools = [tool(40, 1, 1), tool(40, 1, 2)];
