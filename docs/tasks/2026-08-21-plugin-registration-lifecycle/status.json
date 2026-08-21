@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-21-plugin-registration-lifecycle",
+  "type": "refactor",
+  "updatedAt": "2026-08-21T15:25:19.155Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "in_progress",
+    "implementation": "pending",
+    "verification": "pending",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}
