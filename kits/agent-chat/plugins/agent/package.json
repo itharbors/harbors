@@ -12,20 +12,18 @@
         }
       },
       "settings": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "panel": "settings",
-        "title": "Agent",
-        "order": 10,
-        "requests": ["getSettings", "saveSettings", "resetSettings"]
+        "order": 10
       },
       "message": {
         "request": {
           "listConversations": ["listConversations"],
           "listDirectory": ["listDirectory"],
           "getDraftOptions": ["getDraftOptions"],
-          "getSettings": { "methods": ["getSettings"], "callers": ["settings"] },
-          "saveSettings": { "methods": ["saveSettings"], "callers": ["settings"] },
-          "resetSettings": { "methods": ["resetSettings"], "callers": ["settings"] },
+          "getSettings": { "methods": ["getSettings"], "callers": ["agent"] },
+          "saveSettings": { "methods": ["saveSettings"], "callers": ["agent"] },
+          "resetSettings": { "methods": ["resetSettings"], "callers": ["agent"] },
           "getConversationOptions": ["getConversationOptions"],
           "getConversationContext": ["getConversationContext"],
           "getConversationPermissions": ["getConversationPermissions"],

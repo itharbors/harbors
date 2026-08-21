@@ -1,25 +1,17 @@
 type SettingsRequestName = 'getSettings' | 'saveSettings' | 'resetSettings';
+type PanelContext = { message?: { request(plugin: string, name: string, ...args: unknown[]): Promise<unknown> } };
+type MessageRequest = (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
 type Settings = {
   sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access';
   approvalPolicy: 'ask' | 'always';
   global: { sandboxMode: boolean; approvalPolicy: boolean };
 };
 
-type SettingsPageResponse = {
-  type: 'settings-page-response';
-  requestId: string;
-  ok?: boolean;
-  result?: unknown;
-  error?: unknown;
-};
+type PendingRequest = { reject: (error: Error) => void };
 
-type PendingRequest = { resolve: (value: unknown) => void; reject: (error: Error) => void };
-
-const pending = new Map<string, PendingRequest>();
-let requestSequence = 0;
-let activeWindow: Window | null = null;
+const pending = new Set<PendingRequest>();
+let activeRequest: MessageRequest | null = null;
 let activeDocument: Document | null = null;
-let removeMessageListener: (() => void) | null = null;
 let removeFormListeners: (() => void) | null = null;
 
 function errorFrom(value: unknown): Error {
@@ -31,23 +23,15 @@ function errorFrom(value: unknown): Error {
   return new Error('设置请求失败');
 }
 
-function handleResponse(event: MessageEvent<SettingsPageResponse>): void {
-  if (!activeWindow || (event.source && event.source !== activeWindow.parent)) return;
-  const response = event.data;
-  if (!response || response.type !== 'settings-page-response' || typeof response.requestId !== 'string') return;
-  const entry = pending.get(response.requestId);
-  if (!entry) return;
-  pending.delete(response.requestId);
-  if (response.ok === false || response.error !== undefined) entry.reject(errorFrom(response.error));
-  else entry.resolve(response.result);
-}
-
 export function requestSettings(name: SettingsRequestName, ...args: unknown[]): Promise<unknown> {
-  if (!activeWindow?.parent) return Promise.reject(new Error('设置页面不可用'));
-  const requestId = `agent-settings-${Date.now()}-${requestSequence++}`;
+  if (!activeRequest) return Promise.reject(new Error('设置页面不可用'));
   return new Promise((resolve, reject) => {
-    pending.set(requestId, { resolve, reject });
-    window.parent.postMessage({ type: 'settings-page-request', requestId, name, args }, '*');
+    const entry = { reject };
+    pending.add(entry);
+    Promise.resolve()
+      .then(() => activeRequest?.('agent', name, ...args))
+      .then(resolve, reject)
+      .finally(() => pending.delete(entry));
   });
 }
 
@@ -89,7 +73,7 @@ async function loadSettings(): Promise<void> {
     applySettings(await requestSettings('getSettings') as Settings);
     setStatus('设置已加载', 'success');
   } catch (error) {
-    if (activeWindow) setStatus(errorFrom(error).message, 'error');
+    if (activeDocument) setStatus(errorFrom(error).message, 'error');
   }
 }
 
@@ -110,7 +94,7 @@ function bindForm(): void {
       applySettings(settings);
       setStatus('设置已保存，仅影响新对话；当前对话不变。', 'success');
     } catch (error) {
-      if (activeWindow) setStatus(errorFrom(error).message, 'error');
+      if (activeDocument) setStatus(errorFrom(error).message, 'error');
     } finally {
       elements.save.disabled = false;
       elements.reset.disabled = false;
@@ -135,7 +119,7 @@ function bindForm(): void {
       applySettings(settings);
       setStatus('已恢复默认设置，仅影响新对话；当前对话不变。', 'success');
     } catch (error) {
-      if (activeWindow) setStatus(errorFrom(error).message, 'error');
+      if (activeDocument) setStatus(errorFrom(error).message, 'error');
     } finally {
       elements.save.disabled = false;
       elements.reset.disabled = false;
@@ -152,26 +136,21 @@ function bindForm(): void {
 }
 
 function unmount(): void {
-  removeMessageListener?.();
-  removeMessageListener = null;
   removeFormListeners?.();
   removeFormListeners = null;
   const error = new Error('设置页面已卸载');
-  for (const entry of pending.values()) entry.reject(error);
+  for (const entry of pending) entry.reject(error);
   pending.clear();
-  activeWindow = null;
+  activeRequest = null;
   activeDocument = null;
 }
 
 const definition = {
-  mount() {
+  mount(ctx: PanelContext) {
     unmount();
-    if (typeof window === 'undefined' || typeof document === 'undefined') return;
-    activeWindow = window;
+    if (typeof window === 'undefined' || typeof document === 'undefined' || typeof ctx?.message?.request !== 'function') return;
+    activeRequest = ctx.message.request;
     activeDocument = document;
-    const onMessage = (event: MessageEvent<SettingsPageResponse>) => handleResponse(event);
-    activeWindow.addEventListener('message', onMessage);
-    removeMessageListener = () => activeWindow?.removeEventListener('message', onMessage);
     bindForm();
     void loadSettings();
   },

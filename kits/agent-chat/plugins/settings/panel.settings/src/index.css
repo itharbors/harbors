@@ -36,8 +36,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .settings-shell { display: flex; flex: 1 1 auto; min-height: 0; }
 #settings-pages {
   display: flex;
-  flex: 0 1 190px;
-  min-width: 0;
+  flex: 0 1 auto;
+  width: max-content;
+  min-width: 120px;
+  max-width: min(28vw, 220px);
   flex-direction: column;
   gap: 5px;
   overflow-y: auto;
@@ -155,7 +157,7 @@ input[type="checkbox"] { width: 16px; min-height: 16px; padding: 0; accent-color
 .loading, .empty, .error { margin: 18px 0; color: var(--muted); text-align: center; font-size: 11px; }
 
 @media (max-width: 320px) {
-  #settings-pages { flex-basis: 154px; gap: 4px; padding: 10px 8px 12px; }
+  #settings-pages { flex: 0 1 112px; width: min(35vw, 112px); min-width: 96px; max-width: 112px; gap: 4px; padding: 10px 8px 12px; }
   .settings-page-link { min-height: 32px; padding-right: 9px; padding-left: 11px; }
   #settings-content { padding: 8px; }
   .settings-section { padding-left: 9px; padding-right: 9px; }

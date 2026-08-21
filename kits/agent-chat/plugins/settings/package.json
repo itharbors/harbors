@@ -13,8 +13,7 @@
       },
       "message": {
         "request": {
-          "getPages": ["getPages"],
-          "requestPage": ["requestPage"]
+          "getPages": ["getPages"]
         },
         "broadcast": {
           "settings.registry.changed": ["panel.onRegistryChanged"]

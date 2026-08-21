@@ -13,19 +13,17 @@
         }
       },
       "settings": {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "panel": "settings",
-        "title": "模型服务",
-        "order": 20,
-        "requests": ["getSettings", "saveProvider", "deleteProvider", "resetProviderCredential"]
+        "order": 20
       },
       "message": {
         "request": {
           "getCatalog": ["getCatalog"],
-          "getSettings": { "methods": ["getSettings"], "callers": ["settings"] },
-          "saveProvider": { "methods": ["saveProvider"], "callers": ["settings"] },
-          "deleteProvider": { "methods": ["deleteProvider"], "callers": ["settings"] },
-          "resetProviderCredential": { "methods": ["resetProviderCredential"], "callers": ["settings"] },
+          "getSettings": { "methods": ["getSettings"], "callers": ["model-service"] },
+          "saveProvider": { "methods": ["saveProvider"], "callers": ["model-service"] },
+          "deleteProvider": { "methods": ["deleteProvider"], "callers": ["model-service"] },
+          "resetProviderCredential": { "methods": ["resetProviderCredential"], "callers": ["model-service"] },
           "webSearch": ["webSearch"],
           "complete": ["complete"],
           "cancel": ["cancel"]

@@ -1,4 +1,5 @@
 type PanelContext = { message?: { request(plugin: string, name: string, ...args: unknown[]): Promise<unknown> } };
+type MessageRequest = (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
 
 type Provider = {
   id: string;
@@ -21,9 +22,11 @@ type ModelDraft = { id: string; name: string; description: string; contextWindow
 let sequence = 0;
 type PendingRequest = { resolve(value: unknown): void; reject(error: Error): void; timeout: number };
 const pending = new Map<string, PendingRequest>();
+let activeRequest: MessageRequest | null = null;
 
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 function request(method: string, payload?: unknown): Promise<unknown> {
+  if (!activeRequest) return Promise.reject(new Error('设置页面不可用'));
   const requestId = `model-service-settings-${Date.now()}-${sequence += 1}`;
   return new Promise((resolve, reject) => {
     const timeout = window.setTimeout(() => {
@@ -33,18 +36,23 @@ function request(method: string, payload?: unknown): Promise<unknown> {
       entry.reject(new Error('设置请求超时'));
     }, 15_000);
     pending.set(requestId, { resolve, reject, timeout });
-    window.parent.postMessage({ type: 'settings-page-request', requestId, name: method, args: payload === undefined ? [] : [payload] }, '*');
+    const args = payload === undefined ? [] : [payload];
+    Promise.resolve()
+      .then(() => activeRequest?.('model-service', method, ...args))
+      .then((result) => {
+        const entry = pending.get(requestId);
+        if (!entry) return;
+        pending.delete(requestId);
+        window.clearTimeout(entry.timeout);
+        resolve(result);
+      }, (error) => {
+        const entry = pending.get(requestId);
+        if (!entry) return;
+        pending.delete(requestId);
+        window.clearTimeout(entry.timeout);
+        reject(error instanceof Error ? error : new Error(errorText(error)));
+      });
   });
-}
-
-function onResponse(event: MessageEvent): void {
-  if (event.source !== window.parent || !event.data || event.data.type !== 'settings-page-response' || typeof event.data.requestId !== 'string') return;
-  const entry = pending.get(event.data.requestId);
-  if (!entry) return;
-  pending.delete(event.data.requestId);
-  window.clearTimeout(entry.timeout);
-  if (event.data.error !== undefined) entry.reject(new Error(typeof event.data.error === 'string' ? event.data.error : event.data.error?.message || '设置请求失败'));
-  else entry.resolve(event.data.result);
 }
 
 function createModelDraft(model?: Model): ModelDraft {
@@ -114,7 +122,9 @@ function providerModelNames(provider: Provider): string {
 
 const definition = {
   async mount(_ctx: PanelContext) {
-    window.addEventListener('message', onResponse);
+    definition.unmount();
+    if (typeof _ctx?.message?.request !== 'function') return;
+    activeRequest = _ctx.message.request;
     const root = document.getElementById('panel-root');
     if (!root) return;
     root.innerHTML = '<main class="page"><header class="header"><div><h1>模型服务</h1><p class="subtitle">管理 Provider、模型和凭据。Token 只写入凭据库，永不回显。</p></div><div class="toolbar"><button id="refresh" type="button">刷新</button><button id="add" class="primary" type="button">新增 Provider</button></div></header><p id="status" class="status" aria-live="polite"></p><section id="providers" class="provider-list" aria-live="polite"></section></main>';
@@ -239,7 +249,14 @@ const definition = {
     root.querySelector('#add')?.addEventListener('click', () => { const provider = { id: `provider-${Date.now()}`, name: '新 Provider', protocol: 'openai-chat-completions' as const, baseUrl: '', models: [], credentialConfigured: false }; settings.providers = [...settings.providers, provider]; selectedId = provider.id; render(); });
     await load();
   },
-  unmount() { window.removeEventListener('message', onResponse); for (const entry of pending.values()) { window.clearTimeout(entry.timeout); entry.reject(new Error('设置页面已卸载')); } pending.clear(); },
+  unmount() {
+    for (const entry of pending.values()) {
+      window.clearTimeout(entry.timeout);
+      entry.reject(new Error('设置页面已卸载'));
+    }
+    pending.clear();
+    activeRequest = null;
+  },
 };
 
 function escapeHtml(value: string): string { return value.replace(/[&<>"']/gu, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character] || character)); }

@@ -1,9 +1,7 @@
 export interface SettingsPageContribution {
-  schemaVersion: 2;
+  schemaVersion: 3;
   panel: string;
-  title: string;
   order?: number;
-  requests: string[];
 }
 
 export interface SettingsPage {
@@ -11,7 +9,6 @@ export interface SettingsPage {
   panel: string;
   title: string;
   order: number;
-  requests: string[];
   entry: string;
 }
 
@@ -38,31 +35,26 @@ function assertFiniteNumber(value: unknown, label: string): asserts value is num
   }
 }
 
-/** Validate and normalize the v2 page contribution. Panel existence is checked by the host. */
+/** Validate and normalize the v3 page contribution. Panel existence is checked by the host. */
 export function validateSettingsContribution(pluginName: string, contribute: unknown): SettingsPageContribution {
   assertNonEmptyString(pluginName, 'pluginName');
   if (!isRecord(contribute) || !isRecord(contribute.settings)) {
     throw new SettingsSchemaError('contribute.settings must be an object');
   }
   const settings = contribute.settings;
-  if (settings.schemaVersion !== 2) throw new SettingsSchemaError('settings.schemaVersion must be 2');
+  if (settings.schemaVersion !== 3) throw new SettingsSchemaError('settings.schemaVersion must be 3');
+  for (const key of Object.keys(settings)) {
+    if (key !== 'schemaVersion' && key !== 'panel' && key !== 'order') {
+      throw new SettingsSchemaError(`settings.${key} is not allowed`);
+    }
+  }
   assertNonEmptyString(settings.panel, 'settings.panel');
-  assertNonEmptyString(settings.title, 'settings.title');
   const order = settings.order;
   if (order !== undefined) assertFiniteNumber(order, 'settings.order');
-  if (!Array.isArray(settings.requests)) throw new SettingsSchemaError('settings.requests must be an array');
-  const requests: string[] = [];
-  for (const [index, request] of settings.requests.entries()) {
-    assertNonEmptyString(request, `settings.requests[${index}]`);
-    if (requests.includes(request)) throw new SettingsSchemaError(`duplicate settings request ${request}`);
-    requests.push(request);
-  }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     panel: settings.panel,
-    title: settings.title,
     order: order === undefined ? 0 : order as number,
-    requests,
   };
 }
 

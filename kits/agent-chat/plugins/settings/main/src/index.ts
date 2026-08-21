@@ -8,7 +8,7 @@ import {
 
 declare const editor: any;
 
-type RegisteredPage = Omit<SettingsPage, 'entry'> & { localPanel: string; requests: string[] };
+type RegisteredPage = Omit<SettingsPage, 'entry' | 'title'> & { localPanel: string };
 let runtime: any = null;
 const pages = new Map<string, RegisteredPage>();
 
@@ -47,9 +47,7 @@ function registerPage(pluginName: string, contribute: unknown): void {
       owner: pluginName,
       panel,
       localPanel: contribution.panel,
-      title: contribution.title,
       order: contribution.order ?? 0,
-      requests: [...contribution.requests],
     });
     broadcast('settings.registry.changed', { action, owner: pluginName });
   } catch (error) {
@@ -60,14 +58,6 @@ function registerPage(pluginName: string, contribute: unknown): void {
 function unregisterPage(pluginName: string): void {
   if (!pages.delete(pluginName)) return;
   broadcast('settings.registry.changed', { action: 'detach', owner: pluginName });
-}
-
-function assertRequestPage(input: unknown): { owner: string; name: string; args: unknown[] } {
-  if (!isRecord(input)) throw new Error('settings page request must be an object');
-  if (typeof input.owner !== 'string' || input.owner.trim() === '') throw new Error('settings page request owner is required');
-  if (typeof input.name !== 'string' || input.name.trim() === '') throw new Error('settings page request name is required');
-  if (!Array.isArray(input.args)) throw new Error('settings page request args must be an array');
-  return { owner: input.owner, name: input.name, args: input.args };
 }
 
 const definition = {
@@ -89,26 +79,18 @@ const definition = {
   methods: {
     getPages() {
       assertRuntime();
-      return sortSettingsPages(pages.values()).flatMap(({ owner, panel, title, order }) => {
+      const availablePages = [...pages.values()].flatMap(({ owner, panel, order }) => {
         try {
-          const entry = runtime.panel.getInfo(panel)?.entry;
-          if (typeof entry !== 'string' || entry.length === 0) return [];
+          const info = runtime.panel.getInfo(panel);
+          const entry = info?.entry;
+          const title = info?.title;
+          if (typeof entry !== 'string' || entry.length === 0 || typeof title !== 'string' || title.trim() === '') return [];
           return [{ owner, panel, title, order, entry }];
         } catch {
           return [];
         }
       });
-    },
-
-    requestPage(input: unknown) {
-      const currentRuntime = assertRuntime();
-      const request = assertRequestPage(input);
-      const page = pages.get(request.owner);
-      if (!page) throw new Error(`settings page owner is not registered: ${request.owner}`);
-      if (!page.requests.includes(request.name)) {
-        throw new Error(`settings page request is not allowed: ${request.owner}.${request.name}`);
-      }
-      return currentRuntime.message.request(request.owner, request.name, ...request.args);
+      return sortSettingsPages(availablePages);
     },
 
     openSettingsPanel() {

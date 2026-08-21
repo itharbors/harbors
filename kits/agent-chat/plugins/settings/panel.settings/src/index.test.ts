@@ -32,7 +32,7 @@ test('starts the settings shell at the panel root without a header toolbar', asy
   }
 });
 
-test('routes iframe requests only when event.source is the active iframe window', async () => {
+test('does not proxy iframe postMessage requests', async () => {
   const dom = new JSDOM('<div id="panel-root"></div>', { url: 'https://host.test/panel?sessionId=host' });
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
@@ -50,15 +50,10 @@ test('routes iframe requests only when event.source is the active iframe window'
         },
       },
     });
-    const iframe = dom.window.document.querySelector('iframe') as HTMLIFrameElement;
-    assert.ok(iframe?.contentWindow);
     const request = { type: 'settings-page-request', requestId: 'known', name: 'save', args: [1] };
     dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: request, source: dom.window }));
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.equal(calls.filter(([name]) => name === 'requestPage').length, 0);
-    dom.window.dispatchEvent(new dom.window.MessageEvent('message', { data: request, source: iframe.contentWindow }));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.deepEqual(calls.find(([name]) => name === 'requestPage'), ['requestPage', { owner: 'owner', name: 'save', args: [1] }]);
+    assert.deepEqual(calls, ['getPages'].map((name) => [name]));
     definition.unmount?.();
   } finally {
     Object.assign(globalThis, { window: previousWindow, document: previousDocument });
