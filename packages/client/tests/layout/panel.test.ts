@@ -51,6 +51,7 @@ describe('ce-panel', () => {
     expect(iframe).not.toBeNull();
     expect(iframe!.src).toContain('/editor?file=test.ts');
     expect(iframe!.getAttribute('allowtransparency')).toBe('true');
+    expect(iframe!.getAttribute('allow')).toBe('microphone; camera');
     expect(iframe!.getAttribute('sandbox')).toBe('allow-scripts allow-same-origin');
     const sandboxTokens = (iframe as HTMLIFrameElement).sandbox
       ? Array.from((iframe as HTMLIFrameElement).sandbox)

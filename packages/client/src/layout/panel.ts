@@ -174,7 +174,7 @@ export class Panel extends HTMLElement {
       `}
       <div class="content">
         ${shouldRenderIframe
-          ? `<iframe src="${escapeAttr(src!)}" sandbox="allow-scripts allow-same-origin" allowtransparency="true" style="background: transparent"></iframe>`
+          ? `<iframe src="${escapeAttr(src!)}" sandbox="allow-scripts allow-same-origin" allow="microphone; camera" allowtransparency="true" style="background: transparent"></iframe>`
           : unavailable ? '<div class="unavailable">插件未加载</div>' : '<slot></slot>'}
       </div>
     `;
