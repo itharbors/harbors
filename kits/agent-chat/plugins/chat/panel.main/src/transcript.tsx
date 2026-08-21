@@ -54,22 +54,24 @@ function escapeHtmlAttribute(value: string): string {
 // 已注册的代码块渲染器语言集合
 const registeredRendererLanguages = new Set<string>();
 
-function markdownRenderer(): Renderer {
+function markdownRenderer(rendererLanguages: ReadonlySet<string> = registeredRendererLanguages): Renderer {
   const renderer = new Renderer();
+  const defaultCodeRenderer = renderer.code.bind(renderer);
   renderer.link = function ({ href, title, tokens }) {
     const escapedHref = escapeHtmlAttribute(href);
     const titleAttribute = title ? ` title="${escapeHtmlAttribute(title)}"` : "";
     // 始终保留锚点的可点击语义，但绝不把未经消费者确认的目标交给浏览器导航。
     return `<a href="#" data-original-href="${escapedHref}"${titleAttribute}>${this.parser.parseInline(tokens)}</a>`;
   };
-  renderer.code = function ({ text, lang }) {
+  renderer.code = function (token) {
+    const { text, lang } = token;
     // 如果该语言有注册的渲染器，输出占位 div，由 useEffect 异步渲染
-    if (lang && registeredRendererLanguages.has(lang)) {
+    if (lang && rendererLanguages.has(lang)) {
       const encoded = escapeHtmlAttribute(text);
       return `<div class="markdown-code-block-renderer" data-lang="${escapeHtmlAttribute(lang)}" data-code="${encoded}"></div>`;
     }
     // 其他代码块走默认渲染
-    return false as unknown as string;
+    return defaultCodeRenderer(token);
   };
   return renderer;
 }
@@ -83,8 +85,9 @@ const MARKDOWN_CACHE_MAX_ENTRIES = 256;
 export function renderMarkdownHtml(
   content: string,
   sanitize: HtmlSanitizer = (dirty, config) => String(DOMPurify.sanitize(dirty, config)),
+  rendererLanguages: ReadonlySet<string> = registeredRendererLanguages,
 ): string {
-  const rendered = marked.parse(content, { async: false, renderer: markdownRenderer() }) as string;
+  const rendered = marked.parse(content, { async: false, renderer: markdownRenderer(rendererLanguages) }) as string;
   // 原始目标仅作为数据保留；真实 href 是不可外跳的安全占位，HTML 结构仍由 DOMPurify 清理。
   // 允许 div 和 data-* 属性用于代码块渲染器占位。
   return sanitize(rendered, {
