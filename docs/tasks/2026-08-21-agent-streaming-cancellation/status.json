@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-21-agent-streaming-cancellation",
+  "type": "feature",
+  "updatedAt": "2026-08-21T00:00:00.000Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "in_progress",
+    "implementation": "pending",
+    "verification": "pending",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}

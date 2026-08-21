@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-21-secure-agent-tools",
+  "type": "bug",
+  "updatedAt": "2026-08-21T15:15:58Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "in_progress",
+    "implementation": "pending",
+    "verification": "pending",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}
