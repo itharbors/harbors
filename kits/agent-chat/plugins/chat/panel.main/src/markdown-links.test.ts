@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import createDOMPurify, { type Config, type WindowLike } from "dompurify";
 import { JSDOM } from "jsdom";
-import { createMarkdownLinkActivationController, handleMarkdownLinkActivation, originalLinkTarget, renderMarkdownHtml } from "./transcript.js";
+import { createMarkdownLinkActivationReactHandlers, createMarkdownLinkActivationController, handleMarkdownLinkActivation, originalLinkTarget, renderMarkdownHtml } from "./transcript.js";
 
 const dom = new JSDOM("");
 const purifier = createDOMPurify(dom.window as unknown as WindowLike);
@@ -121,6 +121,65 @@ for (const pointerType of ["mouse", "touch"]) {
     assert.equal(click.stopped, true);
   });
 }
+
+test("pointerup with button -1 still activates once through its synthetic click", () => {
+  const anchor = renderLink(`[open](file:///tmp/test.txt)`);
+  const broadcasts: string[] = [];
+  const controller = createMarkdownLinkActivationController((info) => broadcasts.push(info.href));
+  controller.pointerDown(pointerEvent(anchor, { button: 0 }));
+  controller.pointerUp(pointerEvent(anchor, { button: -1 }));
+  controller.click(clickEvent(anchor, 1));
+
+  assert.deepEqual(broadcasts, ["file:///tmp/test.txt"]);
+});
+
+test("Transcript chat-surface React capture handlers activate a mounted link", () => {
+  const appDom = new JSDOM('<div class="message-list-container"><div class="chat-surface"><a href="#" data-original-href="https://arxiv.org/abs/2608.17389">paper</a></div></div>');
+  const document = appDom.window.document;
+  const anchor = document.querySelector("a");
+  assert.ok(anchor);
+  const broadcasts: string[] = [];
+  const controller = createMarkdownLinkActivationController((info) => broadcasts.push(info.href));
+  const handlers = createMarkdownLinkActivationReactHandlers(controller);
+
+  const pointer = (type: string, button: number): void => {
+    const event = new appDom.window.Event(type, { bubbles: true, cancelable: true }) as Event & Record<string, unknown>;
+    Object.assign(event, { pointerId: 1, pointerType: "mouse", isPrimary: true, button, clientX: 10, clientY: 10 });
+    Object.defineProperty(event, "target", { value: anchor });
+    if (type === "pointerdown") handlers.onPointerDownCapture(event as unknown as PointerEvent);
+    if (type === "pointerup") handlers.onPointerUpCapture({ nativeEvent: event as unknown as PointerEvent });
+  };
+  pointer("pointerdown", 0);
+  pointer("pointerup", -1);
+  const click = new appDom.window.MouseEvent("click", { bubbles: true, cancelable: true, button: -1 });
+  Object.defineProperty(click, "target", { value: anchor });
+  handlers.onClickCapture({ nativeEvent: click });
+
+  assert.deepEqual(broadcasts, ["https://arxiv.org/abs/2608.17389"]);
+  assert.equal(click.defaultPrevented, true);
+});
+
+test("React capture adapters accept native events without nativeEvent", () => {
+  const appDom = new JSDOM('<div class="chat-surface"><a href="#" data-original-href="https://example.test/native">native</a></div>');
+  const anchor = appDom.window.document.querySelector("a");
+  assert.ok(anchor);
+  const broadcasts: string[] = [];
+  const controller = createMarkdownLinkActivationController((info) => broadcasts.push(info.href));
+  const handlers = createMarkdownLinkActivationReactHandlers(controller);
+  const event = (type: string, button: number): PointerEvent => {
+    const value = new appDom.window.Event(type, { bubbles: true, cancelable: true }) as Event & Record<string, unknown>;
+    Object.assign(value, { pointerId: 1, pointerType: "mouse", isPrimary: true, button, clientX: 10, clientY: 10 });
+    Object.defineProperty(value, "target", { value: anchor });
+    return value as unknown as PointerEvent;
+  };
+  handlers.onPointerDownCapture(event("pointerdown", 0));
+  handlers.onPointerUpCapture(event("pointerup", -1));
+  const click = new appDom.window.MouseEvent("click", { button: -1 });
+  Object.defineProperty(click, "target", { value: anchor });
+  handlers.onClickCapture(click);
+
+  assert.deepEqual(broadcasts, ["https://example.test/native"]);
+});
 
 test("keyboard click is handled as a fallback activation", () => {
   const anchor = renderLink(`[open](harbors://plugin/open)`);

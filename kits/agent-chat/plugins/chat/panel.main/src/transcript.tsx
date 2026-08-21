@@ -140,7 +140,11 @@ interface MarkdownLinkEvent {
 
 function anchorFromEvent(event: Pick<MarkdownLinkEvent, "target"> & { composedPath?: () => EventTarget[] }): HTMLAnchorElement | null {
   for (const item of event.composedPath?.() || []) {
-    if (item instanceof Element && item.matches("a")) return item as HTMLAnchorElement;
+    // composedPath() 可能返回来自另一个 DOM realm 的 Element；不要依赖当前
+    // iframe 的全局 Element 构造器做 instanceof 判断。
+    if (item && typeof (item as Element).matches === "function" && (item as Element).matches("a")) {
+      return item as HTMLAnchorElement;
+    }
   }
   return (event.target as HTMLElement | null)?.closest?.("a") || null;
 }
@@ -190,29 +194,88 @@ export function createMarkdownLinkActivationController(
       pointer = null;
       const anchor = anchorFromEvent(event);
       const moved = current.moved || Math.hypot(event.clientX - current.x, event.clientY - current.y) > POINTER_DRAG_THRESHOLD;
-      if (!isMainPointer(event) || anchor !== current.anchor || moved) {
+      // pointerup 的 button 在浏览器中可能是 -1；主指针资格只在按下时检查。
+      if (anchor !== current.anchor || moved) {
         // 某些浏览器在拖动结束后仍会合成 click；只抑制该 click，不广播。
         if (anchor === current.anchor) suppressedClick = { anchor, expiresAt: now() + SYNTHETIC_CLICK_WINDOW_MS };
         return;
       }
-      suppressedClick = { anchor, expiresAt: now() + SYNTHETIC_CLICK_WINDOW_MS };
-      handleMarkdownLinkActivation(event, onLinkClick);
+      // 普通激活统一由 click 委托处理；pointerup 只负责结束拖拽状态。
     },
     pointerCancel(event: PointerEvent) {
       if (pointer?.id === event.pointerId) pointer = null;
     },
     click(event: MouseEvent) {
       const anchor = anchorFromEvent(event);
-      if (!anchor || event.button !== 0) return;
+      // 某些触摸/自动化实现的 click.button 为 -1；右键的 button=2 仍应忽略。
+      if (!anchor || (event.button !== undefined && event.button !== 0 && event.button !== -1)) return;
       event.preventDefault();
       event.stopPropagation();
-      if (event.detail > 0 && suppressedClick?.anchor === anchor && suppressedClick.expiresAt >= now()) {
+      if (suppressedClick?.anchor === anchor && suppressedClick.expiresAt >= now()) {
         suppressedClick = null;
         return;
       }
       suppressedClick = null;
       const href = originalLinkTarget(anchor);
       if (href) onLinkClick?.({ href, text: anchor.textContent || "" });
+    },
+  };
+}
+
+export function bindMarkdownLinkActivationDelegation(
+  target: Pick<Document, "addEventListener" | "removeEventListener">,
+  controller: ReturnType<typeof createMarkdownLinkActivationController>,
+  isEligible: (event: Event) => boolean = () => true,
+): () => void {
+  const pointerDown = (event: Event) => {
+    if (isEligible(event)) controller.pointerDown(event as PointerEvent);
+  };
+  // move/up/cancel 必须继续交给控制器，即使指针已经离开消息列表；否则拖拽
+  // 状态不会结束，后续点击可能被错误抑制。
+  const pointerMove = (event: Event) => controller.pointerMove(event as PointerEvent);
+  const pointerUp = (event: Event) => controller.pointerUp(event as PointerEvent);
+  const pointerCancel = (event: Event) => controller.pointerCancel(event as PointerEvent);
+  const click = (event: Event) => {
+    if (isEligible(event)) controller.click(event as MouseEvent);
+  };
+  target.addEventListener("pointerdown", pointerDown, true);
+  target.addEventListener("pointermove", pointerMove, true);
+  target.addEventListener("pointerup", pointerUp, true);
+  target.addEventListener("pointercancel", pointerCancel, true);
+  target.addEventListener("click", click, true);
+  return () => {
+    target.removeEventListener("pointerdown", pointerDown, true);
+    target.removeEventListener("pointermove", pointerMove, true);
+    target.removeEventListener("pointerup", pointerUp, true);
+    target.removeEventListener("pointercancel", pointerCancel, true);
+    target.removeEventListener("click", click, true);
+  };
+}
+
+export function createMarkdownLinkActivationReactHandlers(
+  controller: ReturnType<typeof createMarkdownLinkActivationController>,
+) {
+  const unwrap = <T extends Event>(event: T | { nativeEvent?: T }): T => {
+    if (event && typeof event === "object" && "nativeEvent" in event && event.nativeEvent) {
+      return event.nativeEvent;
+    }
+    return event as T;
+  };
+  return {
+    onPointerDownCapture(event: PointerEvent | { nativeEvent?: PointerEvent }) {
+      controller.pointerDown(unwrap(event));
+    },
+    onPointerMoveCapture(event: PointerEvent | { nativeEvent?: PointerEvent }) {
+      controller.pointerMove(unwrap(event));
+    },
+    onPointerUpCapture(event: PointerEvent | { nativeEvent?: PointerEvent }) {
+      controller.pointerUp(unwrap(event));
+    },
+    onPointerCancelCapture(event: PointerEvent | { nativeEvent?: PointerEvent }) {
+      controller.pointerCancel(unwrap(event));
+    },
+    onClickCapture(event: MouseEvent | { nativeEvent?: MouseEvent }) {
+      controller.click(unwrap(event));
     },
   };
 }
@@ -968,32 +1031,26 @@ export default function Transcript(props: TranscriptProps) {
   }, [permissionRequests]);
   const onResolvePermissionRef = useRef(onResolvePermission);
   onResolvePermissionRef.current = onResolvePermission;
+  const onLinkClickRef = useRef(onLinkClick);
+  onLinkClickRef.current = onLinkClick;
+  const linkControllerRef = useRef<ReturnType<typeof createMarkdownLinkActivationController> | null>(null);
+  if (!linkControllerRef.current) {
+    linkControllerRef.current = createMarkdownLinkActivationController((info) => onLinkClickRef.current?.(info));
+  }
+  const linkHandlers = createMarkdownLinkActivationReactHandlers(linkControllerRef.current);
   const stableResolvePermission = useMemo(
     () => (requestId: string, outcome: PermissionOutcome) => onResolvePermissionRef.current(requestId, outcome),
     [],
   );
-  const surfaceRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const surface = surfaceRef.current;
-    if (!surface) return;
-    const controller = createMarkdownLinkActivationController(onLinkClick);
-    surface.addEventListener("pointerdown", controller.pointerDown, true);
-    surface.addEventListener("pointermove", controller.pointerMove, true);
-    surface.addEventListener("pointerup", controller.pointerUp, true);
-    surface.addEventListener("pointercancel", controller.pointerCancel, true);
-    surface.addEventListener("click", controller.click, true);
-    return () => {
-      surface.removeEventListener("pointerdown", controller.pointerDown, true);
-      surface.removeEventListener("pointermove", controller.pointerMove, true);
-      surface.removeEventListener("pointerup", controller.pointerUp, true);
-      surface.removeEventListener("pointercancel", controller.pointerCancel, true);
-      surface.removeEventListener("click", controller.click, true);
-    };
-  }, [onLinkClick]);
-
   return (
-    <div ref={surfaceRef} className={`chat-surface ${draft ? "fresh" : ""}`}>
+    <div
+      className={`chat-surface ${draft ? "fresh" : ""}`}
+      onPointerDownCapture={linkHandlers.onPointerDownCapture}
+      onPointerMoveCapture={linkHandlers.onPointerMoveCapture}
+      onPointerUpCapture={linkHandlers.onPointerUpCapture}
+      onPointerCancelCapture={linkHandlers.onPointerCancelCapture}
+      onClickCapture={linkHandlers.onClickCapture}
+    >
       {draft && (
         <div className="new-thread-context">
           <span>▣ 当前项目</span>
