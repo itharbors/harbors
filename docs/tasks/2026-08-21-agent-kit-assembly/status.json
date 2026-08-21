@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-21-agent-kit-assembly",
+  "type": "test",
+  "updatedAt": "2026-08-21T15:16:52Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "in_progress",
+    "implementation": "pending",
+    "verification": "pending",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}
