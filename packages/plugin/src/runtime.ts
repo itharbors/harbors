@@ -1,6 +1,6 @@
 import type { PluginCredentialVault } from './credentials.js';
 import type { PluginPaths, PluginPathRoots } from './paths.js';
-import type { ContributeData, PluginDefinition, PluginInfo, PluginSourceIdentity } from './types.js';
+import type { ContributeData, PluginDefinition, PluginInfo, PluginRegistration, PluginSourceIdentity } from './types.js';
 
 export type MessageLocation = 'server' | 'browser';
 export type PluginMethod = (...args: unknown[]) => unknown;
@@ -36,6 +36,8 @@ export interface PluginRuntimePluginHost {
   load?(path: string): Promise<void>;
   unload?(path: string): Promise<void>;
   unregister?(path: string): void;
+  inspect?(path: string): Promise<PluginInfo>;
+  getRegistration?(path: string): PluginRegistration | undefined;
   getInfo(name: string): PluginInfo | undefined;
   listLoaded(): string[];
   listRegistered(): string[];
@@ -88,6 +90,8 @@ export interface PluginRuntimeHost {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   };
   plugin: PluginRuntimePluginHost;
+  /** Host-side owner cleanup hook; lifecycle implementations may omit it. */
+  clearOwner?(owner: string): Promise<void> | void;
   panel: PluginRuntimePanelHost;
   menu: PluginRuntimeMenuHost;
   message: PluginRuntimeMessageHost;

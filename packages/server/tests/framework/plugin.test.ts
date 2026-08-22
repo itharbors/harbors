@@ -219,7 +219,9 @@ describe('PluginModule', () => {
     const dir = writePlugin(tmpDir, 'my-plugin');
     await pluginModule.register(dir);
     expect(pluginModule.listRegistered()).toContain(dir);
-    expect(pluginModule.getInfo('my-plugin')?.contribute?.panel).toEqual({ main: { entry: './panel/dist/index.html' } });
+    await expect(pluginModule.inspect(dir)).resolves.toMatchObject({
+      contribute: { panel: { main: { entry: './panel/dist/index.html' } } },
+    });
   });
 
   it('register throws without ce-editor field', async () => {
@@ -230,7 +232,8 @@ describe('PluginModule', () => {
       version: '0.0.1',
       main: './main/dist/index.js',
     }));
-    await expect(pluginModule.register(dir)).rejects.toThrow(/ce-editor/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/ce-editor/);
   });
 
   it('load and unload transition plugin state', async () => {
@@ -305,7 +308,7 @@ describe('PluginModule', () => {
 
     await pluginModule.register(dir);
 
-    expect(pluginModule.getInfo('@scope/runtime-plugin')?.contribute).toEqual({
+    await expect(pluginModule.inspect(dir)).resolves.toMatchObject({ contribute: {
       panel: { debug: { entry: './panel/dist/index.html' } },
       message: {
         request: {
@@ -316,7 +319,7 @@ describe('PluginModule', () => {
           '@scope/runtime-plugin.assets.changed': ['onAssetsChanged', 'panel.onAssetsChanged'],
         },
       },
-    });
+    } });
   });
 
   it('register requires panel contributions to use object entries', async () => {
@@ -337,7 +340,8 @@ describe('PluginModule', () => {
     fs.mkdirSync(path.join(dir, 'main', 'dist'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: {} });');
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/entry/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/entry/);
   });
 
   it('register accepts panel entry metadata using entry instead of src', async () => {
@@ -365,12 +369,12 @@ describe('PluginModule', () => {
 
     await pluginModule.register(dir);
 
-    expect(pluginModule.getInfo('@scope/typed-plugin-entry')?.contribute?.panel).toEqual({
+    await expect(pluginModule.inspect(dir)).resolves.toMatchObject({ contribute: { panel: {
       preview: {
         entry: './panel.preview/dist/index.html',
         title: 'Preview',
       },
-    });
+    } } });
   });
 
   it('register rejects plugin main outside dist', async () => {
@@ -385,7 +389,8 @@ describe('PluginModule', () => {
       },
     }));
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/dist/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/dist/);
   });
 
   it('register rejects plugin main outside the plugin directory', async () => {
@@ -403,7 +408,8 @@ describe('PluginModule', () => {
       },
     }));
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/inside the plugin directory/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/inside the plugin directory/);
   });
 
   it('register rejects missing declared main instead of falling back to source or legacy entries', async () => {
@@ -420,7 +426,8 @@ describe('PluginModule', () => {
     fs.writeFileSync(path.join(dir, 'main', 'src', 'index.ts'), 'editor.plugin.define({ methods: {} });');
     fs.writeFileSync(path.join(dir, 'index.js'), 'editor.plugin.define({ methods: {} });');
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/main file does not exist/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/main file does not exist/);
   });
 
   it('register rejects panel entry outside the plugin directory', async () => {
@@ -445,7 +452,8 @@ describe('PluginModule', () => {
       },
     }));
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/inside the plugin directory/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/inside the plugin directory/);
   });
 
   it('register rejects missing declared panel entry files', async () => {
@@ -467,7 +475,8 @@ describe('PluginModule', () => {
       },
     }));
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/entry file does not exist/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/entry file does not exist/);
   });
 
   it('register rejects panel entry outside dist index.html', async () => {
@@ -489,7 +498,8 @@ describe('PluginModule', () => {
     }));
     fs.writeFileSync(path.join(dir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: {} });');
 
-    await expect(pluginModule.register(dir)).rejects.toThrow(/dist/);
+    await pluginModule.register(dir);
+    await expect(pluginModule.inspect(dir)).rejects.toThrow(/dist/);
   });
 
   it('loads a plugin defined via editor.plugin.define()', async () => {

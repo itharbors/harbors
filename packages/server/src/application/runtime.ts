@@ -207,6 +207,15 @@ export class ApplicationRuntime {
     this.lifecycleTransitioning.add(name);
     try {
       try {
+        await this.refreshPreparedPlugin(name);
+      } catch {
+        await this.clearOwner(name);
+        this.failPluginState(name, MANIFEST_INVALID);
+        this.refreshPhase();
+        this.emit();
+        return this.getBootstrap();
+      }
+      try {
         await supervisor.retry();
       } catch {
         if (this.terminalIntent) throw createApplicationRuntimeUnavailableError();
@@ -324,8 +333,8 @@ export class ApplicationRuntime {
     for (const spec of this.pluginSpecs) {
       try {
         await this.manifestRegistry.register(spec.path, { kind: 'external' });
-        const info = this.manifestRegistry.getInfo(spec.path);
-        if (!info || info.name !== spec.name) throw new Error('Application plugin manifest name mismatch');
+        const info = await this.manifestRegistry.inspect(spec.path);
+        if (info.name !== spec.name) throw new Error('Application plugin manifest name mismatch');
         assertApplicationContributions(spec.name, info.contribute);
         const pluginPaths = await createPluginPaths({
           roots: this.pluginPathRoots,
@@ -346,8 +355,22 @@ export class ApplicationRuntime {
     }
   }
 
+  /** Explicit retry is a reload: inspect the current disk manifest before creating a generation. */
+  private async refreshPreparedPlugin(name: string): Promise<void> {
+    const prepared = this.prepared.get(name);
+    if (!prepared) throw new Error(`Application plugin "${name}" is not prepared`);
+    const info = await this.manifestRegistry.inspect(prepared.spec.path);
+    if (info.name !== prepared.spec.name) throw new Error('Application plugin manifest name mismatch');
+    assertApplicationContributions(name, info.contribute);
+    this.prepared.set(name, {
+      ...prepared,
+      info,
+      entryPath: path.resolve(info.path, info.entry),
+      ...(info.contribute ? { contribute: structuredClone(info.contribute) } : { contribute: undefined }),
+    });
+  }
+
   private async startPlugin(name: string): Promise<void> {
-    const prepared = this.prepared.get(name)!;
     if (!this.processRuntime && this.requiresProcessRuntime) {
       this.failPluginState(name, PROCESS_NOT_CONFIGURED);
       this.emit();
@@ -359,7 +382,11 @@ export class ApplicationRuntime {
         plugin: name,
         ...(this.processRuntime ? { process: this.processRuntime } : {}),
         host: {
-          initializePayload: (generation) => this.createInitializePayload(prepared, generation),
+          initializePayload: (generation) => {
+            const current = this.prepared.get(name);
+            if (!current) throw new Error(`Application plugin "${name}" is not prepared`);
+            return this.createInitializePayload(current, generation);
+          },
           handleRuntimeCommand: (_plugin, command) => this.handleRuntimeCommand(name, command),
           clearOwner: () => this.clearOwner(name),
           onStateChanged: (state) => this.onSupervisorStateChanged(name, state),
@@ -625,7 +652,7 @@ export class ApplicationRuntime {
         const [observer, attached] = key.split('\0');
         if (observer !== owner && attached === owner) {
           const supervisor = this.supervisors.get(observer!);
-          if (supervisor) this.queueLifecycleDetachment(
+          if (supervisor) void this.queueLifecycleDetachment(
             key,
             observer!,
             supervisor,
@@ -937,6 +964,9 @@ export class ApplicationRuntime {
       }
     }
     this.supervisorOrder.length = 0;
+    for (const spec of this.pluginSpecs) {
+      this.manifestRegistry.unregister(spec.path);
+    }
     this.message.destroy();
     this.menu.destroy();
     this.service.clear();

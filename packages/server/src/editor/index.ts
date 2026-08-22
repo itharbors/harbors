@@ -163,6 +163,17 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       credentials,
     };
   }
+  function sessionPluginHost(): PluginRuntimeHost {
+    return {
+      ...editor,
+      menu: runtimeMenu,
+      clearOwner(owner: string) {
+        panel.clearOwner(owner);
+        message.clearOwner(owner);
+        menu.detach(owner);
+      },
+    };
+  }
   const message = new MessageModule({
     dispatchPanelRequest: (panelKey, method, args) => panel.dispatch(panelKey, method, args),
     dispatchBrowserRequest: options.dispatchBrowserRequest,
@@ -253,10 +264,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         for (const name of BUILTIN_PLUGINS) {
           const pluginPath = await resolvePlugin(name, pluginResolveContext());
           await plugin.register(pluginPath, { kind: 'builtin' });
-          await plugin.load(pluginPath, pluginLoadOptions({
-            ...editor,
-            menu: runtimeMenu,
-          }, []));
+          await plugin.load(pluginPath, pluginLoadOptions(sessionPluginHost(), []));
           loaded.push(pluginPath);
         }
       } catch (err) {
@@ -390,10 +398,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     externalPlugin: ActiveExternalPlugin,
   ): Promise<ActiveExternalPlugin> {
     try {
-      await plugin.load(externalPlugin.path, pluginLoadOptions({
-        ...editor,
-        menu: runtimeMenu,
-      }, externalPlugin.legacyDataDirectories, externalPlugin.credentials, externalPlugin.kitId));
+      await plugin.load(externalPlugin.path, pluginLoadOptions(
+        sessionPluginHost(),
+        externalPlugin.legacyDataDirectories,
+        externalPlugin.credentials,
+        externalPlugin.kitId,
+      ));
       return externalPlugin;
     } catch (loadError) {
       try {
@@ -452,7 +462,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
           ...(descriptor.artifactSha256 ? { artifactSha256: descriptor.artifactSha256 } : {}),
         },
       });
-      const info = plugin.getInfo(pluginPath);
+      const info = await plugin.inspect(pluginPath);
       if (!info) throw new Error(`Plugin "${pluginName}" registration did not produce plugin info`);
       const credentials = options.credentialVault
         && options.credentialVault.capability().mode === 'on'
@@ -619,10 +629,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         await ensureCorePluginsLoaded();
         const info = plugin.getInfo(pluginPath);
         try {
-          await plugin.load(pluginPath, pluginLoadOptions({
-            ...editor,
-            menu: runtimeMenu,
-          }, [], undefined, kit.getCurrent()?.name ?? '__framework__'));
+        await plugin.load(pluginPath, pluginLoadOptions(
+          sessionPluginHost(),
+          [],
+          undefined,
+          kit.getCurrent()?.name ?? '__framework__',
+        ));
         } catch (err) {
           if (info) {
             panel.clearOwner(info.name);
@@ -641,6 +653,8 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         return plugin.unregister(pluginPath);
       },
       getInfo: (name: string) => plugin.getInfo(name),
+      inspect: (pluginPath: string) => plugin.inspect(pluginPath),
+      getRegistration: (pluginPath: string) => plugin.getRegistration(pluginPath),
       listLoaded: () => plugin.listLoaded(),
       listRegistered: () => plugin.listRegistered(),
       callPlugin: (name: string, method: string, ...args: unknown[]) => plugin.callPlugin(name, method, ...args),

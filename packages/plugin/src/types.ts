@@ -45,6 +45,13 @@ export interface PluginInfo {
   contribute?: ContributeData;
 }
 
+/** Registration deliberately contains no manifest-derived fields. */
+export interface PluginRegistration {
+  path: string;
+  kind: PluginKind;
+  source: PluginSourceIdentity;
+}
+
 export interface PluginSourceIdentity {
   scope: 'framework' | 'kit' | 'unmanaged';
   kitId?: string;
