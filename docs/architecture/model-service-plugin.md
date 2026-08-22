@@ -2,7 +2,8 @@
 
 `model-service` 是 Agent Chat Kit 内负责模型访问和 Provider 配置的后台 Plugin。它把配置、凭据解析、
 Provider 协议适配、HTTP transport 和请求终态管理从 `agent` 的会话与工具循环中隔离出来。本文描述
-当前实现的消息契约和边界；它不定义 streaming，也不定义完整的 Agent event protocol。
+当前实现的消息契约和边界。Agent 的 Item 生命周期与持久化事件协议见
+`agent-turn-event-protocol.md`；本文只定义 Model Service 的请求、流式增量和取消边界。
 
 ## 职责边界
 
@@ -304,6 +305,32 @@ sequenceDiagram
     end
 ```
 
+### streaming 增量
+
+`complete` 输入可带 `stream: true` 和调用方生成的 `generation`。Provider 支持流式时，Model
+Service 通过 `model-service.complete.delta` 广播以下结构；Agent 只接受匹配 requestId/generation
+且从 0 开始连续递增的 sequence。广播是 request 生命周期内的通知，不替代 `complete` 的最终响应：
+
+```ts
+interface CompleteDelta {
+  requestId: string;
+  generation: string;
+  sequence: number;
+  delta:
+    | { type: 'text'; text: string }
+    | { type: 'reasoning'; text: string }
+    | { type: 'tool-call'; callId: string; name?: string; arguments?: string };
+}
+```
+
+流式结束后，Model Service 广播 `model-service.complete.terminal`，其中 `state` 为
+`completed`、`cancelled`、`timed_out` 或 `failed`，并保留同一 requestId/generation 和最终 sequence。
+`complete` 返回的 `message` 是 Transcript 唯一权威快照；delta 只用于实时预览和 Item 增量事件。
+
+OpenAI-compatible SSE 与 Anthropic Messages SSE 均在 Model Service 内解析；Provider 明确声明
+不支持 streaming 时，`stream: true` 退化为一次非流式请求，不伪造 token 增量。取消或超时会关闭
+reader/fetch，之后到达的 chunk 不再广播。
+
 ### 配置写入与目录广播
 
 ```mermaid
@@ -339,7 +366,8 @@ interface ModelCatalogChangedPayload {
 
 ## HTTP、重试与错误语义
 
-OpenAI-compatible 请求使用 `${baseUrl}/chat/completions`、Bearer Header、`stream: false`；Anthropic
+OpenAI-compatible 请求使用 `${baseUrl}/chat/completions`、Bearer Header；非流式请求 `stream: false`，
+流式请求 `stream: true`；Anthropic
 请求使用 `${baseUrl}/v1/messages`、`x-api-key`、`anthropic-version: 2023-06-01`。这些 Provider 细节
 只在 model-service 内部构造，不暴露给 Agent。
 
@@ -376,6 +404,6 @@ model-service/
 ```
 
 Agent 通过 `runtime.message.request('model-service', ...)` 注入客户端；Agent 保留会话、工具循环和
-compaction，模型请求不再由 Agent 直接读取 Provider 凭据或发起 HTTP。当前契约只覆盖非流式
-`complete`、结构化 `webSearch`、取消、配置写入和目录广播；不应据此声称实现了 streaming 或完整
-Agent event protocol。
+compaction，模型请求不再由 Agent 直接读取 Provider 凭据或发起 HTTP。契约覆盖流式/非流式
+`complete`、结构化 `webSearch`、取消、配置写入和目录广播；完整 Agent event protocol 仍由 Agent
+负责并遵循 `agent-turn-event-protocol.md`。

@@ -169,3 +169,73 @@ test('未知 Model Service 异常使用安全 UNKNOWN envelope 并保留 request
     await rm(storage, { recursive: true, force: true });
   }
 });
+
+test('Agent 只转发匹配 generation 且连续 sequence 的文本 delta，并保留 Item 生命周期', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-stream-'));
+  const listeners = new Map<string, (delta: any) => void>();
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
+    onDelta(requestId, listener) { listeners.set(requestId, listener); return () => listeners.delete(requestId); },
+    async complete(request) {
+      assert.equal(request.stream, true);
+      assert.ok(request.generation);
+      const listener = listeners.get(request.requestId)!;
+      listener({ requestId: request.requestId, generation: request.generation, sequence: 0, delta: { type: 'text', text: '流' } });
+      listener({ requestId: request.requestId, generation: request.generation, sequence: 2, delta: { type: 'text', text: '错' } });
+      listener({ requestId: request.requestId, generation: request.generation, sequence: 1, delta: { type: 'text', text: '式' } });
+      listener({ requestId: request.requestId, generation: 'old-generation', sequence: 3, delta: { type: 'text', text: '旧' } });
+      return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: '流式' } };
+    },
+    async cancel(requestId) { return { requestId, state: 'completed' }; },
+  };
+  const deltas: string[] = [];
+  const adapter = new HarborsAdapter(client, storage);
+  try {
+    const conversation = await adapter.createConversation('/workspace');
+    assert.equal(await adapter.sendMessage(conversation.id, 'hello', undefined, (delta) => deltas.push(delta)), '流式');
+    assert.deepEqual(deltas, ['流', '式']);
+    const trace = await adapter.getConversationTrace(conversation.id);
+    const itemEvents = trace.filter((event) => event.type.startsWith('item/'));
+    assert.equal(itemEvents.filter((event) => event.itemPhase === 'started' && event.itemKind === 'message').length, 2);
+    assert.equal(itemEvents.filter((event) => event.itemPhase === 'delta' && event.itemKind === 'message').length, 3);
+    assert.equal(itemEvents.filter((event) => event.itemPhase === 'completed' && event.itemKind === 'message').length, 2);
+    const assistantItemId = itemEvents.find((event) => event.itemKind === 'message' && event.itemPhase === 'started' && event.data.turn === 1)?.itemId;
+    const assistantItemEvents = itemEvents.filter((event) => event.itemId === assistantItemId);
+    const lastDelta = Math.max(...assistantItemEvents.filter((event) => event.itemPhase === 'delta').map((event) => event.seq));
+    const firstCompleted = Math.min(...assistantItemEvents.filter((event) => event.itemPhase === 'completed').map((event) => event.seq));
+    assert.ok(lastDelta < firstCompleted, '所有流式 delta 必须先于 assistant item completed 持久化');
+  } finally {
+    adapter.stop();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
+
+test('停止 turn 会把 AbortSignal 传到权限审批等待并记录 cancelled 终态', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-approval-cancel-'));
+  let permissionSignal!: AbortSignal;
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
+    async complete(request) {
+      return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: [{ id: 'bash-1', name: 'bash', arguments: JSON.stringify({ command: 'echo should-not-run' }) }] } };
+    },
+    async cancel(requestId) { return { requestId, state: 'cancelled' }; },
+  };
+  const adapter = new HarborsAdapter(client, storage);
+  adapter.setPermissionRequester(({ signal }) => {
+    permissionSignal = signal!;
+    return new Promise((resolve) => signal?.addEventListener('abort', () => resolve('cancelled'), { once: true }));
+  });
+  try {
+    const conversation = await adapter.createConversation('/workspace', { approvalPolicy: 'ask' });
+    const sending = adapter.sendMessage(conversation.id, 'run command');
+    while (!permissionSignal) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(await adapter.stopConversation(conversation.id), true);
+    await assert.rejects(sending);
+    assert.equal(permissionSignal.aborted, true);
+    const trace = await adapter.getConversationTrace(conversation.id);
+    assert.equal(trace.some((event) => event.type === 'approval/resolved' && event.data.outcome === 'cancelled'), true);
+  } finally {
+    adapter.stop();
+    await rm(storage, { recursive: true, force: true });
+  }
+});

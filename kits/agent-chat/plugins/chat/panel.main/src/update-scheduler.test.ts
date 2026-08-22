@@ -67,3 +67,16 @@ test('applies existing messages in one pass and appends new assistant messages',
     { id: 'msg-2', role: 'assistant', content: 'answer' },
   ]);
 });
+
+test('流式 delta 只接受当前 generation 的严格 sequence，拒绝重复乱序和晚到事件', () => {
+  const flushed: MessageDeltaUpdate[][] = [];
+  const scheduler = createMessageDeltaScheduler((updates) => flushed.push(updates), (callback) => { callback(); return 1; }, () => undefined);
+  scheduler.enqueue({ messageId: 'm', content: 'a', requestId: 'r', generation: 'g1', sequence: 0 });
+  scheduler.enqueue({ messageId: 'm', content: 'late', requestId: 'r', generation: 'g1', sequence: 0 });
+  scheduler.enqueue({ messageId: 'm', content: 'gap', requestId: 'r', generation: 'g1', sequence: 2 });
+  scheduler.enqueue({ messageId: 'm', content: 'b', requestId: 'r', generation: 'g1', sequence: 1 });
+  scheduler.enqueue({ messageId: 'm', content: 'old', requestId: 'r', generation: 'g1', sequence: 2 });
+  scheduler.enqueue({ messageId: 'm', content: 'new', requestId: 'r2', generation: 'g2', sequence: 0 });
+  scheduler.enqueue({ messageId: 'm', content: 'old-again', requestId: 'r', generation: 'g1', sequence: 3 });
+  assert.deepEqual(flushed.map((batch) => batch.at(-1)?.content), ['a', 'b', 'old', 'new']);
+});

@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
-import { HarborsAdapter, type ModelServiceClient, type ModelServiceCompleteRequest } from './adapter/harbors.js';
+import { HarborsAdapter, type ModelServiceClient, type ModelServiceCompleteRequest, type ModelServiceDelta } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
 import { adapterPermissionDefaults, configuredPermissionDefaults, DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE, isApprovalPolicy, isSandboxMode, selectedOptions, withPermissionDefaults } from './permissions.js';
 
@@ -27,6 +27,7 @@ interface ConversationChangedPayload {
 
 let conversations: Conversation[] = [];
 let activeMessageIds = new Map<string, string>();
+const modelDeltaListeners = new Map<string, Set<(delta: ModelServiceDelta) => void>>();
 interface PendingPermissionRequest {
   requestId: string;
   conversationId: string;
@@ -304,6 +305,24 @@ function requestModelServiceWebSearch(query: string, signal?: AbortSignal): Prom
   });
 }
 
+function onModelServiceDelta(value: unknown): void {
+  if (!value || typeof value !== 'object') return;
+  const payload = value as Partial<ModelServiceDelta>;
+  if (typeof payload.requestId !== 'string' || typeof payload.generation !== 'string' || !Number.isSafeInteger(payload.sequence) || !payload.delta || typeof payload.delta !== 'object') return;
+  const listeners = modelDeltaListeners.get(payload.requestId);
+  if (!listeners) return;
+  for (const listener of [...listeners]) listener(payload as ModelServiceDelta);
+}
+
+function subscribeModelServiceDelta(requestId: string, listener: (delta: ModelServiceDelta) => void): () => void {
+  const listeners = modelDeltaListeners.get(requestId) || new Set<(delta: ModelServiceDelta) => void>();
+  listeners.add(listener); modelDeltaListeners.set(requestId, listeners);
+  return () => {
+    listeners.delete(listener);
+    if (!listeners.size) modelDeltaListeners.delete(requestId);
+  };
+}
+
 function modelServiceSearchResult(response: unknown, requestId: string): string {
   if (typeof response === 'string') return response;
   if (!response || typeof response !== 'object' || typeof (response as { result?: unknown }).result !== 'string') {
@@ -325,6 +344,7 @@ editor.plugin.define({
         complete: (input: ModelServiceCompleteRequest) => runtime.message.request('model-service', 'complete', input),
         cancel: (requestId: string) => runtime.message.request('model-service', 'cancel', { requestId }),
         webSearch: requestModelServiceWebSearch,
+        onDelta: subscribeModelServiceDelta,
       };
       adapters = createAdapters(modelService, runtime?.paths?.data);
       try {
@@ -347,10 +367,12 @@ editor.plugin.define({
       adapters = null;
       conversations = [];
       activeMessageIds = new Map();
+      modelDeltaListeners.clear();
       pendingPermissionRequests = new Map();
     },
   },
   methods: {
+    onModelServiceDelta,
     getSettings,
     saveSettings,
     resetSettings,
@@ -531,9 +553,9 @@ editor.plugin.define({
       try {
         const route = parseConversationId(conversationId);
         const options = normalizeTurnOptions(input);
-        aiContent = await requireAdapter(route.source).sendMessage(route.adapterId, content, options, (delta) => {
+        aiContent = await requireAdapter(route.source).sendMessage(route.adapterId, content, options, (delta, meta) => {
           streamedContent += delta;
-          runtime?.message.broadcast('agent.message.delta', { conversationId, messageId: aiMessageId, content: streamedContent });
+          runtime?.message.broadcast('agent.message.delta', { conversationId, messageId: aiMessageId, content: streamedContent, delta, ...(meta ? { requestId: meta.requestId, generation: meta.generation, sequence: meta.sequence } : {}) });
         }, (status) => {
           void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'running', message: status });
         });
