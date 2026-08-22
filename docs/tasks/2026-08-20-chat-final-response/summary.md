@@ -27,7 +27,12 @@
 - `pnpm exec tsx --test` 覆盖 message、agent、model-service、settings、model-catalog、transcript：77/77 通过，包含相关 trace/transcript 测试。
 - 本 Task 没有专属新增测试；上述通过结果是相关 Node 测试随整体 77 项通过，不应表述为新增回归用例已独立通过。
 - Client 聚焦测试 75/76、全量 285/286；唯一失败为本次未修改的 legacy bridge bootstrap 测试。
-- 未完成长最终回复的专门 Web 浏览器验收，因此不能宣称浏览器端到端验证已通过。
+- 在独立 worktree 中运行 `pnpm exec tsx --test kits/agent-chat/plugins/chat/panel.main/src/trace-events.test.ts kits/agent-chat/plugins/chat/panel.main/src/transcript.test.ts`：39/39 通过。
+- 运行 `pnpm run build:runtime`、`node scripts/build.mjs plugins-runtime`，并逐一运行 `node scripts/ce-plugin.mjs build kits/agent-chat/plugins/<name>` 构建 Agent Chat 的 9 个 Plugin：全部通过；Framework 与 Kit Plugin 的 `package.json.main` 制品均存在。
+- 使用独立端口启动 `node scripts/dev.mjs --kit ./kits/agent-chat`：Gateway `49480`、Server `49481`、Client `49482`、Notification `49483`；`POST /api/session` 返回 `201 Created`，session 为 `618ed366-e52f-4554-a39f-aac1b4ed3391`。
+- 真实 Web 浏览器验收使用上述 session：Chat iframe 成功加载；长最终回复首段“昨天（2026-08-20）”与末段“如需进一步阅读某篇论文的完整内容或做技术分析，告诉我即可”同时存在，Markdown 标题“论文清单”存在，Chat 可见正文长度为 3239。
+- 同一页面中 Turn 4 显示已完成、Turn 1 显示失败，过程消息与最终消息边界可区分。
+- 页面 reload 后首段、末段、标题仍存在，正文长度仍为 3239，证明刷新恢复没有截断长最终回复。
 
 ## 影响与风险
 
@@ -37,7 +42,7 @@
 ## 偏差与遗留
 
 - 未新增独立的 final-response 专项测试，仅由相关 77 项 Node 测试覆盖现有逻辑。
-- 未完成长最终回复的浏览器交互验收。
+- 浏览器验收覆盖了长回复、Markdown 标题、完成/失败 Turn 边界与刷新恢复；未覆盖异常大消息下的性能上限。
 
 ## 后续关注
 
