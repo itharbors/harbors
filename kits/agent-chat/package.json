@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "build": "node ../../packages/kit-cli/dist/cli.js build .",
-    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate ."
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:assembly",
+    "test:assembly": "pnpm --dir ../../packages/server exec vitest run kits/agent-chat/tests/assembly.test.ts --root ../.. --config packages/server/vitest.config.ts"
   },
   "ce-editor": {
     "kit": {
