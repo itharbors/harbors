@@ -30,6 +30,8 @@ let activeMessageIds = new Map<string, string>();
 interface PendingPermissionRequest {
   requestId: string;
   conversationId: string;
+  turnId?: string;
+  itemId?: string;
   turn: number;
   step: number;
   toolName: string;
@@ -137,17 +139,17 @@ function requestPermission(request: AgentPermissionRequest): Promise<AgentPermis
       if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
       pendingPermissionRequests.delete(request.requestId);
       void broadcastMessageStatusWithContext(request.conversationId, activeMessageIds.get(request.conversationId), {
-        phase: outcome === 'cancelled' || outcome === 'unavailable' ? 'error' : 'running',
-        message: outcome === 'allowed-once' ? '权限已确认，继续执行…' : '权限请求已结束',
+        phase: outcome === 'cancelled' || outcome === 'unavailable' || outcome === 'timed_out' ? 'error' : 'running',
+        message: outcome === 'allowed-once' ? '权限已确认，继续执行…' : outcome === 'timed_out' ? '权限请求已超时' : '权限请求已结束',
         turn: request.turn,
         step: request.step,
       });
       resolve(outcome);
     };
-    const timer = setTimeout(() => finish('unavailable'), PERMISSION_REQUEST_TIMEOUT_MS);
+    const timer = setTimeout(() => finish('timed_out'), PERMISSION_REQUEST_TIMEOUT_MS);
     const onAbort = () => finish('cancelled');
     pendingPermissionRequests.set(request.requestId, {
-      request: payload,
+      request: { ...payload, ...(request.turnId ? { turnId: request.turnId } : {}), ...(request.itemId ? { itemId: request.itemId } : {}) },
       resolve: finish,
       timer,
       signal,
@@ -166,10 +168,14 @@ function requestPermission(request: AgentPermissionRequest): Promise<AgentPermis
   });
 }
 
-function resolvePermissionRequest(requestId: string, outcome: AgentPermissionOutcome): boolean {
-  if (!['allowed-once', 'rejected', 'cancelled', 'unavailable'].includes(outcome)) return false;
+function resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome; conversationId?: string; turnId?: string; itemId?: string }): boolean {
+  const { requestId, outcome } = input;
+  if (!['allowed-once', 'rejected', 'cancelled', 'unavailable', 'timed_out'].includes(outcome)) return false;
   const pending = pendingPermissionRequests.get(requestId);
   if (!pending) return false;
+  if (input.conversationId && input.conversationId !== pending.request.conversationId) return false;
+  if (input.turnId && input.turnId !== pending.request.turnId) return false;
+  if (input.itemId && input.itemId !== pending.request.itemId) return false;
   pending.resolve(outcome);
   return true;
 }
@@ -422,7 +428,7 @@ editor.plugin.define({
         .map(({ request }) => ({ ...request }));
     },
     async resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome }): Promise<boolean> {
-      return resolvePermissionRequest(input.requestId, input.outcome);
+      return resolvePermissionRequest(input);
     },
     async createConversation(source: AgentSource = 'harbors', project?: string, input?: AgentTurnInput) {
       const adapterOptionsResult = await adapterOptions(source);

@@ -22,7 +22,7 @@ interface TurnOptions { model?: string; reasoningEffort?: string; serviceTier?: 
 interface ContextUsage { model?: string; contextWindow: number; usedTokens: number; usageRatio: number; estimated?: boolean; }
 interface AgentOptionsResponse { models?: ModelOption[]; defaultModel?: string; defaultReasoningEffort?: string; defaultServiceTier?: string; selectedModel?: string; selectedReasoningEffort?: string; selectedServiceTier?: string; selectedSandboxMode?: SandboxMode; selectedApprovalPolicy?: ApprovalPolicy; selection?: TurnOptions; permissions?: PermissionOptions; contextUsage?: ContextUsage; configurationError?: string; }
 type PermissionOutcome = 'allowed-once' | 'rejected';
-interface PermissionRequest { requestId: string; conversationId: string; turn: number; step: number; toolName: string; currentMode: string; requestedMode?: string; justification?: string; }
+interface PermissionRequest { requestId: string; conversationId: string; turnId?: string; itemId?: string; turn: number; step: number; toolName: string; currentMode: string; requestedMode?: string; justification?: string; }
 interface ProgressStatus { phase?: string; message?: string; turn?: number; step?: number; contextUsage?: ContextUsage; }
 interface TraceAppendPayload { conversationId?: unknown; event?: unknown; cursor?: unknown; }
 interface TraceBatch { conversationId?: string; afterSeq?: number; cursor?: number; events?: unknown[]; }
@@ -908,7 +908,8 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     setResolvingPermissionId(requestId);
     setError(null);
     try {
-      const result = await requestWithRetry(ctx, 'agent', 'resolvePermissionRequest', { requestId, outcome });
+      const request = permissionRequests.find((candidate) => candidate.requestId === requestId);
+      const result = await requestWithRetry(ctx, 'agent', 'resolvePermissionRequest', { requestId, outcome, conversationId: id, ...(request?.turnId ? { turnId: request.turnId } : {}), ...(request?.itemId ? { itemId: request.itemId } : {}) });
       if (result === false) throw new Error('权限申请已失效或已被处理');
       await loadPermissionRequests(id);
     } catch (err) {
@@ -917,7 +918,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     } finally {
       setResolvingPermissionId(null);
     }
-  }, [ctx, loadPermissionRequests, resolvingPermissionId]);
+  }, [ctx, loadPermissionRequests, permissionRequests, resolvingPermissionId]);
 
   const updateConversationPermissions = async (nextSandboxMode: SandboxMode | '', nextApprovalPolicy: ApprovalPolicy | ''): Promise<void> => {
     if (sending) return;
