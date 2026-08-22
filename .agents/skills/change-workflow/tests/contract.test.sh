@@ -3,46 +3,40 @@
 test_skill_layout_and_contract() {
   skill_file="$SKILL_DIR/SKILL.md"
   metadata_file="$SKILL_DIR/agents/openai.yaml"
-  repo_root=$(git -C "$SKILL_DIR" rev-parse --show-toplevel)
   test -f "$skill_file" || fail 'SKILL.md is missing'
   test -f "$metadata_file" || fail 'agents/openai.yaml is missing'
-  assert_contains "$(sed -n '1,8p' "$skill_file")" 'name: change-workflow'
-  assert_contains "$(cat "$skill_file")" 'scripts/start-change.sh'
-  assert_contains "$(cat "$skill_file")" 'scripts/finish-change.sh'
   skill=$(cat "$skill_file")
+  assert_contains "$skill" 'name: change-workflow'
+  assert_contains "$skill" 'scripts/start-change.sh'
+  assert_contains "$skill" 'scripts/integrate-change.sh'
+  assert_contains "$skill" 'ff 不传标题'
+  old_finish='finish''-change.sh'
+  assert_not_contains "$skill" "scripts/$old_finish"
   assert_contains "$skill" '背景、目标、范围、非目标、验收、约束'
-  assert_contains "$skill" 'feature`/`bug`/`optimize`/`docs`/`refactor`/`test`/`chore'
-  assert_contains "$skill" '立即填写 `task.md`'
-  assert_contains "$skill" '并取得明确同意后'
-  assert_contains "$skill" '不得运行 start 或以其他方式创建该分支或 worktree'
-  assert_contains "$skill" '截止时间、负责人授权和已投入时间都不是跳过 Task 的例外'
-  assert_contains "$skill" '已有代码但没有 Task'
-  assert_contains "$skill" '`.work/` 默认不提交'
-  assert_contains "$skill" '`status.json` 只由 `task:status` CLI 管理'
-  assert_contains "$skill" '原因猜测、风险判断、交接说明、下一步建议'
-  assert_contains "$skill" '先完成 `summary.md`'
-  assert_contains "$skill" '`--ready-for-pr`'
-  assert_contains "$skill" '不可变 commit'
-  assert_contains "$skill" '回写 PR 号、自动提交并二次 push'
-  assert_contains "$skill" '取得明确同意；未获得明确同意时，不得运行 finish、push 分支或创建、更新 PR'
-  assert_contains "$skill" '`rewind`'
-  assert_contains "$skill" 'GitHub PR 已 merged'
-  assert_contains "$skill" '最新 head commit 的 repository-required checks 成功'
-  assert_contains "$skill" '三份 Task 正式文件已在 `main`'
-  assert_contains "$skill" '才能宣布需求完成并归档当前 Codex 会话'
-  assert_contains "$skill" '先读 `task.md` 和 `status.json`'
-  assert_contains "$skill" '查询 GitHub 实时事实'
-  assert_contains "$skill" '跨机或跨环境'
-  assert_contains "$skill" '不为会话归档制造合并后 commit'
-  assert_contains "$skill" '用户说“完成”不授权 merge'
-  assert_contains "$skill" '用户说“完成”不授权创建 worktree/分支、push、创建或更新 PR'
-  assert_contains "$(cat "$metadata_file")" 'display_name: "Change Workflow"'
-  grep -Fq '"test:change-workflow"' "$repo_root/package.json" || fail 'new package test script is missing'
-  old_skill='feature''-workflow'; old_start='start''-feature'; old_finish='finish''-feature'; old_prefix='codex''/'
-  test -z "$(find "$repo_root/.agents/skills/$old_skill" -type f -print 2>/dev/null)" || fail 'old Skill files remain'
-  if rg -n "$old_prefix|$old_skill|$old_start|$old_finish" "$repo_root/.agents" "$repo_root/AGENTS.md" "$repo_root/package.json" "$repo_root/docs/guides/development-workflow.md"; then
-    fail 'active workflow still references old naming'
+  assert_contains "$skill" '完成 `summary.md`'
+  assert_contains "$skill" '必须停止'
+  assert_contains "$skill" 'A 创建 PR'
+  assert_contains "$skill" 'B 整合到本地 `main`'
+  assert_contains "$skill" 'C 暂不处理'
+  assert_contains "$skill" '分别获得 push 和 `gh`'
+  assert_contains "$skill" 'ff`、merge commit 或 squash'
+  assert_contains "$skill" 'merge commit 与 squash 都必须提供'
+  assert_contains "$skill" '不 push、不创建 PR、不删除分支或 worktree、不自动解决冲突'
+  assert_contains "$skill" '用户说“完成”不授权'
+  assert_not_contains "$(cat "$metadata_file")" 'finish isolated'
+  test -x "$SKILL_DIR/scripts/integrate-change.sh" || fail 'integration script is not executable'
+  test ! -e "$SKILL_DIR/scripts/$old_finish" || fail 'automatic finish script remains'
+  old_finish_test='finish''-change.test.sh'
+  test ! -e "$TEST_DIR/$old_finish_test" || fail 'automatic finish tests remain'
+}
+
+test_no_automatic_finish_references() {
+  if rg -n 'PR_URL=|pr create|pr edit|git .*push' "$SKILL_DIR/scripts" "$SKILL_DIR/SKILL.md"; then
+    fail 'skill still contains automatic PR/push workflow references'
   fi
 }
 
-run_contract_tests() { run_case 'skill layout and active contract' test_skill_layout_and_contract; }
+run_contract_tests() {
+  run_case 'skill layout and explicit integration contract' test_skill_layout_and_contract
+  run_case 'no automatic finish references' test_no_automatic_finish_references
+}

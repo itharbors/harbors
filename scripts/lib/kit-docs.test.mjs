@@ -63,6 +63,8 @@ test('active Kit docs define one mainline development and local-only Kit lifecyc
 test('docs navigation and guides define the six-stage Task lifecycle using real commands', async () => {
   const index = compact(await read('docs/README.md'));
   const development = compact(await read('docs/guides/development-workflow.md'));
+  const tasks = compact(await read('docs/tasks/README.md'));
+  const testing = compact(await read('docs/guides/testing.md'));
   const maintenance = compact(await read('docs/guides/maintaining-docs.md'));
 
   assert.match(index, /\[Task[^\]]*(?:档案|生命周期)[^\]]*\]\(\.\/tasks\/README\.md\)/u);
@@ -71,26 +73,39 @@ test('docs navigation and guides define the six-stage Task lifecycle using real 
     'Task 建档',
     '设计与计划',
     '实现与验证',
-    '收口与 PR',
-    '合并确认与会话归档',
+    '收口选择与交付',
+    '交付确认与会话归档',
   ]) assert.ok(development.includes(stage), stage);
   for (const expected of [
     'feature', 'bug', 'optimize', 'docs', 'refactor', 'test', 'chore',
     'task.md', 'status.json', 'summary.md', '.work/',
-    '同机', '跨机', 'rewind', 'PR_URL', 'merged', 'required checks', 'main', 'Codex 会话',
+    '同机', '跨机', 'rewind', 'merged', 'required checks', 'main', 'Codex 会话',
     'pnpm run test:task-status',
     'pnpm run test:preflight',
     'start-change.sh',
-    'finish-change.sh',
+    '创建 PR', '本地整合', '暂不处理', 'fast-forward', 'merge commit', 'squash',
+    'pullRequest: null', 'ahead/behind',
+    'git merge --ff-only', 'git merge --no-ff', 'git merge --squash', '合法中文标题',
   ]) assert.ok(development.includes(expected), expected);
   for (const action of ['init', 'start', 'complete', 'skip', 'block', 'resume', 'check', 'rewind']) {
     assert.match(development, new RegExp(`pnpm run task:status ${action}(?:\\s|$)`, 'u'), action);
   }
   assert.doesNotMatch(development, /pnpm run task:status --(?:\s|$)/u);
-  assert.match(development, /PR (?:已创建|已建)[^。]{0,100}(?:不代表|不是)[^。]{0,30}(?:需求|Task|任务)完成/u);
+  assert.match(development, /(?:打开的 )?PR[^。]{0,100}(?:不代表|不是)[^。]{0,30}(?:需求|Task|任务)完成/u);
   assert.match(development, /summary\.md[^。]{0,120}--ready-for-pr/iu);
-  assert.match(development, /PR[^。]{0,100}(?:回写|记录)[^。]{0,30}(?:编号|PR 号)[^。]{0,80}(?:二次|再次)[^。]{0,20}push/iu);
+  assert.match(development, /完成实现和验证后[^。]{0,100}询问[^。]{0,100}(?:创建 PR|本地整合|暂不处理)/u);
+  assert.match(development, /(?:push|PR 写入|本地整合)[^。]{0,80}明确授权/u);
+  assert.match(development, /(?:冲突|目标落后远端)[^。]{0,80}(?:停止|停下)/u);
   assert.match(development, /status\.json[^。]{0,120}(?:客观|结构化)[^。]{0,80}(?:主观|自由文本)/iu);
+  assert.match(tasks, /(?:fast-forward|merge commit|squash)[^。]{0,120}(?:授权|策略)/u);
+  assert.match(development, /fast-forward[^。]{0,180}(?:不提供|不产生)[^。]{0,20}(?:提交标题|新的提交标题)/u);
+  assert.match(development, /merge commit[^。]{0,180}合法中文标题/u);
+  assert.match(development, /squash[^。]{0,220}合法中文标题/u);
+  assert.match(testing, /pullRequest: null[^。]{0,80}(?:有效|允许)/u);
+  for (const prose of [development, tasks, testing]) {
+    assert.doesNotMatch(prose, /finish-change\.sh/u);
+    assert.doesNotMatch(prose, /PR_URL=/u);
+  }
 
   for (const expected of ['Task 正式档案', '.work/', 'spec', 'plan', 'research']) {
     assert.ok(maintenance.includes(expected), expected);
