@@ -3,11 +3,15 @@
 Task ID: `2026-08-20-agent-chat-media`
 Type: `feature`
 
-## 背景与目标
+## 背景与问题
 
 Agent Chat 需要支持可插拔的 Markdown 代码块渲染器，使已注册的 Plugin 可以安全提供 Mermaid 图表渲染，并在渲染器不可用或失败时回退为普通代码块。
 
-## 最终范围
+## 目标
+
+Agent Chat 需要安全加载已注册的 Mermaid Markdown renderer，并在不可用或失败时回退为普通代码块。
+
+## 范围
 
 - `kits/agent-chat/plugins/mermaid/**`：Mermaid renderer Plugin、打包资源和 contribution。
 - `kits/agent-chat/plugins/chat/**`：renderer 注册发现、异步渲染、安全降级和相关测试。
@@ -33,8 +37,11 @@ Agent Chat 需要支持可插拔的 Markdown 代码块渲染器，使已注册�
 - renderer 资源来自 Kit 内已注册 Plugin，且不扩大宿主能力边界。
 - 目标 Plugin 测试、Kit 构建/校验和 Web 浏览器验收按仓库测试指南执行。
 
-## 约束与需求变更
+## 约束
 
 - 只支持 Web 宿主，不加入 Electron、原生窗口生命周期、托盘、更新器或桌面 IPC。
+
+## 需求变更
+
 - 原 Audio/Whisper 语音输入是早期原型，已在本 Task 合并前取消；Audio Plugin、模型文件、native-code 权限和语音 UI 不属于最终交付，也不进入重建后的历史。
 - Mermaid 运行时保留为 vendored 资产，并通过插件目录 `.gitattributes` 对该单个压缩资产设置精确 whitespace 例外。
