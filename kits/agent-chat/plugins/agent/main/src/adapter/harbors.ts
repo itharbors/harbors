@@ -1,6 +1,5 @@
-import { appendFile, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { appendFile, lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
@@ -139,6 +138,7 @@ const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
 const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
 const SESSION_LOCK_TIMEOUT_MS = 10_000;
 const SESSION_LOCK_STALE_MS = 30_000;
+const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
@@ -147,11 +147,20 @@ function throwIfAborted(signal: AbortSignal): void {
 
 /** Harbors 自主管理的 agent：参考 Harness，用只追加事件日志维护 session/turn。 */
 export class HarborsAdapter implements AgentAdapter {
-  constructor(private readonly modelService: ModelServiceClient) {}
+  constructor(private readonly modelService: ModelServiceClient, storageRoot: string) {
+    if (typeof storageRoot !== 'string' || !storageRoot.trim() || !isAbsolute(storageRoot)) {
+      throw new Error('MISSING_RUNTIME_DATA');
+    }
+    const root = resolve(storageRoot);
+    this.storageDir = join(root, 'storage-v1', 'sessions');
+    this.trashDir = join(root, 'storage-v1', '.harbors-trash');
+  }
   private stopped = false;
   private readonly abortController = new AbortController();
-  private readonly storageDir = resolve(process.env.HARBORS_AGENT_STORAGE_DIR || process.env.HARBORS_PI_AGENT_STORAGE_DIR || join(homedir(), '.harbors', 'pi-agent', 'sessions'));
-  private eventWriteQueue: Promise<void> = Promise.resolve();
+  private readonly storageDir: string;
+  private readonly trashDir: string;
+  private readonly eventWriteQueues = new Map<string, Promise<void>>();
+  private readonly deletedSessions = new Set<string>();
   /** 同一会话只保留一个可变快照，避免并发 API 各自 load 后用过期 events.length 分配重复 seq。 */
   private readonly sessions = new Map<string, StoredSession>();
   private readonly sessionLoads = new Map<string, Promise<StoredSession>>();
@@ -188,7 +197,11 @@ export class HarborsAdapter implements AgentAdapter {
       logPath: this.logPathFor(id),
     };
     await mkdir(this.storageDir, { recursive: true });
-    await writeFile(session.logPath, `${JSON.stringify(this.headerFor(session))}\n`, 'utf8');
+    await withSessionFileLock(session.logPath, async () => {
+      await this.assertNotDeletedOnDisk(id);
+      await this.assertRegularSessionFile(session.logPath!, true);
+      await writeFile(session.logPath!, `${JSON.stringify(this.headerFor(session))}\n`, { encoding: 'utf8', flag: 'wx' });
+    });
     const initialStat = await stat(session.logPath);
     session.persistedSize = initialStat.size;
     session.persistedMtimeMs = initialStat.mtimeMs;
@@ -201,21 +214,47 @@ export class HarborsAdapter implements AgentAdapter {
   async listConversations(): Promise<AgentConversation[]> {
     await mkdir(this.storageDir, { recursive: true });
     const entries = await readdir(this.storageDir, { withFileTypes: true });
-    const ids = entries.filter((entry) => entry.isFile() && /^[a-f0-9-]{36}\.jsonl$/iu.test(entry.name)).map((entry) => entry.name.slice(0, -'.jsonl'.length));
-    const sessions = await Promise.all(ids.map((id) => this.refreshSession(id).catch(() => null)));
-    return sessions.filter((session): session is StoredSession => session !== null).sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).map(toConversation);
+    const ids = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && SESSION_ID_PATTERN.test(entry.name.slice(0, -'.jsonl'.length))).map((entry) => entry.name.slice(0, -'.jsonl'.length));
+    const sessions = await Promise.all(ids.map((id) => this.refreshSession(id)));
+    return sessions.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).map(toConversation);
   }
 
   async deleteConversation(id: string): Promise<void> {
     throwIfAborted(this.abortController.signal);
+    if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
     const session = await this.load(id);
-    const source = session.logPath;
-    if (!source) throw new Error(`Harbors session has no storage path: ${id}`);
-    const trashDir = join(this.storageDir, '.harbors-trash');
-    await mkdir(trashDir, { recursive: true });
-    await rename(source, join(trashDir, `${id}-${Date.now()}.jsonl`));
-    this.sessions.delete(id);
-    this.sessionLoads.delete(id);
+    await this.enqueueSessionWrite(id, async () => {
+      if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
+      if (this.deletedSessions.has(id)) throw new Error('SESSION_DELETED');
+      const source = session.logPath;
+      if (!source) throw new Error(`Harbors session has no storage path: ${id}`);
+      await mkdir(this.trashDir, { recursive: true });
+      await withSessionFileLock(source, async () => {
+        await this.assertNotDeletedOnDisk(id);
+        await this.assertRegularSessionFile(source);
+        const trashPath = join(this.trashDir, `${id}-${Date.now()}-${randomUUID()}.jsonl`);
+        let moved = false;
+        try {
+          await rename(source, trashPath);
+          moved = true;
+        } catch (error) {
+          if (isNodeError(error, 'ENOENT')) throw new Error('SESSION_NOT_FOUND', { cause: error });
+          throw new Error('SESSION_DELETE_FAILED', { cause: error });
+        }
+        try {
+          await writeFile(this.tombstonePathFor(id), JSON.stringify({ id, deletedAt: Date.now() }), { encoding: 'utf8', flag: 'wx' });
+        } catch (error) {
+          if (moved) {
+            await rename(trashPath, source).catch(() => undefined);
+          }
+          throw new Error('SESSION_DELETE_FAILED', { cause: error });
+        }
+      });
+      this.deletedSessions.add(id);
+      this.sessions.delete(id);
+      this.sessionLoads.delete(id);
+      this.sessionRefreshes.delete(id);
+    });
   }
 
   async renameConversation(id: string, title: string): Promise<AgentConversation> {
@@ -595,10 +634,12 @@ export class HarborsAdapter implements AgentAdapter {
     return { text: boundedSummary(output.trim()), ...(response.usage ? { usage: response.usage } : {}) };
   }
 
-  private logPathFor(id: string): string { if (!/^[a-f0-9-]{36}$/iu.test(id)) throw new Error('Invalid Harbors conversation id'); return join(this.storageDir, `${id}.jsonl`); }
+  private logPathFor(id: string): string { if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID'); return join(this.storageDir, `${id}.jsonl`); }
+  private tombstonePathFor(id: string): string { if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID'); return join(this.storageDir, `${id}.deleted`); }
   private headerFor(session: StoredSession): SessionHeader { return { type: 'session', version: SESSION_FORMAT_VERSION, id: session.id, createdAt: Date.parse(session.createdAt), ...(session.project ? { cwd: session.project } : {}), ...turnSettings(session), ...permissionSettings(session) }; }
 
   private async load(id: string): Promise<StoredSession> {
+    if (this.deletedSessions.has(id)) throw new Error('SESSION_DELETED');
     const cached = this.sessions.get(id);
     if (cached) return cached;
     const pending = this.sessionLoads.get(id);
@@ -614,10 +655,12 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async refreshSession(id: string): Promise<StoredSession> {
+    if (this.deletedSessions.has(id)) throw new Error('SESSION_DELETED');
     const session = await this.load(id);
     const pending = this.sessionRefreshes.get(id);
     if (pending) return pending;
     const refresh = withSessionFileLock(session.logPath || this.logPathFor(id), async () => {
+      await this.assertRegularSessionFile(session.logPath || this.logPathFor(id));
       const persistedStat = await stat(session.logPath || this.logPathFor(id));
       if (persistedStat.size !== session.persistedSize || persistedStat.mtimeMs !== session.persistedMtimeMs) {
         reconcileStoredSession(session, await this.loadByPathUnlocked(session.logPath || this.logPathFor(id)));
@@ -636,6 +679,9 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async loadByPathUnlocked(path: string): Promise<StoredSession> {
+    const id = path.slice(this.storageDir.length + 1, -'.jsonl'.length);
+    await this.assertNotDeletedOnDisk(id);
+    await this.assertRegularSessionFile(path);
     const raw = await readFile(path, 'utf8');
     const parsed = parseSessionLog(raw, path);
     const header = parsed.header;
@@ -645,6 +691,7 @@ export class HarborsAdapter implements AgentAdapter {
     if (parsed.repairTrailingLine || normalized.repaired) {
       const repaired = `${JSON.stringify(header)}\n${events.map((event) => JSON.stringify(event)).join('\n')}${events.length ? '\n' : ''}`;
       const temporaryPath = `${path}.${process.pid}.${randomUUID()}.repair`;
+      await this.assertRegularSessionFile(path);
       await writeFile(temporaryPath, repaired, 'utf8');
       await rename(temporaryPath, path);
     }
@@ -657,10 +704,12 @@ export class HarborsAdapter implements AgentAdapter {
   private async ensureLog(session: StoredSession): Promise<void> {
     if (session.logPath) return;
     const logPath = this.logPathFor(session.id);
+    await this.assertNotDeletedOnDisk(session.id);
     await mkdir(this.storageDir, { recursive: true });
     const header = JSON.stringify(this.headerFor(session));
     const body = session.events.map((event) => JSON.stringify(event)).join('\n');
-    await writeFile(logPath, `${header}\n${body}${body ? '\n' : ''}`, 'utf8');
+    await this.assertRegularSessionFile(logPath, true);
+    await writeFile(logPath, `${header}\n${body}${body ? '\n' : ''}`, { encoding: 'utf8', flag: 'wx' });
     session.logPath = logPath;
     const persistedStat = await stat(logPath);
     session.persistedSize = persistedStat.size;
@@ -669,9 +718,12 @@ export class HarborsAdapter implements AgentAdapter {
 
   private async appendEvent(session: StoredSession, type: string, dataInput: Record<string, unknown> | ((current: StoredSession) => Record<string, unknown>), options: AppendEventOptions = {}): Promise<AgentTraceEvent> {
     let result: AgentTraceEvent | undefined;
-    const task = this.eventWriteQueue.then(async () => {
-      await this.ensureLog(session);
-      await withSessionFileLock(session.logPath!, async () => {
+    await this.enqueueSessionWrite(session.id, async () => {
+      if (this.deletedSessions.has(session.id)) throw new Error('SESSION_DELETED');
+      await withSessionFileLock(session.logPath || this.logPathFor(session.id), async () => {
+        await this.assertNotDeletedOnDisk(session.id);
+        await this.ensureLog(session);
+        await this.assertRegularSessionFile(session.logPath!);
         const persistedStat = await stat(session.logPath!);
         if (persistedStat.size !== session.persistedSize || persistedStat.mtimeMs !== session.persistedMtimeMs) {
           const fresh = await this.loadByPathUnlocked(session.logPath!);
@@ -680,6 +732,7 @@ export class HarborsAdapter implements AgentAdapter {
         const data = typeof dataInput === 'function' ? dataInput(session) : dataInput;
         const event: AgentTraceEvent = { type, seq: session.events.length, time: Date.now(), data, ...options };
         const line = `${JSON.stringify(event)}\n`;
+        await this.assertRegularSessionFile(session.logPath!);
         await appendFile(session.logPath!, line, 'utf8');
         const nextStat = await stat(session.logPath!);
         session.persistedSize = nextStat.size;
@@ -696,9 +749,38 @@ export class HarborsAdapter implements AgentAdapter {
         result = event;
       });
     });
-    this.eventWriteQueue = task.then(() => undefined, () => undefined);
-    await task;
     return result!;
+  }
+
+  private async assertNotDeletedOnDisk(id: string): Promise<void> {
+    try {
+      await stat(this.tombstonePathFor(id));
+    } catch (error) {
+      if (isNodeError(error, 'ENOENT')) return;
+      throw error;
+    }
+    throw new Error('SESSION_DELETED');
+  }
+
+  private async assertRegularSessionFile(path: string, allowMissing = false): Promise<void> {
+    try {
+      const file = await lstat(path);
+      if (!file.isFile()) throw new Error('SESSION_FILE_INVALID');
+    } catch (error) {
+      if (allowMissing && isNodeError(error, 'ENOENT')) return;
+      throw error;
+    }
+  }
+
+  private enqueueSessionWrite<T>(id: string, run: () => Promise<T>): Promise<T> {
+    const previous = this.eventWriteQueues.get(id) || Promise.resolve();
+    const task = previous.then(run);
+    const tail = task.then(() => undefined, () => undefined);
+    this.eventWriteQueues.set(id, tail);
+    void tail.finally(() => {
+      if (this.eventWriteQueues.get(id) === tail) this.eventWriteQueues.delete(id);
+    }).catch(() => undefined);
+    return task;
   }
 }
 

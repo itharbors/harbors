@@ -53,8 +53,8 @@ function requireAdapter(source: AgentSource): AgentAdapter {
   return adapters[source];
 }
 
-function createAdapters(modelService: ModelServiceClient): Record<AgentSource, AgentAdapter> {
-  const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter(modelService) };
+function createAdapters(modelService: ModelServiceClient, storageRoot: string): Record<AgentSource, AgentAdapter> {
+  const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter(modelService, storageRoot) };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
     result[source].setTraceEventListener?.((adapterConversationId, event) => {
@@ -267,7 +267,7 @@ editor.plugin.define({
         cancel: (requestId: string) => runtime.message.request('model-service', 'cancel', requestId),
         webSearch: (query: string, _signal?: AbortSignal) => runtime.message.request('model-service', 'webSearch', query),
       };
-      adapters = createAdapters(modelService);
+      adapters = createAdapters(modelService, runtime?.paths?.data);
       try {
         await refreshConversations();
       } catch (err) {
