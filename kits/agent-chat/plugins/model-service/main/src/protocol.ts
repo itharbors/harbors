@@ -1,15 +1,17 @@
 import type { RelayConfig } from './config.js';
 import { ModelServiceError } from './types.js';
-import type { CompleteInput, ContentBlock, ModelTool, NeutralMessage, NeutralToolCall, NormalizedUsage } from './types.js';
+import type { CompleteInput, ContentBlock, ModelCatalogEntry, ModelTool, NeutralMessage, NeutralToolCall, NormalizedUsage } from './types.js';
 
 export interface RequestPlan { url: string; init: RequestInit; model: string; }
 
 export function buildRequest(config: RelayConfig, input: CompleteInput, model: string): RequestPlan {
+  validateCapabilities(config, input);
   if (config.api === 'openai-completions') {
     const messages = openAiMessages(input.messages, input.system);
     const body: Record<string, unknown> = { model, stream: false, messages };
     if (input.tools?.length) body.tools = input.tools.map(openAiTool);
     if (input.maxOutputTokens !== undefined) body.max_tokens = input.maxOutputTokens;
+    addOpenAiOptions(body, config, input);
     return {
       url: `${config.baseUrl}/chat/completions`,
       init: { method: 'POST', headers: { authorization: `Bearer ${config.credential}`, 'content-type': 'application/json' }, body: JSON.stringify(body) },
@@ -31,6 +33,38 @@ export function buildRequest(config: RelayConfig, input: CompleteInput, model: s
     };
   }
   throw new ModelServiceError('MODEL_SERVICE_UNSUPPORTED_API', '模型服务配置使用了不支持的 API 协议');
+}
+
+export function effectiveModelCapabilities(model: ModelCatalogEntry | undefined, api: RelayConfig['api']): ModelCatalogEntry | undefined {
+  if (!model) return undefined;
+  const openAi = api === 'openai-completions';
+  const { reasoningEfforts, serviceTiers, defaultReasoningEffort, defaultServiceTier, webSearch, ...base } = model;
+  return {
+    ...base,
+    ...(openAi && reasoningEfforts ? { reasoningEfforts: [...reasoningEfforts] } : {}),
+    ...(openAi && serviceTiers ? { serviceTiers: [...serviceTiers] } : {}),
+    ...(openAi && defaultReasoningEffort && reasoningEfforts?.includes(defaultReasoningEffort) ? { defaultReasoningEffort } : {}),
+    ...(openAi && defaultServiceTier && serviceTiers?.includes(defaultServiceTier) ? { defaultServiceTier } : {}),
+    ...(api === 'anthropic-messages' && webSearch === true ? { webSearch: true } : {}),
+  };
+}
+
+function validateCapabilities(config: RelayConfig, input: CompleteInput): void {
+  const model = effectiveModelCapabilities(config.model, config.api);
+  if (input.reasoningEffort !== undefined) {
+    if (typeof input.reasoningEffort !== 'string' || !input.reasoningEffort || !model?.reasoningEfforts?.includes(input.reasoningEffort)) throw new ModelServiceError('UNSUPPORTED_CAPABILITY', '当前模型不支持该 reasoning effort');
+  }
+  if (input.serviceTier !== undefined) {
+    if (typeof input.serviceTier !== 'string' || !input.serviceTier || !model?.serviceTiers?.includes(input.serviceTier)) throw new ModelServiceError('UNSUPPORTED_CAPABILITY', '当前模型不支持该 service tier');
+  }
+}
+
+function addOpenAiOptions(body: Record<string, unknown>, config: RelayConfig, input: CompleteInput): void {
+  const model = effectiveModelCapabilities(config.model, config.api);
+  const reasoningEffort = input.reasoningEffort ?? model?.defaultReasoningEffort;
+  const serviceTier = input.serviceTier ?? model?.defaultServiceTier;
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort;
+  if (serviceTier) body.service_tier = serviceTier;
 }
 
 export function normalizeResponse(api: string, payload: unknown, model: string): { content: string | ContentBlock[] | null; toolCalls?: NeutralToolCall[]; usage?: NormalizedUsage } {

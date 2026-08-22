@@ -16,8 +16,13 @@ type Model = {
   name: string;
   description?: string;
   contextWindow?: number;
+  reasoningEfforts?: string[];
+  serviceTiers?: string[];
+  defaultReasoningEffort?: string;
+  defaultServiceTier?: string;
+  webSearch?: boolean;
 };
-type ModelDraft = { id: string; name: string; description: string; contextWindow: string };
+type ModelDraft = Omit<Model, 'id' | 'name' | 'description' | 'contextWindow'> & { id: string; name: string; description: string; contextWindow: string };
 
 let sequence = 0;
 type PendingRequest = { resolve(value: unknown): void; reject(error: Error): void; timeout: number };
@@ -61,6 +66,11 @@ function createModelDraft(model?: Model): ModelDraft {
     name: model?.name || '',
     description: model?.description || '',
     contextWindow: typeof model?.contextWindow === 'number' ? String(model.contextWindow) : '',
+    ...(model?.reasoningEfforts ? { reasoningEfforts: [...model.reasoningEfforts] } : {}),
+    ...(model?.serviceTiers ? { serviceTiers: [...model.serviceTiers] } : {}),
+    ...(model?.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}),
+    ...(model?.defaultServiceTier ? { defaultServiceTier: model.defaultServiceTier } : {}),
+    ...(typeof model?.webSearch === 'boolean' ? { webSearch: model.webSearch } : {}),
   };
 }
 
@@ -80,6 +90,11 @@ function serializeModelDrafts(drafts: ModelDraft[]): Model[] {
     const model: Model = { id, name: draft.name.trim() || id };
     if (draft.description.trim()) model.description = draft.description.trim();
     if (contextWindow !== undefined) model.contextWindow = contextWindow;
+    if (draft.reasoningEfforts?.length) model.reasoningEfforts = [...draft.reasoningEfforts];
+    if (draft.serviceTiers?.length) model.serviceTiers = [...draft.serviceTiers];
+    if (draft.defaultReasoningEffort) model.defaultReasoningEffort = draft.defaultReasoningEffort;
+    if (draft.defaultServiceTier) model.defaultServiceTier = draft.defaultServiceTier;
+    if (typeof draft.webSearch === 'boolean') model.webSearch = draft.webSearch;
     return model;
   });
 }
@@ -101,6 +116,11 @@ function normalizeSettings(value: unknown): Settings {
         name: typeof candidate.name === 'string' && candidate.name ? candidate.name : candidate.id,
         ...(typeof candidate.description === 'string' ? { description: candidate.description } : {}),
         ...(typeof candidate.contextWindow === 'number' && Number.isFinite(candidate.contextWindow) ? { contextWindow: candidate.contextWindow } : {}),
+        ...(Array.isArray(candidate.reasoningEfforts) ? { reasoningEfforts: candidate.reasoningEfforts.filter((item): item is string => typeof item === 'string' && Boolean(item)) } : {}),
+        ...(Array.isArray(candidate.serviceTiers) ? { serviceTiers: candidate.serviceTiers.filter((item): item is string => typeof item === 'string' && Boolean(item)) } : {}),
+        ...(typeof candidate.defaultReasoningEffort === 'string' && candidate.defaultReasoningEffort ? { defaultReasoningEffort: candidate.defaultReasoningEffort } : {}),
+        ...(typeof candidate.defaultServiceTier === 'string' && candidate.defaultServiceTier ? { defaultServiceTier: candidate.defaultServiceTier } : {}),
+        ...(typeof candidate.webSearch === 'boolean' ? { webSearch: candidate.webSearch } : {}),
       }];
     });
     return [{
@@ -164,9 +184,11 @@ const definition = {
         syncDefaultModelOptions();
       }
       function readModelDrafts(): void {
-        modelDrafts = Array.from(modelsEditor.querySelectorAll<HTMLElement>('.model-block')).map((block) => {
+        const previousDrafts = modelDrafts;
+        modelDrafts = Array.from(modelsEditor.querySelectorAll<HTMLElement>('.model-block')).map((block, index) => {
           const value = (name: keyof ModelDraft): string => (block.querySelector(`[data-model-field="${name}"]`) as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement).value;
-          return { id: value('id'), name: value('name'), description: value('description'), contextWindow: value('contextWindow') };
+          const previous = previousDrafts[index];
+          return { id: value('id'), name: value('name'), description: value('description'), contextWindow: value('contextWindow'), ...(previous?.reasoningEfforts ? { reasoningEfforts: previous.reasoningEfforts } : {}), ...(previous?.serviceTiers ? { serviceTiers: previous.serviceTiers } : {}), ...(previous?.defaultReasoningEffort ? { defaultReasoningEffort: previous.defaultReasoningEffort } : {}), ...(previous?.defaultServiceTier ? { defaultServiceTier: previous.defaultServiceTier } : {}), ...(typeof previous?.webSearch === 'boolean' ? { webSearch: previous.webSearch } : {}) };
         });
       }
       function syncDefaultModelOptions(): void {

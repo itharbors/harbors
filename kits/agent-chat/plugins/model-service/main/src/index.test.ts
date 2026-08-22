@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 import { ModelService } from './index.js';
 import { buildRequest } from './protocol.js';
@@ -470,9 +471,100 @@ test('传入外部 env 或 DSH 路径不会覆盖绑定 Config 和 Credential Va
 
 test('webSearch resolves its token only inside Model Service', async () => {
   let seen: RequestInit | undefined;
-  const service = makeService(async (_url, init) => { seen = init; return response({ content: [{ type: 'web_search_tool_result', content: [{ type: 'web_search_result', title: 'Result', url: 'https://example.invalid', snippet: 'summary' }] }] }); });
-  const result = await service.webSearch('query');
-  assert.match(result, /example\.invalid/u);
+  const provider = makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test Model', webSearch: true }] });
+  const service = makeService(async (_url, init) => { seen = init; return response({ content: [{ type: 'web_search_tool_result', content: [{ type: 'web_search_result', title: 'Result', url: 'https://example.invalid', snippet: 'summary' }] }] }); }, provider);
+  const result = await service.webSearch({ requestId: 'search-1', query: 'query' });
+  assert.match(result.result, /example\.invalid/u);
   assert.equal((seen?.headers as Record<string, string>)['x-api-key'], secret);
-  assert.doesNotMatch(result, new RegExp(secret, 'u'));
+  assert.doesNotMatch(result.result, new RegExp(secret, 'u'));
+});
+
+test('webSearch 拒绝字符串 legacy 请求且不读取凭据或调用 fetch', async () => {
+  let credentialReads = 0;
+  let fetchCalls = 0;
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test Model', webSearch: true }] })),
+    credentials: { async get(id) { credentialReads += 1; return { profile: { id }, secret }; } },
+    fetch: async () => { fetchCalls += 1; return response({}); },
+  });
+  await assert.rejects(service.webSearch('query' as unknown as { requestId: string; query: string }), (error: any) => error.code === 'INVALID_INPUT' && error.requestId === '');
+  assert.equal(credentialReads, 0);
+  assert.equal(fetchCalls, 0);
+});
+
+test('高成本路由 manifest 只接受 Agent caller', async () => {
+  const manifest = JSON.parse(await readFile(new URL('../../package.json', import.meta.url), 'utf8')) as { ['ce-editor']: { contribute: { message: { request: Record<string, unknown> } } } };
+  const request = manifest['ce-editor'].contribute.message.request;
+  assert.deepEqual(request.complete, { methods: ['complete'], callers: ['agent'] });
+  assert.deepEqual(request.cancel, { methods: ['cancel'], callers: ['agent'] });
+  assert.deepEqual(request.webSearch, { methods: ['webSearch'], callers: ['agent'] });
+  assert.deepEqual(request.getCatalog, ['getCatalog']);
+});
+
+test('能力不支持时在读取凭据和 fetch 前拒绝，并返回安全 envelope', async () => {
+  let credentialReads = 0;
+  let fetchCalls = 0;
+  const provider = makeProvider({ models: [{ id: 'test-model', name: 'Test', reasoningEfforts: ['low'] }] });
+  const service = new ModelService({
+    config: makeConfig(provider),
+    credentials: { async get(id) { credentialReads += 1; return { profile: { id }, secret }; } },
+    fetch: async () => { fetchCalls += 1; return response({ choices: [{ message: { content: 'no' } }] }); },
+  });
+  await assert.rejects(service.complete({ ...input, requestId: 'unsupported-before-io', reasoningEffort: 'high' }), (error: any) => {
+    assert.deepEqual(error.envelope(), { code: 'UNSUPPORTED_CAPABILITY', message: '当前模型不支持该 reasoning effort', retryable: false, requestId: 'unsupported-before-io' });
+    assert.deepEqual(JSON.parse(JSON.stringify(error)), error.envelope());
+    return true;
+  });
+  assert.equal(credentialReads, 0);
+  assert.equal(fetchCalls, 0);
+});
+
+test('Anthropic webSearch 使用结构化 requestId 并共享取消终态', async () => {
+  const provider = makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test', webSearch: true }] });
+  let release!: (value: Response) => void;
+  const pending = new Promise<Response>((resolve) => { release = resolve; });
+  const service = makeService(async () => pending, provider);
+  const search = service.webSearch({ requestId: 'search-cancel', query: 'query' });
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(service.cancel({ requestId: 'search-cancel' }), { requestId: 'search-cancel', state: 'cancelled' });
+  release(response({ content: [{ type: 'web_search_tool_result', content: [{ type: 'web_search_result', title: 'late', url: 'https://example.invalid' }] }] }));
+  await assert.rejects(search, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED' && error.requestId === 'search-cancel');
+  assert.deepEqual(service.cancel({ requestId: 'search-cancel' }), { requestId: 'search-cancel', state: 'already_cancelled' });
+});
+
+test('请求 timeout 以毫秒计并固定 timed_out 终态', async () => {
+  const service = new ModelService({ config: makeConfig(), credentials: makeCredentials(), requestTimeoutMs: 5, fetch: async () => new Promise<Response>(() => {}) });
+  await assert.rejects(service.complete({ ...input, requestId: 'timeout-terminal' }), (error: any) => error.code === 'MODEL_SERVICE_TIMEOUT' && error.requestId === 'timeout-terminal');
+  assert.deepEqual(service.cancel({ requestId: 'timeout-terminal' }), { requestId: 'timeout-terminal', state: 'timed_out' });
+});
+
+test('Catalog 只暴露 provider 与 adapter 的能力交集', async () => {
+  const anthropic = makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test', reasoningEfforts: ['low'], serviceTiers: ['fast'], webSearch: true }] });
+  const catalog = await makeService(async () => response({}), anthropic).getCatalog();
+  assert.equal(catalog.models[0]?.webSearch, true);
+  assert.equal('reasoningEfforts' in (catalog.models[0] || {}), false);
+  assert.equal('serviceTiers' in (catalog.models[0] || {}), false);
+});
+
+test('complete 和 webSearch 拒绝复用 terminal requestId，且不触发新的 IO', async () => {
+  let credentialReads = 0;
+  let fetchCalls = 0;
+  const provider = makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test Model', webSearch: true }] });
+  const service = new ModelService({
+    config: makeConfig(provider),
+    credentials: { async get(id) { credentialReads += 1; return { profile: { id }, secret }; } },
+    fetch: async (_url, init) => { fetchCalls += 1; const body = JSON.parse(String(init?.body)); return body.tools ? response({ content: [{ type: 'web_search_tool_result', content: [{ type: 'web_search_result', title: 'Result', url: 'https://example.invalid' }] }] }) : response({ content: [{ type: 'text', text: 'ok' }] }); },
+  });
+  await service.complete({ ...input, requestId: 'reused-complete' });
+  const readsAfterComplete = credentialReads;
+  const fetchesAfterComplete = fetchCalls;
+  await assert.rejects(service.complete({ ...input, requestId: 'reused-complete' }), (error: any) => error.code === 'INVALID_INPUT' && error.requestId === 'reused-complete');
+  assert.equal(credentialReads, readsAfterComplete);
+  assert.equal(fetchCalls, fetchesAfterComplete);
+  await service.webSearch({ requestId: 'reused-search', query: 'query' });
+  const readsAfterSearch = credentialReads;
+  const fetchesAfterSearch = fetchCalls;
+  await assert.rejects(service.webSearch({ requestId: 'reused-search', query: 'query' }), (error: any) => error.code === 'INVALID_INPUT' && error.requestId === 'reused-search');
+  assert.equal(credentialReads, readsAfterSearch);
+  assert.equal(fetchCalls, fetchesAfterSearch);
 });

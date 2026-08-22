@@ -109,7 +109,7 @@ async function refreshConversations(): Promise<Conversation[]> {
     return result.value.conversations.map((conversation) => {
       const id = conversationId(result.value.source, conversation.id);
       const local = localById.get(id);
-      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage, active: activeMessageIds.has(id) };
+      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), ...(conversation.timeoutMs !== undefined || local?.timeoutMs !== undefined ? { timeoutMs: conversation.timeoutMs ?? local?.timeoutMs } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage, active: activeMessageIds.has(id) };
     });
   }).sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
   return conversations.map((conversation) => ({ ...conversation }));
@@ -257,6 +257,59 @@ function resetSettings(): AgentSettings {
   return getSettings();
 }
 
+/**
+ * Keep the adapter-facing webSearch(query, signal) convenience API while
+ * speaking the correlated Model Service message protocol at the runtime
+ * boundary. A late result after abort is deliberately ignored.
+ */
+function requestModelServiceWebSearch(query: string, signal?: AbortSignal): Promise<string> {
+  const requestId = randomUUID();
+  const request = runtime.message.request('model-service', 'webSearch', { requestId, query });
+  const cancel = () => {
+      void runtime.message.request('model-service', 'cancel', { requestId }).catch(() => undefined);
+  };
+  if (!signal) return request.then((response: unknown) => modelServiceSearchResult(response, requestId));
+  return new Promise<string>((resolve, reject) => {
+    let settled = false;
+    const onAbort = () => {
+      if (settled) return;
+      settled = true;
+      cancel();
+      reject(signal.reason instanceof Error ? signal.reason : new Error('模型搜索已取消'));
+    };
+    const finish = () => signal.removeEventListener('abort', onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      finish();
+      return;
+    }
+    request.then((response: unknown) => {
+      if (settled) return;
+      settled = true;
+      finish();
+      try { resolve(modelServiceSearchResult(response, requestId)); } catch (error) { reject(error); }
+    }, (error: unknown) => {
+      if (settled) return;
+      settled = true;
+      finish();
+      reject(error);
+    });
+  });
+}
+
+function modelServiceSearchResult(response: unknown, requestId: string): string {
+  if (typeof response === 'string') return response;
+  if (!response || typeof response !== 'object' || typeof (response as { result?: unknown }).result !== 'string') {
+    throw Object.assign(new Error('模型搜索返回了无效响应'), { code: 'MODEL_SERVICE_INVALID_RESPONSE', requestId });
+  }
+  const returnedRequestId = (response as { requestId?: unknown }).requestId;
+  if (returnedRequestId !== undefined && returnedRequestId !== requestId) {
+    throw Object.assign(new Error('模型搜索响应关联 ID 不匹配'), { code: 'MODEL_SERVICE_INVALID_RESPONSE', requestId });
+  }
+  return (response as { result: string }).result;
+}
+
 editor.plugin.define({
   lifecycle: {
     async load(ctx: any) {
@@ -264,8 +317,8 @@ editor.plugin.define({
       const modelService: ModelServiceClient = {
         getCatalog: () => runtime.message.request('model-service', 'getCatalog'),
         complete: (input: ModelServiceCompleteRequest) => runtime.message.request('model-service', 'complete', input),
-        cancel: (requestId: string) => runtime.message.request('model-service', 'cancel', requestId),
-        webSearch: (query: string, _signal?: AbortSignal) => runtime.message.request('model-service', 'webSearch', query),
+        cancel: (requestId: string) => runtime.message.request('model-service', 'cancel', { requestId }),
+        webSearch: requestModelServiceWebSearch,
       };
       adapters = createAdapters(modelService, runtime?.paths?.data);
       try {
@@ -494,6 +547,7 @@ editor.plugin.define({
         if (options.model) local.model = options.model;
         if (options.reasoningEffort) local.reasoningEffort = options.reasoningEffort;
         if (options.serviceTier) local.serviceTier = options.serviceTier;
+        if (options.timeoutMs !== undefined) local.timeoutMs = options.timeoutMs;
         if (options.sandboxMode) local.sandboxMode = assertSandboxMode(options.sandboxMode);
         if (options.approvalPolicy) local.approvalPolicy = assertApprovalPolicy(options.approvalPolicy);
       }
