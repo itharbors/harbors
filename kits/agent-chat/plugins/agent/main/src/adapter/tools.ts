@@ -1,6 +1,10 @@
-import { execFile } from 'node:child_process';
-import { readdir, readFile, rename, rm, stat } from 'node:fs/promises';
-import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync, existsSync } from 'node:fs';
+import { execFile, spawn } from 'node:child_process';
+import { lookup } from 'node:dns/promises';
+import { readdir, readFile, rename, rm } from 'node:fs/promises';
+import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync, existsSync, lstatSync, realpathSync } from 'node:fs';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
+import { isIP } from 'node:net';
 import { homedir } from 'node:os';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
@@ -13,6 +17,8 @@ const MAX_LINE_LENGTH = 2000;
 const SEARCH_TIMEOUT_MS = 30_000;
 const BASH_TIMEOUT_MS = 120_000;
 const WEB_TIMEOUT_MS = 30_000;
+const WEB_MAX_REDIRECTS = 5;
+const WEB_MAX_BODY_BYTES = 2 * 1024 * 1024;
 const WEB_MAX_BODY_CHARS = 20_000;
 const IMAGE_MAX_BYTES = 10 * 1024 * 1024;
 
@@ -421,7 +427,7 @@ async function runDelete(root: string, input: Record<string, unknown>, permissio
   const recursive = Boolean(input.recursive);
   const target = resolveToolPath(root, path, mode);
   if (!existsSync(target)) throw new Error(`路径不存在：${path}`);
-  const info = await stat(target);
+  const info = lstatSync(target);
   if (info.isDirectory() && !recursive) throw new Error(`${path} 是目录；删除目录请将 recursive 设为 true`);
   throwIfToolAborted(signal);
   await rm(target, { recursive, force: false });
@@ -503,20 +509,62 @@ async function runBash(root: string, input: Record<string, unknown>, signal?: Ab
   const timeoutMs = Math.min(BASH_TIMEOUT_MS, Math.max(1, Math.floor(Number(input.timeoutMs) || BASH_TIMEOUT_MS)));
   const workdirArg = string(input.workdir);
   const cwd = workdirArg ? resolveToolPath(root, workdirArg, mode) : root;
-  try {
-    const { stdout, stderr } = await exec('bash', ['-c', command], { cwd, timeout: timeoutMs, maxBuffer: MAX_OUTPUT * 8, signal });
-    const out = cap(stdout);
-    const err = cap(stderr);
-    return [out, err].filter(Boolean).join('\n') || '(no output)';
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    const err = error as { stdout?: string; stderr?: string; code?: number; signal?: string };
-    const out = cap(err.stdout || '');
-    const errOut = cap(err.stderr || '');
-    const body = [out, errOut].filter(Boolean).join('\n');
-    const code = err.code ?? (err.signal ? `signal ${err.signal}` : 'unknown');
-    return cap(`${body}\n[exit code: ${code}]`);
+  const result = await executeBash(command, cwd, timeoutMs, signal);
+  const out = cap(result.stdout);
+  const err = cap(result.stderr);
+  return [out, err].filter(Boolean).join('\n') || '(no output)';
+}
+
+interface BashResult { stdout: string; stderr: string; }
+
+class ToolExecutionError extends Error {
+  constructor(readonly code: string, message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = 'ToolExecutionError';
   }
+}
+
+function executeBash(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<BashResult> {
+  return new Promise((resolveResult, rejectResult) => {
+    const child = spawn('bash', ['-c', command], { cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (error?: Error, result?: BashResult) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener('abort', onAbort);
+      if (error) rejectResult(error); else resolveResult(result || { stdout, stderr });
+    };
+    const kill = () => {
+      try {
+        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
+        else child.kill('SIGKILL');
+      } catch { /* the process may have exited between close and kill */ }
+    };
+    const onAbort = () => { kill(); finish(signal?.reason instanceof Error ? signal.reason : new Error('Tool execution aborted')); };
+    const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
+      const value = chunk.toString('utf8');
+      if (kind === 'stdout') stdout += value; else stderr += value;
+      if (Buffer.byteLength(stdout) > MAX_OUTPUT * 8 || Buffer.byteLength(stderr) > MAX_OUTPUT * 8) {
+        kill();
+        finish(new ToolExecutionError('BASH_OUTPUT_LIMIT', `bash 输出超过 ${MAX_OUTPUT * 8} 字节限制`));
+      }
+    };
+    child.stdout.on('data', (chunk: Buffer) => append('stdout', chunk));
+    child.stderr.on('data', (chunk: Buffer) => append('stderr', chunk));
+    child.once('error', (error) => finish(new ToolExecutionError('BASH_SPAWN_FAILED', `bash 启动失败：${error.message}`, { cause: error })));
+    child.once('close', (code, terminationSignal) => {
+      if (settled) return;
+      if (code === 0 && !terminationSignal) return finish(undefined, { stdout, stderr });
+      const detail = terminationSignal ? `被信号 ${terminationSignal} 终止` : `退出码 ${code ?? 'unknown'}`;
+      finish(new ToolExecutionError(terminationSignal ? 'BASH_SIGNAL' : 'BASH_NONZERO_EXIT', `bash 执行失败：${detail}${stderr ? `：${cap(stderr)}` : ''}`));
+    });
+    timer = setTimeout(() => { kill(); finish(new ToolExecutionError('BASH_TIMEOUT', `bash 执行超时（${timeoutMs}ms）`)); }, timeoutMs);
+    if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
+  });
 }
 
 async function skills(workspace: string): Promise<Array<{ name: string; path: string }>> {
@@ -592,11 +640,46 @@ async function requestSandboxMode(toolName: string, input: Record<string, unknow
 function resolveToolPath(root: string, candidate: string, mode?: AgentSandboxMode): string {
   if (mode === 'danger-full-access') return resolve(root, candidate || '.');
   const resolved = resolve(root, candidate || '.');
-  if (isWithin(root, resolved)) return resolved;
-  throw new SandboxPermissionRequiredError('danger-full-access', `路径超出当前工作区范围，需要 danger-full-access 权限：${candidate}`);
+  let realRoot: string;
+  try { realRoot = realpathSync.native(root); } catch (error) {
+    throw new Error(`无法验证工作区路径：${error instanceof Error ? error.message : String(error)}`);
+  }
+  const existing = nearestExistingPath(resolved);
+  let realExisting: string;
+  try { realExisting = realpathSync.native(existing); } catch (error) {
+    throw new Error(`无法验证目标路径：${candidate || '.'}`);
+  }
+  if (!isWithin(realRoot, realExisting)) {
+    throw new SandboxPermissionRequiredError('danger-full-access', `路径超出当前工作区范围，需要 danger-full-access 权限：${candidate}`);
+  }
+  if (existsSync(resolved)) {
+    let realTarget: string;
+    try { realTarget = realpathSync.native(resolved); } catch {
+      throw new Error(`无法验证目标路径：${candidate || '.'}`);
+    }
+    if (!isWithin(realRoot, realTarget)) {
+      throw new SandboxPermissionRequiredError('danger-full-access', `路径符号链接超出当前工作区范围，需要 danger-full-access 权限：${candidate}`);
+    }
+  }
+  return resolved;
 }
 
-function isWithin(root: string, resolved: string): boolean { const rel = relative(root, resolved); return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..')); }
+function nearestExistingPath(path: string): string {
+  let current = path;
+  while (true) {
+    try { lstatSync(current); return current; } catch (error) {
+      if ((error as { code?: string }).code !== 'ENOENT') throw error;
+      const parent = dirname(current);
+      if (parent === current) throw error;
+      current = parent;
+    }
+  }
+}
+
+function isWithin(root: string, resolved: string): boolean {
+  const rel = relative(root, resolved);
+  return rel === '' || (!rel.startsWith(`..${sep}`) && rel !== '..' && !rel.startsWith('..'));
+}
 
 function isOutputLimitError(error: unknown): boolean {
   const value = error as { code?: unknown; message?: unknown };
@@ -659,12 +742,173 @@ async function runWebFetch(input: Record<string, unknown>, signal?: AbortSignal)
   let parsed: URL;
   try { parsed = new URL(url); } catch { throw new Error('web_fetch 只接受有效的 HTTP(S) URL'); }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new Error('web_fetch 只接受 HTTP(S) URL');
-  const response = await fetch(parsed, { redirect: 'follow', signal: requestTimeoutSignal(signal, WEB_TIMEOUT_MS), headers: { accept: 'text/html, text/plain, application/json' } });
-  if (!response.ok) throw new Error(`web_fetch 请求失败（HTTP ${response.status}）`);
-  const contentType = response.headers.get('content-type') || '';
-  const body = await response.text();
-  const text = contentType.includes('html') ? htmlToText(body) : body;
-  return cap(`<url>${parsed.toString()}</url>\n<content>\n${text.slice(0, WEB_MAX_BODY_CHARS)}\n</content>`);
+  let redirects = 0;
+  while (true) {
+    const response = await requestWeb(parsed, signal);
+    if (isRedirect(response.statusCode)) {
+      const locationHeader = response.headers.location;
+      const location = Array.isArray(locationHeader) ? locationHeader[0] : locationHeader;
+      response.discard();
+      if (!location) throw new ToolExecutionError('WEB_INVALID_REDIRECT', `web_fetch 收到无 Location 的重定向（HTTP ${response.statusCode}）`);
+      if (redirects >= WEB_MAX_REDIRECTS) throw new ToolExecutionError('WEB_REDIRECT_LIMIT', `web_fetch 重定向超过 ${WEB_MAX_REDIRECTS} 跳限制`);
+      try { parsed = new URL(location, parsed); } catch { throw new ToolExecutionError('WEB_INVALID_REDIRECT', 'web_fetch 重定向目标无效'); }
+      if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') throw new ToolExecutionError('WEB_INVALID_REDIRECT', 'web_fetch 重定向目标不是 HTTP(S) URL');
+      redirects += 1;
+      continue;
+    }
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      response.discard();
+      throw new ToolExecutionError('WEB_HTTP_ERROR', `web_fetch 请求失败（HTTP ${response.statusCode}）`);
+    }
+    const contentTypeHeader = response.headers['content-type'];
+    const contentType = Array.isArray(contentTypeHeader) ? contentTypeHeader.join(';') : contentTypeHeader || '';
+    const body = await response.text();
+    const text = contentType.includes('html') ? htmlToText(body) : body;
+    return cap(`<url>${parsed.toString()}</url>\n<content>\n${text.slice(0, WEB_MAX_BODY_CHARS)}\n</content>`);
+  }
+}
+
+interface WebResponse {
+  statusCode: number;
+  headers: Record<string, string | string[] | undefined>;
+  text(): Promise<string>;
+  discard(): void;
+}
+
+function isRedirect(statusCode: number): boolean { return statusCode === 301 || statusCode === 302 || statusCode === 303 || statusCode === 307 || statusCode === 308; }
+
+async function requestWeb(url: URL, parentSignal?: AbortSignal): Promise<WebResponse> {
+  const hostname = url.hostname.replace(/^\[|\]$/gu, '');
+  await resolveAndValidateHost(hostname);
+  const timeoutSignal = requestTimeoutSignal(parentSignal, WEB_TIMEOUT_MS);
+  return new Promise((resolveResponse, rejectResponse) => {
+    let settled = false;
+    const transport = url.protocol === 'https:' ? httpsRequest : httpRequest;
+    const request = transport({
+      protocol: url.protocol,
+      hostname,
+      port: url.port || undefined,
+      path: `${url.pathname || '/'}${url.search}`,
+      method: 'GET',
+      headers: { accept: 'text/html, text/plain, application/json' },
+      ...(url.protocol === 'https:' ? { servername: hostname } : {}),
+      lookup: (host, options, callback) => {
+        resolveAndValidateHost(host).then((addresses) => {
+          if (options.all) callback(null, addresses);
+          else callback(null, addresses[0].address, addresses[0].family);
+        }).catch((error) => callback(error instanceof Error ? error : new Error(String(error)), options.all ? [] : '', 0));
+      },
+    }, (response) => {
+      if (settled) return;
+      const contentLength = Number(response.headers['content-length']);
+      if (Number.isFinite(contentLength) && contentLength > WEB_MAX_BODY_BYTES) {
+        response.destroy();
+        settled = true;
+        rejectResponse(new ToolExecutionError('WEB_BODY_LIMIT', `web_fetch 响应超过 ${WEB_MAX_BODY_BYTES} 字节限制`));
+        return;
+      }
+      const text = () => readWebBody(response, timeoutSignal);
+      const discard = () => { response.resume(); };
+      settled = true;
+      timeoutSignal.removeEventListener('abort', onAbort);
+      resolveResponse({ statusCode: response.statusCode || 0, headers: response.headers, text, discard });
+    });
+    const onAbort = () => request.destroy(timeoutSignal.reason instanceof Error ? timeoutSignal.reason : new Error('web_fetch 请求已取消'));
+    timeoutSignal.addEventListener('abort', onAbort, { once: true });
+    request.once('error', (error) => {
+      timeoutSignal.removeEventListener('abort', onAbort);
+      if (settled) return;
+      settled = true;
+      if (parentSignal?.aborted) rejectResponse(parentSignal.reason instanceof Error ? parentSignal.reason : new Error('Tool execution aborted'));
+      else if (timeoutSignal.aborted) rejectResponse(new ToolExecutionError('WEB_TIMEOUT', `web_fetch 请求超时（${WEB_TIMEOUT_MS}ms）`, { cause: error }));
+      else rejectResponse(new ToolExecutionError('WEB_NETWORK_ERROR', `web_fetch 网络请求失败：${error.message}`, { cause: error }));
+    });
+    request.end();
+  });
+}
+
+function readWebBody(response: import('node:http').IncomingMessage, signal: AbortSignal): Promise<string> {
+  return new Promise((resolveBody, rejectBody) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener('abort', onAbort);
+      if (error) rejectBody(error); else resolveBody(Buffer.concat(chunks).toString('utf8'));
+    };
+    const onAbort = () => { response.destroy(); finish(signal.reason instanceof Error ? signal.reason : new Error('web_fetch 请求已取消')); };
+    signal.addEventListener('abort', onAbort, { once: true });
+    response.on('data', (chunk: Buffer | string) => {
+      const value = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      size += value.byteLength;
+      if (size > WEB_MAX_BODY_BYTES) {
+        response.destroy();
+        finish(new ToolExecutionError('WEB_BODY_LIMIT', `web_fetch 响应超过 ${WEB_MAX_BODY_BYTES} 字节限制`));
+      } else chunks.push(value);
+    });
+    response.once('end', () => finish());
+    response.once('error', (error) => finish(new ToolExecutionError('WEB_NETWORK_ERROR', `web_fetch 读取响应失败：${error.message}`, { cause: error })));
+  });
+}
+
+async function resolveAndValidateHost(hostname: string): Promise<Array<{ address: string; family: number }>> {
+  const normalized = hostname.replace(/^\[|\]$/gu, '').toLowerCase().replace(/\.$/u, '');
+  const ipFamily = isIP(normalized);
+  if (ipFamily) {
+    if (isRestrictedAddress(normalized)) throw new ToolExecutionError('WEB_SSRF_BLOCKED', 'web_fetch 拒绝访问受限网络地址');
+    return [{ address: normalized, family: ipFamily }];
+  }
+  if (!normalized || normalized === 'localhost' || normalized.endsWith('.localhost') || normalized.endsWith('.local')) {
+    throw new ToolExecutionError('WEB_SSRF_BLOCKED', 'web_fetch 拒绝访问本地主机地址');
+  }
+  let addresses: Array<{ address: string; family: number }>;
+  try { addresses = await lookup(normalized, { all: true, verbatim: true }); } catch (error) {
+    throw new ToolExecutionError('WEB_DNS_ERROR', `web_fetch 无法解析目标地址：${normalized}`, { cause: error });
+  }
+  if (!addresses.length || addresses.some((entry) => isRestrictedAddress(entry.address))) {
+    throw new ToolExecutionError('WEB_SSRF_BLOCKED', 'web_fetch 拒绝访问解析到受限网络地址');
+  }
+  return addresses;
+}
+
+function isRestrictedAddress(address: string): boolean {
+  const normalized = address.replace(/^\[|\]$/gu, '').toLowerCase();
+  const family = isIP(normalized);
+  if (family === 4) {
+    const octets = normalized.split('.').map(Number);
+    const value = (((octets[0] * 256 + octets[1]) * 256 + octets[2]) * 256 + octets[3]) >>> 0;
+    const inRange = (start: number, end: number) => value >= start && value <= end;
+    return inRange(0x00000000, 0x00ffffff) || inRange(0x0a000000, 0x0affffff) || inRange(0x64400000, 0x647fffff)
+      || inRange(0x7f000000, 0x7fffffff) || inRange(0xa9fe0000, 0xa9feffff) || inRange(0xac100000, 0xac1fffff)
+      || inRange(0xc0000000, 0xc00000ff) || inRange(0xc0000200, 0xc00002ff) || inRange(0xc0000220, 0xc000022f)
+      || inRange(0xc0000230, 0xc000023f) || inRange(0xc6120000, 0xc613ffff) || inRange(0xc6336400, 0xc63364ff)
+      || inRange(0xcb007100, 0xcb0071ff) || inRange(0xc0a80000, 0xc0a8ffff)
+      || inRange(0xe0000000, 0xffffffff);
+  }
+  if (family !== 6) return true;
+  const value = ipv6ToBigInt(normalized);
+  if (value === 0n || value === 1n) return true;
+  if ((value >> 121n) === 0x7en || (value >> 118n) === 0x3fan || (value >> 120n) === 0xffn) return true;
+  if ((value >> 96n) === 0x20010db8n || (value >> 96n) === 0x20010000n || (value >> 96n) === 0x20010010n) return true;
+  const mapped = value >> 32n;
+  return mapped === 0xffffn && isRestrictedAddress(`${Number((value >> 24n) & 255n)}.${Number((value >> 16n) & 255n)}.${Number((value >> 8n) & 255n)}.${Number(value & 255n)}`);
+}
+
+function ipv6ToBigInt(value: string): bigint {
+  const [head, tail] = value.split('::');
+  const expandIpv4 = (words: string[]) => words.flatMap((word) => {
+    if (!word.includes('.')) return [word];
+    const octets = word.split('.').map(Number);
+    if (octets.length !== 4 || octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) return [];
+    return [`${((octets[0] << 8) | octets[1]).toString(16)}`, `${((octets[2] << 8) | octets[3]).toString(16)}`];
+  });
+  const left = expandIpv4(head ? head.split(':').filter(Boolean) : []);
+  const right = expandIpv4(tail ? tail.split(':').filter(Boolean) : []);
+  const words = [...left, ...Array(8 - left.length - right.length).fill('0'), ...right];
+  if (words.length !== 8) return 0n;
+  try { return words.reduce((result, word) => (result << 16n) | BigInt(`0x${word}`), 0n); } catch { return 0n; }
 }
 
 function requestTimeoutSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
