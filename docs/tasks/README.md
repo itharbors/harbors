@@ -22,8 +22,8 @@ Task 类型为 `feature`、`bug`、`optimize`、`docs`、`refactor`、`test`、`
 2. Task 建档：创建目录、填写需求快照和初始状态。
 3. 设计/计划：在本地过程材料中完成可执行设计。
 4. 实现/验证：实现、测试和修正。
-5. 收口/PR：完成总结、通过 PR 前检查、创建 PR。
-6. 合并确认/会话归档：以 GitHub 与 main 的事实确认完成，再归档 Codex 会话。
+5. 收口/交付选择：完成总结、通过 ready gate，向用户询问创建 PR、本地整合到 `main` 或暂不处理。
+6. 交付确认/会话归档：按用户选择的路径确认本地或 GitHub 事实，再归档 Codex 会话。
 
 `status.json` 的五个内部 stages 是 `requirements`、`design`、`implementation`、`verification`、`consolidation`。可用 action 为 `start`、`complete`、`skip`、`block`、`resume`、`rewind`、`set-pr`。前一阶段必须终态才能开始后一阶段；`complete` 和 `skip` 只作用于进行中阶段，并分别形成 completed、skipped 终态；`block`/`resume` 在进行中与阻塞之间切换；`rewind` 使目标阶段重新进行并将其后阶段设回 pending；`set-pr` 只在所有内部阶段终态时记录安全正整数 PR 号。状态只记录这些结构化事实，不添加主观说明。
 
@@ -50,11 +50,30 @@ node scripts/task-status.mjs resolve feature/safe-login origin/main --ready-for-
 
 普通 `check` 要求 `task.md` 符合合约，并在 `summary.md` 存在时校验它；当 `consolidation` 为终态时 `summary.md` 必须存在。`--ready-for-pr` 还要求三份正式文件非空、两份 Markdown 均符合合约以及全部内部 stages 终态；PR 号可以仍为 `null`。`resolve` 从本分支相对 base 的 Task 变更解析唯一状态，并确认分支身份相符。
 
-## PR、合并与完成
+## 交付选择、合并与完成
 
-创建 PR 前，在当前 pre-PR head 上完成并提交 `summary.md`，PR body 链接该不可变 SHA 上的 summary URL。创建 PR 后记录 PR 号并再次 push，使 `status.json` 的 PR 事实可追溯。finish 只复用当前仓库拥有、base/head 身份一致的 open PR；同名 fork PR 不得被编辑或记录。已记录 PR 若关闭且未合并，可以创建或采用经过同样身份校验的替代 PR，并将编号更新为当前 PR；已合并或身份不符的旧 PR 不得自动替换。
+实现与验证完成后必须先停下并询问用户选择：创建 PR、本地整合到 `main`，或暂不处理。选择不等于授权
+外部写入；push、创建或更新 PR、本地整合分别需要明确授权。暂不处理时不改变远端事实，也不宣称
+需求完成。
 
-“完成”是派生事实，必须同时满足：内部 stages 终态、已记录 PR 号、GitHub 显示 merged、最新 head 的 required checks 成功，以及三份 Task 正式文件已在 main。仅在这些事实成立后归档 Codex 会话；不要为了“归档”制造合并后的 commit。
+选择 PR 时，先确认要 push 的分支和 head，单独取得 push 授权；push 后核对 base/head，再单独取得
+创建或更新 PR 的授权。只有实际存在 PR 后才能用 `set-pr` 记录正整数编号。PR 打开不代表完成；PR
+路径仍须同时满足：内部 stages 终态、已记录 PR 号、GitHub 显示 merged、最新 head 的 required checks
+成功，以及三份 Task 正式文件已在 `main`。合并 PR 仍需另行明确授权。`pullRequest: null` 在尚未选
+PR 或本地整合路径是有效状态，不是失败。
+
+选择本地 `main` 时，先选择并确认 `fast-forward`、merge commit 或 squash，再针对确定的源分支和
+head 取得独立整合授权，且不 push。整合前要求源/目标 worktree clean、目标为本地 `main`、记录
+`origin/main...main` 的 ahead/behind，并完成只读冲突预检；若 `main` 落后远端，必须先请求单独同步
+授权，不能自动 pull、rebase、stash 或 reset。冲突时停止并交还用户处理。`fast-forward` 仅在目标是
+源祖先时可用，使用 `git merge --ff-only <source-branch>` 且不提供新的提交标题；merge commit 必须
+使用非快进策略并显式提供合法中文标题，例如 `git merge --no-ff -m "[Feature] 合并安全登录" <source-branch>`；
+squash 使用 `git merge --squash <source-branch>` 后再以合法中文标题执行 `git commit -m "[Feature] 添加安全登录"`。
+三种策略都要记录源 head；merge commit 和 squash 还要记录整合前后 `main` head。
+
+本地路径的完成定义是：内部 stages 终态，`task.md`、`status.json`、`summary.md` 和交付变更都已在
+本地 `main`，且 `main` clean；此时 `pullRequest` 保持 `null`。这不代表远端 `main` 已更新。只有对应
+路径的事实全部成立后，才可归档 Codex 会话。
 
 ## 可复制模板
 

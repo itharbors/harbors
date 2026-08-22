@@ -12,7 +12,8 @@
 ### 1. 需求确认与分类
 
 开始实现前确认背景、目标、范围、非目标、验收标准和约束，再选择一种类型：`feature`、`bug`、
-`optimize`、`docs`、`refactor`、`test` 或 `chore`。类型决定分支与 PR 主类型，并要求分支中至少有
+`optimize`、`docs`、`refactor`、`test` 或 `chore`。类型决定分支主类型；选择创建 PR 时才决定 PR
+主类型，并要求分支中至少有
 一笔对应主类型提交；每笔提交标签按实际变更性质选择。不能用期限、负责人授权或已经投入的时间
 代替需求确认与 Task 建档。
 
@@ -26,7 +27,7 @@ bash .agents/skills/change-workflow/scripts/start-change.sh feature safe-login
 
 start 脚本会基于 `origin/main` 创建隔离分支与 worktree，并自动运行 Task init，输出
 `TASK_ID=` 和 `TASK_DIR=`。进入输出的 worktree 后立即把已确认需求完整写入 `task.md`。如果代码
-已经存在而分支上没有 Task，必须先补建并填写，再继续或 finish；可在该 worktree 运行真实 CLI：
+已经存在而分支上没有 Task，必须先补建并填写，再继续实现或进入交付收口；可在该 worktree 运行真实 CLI：
 
 ```bash
 pnpm run task:status init feature safe-login
@@ -69,30 +70,42 @@ pnpm run check:preflight
 ```
 
 `pnpm run test:preflight` 运行紧凑的关键测试；`pnpm run check:preflight` 先增加全仓 Kit 架构审计。
-它们提供快速反馈，不替代 finish 所运行的最终门禁。
+它们提供快速反馈，不替代交付选择前应明确记录的最终门禁。
 
-### 5. 收口与 PR
+### 5. 收口选择与交付
 
 先更新完整 `summary.md`，写明验收完成情况、实际改动、决定、验证、影响、风险和遗留。`summary.md`
-完整且内部 stages 终态后，必须通过 `--ready-for-pr` ready gate：
+完整且内部 stages 终态后，先通过 `--ready-for-pr` ready gate：
 
 ```bash
 pnpm run task:status complete <task-id> consolidation
 pnpm run task:status check <task-id> --ready-for-pr
 ```
 
-提交全部变更、保持 worktree clean，并在仓库外准备包含 `## Summary` 和 `## Testing` 的 body 文件。
-使用 change-workflow 的 finish 脚本：
+完成实现和验证后必须停下，向用户报告分支、提交、Task 状态、验证命令和风险，并询问唯一的后续路径：
+创建 PR、本地整合到 `main`，或暂不处理。选择路径本身不授权任何外部写入；每一次 push、创建或更新
+PR、以及本地整合都要取得对应的明确授权。未得到选择前不得 push、创建 PR、merge、rebase、stash 或
+reset。
 
-```bash
-bash .agents/skills/change-workflow/scripts/finish-change.sh \
-  "添加安全登录" /absolute/path/to/pr-body.md
-```
+选择创建 PR 时，依次确认要 push 的确切分支和 head，再单独取得 push 授权；push 成功后核对 base/head
+身份，再单独取得创建或更新 PR 的授权。PR 创建后才用 `task:status set-pr` 记录正整数编号。打开的
+PR 不代表完成，PR 的合并和 required checks 仍是后续独立的外部事实；不要把状态文件中的
+`pullRequest: null` 当作失败。
 
-finish 会重新执行 ready gate 和当前根 `check` 全仓门禁，只创建或恢复当前仓库拥有且 base/head 身份一致的 open PR；同名 fork PR 不会被编辑或记录。已记录 PR 关闭且未合并时可安全替换并更新编号，已合并或身份不符时 fail closed。finish 在 PR body 添加指向 pre-PR
-commit 上 `summary.md` 的不可变链接，回写 PR 编号，自动提交该 status 变化并二次 push。第一次调用在
-PR 创建后失败时，修复外部原因后重跑相同 finish 命令；它只恢复已验证的 open PR 和精确的自动
-status 写回状态，不把其他 dirty changes 当作可恢复状态。
+选择本地 `main` 时，先让用户选择一种整合策略：`fast-forward`、merge commit 或 squash。之后针对
+确定的源分支和 head、目标 `main`、策略取得独立整合授权，且不 push。整合前必须确认源和目标 worktree
+都 clean、目标确实是本地 `main`、源分支包含待交付提交，并记录 `origin/main...main` 的 ahead/behind
+关系；若目标落后远端，先停下请求单独的同步授权，不自动 pull、rebase、stash 或 reset。应使用等价的
+只读冲突预检（例如 `git merge-tree --write-tree`）；出现冲突时停止并交还用户处理。
+
+`fast-forward` 仅在 `main` 是源分支祖先时允许，命令为 `git merge --ff-only <source-branch>`，不提供
+新的提交标题；merge commit 必须显式使用非快进策略，并提供符合提交规范的合法中文标题，例如
+`git merge --no-ff -m "[Feature] 合并安全登录" <source-branch>`；squash 必须先执行
+`git merge --squash <source-branch>`，再使用合法中文标题提交，例如 `git commit -m "[Feature] 添加安全登录"`。
+三种策略都要记录源 head；merge commit 和 squash 还要记录整合前后 `main` head，不能假装源分支已成为
+`main` 的祖先。整合后重新确认 `main` clean，并将三份 Task 文件和交付变更都核对在本地 `main`。
+
+选择暂不处理时，不写入外部仓库事实，不宣称需求已完成；保留当前分支和 Task 证据，待用户再次选择。
 
 审查若要求实质代码或行为变更，不能直接沿用旧验证和 summary。按受影响范围回退
 implementation、verification 或 consolidation，例如：
@@ -101,11 +114,11 @@ implementation、verification 或 consolidation，例如：
 pnpm run task:status rewind <task-id> implementation
 ```
 
-之后重新实现、验证、更新 `summary.md`、完成各 stages，并再次运行 ready gate 与 finish。
+之后重新实现、验证、更新 `summary.md`、完成各 stages，并再次运行 ready gate，再重新询问交付路径。
 
-### 6. 合并确认与会话归档
+### 6. 交付确认与会话归档
 
-`PR_URL=` 或 PR 已创建只代表收口已提交，不代表 Task/任务完成。完成是派生事实，必须同时满足：
+创建 PR 或通过 ready gate 只代表收口已提交，不代表 Task/任务完成。PR 路径的完成仍必须同时满足：
 
 - 所有内部 stages 终态；
 - `status.json` 已记录 PR 号；
@@ -113,8 +126,9 @@ pnpm run task:status rewind <task-id> implementation
 - PR latest head commit 的 repository-required checks 成功；
 - `task.md`、`status.json`、`summary.md` 三份正式文件都已在 `main`。
 
-全部成立后才能宣布需求完成并归档当前 Codex 会话。不要为了会话归档制造 merge 后 commit；用户
-要求“完成”也不授权 Agent 主动 merge PR。
+本地 `main` 路径不要求 PR 号：当所有内部 stages 终态、三份 Task 文件和交付变更已在本地 `main`、
+且 `main` clean 时即可宣布本地整合完成，`pullRequest` 保持 `null` 是有效结果。它不代表远端 `main`
+已更新，也不授权 push。全部对应事实成立后才能归档当前 Codex 会话；不要为了归档制造额外提交。
 
 ## Task 恢复与交接
 
@@ -348,23 +362,17 @@ main
   -> merge to main updates source only
 ```
 
-Kit 变更使用 change-workflow，与 Framework 共享同一套 start/finish 脚本：
+Kit 变更使用 change-workflow，与 Framework 共享同一套 start 脚本和 Task 合约：
 
 ```bash
 bash .agents/skills/change-workflow/scripts/start-change.sh feature add-import
 ```
 
-该命令固定获取 `origin/main`，创建隔离分支与 worktree，并自动运行 Task init。
-只在输出的 worktree 中开发。完成后准备含 `## Summary`
-与 `## Testing` 的 PR body，再运行：
-
-```bash
-bash .agents/skills/change-workflow/scripts/finish-change.sh \
-  "添加数据导入" /absolute/path/to/pr-body.md
-```
-
-finish 会重新执行 ready gate 与 `pnpm run check` 全量门禁，普通 push 后创建并核验 base 为 `main`
-的 PR。路径级 CI 至少检查被修改的 Kit；Kit CLI 或其他共享构建面变化会触发所有官方 Kit CI。
+该命令固定获取 `origin/main`，创建隔离分支与 worktree，并自动运行 Task init。只在输出的 worktree
+中开发。完成实现和验证后，先按上面的交付选择停下；若用户选择 PR，再分别取得 push 和创建/更新
+PR 的授权，并准备含 `## Summary` 与 `## Testing` 的 body。若用户选择本地 `main`，按确认的
+fast-forward、merge commit 或 squash 策略整合，且不 push。路径级 CI 至少检查被修改的 Kit；Kit CLI
+或其他共享构建面变化会触发所有官方 Kit CI。
 
 若修改 Kit 的版本，必须同步 `kit.json`、`package.json` 和 `pnpm-lock.yaml`；版本一致性由本地校验保证，但普通开发变更不要求递增版本。需要制品时，在本地运行 validate、pack 和 inspect。
 
@@ -405,8 +413,8 @@ finish 会重新执行 ready gate 与 `pnpm run check` 全量门禁，普通 pus
 
 `pnpm run check` 是当前全仓最终门禁，不作为局部 Plugin、Kit 或 Framework 开发的默认检查。
 它只构建一次 Framework，再运行 Framework 与 workflow 测试，并以一次 `kits:check` 完成所有
-Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。`finish-change.sh`
-在收口时也会执行当前根 `check` 脚本，因此 finish 仍是当前全仓最终门禁流程的一部分。这里的
+Kit 的 build、test、validate 和本地产物检查，最后检查 Framework 插件产物。交付选择前应由 Agent
+明确运行并记录这项门禁；这里的
 Framework 测试是全仓门禁的组成部分，不改变局部 Plugin/Kit 验证要求。
 
 需求开发循环优先运行聚焦测试和紧凑预检：
@@ -434,6 +442,6 @@ pnpm run check:preflight
 目标 Kit，不会被无关 Kit 的临时损坏拖累。审计禁止跨 Kit 源码引用、Kit 外本地依赖、缺失
 lockfile、Framework 产品特判和静态产品清单。
 
-通用变更提交完成后直接调用 `finish-change.sh`，由完成流程运行最终全量门禁；不要在没有新
+通用变更应在交付选择前按受影响范围运行最终门禁，并将命令和结果写入 `summary.md`；不要在没有新
 代码变化时先手动重复同一轮全量检查。修改架构行为时同步检查
 [文档维护指南](./maintaining-docs.md)。

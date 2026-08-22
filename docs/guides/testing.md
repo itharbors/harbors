@@ -93,13 +93,23 @@ Kit 测试流程的具体现状如下：
 
 ## 全仓门禁与局部范围的差异
 
-局部范围规则和仓库最终门禁是两件事：前者回答“这次变更日常应验证什么”，后者回答“现有收口流程最终还会
-检查什么”。当前 `pnpm run check` 仍是全仓门禁。`finish-change.sh` 的收口流程当前也会调用根 `npm run check`，
-因此 finish 仍会触发这套全仓检查。
+局部范围规则和仓库最终门禁是两件事：前者回答“这次变更日常应验证什么”，后者回答“交付前需要明确
+运行什么”。当前 `pnpm run check` 仍是全仓门禁；它不会因为某个收口动作而被默认为已运行。
 
 这项现状不应被冒充为局部测试要求：只改 Plugin 时，局部规则仍然是只验证该 Plugin；只改目标 Kit 时，局部规则
-仍然是只验证目标 Kit；只有 Framework 变更才按受影响 Framework 范围加测。若实际执行了 `pnpm run check` 或
-finish 流程，应在 Task 的 summary / `.work/` 中把它记录为独立的全仓门禁证据，并同时记录局部验证证据。
+仍然是只验证目标 Kit；只有 Framework 变更才按受影响 Framework 范围加测。若实际执行了 `pnpm run check`，
+应在 Task 的 summary / `.work/` 中把它记录为独立的全仓门禁证据，并同时记录局部验证证据。交付选择前由
+Agent 明确运行并记录所需门禁，不把某个收口动作默认为已运行全仓检查。
+
+## 本地 main 整合前置
+
+实现和验证完成后，Agent 必须先向用户报告证据并询问创建 PR、本地整合到 `main` 或暂不处理。任何
+push、PR 写入或本地整合都需要对应的明确授权。选择本地 `main` 时，还必须先确定 fast-forward、merge
+commit 或 squash 策略，确认源/目标 worktree clean、目标分支确为 `main`，并记录 `origin/main...main`
+的 ahead/behind；若目标落后远端，应先请求单独的同步授权。整合前做只读冲突预检，遇到冲突停止，不
+自动解决、pull、rebase、stash 或 reset。整合后再次确认本地 `main` clean，并确认三份 Task 文件和交付
+变更均已在本地 `main`。fast-forward 不产生新的提交标题；merge commit 和 squash 必须分别提供符合
+提交规范的合法中文标题。本地整合不需要 PR 号，`pullRequest: null` 是有效结果，也不意味着允许 push。
 
 ## 验证证据
 
@@ -108,7 +118,7 @@ finish 流程，应在 Task 的 summary / `.work/` 中把它记录为独立的�
 - 从仓库根目录执行的完整命令和退出码，或明确的通过 / 失败结论；
 - 测试所属边界（Plugin、Kit 或 Framework）及选择该范围的原因；
 - 若使用浏览器验收，记录 `pnpm run dev:web`、访问的 Kit / 页面、操作步骤和观察到的可见行为；
-- 若执行了全仓 `pnpm run check` 或 finish 收口门禁，明确标记它是独立的全仓门禁，不把它改写成局部测试结论；
+- 若执行了全仓 `pnpm run check`，明确标记它是独立的全仓门禁，不把它改写成局部测试结论；
 - 若因端口、权限或其他环境限制跳过某项，记录原因和未覆盖的风险。
 
 不要只写“测试通过”而不给出命令。跨环境交接时，验证证据必须可复现。
