@@ -763,9 +763,9 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       }
     });
     registerSetter('agent.message.delta', (value: unknown) => {
-      const delta = value as { conversationId?: string; messageId?: string; content?: string } | null;
+      const delta = value as { conversationId?: string; messageId?: string; content?: string; delta?: string; requestId?: string; generation?: string; sequence?: number } | null;
       if (!disposed && delta?.conversationId === conversationIdRef.current && delta.messageId) {
-        messageDeltaScheduler.enqueue({ messageId: delta.messageId, content: typeof delta.content === 'string' ? delta.content : '' });
+        messageDeltaScheduler.enqueue({ messageId: delta.messageId, content: typeof delta.content === 'string' ? delta.content : '', ...(typeof delta.delta === 'string' ? { delta: delta.delta } : {}), ...(typeof delta.requestId === 'string' ? { requestId: delta.requestId } : {}), ...(typeof delta.generation === 'string' ? { generation: delta.generation } : {}), ...(Number.isSafeInteger(delta.sequence) ? { sequence: delta.sequence } : {}) });
       }
     });
     registerSetter('agent.message.status', (value: unknown) => {

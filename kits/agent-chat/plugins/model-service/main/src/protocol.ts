@@ -8,7 +8,7 @@ export function buildRequest(config: RelayConfig, input: CompleteInput, model: s
   validateCapabilities(config, input);
   if (config.api === 'openai-completions') {
     const messages = openAiMessages(input.messages, input.system);
-    const body: Record<string, unknown> = { model, stream: false, messages };
+    const body: Record<string, unknown> = { model, stream: input.stream === true, messages };
     if (input.tools?.length) body.tools = input.tools.map(openAiTool);
     if (input.maxOutputTokens !== undefined) body.max_tokens = input.maxOutputTokens;
     addOpenAiOptions(body, config, input);
@@ -22,6 +22,7 @@ export function buildRequest(config: RelayConfig, input: CompleteInput, model: s
     const body: Record<string, unknown> = {
       model,
       max_tokens: input.maxOutputTokens ?? 16_384,
+      ...(input.stream === true ? { stream: true } : {}),
       messages: anthropicMessages(input.messages),
     };
     if (input.system) body.system = input.system;
@@ -46,6 +47,7 @@ export function effectiveModelCapabilities(model: ModelCatalogEntry | undefined,
     ...(openAi && defaultReasoningEffort && reasoningEfforts?.includes(defaultReasoningEffort) ? { defaultReasoningEffort } : {}),
     ...(openAi && defaultServiceTier && serviceTiers?.includes(defaultServiceTier) ? { defaultServiceTier } : {}),
     ...(api === 'anthropic-messages' && webSearch === true ? { webSearch: true } : {}),
+    ...(model.streaming !== undefined ? { streaming: model.streaming } : {}),
   };
 }
 
@@ -198,7 +200,7 @@ function normalizeOpenAiContent(content: unknown): string | ContentBlock[] | nul
   return blocks;
 }
 
-function normalizeUsage(api: 'openai' | 'anthropic', value: unknown): NormalizedUsage | undefined {
+export function normalizeUsage(api: 'openai' | 'anthropic', value: unknown): NormalizedUsage | undefined {
   if (!value || typeof value !== 'object') return undefined;
   const usage = value as Record<string, unknown>;
   const number = (input: unknown): number | undefined => typeof input === 'number' && Number.isFinite(input) && input >= 0 ? Math.floor(input) : undefined;

@@ -38,6 +38,9 @@
           "getConversationTracePage": ["getConversationTracePage"],
           "sendMessage": ["sendMessage"],
           "stopConversation": ["stopConversation"]
+        },
+        "broadcast": {
+          "model-service.complete.delta": ["onModelServiceDelta"]
         }
       }
     }

@@ -568,3 +568,103 @@ test('complete 和 webSearch 拒绝复用 terminal requestId，且不触发新�
   assert.equal(credentialReads, readsAfterSearch);
   assert.equal(fetchCalls, fetchesAfterSearch);
 });
+
+test('OpenAI streaming fixture 逐段广播稳定 requestId/generation/sequence 并返回权威 complete', async () => {
+  const chunks = [
+    'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"好"}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+    'data: [DONE]\n\n',
+  ];
+  const recorder = makeBroadcastRecorder();
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(), message: recorder.message,
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) { for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk)); controller.close(); },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const result = await service.complete({ ...input, requestId: 'stream-1', generation: 'gen-1', stream: true });
+  assert.equal(result.message.content, '你好');
+  const deltas = recorder.events.filter((event) => event.topic === 'model-service.complete.delta').map((event) => event.payload as { requestId: string; generation: string; sequence: number; delta: { text: string } });
+  assert.deepEqual(deltas.map((delta) => ({ requestId: delta.requestId, generation: delta.generation, sequence: delta.sequence, text: delta.delta.text })), [
+    { requestId: 'stream-1', generation: 'gen-1', sequence: 0, text: '你' },
+    { requestId: 'stream-1', generation: 'gen-1', sequence: 1, text: '好' },
+  ]);
+  assert.equal((recorder.events.at(-1)?.payload as { state: string }).state, 'completed');
+});
+
+test('Anthropic SSE fixture 遵循 event framing，忽略 event/id/retry 并合并多行 data', async () => {
+  const chunks = [
+    'event: message_start\nid: anthropic-1\nretry: 1000\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
+    'event: content_block_start\ndata: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}\n\n',
+    'event: content_block_delta\ndata: {\ndata: "type": "content_block_delta",\ndata: "index": 0,\ndata: "delta": {"text": "你"}\ndata: }\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"text":"好"}}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":2}}\n\n',
+    'event: message_stop\nid: anthropic-2\ndata: [DONE]\n\n',
+  ];
+  const recorder = makeBroadcastRecorder();
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(), message: recorder.message,
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) { for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk)); controller.close(); },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const result = await service.complete({ ...input, requestId: 'anthropic-stream-1', generation: 'gen-anthropic', stream: true });
+  assert.equal(result.message.content, '你好');
+  assert.deepEqual(result.usage, { inputTokens: 3, outputTokens: 2, totalTokens: 5 });
+  const deltas = recorder.events.filter((event) => event.topic === 'model-service.complete.delta').map((event) => (event.payload as any).delta.text);
+  assert.deepEqual(deltas, ['你', '好']);
+});
+
+test('流式 SSE 单事件超过有限帧缓存时返回稳定错误并取消 reader', async () => {
+  let readerCancelled = false;
+  const oversized = `data: ${JSON.stringify({ choices: [{ delta: { content: 'x'.repeat(300_000) } }] })}\n\n`;
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(),
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(oversized)); },
+      cancel() { readerCancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  await assert.rejects(service.complete({ ...input, requestId: 'stream-limit', stream: true }), (error: any) => {
+    assert.equal(error.code, 'MODEL_SERVICE_INVALID_RESPONSE');
+    assert.match(error.message, /大小上限/u);
+    return true;
+  });
+  assert.equal(readerCancelled, true);
+});
+
+test('Provider 不支持 streaming 时走一次非流式兼容完成，不伪造 delta', async () => {
+  const recorder = makeBroadcastRecorder();
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: false }] })),
+    credentials: makeCredentials(), message: recorder.message,
+    fetch: async (_url, init) => {
+      assert.equal(JSON.parse(String(init?.body)).stream, false);
+      return response({ choices: [{ message: { content: '兼容' } }] });
+    },
+  });
+  const result = await service.complete({ ...input, requestId: 'fallback-1', stream: true });
+  assert.equal(result.message.content, '兼容');
+  assert.equal(recorder.events.filter((event) => event.topic === 'model-service.complete.delta').length, 0);
+});
+
+test('streaming reader 收到 cancel 后停止读取并丢弃晚到 chunk，取消幂等', async () => {
+  const recorder = makeBroadcastRecorder();
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(), message: recorder.message,
+    fetch: async () => new Response(new ReadableStream({ start(next) { controller = next; next.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"先"}}]}\n\n')); } }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const completion = service.complete({ ...input, requestId: 'stream-cancel', generation: 'gen-cancel', stream: true });
+  while (recorder.events.filter((event) => event.topic === 'model-service.complete.delta').length < 1) await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(service.cancel({ requestId: 'stream-cancel' }), { requestId: 'stream-cancel', state: 'cancelled' });
+  assert.deepEqual(service.cancel({ requestId: 'stream-cancel' }), { requestId: 'stream-cancel', state: 'already_cancelled' });
+  try { controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"晚"}}]}\n\n')); } catch { /* reader cancellation closes the fixture */ }
+  await assert.rejects(completion, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.equal(recorder.events.filter((event) => event.topic === 'model-service.complete.delta').length, 1);
+});

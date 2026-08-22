@@ -78,6 +78,8 @@ export interface ModelServiceCompleteRequest {
   tools?: unknown[];
   maxOutputTokens?: number;
   retryMode?: 'default' | 'disabled';
+  stream?: boolean;
+  generation?: string;
 }
 
 export interface ModelServiceCompleteResponse {
@@ -115,6 +117,14 @@ export interface ModelServiceClient {
   complete(request: ModelServiceCompleteRequest): Promise<ModelServiceCompleteResponse>;
   cancel(requestId: string): Promise<{ requestId: string; state: 'cancelled' | 'already_cancelled' | 'completed' | 'timed_out' | 'failed' | 'not_found' } | unknown>;
   webSearch?(query: string, signal?: AbortSignal): Promise<string>;
+  onDelta?(requestId: string, listener: (delta: ModelServiceDelta) => void): () => void;
+}
+
+export interface ModelServiceDelta {
+  requestId: string;
+  generation: string;
+  sequence: number;
+  delta: { type: 'text' | 'reasoning' | 'tool-call'; text?: string; callId?: string; name?: string; arguments?: string };
 }
 
 interface AppendEventOptions {
@@ -213,12 +223,12 @@ export class HarborsAdapter implements AgentAdapter {
       logPath: this.logPathFor(id),
     };
     await mkdir(this.storageDir, { recursive: true });
-    await withSessionFileLock(session.logPath, async () => {
+    await withSessionFileLock(session.logPath!, async () => {
       await this.assertNotDeletedOnDisk(id);
       await this.assertRegularSessionFile(session.logPath!, true);
       await writeFile(session.logPath!, `${JSON.stringify(this.headerFor(session))}\n`, { encoding: 'utf8', flag: 'wx' });
     });
-    const initialStat = await stat(session.logPath);
+    const initialStat = await stat(session.logPath!);
     session.persistedSize = initialStat.size;
     session.persistedMtimeMs = initialStat.mtimeMs;
     this.sessions.set(id, session);
@@ -307,7 +317,7 @@ export class HarborsAdapter implements AgentAdapter {
     };
   }
 
-  async sendMessage(id: string, content: string, input?: AgentTurnInput, _onDelta?: (delta: string) => void, onStatus?: (status: string) => void): Promise<string> {
+  async sendMessage(id: string, content: string, input?: AgentTurnInput, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void, onStatus?: (status: string) => void): Promise<string> {
     if (this.stopped) throw new Error('Harbors adapter has been stopped');
     if (this.activeTurnControllers.has(id)) throw new Error('该会话已有正在执行的 turn');
     const session = await this.load(id);
@@ -347,7 +357,7 @@ export class HarborsAdapter implements AgentAdapter {
     this.activeTurnControllers.set(id, turnController);
     this.activeTurnCompletions.set(id, completion);
     try {
-      const response = await this.runTurn(session, turn, signal, onStatus);
+      const response = await this.runTurn(session, turn, signal, onStatus, onDelta);
       throwIfAborted(signal);
       await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } });
       throwIfAborted(signal);
@@ -387,11 +397,13 @@ export class HarborsAdapter implements AgentAdapter {
 
   async getModels(): Promise<AgentOptions> {
     const catalog = await this.modelService.getCatalog();
-    const models: AgentModelOption[] = catalog.models.map((model) => ({
-      ...model,
-      ...(model.reasoningEfforts ? { reasoningEfforts: model.reasoningEfforts.map((option) => typeof option === 'string' ? { id: option, name: option } : option) } : {}),
-      ...(model.serviceTiers ? { serviceTiers: model.serviceTiers.map((option) => typeof option === 'string' ? { id: option, name: option } : option) } : {}),
-    }));
+    const toOptions = (options: string[] | AgentOption[] | undefined): AgentOption[] | undefined => options?.map((option) => typeof option === 'string' ? { id: option, name: option } : option);
+    const models: AgentModelOption[] = catalog.models.map((model) => {
+      const { reasoningEfforts, serviceTiers, ...base } = model;
+      const normalizedReasoning = toOptions(reasoningEfforts);
+      const normalizedTiers = toOptions(serviceTiers);
+      return { ...base, ...(normalizedReasoning ? { reasoningEfforts: normalizedReasoning } : {}), ...(normalizedTiers ? { serviceTiers: normalizedTiers } : {}) };
+    });
     const configurationError = typeof catalog.configurationError === 'string' ? catalog.configurationError : catalog.configurationError?.message;
     return { models, defaultModel: catalog.defaultModel, ...(configurationError ? { configurationError } : {}) };
   }
@@ -443,16 +455,16 @@ export class HarborsAdapter implements AgentAdapter {
 
   setPermissionRequester(requester?: AgentPermissionRequester): void { this.permissionRequester = requester; }
 
-  private async runTurn(session: StoredSession, turn: number, signal: AbortSignal, onStatus?: (status: string) => void): Promise<string> {
+  private async runTurn(session: StoredSession, turn: number, signal: AbortSignal, onStatus?: (status: string) => void, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void): Promise<string> {
     const catalog = await this.modelService.getCatalog();
     throwIfAborted(signal);
     const model = session.model || catalog.defaultModel || catalog.models[0]?.id;
     if (!model) throw new Error(typeof catalog.configurationError === 'string' ? catalog.configurationError : catalog.configurationError?.message || 'model-service 未配置可用模型');
     const contextWindow = contextWindowFor(catalog.models, model);
-    return this.runModelToolLoop(session, turn, model, contextWindow, onStatus, signal);
+    return this.runModelToolLoop(session, turn, model, contextWindow, onStatus, signal, onDelta);
   }
 
-  private async runModelToolLoop(session: StoredSession, turn: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal): Promise<string> {
+  private async runModelToolLoop(session: StoredSession, turn: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
     const systemPrompt = await loadWorkspaceInstructions(workspace);
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
@@ -463,20 +475,36 @@ export class HarborsAdapter implements AgentAdapter {
       throwIfAborted(signal);
       await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
       await this.appendEvent(session, 'step/start', { turn, step });
+      let deltaPersistence: Promise<void> = Promise.resolve();
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求模型服务…');
         const requestId = randomUUID();
-        await this.appendEvent(session, 'request/context', { turn, step, requestId, provider: 'model-service', model, ...turnSettings(session), ...permissionSettings(session) });
+        const generation = randomUUID();
+        const assistantItemId = randomUUID();
+        let streamedText = '';
+        let acceptedSequence = 0;
+        await this.appendItemEvent(session, 'item/started', turn, step, assistantItemId, 'message', { role: 'assistant', content: '' }, 'started');
+        await this.appendEvent(session, 'request/context', { turn, step, requestId, generation, provider: 'model-service', model, ...turnSettings(session), ...permissionSettings(session) });
         const messages = toModelServiceMessages(session.events, session.surface);
-        const response = await this.completeModel({ requestId, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default' }, signal);
+        const response = await this.completeModel({ requestId, generation, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default', stream: true }, signal, (delta) => {
+          if (delta.requestId !== requestId || delta.generation !== generation || delta.sequence !== acceptedSequence) return;
+          acceptedSequence += 1;
+          if (delta.delta.type !== 'text' || !delta.delta.text) return;
+          streamedText += delta.delta.text;
+          deltaPersistence = deltaPersistence.then(() => this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: delta.delta.text, requestId, generation, sequence: delta.sequence }, 'delta'));
+          onDelta?.(delta.delta.text, { requestId, generation, sequence: delta.sequence });
+        });
+        // The model completion may resolve immediately after its last delta.
+        // Drain the append-only persistence chain before writing the canonical
+        // assistant message or any terminal item/step event.
+        await deltaPersistence;
         overflowRetries = 0;
         throwIfAborted(signal);
         const message = response.message;
         const calls = (message.toolCalls || []).filter((call) => call.id && call.name).map((call) => ({ id: call.id, name: call.name, input: parseToolArguments(call.arguments), arguments: boundedText(call.arguments) }));
         const usage = response.usage;
         const traceToolCalls = message.toolCalls?.map((call) => ({ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }));
-        const assistantItemId = randomUUID();
         const reasoningText = thinkingContent(message.content);
         if (reasoningText) {
           const reasoningItemId = randomUUID();
@@ -484,11 +512,13 @@ export class HarborsAdapter implements AgentAdapter {
           await this.appendItemEvent(session, 'item/delta', turn, step, reasoningItemId, 'reasoning', { text: reasoningText }, 'delta');
           await this.appendItemEvent(session, 'item/completed', turn, step, reasoningItemId, 'reasoning', { text: reasoningText }, 'completed');
         }
-        await this.appendItemEvent(session, 'item/started', turn, step, assistantItemId, 'message', { role: 'assistant', content: message.content }, 'started');
         await this.appendEvent(session, 'assistant/message', { turn, step, itemId: assistantItemId, ...(usage ? { usage } : {}), message: { role: 'assistant', content: message.content, ...(traceToolCalls ? { tool_calls: traceToolCalls } : {}), source: { kind: 'model', provider: 'model-service', model: response.model }, id: assistantItemId } }, { surfaceOp: 'append' });
-        await this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: message.content }, 'delta');
+        if (!acceptedSequence) {
+          const finalText = textContent(message.content);
+          if (finalText) { streamedText = finalText; await this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: finalText, requestId, generation, sequence: 0 }, 'delta'); onDelta?.(finalText, { requestId, generation, sequence: 0 }); }
+        }
         if (!calls.length) {
-          const text = textContent(message.content);
+          const text = streamedText || textContent(message.content);
           if (!text) throw new Error('Harbors agent returned no text response');
           await this.appendItemEvent(session, 'item/completed', turn, step, assistantItemId, 'message', { role: 'assistant', content: message.content, ...(usage ? { usage } : {}) }, 'completed');
           throwIfAborted(signal);
@@ -510,6 +540,10 @@ export class HarborsAdapter implements AgentAdapter {
         await this.appendEvent(session, 'step/end', { turn, step });
         step += 1;
       } catch (error) {
+        // A provider cancellation/error can race with the last append. Await
+        // the chain so a rejected append is observed and never becomes an
+        // unhandled rejection, and so step/end cannot overtake item/delta.
+        await deltaPersistence.catch(() => undefined);
         await this.appendEvent(session, 'step/end', { turn, step }).catch(() => undefined);
         if (isContextOverflowError(error) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
           overflowRetries += 1;
@@ -522,7 +556,7 @@ export class HarborsAdapter implements AgentAdapter {
     }
   }
 
-  private async completeModel(request: ModelServiceCompleteRequest, signal: AbortSignal): Promise<ModelServiceCompleteResponse> {
+  private async completeModel(request: ModelServiceCompleteRequest, signal: AbortSignal, onDelta?: (delta: ModelServiceDelta) => void): Promise<ModelServiceCompleteResponse> {
     throwIfAborted(signal);
     let cancelled = false;
     const onAbort = () => {
@@ -530,6 +564,7 @@ export class HarborsAdapter implements AgentAdapter {
       void this.modelService.cancel(request.requestId).catch(() => undefined);
     };
     signal.addEventListener('abort', onAbort, { once: true });
+    const unsubscribe = this.modelService.onDelta?.(request.requestId, (delta) => onDelta?.(delta));
     try {
       const response = await this.modelService.complete(request);
       if (cancelled) {
@@ -542,6 +577,7 @@ export class HarborsAdapter implements AgentAdapter {
       throw asModelServiceError(error, toModelServiceErrorEnvelope(error, request.requestId));
     } finally {
       signal.removeEventListener('abort', onAbort);
+      unsubscribe?.();
     }
   }
 

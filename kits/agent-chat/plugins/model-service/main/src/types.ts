@@ -51,6 +51,8 @@ export interface ModelCatalogEntry {
   defaultReasoningEffort?: string;
   defaultServiceTier?: string;
   webSearch?: boolean;
+  /** Provider 是否声明可用真实流式响应；未声明时按适配器默认支持。 */
+  streaming?: boolean;
 }
 
 export interface ModelCatalog {
@@ -107,6 +109,10 @@ export interface CompleteInput {
   serviceTier?: string;
   /** milliseconds; a caller can only shorten the configured provider timeout */
   timeoutMs?: number;
+  /** 请求真实 Provider streaming；不支持时由 Model Service 使用非流式兼容路径。 */
+  stream?: boolean;
+  /** 调用方为一次重启/替换生成的 opaque generation。 */
+  generation?: string;
 }
 
 export interface NormalizedUsage {
@@ -127,6 +133,19 @@ export interface CompleteOutput {
     toolCalls?: NeutralToolCall[];
   };
   usage?: NormalizedUsage;
+}
+
+export type ModelDelta =
+  | { type: 'text'; text: string }
+  | { type: 'reasoning'; text: string }
+  | { type: 'tool-call'; callId: string; name?: string; arguments?: string };
+
+export interface CompleteDelta {
+  requestId: string;
+  generation: string;
+  /** 单一 request/generation 内从 0 开始严格递增。 */
+  sequence: number;
+  delta: ModelDelta;
 }
 
 export interface WebSearchInput { requestId: string; query: string; timeoutMs?: number; }
