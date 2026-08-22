@@ -52,6 +52,31 @@ test('并发 API 共享同一会话快照并连续分配 seq', async () => {
   });
 });
 
+test('新 Agent trace 为 turn/item/request 提供完整关联与 Item 终态', async () => {
+  await withStorage(async (_directory, adapter) => {
+    const conversation = await adapter.createConversation('/workspace');
+    await adapter.sendMessage(conversation.id, 'hello', { model: 'test-model' });
+    const trace = await adapter.getConversationTrace(conversation.id);
+    const turnStart = trace.find((event) => event.type === 'turn/start');
+    assert.ok(turnStart?.turnId);
+    assert.equal(turnStart?.conversationId, conversation.id);
+    const itemEvents = trace.filter((event) => event.type.startsWith('item/'));
+    assert.ok(itemEvents.length > 0);
+    const itemIds = new Set(itemEvents.map((event) => event.itemId));
+    for (const itemId of itemIds) {
+      if (!itemId) continue;
+      const phases = itemEvents.filter((event) => event.itemId === itemId).map((event) => event.itemPhase);
+      assert.equal(phases[0], 'started');
+      assert.equal(phases.at(-1), 'completed');
+      assert.equal(itemEvents.filter((event) => event.itemId === itemId).every((event) => event.turnId === turnStart?.turnId && event.conversationId === conversation.id), true);
+    }
+    const context = trace.find((event) => event.type === 'request/context');
+    assert.equal(typeof context?.requestId, 'string');
+    assert.equal(context?.turnId, turnStart?.turnId);
+    assert.equal(context?.data.conversationId, conversation.id);
+  });
+});
+
 test('存储路径只来自 runtime data，不读取历史环境变量目录', async () => {
   const runtimeData = await mkdtemp(join(tmpdir(), 'harbors-agent-runtime-data-'));
   const legacyData = await mkdtemp(join(tmpdir(), 'harbors-agent-legacy-data-'));

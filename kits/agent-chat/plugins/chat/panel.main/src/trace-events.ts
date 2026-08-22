@@ -8,6 +8,12 @@ export interface TraceEvent {
   seq: number;
   time: number;
   data: Record<string, unknown>;
+  conversationId?: string;
+  turnId?: string;
+  itemId?: string;
+  requestId?: string;
+  itemKind?: 'message' | 'reasoning' | 'tool-call' | 'tool-result' | 'approval';
+  itemPhase?: 'started' | 'delta' | 'completed';
   /** 事件进入模型可见 surface 的方式；用于区分被压缩替换的历史消息。 */
   surfaceOp?: 'append' | { op: 'replace'; start: number; end: number };
 }
@@ -58,7 +64,7 @@ export interface TraceStep {
   completed: boolean;
 }
 
-export type TraceTurnTerminalStatus = 'completed' | 'failed';
+export type TraceTurnTerminalStatus = 'completed' | 'failed' | 'cancelled' | 'rejected' | 'timed_out';
 export type TraceIncompletePhase = 'step_started' | 'model_request' | 'model_response' | 'tool_execution';
 
 export interface TraceTurn {
@@ -259,10 +265,18 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
       if (!turns.has(turn)) turns.set(turn, turnEntry);
       if (event.type === 'turn/end') {
         const failure = extractTurnEndError(event.data);
+        const reason = event.data.reason as Record<string, unknown> | undefined;
+        const status = reason?.kind === 'cancelled' || reason?.kind === 'cancel' || reason?.kind === 'aborted'
+          ? 'cancelled'
+          : reason?.kind === 'rejected' || reason?.kind === 'rejection'
+            ? 'rejected'
+            : reason?.kind === 'timed_out' || reason?.kind === 'timeout'
+              ? 'timed_out'
+              : failure ? 'failed' : 'completed';
         turnEntry.terminal = {
-          status: failure ? 'failed' : 'completed',
+          status,
           seq: event.seq,
-          ...(failure ? { reason: failure } : {}),
+          ...(failure ? { reason: failure } : reason?.kind && status !== 'completed' ? { reason: String(reason.kind) } : {}),
         };
       }
     }

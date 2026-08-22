@@ -11,7 +11,12 @@ export const AGENT_SANDBOX_MODES: readonly AgentSandboxMode[] = ['read-only', 'w
 export type AgentApprovalPolicy = 'ask' | 'always';
 export const AGENT_APPROVAL_POLICIES: readonly AgentApprovalPolicy[] = ['ask', 'always'];
 
-export type AgentPermissionOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
+export type AgentPermissionOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable' | 'timed_out';
+
+/** Agent/Chat 事件协议中的稳定内容项 discriminator。 */
+export type AgentItemKind = 'message' | 'reasoning' | 'tool-call' | 'tool-result' | 'approval';
+export type AgentItemPhase = 'started' | 'delta' | 'completed';
+export type AgentTurnTerminalKind = 'completed' | 'failed' | 'cancelled' | 'rejected' | 'timed_out';
 
 export type AgentProgressPhase = 'running' | 'waiting_permission' | 'completed' | 'error';
 
@@ -31,6 +36,10 @@ export interface AgentPermissionState {
 export interface AgentPermissionRequest {
   requestId: string;
   conversationId: string;
+  /** 一次 Agent turn 的稳定 ID；旧 adapter 可缺省，由协议归一化层补齐。 */
+  turnId?: string;
+  /** 触发审批的工具 Item ID。 */
+  itemId?: string;
   turn: number;
   step: number;
   toolName: string;
@@ -152,6 +161,14 @@ export interface AgentTraceEvent {
   seq: number;
   time: number;
   data: Record<string, unknown>;
+  /** 新协议关联键。旧 JSONL 事件没有这些字段时由读取层按 data/seq 兼容推导。 */
+  conversationId?: string;
+  turnId?: string;
+  itemId?: string;
+  requestId?: string;
+  /** Item 事件的稳定 discriminator 与生命周期阶段。 */
+  itemKind?: AgentItemKind;
+  itemPhase?: AgentItemPhase;
   /** How this event enters the model-visible surface. */
   surfaceOp?: 'append' | { op: 'replace'; start: number; end: number };
   /** Earlier events cited as the source of a replacement or derived message. */

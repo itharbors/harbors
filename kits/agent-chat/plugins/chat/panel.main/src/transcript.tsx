@@ -15,6 +15,8 @@ export interface MessageData {
 interface PermissionRequest {
   requestId: string;
   conversationId: string;
+  turnId?: string;
+  itemId?: string;
   turn: number;
   step: number;
   toolName: string;
@@ -570,7 +572,7 @@ export interface DisplayTurn {
   terminal?: TraceTurn["terminal"];
   trailingIncompleteStep?: TraceTurn["trailingIncompleteStep"];
   hasStructuredTrace: boolean;
-  status: "running" | "interrupted" | "completed" | "failed";
+  status: "running" | "interrupted" | "completed" | "failed" | "cancelled" | "rejected" | "timed_out";
 }
 
 export function shouldCollapseTurn(turn: DisplayTurn): boolean {
@@ -759,7 +761,13 @@ function projectTurn(
   const steps = reconcileSteps(previous, sourceTurn, localRequests, fallbackAssistant, turn);
   const status: DisplayTurn["status"] = sourceTurn?.terminal?.status === "failed"
     ? "failed"
-    : sourceTurn?.terminal?.status === "completed" || hasLegacyFinal
+    : sourceTurn?.terminal?.status === "cancelled"
+      ? "cancelled"
+      : sourceTurn?.terminal?.status === "rejected"
+        ? "rejected"
+        : sourceTurn?.terminal?.status === "timed_out"
+          ? "timed_out"
+          : sourceTurn?.terminal?.status === "completed" || hasLegacyFinal
       ? "completed"
       : runningTurn === turn
         ? "running"
@@ -815,7 +823,10 @@ export function createDisplayTurnProjector(): DisplayTurnProjector {
           const hasLegacyFinal = !item.sourceTurn && item.assistantTexts.length > 0;
           const isInterrupted = !hasLegacyFinal
             && item.sourceTurn?.terminal?.status !== "completed"
-            && item.sourceTurn?.terminal?.status !== "failed";
+            && item.sourceTurn?.terminal?.status !== "failed"
+            && item.sourceTurn?.terminal?.status !== "cancelled"
+            && item.sourceTurn?.terminal?.status !== "rejected"
+            && item.sourceTurn?.terminal?.status !== "timed_out";
           if (isInterrupted) {
             runningTurn = item.turn;
             break;
@@ -951,7 +962,7 @@ const TurnBlock = memo(function TurnBlock({
   // 默认策略：完成且有最终回复才折叠。
   const collapsed = manualCollapsed ?? hasFinalResponse;
 
-  const statusLabel = ({ running: "运行中", interrupted: "已中断", completed: "已完成", failed: "失败" } as const)[turn.status];
+  const statusLabel = ({ running: "运行中", interrupted: "已中断", completed: "已完成", failed: "失败", cancelled: "已取消", rejected: "已拒绝", timed_out: "已超时" } as const)[turn.status];
   const phaseLabel = turn.trailingIncompleteStep
     ? ({ step_started: "步骤启动阶段", model_request: "模型请求阶段", model_response: "模型响应阶段", tool_execution: "工具执行阶段" } as const)[turn.trailingIncompleteStep.phase]
     : null;
