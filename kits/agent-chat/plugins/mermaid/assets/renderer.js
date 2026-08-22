@@ -18,7 +18,7 @@ export function load() {
   mermaidPromise = new Promise((resolve, reject) => {
     // 从 mermaid 插件的 assets 加载 mermaid.js
     const script = document.createElement('script');
-    script.src = '/api/assets/plugin/mermaid/assets/mermaid.min.js';
+    script.src = '/api/assets/plugin/mermaid/mermaid.min.js';
     script.onload = () => {
       mermaidLoaded = true;
       // 初始化 mermaid，关闭自动渲染
