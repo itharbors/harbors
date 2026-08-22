@@ -69,3 +69,49 @@ test('草稿和空选择不伪造 selectedProject', async () => {
     plugin.lifecycle.unload();
   }
 });
+
+test('Panel 新建请求通过 selected 广播让订阅面板进入草稿态', async () => {
+  const broadcasts: Array<[string, unknown]> = [];
+  let resolveInitial!: (value: unknown) => void;
+  const initialList = new Promise((resolve) => { resolveInitial = resolve; });
+  let chatDraftVisible = false;
+  const runtime = {
+    message: {
+      broadcast(topic: string, value: unknown) {
+        broadcasts.push([topic, value]);
+        // 用 Chat Panel 的 onConversationSelected 边界模拟真实广播订阅。
+        if (topic === 'conversation.selected') {
+          const state = value as { selectedConversationId?: string | null; draft?: unknown };
+          chatDraftVisible = state.selectedConversationId === null && Boolean(state.draft);
+        }
+      },
+      request(target: string, method: string) {
+        assert.equal(target, 'agent');
+        assert.equal(method, 'listConversations');
+        return initialList;
+      },
+    },
+  };
+
+  plugin.lifecycle.load(runtime);
+  try {
+    // 这就是 conversation.list Panel 的定向请求：旧的初始化列表请求仍未返回。
+    const panelRequest = async (target: string, method: string, ...args: unknown[]) => {
+      assert.equal(target, 'conversation');
+      assert.equal(method, 'select');
+      return plugin.methods.select(...args);
+    };
+    const snapshot = await panelRequest('conversation', 'select', null, { project: '/workspace/draft' });
+    resolveInitial([{ id: 'conversation:old', project: '/workspace/old' }]);
+    await initialList;
+
+    assert.equal(snapshot.selectedConversationId, null);
+    assert.deepEqual(snapshot.draft, { source: 'harbors', project: '/workspace/draft' });
+    assert.equal(chatDraftVisible, true);
+    const selected = broadcasts.filter(([topic]) => topic === 'conversation.selected').at(-1)?.[1] as any;
+    assert.equal(selected.selectedConversationId, null);
+    assert.deepEqual(selected.draft, { source: 'harbors', project: '/workspace/draft' });
+  } finally {
+    plugin.lifecycle.unload();
+  }
+});
