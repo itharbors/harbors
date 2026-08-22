@@ -64,8 +64,9 @@ Web 是唯一宿主。涉及 UI、Kit 装配或共享可见行为时，按需使
 
 Kit 测试流程的具体现状如下：
 
-- 当前 `kits/agent-chat/package.json` 与 `kits/default/package.json` 的 `test:kit` 都是 `validate`，它们校验 Kit
-  descriptor / manifest，不应被描述为 Kit assembly 测试。
+- `kits/default/package.json` 的 `test:kit` 仍是 `validate`，只校验 Kit descriptor / manifest。
+  `kits/agent-chat/package.json` 的 `test:kit` 在 validate 后还会运行 `test:assembly`，由真实 Server Editor
+  加载 Agent Chat Kit 的全部插件并执行跨插件装配回归；因此该 Kit 的流程同时覆盖 descriptor 校验和 Kit assembly。
 - `pnpm run kits:test <slug>` 会先构建所需 Framework toolchain，再构建选中的 Kit，随后执行该 Kit 声明的
   `test` script；对上述两个内置 Kit，这个脚本最终就是 `test:kit`，即 `validate`。这个命令不能笼统地宣称仓库
   已有 Kit assembly 测试。
