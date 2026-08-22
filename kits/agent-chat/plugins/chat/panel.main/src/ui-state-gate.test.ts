@@ -30,3 +30,14 @@ test('keeps revision monotonic within one generation', () => {
   assert.equal(acceptConversationUiState(gate, state(2, 'A', 1)), false);
   assert.equal(acceptConversationUiState(gate, state(3, 'A', 3)), true);
 });
+
+test('rejects same-sequence initialization snapshots from a newer generation', () => {
+  const gate = createConversationUiStateGate();
+
+  assert.equal(acceptConversationUiState(gate, state(1, 'draft-generation', 1)), true);
+  // getState started before the broadcast but returned after a plugin reload;
+  // its empty snapshot must not erase the already-renderable draft.
+  assert.equal(acceptConversationUiState(gate, state(1, 'reloaded-generation', 0)), false);
+  assert.equal(gate.latestGeneration, 'draft-generation');
+  assert.equal(gate.latestRevision, 1);
+});
