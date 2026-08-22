@@ -1,19 +1,20 @@
 # Agent Chat Kit 的 model-service Plugin
 
-`model-service` 是 Agent Chat Kit 内负责模型访问的后台 Plugin。它把模型配置、凭据解析、协议适配和
-HTTP transport 从 `agent` 的会话与工具循环中隔离出来，同时保留当前 Harbors Relay 的兼容入口。
-
-本文描述当前 V1 的边界；它不是 `ctx.config`/`ctx.credentials` Profile 配置方案。
+`model-service` 是 Agent Chat Kit 内负责模型访问和 Provider 配置的后台 Plugin。它把配置、凭据解析、
+Provider 协议适配、HTTP transport 和请求终态管理从 `agent` 的会话与工具循环中隔离出来。本文描述
+当前实现的消息契约和边界；它不定义 streaming，也不定义完整的 Agent event protocol。
 
 ## 职责边界
 
 ### model-service 负责
 
-- 读取 legacy 环境变量和 DSH Relay 配置；优先级保持为显式 `HARBORS_RELAY_*`、`PI_AGENT_*`、DSH 配置。
-- 解析模型目录、默认模型、上下文窗口以及模型的 reasoning effort/service tier 元数据。
-- 读取 DSH 兼容凭据。凭据只在 Plugin 内存中用于请求，不进入消息返回值、日志、会话事件或模型目录；DSH credential 路径不是普通文件、权限包含 `0o077` 或读取异常时，以脱敏的 `MODEL_SERVICE_NOT_CONFIGURED` 失败，只有 `ENOENT` 视为缺失。
-- 根据配置选择 `openai-completions` 或 `anthropic-messages`，构造 URL、认证 Header 和 provider payload。
-- 执行单次 HTTP 请求、超时、重试、`Retry-After` 退避、响应归一化和取消。
+- 从绑定的 Plugin Config 读取 Provider、模型目录、默认模型和重试/超时选项。
+- 通过 Credential Vault 读取 Provider 凭据。凭据只在 Plugin 内存中用于请求，不进入消息返回值、日志、
+  会话事件或模型目录。
+- 根据 Provider 配置选择 `openai-completions` 或 `anthropic-messages`，构造 URL、认证 Header 和
+  Provider payload。
+- 执行单次非流式 HTTP 请求、超时、重试、`Retry-After` 退避、响应归一化和取消。
+- 持久化 Provider 配置，并在成功写入后广播模型目录变化。
 
 ### agent 负责
 
@@ -24,23 +25,65 @@ HTTP transport 从 `agent` 的会话与工具循环中隔离出来，同时保�
 两者之间只通过消息 request 交互。Plugin 不直接 import 另一 Plugin 的实现，也不使用
 `plugin.callPlugin` 作为业务通道。
 
-## 消息契约
+## 消息入口与 ACL
 
-`model-service/package.json` 声明以下 request：
+`model-service/package.json` 声明的 request 入口如下：
 
-```text
-model-service.getCatalog()
-model-service.complete(input)
-model-service.cancel(requestId)
+```json
+{
+  "getCatalog": ["getCatalog"],
+  "getSettings": { "methods": ["getSettings"], "callers": ["model-service"] },
+  "saveProvider": { "methods": ["saveProvider"], "callers": ["model-service"] },
+  "deleteProvider": { "methods": ["deleteProvider"], "callers": ["model-service"] },
+  "resetProviderCredential": { "methods": ["resetProviderCredential"], "callers": ["model-service"] },
+  "webSearch": { "methods": ["webSearch"], "callers": ["agent"] },
+  "complete": { "methods": ["complete"], "callers": ["agent"] },
+  "cancel": { "methods": ["cancel"], "callers": ["agent"] }
+}
 ```
 
-V1 没有模型配置写入，因此不发送 `model-service.catalog.changed` 广播。Agent 继续向 Chat/Conversation
-Plugin 广播既有的会话、trace、delta 和 status 主题；这些是 Agent 的 UI 可见状态，不是 model-service
-内部协议。
+`complete`、`cancel` 和 `webSearch` 只允许 `agent` caller。Framework 在进入 model-service 的 handler
+之前，根据受信 caller 执行 manifest 中的 ACL；未授权请求在 Framework 路由层被拒绝，不会进入
+Model Service，也不会被包装成下文的 `ErrorEnvelope`。设置面板使用 `model-service` caller 访问
+`getSettings`、`saveProvider`、`deleteProvider` 和 `resetProviderCredential`。`getCatalog` 是无
+`callers` 限制的目录读取 request。
 
-### getCatalog
+## 请求与错误协议
 
-输入为空，返回：
+所有带请求生命周期的操作使用调用方生成的不透明 `requestId`。request 的成功值沿消息边界返回；
+Model Service handler 产生的业务错误通过 request reject 传递，并使用稳定的错误 envelope：
+
+```ts
+interface ErrorEnvelope {
+  code: ModelServiceErrorCode;
+  message: string;
+  retryable: boolean;
+  requestId: string;
+}
+
+type ModelServiceErrorCode =
+  | 'UNAUTHORIZED'
+  | 'INVALID_INPUT'
+  | 'UNSUPPORTED_CAPABILITY'
+  | 'MODEL_SERVICE_NOT_CONFIGURED'
+  | 'MODEL_SERVICE_UNSUPPORTED_API'
+  | 'MODEL_SERVICE_HTTP_ERROR'
+  | 'MODEL_SERVICE_CONTEXT_OVERFLOW'
+  | 'MODEL_SERVICE_INVALID_RESPONSE'
+  | 'MODEL_SERVICE_NETWORK_ERROR'
+  | 'MODEL_SERVICE_TIMEOUT'
+  | 'MODEL_SERVICE_CANCELLED'
+  | 'MODEL_SERVICE_STOPPED';
+```
+
+`message` 必须是安全的可展示信息，不携带凭据、凭据来源、凭据文件路径、环境变量名或原始 Provider
+response。Framework ACL 的未授权拒绝发生在 handler 之前，不属于这个 envelope；进入 handler 后的
+参数校验、能力拒绝、Provider/网络失败、取消和超时才按上述结构 reject。虽然类型联合保留
+`UNAUTHORIZED`，当前跨 Plugin ACL 拒绝不会由 Model Service handler 产生该 envelope。
+
+## getCatalog
+
+输入为空，返回当前配置和 Provider 能力与适配器能力的交集：
 
 ```ts
 interface ModelCatalogEntry {
@@ -52,6 +95,7 @@ interface ModelCatalogEntry {
   serviceTiers?: string[];
   defaultReasoningEffort?: string;
   defaultServiceTier?: string;
+  webSearch?: boolean;
 }
 
 interface ModelCatalog {
@@ -64,12 +108,14 @@ interface ModelCatalog {
 }
 ```
 
-配置缺失仍返回 catalog，便于 Agent 显示稳定的配置提示；`message` 不包含凭据、凭据文件路径或实际
-环境变量名。没有 DSH 模型目录时保留当前 fallback 模型行为。
+OpenAI-compatible Provider 的 `reasoningEfforts`、`serviceTiers` 及其有效默认值可出现在目录中；
+Anthropic Provider 不宣称这两类能力，即使配置中存在对应字段。`webSearch` 只有在 Anthropic model
+显式配置 `webSearch: true` 时才出现在有效目录能力中。配置缺失仍返回 catalog，便于 Agent/Chat
+显示稳定的配置提示；提示文本不包含凭据或内部标识。
 
-### complete
+## complete
 
-输入和输出使用 provider-neutral 结构：
+输入和输出使用 Provider-neutral 结构：
 
 ```ts
 interface TextContentBlock { type: 'text'; text: string; }
@@ -90,19 +136,25 @@ interface NeutralMessage {
   isError?: boolean;
 }
 
+interface ModelTool {
+  name: string;
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 interface CompleteInput {
   requestId: string;
   purpose: 'turn' | 'compaction';
   model?: string;
   system?: string;
   messages: NeutralMessage[];
-  tools?: Array<{
-    name: string;
-    description: string;
-    inputSchema: Record<string, unknown>;
-  }>;
+  tools?: ModelTool[];
   maxOutputTokens?: number;
   retryMode?: 'default' | 'disabled';
+  reasoningEffort?: string;
+  serviceTier?: string;
+  /** milliseconds; a caller can only shorten the configured provider timeout */
+  timeoutMs?: number;
 }
 
 interface CompleteOutput {
@@ -127,24 +179,64 @@ interface CompleteOutput {
 `purpose: "turn"` 使用正常重试，普通主模型请求的输出上限为 16,384；`purpose: "compaction"` 使用
 `retryMode: "disabled"`，由 Agent 决定何时压缩上下文，压缩请求的上限沿用调用方传入值。
 
-`arguments` 保留 tool call 的 JSON 文本，Agent 负责解析和执行；model-service 只负责 provider 间的
-tool schema/消息转换。`usage` 只有输入/输出用量统计，不是访问凭据。
+`reasoningEffort` 和 `serviceTier` 只有在当前模型目录宣称支持时才接受。OpenAI-compatible 请求把
+它们分别映射为 Provider payload 的 `reasoning_effort` 和 `service_tier`，未显式传入时可使用模型的
+有效默认值；Anthropic 请求不宣称或发送这两项能力。`arguments` 保留 tool call 的 JSON 文本，
+Agent 负责解析和执行。`usage` 只有数量统计，不是访问凭据。
 
-### cancel
+`timeoutMs` 是本次请求的毫秒预算。它只能缩短已配置的 Provider timeout 和系统 timeout，不能延长
+任一上限；实际预算取 Provider、系统/注入预算和请求值的最小值。超时后 request reject 为
+`MODEL_SERVICE_TIMEOUT`，且该 request 进入 `timed_out` 终态。
 
-消息运行时的 request 参数是可序列化值，不能传递 `AbortSignal`。因此每次 `complete` 使用 Agent 生成的
-不透明 `requestId`，Agent 的 turn signal 取消时另发 `cancel(requestId)`：
+## webSearch
+
+`webSearch` 不接受旧的字符串或只含 query 的 legacy 形态，只接受结构化输入，并返回结构化结果：
 
 ```ts
-interface CancelOutput {
+interface WebSearchInput {
   requestId: string;
-  state: 'cancelled' | 'completed' | 'not_found';
+  query: string;
+  timeoutMs?: number;
+}
+
+interface WebSearchOutput {
+  requestId: string;
+  result: string;
 }
 ```
 
-`cancel` 会中止 HTTP fetch 或 retry 退避；对应的 `complete` request reject 为
-`MODEL_SERVICE_CANCELLED`，取消后不得再重试。Plugin unload 会中止所有活动请求并 reject 为
-`MODEL_SERVICE_STOPPED`。
+只有当前解析到的 Anthropic model 显式设置 `webSearch: true` 时才允许调用；OpenAI-compatible 和未
+声明该能力的 Anthropic model 均 reject `UNSUPPORTED_CAPABILITY`。Model Service 在内部调用 Anthropic
+web-search tool，并将结构化来源归一化为 `result` 字符串；Provider 凭据和原始 response 不跨消息边界
+返回。`timeoutMs` 遵循与 `complete` 相同的“只能缩短 Provider/系统预算”规则。
+
+## cancel 与请求终态
+
+```ts
+interface CancelInput { requestId: string; }
+type CancelState =
+  | 'cancelled'
+  | 'already_cancelled'
+  | 'completed'
+  | 'timed_out'
+  | 'failed'
+  | 'not_found';
+interface CancelOutput { requestId: string; state: CancelState; }
+```
+
+`complete` 和 `webSearch` 共用同一组 active/terminal request registry，`cancel` 也查询并更新这组
+registry，因此两种操作的 requestId 不能复用。状态含义如下：
+
+- `cancelled`：请求仍 active 时成功发起取消；对应 request reject 为 `MODEL_SERVICE_CANCELLED`。
+- `already_cancelled`：请求已经以取消终态结束，再次取消。
+- `completed`：请求已成功完成。
+- `timed_out`：请求已因预算耗尽终止。
+- `failed`：请求已因 Provider、网络、停止/卸载或其他失败终止。
+- `not_found`：registry 中没有该 requestId。
+
+取消会中止 HTTP fetch 或 retry 退避，取消后的 `complete`/`webSearch` 不再重试。Plugin unload 会中止
+所有活动请求，并使对应 request reject 为 `MODEL_SERVICE_STOPPED`；其已记录终态通过 `cancel` 表示
+为 `failed`。
 
 ## 消息顺序
 
@@ -153,79 +245,122 @@ interface CancelOutput {
 ```mermaid
 sequenceDiagram
     participant A as agent
+    participant F as Framework ACL/消息路由
     participant M as model-service
-    participant R as Relay
+    participant R as Provider Relay
     participant T as 本地工具
-    A->>M: getCatalog()
-    M-->>A: ModelCatalog
-    loop 每个 turn step
-        A->>M: complete(中立 messages + tools + requestId)
-        M->>R: OpenAI/Anthropic HTTP
-        R-->>M: assistant text/tool calls + usage
-        M-->>A: CompleteOutput
-        A->>T: 执行 tool calls（如有）
-        T-->>A: tool results
-    end
-    A-->>Chat: agent.message.status / trace / delta 广播
+    A->>F: request complete(input, caller=agent)
+    F->>M: 通过 ACL 后调用 complete handler
+    M->>R: OpenAI/Anthropic 非流式 HTTP
+    R-->>M: assistant text/tool calls + usage
+    M-->>A: CompleteOutput
+    A->>T: 执行 tool calls（如有）
+    T-->>A: tool results
+    A-->>Chat: agent message/trace/status 广播
 ```
 
-### 取消
+下一轮 turn 由 Agent 再次发送新的 `complete` request，并带回 assistant tool calls 和 tool results。
+
+### webSearch
 
 ```mermaid
 sequenceDiagram
     participant A as agent
+    participant F as Framework ACL/消息路由
     participant M as model-service
-    participant R as Relay
-    A->>M: complete({requestId})
-    M->>R: fetch(signal)
-    A->>M: cancel(requestId)
-    M--xR: abort fetch/退避
-    M-->>A: reject MODEL_SERVICE_CANCELLED
+    participant R as Anthropic
+    A->>F: request webSearch({requestId, query, timeoutMs?}, caller=agent)
+    F->>M: 通过 ACL 后调用 webSearch handler
+    M->>M: 校验 Anthropic model.webSearch === true
+    M->>R: Anthropic web-search tool request
+    R-->>M: 结构化搜索来源
+    M-->>A: {requestId, result}
 ```
 
-### 配置广播
+### 取消与超时
 
-V1 没有配置写入，所以没有 `model-service -> broadcast` 链路。后续 Profile 管理阶段可以新增
-`model-service.catalog.changed`，顺序应为“配置写入成功 → model-service 广播 → Agent/UI 重新
-`getCatalog`”；广播不能携带凭据或 legacy 配置引用。
+```mermaid
+sequenceDiagram
+    participant A as agent
+    participant F as Framework ACL/消息路由
+    participant M as model-service
+    participant R as Provider Relay
+    A->>F: request complete({requestId, ...}, caller=agent)
+    F->>M: 通过 ACL 后登记 active request
+    M->>R: fetch / retry 退避
+    alt Agent signal abort
+        A->>F: request cancel({requestId}, caller=agent)
+        F->>M: 通过 ACL 后查询共享 registry
+        M--xR: abort fetch/退避
+        M-->>A: CancelOutput(cancelled)
+        M-->>A: complete reject ErrorEnvelope(MODEL_SERVICE_CANCELLED)
+    else timeout budget exhausted
+        M->>M: active -> timed_out，并记录 terminal
+        M--xR: abort fetch/退避
+        M-->>A: complete reject ErrorEnvelope(MODEL_SERVICE_TIMEOUT)
+        A->>F: request cancel({requestId}, caller=agent)
+        F->>M: 通过 ACL 后查询共享 registry
+        M-->>A: CancelOutput(timed_out)
+    end
+```
 
-## HTTP 与错误语义
+### 配置写入与目录广播
 
-OpenAI-compatible 请求继续使用 `${baseUrl}/chat/completions`、Bearer Header、`stream: false`；
-Anthropic 请求继续使用 `${baseUrl}/v1/messages`、`x-api-key`、`anthropic-version: 2023-06-01`。
-请求体由中立消息转换而来，Provider 细节不暴露给 Agent。
+```mermaid
+sequenceDiagram
+    participant P as model-service 设置面板
+    participant F as Framework ACL/消息路由
+    participant M as model-service
+    participant C as Plugin Config/Credential Vault
+    participant H as Chat
+    P->>F: request saveProvider/deleteProvider/resetProviderCredential
+    F->>M: 以 model-service caller 通过 ACL 后调用 handler
+    M->>C: 写入配置或凭据变更
+    C-->>M: 写入成功
+    M->>M: 读取最新 catalog，递增 revision
+    M-->>H: broadcast model-service.catalog.changed(payload)
+    H->>H: Chat 订阅并刷新模型目录/配置状态
+```
 
-默认可重试状态为 408、429、500、502、503、504；网络错误按现有兼容逻辑处理，默认最多 2 次重试，
-基础退避 1 秒、上限 8 秒，并尊重有界 `Retry-After`。只有 HTTP 413，或 HTTP 400 且正文命中上下文/token
-上限模式时，才返回 `MODEL_SERVICE_CONTEXT_OVERFLOW`；5xx 即使正文包含 `context` 字样，也不得误判为
-context overflow：
+只有配置或凭据写入成功后才广播。广播 payload 为：
 
 ```ts
-type ModelServiceErrorCode =
-  | 'MODEL_SERVICE_NOT_CONFIGURED'
-  | 'MODEL_SERVICE_UNSUPPORTED_API'
-  | 'MODEL_SERVICE_HTTP_ERROR'
-  | 'MODEL_SERVICE_CONTEXT_OVERFLOW'
-  | 'MODEL_SERVICE_INVALID_RESPONSE'
-  | 'MODEL_SERVICE_NETWORK_ERROR'
-  | 'MODEL_SERVICE_TIMEOUT'
-  | 'MODEL_SERVICE_CANCELLED'
-  | 'MODEL_SERVICE_STOPPED';
+type ModelCatalogChangedReason = 'provider-saved' | 'provider-deleted' | 'credential-reset';
+
+interface ModelCatalogChangedPayload {
+  revision: number;
+  reason: ModelCatalogChangedReason;
+  catalog: ModelCatalog;
+}
 ```
 
-错误通过 request reject 传递，跨 Plugin/进程边界依赖稳定 `code` 和安全 `message`，不依赖未纳入运行时
-错误协议的自定义 `status` 或原始 response body。
+广播只携带安全目录和变化原因，不携带真实凭据、credential ID 或 legacy 配置引用。Chat Plugin 声明
+`model-service.catalog.changed` broadcast，并由其 panel 订阅；它不是 Agent 的模型请求 response。
+
+## HTTP、重试与错误语义
+
+OpenAI-compatible 请求使用 `${baseUrl}/chat/completions`、Bearer Header、`stream: false`；Anthropic
+请求使用 `${baseUrl}/v1/messages`、`x-api-key`、`anthropic-version: 2023-06-01`。这些 Provider 细节
+只在 model-service 内部构造，不暴露给 Agent。
+
+默认可重试状态为 408、429、500、502、503、504；网络错误按当前兼容逻辑处理，默认最多 2 次重试，
+基础退避 1 秒、上限 8 秒，并尊重有界 `Retry-After`。只有 HTTP 413，或 HTTP 400 且正文命中
+上下文/token 上限模式时，才返回 `MODEL_SERVICE_CONTEXT_OVERFLOW`；5xx 即使正文包含 `context` 字样，
+也不得误判为 context overflow。
 
 ## 安全边界
 
-- `CompleteInput` 不能包含 `apiKey`、Header、base URL、credential file path 或 `apiKeyEnv`。
-- `ModelCatalog`、`CompleteOutput` 和错误 message 不返回真实凭据、凭据来源、凭据文件路径或环境变量名。
-- DSH credential 路径非普通文件、权限包含 `0o077` 或读取异常时，以脱敏的 `MODEL_SERVICE_NOT_CONFIGURED` 失败；只有 `ENOENT` 才视为凭据缺失。
-- Provider Header 只在 model-service 内部构造；原始 provider response 不跨消息边界返回。
-- 测试可以使用临时文件和假值，但不能读取或打印当前用户真实 DSH 凭据。
+- `CompleteInput` 和 `WebSearchInput` 不能包含 `apiKey`、Header、base URL、credential file path 或
+  `apiKeyEnv`。
+- `ModelCatalog`、`CompleteOutput`、`WebSearchOutput` 和错误 message 不返回真实凭据、凭据来源、
+  凭据文件路径、credential ID 或环境变量名。
+- Provider Header 只在 model-service 内部构造；原始 Provider response 不跨消息边界返回。
+- Config 只保存 Provider 元数据和 credential 引用；真实 secret 进入 Credential Vault，并通过
+  `get`/`put`/`delete` 在 model-service 内部使用。
+- 测试可以使用临时文件和假值，但不能读取或打印当前用户真实凭据。
 - usage 统计是数量，不是访问 Token；Agent 可将其写入既有 trace 以维持上下文统计。
 
-## 实现与迁移位置
+## 实现位置与非目标
 
 当前 Plugin 位于 `kits/agent-chat/plugins/model-service`：
 
@@ -233,19 +368,14 @@ type ModelServiceErrorCode =
 model-service/
 ├── package.json
 └── main/src/
-    ├── index.ts       # lifecycle、request handler、活动请求与取消
-    ├── types.ts       # 消息/目录/错误类型
-    ├── config.ts      # legacy env、DSH 配置与凭据兼容读取
-    ├── protocol.ts    # OpenAI/Anthropic 转换与响应归一化
+    ├── index.ts       # lifecycle、request handler、active/terminal registry、取消与目录广播
+    ├── types.ts       # 消息/目录/错误/取消类型
+    ├── config.ts      # Plugin Config、Credential Vault 与 Provider 兼容读取
+    ├── protocol.ts    # OpenAI/Anthropic 转换、能力映射与响应归一化
     └── index.test.ts   # Plugin 聚焦测试
 ```
 
 Agent 通过 `runtime.message.request('model-service', ...)` 注入客户端；Agent 保留会话、工具循环和
-compaction，模型请求不再由 Agent 直接读取 Relay 凭据或发起 HTTP。
-
-## 后续迁移点
-
-1. 将 legacy env/DSH 读取替换为 `ctx.config` 的模型服务 Profile，但保留兼容层直到迁移窗口结束。
-2. 将真实凭据接入 `ctx.credentials`，并继续保证凭据只在 model-service 内部可见。
-3. 增加 Profile 写入、校验和 `model-service.catalog.changed` 广播；广播只通知目录变化，不携带敏感字段。
-4. 若需要流式输出，可在不改变 `complete` 非流式契约的前提下另行设计带 requestId 的增量 broadcast。
+compaction，模型请求不再由 Agent 直接读取 Provider 凭据或发起 HTTP。当前契约只覆盖非流式
+`complete`、结构化 `webSearch`、取消、配置写入和目录广播；不应据此声称实现了 streaming 或完整
+Agent event protocol。

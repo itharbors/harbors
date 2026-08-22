@@ -1,4 +1,7 @@
 export type ModelServiceErrorCode =
+  | 'UNAUTHORIZED'
+  | 'INVALID_INPUT'
+  | 'UNSUPPORTED_CAPABILITY'
   | 'MODEL_SERVICE_NOT_CONFIGURED'
   | 'MODEL_SERVICE_UNSUPPORTED_API'
   | 'MODEL_SERVICE_HTTP_ERROR'
@@ -9,11 +12,32 @@ export type ModelServiceErrorCode =
   | 'MODEL_SERVICE_CANCELLED'
   | 'MODEL_SERVICE_STOPPED';
 
+export interface ErrorEnvelope {
+  code: ModelServiceErrorCode;
+  message: string;
+  retryable: boolean;
+  requestId: string;
+}
+
+const RETRYABLE_CODES = new Set<ModelServiceErrorCode>(['MODEL_SERVICE_NETWORK_ERROR', 'MODEL_SERVICE_TIMEOUT', 'MODEL_SERVICE_HTTP_ERROR']);
+
 export class ModelServiceError extends Error {
   readonly name = 'ModelServiceError';
+  readonly retryable: boolean;
+  readonly requestId: string;
 
-  constructor(readonly code: ModelServiceErrorCode, message: string, options?: { cause?: unknown }) {
-    super(message, options);
+  constructor(readonly code: ModelServiceErrorCode, message: string, options: { cause?: unknown; retryable?: boolean; requestId?: string } = {}) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.retryable = options.retryable ?? RETRYABLE_CODES.has(code);
+    this.requestId = options.requestId || '';
+  }
+
+  envelope(requestId = this.requestId): ErrorEnvelope {
+    return { code: this.code, message: this.message, retryable: this.retryable, requestId };
+  }
+
+  toJSON(): ErrorEnvelope {
+    return this.envelope();
   }
 }
 
@@ -26,6 +50,7 @@ export interface ModelCatalogEntry {
   serviceTiers?: string[];
   defaultReasoningEffort?: string;
   defaultServiceTier?: string;
+  webSearch?: boolean;
 }
 
 export interface ModelCatalog {
@@ -78,6 +103,10 @@ export interface CompleteInput {
   tools?: ModelTool[];
   maxOutputTokens?: number;
   retryMode?: 'default' | 'disabled';
+  reasoningEffort?: string;
+  serviceTier?: string;
+  /** milliseconds; a caller can only shorten the configured provider timeout */
+  timeoutMs?: number;
 }
 
 export interface NormalizedUsage {
@@ -100,4 +129,8 @@ export interface CompleteOutput {
   usage?: NormalizedUsage;
 }
 
-export interface CancelOutput { requestId: string; state: 'cancelled' | 'completed' | 'not_found'; }
+export interface WebSearchInput { requestId: string; query: string; timeoutMs?: number; }
+export interface WebSearchOutput { requestId: string; result: string; }
+export interface CancelInput { requestId: string; }
+export type CancelState = 'cancelled' | 'already_cancelled' | 'completed' | 'timed_out' | 'failed' | 'not_found';
+export interface CancelOutput { requestId: string; state: CancelState; }

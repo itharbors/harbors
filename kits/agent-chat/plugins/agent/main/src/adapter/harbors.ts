@@ -14,6 +14,7 @@ interface StoredSession {
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;
+  timeoutMs?: number;
   sandboxMode: AgentSandboxMode;
   approvalPolicy: AgentApprovalPolicy;
   createdAt: string;
@@ -35,6 +36,7 @@ interface SessionHeader {
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;
+  timeoutMs?: number;
   sandboxMode?: AgentSandboxMode;
   approvalPolicy?: AgentApprovalPolicy;
 }
@@ -66,6 +68,10 @@ export interface ModelServiceCompleteRequest {
   requestId: string;
   purpose: 'turn' | 'compaction';
   model?: string;
+  /** Model-specific options are only sent when selected by the session. */
+  reasoningEffort?: string;
+  serviceTier?: string;
+  timeoutMs?: number;
   system?: string;
   messages: ModelServiceMessage[];
   tools?: unknown[];
@@ -78,6 +84,14 @@ export interface ModelServiceCompleteResponse {
   model: string;
   message: { role: 'assistant'; content: unknown; toolCalls?: Array<{ id: string; name: string; arguments: string }> };
   usage?: AgentTokenUsage;
+}
+
+/** Stable failure shape returned by Model Service. */
+export interface ModelServiceErrorEnvelope {
+  code: string;
+  message: string;
+  retryable: boolean;
+  requestId: string;
 }
 
 export interface ModelServiceCatalog {
@@ -98,7 +112,7 @@ export interface ModelServiceCatalog {
 export interface ModelServiceClient {
   getCatalog(): Promise<ModelServiceCatalog>;
   complete(request: ModelServiceCompleteRequest): Promise<ModelServiceCompleteResponse>;
-  cancel(requestId: string): Promise<unknown>;
+  cancel(requestId: string): Promise<{ requestId: string; state: 'cancelled' | 'already_cancelled' | 'completed' | 'timed_out' | 'failed' | 'not_found' } | unknown>;
   webSearch?(query: string, signal?: AbortSignal): Promise<string>;
 }
 
@@ -188,6 +202,7 @@ export class HarborsAdapter implements AgentAdapter {
       ...(options.model ? { model: options.model } : {}),
       ...(options.reasoningEffort ? { reasoningEffort: options.reasoningEffort } : {}),
       ...(options.serviceTier ? { serviceTier: options.serviceTier } : {}),
+      ...(options.timeoutMs !== undefined ? { timeoutMs: assertTimeoutMs(options.timeoutMs) } : {}),
       sandboxMode,
       approvalPolicy,
       createdAt: now.toISOString(),
@@ -308,11 +323,13 @@ export class HarborsAdapter implements AgentAdapter {
       const model = options.model || current.model;
       const reasoningEffort = options.reasoningEffort || current.reasoningEffort;
       const serviceTier = options.serviceTier || current.serviceTier;
+      const timeoutMs = options.timeoutMs ?? current.timeoutMs;
       return {
         turn: nextTurnNumber(current.events),
         ...(model ? { model } : {}),
         ...(reasoningEffort ? { reasoningEffort } : {}),
         ...(serviceTier ? { serviceTier } : {}),
+        ...(timeoutMs !== undefined ? { timeoutMs: assertTimeoutMs(timeoutMs) } : {}),
         ...permissionSettings(current),
       };
     });
@@ -332,9 +349,9 @@ export class HarborsAdapter implements AgentAdapter {
       throwIfAborted(signal);
       return response;
     } catch (error) {
-      const normalized = normalizeError(error);
-      await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'error', error: { message: normalized, code: 'UNKNOWN' } } });
-      throw error;
+      const envelope = toModelServiceErrorEnvelope(error);
+      await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'error', error: envelope } });
+      throw asModelServiceError(error, envelope);
     } finally {
       if (this.activeTurnControllers.get(id) === turnController) this.activeTurnControllers.delete(id);
       if (this.activeTurnCompletions.get(id) === completion) this.activeTurnCompletions.delete(id);
@@ -380,6 +397,7 @@ export class HarborsAdapter implements AgentAdapter {
       ...(session.model ? { model: session.model } : {}),
       ...(session.reasoningEffort ? { reasoningEffort: session.reasoningEffort } : {}),
       ...(session.serviceTier ? { serviceTier: session.serviceTier } : {}),
+      ...(session.timeoutMs !== undefined ? { timeoutMs: session.timeoutMs } : {}),
       sandboxMode: session.sandboxMode,
       approvalPolicy: session.approvalPolicy,
     };
@@ -446,7 +464,7 @@ export class HarborsAdapter implements AgentAdapter {
         await this.appendEvent(session, 'request/context', { turn, step, provider: 'model-service', model, ...turnSettings(session), ...permissionSettings(session) });
         const requestId = randomUUID();
         const messages = toModelServiceMessages(session.events, session.surface);
-        const response = await this.completeModel({ requestId, purpose: 'turn', model, system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default' }, signal);
+        const response = await this.completeModel({ requestId, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default' }, signal);
         overflowRetries = 0;
         throwIfAborted(signal);
         const message = response.message;
@@ -494,8 +512,14 @@ export class HarborsAdapter implements AgentAdapter {
     signal.addEventListener('abort', onAbort, { once: true });
     try {
       const response = await this.modelService.complete(request);
-      if (cancelled) throw signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped');
+      if (cancelled) {
+        throw new AgentModelServiceError({ code: 'MODEL_SERVICE_CANCELLED', message: '模型请求已取消', retryable: false, requestId: request.requestId });
+      }
       return response;
+    } catch (error) {
+      // The message bridge may deserialize an Error into a plain object. Keep
+      // the Model Service envelope in both cases and attach this request ID.
+      throw asModelServiceError(error, toModelServiceErrorEnvelope(error, request.requestId));
     } finally {
       signal.removeEventListener('abort', onAbort);
     }
@@ -528,7 +552,7 @@ export class HarborsAdapter implements AgentAdapter {
         step,
         sandboxMode: session.sandboxMode,
         approvalPolicy: session.approvalPolicy,
-        webSearch: this.modelService.webSearch,
+        webSearch: this.modelService.webSearch?.bind(this.modelService),
         requestPermission: ({ toolName, currentMode, requestedMode, justification, signal: requestSignal }) => this.requestPermission(session, turn, step, call.id, toolName, currentMode, requestedMode, justification, requestSignal),
       });
       const toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };
@@ -628,7 +652,7 @@ export class HarborsAdapter implements AgentAdapter {
     const instruction = COMPACTION_INSTRUCTION;
     const messages = [...toModelServiceMessages(session.events, nodes), { role: 'user' as const, content: instruction }];
     onStatus?.('正在生成上下文摘要…');
-    const response = await this.completeModel({ requestId: randomUUID(), purpose: 'compaction', model, messages, maxOutputTokens: maxTokens, retryMode: 'disabled' }, signal);
+    const response = await this.completeModel({ requestId: randomUUID(), purpose: 'compaction', model, ...turnModelSettings(session), messages, maxOutputTokens: maxTokens, retryMode: 'disabled' }, signal);
     const output = textContent(response.message.content);
     if (!output.trim()) throw new Error('context compaction produced no summary');
     return { text: boundedSummary(output.trim()), ...(response.usage ? { usage: response.usage } : {}) };
@@ -845,6 +869,7 @@ function reconcileStoredSession(target: StoredSession, source: StoredSession): v
   target.model = source.model;
   target.reasoningEffort = source.reasoningEffort;
   target.serviceTier = source.serviceTier;
+  target.timeoutMs = source.timeoutMs;
   target.sandboxMode = source.sandboxMode;
   target.approvalPolicy = source.approvalPolicy;
   target.createdAt = source.createdAt;
@@ -865,6 +890,7 @@ function applySessionEventState(session: StoredSession, event: AgentTraceEvent):
     if (typeof data.model === 'string' && data.model) session.model = data.model;
     if (typeof data.reasoningEffort === 'string' && data.reasoningEffort) session.reasoningEffort = data.reasoningEffort;
     if (typeof data.serviceTier === 'string' && data.serviceTier) session.serviceTier = data.serviceTier;
+    if (data.timeoutMs !== undefined) session.timeoutMs = assertTimeoutMs(data.timeoutMs);
     if (typeof data.sandboxMode === 'string') session.sandboxMode = assertSandboxMode(data.sandboxMode);
     if (typeof data.approvalPolicy === 'string') session.approvalPolicy = assertApprovalPolicy(data.approvalPolicy);
   }
@@ -987,11 +1013,65 @@ function parseToolArguments(value: string | undefined): Record<string, unknown> 
 function boundedText(value: string): string { return value.length <= MAX_STORED_VALUE_CHARS ? value : `${value.slice(0, MAX_STORED_VALUE_CHARS)}\n...[truncated]`; }
 function boundedJson(value: unknown): string { try { return boundedText(JSON.stringify(value)); } catch { return '[unserializable]'; } }
 function normalizeError(error: unknown): string { return error instanceof Error ? error.message : String(error); }
-function turnSettings(value: Pick<StoredSession, 'model' | 'reasoningEffort' | 'serviceTier'>): AgentTurnOptions {
+function turnModelSettings(value: Pick<StoredSession, 'reasoningEffort' | 'serviceTier' | 'timeoutMs'>): Pick<ModelServiceCompleteRequest, 'reasoningEffort' | 'serviceTier' | 'timeoutMs'> {
+  return {
+    ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}),
+    ...(value.serviceTier ? { serviceTier: value.serviceTier } : {}),
+    ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
+  };
+}
+
+class AgentModelServiceError extends Error {
+  readonly code: string;
+  readonly retryable: boolean;
+  readonly requestId: string;
+  readonly envelope: ModelServiceErrorEnvelope;
+
+  constructor(envelope: ModelServiceErrorEnvelope, cause?: unknown) {
+    super(envelope.message, cause instanceof Error ? { cause } : undefined);
+    this.name = 'ModelServiceError';
+    this.code = envelope.code;
+    this.retryable = envelope.retryable;
+    this.requestId = envelope.requestId;
+    this.envelope = envelope;
+  }
+}
+
+function toModelServiceErrorEnvelope(error: unknown, fallbackRequestId = ''): ModelServiceErrorEnvelope {
+  let candidate = error;
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    const value = candidate as Record<string, unknown>;
+    const nested = value.error && typeof value.error === 'object' && !Array.isArray(value.error) ? value.error as Record<string, unknown> : undefined;
+    const ownEnvelope = value.envelope && typeof value.envelope !== 'function' ? value.envelope : undefined;
+    const nestedEnvelope = nested?.envelope && typeof nested.envelope !== 'function' ? nested.envelope : undefined;
+    candidate = ownEnvelope ?? nestedEnvelope ?? nested ?? value;
+  }
+  if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) {
+    const value = candidate as Record<string, unknown>;
+    if (typeof value.code === 'string' && value.code.trim() && typeof value.message === 'string' && value.message.trim()) {
+      return {
+        code: value.code,
+        message: value.message,
+        retryable: typeof value.retryable === 'boolean' ? value.retryable : false,
+        requestId: typeof value.requestId === 'string' && value.requestId ? value.requestId : fallbackRequestId,
+      };
+    }
+  }
+  return { code: 'UNKNOWN', message: '模型服务请求失败', retryable: false, requestId: fallbackRequestId };
+}
+
+function asModelServiceError(error: unknown, envelope: ModelServiceErrorEnvelope): Error {
+  if (error instanceof AgentModelServiceError
+    && error.code === envelope.code
+    && error.requestId === envelope.requestId) return error;
+  return new AgentModelServiceError(envelope, error);
+}
+function turnSettings(value: Pick<StoredSession, 'model' | 'reasoningEffort' | 'serviceTier' | 'timeoutMs'>): AgentTurnOptions {
   return {
     ...(value.model ? { model: value.model } : {}),
     ...(value.reasoningEffort ? { reasoningEffort: value.reasoningEffort } : {}),
     ...(value.serviceTier ? { serviceTier: value.serviceTier } : {}),
+    ...(value.timeoutMs !== undefined ? { timeoutMs: value.timeoutMs } : {}),
   };
 }
 function permissionSettings(value: Pick<StoredSession, 'sandboxMode' | 'approvalPolicy'>): AgentPermissionState {
@@ -1009,6 +1089,7 @@ function settingsFromEvents(events: AgentTraceEvent[], header: SessionHeader): A
       if (typeof data.model === 'string' && data.model) settings.model = data.model;
       if (typeof data.reasoningEffort === 'string' && data.reasoningEffort) settings.reasoningEffort = data.reasoningEffort;
       if (typeof data.serviceTier === 'string' && data.serviceTier) settings.serviceTier = data.serviceTier;
+      if (data.timeoutMs !== undefined) settings.timeoutMs = assertTimeoutMs(data.timeoutMs);
       if (typeof data.sandboxMode === 'string') settings.sandboxMode = assertSandboxMode(data.sandboxMode);
       if (typeof data.approvalPolicy === 'string') settings.approvalPolicy = assertApprovalPolicy(data.approvalPolicy);
     } else if (event.type === 'sandbox/mode' && typeof data.mode === 'string') {
@@ -1028,6 +1109,10 @@ function assertApprovalPolicy(value: string): AgentApprovalPolicy {
   // 兼容旧会话中将“自动允许”保存为 never 的记录。
   if (value === 'never') return 'always';
   throw new Error(`Invalid approval policy: ${value}`);
+}
+function assertTimeoutMs(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0 || value > 600_000) throw new Error('Invalid timeoutMs');
+  return value;
 }
 function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean { if (!value) return fallback; if (/^(?:1|true|yes|on)$/iu.test(value)) return true; if (/^(?:0|false|no|off)$/iu.test(value)) return false; return fallback; }
 function textContent(content: unknown): string {

@@ -4,12 +4,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 
+let loadedPlugin: any;
+
 test('新建对话使用 config 默认权限，已有会话保持原权限', async () => {
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-'));
 
   let plugin: any;
   (globalThis as any).editor = { plugin: { define(value: any) { plugin = value; } } };
   await import('./index.js');
+  loadedPlugin = plugin;
   const values: Record<string, unknown> = {
     'agent.defaults.sandboxMode': 'danger-full-access',
     'agent.defaults.approvalPolicy': 'always',
@@ -89,6 +92,58 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
     });
   } finally {
     await plugin.lifecycle.unload();
+    await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('runtime webSearch 使用结构化 requestId，并在 abort 时取消且忽略晚到成功', async () => {
+  assert.ok(loadedPlugin);
+  const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-search-'));
+  let completeCount = 0;
+  let searchInput: any;
+  let cancelledId = '';
+  let resolveSearch: ((value: unknown) => void) | undefined;
+  const runtime = {
+    paths: { data: storageDir },
+    config: { get() { return undefined; }, set() {}, delete() {} },
+    message: {
+      broadcast() {},
+      request(target: string, method: string, input?: any): Promise<any> {
+        assert.equal(target, 'model-service');
+        if (method === 'getCatalog') return Promise.resolve({ models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' });
+        if (method === 'complete') {
+          completeCount += 1;
+          if (completeCount > 1) return Promise.reject(new Error('late complete should not run'));
+          return Promise.resolve({ requestId: input.requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: [{ id: 'search-1', name: 'web_search', arguments: '{"query":"latest news"}' }] } });
+        }
+        if (method === 'webSearch') {
+          searchInput = input;
+          return new Promise((resolve) => { resolveSearch = resolve; });
+        }
+        if (method === 'cancel') {
+          cancelledId = input.requestId;
+          resolveSearch?.({ requestId: input.requestId, result: 'late result' });
+          return Promise.resolve({ requestId: input.requestId, state: 'cancelled' });
+        }
+        return Promise.reject(new Error(`unexpected model-service method: ${method}`));
+      },
+    },
+  };
+  try {
+    await loadedPlugin.lifecycle.load(runtime);
+    const conversation = await loadedPlugin.methods.createConversation('harbors', '/workspace');
+    const sending = loadedPlugin.methods.sendMessage(conversation.id, 'search');
+    while (!searchInput) await new Promise((resolve) => setTimeout(resolve, 1));
+    assert.equal(typeof searchInput.requestId, 'string');
+    assert.equal(searchInput.query, 'latest news');
+    assert.equal('timeoutMs' in searchInput, false);
+    assert.equal(await loadedPlugin.methods.stopConversation(conversation.id), true);
+    await assert.rejects(sending);
+    assert.equal(cancelledId, searchInput.requestId);
+    assert.equal(completeCount, 1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  } finally {
+    await loadedPlugin.lifecycle.unload();
     await rm(storageDir, { recursive: true, force: true });
   }
 });

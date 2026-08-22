@@ -82,6 +82,8 @@ export interface AgentTurnOptions {
   model?: string;
   reasoningEffort?: string;
   serviceTier?: string;
+  /** 可选的单次 Model Service 请求超时，单位为毫秒。 */
+  timeoutMs?: number;
   sandboxMode?: AgentSandboxMode;
   approvalPolicy?: AgentApprovalPolicy;
 }
@@ -117,6 +119,7 @@ export interface AgentConversation {
   reasoningEffort?: string;
   /** 此会话最近一次使用的服务档位。 */
   serviceTier?: string;
+  timeoutMs?: number;
   /** 此会话当前的文件沙盒模式。 */
   sandboxMode?: AgentSandboxMode;
   /** 此会话当前的审批策略。 */

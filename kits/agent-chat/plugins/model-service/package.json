@@ -24,9 +24,9 @@
           "saveProvider": { "methods": ["saveProvider"], "callers": ["model-service"] },
           "deleteProvider": { "methods": ["deleteProvider"], "callers": ["model-service"] },
           "resetProviderCredential": { "methods": ["resetProviderCredential"], "callers": ["model-service"] },
-          "webSearch": ["webSearch"],
-          "complete": ["complete"],
-          "cancel": ["cancel"]
+          "webSearch": { "methods": ["webSearch"], "callers": ["agent"] },
+          "complete": { "methods": ["complete"], "callers": ["agent"] },
+          "cancel": { "methods": ["cancel"], "callers": ["agent"] }
         }
       }
     }

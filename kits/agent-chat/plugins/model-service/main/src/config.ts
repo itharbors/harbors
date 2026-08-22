@@ -23,6 +23,7 @@ export interface RelayConfig {
   contextWindow?: number;
   providerId: string;
   retry: { enabled: boolean; maxRetries: number; baseDelayMs: number; maxDelayMs: number };
+  model?: ModelProviderModel;
 }
 export interface ConfigReader { get<T = unknown>(key: string, layer?: string): T | undefined; set?(key: string, value: unknown, layer?: string): void; }
 export interface CredentialReader {
@@ -71,8 +72,8 @@ function relayConfig(provider: ModelProvider, credential: string): RelayConfig {
   const api = provider.protocol === 'anthropic-messages' ? 'anthropic-messages' : 'openai-completions';
   const modelId = provider.defaultModel || provider.models[0]?.id || 'default';
   const options = provider.options || {};
-  const model = provider.models.find((candidate) => candidate.id === modelId);
-  return { baseUrl: provider.baseUrl.replace(/\/$/u, ''), credential, api, modelId, models: provider.models, ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}), ...(model?.contextWindow ? { contextWindow: model.contextWindow } : {}), providerId: provider.id, retry: { enabled: options.retryEnabled ?? DEFAULT_RETRY.enabled, maxRetries: boundedInteger(options.maxRetries, DEFAULT_RETRY.maxRetries, 0, 10), baseDelayMs: boundedInteger(options.baseDelayMs, DEFAULT_RETRY.baseDelayMs, 0, 60_000), maxDelayMs: boundedInteger(options.maxDelayMs, DEFAULT_RETRY.maxDelayMs, 0, 300_000) } };
+  const model = provider.models.find((candidate) => candidate.id === modelId) || { id: modelId, name: modelId };
+  return { baseUrl: provider.baseUrl.replace(/\/$/u, ''), credential, api, modelId, models: provider.models, model, ...(provider.defaultModel ? { defaultModel: provider.defaultModel } : {}), ...(model.contextWindow ? { contextWindow: model.contextWindow } : {}), providerId: provider.id, retry: { enabled: options.retryEnabled ?? DEFAULT_RETRY.enabled, maxRetries: boundedInteger(options.maxRetries, DEFAULT_RETRY.maxRetries, 0, 10), baseDelayMs: boundedInteger(options.baseDelayMs, DEFAULT_RETRY.baseDelayMs, 0, 60_000), maxDelayMs: boundedInteger(options.maxDelayMs, DEFAULT_RETRY.maxDelayMs, 0, 300_000) } };
 }
 function normalizeConfig(value: Record<string, unknown>): ModelServiceConfig {
   const providers = Array.isArray(value.providers) ? value.providers.flatMap(normalizeProvider) : [];
@@ -86,10 +87,13 @@ function normalizeProvider(value: unknown): ModelProvider[] {
     if (typeof model === 'string' && model) return [{ id: model, name: model }];
     if (!isRecord(model) || typeof model.id !== 'string' || !model.id) return [];
     const contextWindow = positiveInteger(model.contextWindow);
-    return [{ id: model.id, name: typeof model.name === 'string' && model.name ? model.name : model.id, ...(typeof model.description === 'string' ? { description: model.description } : {}), ...(contextWindow ? { contextWindow } : {}) }];
+    const reasoningEfforts = stringList(model.reasoningEfforts);
+    const serviceTiers = stringList(model.serviceTiers);
+    return [{ id: model.id, name: typeof model.name === 'string' && model.name ? model.name : model.id, ...(typeof model.description === 'string' ? { description: model.description } : {}), ...(contextWindow ? { contextWindow } : {}), ...(reasoningEfforts ? { reasoningEfforts } : {}), ...(serviceTiers ? { serviceTiers } : {}), ...(typeof model.defaultReasoningEffort === 'string' && model.defaultReasoningEffort ? { defaultReasoningEffort: model.defaultReasoningEffort } : {}), ...(typeof model.defaultServiceTier === 'string' && model.defaultServiceTier ? { defaultServiceTier: model.defaultServiceTier } : {}), ...(typeof model.webSearch === 'boolean' ? { webSearch: model.webSearch } : {}) }];
   }) : [];
   return [{ id: value.id, name: value.name, protocol, baseUrl: value.baseUrl, credentialId: value.credentialId, models, ...(typeof value.defaultModel === 'string' && value.defaultModel ? { defaultModel: value.defaultModel } : {}), ...(isRecord(value.options) ? { options: value.options as ModelProviderOptions } : {}) }];
 }
+function stringList(value: unknown): string[] | undefined { if (!Array.isArray(value)) return undefined; const values = value.filter((item): item is string => typeof item === 'string' && item.length > 0); return values.length ? [...new Set(values)] : undefined; }
 function isRecord(value: unknown): value is Record<string, unknown> { return typeof value === 'object' && value !== null && !Array.isArray(value); }
 function positiveInteger(value: unknown): number | undefined { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : undefined; }
 function boundedInteger(value: number | undefined, fallback: number, min: number, max: number): number { return typeof value === 'number' && Number.isInteger(value) ? Math.min(max, Math.max(min, value)) : fallback; }

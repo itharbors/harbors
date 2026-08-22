@@ -83,3 +83,89 @@ test('上下文窗口只使用 model-service catalog，缺失时回退默认值'
     await rm(storage, { recursive: true, force: true });
   }
 });
+
+test('turn complete 会传递会话选择的 reasoning effort 与 service tier', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-capabilities-'));
+  let request: any;
+  const client: ModelServiceClient = {
+    async getCatalog() {
+      return {
+        models: [{ id: 'test-model', name: 'Test Model', reasoningEfforts: ['high'], serviceTiers: ['priority'] }],
+        defaultModel: 'test-model',
+      };
+    },
+    async complete(input) {
+      request = input;
+      return { requestId: input.requestId, model: 'test-model', message: { role: 'assistant', content: 'ok' } };
+    },
+    async cancel(requestId) { return { requestId, state: 'completed' }; },
+  };
+  const adapter = new HarborsAdapter(client, storage);
+  try {
+    const conversation = await adapter.createConversation('/workspace', { model: 'test-model', reasoningEffort: 'high', serviceTier: 'priority', timeoutMs: 12_345 });
+    assert.equal(await adapter.sendMessage(conversation.id, 'hello'), 'ok');
+    assert.equal(request.purpose, 'turn');
+    assert.equal(request.reasoningEffort, 'high');
+    assert.equal(request.serviceTier, 'priority');
+    assert.equal(request.timeoutMs, 12_345);
+  } finally {
+    adapter.stop();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
+
+test('Model Service 已知 envelope 会保留到 turn/end 和对外错误', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-envelope-'));
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
+    async complete(input) {
+      throw { error: { envelope: { code: 'MODEL_SERVICE_TIMEOUT', message: '模型请求超时', retryable: true, requestId: input.requestId } } };
+    },
+    async cancel(requestId) { return { requestId, state: 'timed_out' }; },
+  };
+  const adapter = new HarborsAdapter(client, storage);
+  try {
+    const conversation = await adapter.createConversation('/workspace');
+    await assert.rejects(adapter.sendMessage(conversation.id, 'hello'), (error: any) => {
+      assert.equal(error.code, 'MODEL_SERVICE_TIMEOUT');
+      assert.equal(error.message, '模型请求超时');
+      assert.equal(error.retryable, true);
+      assert.match(error.requestId, /^[0-9a-f-]{36}$/u);
+      return true;
+    });
+    const turnEnd = (await adapter.getConversationTrace(conversation.id)).find((event) => event.type === 'turn/end');
+    assert.deepEqual(turnEnd?.data.reason.error, {
+      code: 'MODEL_SERVICE_TIMEOUT',
+      message: '模型请求超时',
+      retryable: true,
+      requestId: (turnEnd?.data.reason.error as any).requestId,
+    });
+  } finally {
+    adapter.stop();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
+
+test('未知 Model Service 异常使用安全 UNKNOWN envelope 并保留 requestId', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-unknown-'));
+  let requestId = '';
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
+    async complete(input) { requestId = input.requestId; throw new Error('secret provider credential'); },
+    async cancel(id) { return { requestId: id, state: 'failed' }; },
+  };
+  const adapter = new HarborsAdapter(client, storage);
+  try {
+    const conversation = await adapter.createConversation('/workspace');
+    await assert.rejects(adapter.sendMessage(conversation.id, 'hello'), (error: any) => {
+      assert.equal(error.code, 'UNKNOWN');
+      assert.equal(error.message, '模型服务请求失败');
+      assert.equal(error.retryable, false);
+      assert.equal(error.requestId, requestId);
+      return true;
+    });
+  } finally {
+    adapter.stop();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
