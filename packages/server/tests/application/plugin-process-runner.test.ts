@@ -530,8 +530,10 @@ describe('application plugin process runner', () => {
       '/plugins/registered-only',
     ]);
     expect(controller.runtime.plugin.listLoaded()).toEqual(['running-plugin']);
-    expect(controller.runtime.plugin.getInfo('registered-only')).toEqual(registeredOnly);
-    expect(controller.runtime.plugin.getInfo('/plugins/registered-only')).toEqual(registeredOnly);
+    expect(controller.runtime.plugin.getInfo('registered-only')).toBeUndefined();
+    expect(controller.runtime.plugin.getRegistration?.('/plugins/registered-only')).toMatchObject({
+      path: '/plugins/registered-only', kind: 'external', source: { scope: 'unmanaged' },
+    });
   });
 
   it('refreshes loaded plugin names without filtering registered plugin info', () => {
@@ -565,7 +567,7 @@ describe('application plugin process runner', () => {
 
     expect(() => controller.runtime.plugin.listLoaded()).not.toThrow();
     expect(controller.runtime.plugin.listLoaded()).toEqual(['observer']);
-    expect(controller.runtime.plugin.getInfo('sibling')).toEqual(registered[1]);
+    expect(controller.runtime.plugin.getInfo('sibling')).toBeUndefined();
   });
 
   it('returns only own service snapshot entries', async () => {

@@ -10,7 +10,7 @@ import type {
   PanelDescriptor,
   PanelRegistration,
 } from '../framework/panel/types';
-import type { ContributeData, PluginConfigBindingHost, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, PluginSourceIdentity } from '@itharbors/magnet';
+import type { ContributeData, PluginConfigBindingHost, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, PluginRegistration, PluginSourceIdentity } from '@itharbors/magnet';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
 import type { PanelFileRuntime, PluginCredentialVault } from '@itharbors/plugin-types';
 
@@ -43,6 +43,8 @@ export interface PluginRuntime {
   plugin: {
     define(definition: PluginDefinition): void;
     getInfo(name: string): PluginInfo | undefined;
+    inspect?(path: string): Promise<PluginInfo>;
+    getRegistration?(path: string): PluginRegistration | undefined;
     listLoaded(): string[];
     listRegistered(): string[];
     callPlugin(name: string, method: string, ...args: unknown[]): unknown;
@@ -177,6 +179,8 @@ export interface Editor {
     unload(path: string): Promise<void>;
     unregister(path: string): void;
     getInfo(name: string): PluginInfo | undefined;
+    inspect(path: string): Promise<PluginInfo>;
+    getRegistration(path: string): PluginRegistration | undefined;
     listLoaded(): string[];
     listRegistered(): string[];
     callPlugin(name: string, method: string, ...args: unknown[]): unknown;
@@ -233,6 +237,7 @@ export interface Editor {
 
 export type PluginRuntimeHost = Omit<Editor, 'menu'> & {
   menu: PluginRuntime['menu'];
+  clearOwner?: (owner: string) => Promise<void> | void;
 };
 
 export type PluginLoadOptions =

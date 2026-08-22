@@ -143,7 +143,8 @@ describe('@itharbors/magnet standalone runtime', () => {
     const module = new PluginModule();
 
     await module.register(pluginDirectory);
-    expect(module.getInfo('@example/plugin')).toMatchObject({
+    expect(module.getInfo('@example/plugin')).toBeUndefined();
+    await expect(module.inspect(pluginDirectory)).resolves.toMatchObject({
       name: '@example/plugin',
       version: '1.0.0',
     });
@@ -165,7 +166,7 @@ describe('@itharbors/magnet standalone runtime', () => {
     expect(module.listRegistered()).toEqual([]);
   });
 
-  it('rejects malformed manifests before executing plugin code', async () => {
+  it('keeps registration independent from malformed manifests', async () => {
     const root = temporaryDirectory('itharbors-plugin-invalid-');
     const pluginDirectory = createPlugin(root, 'globalThis.__invalidPluginExecuted = true;');
     const manifestPath = path.join(pluginDirectory, 'package.json');
@@ -174,7 +175,8 @@ describe('@itharbors/magnet standalone runtime', () => {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
 
     const module = new PluginModule();
-    await expect(module.register(pluginDirectory)).rejects.toThrow(/inside the plugin directory|portable relative path/);
+    await expect(module.register(pluginDirectory)).resolves.toBeUndefined();
+    await expect(module.inspect(pluginDirectory)).rejects.toThrow(/inside the plugin directory|portable relative path/);
     expect((globalThis as { __invalidPluginExecuted?: boolean }).__invalidPluginExecuted).toBeUndefined();
   });
 
@@ -198,7 +200,9 @@ describe('@itharbors/magnet standalone runtime', () => {
     };
     fs.writeFileSync(manifestPath, JSON.stringify(manifest));
 
-    await expect(new PluginModule().register(pluginDirectory))
+    const module = new PluginModule();
+    await module.register(pluginDirectory);
+    await expect(module.inspect(pluginDirectory))
       .rejects.toThrow(/panel contribution "demo" entry must stay inside the plugin directory/);
   });
 
@@ -253,6 +257,38 @@ describe('@itharbors/magnet standalone runtime', () => {
       .toBe('standalone-consumer:hello Harbors');
     await module.unload(pluginDirectory);
     expect(() => module.callPlugin('@example/cjs-plugin', 'greet')).toThrow(/not loaded/);
+  });
+
+  it('reads the latest manifest and entry at load time after registration', async () => {
+    const root = temporaryDirectory('itharbors-plugin-manifest-refresh-');
+    const pluginDirectory = createPlugin(root, `
+      editor.plugin.define({ methods: { value() { return 'v1'; } } });
+    `);
+    const module = new PluginModule();
+    await module.register(pluginDirectory);
+    expect(module.getRegistration(pluginDirectory)).toMatchObject({
+      path: pluginDirectory,
+      kind: 'external',
+      source: { scope: 'unmanaged' },
+    });
+
+    const nextEntry = './main/dist/next.js';
+    fs.writeFileSync(path.join(pluginDirectory, 'main', 'dist', 'next.js'),
+      `editor.plugin.define({ methods: { value() { return 'v2'; } } });`);
+    const manifestPath = path.join(pluginDirectory, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.version = '2.0.0';
+    manifest.main = nextEntry;
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    await module.load(pluginDirectory, {
+      scope: 'session',
+      host: createHost(module),
+      paths: { roots: createRoots(path.join(root, 'application-data')), legacyDataDirectories: [] },
+    });
+    expect(module.getInfo('@example/plugin')).toMatchObject({ version: '2.0.0', entry: nextEntry });
+    expect(module.callPlugin('@example/plugin', 'value')).toBe('v2');
+    await module.unload(pluginDirectory);
   });
 
   it('clears require.cache for entry-local helpers so reloading picks up changes', async () => {

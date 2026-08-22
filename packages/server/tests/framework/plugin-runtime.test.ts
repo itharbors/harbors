@@ -154,7 +154,7 @@ describe('PluginModule', () => {
       },
     });
 
-    expect(plugin.getInfo('log')).toMatchObject({
+    await expect(plugin.inspect(pluginDir)).resolves.toMatchObject({
       kind: 'external',
       version: '1.0.0',
       source: {
@@ -180,9 +180,9 @@ describe('PluginModule', () => {
 
     await plugin.register(capableDir, { kind: 'external' });
 
-    expect(plugin.getInfo('capable')).toMatchObject({ capabilities: ['credentials'] });
-    await expect(plugin.register(duplicateDir, { kind: 'external' })).rejects.toThrow(/capabilit/i);
-    expect(plugin.getInfo('duplicate')).toBeUndefined();
+    await expect(plugin.inspect(capableDir)).resolves.toMatchObject({ capabilities: ['credentials'] });
+    await plugin.register(duplicateDir, { kind: 'external' });
+    await expect(plugin.inspect(duplicateDir)).rejects.toThrow(/capabilit/i);
   });
 
   it('injects a bound config facade instead of the host EditorConfig', async () => {

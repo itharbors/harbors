@@ -1,6 +1,6 @@
 import path from 'node:path';
 import type { ApplicationPluginRuntime } from '../../editor/types';
-import type { ContributeData, PluginInfo } from '@itharbors/magnet';
+import type { ContributeData, PluginInfo, PluginRegistration } from '@itharbors/magnet';
 import type { PluginProcessRpcPeer } from './rpc-peer';
 import { normalizePluginProcessError } from './error.js';
 
@@ -151,9 +151,17 @@ export function createRunnerRuntime(options: CreateRunnerRuntimeOptions): Runner
       define: () => { throw new Error('Plugin definitions are captured only while importing a plugin'); },
       getInfo: (name: string) => {
         const resolvedPath = path.resolve(name);
+        if (!pluginSnapshot.loaded.includes(name)) return undefined;
         return pluginSnapshot.registered.find((plugin) => (
           plugin.name === name || plugin.path === resolvedPath
         ));
+      },
+      getRegistration: (name: string): PluginRegistration | undefined => {
+        const resolvedPath = path.resolve(name);
+        const plugin = pluginSnapshot.registered.find((candidate) => (
+          candidate.path === resolvedPath || candidate.name === name
+        ));
+        return plugin ? { path: plugin.path, kind: plugin.kind, source: plugin.source } : undefined;
       },
       listLoaded: () => [...pluginSnapshot.loaded],
       listRegistered: () => pluginSnapshot.registered.map((plugin) => plugin.path),

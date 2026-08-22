@@ -4,6 +4,7 @@ import type {
   PluginInfo,
   PluginKind,
   PluginSourceIdentity,
+  PluginRegistration,
   PluginCapability,
   PluginModule as LoadedPluginModule,
 } from './types.js';
@@ -61,6 +62,7 @@ export type {
   PluginMessageRoute,
   PluginMessageRouteDeclaration,
   PluginSourceIdentity,
+  PluginRegistration,
 } from './types.js';
 export type {
   ApplicationHostMode,
@@ -118,6 +120,12 @@ interface PluginDefinitionBridge {
   readonly plugin: Readonly<{
     define(definition: import('./types.js').PluginDefinition): void;
   }>;
+}
+
+interface RegisteredPlugin {
+  readonly path: string;
+  readonly kind: PluginKind;
+  readonly source: PluginSourceIdentity;
 }
 
 function isDistJavaScriptEntry(value: string): boolean {
@@ -261,10 +269,14 @@ function requireResolveRealPath(entryPath: string): string {
 }
 
 export class PluginModule {
-  private pathMap = new Map<string, Plugin>();
+  private pathMap = new Map<string, RegisteredPlugin>();
   private nameMap = new Map<string, Plugin>();
   private credentialRevokers = new Map<string, () => Promise<void>>();
+  private ownerClearers = new Map<string, () => Promise<void> | void>();
   private commonjsPaths = new Set<string>();
+  private loadingPaths = new Set<string>();
+  private pendingLifecyclePaths = new Map<string, number>();
+  private lifecycleQueue: Promise<void> = Promise.resolve();
 
   async register(pluginPath: string, options: {
     kind: PluginKind;
@@ -272,15 +284,36 @@ export class PluginModule {
   } = { kind: 'external' }): Promise<void> {
     const absPath = path.resolve(pluginPath);
     if (this.pathMap.has(absPath)) return;
+    this.pathMap.set(absPath, {
+      path: absPath,
+      kind: options.kind,
+      source: {
+        ...(options.source ?? {
+          scope: options.kind === 'builtin' ? 'framework' : 'unmanaged',
+        }),
+      },
+    });
+  }
 
-    const pkgPath = path.join(absPath, 'package.json');
+  /** Read and validate the current manifest without executing the plugin entry. */
+  async inspect(pluginPath: string): Promise<PluginInfo> {
+    const absPath = path.resolve(pluginPath);
+    const registration = this.pathMap.get(absPath);
+    if (!registration) throw new Error(`Plugin at ${absPath} is not registered`);
+    return this.readPluginInfo(absPath, registration);
+  }
+
+  private async readPluginInfo(absPath: string, registration: RegisteredPlugin): Promise<PluginInfo> {
     let pkg: PackageJson;
     try {
-      pkg = JSON.parse(await readFile(pkgPath, 'utf-8')) as PackageJson;
+      pkg = JSON.parse(await readFile(path.join(absPath, 'package.json'), 'utf-8')) as PackageJson;
     } catch {
       throw new Error(`Invalid plugin: no package.json found at ${absPath}`);
     }
+    return this.createPluginInfo(absPath, registration, pkg);
+  }
 
+  private createPluginInfo(absPath: string, registration: RegisteredPlugin, pkg: PackageJson): PluginInfo {
     const manifest = parsePluginPackageManifest(pkg);
     resolveDeclaredMain(absPath, { ...pkg, main: manifest.main }, manifest.name);
     const contribute = manifest.contribute as ContributeData;
@@ -288,23 +321,24 @@ export class PluginModule {
     const assets = manifest.assets.public.length > 0
       ? { public: [...manifest.assets.public] }
       : undefined;
-    const capabilities = [...manifest.capabilities];
-    const info: PluginInfo = {
+    return {
       name: manifest.name,
       version: manifest.version,
       path: absPath,
-      kind: options.kind,
-      source: options.source ?? {
-        scope: options.kind === 'builtin' ? 'framework' : 'unmanaged',
-      },
+      kind: registration.kind,
+      source: registration.source,
       entry: manifest.main,
-      capabilities,
-      assets,
-      contribute,
+      capabilities: [...manifest.capabilities],
+      ...(assets ? { assets } : {}),
+      ...(contribute ? { contribute } : {}),
     };
+  }
 
-    this.pathMap.set(absPath, new Plugin(info));
-    if (manifest.main.endsWith('.js') && pkg.type !== 'module') this.commonjsPaths.add(absPath);
+  private enqueueLifecycle<T>(operation: () => Promise<T>): Promise<T> {
+    const previous = this.lifecycleQueue;
+    let resolveTail!: () => void;
+    this.lifecycleQueue = new Promise<void>((resolve) => { resolveTail = resolve; });
+    return previous.then(operation).finally(resolveTail) as Promise<T>;
   }
 
   async load(
@@ -312,33 +346,55 @@ export class PluginModule {
     runtimeInput: PluginLoadOptions,
   ): Promise<void> {
     const absPath = path.resolve(pluginPath);
-    const registeredPlugin = this.pathMap.get(absPath);
-    if (!registeredPlugin) {
+    this.pendingLifecyclePaths.set(absPath, (this.pendingLifecyclePaths.get(absPath) ?? 0) + 1);
+    return this.enqueueLifecycle(() => this.loadInternal(absPath, runtimeInput))
+      .finally(() => this.releasePendingLifecycle(absPath));
+  }
+
+  private async loadInternal(
+    pluginPath: string,
+    runtimeInput: PluginLoadOptions,
+  ): Promise<void> {
+    const absPath = path.resolve(pluginPath);
+    const registration = this.pathMap.get(absPath);
+    if (!registration) {
       throw new Error(`Plugin at ${absPath} is not registered`);
     }
 
-    const existing = this.nameMap.get(registeredPlugin.name);
+    // Loading is the only implicit manifest read. Never reuse a registration snapshot.
+    const loadedInfo = await this.readPluginInfo(absPath, registration);
+
+    const existing = this.nameMap.get(loadedInfo.name);
     if (existing?.path === absPath && existing.status === PluginStatus.Running) return;
     if (existing) {
-      await this.unload(existing.path);
+      await this.unloadInternal(existing.path);
     }
 
     const plugin = new Plugin({
-      ...registeredPlugin.info,
-      contribute: registeredPlugin.info.contribute
-        ? JSON.parse(JSON.stringify(registeredPlugin.info.contribute)) as ContributeData
+      ...loadedInfo,
+      contribute: loadedInfo.contribute
+        ? JSON.parse(JSON.stringify(loadedInfo.contribute)) as ContributeData
         : undefined,
     });
     plugin.status = PluginStatus.Loading;
-    const entryPath = resolveLoadEntryPath(absPath, registeredPlugin.info.entry);
+    const entryPath = resolveLoadEntryPath(absPath, loadedInfo.entry);
+    if (loadedInfo.entry.endsWith('.js')) {
+      let pkgType: string | undefined;
+      try {
+        pkgType = (JSON.parse(await readFile(path.join(absPath, 'package.json'), 'utf8')) as PackageJson).type;
+      } catch { /* readPluginInfo already validated this file */ }
+      if (pkgType !== 'module') this.commonjsPaths.add(absPath);
+      else this.commonjsPaths.delete(absPath);
+    }
 
     let definition: LoadedPluginModule['definition'];
     const runtimeOptions = runtimeInput;
     const runtimePaths = await createPluginPaths({
       roots: runtimeOptions.paths.roots,
-      owner: registeredPlugin.name,
+      owner: loadedInfo.name,
       legacyDataDirectories: runtimeOptions.paths.legacyDataDirectories,
     });
+    this.loadingPaths.add(absPath);
     let credentialLease: ReturnType<typeof createRevocableCredentialVault> | undefined;
     let lifecycleRuntime: PluginRuntime | ApplicationPluginRuntime | undefined;
 
@@ -353,15 +409,15 @@ export class PluginModule {
         }
 
         credentialLease = runtimeOptions.scope === 'session'
-          && registeredPlugin.info.capabilities?.includes('credentials')
+          && loadedInfo.capabilities?.includes('credentials')
           && runtimeOptions.credentials
           ? createRevocableCredentialVault(runtimeOptions.credentials)
           : undefined;
         lifecycleRuntime = runtimeOptions.scope === 'application'
-          ? createApplicationPluginRuntime(runtimeOptions.host, registeredPlugin.name, runtimePaths)
+          ? createApplicationPluginRuntime(runtimeOptions.host, loadedInfo.name, runtimePaths)
           : createPluginRuntime(
               runtimeOptions.host,
-              registeredPlugin.name,
+              loadedInfo.name,
               runtimePaths,
               runtimeOptions.config,
               runtimeOptions.kitId,
@@ -370,7 +426,7 @@ export class PluginModule {
         Object.freeze(lifecycleRuntime);
         const definitionBridge = createPluginDefinitionBridge((nextDefinition) => {
           if (definition) {
-            throw new Error(`Plugin "${registeredPlugin.name}" called editor.plugin.define() more than once`);
+            throw new Error(`Plugin "${loadedInfo.name}" called editor.plugin.define() more than once`);
           }
           definition = nextDefinition;
         });
@@ -402,13 +458,15 @@ export class PluginModule {
     } catch (error) {
       await credentialLease?.revokeAndDrain();
       plugin.status = PluginStatus.Idle;
+      this.loadingPaths.delete(absPath);
       throw error;
     }
 
     if (!definition) {
       await credentialLease?.revokeAndDrain();
       plugin.status = PluginStatus.Idle;
-      throw new Error(`Plugin "${registeredPlugin.name}" did not call editor.plugin.define()`);
+      this.loadingPaths.delete(absPath);
+      throw new Error(`Plugin "${loadedInfo.name}" did not call editor.plugin.define()`);
     }
 
     plugin.instance = {
@@ -417,7 +475,11 @@ export class PluginModule {
     };
     plugin.status = PluginStatus.Running;
     this.nameMap.set(plugin.name, plugin);
+    this.loadingPaths.delete(absPath);
     if (credentialLease) this.credentialRevokers.set(plugin.path, credentialLease.revokeAndDrain);
+    if (runtimeOptions.scope === 'session' && runtimeOptions.host.clearOwner) {
+      this.ownerClearers.set(plugin.path, () => runtimeOptions.host.clearOwner!(plugin.name));
+    }
 
     try {
       if (definition.lifecycle?.load) {
@@ -435,7 +497,7 @@ export class PluginModule {
       }
     } catch (loadError) {
       try {
-        await this.unload(absPath);
+        await this.unloadInternal(absPath);
       } catch (cleanupError) {
         throw new AggregateError(
           [loadError, cleanupError],
@@ -447,6 +509,13 @@ export class PluginModule {
   }
 
   async unload(pluginPath: string): Promise<void> {
+    const absPath = path.resolve(pluginPath);
+    this.pendingLifecyclePaths.set(absPath, (this.pendingLifecyclePaths.get(absPath) ?? 0) + 1);
+    return this.enqueueLifecycle(() => this.unloadInternal(absPath))
+      .finally(() => this.releasePendingLifecycle(absPath));
+  }
+
+  private async unloadInternal(pluginPath: string): Promise<void> {
     const absPath = path.resolve(pluginPath);
     const plugin = Array.from(this.nameMap.values()).find((candidate) => candidate.path === absPath);
     if (!plugin || plugin.status !== PluginStatus.Running) return;
@@ -479,6 +548,23 @@ export class PluginModule {
       }
     }
 
+    try {
+      await this.ownerClearers.get(plugin.path)?.();
+    } catch (error) {
+      errors.push(error);
+    }
+    this.ownerClearers.delete(plugin.path);
+
+    // Drop entry-local CommonJS state as part of unload; the next load still
+    // re-reads the manifest and re-detects the module format.
+    if (this.commonjsPaths.has(plugin.path)) {
+      try {
+        clearPluginRequireCache(resolveLoadEntryPath(plugin.path, plugin.info.entry));
+      } catch {
+        // A removed entry is already uncached; do not hide the lifecycle result.
+      }
+    }
+
     this.nameMap.delete(plugin.name);
     plugin.status = PluginStatus.Idle;
     plugin.instance = null;
@@ -495,8 +581,9 @@ export class PluginModule {
     const absPath = path.resolve(pluginPath);
     const plugin = this.pathMap.get(absPath);
     if (!plugin) return;
-    if (this.nameMap.get(plugin.name)?.path === absPath) {
-      throw new Error(`Plugin "${plugin.name}" must be unloaded before unregistering`);
+    const loaded = Array.from(this.nameMap.values()).find((candidate) => candidate.path === absPath);
+    if (loaded || this.loadingPaths.has(absPath) || this.pendingLifecyclePaths.has(absPath)) {
+      throw new Error(`Plugin "${loaded?.name ?? absPath}" must be unloaded before unregistering`);
     }
     this.pathMap.delete(absPath);
     this.commonjsPaths.delete(absPath);
@@ -505,11 +592,6 @@ export class PluginModule {
   getInfo(name: string): PluginInfo | undefined {
     const loaded = this.nameMap.get(name);
     if (loaded) return loaded.info;
-    const byPath = this.pathMap.get(path.resolve(name));
-    if (byPath) return byPath.info;
-    for (const plugin of this.pathMap.values()) {
-      if (plugin.name === name) return plugin.info;
-    }
     return undefined;
   }
 
@@ -519,6 +601,17 @@ export class PluginModule {
 
   listRegistered(): string[] {
     return Array.from(this.pathMap.keys());
+  }
+
+  getRegistration(pluginPath: string): PluginRegistration | undefined {
+    const registration = this.pathMap.get(path.resolve(pluginPath));
+    return registration ? { ...registration, source: { ...registration.source } } : undefined;
+  }
+
+  private releasePendingLifecycle(absPath: string): void {
+    const count = this.pendingLifecyclePaths.get(absPath) ?? 0;
+    if (count <= 1) this.pendingLifecyclePaths.delete(absPath);
+    else this.pendingLifecyclePaths.set(absPath, count - 1);
   }
 
   callPlugin(name: string, method: string, ...args: unknown[]): unknown {
@@ -547,7 +640,7 @@ function assertPluginLifecycleCapability(ownerName: string, editor: PluginRuntim
 function assertCurrentKitPlugin(editor: PluginRuntimeHost, pluginPath: string): PluginInfo {
   const info = editor.plugin.getInfo(pluginPath);
   if (!info) {
-    throw new Error(`Plugin at ${pluginPath} is not registered`);
+    throw new Error(`Plugin at ${pluginPath} is not loaded`);
   }
   if (info.kind === "builtin") {
     throw new Error(`Cannot operate on builtin plugin "${info.name}"`);
@@ -596,6 +689,8 @@ function createPluginRuntime(
     plugin: {
       define: editor.plugin.define,
       getInfo: editor.plugin.getInfo,
+      inspect: editor.plugin.inspect,
+      getRegistration: editor.plugin.getRegistration,
       listLoaded: editor.plugin.listLoaded,
       listRegistered: editor.plugin.listRegistered,
       callPlugin: editor.plugin.callPlugin,
@@ -609,13 +704,13 @@ function createPluginRuntime(
         if (!managedPluginPaths.has(normalizedPath)) {
           throw new Error(`Plugin path "${pluginPath}" is not part of the current kit`);
         }
-        const existing = editor.plugin.getInfo(normalizedPath);
+        const existing = editor.plugin.getRegistration?.(normalizedPath);
         if (existing) {
           if (existing.kind === "builtin") {
-            throw new Error(`Cannot register builtin plugin "${existing.name}"`);
+            throw new Error(`Cannot register builtin plugin at "${normalizedPath}"`);
           }
           if (existing.source.scope !== "kit" || existing.source.kitId !== currentKit.name) {
-            throw new Error(`Plugin "${existing.name}" does not belong to the current kit`);
+            throw new Error(`Plugin at "${normalizedPath}" does not belong to the current kit`);
           }
           return;
         }
@@ -755,6 +850,8 @@ function createApplicationPluginRuntime(
     plugin: {
       define: application.plugin.define,
       getInfo: application.plugin.getInfo,
+      inspect: application.plugin.inspect,
+      getRegistration: application.plugin.getRegistration,
       listLoaded: application.plugin.listLoaded,
       listRegistered: application.plugin.listRegistered,
       callPlugin: application.plugin.callPlugin,

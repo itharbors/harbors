@@ -162,9 +162,19 @@ stateDiagram-v2
     Idle --> [*]: unregister(path)
 ```
 
-### register
+### register、inspect 与 load
 
-读取和校验 package，保存 PluginInfo。它不执行 main，也不产生贡献。
+`register(path)` 只写入注册索引：绝对路径、`kind` 和 `source`。它不读取或校验
+`package.json`，不解析 manifest，不执行 main，也不产生贡献。因此注册目录可以在之后
+发生变化，注册索引不会伪装成旧的 manifest 快照。
+
+需要在执行前检查 manifest 的调用方使用显式 `inspect(path)`；该操作读取并校验当前磁盘
+manifest，但不执行入口。`getRegistration(path)` 只返回注册索引，`getInfo(name)` 在插件
+运行期间返回 Loaded PluginInfo；管理层不应通过注册状态推断 manifest。
+
+`load(path)` 每次从注册索引对应的路径重新读取并校验 manifest，然后解析入口、能力、assets
+和 contributions，再执行插件代码与 lifecycle。加载失败不会污染注册索引，后续 load 可重新
+读取最新文件。
 
 ### load
 
