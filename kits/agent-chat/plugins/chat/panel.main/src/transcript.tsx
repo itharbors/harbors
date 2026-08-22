@@ -51,6 +51,21 @@ function escapeHtmlAttribute(value: string): string {
     .replace(/>/g, "&gt;");
 }
 
+export function renderMarkdownCodeFallback(code: string): string {
+  return `<pre><code>${escapeHtmlAttribute(code)}</code></pre>`;
+}
+
+export function readMarkdownRendererCode(node: Pick<HTMLDivElement, "querySelector" | "getAttribute">): string {
+  const codeElement = node.querySelector("pre > code");
+  return codeElement ? codeElement.textContent ?? "" : node.getAttribute("data-code") ?? "";
+}
+
+export function renderMarkdownRendererOutput(code: string, rendered: unknown): string {
+  return typeof rendered === "string" && rendered.trim().length > 0
+    ? rendered
+    : renderMarkdownCodeFallback(code);
+}
+
 // 已注册的代码块渲染器语言集合
 const registeredRendererLanguages = new Set<string>();
 
@@ -68,7 +83,7 @@ function markdownRenderer(rendererLanguages: ReadonlySet<string> = registeredRen
     // 如果该语言有注册的渲染器，输出占位 div，由 useEffect 异步渲染
     if (lang && rendererLanguages.has(lang)) {
       const encoded = escapeHtmlAttribute(text);
-      return `<div class="markdown-code-block-renderer" data-lang="${escapeHtmlAttribute(lang)}" data-code="${encoded}"></div>`;
+      return `<div class="markdown-code-block-renderer" data-lang="${escapeHtmlAttribute(lang)}" data-code="${encoded}">${renderMarkdownCodeFallback(text)}</div>`;
     }
     // 其他代码块走默认渲染
     return defaultCodeRenderer(token);
@@ -368,21 +383,21 @@ const MarkdownMessage = memo(function MarkdownMessage({ content, messageRequest 
       for (const node of placeholderNodes) {
         if (cancelled) return;
         const lang = node.getAttribute('data-lang') || '';
-        const code = node.getAttribute('data-code') || '';
+        const code = readMarkdownRendererCode(node);
 
         const mod = await loadRendererModule(lang);
         if (!mod) {
           // 渲染器不可用，降级为普通代码块
-          node.outerHTML = `<pre><code>${escapeHtmlAttribute(code)}</code></pre>`;
+          node.outerHTML = renderMarkdownCodeFallback(code);
           continue;
         }
 
         try {
           const rendered = await mod.execute(code);
-          node.outerHTML = rendered;
+          node.outerHTML = renderMarkdownRendererOutput(code, rendered);
         } catch (err) {
           console.error(`[markdown-renderer] failed to execute renderer for ${lang}:`, err);
-          node.outerHTML = `<pre><code>${escapeHtmlAttribute(code)}</code></pre>`;
+          node.outerHTML = renderMarkdownCodeFallback(code);
         }
       }
     })();

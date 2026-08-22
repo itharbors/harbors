@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
-import { buildDisplayTurns, createDisplayTurnProjector, createMarkdownHtmlCache, nextDisplayTurn, renderMarkdownHtml, shouldCollapseTurn, type MessageData } from './transcript.js';
+import createDOMPurify, { type Config, type WindowLike } from 'dompurify';
+import { JSDOM } from 'jsdom';
+import { buildDisplayTurns, createDisplayTurnProjector, createMarkdownHtmlCache, nextDisplayTurn, readMarkdownRendererCode, renderMarkdownCodeFallback, renderMarkdownHtml, renderMarkdownRendererOutput, shouldCollapseTurn, type MessageData } from './transcript.js';
 import { parseSurfaceMessages, parseTraceTurns, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import { createTraceSyncState, mergeTracePage } from './trace-sync.js';
 
@@ -107,7 +109,36 @@ test('registered Mermaid fenced code uses a renderer placeholder', () => {
   assert.match(html, /class="markdown-code-block-renderer"/);
   assert.match(html, /data-lang="mermaid"/);
   assert.match(html, /data-code="graph TD\nA--&gt;B"/);
+  assert.match(html, /<pre><code>graph TD\nA--&gt;B<\/code><\/pre>/);
   assert.notEqual(html, 'false');
+});
+
+test('sanitized multiline Mermaid placeholder retains source text', () => {
+  const code = 'graph TD\nA-->B\nB-->C';
+  const dom = new JSDOM('');
+  const purifier = createDOMPurify(dom.window as unknown as WindowLike);
+  const html = renderMarkdownHtml(
+    `\`\`\`mermaid\n${code}\n\`\`\``,
+    (dirty, config) => String(purifier.sanitize(dirty, config as Config)),
+    new Set(['mermaid']),
+  );
+  const placeholder = new JSDOM(html).window.document.querySelector<HTMLDivElement>('.markdown-code-block-renderer');
+
+  assert.ok(placeholder);
+  placeholder.setAttribute('data-code', '');
+  assert.equal(readMarkdownRendererCode(placeholder), code);
+});
+
+test('successful renderer output is kept while empty output falls back to source', () => {
+  const code = 'graph TD\nA-->B';
+  const rendered = '<svg data-rendered="true"></svg>';
+
+  assert.equal(renderMarkdownRendererOutput(code, rendered), rendered);
+  const fallback = renderMarkdownRendererOutput(code, '');
+  assert.match(fallback, /<pre><code>graph TD\nA--&gt;B<\/code><\/pre>/);
+  assert.doesNotMatch(fallback, /<code><\/code>/);
+  assert.notEqual(fallback, 'false');
+  assert.equal(renderMarkdownCodeFallback(code), fallback);
 });
 
 test('paged turns 39-44 keep their real numbers and attach turn 40 tools', () => {
