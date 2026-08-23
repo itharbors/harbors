@@ -3,7 +3,7 @@
 本指南说明 Plugin、Kit、Framework 三层的测试所有权、测试类型、文件放置和范围选择。
 目标是按实际受影响的边界选择最小必要验证，同时不把当前尚未实现的命令或测试能力写成既成事实。
 
-Web 是唯一宿主。涉及 UI、Kit 装配或共享可见行为时，按需使用 `pnpm run dev:web` 并在浏览器中验收；
+Web 是唯一宿主。涉及 UI、Kit 装配或共享可见行为时，按需使用 `pnpm dev` 并在浏览器中验收；
 不引入 Electron、桌面窗口、托盘、更新器或桌面 IPC 的测试假设。
 
 ## 所有权边界
@@ -34,7 +34,7 @@ Web 是唯一宿主。涉及 UI、Kit 装配或共享可见行为时，按需使
 3. **Kit assembly**：验证单个 Kit 的 descriptor、布局、多个 Plugin 的组合和跨 Plugin 消息链路。它覆盖多个
    Plugin，但仍只属于一个 Kit。
 4. **Framework 测试**：覆盖 `packages/*` 的运行时、协议、构建工具，以及 `scripts/lib` 的工具逻辑。
-5. **浏览器验收**：对 UI、Kit 装配或共享可见行为，在 Web 宿主中按需启动 `pnpm run dev:web`，然后通过浏览器
+5. **浏览器验收**：对 UI、Kit 装配或共享可见行为，在 Web 宿主中按需启动 `pnpm dev`，然后通过浏览器
    验证用户可见结果。
 
 当前仓库不能由构建或校验命令推导出 runtime smoke 或 Kit assembly 已经存在。新增这类测试时，必须按下节
@@ -78,7 +78,8 @@ Kit 测试流程的具体现状如下：
 
 | 命令 | 当前作用 | 适用边界 |
 | --- | --- | --- |
-| `pnpm run dev:web` | 启动 Web 开发栈，供浏览器验收 | UI、Kit 装配和共享可见行为 |
+| `pnpm dev` | 启动 Gateway、Server、Client 三进程 Web 开发栈（含源码监听与 Client HMR），供浏览器验收 | UI、Kit 装配和共享可见行为 |
+| `pnpm start` | 启动单个 Server，提供已构建的 Client 资产；不启用开发监听或 HMR | 稳定运行验收 |
 | `pnpm --filter @itharbors/<pkg> run test` | 运行一个 Framework package 的 `test` script | 受影响 Framework package |
 | `node --test scripts/lib/<file>.test.mjs` | 运行一个 Framework 脚本工具测试文件 | 受影响 `scripts/lib` |
 | `pnpm run test:framework` | 构建 toolchain 后运行仓库定义的 Framework 测试集合 | Framework 变更需要更宽覆盖时；不是 Plugin 局部变更的默认命令 |
@@ -118,7 +119,7 @@ commit 或 squash 策略，确认源/目标 worktree clean、目标分支确为 
 
 - 从仓库根目录执行的完整命令和退出码，或明确的通过 / 失败结论；
 - 测试所属边界（Plugin、Kit 或 Framework）及选择该范围的原因；
-- 若使用浏览器验收，记录 `pnpm run dev:web`、访问的 Kit / 页面、操作步骤和观察到的可见行为；
+- 若使用浏览器验收，记录 `pnpm dev`、访问的 Kit / 页面、操作步骤和观察到的可见行为；
 - 若执行了全仓 `pnpm run check`，明确标记它是独立的全仓门禁，不把它改写成局部测试结论；
 - 若因端口、权限或其他环境限制跳过某项，记录原因和未覆盖的风险。
 

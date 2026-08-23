@@ -4,7 +4,7 @@
 
 ```mermaid
 sequenceDiagram
-    participant CLI as pnpm run dev:web
+    participant CLI as pnpm dev
     participant G as Gateway
     participant S as Server
     participant C as Vite Client
@@ -17,7 +17,7 @@ sequenceDiagram
     G->>C: 页面与静态资源
 ```
 
-`pnpm start` 使用 `packages/server/src/start.ts` 直接启动稳定 Web Server；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。运行数据位于 `.data/`。
+`pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程；Gateway 和 Server 监听源码变化，Client 使用 Vite HMR。`pnpm start` 使用 `packages/server/src/start.ts` 直接启动单个稳定 Web Server，提供已构建的 Client 资产，不启用开发代理、源码监听或 HMR；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。运行数据位于 `.data/`。
 
 ## 会话创建与 bootstrap
 

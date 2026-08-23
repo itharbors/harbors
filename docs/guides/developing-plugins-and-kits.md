@@ -593,7 +593,7 @@ test、validate 和本地产物检查。
 浏览器验收使用 Web 宿主，不包含 Electron 或桌面宿主假设：
 
 ```bash
-pnpm run dev:web -- --kit ./kits/my-kit
+pnpm dev -- --kit ./kits/my-kit
 ```
 
 `--kit` 是直达快捷方式：它把外部 Kit 临时追加到 Catalog，并在服务就绪后只自动打开该 Kit；

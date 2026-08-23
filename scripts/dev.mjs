@@ -155,13 +155,13 @@ function parseArgs(args) {
 function printHelp() {
   console.log(`
 Usage:
-  pnpm run dev:web
-  pnpm run dev:web -- --kit <kit-package-name-or-path>
+  pnpm dev
+  pnpm dev -- --kit <kit-package-name-or-path>
 
 Examples:
-  pnpm run dev:web -- --kit <package-name>
-  pnpm run dev:web -- --kit ./kits/<name>
-  pnpm run dev:web -- --kit-path /absolute/path/to/kit
+  pnpm dev -- --kit <package-name>
+  pnpm dev -- --kit ./kits/<name>
+  pnpm dev -- --kit-path /absolute/path/to/kit
 `.trim());
 }
 

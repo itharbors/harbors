@@ -4,7 +4,7 @@ import test from 'node:test';
 import { createPnpmSpawnSpec } from './pnpm-spawn.mjs';
 
 test('uses npm_node_execpath instead of the host executable for npm_execpath', () => {
-  const pnpmArgs = ['run', 'dev:web', '--', '--kit', 'default'];
+  const pnpmArgs = ['run', 'dev', '--', '--kit', 'default'];
 
   const spec = createPnpmSpawnSpec(pnpmArgs, {
     env: {
@@ -26,7 +26,7 @@ test('uses npm_node_execpath instead of the host executable for npm_execpath', (
 });
 
 test('uses the current Node executable for npm_execpath on Windows', () => {
-  const pnpmArgs = ['run', 'dev:web', '--', '--kit', 'default'];
+  const pnpmArgs = ['run', 'dev', '--', '--kit', 'default'];
 
   const spec = createPnpmSpawnSpec(pnpmArgs, {
     env: { npm_execpath: 'C:\\pnpm\\pnpm.cjs' },

@@ -8,8 +8,7 @@
   },
   "scripts": {
     "start": "tsx packages/server/src/start.ts",
-    "dev": "pnpm run dev:web",
-    "dev:web": "node scripts/dev.mjs",
+    "dev": "node scripts/dev.mjs",
     "kit": "node packages/kit-cli/dist/cli.js",
     "kit:check": "pnpm --filter @itharbors/magnet --filter @itharbors/kit-core --filter @itharbors/kit-cli --filter @itharbors/plugin-types --filter @itharbors/host-security --filter @itharbors/server run build && node scripts/check-kit.mjs",
     "kit:boundary": "node scripts/check-kit-boundary.mjs",

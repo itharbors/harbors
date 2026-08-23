@@ -17,7 +17,7 @@ flowchart LR
     Panel -- "受控 runtime API" --> Gateway
 ```
 
-`pnpm run dev:web` 启动开发拓扑。`pnpm start` 则直接启动构建后的 Web Server，默认监听 `48381`，从 `kits/default` 装配内置 Kit，并把运行数据写入 `.data/`。
+`pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程：Gateway 和 Server 监听源码变化，Client 由 Vite 提供 HMR。`pnpm start` 则在先完成构建后启动单个 Web Server，直接提供构建后的 Client 资产，默认监听 `48381`，从 `kits/default` 装配内置 Kit，并把运行数据写入 `.data/`；它不启动开发代理、源码监听或 HMR。
 
 ## Workspace 职责
 

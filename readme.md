@@ -11,17 +11,17 @@ ITHARBORS 是一个插件优先的 Web 应用框架。Gateway 提供统一入口
 
 ```bash
 pnpm install
-pnpm run dev
+pnpm dev
 ```
 
-`pnpm run dev` 等同于 `pnpm run dev:web`，启动开发 Gateway、Server 与 Client，访问 <http://localhost:49380>。稳定单进程入口使用：
+`pnpm dev` 启动由 Gateway、Server 与 Client 组成的三进程 Web 开发栈；Gateway 和 Server 监听源码变化，Client 由 Vite 提供 HMR。浏览器访问 <http://localhost:49380>。稳定单进程入口需先构建，再使用：
 
 ```bash
 pnpm run build
 pnpm start
 ```
 
-`pnpm start` 在 `HARBORS_SERVER_PORT`（默认 `48381`）启动 Web Server，并从 `kits/default` 装配内置 Kit。运行数据写入被 Git 忽略的 `.data/`。
+`pnpm start` 在 `HARBORS_SERVER_PORT`（默认 `48381`）启动单个 Web Server，直接提供 `packages/client/dist` 中的构建资产，并从 `kits/default` 装配内置 Kit；它不启动开发代理、源码监听或 HMR。运行数据写入被 Git 忽略的 `.data/`。
 
 ## 架构
 
