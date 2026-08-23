@@ -212,6 +212,14 @@ runtime.message.broadcast("state.changed", state);
 值、数字、字符串、数组和对象，不包含函数、`BigInt`、循环引用等值。开放贡献数据本身不
 会赋予插件新的宿主权限。
 
+“顶层键开放扩展”不表示任意功能名都可以占据 `contribute` 顶层。除
+`panel`、`menu` 和 `message` 这些 Framework 保留贡献点外，自定义 contribution 的
+顶层命名空间必须使用消费者插件的 `package.json.name`，结构固定为
+`contribute.<消费者插件名>.<具体贡献类型>`。消费者插件名是接收并解释贡献的插件身份，不是
+产生贡献的来源 owner；使用 scoped package name 时也要保留完整名称。Framework 当前只对
+未知 contribution 校验 JSON-safe 数据，不强制检查消费者插件是否已安装或是否声明了对应
+类型，因此消费者必须在自己的边界校验命名空间、贡献类型和 payload。
+
 消费者通过 `lifecycle.attach(pluginName, contribute)` 注册贡献，并使用真实的
 `pluginName` 做 owner 隔离。对同一 owner 的重复 `attach` 必须幂等，不应重复注册；
 `lifecycle.detach(pluginName)` 必须清理该 owner 注册的全部贡献。Framework 在加载和卸载
@@ -230,8 +238,38 @@ runtime.message.broadcast("state.changed", state);
 }
 ```
 
-`settings` 的 section 结构由其自身协议定义；其他消费者也应在自己的边界内校验和清理
-对应贡献。
+`settings` 的 section 结构由其自身协议定义；`contribute.settings` 与 `contribute.chat` 都
+是合法的消费者命名空间。如果实际消费者 package name 是 `@example/settings`，顶层键应写成
+`"@example/settings"`，而不是缩短为 `settings`。消费者定义的具体贡献类型位于该命名空间内，
+例如：
+
+```json
+{
+  "contribute": {
+    "chat": {
+      "command": {
+        "name": "summarize"
+      }
+    }
+  }
+}
+```
+
+下面的写法把功能名直接放在 `contribute` 顶层，不能表达贡献由哪个消费者解释，因此不符合
+命名空间规则：
+
+```json
+{
+  "contribute": {
+    "settingsPage": { "title": "Appearance" },
+    "markdownRenderer": { "extensions": ["md"] }
+  }
+}
+```
+
+消费者应在 `attach` 中校验命名空间、具体贡献类型和 payload；重复收到同一 owner 的贡献时
+幂等更新或替换注册，并在 `detach(pluginName)` 中按来源 `pluginName` 清理该 owner 的全部状态
+和资源。
 
 ### Panel
 

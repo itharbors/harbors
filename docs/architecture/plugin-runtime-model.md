@@ -259,6 +259,29 @@ Supervisor 给 initialize/load 30 秒。正常 stop 先请求 unload（启动未
 持有贡献，例如 `@itharbors/message` 为贡献者注册消息路由。这样 `clearOwner(pluginName)`
 才能可靠清理。
 
+除上表列出的内置贡献点外，自定义 contribution 的顶层 key 必须使用消费者插件
+`package.json` 中的 `name`，结构固定为抽象路径
+`contribute.<consumerPluginName>.<contributionType>`。其中 `<consumerPluginName>` 是接收并
+解释贡献的插件身份，不是产生贡献的来源 owner；它在 JSON 中是一个完整 key，package name
+中的 `/` 不表示额外的嵌套层级。例如消费者 package name 为 `@example/consumer` 时，应写成：
+
+```json
+{
+  "contribute": {
+    "@example/consumer": {
+      "customType": { "enabled": true }
+    }
+  }
+}
+```
+
+Framework 对未知、自定义 contribution 当前只校验值是否为 JSON-safe，不强制验证消费者命名空间
+是否对应已安装插件或已声明的贡献类型，因此消费者必须自行校验 contribution 内容。
+`lifecycle.attach(pluginName, contribute)` 中的 `pluginName` 始终是来源 owner 的 package name；
+`lifecycle.detach(pluginName)` 收到同一个 owner 名称。消费者应按 owner 实现幂等 attach，并在
+detach 时清理该 owner 的全部状态和资源。上表中的内置 `panel`、`message`、`menu` 由 Framework
+控制器消费，不适用自定义消费者命名空间规则。
+
 ## 插件方法与消息
 
 `definition.methods` 可由 Server 中其他插件通过 `callPlugin(name, method, ...args)`
