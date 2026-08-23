@@ -165,11 +165,10 @@ pnpm install
 开发时运行：
 
 ```bash
-pnpm run dev
+pnpm dev
 ```
 
-`pnpm run dev` 等同于 `pnpm run dev:web`，并行启动 Gateway、Server 和 Client。浏览器应访问
-Gateway `http://localhost:49380`，由它将 API 和 SSE 路由到 Server，不要将 Vite 端口当作完整应用入口。
+`pnpm dev` 启动 Gateway、Server 和 Client 三个开发进程：Gateway 与 Server 使用 `tsx watch` 监听源码，Client 使用 Vite 提供 HMR。浏览器应访问 Gateway `http://localhost:49380`，由它将 API 和 SSE 路由到 Server，不要将 Vite 端口当作完整应用入口。
 
 Web 栈运行统一 Kit host，裸地址显示 Kit 选择页，并提供开发直达地址：
 
@@ -192,18 +191,20 @@ Kit 选择页   http://localhost:49380/
 ## 指定 Kit
 
 ```bash
-pnpm run dev:web -- --kit ./kits/<name>
-pnpm run dev:web -- --kit <package-name>
+pnpm dev -- --kit ./kits/<name>
+pnpm dev -- --kit <package-name>
 ```
 
 `--kit`、`--kit-path` 和 `--kitPath` 都被 Web 开发脚本接受。路径必须包含有效 package；
 package name 必须能在 Kit 目录中找到。外部路径会临时追加到 Catalog，开发脚本会打印
-`Requested Kit` 直达地址。稳定的单进程 Web 入口为：
+`Requested Kit` 直达地址。稳定的单进程 Web 入口需先生成构建资产，随后使用：
 
 ```bash
 pnpm run build
 pnpm start
 ```
+
+`pnpm start` 只启动 Server，直接提供已构建的 Client 资产，不包含 Gateway、源码监听或 HMR。
 
 ## 构建
 

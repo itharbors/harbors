@@ -11,7 +11,7 @@
 ## 决策
 
 1. Harbors 只支持 Web host。
-2. `pnpm run dev` 与 `pnpm run dev:web` 使用浏览器开发栈；`pnpm start` 直接启动 Web Server。
+2. `pnpm dev` 启动 Gateway、Server 与 Client 三进程浏览器开发栈，提供源码监听与 Client HMR；`pnpm start` 在构建资产上直接启动单个 Web Server。
 3. 仓库只内置 `default` Kit；其他 Kit 作为独立源码目录维护。
 4. 删除 Electron、桌面打包、自动更新、Tray、BrowserWindow、桌面 IPC、Notification Host 和桌面 Kit Manager。
 5. 保留通用的 Kit descriptor、制品校验与本地打包能力，不建立远程 Kit 发布流程。
@@ -29,7 +29,7 @@
 
 ## 影响
 
-- 浏览器成为唯一受支持交互入口，开发和验收默认使用 `pnpm run dev:web`。
+- 浏览器成为唯一受支持交互入口，开发和验收默认使用 `pnpm dev`；稳定运行验收使用先构建后执行的 `pnpm start`。
 - 不再提供托盘、多原生窗口、桌面通知、自动更新或签名桌面安装包。
 - Client 不依赖 Electron bridge，插件子进程始终使用 Node。
 - Kit 制品仅用于本地校验、分发或导入，不触发远程 Release、Tag 或 Registry 发布。
