@@ -9,6 +9,34 @@
 六个阶段。Task 的三份正式文件是需求快照 `task.md`、机器状态 `status.json` 和收口总结
 `summary.md`；本机过程材料放在默认不提交的 `.work/`。
 
+### 决策反馈闭环
+
+决策信息按[决策反馈闭环指南](./decision-feedback-loop.md)贯穿 Task，但仍只使用下表的五个内部
+stages，不增加 `status.json` 阶段或其他状态字段。角色反馈是规划输入，不能因收集到反馈就自动
+升级为正式决策。
+
+外部 decision memory 只能辅助发现可回链的仓库来源，不能独立约束 Task。无命中、`partial` 或
+`failed` 都不能解释为“没有决策”，仍必须扫描仓库中的 ADR、架构文档、指南、相关 Task 和实现路径。
+
+| 内部 stage | 闭环动作与应保留的证据 |
+| --- | --- |
+| `requirements` | 任务启动时检索已批准的决策，形成 Decision Context；记录候选 owner、reviewer、approver 的角色来源和负责范围；无论外部 memory 是否命中都扫描仓库 Markdown，并记录检索范围、来源、质量和未决缺口。 |
+| `design` | 确认 owner、reviewer、approver 的分工；规划逐条标记决策为“适用、不适用、冲突、需新增”或“需人工确认”，并处置角色反馈、记录理由和来源；反馈与正式决策分开记录。 |
+| `implementation` | 建立“决策 → 实现证据”映射；任务范围变化时重新检索并更新处置，不能沿用过期上下文。 |
+| `verification` | 建立“决策 → 测试/验证证据”映射，核对冲突、例外和人工确认项的实际结论。 |
+| `consolidation` | 形成 Decision Delta，分类并发布到正式落点；完成反向检索验证，确认下一次任务能找到新增或修订的信息；验证失败时保持 `in_progress` 或人工 `block`。 |
+
+`skip` 只表示对应 stage 确认无需执行实际工作，不豁免 Decision Context、Decision Delta 或反向检索
+记录。确无适用决策时，必须在检索仓库 Markdown 后明确记录“无适用项”及检索证据；确无决策增量
+时，必须明确记录“无增量”及分类、反向检索验证证据。缺少这些证据时不得用 `skip` 进入终态。
+
+新建 Task 的 `task.md` 必须有“决策上下文与处置”记录：检索意图和范围、已批准来源、外部 memory
+状态及仓库定向查找、未决缺口，候选和确认后的 owner、reviewer、approver、角色来源与负责范围；
+逐条列出适用性处置、理由/证据、角色反馈和需人工确认项。`summary.md` 应按“已批准决策、当前架构
+事实、操作方法、待讨论方案、一次性任务证据、冲突或例外”记录 Decision Delta，并标注保留、修订、
+替代、新增等变化、正式落点（ADR、架构文档、指南或 Task 记录）以及反向检索所用查询、命中结果
+和仍未解决的缺口。已有 Task 的兼容边界和可复用记录结构见 [Task 档案契约](../tasks/README.md)。
+
 ### 1. 需求确认与分类
 
 开始实现前确认背景、目标、范围、非目标、验收标准和约束，再选择一种类型：`feature`、`bug`、
@@ -81,6 +109,16 @@ pnpm run check:preflight
 pnpm run task:status complete <task-id> consolidation
 pnpm run task:status check <task-id> --ready-for-pr
 ```
+
+运行 ready gate 前还要人工检查决策闭环：仓库扫描及外部 memory 无命中、`partial`、`failed` 状态
+是否有记录，
+候选角色来源、负责范围和最终分工是否清楚，每条决策是否已有处置且角色反馈未被当作决策，实现和
+测试证据是否可追溯，范围变化是否触发重检，Decision Delta 是否已分类并落到正确的正式文档，
+以及反向检索是否能命中新落点；任何 skipped stage 是否仍有 Decision Context、Decision Delta 和
+反向检索记录，其中确无适用决策或无增量的，是否明确记录“无适用项”或“无增量”及检索、分类和
+验证证据。反向检索失败时不得完成闭环或通过人工语义检查，`consolidation`
+必须保持 `in_progress` 或由执行者 `block`。当前 CLI 的 ready gate 只检查正式文件、Markdown
+基本契约和五个内部 stages 的终态，不会自动判断上述语义、校验 skip 证据或自动阻塞反向检索失败。
 
 完成实现和验证后必须停下，向用户报告分支、提交、Task 状态、验证命令和风险，并询问唯一的后续路径：
 创建 PR、本地整合到 `main`，或暂不处理。选择路径本身不授权任何外部写入；每一次 push、创建或更新
