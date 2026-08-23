@@ -12,7 +12,9 @@
 2. [核心原则](./architecture/core-principles.md)：理解架构边界与不变量。
 3. [核心运行流程](./architecture/runtime-flows.md)：跟随会话、消息和窗口的端到端路径。
 4. [Task 档案与生命周期](./tasks/README.md)：了解需求快照、阶段状态、收口总结与完成判定。
-5. [开发工作流](./guides/development-workflow.md)：启动、构建、测试和排查项目。
+5. [决策反馈闭环](./guides/decision-feedback-loop.md)：从规划、角色反馈到决策增量沉淀和
+   反向检索验证。
+6. [开发工作流](./guides/development-workflow.md)：启动、构建、测试和排查项目。
 
 ### 维护框架
 
@@ -28,9 +30,10 @@
 2. [Kit 与会话模型](./architecture/kit-and-session-model.md)
 3. [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md)
 4. [开发工作流](./guides/development-workflow.md)
-5. [测试指南](./guides/testing.md)
-6. [Kit 制品与本地安装](./guides/kit-artifacts.md)
-7. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
+5. [决策反馈闭环](./guides/decision-feedback-loop.md)
+6. [测试指南](./guides/testing.md)
+7. [Kit 制品与本地安装](./guides/kit-artifacts.md)
+8. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
 
 ## 文档地图
 
@@ -44,6 +47,7 @@
 | [布局模型](./architecture/layout-model.md) | Window、Panel、Tab、Split 和实例状态如何表达？ |
 | [UI 系统](./architecture/ui-system.md) | Web Components、主题与 iframe 如何协作？ |
 | [Task 档案与生命周期](./tasks/README.md) | 可交付变更如何建档、推进、收口、确认完成与恢复？ |
+| [决策反馈闭环](./guides/decision-feedback-loop.md) | 如何在任务规划中消费决策、收集角色反馈、沉淀决策增量并验证下次可检索？ |
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [测试指南](./guides/testing.md) | 如何按功能单元选择测试范围并完成验收？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
@@ -54,11 +58,21 @@
 
 ## 文档职责
 
-- `architecture/` 描述当前代码已经实现的行为、边界和不变量。源码与文档冲突时，
-  先以源码为事实并修正文档；如果源码本身违背已接受的设计决策，再单独讨论代码修改。
-- `guides/` 以任务为中心，给出可执行步骤和检查方式，不重复完整架构叙事。
-- `decisions/` 保存重要取舍。ADR 记录作出决策时的上下文，不随着实现细节变化而重写历史。
+不同来源分别回答“应该怎样”和“当前怎样”，不能互相静默覆盖：
+
+- 已接受 ADR 是决策约束的权威来源；`decisions/` 保留取舍上下文和历史，不随实现细节
+  变化重写历史。决策的消费、反馈和沉淀按[决策反馈闭环](./guides/decision-feedback-loop.md)
+  执行。
+- 源码与测试是当前实现事实的权威来源，测试同时提供可复核的行为证据。
+- `architecture/` 描述经验证的当前行为、边界和不变量，是实现事实与决策约束的正式
+  投影；`guides/` 给出与两者一致的可执行步骤，不重复完整架构叙事。
+- `tasks/` 保存需求、状态、来源和验证证据，不把未批准的角色反馈升级为长期决策。
+- 外部 decision memory 只用于辅助发现可追溯的仓库来源，不能独立成为任务约束。
 - `superpowers/` 保存说明体系本身的设计与实施计划，不面向普通使用者。
+
+若源码或测试与已接受 ADR 冲突，必须显式升级并裁定是修正实现、批准例外还是新增 ADR；
+不得用 architecture/guide 覆盖 ADR，也不得改写 ADR 来迎合未批准的当前实现。裁定后同步
+更新相关正式投影和双向链接。
 
 ## 当前状态与适用范围
 
