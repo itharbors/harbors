@@ -28,13 +28,57 @@ function sessionPath(directory: string, id: string): string {
   return join(directory, 'storage-v1', 'sessions', `${id}.jsonl`);
 }
 
-test('并发 API 共享同一会话快照并连续分配 seq', async () => {
+type DiskRecord = {
+  timestamp: string;
+  ordinal: number;
+  type: string;
+  payload: Record<string, unknown>;
+  [key: string]: unknown;
+};
+
+async function readDiskRecords(path: string): Promise<DiskRecord[]> {
+  const raw = await readFile(path, 'utf8');
+  assert.equal(raw.includes('\r'), false);
+  assert.equal(raw.endsWith('\n'), true);
+  return raw.trimEnd().split('\n').map((line) => JSON.parse(line) as DiskRecord);
+}
+
+function canonicalMeta(id: string, createdAt = '2026-08-23T10:00:00.000Z'): DiskRecord {
+  return {
+    timestamp: createdAt,
+    ordinal: 0,
+    type: 'session_meta',
+    payload: { schema_version: 1, conversation_id: id, created_at: createdAt },
+  };
+}
+
+function canonicalEvent(id: string, ordinal: number, type: string, data: Record<string, unknown>, timestamp = '2026-08-23T10:00:01.000Z'): DiskRecord {
+  return {
+    timestamp,
+    ordinal,
+    type: 'event_msg',
+    payload: { type, conversation_id: id, data },
+  };
+}
+
+test('新会话从 session_meta ordinal 0 开始，事件 ordinal 连续且 listener 看到已落盘 canonical record', async () => {
   await withStorage(async (directory, adapter) => {
     const conversation = await adapter.createConversation('/workspace');
+    const initial = await readDiskRecords(sessionPath(directory, conversation.id));
+    assert.equal(initial[0]?.type, 'session_meta');
+    assert.equal(initial[0]?.ordinal, 0);
+    assert.deepEqual(initial[0]?.payload, {
+      schema_version: 1,
+      conversation_id: conversation.id,
+      created_at: initial[0]?.payload.created_at,
+      cwd: '/workspace',
+      sandbox_mode: 'workspace-write',
+      approval_policy: 'ask',
+    });
     const persistedAtBroadcast: boolean[] = [];
     adapter.setTraceEventListener((_conversationId, event) => {
-      const path = sessionPath(directory, conversation.id);
-      persistedAtBroadcast.push(readFileSync(path, 'utf8').includes(`"seq":${event.seq}`));
+      const records = JSON.parse(readFileSync(sessionPath(directory, conversation.id), 'utf8').trimEnd().split('\n').at(-1)!) as DiskRecord;
+      persistedAtBroadcast.push(records.ordinal === event.seq + 1 && records.payload.type === event.type && JSON.stringify(records.payload.data) === JSON.stringify(event.data));
     });
 
     await Promise.all([
@@ -44,6 +88,9 @@ test('并发 API 共享同一会话快照并连续分配 seq', async () => {
 
     const trace = await adapter.getConversationTrace(conversation.id);
     assert.deepEqual(trace.map((event) => event.seq), [0, 1, 2, 3]);
+    const records = await readDiskRecords(sessionPath(directory, conversation.id));
+    assert.deepEqual(records.map((record) => record.ordinal), records.map((_record, index) => index));
+    assert.deepEqual(records.slice(1).map((record) => record.ordinal - 1), trace.map((event) => event.seq));
     const incremental = await adapter.getConversationTraceSince(conversation.id, 1);
     assert.equal(incremental.afterSeq, 1);
     assert.equal(incremental.cursor, 3);
@@ -77,6 +124,23 @@ test('新 Agent trace 为 turn/item/request 提供完整关联与 Item 终态', 
   });
 });
 
+test('canonical opaque tool input 的 camelCase key round-trip 不变', async () => {
+  await withStorage(async (directory, adapter) => {
+    const id = '77777777-7777-4777-8777-777777777777';
+    const records = [
+      canonicalMeta(id),
+      canonicalEvent(id, 1, 'tool/call', { toolInput: { camelCaseUserKey: 'value', nestedHTTPValue: 7 } }),
+    ];
+    const path = sessionPath(directory, id);
+    await writeFile(path, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf8');
+
+    const trace = await adapter.getConversationTrace(id);
+    assert.deepEqual(trace[0]?.data.toolInput, { camelCaseUserKey: 'value', nestedHTTPValue: 7 });
+    const onDisk = await readDiskRecords(path);
+    assert.deepEqual((onDisk[1]?.payload.data as any).toolInput, { camelCaseUserKey: 'value', nestedHTTPValue: 7 });
+  });
+});
+
 test('存储路径只来自 runtime data，不读取历史环境变量目录', async () => {
   const runtimeData = await mkdtemp(join(tmpdir(), 'harbors-agent-runtime-data-'));
   const legacyData = await mkdtemp(join(tmpdir(), 'harbors-agent-legacy-data-'));
@@ -100,7 +164,54 @@ test('存储路径只来自 runtime data，不读取历史环境变量目录', a
   }
 });
 
-test('两个 adapter 并发发送、改名和改权限时跨实例连续写盘', async () => {
+test('legacy v0 普通读取不改写 header 或原始事件', async () => {
+  await withStorage(async (directory, adapter) => {
+    const id = '55555555-5555-4555-8555-555555555555';
+    const header = { type: 'session', version: 0, id, createdAt: Date.parse('2026-08-23T10:00:00.000Z'), cwd: '/workspace' };
+    const event = { type: 'user/message', seq: 0, time: header.createdAt + 1, conversationId: id, data: { content: 'legacy', conversationId: id, opaqueCamelKey: { nestedHTTPValue: true } }, extensionField: { preserved: true } };
+    const path = sessionPath(directory, id);
+    const raw = `${JSON.stringify(header)}\n${JSON.stringify(event)}\n`;
+    await writeFile(path, raw, 'utf8');
+
+    const trace = await adapter.getConversationTrace(id);
+    assert.equal(trace[0]?.seq, 0);
+    assert.deepEqual(trace[0]?.data.opaqueCamelKey, { nestedHTTPValue: true });
+    assert.equal(await readFile(path, 'utf8'), raw);
+  });
+});
+
+test('legacy 首次写入原子升级为 canonical，轨迹等价且保留扩展数据与重复 seq 引用', async () => {
+  await withStorage(async (directory, adapter) => {
+    const id = '66666666-6666-4666-8666-666666666666';
+    const header = { type: 'session', version: 0, id, createdAt: Date.parse('2026-08-23T10:00:00.000Z'), cwd: '/workspace' };
+    const events = [
+      { type: 'user/message', seq: 0, time: header.createdAt + 1, data: { turn: 1, content: 'question', opaqueCamelKey: { nestedHTTPValue: true } }, surfaceOp: 'append' },
+      { type: 'assistant/message', seq: 1, time: header.createdAt + 2, data: { turn: 1, content: 'answer' }, surfaceOp: 'append' },
+      { type: 'session/title', seq: 1, time: header.createdAt + 3, data: { title: 'legacy title', messageSeqs: [1] } },
+      { type: 'turn/end', seq: 2, time: header.createdAt + 4, data: { turn: 1 }, sourceEventSeqs: [1] },
+    ];
+    const path = sessionPath(directory, id);
+    await writeFile(path, `${[header, ...events].map((value) => JSON.stringify(value)).join('\n')}\n`, 'utf8');
+
+    const before = await adapter.getConversationTrace(id);
+    assert.deepEqual(before.map((event) => event.seq), [0, 1, 2, 3]);
+    assert.deepEqual(before[2]?.data.messageSeqs, [1]);
+    assert.deepEqual(before[3]?.sourceEventSeqs, [1, 2]);
+    await adapter.renameConversation(id, 'after upgrade');
+
+    const records = await readDiskRecords(path);
+    assert.equal(records[0]?.type, 'session_meta');
+    assert.equal(records[0]?.payload.schema_version, 1);
+    assert.deepEqual(records.map((record) => record.ordinal), records.map((_record, index) => index));
+    const after = await adapter.getConversationTrace(id);
+    assert.deepEqual(after.slice(0, before.length), before);
+    assert.deepEqual(after[0]?.data.opaqueCamelKey, { nestedHTTPValue: true });
+    assert.deepEqual(after[2]?.data.messageSeqs, [1]);
+    assert.deepEqual(after[3]?.sourceEventSeqs, [1, 2]);
+  });
+});
+
+test('两个 adapter 并发发送、改名和改权限时 canonical ordinal 唯一连续且读取投影一致', async () => {
   await withStorage(async (directory, first) => {
     const second = new HarborsAdapter(modelService, directory);
     try {
@@ -112,13 +223,17 @@ test('两个 adapter 并发发送、改名和改权限时跨实例连续写盘',
         second.setConversationPermissions(conversation.id, { approvalPolicy: 'always' }),
       ]);
 
-      const lines = (await readFile(sessionPath(directory, conversation.id), 'utf8')).trim().split(/\r?\n/u).slice(1).map((line) => JSON.parse(line));
-      assert.deepEqual(lines.map((event) => event.seq), lines.map((_event, index) => index));
-      assert.equal(new Set(lines.map((event) => event.seq)).size, lines.length);
-      assert.equal(lines.some((event) => event.type === 'assistant/message'), true);
-      assert.equal(lines.some((event) => event.type === 'session/title' && event.data.title === '跨实例标题'), true);
-      assert.equal(lines.some((event) => event.type === 'approval/policy' && event.data.policy === 'always'), true);
-      assert.deepEqual((await second.getConversationTrace(conversation.id)).map((event) => event.seq), lines.map((event) => event.seq));
+      const records = await readDiskRecords(sessionPath(directory, conversation.id));
+      assert.equal(records[0]?.type, 'session_meta');
+      assert.deepEqual(records.map((record) => record.ordinal), records.map((_record, index) => index));
+      assert.equal(new Set(records.map((record) => record.ordinal)).size, records.length);
+      const events = records.slice(1);
+      assert.equal(events.some((record) => record.payload.type === 'assistant/message'), true);
+      assert.equal(events.some((record) => record.payload.type === 'session/title' && (record.payload.data as any).title === '跨实例标题'), true);
+      assert.equal(events.some((record) => record.payload.type === 'approval/policy' && (record.payload.data as any).policy === 'always'), true);
+      const projected = await second.getConversationTrace(conversation.id);
+      assert.deepEqual(projected.map((event) => event.seq), events.map((record) => record.ordinal - 1));
+      assert.deepEqual(projected.map((event) => event.type), events.map((record) => record.payload.type));
     } finally {
       second.stop();
     }
@@ -150,7 +265,10 @@ test('删除移动失败时不遗留 tombstone，源日志仍可读', async () =
     await chmod(trash, 0o500);
     try {
       await assert.rejects(adapter.deleteConversation(conversation.id), /SESSION_DELETE_FAILED/);
-      assert.equal((await readFile(source, 'utf8')).includes('"type":"session"'), true);
+      const records = await readDiskRecords(source);
+      assert.equal(records[0]?.type, 'session_meta');
+      assert.equal(records[0]?.payload.schema_version, 1);
+      assert.equal(records.length >= 1, true);
       await assert.rejects(readFile(join(directory, 'storage-v1', 'sessions', `${conversation.id}.deleted`)), /ENOENT/);
     } finally {
       await chmod(trash, 0o700);
@@ -161,6 +279,9 @@ test('删除移动失败时不遗留 tombstone，源日志仍可读', async () =
 test('既有 session JSONL 为 symlink 时读写删均 fail closed', async () => {
   await withStorage(async (directory, adapter) => {
     const conversation = await adapter.createConversation('/workspace');
+    const before = await adapter.getConversationTrace(conversation.id);
+    const broadcasts: unknown[] = [];
+    adapter.setTraceEventListener((_conversationId, event) => broadcasts.push(event));
     const source = sessionPath(directory, conversation.id);
     const target = `${source}.target`;
     await rename(source, target);
@@ -173,6 +294,8 @@ test('既有 session JSONL 为 symlink 时读写删均 fail closed', async () =>
       await unlink(source);
       await rename(target, source);
     }
+    assert.deepEqual(broadcasts, []);
+    assert.deepEqual(await adapter.getConversationTrace(conversation.id), before);
   });
 });
 
@@ -286,14 +409,79 @@ test('尾部中断行可恢复，刷新分页拼接与全量轨迹一致', async
   });
 });
 
+test('canonical 尾部中断修复后仍保持 canonical envelope 与连续 ordinal', async () => {
+  await withStorage(async (directory, adapter) => {
+    const id = '88888888-8888-4888-8888-888888888888';
+    const records = [canonicalMeta(id), canonicalEvent(id, 1, 'user/message', { content: 'one' })];
+    const path = sessionPath(directory, id);
+    await writeFile(path, `${records.map((record) => JSON.stringify(record)).join('\n')}\n{"timestamp":"`, 'utf8');
+
+    const trace = await adapter.getConversationTrace(id);
+    assert.deepEqual(trace.map((event) => event.seq), [0]);
+    const repaired = await readDiskRecords(path);
+    assert.equal(repaired[0]?.type, 'session_meta');
+    assert.equal(repaired[0]?.payload.schema_version, 1);
+    assert.deepEqual(repaired.map((record) => record.ordinal), [0, 1]);
+    assert.equal((await readFile(path, 'utf8')).endsWith('\n'), true);
+  });
+});
+
 test('列表遇到中间损坏日志会明确失败', async () => {
   await withStorage(async (directory, adapter) => {
     const id = '44444444-4444-4444-8444-444444444444';
     const header = { type: 'session', version: 0, id, createdAt: Date.now() };
     await mkdir(join(directory, 'storage-v1', 'sessions'), { recursive: true });
     await writeFile(sessionPath(directory, id), `${JSON.stringify(header)}\nnot-json\n`, 'utf8');
-    await assert.rejects(adapter.listConversations(), /Invalid Harbors session event JSON/);
+    await assert.rejects(adapter.listConversations(), /Invalid Harbors session JSON/);
   });
+});
+
+test('canonical 中间损坏和未知 schema 均 fail closed', async () => {
+  await withStorage(async (directory, adapter) => {
+    const corruptId = '99999999-9999-4999-8999-999999999999';
+    const corruptPath = sessionPath(directory, corruptId);
+    await writeFile(corruptPath, `${JSON.stringify(canonicalMeta(corruptId))}\nnot-json\n`, 'utf8');
+    await assert.rejects(adapter.getConversationTrace(corruptId), /Invalid Harbors session JSON/);
+    assert.equal((await readFile(corruptPath, 'utf8')).includes('not-json'), true);
+
+    const unknownId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const unknownPath = sessionPath(directory, unknownId);
+    const unknown = canonicalMeta(unknownId);
+    unknown.payload.schema_version = 99;
+    await writeFile(unknownPath, `${JSON.stringify(unknown)}\n`, 'utf8');
+    await assert.rejects(adapter.getConversationTrace(unknownId), /Invalid Harbors session JSON/);
+    assert.equal((await readFile(unknownPath, 'utf8')).includes('"schema_version":99'), true);
+  });
+});
+
+test('文件名与 canonical 或 legacy 会话身份不一致时读写均 fail closed', async () => {
+  const cases = [
+    {
+      name: 'canonical',
+      content: (id: string) => `${JSON.stringify(canonicalMeta(id))}\n`,
+    },
+    {
+      name: 'legacy',
+      content: (id: string) => `${JSON.stringify({ type: 'session', version: 0, id, createdAt: Date.parse('2026-08-23T10:00:00.000Z') })}\n`,
+    },
+  ];
+  for (const current of cases) {
+    await withStorage(async (directory, adapter) => {
+      const filenameId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+      const headerId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+      const path = sessionPath(directory, filenameId);
+      const original = current.content(headerId);
+      await writeFile(path, original, 'utf8');
+      const broadcasts: unknown[] = [];
+      adapter.setTraceEventListener((_conversationId, event) => broadcasts.push(event));
+
+      await assert.rejects(adapter.listConversations(), /SESSION_ID_MISMATCH/);
+      await assert.rejects(adapter.getConversationTrace(filenameId), /SESSION_ID_MISMATCH/);
+      await assert.rejects(adapter.renameConversation(filenameId, '不得写入'), /SESSION_ID_MISMATCH/);
+      assert.equal(await readFile(path, 'utf8'), original, current.name);
+      assert.deepEqual(broadcasts, [], current.name);
+    });
+  }
 });
 
 test('活动会话不能删除，普通删除原子移动到 trash', async () => {

@@ -1,4 +1,4 @@
-import { appendFile, lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
@@ -7,6 +7,7 @@ import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './to
 import { loadWorkspaceInstructions } from './instructions.js';
 import { paginateTraceEvents } from './trace-pagination.js';
 import { normalizeLegacyTraceEvent } from './protocol.js';
+import { canonicalRecordFromTraceEvent, canonicalRecordsFromTrace, canonicalSessionMeta, decodeJsonl, encodeCanonicalRecord, encodeJsonl, type CanonicalRecord } from './jsonl-format.js';
 
 interface StoredSession {
   id: string;
@@ -24,6 +25,7 @@ interface StoredSession {
   /** Current model-visible event sequence, folded from the append-only log. */
   surface: number[];
   logPath?: string;
+  format?: 'legacy' | 'canonical';
   persistedSize?: number;
   persistedMtimeMs?: number;
 }
@@ -226,11 +228,12 @@ export class HarborsAdapter implements AgentAdapter {
     await withSessionFileLock(session.logPath!, async () => {
       await this.assertNotDeletedOnDisk(id);
       await this.assertRegularSessionFile(session.logPath!, true);
-      await writeFile(session.logPath!, `${JSON.stringify(this.headerFor(session))}\n`, { encoding: 'utf8', flag: 'wx' });
+      await writeSessionFile(session.logPath!, encodeCanonicalRecord(canonicalSessionMeta(this.headerFor(session))), 'wx', true);
     });
     const initialStat = await stat(session.logPath!);
     session.persistedSize = initialStat.size;
     session.persistedMtimeMs = initialStat.mtimeMs;
+    session.format = 'canonical';
     this.sessions.set(id, session);
     await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
     await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
@@ -774,26 +777,30 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async loadByPathUnlocked(path: string): Promise<StoredSession> {
-    const id = path.slice(this.storageDir.length + 1, -'.jsonl'.length);
-    await this.assertNotDeletedOnDisk(id);
+    const expectedId = path.slice(this.storageDir.length + 1, -'.jsonl'.length);
+    if (!SESSION_ID_PATTERN.test(expectedId)) throw new Error(`SESSION_ID_INVALID: ${path}`);
+    await this.assertNotDeletedOnDisk(expectedId);
     await this.assertRegularSessionFile(path);
     const raw = await readFile(path, 'utf8');
     const parsed = parseSessionLog(raw, path);
     const header = parsed.header;
     if (header.type !== 'session' || header.version !== SESSION_FORMAT_VERSION || !header.id) throw new Error(`Invalid Harbors session header: ${path}`);
-    const normalized = normalizeStoredTrace(parsed.events, header.id);
+    if (header.id !== expectedId) throw new Error(`SESSION_ID_MISMATCH: expected ${expectedId}, got ${header.id}`);
+    const normalized = parsed.format === 'legacy' ? normalizeStoredTrace(parsed.events, header.id) : { events: parsed.events, repaired: false };
     const events = normalized.events;
     if (parsed.repairTrailingLine || normalized.repaired) {
-      const repaired = `${JSON.stringify(header)}\n${events.map((event) => JSON.stringify(event)).join('\n')}${events.length ? '\n' : ''}`;
+      const repaired = parsed.format === 'canonical'
+        ? encodeJsonl(parsed.records || [])
+        : `${JSON.stringify(header)}\n${events.map((event) => JSON.stringify(event)).join('\n')}${events.length ? '\n' : ''}`;
       const temporaryPath = `${path}.${process.pid}.${randomUUID()}.repair`;
       await this.assertRegularSessionFile(path);
-      await writeFile(temporaryPath, repaired, 'utf8');
+      await writeSessionFile(temporaryPath, repaired, 'wx', true);
       await rename(temporaryPath, path);
     }
     const persistedStat = await stat(path);
     const lastEvent = events.at(-1);
     const settings = settingsFromEvents(events, header);
-    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), events, surface: foldSurface(events), logPath: path, persistedSize: persistedStat.size, persistedMtimeMs: persistedStat.mtimeMs };
+    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), events, surface: foldSurface(events), logPath: path, format: parsed.format, persistedSize: persistedStat.size, persistedMtimeMs: persistedStat.mtimeMs };
   }
 
   private async ensureLog(session: StoredSession): Promise<void> {
@@ -801,12 +808,31 @@ export class HarborsAdapter implements AgentAdapter {
     const logPath = this.logPathFor(session.id);
     await this.assertNotDeletedOnDisk(session.id);
     await mkdir(this.storageDir, { recursive: true });
-    const header = JSON.stringify(this.headerFor(session));
-    const body = session.events.map((event) => JSON.stringify(event)).join('\n');
+    const body = encodeJsonl(canonicalRecordsFromTrace(this.headerFor(session), session.events));
     await this.assertRegularSessionFile(logPath, true);
-    await writeFile(logPath, `${header}\n${body}${body ? '\n' : ''}`, { encoding: 'utf8', flag: 'wx' });
+    await writeSessionFile(logPath, body, 'wx', true);
     session.logPath = logPath;
+    session.format = 'canonical';
     const persistedStat = await stat(logPath);
+    session.persistedSize = persistedStat.size;
+    session.persistedMtimeMs = persistedStat.mtimeMs;
+  }
+
+  /** Upgrade a legacy log only when a write is requested; reads stay read-only. */
+  private async migrateLegacySessionUnlocked(session: StoredSession): Promise<void> {
+    const path = session.logPath || this.logPathFor(session.id);
+    await this.assertRegularSessionFile(path);
+    const temporaryPath = `${path}.${process.pid}.${randomUUID()}.upgrade`;
+    const contents = encodeJsonl(canonicalRecordsFromTrace(this.headerFor(session), session.events));
+    try {
+      await writeSessionFile(temporaryPath, contents, 'wx', true);
+      await rename(temporaryPath, path);
+    } catch (error) {
+      await unlink(temporaryPath).catch(() => undefined);
+      throw error;
+    }
+    const persistedStat = await stat(path);
+    session.format = 'canonical';
     session.persistedSize = persistedStat.size;
     session.persistedMtimeMs = persistedStat.mtimeMs;
   }
@@ -824,6 +850,7 @@ export class HarborsAdapter implements AgentAdapter {
           const fresh = await this.loadByPathUnlocked(session.logPath!);
           reconcileStoredSession(session, fresh);
         }
+        if (session.format === 'legacy') await this.migrateLegacySessionUnlocked(session);
         const rawData = typeof dataInput === 'function' ? dataInput(session) : dataInput;
         const turn = typeof rawData.turn === 'number' && Number.isSafeInteger(rawData.turn) && rawData.turn > 0 ? rawData.turn : undefined;
         const previousTurn = turn === undefined ? undefined : [...session.events].reverse().find((candidate) => candidate.type === 'turn/start' && candidate.data.turn === turn);
@@ -855,15 +882,21 @@ export class HarborsAdapter implements AgentAdapter {
           data,
           ...options,
         };
-        const line = `${JSON.stringify(event)}\n`;
+        const line = encodeCanonicalRecord(canonicalRecordFromTraceEvent(event, { ordinal: event.seq + 1 }));
         await this.assertRegularSessionFile(session.logPath!);
-        await appendFile(session.logPath!, line, 'utf8');
+        await appendCanonicalLineWithRecovery(
+          session.logPath!,
+          line,
+          event.seq + 1,
+          type === 'turn/end' || type === 'approval/resolved',
+        );
         const nextStat = await stat(session.logPath!);
         session.persistedSize = nextStat.size;
         session.persistedMtimeMs = nextStat.mtimeMs;
         session.events.push(event);
         session.surface = applySurfaceEvent(session.surface, event);
         session.updatedAt = new Date(event.time).toISOString();
+        session.format = 'canonical';
         applySessionEventState(session, event);
         try {
           this.traceEventListener?.(session.id, { ...event, data: { ...event.data } });
@@ -915,6 +948,120 @@ interface ParsedSessionLog {
   header: SessionHeader;
   events: AgentTraceEvent[];
   repairTrailingLine: boolean;
+  format: 'legacy' | 'canonical';
+  records?: CanonicalRecord[];
+}
+
+async function writeSessionFile(path: string, contents: string, flag: 'wx' | 'w' = 'w', sync = false): Promise<void> {
+  const handle = await open(path, flag);
+  try {
+    await handle.writeFile(contents, 'utf8');
+    if (sync) await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function appendSessionLine(path: string, line: string, sync = false): Promise<void> {
+  const handle = await open(path, 'a');
+  try {
+    await handle.writeFile(line, 'utf8');
+    if (sync) await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+interface AppendRecoveryState {
+  kind: 'complete' | 'incomplete-tail' | 'unrecoverable';
+  prefixBytes?: number;
+}
+
+/**
+ * Confirm or recover one failed append while the caller still owns the queue
+ * and session lock. The record and ordinal are supplied by the caller and are
+ * never regenerated during recovery.
+ */
+async function appendCanonicalLineWithRecovery(path: string, line: string, ordinal: number, syncRequired: boolean): Promise<void> {
+  try {
+    await appendSessionLine(path, line, syncRequired);
+    return;
+  } catch (firstError) {
+    const state = await inspectFailedCanonicalAppend(path, line, ordinal);
+    if (state.kind === 'complete') {
+      if (syncRequired) await syncSessionFile(path);
+      return;
+    }
+    if (state.kind !== 'incomplete-tail' || state.prefixBytes === undefined) throw firstError;
+
+    await truncateSessionFile(path, state.prefixBytes);
+    // A second failure is deliberately not inspected: after one recovery
+    // attempt we fail closed and leave memory/listeners untouched.
+    await appendSessionLine(path, line, syncRequired);
+  }
+}
+
+async function inspectFailedCanonicalAppend(path: string, expectedLine: string, expectedOrdinal: number): Promise<AppendRecoveryState> {
+  await assertRegularRecoveryFile(path);
+  const raw = await readFile(path, 'utf8');
+  const hasFinalLf = raw.endsWith('\n');
+  const body = hasFinalLf ? raw.slice(0, -1) : raw;
+  if (!body) return { kind: 'unrecoverable' };
+  const parts = body.split('\n');
+  const completeParts = hasFinalLf ? parts : parts.slice(0, -1);
+  const tail = hasFinalLf ? '' : parts.at(-1) || '';
+  const prefix = completeParts.length ? `${completeParts.join('\n')}\n` : '';
+  let records: CanonicalRecord[];
+  try {
+    const decoded = decodeJsonl(prefix, { repairTrailingLine: false });
+    if (decoded.format !== 'canonical') return { kind: 'unrecoverable' };
+    records = decoded.records as CanonicalRecord[];
+  } catch {
+    return { kind: 'unrecoverable' };
+  }
+
+  const expectedBody = expectedLine.endsWith('\n') ? expectedLine.slice(0, -1) : expectedLine;
+  if (hasFinalLf) {
+    // A complete expected line is only confirmable when it is the sole next
+    // ordinal. Any occupied ordinal with different bytes, or any extra tail,
+    // is an interleaving/corruption and must fail closed.
+    if (records.length === expectedOrdinal + 1 && completeParts[expectedOrdinal] === expectedBody) return { kind: 'complete' };
+    return { kind: 'unrecoverable' };
+  }
+
+  // Only remove a non-empty suffix that is provably a prefix of this exact
+  // frozen line. An unrelated or complete-but-un-terminated line is not safe
+  // to guess about and therefore fails closed.
+  if (tail && records.length === expectedOrdinal && expectedBody.startsWith(tail)) {
+    return { kind: 'incomplete-tail', prefixBytes: Buffer.byteLength(prefix, 'utf8') };
+  }
+  return { kind: 'unrecoverable' };
+}
+
+async function truncateSessionFile(path: string, length: number): Promise<void> {
+  await assertRegularRecoveryFile(path);
+  const handle = await open(path, 'r+');
+  try {
+    await handle.truncate(length);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncSessionFile(path: string): Promise<void> {
+  await assertRegularRecoveryFile(path);
+  const handle = await open(path, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertRegularRecoveryFile(path: string): Promise<void> {
+  const file = await lstat(path);
+  if (!file.isFile()) throw new Error('SESSION_FILE_INVALID');
 }
 
 async function withSessionFileLock<T>(sessionPath: string, run: () => Promise<T>): Promise<T> {
@@ -977,6 +1124,7 @@ function reconcileStoredSession(target: StoredSession, source: StoredSession): v
   target.events = source.events;
   target.surface = source.surface;
   target.logPath = source.logPath;
+  target.format = source.format;
   target.persistedSize = source.persistedSize;
   target.persistedMtimeMs = source.persistedMtimeMs;
 }
@@ -997,29 +1145,18 @@ function applySessionEventState(session: StoredSession, event: AgentTraceEvent):
 }
 
 function parseSessionLog(raw: string, path: string): ParsedSessionLog {
-  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-  let header: SessionHeader;
   try {
-    header = JSON.parse(lines.shift() || '') as SessionHeader;
+    const decoded = decodeJsonl(raw);
+    return {
+      header: decoded.header,
+      events: decoded.events,
+      repairTrailingLine: decoded.repairedTrailingLine,
+      format: decoded.format,
+      ...(decoded.format === 'canonical' ? { records: decoded.records as CanonicalRecord[] } : {}),
+    };
   } catch (error) {
-    throw new Error(`Invalid Harbors session header JSON: ${path}`, { cause: error });
+    throw new Error(`Invalid Harbors session JSON: ${path}`, { cause: error });
   }
-  const events: AgentTraceEvent[] = [];
-  let repairTrailingLine = false;
-  for (let index = 0; index < lines.length; index += 1) {
-    try {
-      const event = JSON.parse(lines[index]) as AgentTraceEvent;
-      if (!event || typeof event !== 'object' || typeof event.type !== 'string' || !event.data || typeof event.data !== 'object' || Array.isArray(event.data)) {
-        throw new Error('event shape is invalid');
-      }
-      events.push(event);
-    } catch (error) {
-      const isInterruptedTail = index === lines.length - 1 && !raw.endsWith('\n');
-      if (!isInterruptedTail) throw new Error(`Invalid Harbors session event JSON at line ${index + 2}: ${path}`, { cause: error });
-      repairTrailingLine = true;
-    }
-  }
-  return { header, events, repairTrailingLine };
 }
 
 /**
