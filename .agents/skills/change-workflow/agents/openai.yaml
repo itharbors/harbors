@@ -1,4 +1,4 @@
 interface:
   display_name: "Change Workflow"
-  short_description: "Start and close isolated typed change worktrees"
-  default_prompt: "Use $change-workflow to start a typed Harbors change in an isolated worktree."
+  short_description: "编排 Harbors Task、执行计划与交付"
+  default_prompt: "使用 $change-workflow 编排 Harbors 任务定义、环境选择、执行计划、总结沉淀和交付处理。"

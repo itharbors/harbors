@@ -12,9 +12,11 @@
 2. [核心原则](./architecture/core-principles.md)：理解架构边界与不变量。
 3. [核心运行流程](./architecture/runtime-flows.md)：跟随会话、消息和窗口的端到端路径。
 4. [Task 档案与生命周期](./tasks/README.md)：了解需求快照、阶段状态、收口总结与完成判定。
-5. [决策反馈闭环](./guides/decision-feedback-loop.md)：从规划、角色反馈到决策增量沉淀和
+5. [自动化开发主流程](./architecture/automated-development-workflow.md)：了解任务定义、环境选择、
+   执行计划、总结沉淀和交付门禁。
+6. [决策反馈闭环](./guides/decision-feedback-loop.md)：从规划、角色反馈到决策增量沉淀和
    反向检索验证。
-6. [开发工作流](./guides/development-workflow.md)：启动、构建、测试和排查项目。
+7. [开发工作流](./guides/development-workflow.md)：启动、构建、测试和排查项目。
 
 ### 维护框架
 
@@ -30,10 +32,11 @@
 2. [Kit 与会话模型](./architecture/kit-and-session-model.md)
 3. [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md)
 4. [开发工作流](./guides/development-workflow.md)
-5. [决策反馈闭环](./guides/decision-feedback-loop.md)
-6. [测试指南](./guides/testing.md)
-7. [Kit 制品与本地安装](./guides/kit-artifacts.md)
-8. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
+5. [自动化开发主流程](./architecture/automated-development-workflow.md)
+6. [决策反馈闭环](./guides/decision-feedback-loop.md)
+7. [测试指南](./guides/testing.md)
+8. [Kit 制品与本地安装](./guides/kit-artifacts.md)
+9. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
 
 ## 文档地图
 
@@ -47,6 +50,7 @@
 | [布局模型](./architecture/layout-model.md) | Window、Panel、Tab、Split 和实例状态如何表达？ |
 | [UI 系统](./architecture/ui-system.md) | Web Components、主题与 iframe 如何协作？ |
 | [Task 档案与生命周期](./tasks/README.md) | 可交付变更如何建档、推进、收口、确认完成与恢复？ |
+| [自动化开发主流程](./architecture/automated-development-workflow.md) | 主 Agent 如何编排任务、环境、执行计划、总结和交付？ |
 | [决策反馈闭环](./guides/decision-feedback-loop.md) | 如何在任务规划中消费决策、收集角色反馈、沉淀决策增量并验证下次可检索？ |
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [测试指南](./guides/testing.md) | 如何按功能单元选择测试范围并完成验收？ |

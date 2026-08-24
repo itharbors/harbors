@@ -16,16 +16,22 @@
 
 Task 类型为 `feature`、`bug`、`optimize`、`docs`、`refactor`、`test`、`chore`：分别用于新能力、缺陷修复、性能资源优化、文档、无行为变化的结构调整、独立测试和日常维护。
 
-一项变更依次经过六个工作阶段：
+一项变更依次经过五段主流程：
 
-1. 需求/分类：确认需求并选择七类类型之一。
-2. Task 建档：创建目录、填写需求快照和初始状态。
-3. 设计/计划：在本地过程材料中完成可执行设计。
-4. 实现/验证：实现、测试和修正。
-5. 收口/交付选择：完成总结、通过 ready gate，向用户询问创建 PR、本地整合到 `main` 或暂不处理。
-6. 交付确认/会话归档：按用户选择的路径确认本地或 GitHub 事实，再归档 Codex 会话。
+1. 定义任务：补全需求、范围、验收、约束和决策上下文，写入 Task。
+2. 工作环境确认：Task 定义完成后固定询问使用当前工作区，或基于本地 `main` HEAD 创建 worktree。
+3. 执行计划：统一编排计划、二次审查、实现、代码审查、验证、有限自动修复和重验。
+4. 总结沉淀：自动整理实现与验证证据，分类 Decision Delta 和发现项，完成 ready gate 所需总结。
+5. 交付处理：ready gate 通过后询问创建 PR、本地整合到 `main` 或暂不处理，并按授权路径确认事实。
+
+工作环境确认和交付处理不新增 `status.json` stage；它们是主 Agent 的用户门禁。完整职责和通信
+契约见[自动化开发主流程](../architecture/automated-development-workflow.md)。
 
 `status.json` 的五个内部 stages 是 `requirements`、`design`、`implementation`、`verification`、`consolidation`。可用 action 为 `start`、`complete`、`skip`、`block`、`resume`、`rewind`、`set-pr`。前一阶段必须终态才能开始后一阶段；`complete` 和 `skip` 只作用于进行中阶段，并分别形成 completed、skipped 终态；`block`/`resume` 在进行中与阻塞之间切换；`rewind` 使目标阶段重新进行并将其后阶段设回 pending；`set-pr` 只在所有内部阶段终态时记录安全正整数 PR 号。状态只记录这些结构化事实，不添加主观说明。
+
+主流程映射为：定义任务对应 `requirements`；工作环境确认无内部 stage；执行计划覆盖
+`design`、`implementation`、`verification`；总结沉淀对应 `consolidation`；交付处理位于 ready
+gate 之后。阶段状态仍由主 Agent 统一推进，sub-agent 不直接写入 `status.json`。
 
 `skip` 不豁免决策闭环记录。确无适用决策时，必须先完成仓库检索并在 `task.md` 明确记录“无适用项”
 及检索证据；确无决策增量时，必须在 `summary.md` 明确记录“无增量”及分类和反向检索验证证据。
@@ -64,6 +70,12 @@ Task 的检索、规划、反馈、执行、验证和收口遵循[决策反馈�
   未命中或仍需人工确认的项目。验证失败时不得宣称闭环完成，`consolidation` 必须保持
   `in_progress` 或由执行者 `block`。
 
+总结沉淀还必须单独报告四类发现项：`blocking`（阻止验证或 ready gate 的问题）、`non_blocking`
+（不阻止本次收口但需告知用户的风险）、`decision_candidates`（需要人工裁定的长期方案）和
+`follow_up`（建议后续任务处理的事项）。自动提取这些类别不等于自动批准；只有 approver 明确批准
+并发布后，决策候选才能成为 accepted ADR。除 `blocking` 外，其他类别不阻止自动收口，但必须写入
+`summary.md` 并在最终报告中展示。
+
 上述内容是人工记录和评审契约，不是 `task:status` CLI 当前会自动校验的语义；CLI 也不会自动判断
 “无适用项”“无增量”是否有充分证据。
 
@@ -84,8 +96,8 @@ node scripts/task-status.mjs rewind 2026-08-04-safe-login implementation
 node scripts/task-status.mjs set-pr 2026-08-04-safe-login 123
 node scripts/task-status.mjs check 2026-08-04-safe-login
 node scripts/task-status.mjs check 2026-08-04-safe-login --ready-for-pr
-node scripts/task-status.mjs resolve feature/safe-login origin/main
-node scripts/task-status.mjs resolve feature/safe-login origin/main --ready-for-pr
+node scripts/task-status.mjs resolve feature/safe-login main
+node scripts/task-status.mjs resolve feature/safe-login main --ready-for-pr
 ```
 
 普通 `check` 要求 `task.md` 符合合约，并在 `summary.md` 存在时校验它；当 `consolidation` 为终态时 `summary.md` 必须存在。`--ready-for-pr` 还要求三份正式文件非空、两份 Markdown 均符合合约以及全部内部 stages 终态；PR 号可以仍为 `null`。`resolve` 从本分支相对 base 的 Task 变更解析唯一状态，并确认分支身份相符。
@@ -112,9 +124,9 @@ Decision Delta 和反向检索记录仍完整；确无适用决策或无增量�
 PR 或本地整合路径是有效状态，不是失败。
 
 选择本地 `main` 时，先选择并确认 `fast-forward`、merge commit 或 squash，再针对确定的源分支和
-head 取得独立整合授权，且不 push。整合前要求源/目标 worktree clean、目标为本地 `main`、记录
-`origin/main...main` 的 ahead/behind，并完成只读冲突预检；若 `main` 落后远端，必须先请求单独同步
-授权，不能自动 pull、rebase、stash 或 reset。冲突时停止并交还用户处理。`fast-forward` 仅在目标是
+head 取得独立整合授权，且不 push。整合前要求源/目标 worktree clean、目标为本地 `main`，并完成
+只读冲突预检。必要时可记录远端状态作为交付事实，但 `origin/main` 不是本地开发或本地整合的
+强制基线；不能自动 pull、rebase、stash 或 reset。冲突时停止并交还用户处理。`fast-forward` 仅在目标是
 源祖先时可用，使用 `git merge --ff-only <source-branch>` 且不提供新的提交标题；merge commit 必须
 使用非快进策略并显式提供合法中文标题，例如 `git merge --no-ff -m "[Feature] 合并安全登录" <source-branch>`；
 squash 使用 `git merge --squash <source-branch>` 后再以合法中文标题执行 `git commit -m "[Feature] 添加安全登录"`。

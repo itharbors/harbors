@@ -5,8 +5,10 @@ TEST_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)
 . "$TEST_DIR/start-change.test.sh"
 . "$TEST_DIR/integrate-change.test.sh"
 . "$TEST_DIR/contract.test.sh"
+. "$TEST_DIR/protocol.test.sh"
 run_start_tests
 run_integration_tests
 run_contract_tests
+run_protocol_tests
 printf '%s passed, %s failed\n' "$PASS_COUNT" "$FAIL_COUNT"
 test "$FAIL_COUNT" -eq 0

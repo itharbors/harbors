@@ -52,7 +52,7 @@ test_merge_commit_is_explicit_and_preserves_source() {
   assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$source_head"
 }
 
-test_behind_main_is_rejected_before_integration() {
+test_main_behind_origin_does_not_block_local_integration() {
   prepare_change
   other="$FIXTURE_ROOT/other"
   git clone "$ORIGIN" "$other" >/dev/null 2>&1
@@ -63,14 +63,24 @@ test_behind_main_is_rejected_before_integration() {
   git -C "$other" commit -m '[Chore] 添加远端 main 测试提交' >/dev/null
   git -C "$other" push origin main >/dev/null 2>&1
   git -C "$REPO" fetch origin main >/dev/null 2>&1
-  before_main=$(git -C "$REPO" rev-parse main)
   before_source=$(git -C "$WORKTREE" rev-parse HEAD)
-  if output=$($INTEGRATE "$WORKTREE" ff --confirm 2>&1); then fail 'behind main was integrated'; fi
-  assert_contains "$output" 'behind origin/main'
-  assert_contains "$output" 'separate authorization'
-  assert_eq "$(git -C "$REPO" rev-parse main)" "$before_main"
+  output=$($INTEGRATE "$WORKTREE" ff --confirm)
+  assert_contains "$output" 'INTEGRATED=1'
+  assert_contains "$output" 'MAIN_BEHIND_ORIGIN=1'
+  assert_eq "$(git -C "$REPO" rev-parse main)" "$before_source"
   assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$before_source"
   assert_eq "$(git -C "$REPO" status --porcelain=v1 --untracked-files=all)" ''
+}
+
+test_missing_origin_main_does_not_block_local_integration() {
+  prepare_change
+  git -C "$REPO" update-ref -d refs/remotes/origin/main
+  source_head=$(git -C "$WORKTREE" rev-parse HEAD)
+  output=$($INTEGRATE "$WORKTREE" ff --confirm)
+  assert_contains "$output" 'INTEGRATED=1'
+  assert_contains "$output" 'MAIN_AHEAD_ORIGIN=unavailable'
+  assert_contains "$output" 'MAIN_BEHIND_ORIGIN=unavailable'
+  assert_eq "$(git -C "$REPO" rev-parse main)" "$source_head"
 }
 
 test_squash_requires_valid_label_and_creates_one_commit() {
@@ -84,6 +94,44 @@ test_squash_requires_valid_label_and_creates_one_commit() {
   assert_contains "$output" 'STRATEGY=squash'
   assert_eq "$(git -C "$REPO" log -1 --format=%s)" '[Docs] 整合本地文档变更'
   assert_eq "$(git -C "$WORKTREE" rev-parse HEAD)" "$source_head"
+}
+
+test_squash_commit_failure_restores_clean_main() {
+  prepare_change
+  hooks="$FIXTURE_ROOT/hooks"
+  mkdir "$hooks"
+  cat > "$hooks/pre-commit" <<'EOF'
+#!/usr/bin/env sh
+exit 1
+EOF
+  chmod +x "$hooks/pre-commit"
+  git -C "$REPO" config core.hooksPath "$hooks"
+  before=$(git -C "$REPO" rev-parse HEAD)
+  if output=$($INTEGRATE "$WORKTREE" squash --confirm '[Docs] 触发提交失败' 2>&1); then fail 'squash hook failure succeeded'; fi
+  assert_contains "$output" 'squash commit failed; main was restored'
+  assert_eq "$(git -C "$REPO" rev-parse HEAD)" "$before"
+  assert_eq "$(git -C "$REPO" status --porcelain=v1 --untracked-files=all)" ''
+  test ! -e "$REPO/change.txt" || fail 'source-added file survived squash rollback'
+}
+
+test_squash_hook_extra_file_is_preserved_and_reported() {
+  prepare_change
+  hooks="$FIXTURE_ROOT/hooks"
+  mkdir "$hooks"
+  cat > "$hooks/pre-commit" <<EOF
+#!/usr/bin/env sh
+printf 'hook output\\n' > '$REPO/hook-extra.txt'
+exit 1
+EOF
+  chmod +x "$hooks/pre-commit"
+  git -C "$REPO" config core.hooksPath "$hooks"
+  before=$(git -C "$REPO" rev-parse HEAD)
+  if output=$($INTEGRATE "$WORKTREE" squash --confirm '[Docs] 保留额外文件' 2>&1); then fail 'squash extra-file hook succeeded'; fi
+  assert_contains "$output" 'squash commit failed and could not restore clean main'
+  assert_eq "$(git -C "$REPO" rev-parse HEAD)" "$before"
+  test -f "$REPO/hook-extra.txt" || fail 'hook extra file was unexpectedly removed'
+  test ! -e "$REPO/change.txt" || fail 'source-added file survived partial rollback'
+  rm "$REPO/hook-extra.txt"
 }
 
 test_conflict_is_not_resolved_automatically() {
@@ -128,8 +176,11 @@ run_integration_tests() {
   run_case 'integration requires clean primary and source' test_integration_requires_clean_primary_and_source
   run_case 'fast-forward keeps source and does not push' test_fast_forward_keeps_source_and_does_not_push
   run_case 'merge commit is explicit' test_merge_commit_is_explicit_and_preserves_source
-  run_case 'behind main is rejected before integration' test_behind_main_is_rejected_before_integration
+  run_case 'main behind origin does not block local integration' test_main_behind_origin_does_not_block_local_integration
+  run_case 'missing origin main does not block local integration' test_missing_origin_main_does_not_block_local_integration
   run_case 'squash requires a valid label' test_squash_requires_valid_label_and_creates_one_commit
+  run_case 'squash commit failure restores clean main' test_squash_commit_failure_restores_clean_main
+  run_case 'squash hook extra file is preserved' test_squash_hook_extra_file_is_preserved_and_reported
   run_case 'conflicts are not resolved automatically' test_conflict_is_not_resolved_automatically
   run_case 'squash conflicts are preflighted' test_squash_conflict_is_preflighted_without_dirty_main
   run_case 'foreign repositories are rejected' test_rejects_source_from_another_repository

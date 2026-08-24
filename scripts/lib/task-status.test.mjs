@@ -23,7 +23,7 @@ test('creates the canonical initial Task status', () => {
     updatedAt: now,
     stages: {
       requirements: 'completed',
-      design: 'in_progress',
+      design: 'pending',
       implementation: 'pending',
       verification: 'pending',
       consolidation: 'pending',
@@ -82,7 +82,7 @@ test('returns a canonical clone and exposes frozen domain enumerations', () => {
   const result = validateTaskStatus(value, { expectedTaskId: taskId });
   result.stages.design = 'blocked';
 
-  assert.equal(value.stages.design, 'in_progress');
+  assert.equal(value.stages.design, 'pending');
   assert.deepEqual(TASK_TYPES, ['feature', 'bug', 'optimize', 'docs', 'refactor', 'test', 'chore']);
   assert.deepEqual(TASK_STAGES, ['requirements', 'design', 'implementation', 'verification', 'consolidation']);
   assert.deepEqual(TASK_STAGE_STATES, ['pending', 'in_progress', 'completed', 'blocked', 'skipped']);
@@ -177,6 +177,7 @@ test('keeps JSON Schema stage sequences consistent with runtime validation', () 
 
 test('advances, blocks, resumes, rewinds, and records a PR without free text', () => {
   let value = createInitialTaskStatus({ taskId, type: 'feature', now });
+  value = applyTaskStatusAction(value, { kind: 'start', stage: 'design' }, { now });
   value = applyTaskStatusAction(value, { kind: 'complete', stage: 'design' }, { now });
   value = applyTaskStatusAction(value, { kind: 'start', stage: 'implementation' }, { now });
   value = applyTaskStatusAction(value, { kind: 'block', stage: 'implementation' }, { now });

@@ -3,11 +3,15 @@
 本指南以仓库根目录为工作目录，覆盖当前 workspace 的安装、启动、构建、测试和排查。
 架构背景见[系统架构](../architecture/system-overview.md)。
 
-## Task 驱动的六阶段开发
+## 自动化开发主流程
 
-所有可交付的 Framework 或 Kit 变更都使用一个 [Task 档案](../tasks/README.md)，依次经过以下
-六个阶段。Task 的三份正式文件是需求快照 `task.md`、机器状态 `status.json` 和收口总结
+所有可交付的 Framework 或 Kit 变更都使用一个 [Task 档案](../tasks/README.md)，依次经过“定义任务 → 工作环境确认 → 执行计划 → 总结沉淀 → 交付处理”五段主流程。Task 的三份正式文件是需求快照 `task.md`、机器状态 `status.json` 和收口总结
 `summary.md`；本机过程材料放在默认不提交的 `.work/`。
+
+主 Agent 负责外部编排和唯一阶段状态；干净 sub-agent 接收最小 `StagePacket`，完成一个工作单元
+并返回结构化 `StageResult`。工作环境确认和交付处理不新增 `status.json` stage，五个内部 stages
+仍为 `requirements`、`design`、`implementation`、`verification`、`consolidation`。完整架构见
+[自动化开发主流程](../architecture/automated-development-workflow.md)。
 
 ### 决策反馈闭环
 
@@ -37,7 +41,7 @@ stages，不增加 `status.json` 阶段或其他状态字段。角色反馈是�
 替代、新增等变化、正式落点（ADR、架构文档、指南或 Task 记录）以及反向检索所用查询、命中结果
 和仍未解决的缺口。已有 Task 的兼容边界和可复用记录结构见 [Task 档案契约](../tasks/README.md)。
 
-### 1. 需求确认与分类
+### 定义任务
 
 开始实现前确认背景、目标、范围、非目标、验收标准和约束，再选择一种类型：`feature`、`bug`、
 `optimize`、`docs`、`refactor`、`test` 或 `chore`。类型决定分支主类型；选择创建 PR 时才决定 PR
@@ -45,35 +49,69 @@ stages，不增加 `status.json` 阶段或其他状态字段。角色反馈是�
 一笔对应主类型提交；每笔提交标签按实际变更性质选择。不能用期限、负责人授权或已经投入的时间
 代替需求确认与 Task 建档。
 
-### 2. Task 建档
+### 工作环境确认
 
-从 primary checkout 运行 change-workflow 的 start 脚本。Framework 和 Kit 变更都使用：
+Task 定义完成后固定询问用户选择当前工作区或独立 worktree。`current` 允许当前已有分支或
+linked worktree，保留已有 dirty；但 detached HEAD 必须拒绝。选择 `worktree` 时基于本地
+`main` 当前 HEAD 创建隔离环境，并安全携带已经完成的 Task 档案。
 
-```bash
-bash .agents/skills/change-workflow/scripts/start-change.sh feature safe-login
-```
-
-start 脚本会基于 `origin/main` 创建隔离分支与 worktree，并自动运行 Task init，输出
-`TASK_ID=` 和 `TASK_DIR=`。进入输出的 worktree 后立即把已确认需求完整写入 `task.md`。如果代码
-已经存在而分支上没有 Task，必须先补建并填写，再继续实现或进入交付收口；可在该 worktree 运行真实 CLI：
+先在当前 primary checkout 建立并填写 Task。环境选择入口只在 `task.md` 完整、`requirements`
+已终态且用户明确选择后运行：
 
 ```bash
-pnpm run task:status init feature safe-login
+node scripts/task-status.mjs init feature safe-login
+# 将输出的 <task-id> 对应的 docs/tasks/<task-id>/task.md 填写完整
+
+# 用户选择 current：保留当前工作区已有改动
+bash .agents/skills/change-workflow/scripts/start-change.sh current <task-id>
+
+# 用户选择 worktree：基于本地 main HEAD 创建隔离环境
+bash .agents/skills/change-workflow/scripts/start-change.sh worktree <task-id>
 ```
 
-### 3. 设计与计划
+`current <task-id>` 只登记当前工作区并开始 `design`，不创建分支或 worktree；`worktree <task-id>`
+基于本地 `main` HEAD 创建隔离分支和 worktree，将启动前已形成的 Task 安全带入后开始 `design`。
+两条入口都会输出 `TASK_ID=` 和 `TASK_DIR=`。若代码已经存在而工作区没有 Task，必须先用
+`task-status init` 补建并填写，再选择环境。detached HEAD、缺少 Task 或无法确认工作区事实时
+必须停止并报告，不能猜测或自动切换环境。
+
+环境选择后必须记录实际环境事实：绝对工作区路径、`mode`、当前 branch、HEAD、dirty 状态和
+dirty 文件数/范围、Task 目录及（worktree 模式）`base_commit`。`current` 的 `dirty_policy`
+为 `preserve`；允许已有分支或 linked worktree，但不得覆盖无关改动。`worktree` 的
+`dirty_policy` 为 `clean-required`，唯一例外是把未提交的 Task 档案转移后初始只允许该 Task
+目录 dirty；执行计划开始后，sub-agent 只能修改 StagePacket 声明的 `allowed_paths`，其他 dirty
+或越界变更必须停止并返回主 Agent。
+
+```bash
+node scripts/task-status.mjs check <task-id>
+```
+
+### 执行计划
 
 spec、plan、research、短期验证输出和同机 handoff 默认放在当前 Task 的 `.work/`，不提交到 Git。
 这些材料若形成跨需求长期有效的架构、安全、迁移或维护规则，必须升级到正式 guide、reference、
 ADR 或设计文档。
 
-### 4. 实现与验证
+执行计划内部固定覆盖：计划、二次审查、实现、代码审查、验证、有限自动修复和重验。计划与
+二次审查属于 `design`，实现与代码审查属于 `implementation`，验证、有限修复和重验属于
+`verification`。自动修复只允许处理验证证据明确指向、范围内且可逆的问题；达到轮次或停止
+条件仍失败时必须记录 `blocking` 并交还用户。
+
+每个工作单元使用最小 `StagePacket`，具体字段以 [protocol reference](../../.agents/skills/change-workflow/references/protocol.md)
+为准，至少包含 `protocol_version`、`task`、`stage`、`work_unit`、`objective`、`workspace`、
+`allowed_paths`、`inputs`、`acceptance` 和 `stop_conditions`；`StageResult` 必须返回
+`protocol_version`、`task_id`、`stage`、`work_unit`、`outcome`、`recommendation`、`artifacts`、
+`evidence`、`issues`、`decision_candidates`、`follow_up` 和 `next_action`。`outcome` 只能是
+`completed`、`needs_repair`、`blocked` 或 `not_applicable`。sub-agent 不修改 `status.json`、
+不创建环境、不执行交付动作。
+
+#### 执行计划的状态与验证
 
 `status.json` 只由 Task CLI 管理 schema 字段，只保存阶段、更新时间、PR 编号等客观结构化事实，
 不保存主观判断或自由文本。原因猜测、风险判断、交接说明、备选方案、下一步建议不得写入 status；同机过程判断
 写入明确命名的 `.work/` 文件，需要长期或跨环境保留的事实按上节升级。
 
-初始 Task 已将 requirements 标记为完成并进入 design。按实际工作运行状态命令：
+Task 定义完成后将 `requirements` 标记为完成；用户选定工作环境后进入 `design`。按实际工作运行状态命令：
 
 ```bash
 pnpm run task:status complete <task-id> design
@@ -100,7 +138,13 @@ pnpm run check:preflight
 `pnpm run test:preflight` 运行紧凑的关键测试；`pnpm run check:preflight` 先增加全仓 Kit 架构审计。
 它们提供快速反馈，不替代交付选择前应明确记录的最终门禁。
 
-### 5. 收口选择与交付
+### 总结沉淀
+
+总结阶段自动提取需求变化、用户决定、实现 diff、评审意见和验证证据中的 Decision Delta，分类
+写入 `summary.md` 或正式 architecture、guide、ADR。必须输出 `blocking`、`non_blocking`、
+`decision_candidates`、`follow_up` 四类发现项；只有 `blocking` 会阻止自动收口，其余类别不阻止
+ready gate，但必须报告给用户。自动提取不等于自动批准，ADR 的 `accepted` 仍需要 approver
+明确批准。
 
 先更新完整 `summary.md`，写明验收完成情况、实际改动、决定、验证、影响、风险和遗留。`summary.md`
 完整且内部 stages 终态后，先通过 `--ready-for-pr` ready gate：
@@ -132,8 +176,8 @@ PR 不代表完成，PR 的合并和 required checks 仍是后续独立的外部
 
 选择本地 `main` 时，先让用户选择一种整合策略：`fast-forward`、merge commit 或 squash。之后针对
 确定的源分支和 head、目标 `main`、策略取得独立整合授权，且不 push。整合前必须确认源和目标 worktree
-都 clean、目标确实是本地 `main`、源分支包含待交付提交，并记录 `origin/main...main` 的 ahead/behind
-关系；若目标落后远端，先停下请求单独的同步授权，不自动 pull、rebase、stash 或 reset。应使用等价的
+都 clean、目标确实是本地 `main`、源分支包含待交付提交。远端状态可作为 push/PR 路径的事实记录，
+但 `origin/main` 不是本地开发或整合的强制基线；不自动 pull、rebase、stash 或 reset。应使用等价的
 只读冲突预检（例如 `git merge-tree --write-tree`）；出现冲突时停止并交还用户处理。
 
 `fast-forward` 仅在 `main` 是源分支祖先时允许，命令为 `git merge --ff-only <source-branch>`，不提供
@@ -154,7 +198,7 @@ pnpm run task:status rewind <task-id> implementation
 
 之后重新实现、验证、更新 `summary.md`、完成各 stages，并再次运行 ready gate，再重新询问交付路径。
 
-### 6. 交付确认与会话归档
+### 交付处理
 
 创建 PR 或通过 ready gate 只代表收口已提交，不代表 Task/任务完成。PR 路径的完成仍必须同时满足：
 
@@ -397,10 +441,10 @@ Client 会尝试创建 session 并重试一次，但不会掩盖持续装载错�
 
 Framework 和官方 Kit 都通过 `main` 集成，统一使用 change-workflow，按变更对象调整检查范围：
 
-| 变更对象 | 基线 / PR base | 变更分支 | 本地 Skill |
+| 变更对象 | 本地开发基线 / PR base | 隔离分支（选择 worktree 时） | 本地 Skill |
 | --- | --- | --- | --- |
-| Framework | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
-| 单个 Kit | `origin/main` / `main` | `<type>/<slug>` | `change-workflow` |
+| Framework | 本地 `main` / `main` | `<type>/<slug>` | `change-workflow` |
+| 单个 Kit | 本地 `main` / `main` | `<type>/<slug>` | `change-workflow` |
 
 每个 Kit 保存在自己的 `kits/<name>` 功能单元中；根工作流按 descriptor 发现，不维护产品清单。Kit 只在本地开发与打包。PR 合并仅更新源码，不会自动创建制品、发布版本、递增版本、创建 Release Tag 或更新 Registry。完整生命周期是：
 
@@ -412,14 +456,18 @@ main
   -> merge to main updates source only
 ```
 
-Kit 变更使用 change-workflow，与 Framework 共享同一套 start 脚本和 Task 合约：
+Kit 变更使用 change-workflow，与 Framework 共享同一套 Task 合约。先创建并填写 Task，再由用户
+选择 `current` 或 `worktree`：
 
 ```bash
-bash .agents/skills/change-workflow/scripts/start-change.sh feature add-import
+node scripts/task-status.mjs init feature add-import
+# 填写 docs/tasks/<task-id>/task.md 后，按用户选择执行其一：
+bash .agents/skills/change-workflow/scripts/start-change.sh current <task-id>
+bash .agents/skills/change-workflow/scripts/start-change.sh worktree <task-id>
 ```
 
-该命令固定获取 `origin/main`，创建隔离分支与 worktree，并自动运行 Task init。只在输出的 worktree
-中开发。完成实现和验证后，先按上面的交付选择停下；若用户选择 PR，再分别取得 push 和创建/更新
+`current` 保留已有改动，不创建分支或 worktree；`worktree` 才基于本地 `main` 当前 HEAD 创建隔离
+分支与 worktree。完成实现和验证后，先按上面的交付选择停下；若用户选择 PR，再分别取得 push 和创建/更新
 PR 的授权，并准备含 `## Summary` 与 `## Testing` 的 body。若用户选择本地 `main`，按确认的
 fast-forward、merge commit 或 squash 策略整合，且不 push。路径级 CI 至少检查被修改的 Kit；Kit CLI
 或其他共享构建面变化会触发所有官方 Kit CI。

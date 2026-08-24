@@ -1,38 +1,38 @@
 ---
 name: change-workflow
-description: Use when starting, continuing, or closing feature, bug, docs, refactor, optimization, test, or maintenance work in the Harbors repository, especially requests mentioning a worktree, branch, push, or GitHub pull request. Do not use for release branches or work outside this repository.
+description: 在 Harbors 仓库启动、继续、收口和交付 feature、bug、docs、refactor、optimize、test 或 maintenance 任务；当请求涉及 Task、工作区、worktree、分支、验证或本地整合时使用。不要用于 release 分支或仓库外工作。
 ---
 
-# Change Workflow
+# Harbors Change Workflow
 
-Every deliverable change follows one Task through six stages. Keep the change isolated from the primary checkout and use the bundled scripts for Git and Task invariants.
+这是一个主流程 Skill。不要把 `references/` 拆成可独立路由的阶段 Skill；它们是只在当前阶段需要时读取的操作契约。主 Agent 负责外部编排、Task 状态和授权，干净 sub-agent 只负责收到的一个阶段工作单元。
 
-| Intent | Action | Success evidence |
-| --- | --- | --- |
-| Start | `scripts/start-change.sh <type> <slug>` | `WORKTREE_PATH=`, `BRANCH=`, `CHANGE_TYPE=`, `BASE_COMMIT=`, `TASK_ID=`, `TASK_DIR=` |
-| Continue | Work only in the emitted worktree | Branch equals emitted `<type>/<slug>` |
-| Close locally | 完成实现、验证、summary、提交并停止 | 向用户询问下一步，不产生 push、PR 或 main 合并 |
-| Integrate locally | `scripts/integrate-change.sh <source-worktree> ff --confirm`；或 `<source-worktree> <merge|squash> --confirm <commit-title>`（merge/squash 必须提供合法中文标签标题，ff 不传标题） | 明确授权后，目标 `main` 完成指定整合 |
+## 主流程
 
-## Six stages
+严格按以下顺序推进，不把阶段内部步骤变成第二套状态机：
 
-1. **需求确认与分类**：先确认背景、目标、范围、非目标、验收、约束，再分类为 `feature`/`bug`/`optimize`/`docs`/`refactor`/`test`/`chore`。类型对应 `[Feature]`、`[Bug]`、`[Optimize]`、`[Docs]`、`[Refactor]`、`[Test]`、`[Chore]`；`[Init]` 只用于仓库初始化。
-2. **Task 建档**：先向用户说明计划创建的 `<type>/<slug>` 分支和 `.worktrees/<type>-<slug>` worktree，并取得明确同意后，才从 primary checkout 运行 start；它锁定已 fetch 的 `origin/main`、创建分支与 worktree，并自动 init Task。未获得明确同意时，不得运行 start 或以其他方式创建该分支或 worktree。进入输出的 worktree 后立即填写 `task.md` 中已确认的需求。截止时间、负责人授权和已投入时间都不是跳过 Task 的例外；已有代码但没有 Task 时，先补建并填写 Task，再继续。
-3. **设计与计划**：spec、plan、research 默认写入当前 Task 的 `.work/`；`.work/` 默认不提交。若形成跨需求长期有效的架构、安全、迁移或维护规则，将其升级到正式 guide、reference、ADR 或设计文档。
-4. **实现与验证**：用 `npm run task:status -- start|complete|skip|block|resume|rewind <task-id> <stage>` 推进状态，运行聚焦测试并保留真实证据。`status.json` 只由 `task:status` CLI 管理 schema 字段，只记录客观结构化事实；原因猜测、风险判断、交接说明、下一步建议和其他自由文本写入明确命名的 `.work/` 记录或正式文档，绝不写入 status。
-5. **本地收口与选择**：完成 `summary.md`，使 implementation、verification、consolidation 等内部 stages 终态，并通过现有 ready gate（命令名暂保留兼容：`npm run task:status -- check <task-id> --ready-for-pr`）。提交所有改动并保持源 worktree clean。完成这些本地检查后必须停止，向用户提供三项选择：A 创建 PR；B 整合到本地 `main`；C 暂不处理。A 需要随后分别获得 push 和 `gh` 创建/更新 PR 的明确授权；B 需要用户明确选择 `ff`、merge commit 或 squash，并分别授权整合。merge commit 与 squash 都必须提供带合法标签和中文摘要的提交标题。任何选择都不因用户说“完成”而默认执行。
-6. **整合确认与会话归档**：只有用户明确授权后才能运行 `scripts/integrate-change.sh`。脚本只在 primary `main` 与源 worktree 都 clean 时工作，不 push、不创建 PR、不删除分支或 worktree、不自动解决冲突。整合成功后，核对三份 Task 正式文件已在 `main`，再宣布需求完成；不为会话归档制造额外 commit。
+1. **定义任务**：确认背景、目标、范围、非目标、验收标准、约束、类型和角色，创建或补全唯一 Task。需求字段覆盖：背景、目标、范围、非目标、验收、约束。定义完成后将 `requirements` 标记为 `completed`，其余现有 stages 保持 `pending`。
+2. **工作环境确认**：Task 定义完成后，固定向用户询问使用 `current` 当前工作区，还是 `worktree` 独立 worktree；在得到选择前不得进入执行计划、创建分支或 worktree。选择规则见 [environment-selection.md](references/environment-selection.md)。
+   工作环境确认必须在 Task 定义后进行，不能提前隐式选择。
+3. **执行计划**：按计划、二次审查、实现、代码审查、验证、有限自动修复和重验推进。它只映射现有 `design`、`implementation`、`verification` 三个 Task stages，不新增状态。细节见 [execution-plan.md](references/execution-plan.md)。
+4. **总结沉淀**：默认自动执行，从需求变化、用户决定、实现 diff、评审和验证提取 Decision Delta，写入 `summary.md` 并分类报告 `blocking`、`non_blocking`、`decision_candidates`、`follow_up`。阻塞项阻止 ready，其余项不阻止自动收口；accepted 决策仍需 approver 明确批准。细节见 [consolidation.md](references/consolidation.md)。
+5. **交付处理**：完成现有 ready gate 后停止并向用户提供下一步选择：A 创建 PR；B 整合到本地 `main`；C 暂不处理。A 分别需要 push 和 `gh` 创建/更新 PR 的明确授权；B 需要用户选择 `ff`、merge commit 或 squash 并分别授权。交付脚本不 push、不创建 PR、不删除分支或 worktree、不自动解决冲突。
 
-## Resume and handoff
+主流程与现有五个 Task stages 的映射是：定义任务→`requirements`；工作环境确认→不新增 stage；执行计划→`design`、`implementation`、`verification`；总结沉淀→`consolidation`；交付处理→ready gate 之后。不得建立独立于 `requirements`、`design`、`implementation`、`verification`、`consolidation` 的机器状态。
 
-同机跨会话恢复时，先读 `task.md` 和 `status.json`，再读 `.work/` 中必要的 plan、research 或 handoff，最后核对 Git branch/status/log/diff。完成本地恢复之后才查询 GitHub 实时事实，GitHub 是 PR open/merged/checks 的权威源，这些易变状态不复制进 status。恢复时不猜测、不重做已完成工作：status 只定位阶段，非结构化理由从 Task、`.work/`、正式 docs 与 GitHub 事实恢复。
+## 调度和所有权
 
-跨机或跨环境交接不能依赖 `.work/`。将已验证且长期有效的客观事实升级到 `task.md`、`summary.md` 或正式 docs；未验证的主观猜测必须明确标注，并放到经授权的非 status 交接渠道，不得伪装成结构化事实。
+- 主 Agent 独占 `status.json` 的状态推进、用户门禁、环境创建/选择、ready gate、交付授权和最终完成声明。只能通过 Task CLI 修改 `status.json`，不把原因、风险或交接文本写入 status。
+- 阶段 sub-agent 通过最小 `StagePacket` 接收上下文，并返回结构化 `StageResult`；协议见 [protocol.md](references/protocol.md)。sub-agent 不创建环境、不改 `status.json`、不执行交付、不宣布整个 Task 完成。
+- 每次委派只发送当前 work unit 所需的 Task/stage、目标、工作区事实、允许路径、必要输入、验收和停止条件；不要转发完整会话或无关历史。
+- 主 Agent 必须独立检查 sub-agent 的实际 diff 和验证证据，再推进状态。失败按 `blocking` 处理；有限自动修复只允许在执行计划内重试并重验，不能绕过人工门禁。
 
-## Develop and commit
+## 重入和安全边界
 
-确认当前分支后再编辑。运行聚焦测试，检查 `git status --short`、`git diff` 和 `git diff --cached`，只暂存相关文件，绝不使用 `git add .`。每个提交都使用与实际内容一致的标签、简洁中文摘要且末尾不加句号；分支类型至少出现在一个提交中。`[Init]` 仅用于仓库初始化。
+恢复任务先读 `task.md`、`status.json`，再按需读 `.work/` 记录和本 Skill references，最后核对 Git 状态；不要猜测或重做已完成阶段。用户说“完成”不授权创建 worktree/分支、push、创建或更新 PR，亦不授权整合到 `main`。
 
-## Hard boundaries
+环境启动唯一使用 `current <task-id>` 或 `worktree <task-id>`。创建 worktree 应基于本地 `main` HEAD，不能把 `origin/main` 当作强制开发基线；当前工作区路径须保留用户已有改动。整合使用 `scripts/integrate-change.sh`，仍须 clean、ready、冲突预检和显式授权：ff 不传标题；merge commit 与 squash 都必须提供合法标签和中文提交标题。
 
-不得 stash、pull、rebase、hard reset、force push、递归删除、自动清理 worktree，也不得把已有分支当作新任务继续。`main` 的 merge、push、PR 创建或更新只能通过对应的明确授权流程执行；本地整合仅允许在用户明确授权后运行 `integrate-change.sh`。保留 worktree 和分支，除非用户明确要求删除。用户说“完成”不授权创建 worktree/分支、push、创建或更新 PR，也不授权 main 整合；push、PR 与整合分别需要对应的明确同意。不得把 compare URL 或成功 push 当作 PR 已创建。不得将此 Skill 安装到用户级目录。
+本 Skill 不负责 release 分支、远端事实以外的猜测、自动 push/PR、删除分支或 worktree，且不修改 Plugin、Kit、Framework 的业务行为或消息协议。
+
+兼容收口契约：完成 `summary.md` 后必须停止；分别获得 push 和 `gh` 的授权；用户说“完成”不授权任何远端或 main 整合动作。

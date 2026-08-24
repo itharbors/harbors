@@ -67,12 +67,10 @@ label_for_type() {
 }
 
 prepare_change() {
-  local type=${1:-feature} start_output
+  local type=${1:-feature}
   new_fixture
-  start_output=$($START "$type" integration-case 2>/dev/null)
-  WORKTREE="$REPO/.worktrees/$type-integration-case"
-  TASK_ID=$(printf '%s\n' "$start_output" | sed -n 's/^TASK_ID=//p')
-  TASK_DIR="$WORKTREE/docs/tasks/$TASK_ID"
+  TASK_ID=$(cd "$REPO" && node scripts/task-status.mjs init "$type" integration-case)
+  TASK_DIR="$REPO/docs/tasks/$TASK_ID"
   cat > "$TASK_DIR/task.md" <<EOF
 # $TASK_ID
 
@@ -107,6 +105,9 @@ Type: \`$type\`
 
 无。
 EOF
+  start_output=$($START worktree "$TASK_ID" 2>/dev/null)
+  WORKTREE="$REPO/.worktrees/$type-integration-case"
+  TASK_DIR="$WORKTREE/docs/tasks/$TASK_ID"
   cat > "$TASK_DIR/summary.md" <<'EOF'
 # 测试总结
 

@@ -27,7 +27,7 @@ test('init creates canonical task files in a Git repository', (t) => {
     updatedAt: '<timestamp>',
     stages: {
       requirements: 'completed',
-      design: 'in_progress',
+      design: 'pending',
       implementation: 'pending',
       verification: 'pending',
       consolidation: 'pending',
@@ -126,6 +126,7 @@ test('state commands persist valid transitions and leave a file unchanged on an 
   const taskId = initializeTask(fixture.path);
   const statusPath = join(fixture.path, `docs/tasks/${taskId}/status.json`);
 
+  assert.equal(runCli(fixture.path, ['start', taskId, 'design']).stdout, `${taskId}\n`);
   assert.equal(runCli(fixture.path, ['complete', taskId, 'design']).stdout, `${taskId}\n`);
   assert.equal(runCli(fixture.path, ['start', taskId, 'implementation']).status, 0);
   const beforeInvalidTransition = readFileSync(statusPath, 'utf8');
@@ -141,6 +142,7 @@ test('skip makes an active stage terminal through the supported CLI', (t) => {
   t.after(() => fixture[Symbol.dispose]());
   const taskId = initializeTask(fixture.path);
 
+  assert.equal(runCli(fixture.path, ['start', taskId, 'design']).status, 0);
   assert.equal(runCli(fixture.path, ['complete', taskId, 'design']).status, 0);
   assert.equal(runCli(fixture.path, ['start', taskId, 'implementation']).status, 0);
   assert.equal(runCli(fixture.path, ['skip', taskId, 'implementation']).status, 0);
@@ -398,6 +400,7 @@ function initializeTask(cwd, date = '2026-08-04', slug = 'safe-login') {
 
 function finishTask(cwd, taskId) {
   for (const [command, stage] of [
+    ['start', 'design'],
     ['complete', 'design'],
     ['start', 'implementation'],
     ['complete', 'implementation'],

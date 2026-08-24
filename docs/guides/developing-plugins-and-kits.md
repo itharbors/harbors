@@ -446,8 +446,9 @@ Kit 的 descriptor 通过 `harbors.distribution` 声明本地装配类别；buil
 发现全部合法 Kit，stable profile 只选择 descriptor 声明的 builtin，并从隔离构建生成的 staging
 加载。每个目录独立维护 `kit.json`、`package.json`、`pnpm-lock.yaml`、依赖安装、插件、测试和
 构建产物，仓库只共享通用本地工具链。
-修改某个 Kit 时使用 `change-workflow` 从 `origin/main` 创建短期分支，PR 仍合回 `main`；普通合并
-仅更新源码，不发布 Kit 或 Framework。
+修改某个 Kit 时使用 `change-workflow` 基于本地 `main` 当前 HEAD 创建短期隔离环境，PR 仍合回
+`main`；普通合并仅更新源码，不发布 Kit 或 Framework。`origin/main` 只在明确选择 push/PR 时
+用于远端事实校验，不是本地开发基线。
 
 Kit 只在本地开发与打包。合并源码不会自动创建制品或变更版本；版本字段继续作为 descriptor
 与制品校验的静态元数据。可使用 `pnpm run kit -- validate`、`pnpm run kit -- pack` 和
