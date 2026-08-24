@@ -115,6 +115,14 @@ function parseArgs(args) {
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
 
+    // pnpm forwards the command argument separator when the public command is
+    // written as `pnpm dev -- <args>`. It is a transport detail, not a dev
+    // option; accept it only in the expected leading position so all other
+    // unknown arguments remain errors.
+    if (index === 0 && arg === '--') {
+      continue;
+    }
+
     if (arg === '--help' || arg === '-h') {
       result.help = true;
       continue;

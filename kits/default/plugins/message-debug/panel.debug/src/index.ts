@@ -53,6 +53,7 @@ type MessageSnapshot = {
 type RuntimeMessage = {
   type?: string;
   payload?: unknown;
+  timestamp?: number;
 };
 
 function requireElement<T extends HTMLElement>(element: T | null, id: string): T {

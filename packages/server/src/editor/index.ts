@@ -8,7 +8,7 @@ import type { PanelConstraints } from '../framework/panel/types';
 import { KitModule, normalizeKitLayoutConfig } from '../framework/kit/index';
 import { normalizeKitTheme } from '../framework/kit/theme';
 import { MenuModule } from '../framework/menu/index';
-import { MessageModule } from '../framework/message/index';
+import { MessageModule, type MessageObservation } from '../framework/message/index';
 import { PanelModule } from '../framework/panel/index';
 import { PluginModule } from '@itharbors/magnet';
 import { WindowManager } from '../framework/window/index';
@@ -89,6 +89,8 @@ interface CreateEditorOptions {
   pluginPathRoots: PluginPathRoots;
   configStorageRoots?: ConfigStorageRoots;
   credentialVault?: CredentialVaultBindingSource;
+  /** Testing-only host observation; never included in a plugin runtime facade. */
+  messageObserver?: (event: MessageObservation) => void;
 }
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
@@ -183,6 +185,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         options.dispatchPanelBroadcast?.(descriptor.name, method, args);
       }
     },
+    observe: options.messageObserver,
   });
   const kit = new KitModule();
   let windowManager: WindowManager | null = null;

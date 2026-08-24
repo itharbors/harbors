@@ -226,12 +226,13 @@ describe('createEditor', () => {
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
 
-    const spy = vi.spyOn(editor.message, 'broadcast');
+    const spy = vi.fn();
+    editor.message.registerBroadcast('config-observer', 'config.changed', spy);
 
     await editor.kit.load(configKitFixture.directory);
     editor.config.set('theme', 'dark');
 
-    expect(spy).toHaveBeenCalledWith('config.changed', {
+    expect(spy).toHaveBeenCalledWith({
       key: 'theme',
       type: 'global',
       action: 'set',
@@ -247,7 +248,8 @@ describe('createEditor', () => {
     await editor.plugin.load(pluginDir);
     await editor.plugin.unload('config');
 
-    const spy = vi.spyOn(editor.message, 'broadcast');
+    const spy = vi.fn();
+    editor.message.registerBroadcast('config-observer', 'config.changed', spy);
 
     await editor.kit.load(configKitFixture.directory);
     editor.config.set('theme', 'dark');

@@ -97,7 +97,11 @@ importers:
         specifier: ^2.0.0
         version: 2.1.9(@types/node@22.20.1)(jsdom@29.1.1)
 
-  packages/host-security: {}
+  packages/host-security:
+    devDependencies:
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.20.1)(jsdom@29.1.1)
 
   packages/kit-cli:
     dependencies:
@@ -126,6 +130,9 @@ importers:
       '@types/yazl':
         specifier: ^3.3.1
         version: 3.3.1
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.20.1)(jsdom@29.1.1)
 
   packages/kit-core:
     dependencies:
@@ -139,6 +146,9 @@ importers:
       '@types/semver':
         specifier: ^7.7.1
         version: 7.8.0
+      vitest:
+        specifier: ^2.0.0
+        version: 2.1.9(@types/node@22.20.1)(jsdom@29.1.1)
 
   packages/native-credential-vault:
     devDependencies:

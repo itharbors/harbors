@@ -1,43 +1,117 @@
 # Agent Chat Kit 装配与回归边界
 
-Agent Chat Kit 的装配来源是 `kits/agent-chat/package.json` 中声明的九个 Kit 插件：
-`conversation`、`chat`、`model-service`、`agent`、`plugin`、`preview`、`debug`、`settings` 和
-`mermaid`。Server Web 宿主先加载 Framework 的 `panel`、`message`、`menu`、`config` 插件，再按 Kit
-声明顺序解析和加载上述插件；测试不得用孤立的消息模块替代这条装配路径。
+Agent Chat 的组合测试属于 `kits/agent-chat/tests/`，不是 Framework 的业务测试。Framework 只拥有通用的
+Plugin runtime harness、Kit assembly harness 和 Web Host 进程 runner；Chat、Conversation、Agent、Model Service
+和页面的业务断言由 Agent Chat Kit 自己拥有。
 
-## 消息顺序
+## 公开测试边界
 
-一次普通对话的可观察链路如下：
+Framework 通过 `@itharbors/server/testing` 提供测试用 export。Kit 测试只依赖这个公开边界和 Kit-local fixture，
+不得 import `packages/server/src/**`、`packages/server/tests/**` 等私有源码，也不应直接操作 `createEditor`。
 
-1. Chat/Conversation 面板以定向 request 调用 `agent.createConversation` 或
-   `agent.sendMessage`。
-2. Agent 以定向 request 调用 `model-service.getCatalog` / `model-service.complete`；请求携带唯一
-   `requestId`，流式请求还携带 `generation`。
-3. Model Service 将 Provider 的流式增量以 `model-service.complete.delta` broadcast 发出。Agent 只
-   接收同一 `requestId` 和 `generation` 的单调 `sequence`，再以 `agent.message.delta` broadcast
-   给 Chat。
-4. Agent 每次持久化 trace 后 broadcast `agent.conversation.trace.append`。Chat 以
-   `conversationId`、`turnId`、`itemId` 和 `seq` 重建 Transcript；`item.completed` 的 snapshot
-   是最终状态。
-5. Agent 以 `agent.message.status` broadcast running / completed / error 状态，并以 `turn/end`
-   记录 `completed`、`failed`、`cancelled`、`timed_out` 或 `rejected` 终态。
+### Plugin runtime harness
 
-审批是同一条链上的定向回环：Agent 先持久化并 broadcast `approval/asked`，Chat 以相同的
-`conversationId`、`turnId`、`itemId`、`requestId` 调用 `agent.resolvePermissionRequest`，Agent 再持久化
-`approval/resolved`。拒绝的工具调用会成为带错误的 `tool/result`；Agent 可继续向模型请求恢复性回答，
-因此拒绝本身不必然结束整个 turn。
+`createPluginRuntimeHarness({ pluginPath, ... })` 真实 register/load 一个 Plugin，返回：
 
-## 回归边界
+- `plugin.load()`、`plugin.unload()`、`plugin.call()`、`plugin.info()` 和 `plugin.isLoaded()`；
+- `messages`，用于真实 request、requestFrom、broadcast、外部 request/broadcast route 注册、查询和注销；
+- `observer`，以 `MessageTraceEvent.sequence` 记录 request/broadcast 的 caller、owner、name/topic 和 args；
+- `dispose()`，负责 unload、消息模块销毁和 harness 自己创建的临时数据根清理。
 
-`kits/agent-chat/tests/assembly.test.ts` 使用真实 manifest、真实 PluginModule 和真实 MessageModule，
-只将不可控的 Provider HTTP 响应替换为本地 `fetch` 流。它覆盖：
+`externalRequests`、`externalBroadcasts`、`applicationRequest` 和 `credentials` 是 Plugin 外部边界的 test
+double。被测 Plugin、Plugin System、runtime message 和生命周期保持真实；该 harness 不加载完整 Kit。
 
-- 九个 Kit 插件的实际加载、Panel 贡献和 request/broadcast 路由；
-- 正常流式完成、delta 与 trace 的关联键和序列；
-- 工具调用触发审批、拒绝后的错误工具结果及 turn 恢复；
-- Stop 通过 Agent 到 Model Service 的 cancel 链路及 `turn/end=cancelled` 终态；
-- Provider 错误的关联错误 envelope 与 `turn/end=failed` 终态；
-- 会话选择切换后，旧 request/generation 的重复晚到 delta 不改变当前会话历史；
-- Agent 插件卸载/重新加载后的历史恢复。
+### Kit assembly harness
 
-浏览器验收仍属于 Web 宿主层；本测试不引入 Electron 或其他桌面宿主假设。
+`createKitAssemblyHarness({ kitDirectory, projectRoot?, kitName?, ... })` 真实创建 assembly 并加载 Kit descriptor、
+布局和 Kit 声明的全部 Plugin，返回：
+
+- `kit.load()`、`kit.current()` 和 `kit.plugins()`；
+- `plugin.loaded()`、`plugin.info(name)` 和真实 `plugin.call(plugin, method, ...args)`；
+- 与 Plugin harness 同契约的 `messages`、`observer` 和 `dispose()`。
+
+Kit 可以通过 `externalRequests`、`externalBroadcasts`、`applicationRequest` 和 `credentials` 模拟 Kit 外部的
+服务，但不能 mock Plugin、Plugin System、MessageModule 或跨 Plugin 路由。这样 assembly 测试验证的是真实组合，
+而不是由 mock 重新实现的组合。
+
+## Web Host runner 边界
+
+Framework 的 `scripts/lib/web-host-runner.mjs` 导出 `startWebHost(options)`，当前实现负责：
+
+1. 校验绝对 `repositoryRoot`、非空 `kitSources`、`defaultKit` 和超时参数；
+2. 分配 Gateway、Server、Client、notification 四个隔离端口；
+3. 创建临时数据根，并向三个进程传入 Kit sources、default Kit、端口和数据路径；
+4. 启动 Gateway、Server、Client，轮询 Gateway `/api/health`，保存有限 stdout/stderr 日志；
+5. 返回 `baseUrl`、`ports`、`tempRoot`、`logs`、`health()` 和幂等 `stop()`；
+6. 停止时按逆序发送 SIGTERM，超时后对仍存活的子进程发送 SIGKILL，最后删除临时根；启动失败也执行相同清理。
+
+runner 只管理进程、端口、健康检查、日志和清理，不知道任何 Kit 的名称语义、Panel、对话、业务 request、broadcast
+或页面内容。完整 Web Host smoke 的业务测试归目标 Kit；Agent Chat 的 Kit-owned smoke wrapper 只调用这个通用
+runner 并执行公开 HTTP 断言，不直接操作 `createEditor` 或 Server 私有源码。runner 的自动化测试仍只验证通用进程
+契约和隔离清理，不要把它写成 Kit 业务 smoke。
+
+## Agent Chat 装配来源
+
+Agent Chat 的 Kit manifest 声明九个 Kit Plugin：`conversation`、`chat`、`model-service`、`agent`、`plugin`、
+`preview`、`debug`、`settings` 和 `mermaid`。Server assembly 还会先加载通用 Framework 插件 `panel`、
+`message`、`menu`、`config`。测试必须通过真实 Kit assembly 观察这条装配路径，不能用孤立 MessageModule 替代。
+
+本文记录已经落地的装配契约和回归链路。Agent Chat 已声明 `test:plugin`、`test:assembly`、`test:kit` 和
+`smoke`：前两者分别验证单 Plugin runtime 与完整 Kit assembly，后者验证真实 Gateway/Server/Client 的公开
+HTTP。浏览器验收是独立层级，已确认 13/13 声明 Plugin 加载且无 console error。
+
+## request/broadcast 顺序
+
+### 普通流式 turn
+
+1. Chat/Conversation 面板通过真实 Panel/transport request `agent.createConversation` 或 `agent.sendMessage`。
+2. Agent 定向 request `model-service.getCatalog` 或 `model-service.complete`；流式请求携带 request identity 和
+   generation。
+3. Model Service 收到外部 Provider 的确定性 test double 响应后 broadcast `model-service.complete.delta`。
+   Agent 只接受匹配 request identity、generation 且 sequence 单调的 delta。
+4. Agent 将模型增量 broadcast 为 `agent.message.delta`，供 Chat 更新可见消息。
+5. Agent 每次持久化 trace 后 broadcast `agent.conversation.trace.append`；Chat 使用 conversation、turn、item
+   和 sequence 重建 transcript，最终 snapshot 作为 item 完成状态。
+6. Agent broadcast `agent.message.status`，并以 `turn/end` 记录 `completed`、`failed`、`cancelled`、
+   `timed_out` 或 `rejected` 终态。
+
+### 审批回环
+
+1. Agent 先持久化审批请求，再 broadcast `approval/asked`。
+2. Chat 以相同的 conversation、turn、item 和 request identity request `agent.resolvePermissionRequest`。
+3. Agent 持久化并 broadcast `approval/resolved`；拒绝的工具调用形成带错误的真实 tool result，后续 turn 是否
+   恢复由 Agent 实现决定，不能由测试 mock 直接伪造终态。
+
+测试使用 harness observer 断言上述 request/broadcast 的顺序、owner/topic、关联键、payload 和终点；对错误、
+拒绝、取消、重启和迟到 delta 也必须断言清理及当前会话隔离。
+
+## 命令与证据
+
+当前可直接验证通用实现和 Agent Chat Kit 的命令是：
+
+```bash
+pnpm --filter @itharbors/server exec vitest run tests/framework/testing-harness.test.ts
+node --test scripts/lib/web-host-runner.test.mjs
+pnpm --dir kits/agent-chat run test:plugin
+pnpm --dir kits/agent-chat run test:assembly
+pnpm --dir kits/agent-chat run test:kit
+pnpm --dir kits/agent-chat run smoke
+pnpm run kits:test <slug>
+pnpm run kits:check <slug>
+```
+
+`test:plugin` 只加载 Conversation Plugin 并模拟 Plugin 外 request/broadcast；`test:assembly` 通过公开 testing
+harness 加载全部声明 Plugin 并验证真实组合消息链路；`test:kit` 依次执行 validate、前两者；`smoke` 启动真实
+Gateway、Server、Client 并通过公开 HTTP 验证 health、Kit catalog、redirect 和页面 HTML。自动 smoke 不执行
+浏览器点击或页面交互；浏览器验收单独确认 13/13 Plugin 加载和无 console error。`kits:test` 构建 toolchain 和
+目标 Kit 后执行其声明的 `test` script；`kits:check` 在 build、test、validate 后只对声明了 `harbors.scripts.smoke`
+的 Kit 执行 smoke，并在适用时执行制品检查。每次实际验证仍需在 Task summary 或 `.work/` 记录命令、退出结果、
+边界和未覆盖风险。
+
+## 测试发现与清理
+
+Vitest 使用目标 package 作为 root 或显式目标文件；不得扫描仓库 `.worktrees/`，从仓库根启动的配置必须显式排除
+`**/.worktrees/**`。Kit assembly 命令不能通过扩大 root 来发现同名 worktree 测试。
+
+所有 harness 和 Web Host smoke 必须在 `afterEach`/`finally` 中 dispose/stop，释放 Plugin listener、子进程、端口、
+临时数据和日志。测试不得读取用户家目录、共享进程或其他 worktree。

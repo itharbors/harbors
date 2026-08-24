@@ -16,7 +16,8 @@
     "test": "vitest run --config vitest.config.ts"
   },
   "devDependencies": {
-    "@types/semver": "^7.7.1"
+    "@types/semver": "^7.7.1",
+    "vitest": "^2.0.0"
   },
   "dependencies": {
     "@itharbors/magnet": "0.0.1",

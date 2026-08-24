@@ -180,9 +180,15 @@ describe('EditorApp default layout', () => {
   });
 
   async function waitForBootstrap() {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session') ?? params.get('sessionId') ?? '';
+    const kit = params.get('kit');
+    const runtimeId = kit ? `${sessionId}::${kit}` : sessionId;
+    const expectedBootstrapUrl = `/api/bootstrap/${encodeURIComponent(runtimeId)}`;
+
     for (let i = 0; i < 10; i += 1) {
       if (
-        mockFetch.mock.calls.some((call) => call[0] === '/api/bootstrap/existing-id')
+        mockFetch.mock.calls.some((call) => call[0] === expectedBootstrapUrl)
         && el?.querySelector('ce-panel-group')
       ) {
         await Promise.resolve();
@@ -1035,6 +1041,9 @@ describe('EditorApp default layout', () => {
     document.body.appendChild(el);
     await waitForBootstrap();
 
+    expect(mockFetch.mock.calls.some(
+      (call) => call[0] === '/api/bootstrap/existing-id%3A%3A%2Frepo%2Fkits%2Fdefault',
+    )).toBe(true);
     expect(syncMenu).not.toHaveBeenCalled();
 
     delete (window as typeof window & { electronMenu?: unknown }).electronMenu;

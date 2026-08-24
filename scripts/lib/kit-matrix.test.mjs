@@ -148,6 +148,35 @@ test('validates builtin Kits without market artifacts and packs exactly one insp
   ]);
 });
 
+test('runs a declared Kit smoke script from the isolated Kit root during check', async () => {
+  const calls = [];
+  const smokeDescriptor = {
+    ...descriptors[0],
+    scripts: { build: 'build', test: 'test:kit', smoke: 'smoke' },
+  };
+  await runKitMatrix({
+    action: 'check',
+    slugs: ['zeta'],
+    repositoryRoot,
+    descriptors: [smokeDescriptor],
+    ensureInstall: installFixture,
+    run: async (file, args, options) => calls.push({ file, args, options }),
+    makeTempDirectory: async () => '/tmp/check-smoke',
+    removeDirectory: async () => {},
+  });
+
+  const smoke = calls.find(({ file, args }) => file === 'pnpm' && args[0] === 'run' && args[1] === 'smoke');
+  assert.deepEqual(smoke, {
+    file: 'pnpm',
+    args: ['run', 'smoke'],
+    options: {
+      cwd: '/runs/zeta/repository/kits/zeta',
+      encoding: 'utf8',
+      env: { ...process.env, HARBORS_REPOSITORY_ROOT: repositoryRoot },
+    },
+  });
+});
+
 test('builds an isolated Kit before testing it in the same working root', async () => {
   const calls = [];
   const removed = [];

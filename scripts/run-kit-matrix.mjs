@@ -197,6 +197,9 @@ async function checkKitEntry({
     await runKitCli(run, repositoryRoot, ['build', entry.directory]);
     await runKitCli(run, repositoryRoot, ['test', entry.directory]);
     await runKitCli(run, repositoryRoot, ['validate', entry.directory]);
+    if (entry.scripts?.smoke) {
+      await runKitScript(run, repositoryRoot, entry.directory, entry.scripts.smoke);
+    }
     if (entry.distribution === 'market') {
       await runKitCli(run, repositoryRoot, ['pack', entry.directory, '--output', artifact]);
       await runKitCli(run, repositoryRoot, ['inspect', artifact, '--json']);
@@ -216,6 +219,14 @@ function runKitCli(run, repositoryRoot, args) {
   return run(process.execPath, ['packages/kit-cli/dist/cli.js', ...args], {
     cwd: repositoryRoot,
     encoding: 'utf8',
+  });
+}
+
+function runKitScript(run, repositoryRoot, directory, script) {
+  return run('pnpm', ['run', script], {
+    cwd: directory,
+    encoding: 'utf8',
+    env: { ...process.env, HARBORS_REPOSITORY_ROOT: repositoryRoot },
   });
 }
 
