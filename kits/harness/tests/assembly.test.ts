@@ -8,6 +8,7 @@ import { createKitAssemblyHarness, type KitAssemblyHarness } from '@itharbors/se
 const kitDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(kitDirectory, '../..');
 const pluginNames = ['conversation', 'chat', 'model-service', 'agent', 'plugin', 'preview', 'debug', 'settings', 'mermaid'];
+const layout = JSON.parse(fs.readFileSync(path.join(kitDirectory, 'layout.json'), 'utf8')) as { windows?: Array<{ id?: string }> };
 
 function createCredentialVault() {
   const records = new Map<string, string>();
@@ -72,7 +73,7 @@ function createAssembly(sessionId: string, applicationData?: string): KitAssembl
   return createKitAssemblyHarness({
     projectRoot,
     kitDirectory,
-    kitName: 'agent-chat',
+    kitName: 'harness',
     sessionId,
     ...(applicationData ? { paths: { applicationData } } : {}),
     credentials: createCredentialVault(),
@@ -89,7 +90,7 @@ async function waitFor<T>(read: () => Promise<T>, predicate: (value: T) => boole
   throw new Error(`timed out after ${timeout}ms`);
 }
 
-describe('Agent Chat Kit real assembly', () => {
+describe('Harbors Harness Kit real assembly', () => {
   const originalFetch = globalThis.fetch;
   const harnesses: KitAssemblyHarness[] = [];
   const temporaryDirectories: string[] = [];
@@ -112,7 +113,9 @@ describe('Agent Chat Kit real assembly', () => {
 
     expect(runtime.plugin.loaded()).toEqual(expect.arrayContaining(['panel', 'message', 'menu', 'config', ...pluginNames]));
     for (const plugin of pluginNames) expect(runtime.plugin.info(plugin)?.source.scope).toBe('kit');
-    expect(runtime.kit.current()?.name).toBe('agent-chat');
+    expect(runtime.kit.current()?.name).toBe('harness');
+    expect(runtime.kit.current()?.menuRoot).toEqual({ id: 'harness', label: 'Harbors Harness' });
+    expect(layout.windows?.map((window) => window.id)).toEqual(['harness-main']);
     expect(runtime.plugin.info('chat')?.contribute?.panel?.main).toBeDefined();
     expect(runtime.plugin.info('conversation')?.contribute?.panel?.list).toBeDefined();
 
@@ -176,7 +179,7 @@ describe('Agent Chat Kit real assembly', () => {
   });
 
   it('restores conversation history after the Kit assembly is restarted and rejects late old-generation traffic', async () => {
-    const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-chat-assembly-restart-'));
+    const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-assembly-restart-'));
     temporaryDirectories.push(applicationData);
     const runtime = createAssembly('assembly-restart', applicationData);
     harnesses.push(runtime);

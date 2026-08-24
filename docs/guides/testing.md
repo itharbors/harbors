@@ -41,7 +41,7 @@ runtime message、临时路径和 dispose；测试不得直接构造 Framework �
 实现。`MessageObserver` 的 `MessageTraceEvent.sequence`、`kind`、`caller`、`plugin`、`name`、`topic` 和
 `args` 用于断言顺序、来源和 payload。
 
-仓库没有根级统一的 `pnpm run test:plugin` 命令，但 Agent Chat Kit 已在自己的 package script 中声明
+仓库没有根级统一的 `pnpm run test:plugin` 命令，但 Harbors Harness Kit 已在自己的 package script 中声明
 `test:plugin`，并通过真实 Conversation Plugin runtime smoke 验证 Plugin 外 request/broadcast。`ce-plugin build`
 只构建 Plugin，`ce-plugin check` 只校验 manifest 和构建产物；它们都不会运行并置测试，也不等价于 runtime smoke。
 
@@ -68,7 +68,7 @@ runner 不知道 Chat、Panel、对话或任何具体 Kit 的业务语义；它�
 私有源码或直接操作 `createEditor`；wrapper 只负责把 runner 的公开生命周期结果转换为 Kit-owned 的公开 HTTP
 断言。
 
-Agent Chat 已声明 Kit-owned `smoke`，并已用真实 Gateway、Server、Client 通过公开 HTTP 验证 health、Kit catalog、
+Harbors Harness 已声明 Kit-owned `smoke`，并已用真实 Gateway、Server、Client 通过公开 HTTP 验证 health、Kit catalog、
 Kit 路径重定向和页面 HTML。该自动 smoke 不操作浏览器，也不等同于浏览器交互验收；浏览器验收另行确认 13/13
 声明 Plugin 均加载且无 console error。Framework runner 的 contract 测试仍只验证通用进程、健康检查、隔离环境
 和清理，不要将其写成 Kit 业务 smoke。
@@ -76,7 +76,7 @@ Kit 路径重定向和页面 HTML。该自动 smoke 不操作浏览器，也不�
 ### Framework 测试
 
 Framework 测试验证通用 runtime、消息路由、harness、Web Host runner、构建工具和脚本工具本身，仍放在
-`packages/*/tests/` 或 `scripts/lib/`。Framework 测试不能因为使用 Agent Chat fixture 就取得 Agent Chat 业务
+`packages/*/tests/` 或 `scripts/lib/`。Framework 测试不能因为使用 Harbors Harness fixture 就取得 Harbors Harness 业务
 断言的所有权；fixture 只用于验证通用工具的接口和清理契约。
 
 ## 消息链路与顺序
@@ -104,9 +104,9 @@ Framework 测试验证通用 runtime、消息路由、harness、Web Host runner�
    `request -> broadcast` 的顺序、owner/topic、request 参数和 broadcast payload。
 4. 对成功、拒绝、错误、取消和重启场景，断言链路终点、错误传播、sequence/generation 关系和 dispose 结果。
 
-### Agent Chat 链路记录
+### Harbors Harness 链路记录
 
-Agent Chat 的已落地 assembly 链路按以下顺序运行和记录；HTTP smoke 与浏览器验收仍是两个独立层级：
+Harbors Harness 的已落地 assembly 链路按以下顺序运行和记录；HTTP smoke 与浏览器验收仍是两个独立层级：
 
 1. Chat/Conversation 面板 request `agent.createConversation` 或 `agent.sendMessage`。
 2. Agent request `model-service.getCatalog` 或 `model-service.complete`；请求携带 request identity，流式请求还
@@ -126,10 +126,10 @@ Agent Chat 的已落地 assembly 链路按以下顺序运行和记录；HTTP smo
 | --- | --- | --- |
 | `pnpm --filter @itharbors/server exec vitest run tests/framework/testing-harness.test.ts` | 运行 Framework runtime harness contract tests | 不代表 Kit 业务 smoke 或浏览器交互已通过 |
 | `node --test scripts/lib/web-host-runner.test.mjs` | 运行通用 Web Host runner 的进程、健康检查和清理测试 | 不代表某个 Kit 的 HTTP 或浏览器业务行为已通过 |
-| `pnpm --dir kits/agent-chat run test:plugin` | 加载真实 Conversation Plugin，模拟 Plugin 外 request/broadcast 并验证 runtime smoke | 只覆盖 Conversation Plugin，不覆盖完整 Kit |
-| `pnpm --dir kits/agent-chat run test:assembly` | 通过公开 testing harness 加载 Agent Chat 全部声明 Plugin，验证组合 request/broadcast 链路 | 不包含 Web Host 或浏览器交互 |
-| `pnpm --dir kits/agent-chat run test:kit` | 依次执行 descriptor validate、`test:plugin` 和 `test:assembly` | 不自动执行 `smoke` |
-| `pnpm --dir kits/agent-chat run smoke` | 启动真实 Gateway、Server、Client 并通过公开 HTTP 验证 health、catalog、redirect 和 HTML | 不执行浏览器点击或页面交互 |
+| `pnpm --dir kits/harness run test:plugin` | 加载真实 Conversation Plugin，模拟 Plugin 外 request/broadcast 并验证 runtime smoke | 只覆盖 Conversation Plugin，不覆盖完整 Kit |
+| `pnpm --dir kits/harness run test:assembly` | 通过公开 testing harness 加载 Harbors Harness 全部声明 Plugin，验证组合 request/broadcast 链路 | 不包含 Web Host 或浏览器交互 |
+| `pnpm --dir kits/harness run test:kit` | 依次执行 descriptor validate、`test:plugin` 和 `test:assembly` | 不自动执行 `smoke` |
+| `pnpm --dir kits/harness run smoke` | 启动真实 Gateway、Server、Client 并通过公开 HTTP 验证 health、catalog、redirect 和 HTML | 不执行浏览器点击或页面交互 |
 | `pnpm run kits:test <slug>` | 构建 toolchain 和目标 Kit，再执行该 Kit 声明的 `test` script | 不自动执行未声明的 smoke |
 | `pnpm run kits:check <slug>` | 对目标 Kit 执行 build、test、validate；若 descriptor 声明 `harbors.scripts.smoke`，再执行其 smoke；市场 Kit 还 pack/inspect | 不把 `check` 变成 Framework 或所有 Kit 的浏览器测试 |
 | `pnpm --dir kits/<kit> run <declared-test-script>` | 直接运行 Kit 自己声明的 test script | 只证明该脚本覆盖的内容 |
@@ -137,7 +137,7 @@ Agent Chat 的已落地 assembly 链路按以下顺序运行和记录；HTTP smo
 | `pnpm run check` | 全仓最终门禁，包含 Framework/workflow 测试和 Kit matrix check | 不改变局部变更的最小验证范围 |
 
 `test` 是 Kit 声明的测试脚本；`smoke` 是可选的 Kit 声明脚本，只由适用的 `kits:check` 阶段调用；`check` 是
-更宽的构建、测试、validate、可选 smoke 和制品检查编排。Agent Chat 的 `test:plugin`、`test:assembly`、
+更宽的构建、测试、validate、可选 smoke 和制品检查编排。Harbors Harness 的 `test:plugin`、`test:assembly`、
 `test:kit` 和 `smoke` 都是 Kit-local 已声明脚本，不应推广成根级统一命令。自动 smoke 只验证公开 HTTP，不是
 浏览器交互测试；浏览器验收单独记录。
 
@@ -156,13 +156,13 @@ Agent Chat 的已落地 assembly 链路按以下顺序运行和记录；HTTP smo
 
 Task 的 `summary.md` 或 `.work/` 应记录实际命令、退出码、测试所属边界和未覆盖风险。浏览器验收还要记录 Web
 Host 启动方式、目标 Kit、访问页面、request/broadcast 操作和可见结果。局部验证与全仓 `pnpm run check` 分开
-记录；Agent Chat 的 Plugin smoke、assembly、HTTP smoke 和浏览器验收应分别记录，不能用 Framework runner 测试
+记录；Harbors Harness 的 Plugin smoke、assembly、HTTP smoke 和浏览器验收应分别记录，不能用 Framework runner 测试
 替代其中任何一项。Task 状态中的 `pullRequest: null` 在尚未选择 PR 或采用本地整合路径时是有效状态，不代表测试失败。
 
 ## 相关入口
 
 - [开发工作流](./development-workflow.md)
-- [Agent Chat Kit 装配与回归边界](../architecture/agent-chat-kit-assembly.md)
+- [Harbors Harness Kit 装配与回归边界](../architecture/harness-kit-assembly.md)
 - [Server testing export](../../packages/server/src/testing.ts)
 - [Kit matrix runner](../../scripts/run-kit-matrix.mjs)
 - [Web Host runner](../../scripts/lib/web-host-runner.mjs)

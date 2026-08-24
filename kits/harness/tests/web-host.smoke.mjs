@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -11,7 +11,7 @@ const { startWebHost } = await import(runnerUrl);
 const host = await startWebHost({
   repositoryRoot,
   kitSources: [{ directory: kitDirectory, source: 'explicit' }],
-  defaultKit: 'agent-chat',
+  defaultKit: 'harness',
   environment: { HARBORS_CREDENTIAL_MODE: 'off' },
 });
 
@@ -24,16 +24,42 @@ try {
   const catalog = await catalogResponse.json();
   const kits = Array.isArray(catalog) ? catalog : catalog.kits;
   assert.ok(Array.isArray(kits), 'Kit catalog must expose a kits array');
-  assert.ok(kits.some((kit) => kit?.id === 'agent-chat' && kit?.name === 'agent-chat'));
+  assert.ok(kits.some((kit) => kit?.id === 'harness' && kit?.name === 'harness' && kit?.label === 'Harbors Harness'));
 
-  const publicPath = await fetch(`${host.baseUrl}/kits/agent-chat`, { redirect: 'manual' });
+  const publicPath = await fetch(`${host.baseUrl}/kits/harness`, { redirect: 'manual' });
   assert.equal(publicPath.status, 302);
-  assert.equal(publicPath.headers.get('location'), '/?kit=agent-chat');
+  assert.equal(publicPath.headers.get('location'), '/?kit=harness');
 
-  const page = await fetchUntilReady(`${host.baseUrl}/?kit=agent-chat`);
+  const page = await fetchUntilReady(`${host.baseUrl}/?kit=harness`);
   assert.equal(page.status, 200);
   assert.match(page.headers.get('content-type') ?? '', /text\/html/u);
-  assert.match(await page.text(), /<html|<!doctype html/iu);
+  const html = await page.text();
+  assert.match(html, /<html|<!doctype html/iu);
+
+  const mainEntry = await readFile(path.join(kitDirectory, 'main.html'), 'utf8');
+  const secondaryEntry = await readFile(path.join(kitDirectory, 'secondary.html'), 'utf8');
+  assert.match(mainEntry, /<title>Harbors Harness<\/title>/u);
+  assert.match(secondaryEntry, /<title>Harbors Harness Window<\/title>/u);
+
+  const legacyPath = await fetch(`${host.baseUrl}/kits/agent-chat`, { redirect: 'manual' });
+  assert.equal(legacyPath.status, 404);
+  assert.equal(legacyPath.headers.get('location'), null);
+
+  const legacySessionId = 'legacy-agent-chat-session';
+  const legacySession = await fetch(`${host.baseUrl}/api/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: legacySessionId, kit: 'agent-chat' }),
+  });
+  assert.equal(legacySession.status, 404);
+  assert.deepEqual(await legacySession.json(), {
+    error: { code: 'KIT_NOT_FOUND', message: 'Kit "agent-chat" not found', details: null },
+  });
+  const legacySessionLookup = await fetch(`${host.baseUrl}/api/session/${legacySessionId}`);
+  assert.equal(legacySessionLookup.status, 404);
+  assert.deepEqual(await legacySessionLookup.json(), {
+    error: { code: 'SESSION_NOT_FOUND', message: 'Session not found', details: null },
+  });
 } finally {
   await host.stop();
 }
@@ -66,5 +92,5 @@ async function fetchUntilReady(url, timeoutMs = 30_000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
-  throw new Error(`Agent Chat page did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+  throw new Error(`Harbors Harness page did not become ready: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
 }

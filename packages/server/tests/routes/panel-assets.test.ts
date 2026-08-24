@@ -49,7 +49,7 @@ describe('panel assets', () => {
     }
 
     const source = new Map();
-    for (const [sessionId, directory] of [['client::default', defaultDir], ['client::agent-chat', agentDir]] as const) {
+    for (const [sessionId, directory] of [['client::default', defaultDir], ['client::harness', agentDir]] as const) {
       source.set(sessionId, {
         sessionId,
         panel: {
@@ -73,50 +73,50 @@ describe('panel assets', () => {
 
     const router = createPanelAssetRouter(source as never);
     const html = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.html?sessionId=client%3A%3Adefault&sessionId=client%3A%3Aagent-chat' } as never, html.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.html?sessionId=client%3A%3Adefault&sessionId=client%3A%3Aharness' } as never, html.res);
     expect(html.statusCode()).toBe(200);
     expect(html.body()).toContain('>agent</body>');
     expect(html.body()).not.toContain('>default</body>');
-    expect(html.body()).toContain('const sessionId = "client::agent-chat";');
-    expect(html.body()).toContain('./index.css?theme=dark&sessionId=client%3A%3Aagent-chat');
-    expect(html.body()).toContain('src="image.png?sessionId=client%3A%3Aagent-chat"');
+    expect(html.body()).toContain('const sessionId = "client::harness";');
+    expect(html.body()).toContain('./index.css?theme=dark&sessionId=client%3A%3Aharness');
+    expect(html.body()).toContain('src="image.png?sessionId=client%3A%3Aharness"');
     expect(html.body()).not.toContain('sessionId=stale');
 
     const script = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.js?sessionId=client%3A%3Aagent-chat' } as never, script.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.js?sessionId=client%3A%3Aharness' } as never, script.res);
     expect(script.statusCode()).toBe(200);
     expect(script.body()).toContain("import 'react'");
     expect(script.body()).not.toContain('react?sessionId=');
-    expect(script.body()).toContain("./chunk.js?v=1&sessionId=client%3A%3Aagent-chat");
+    expect(script.body()).toContain("./chunk.js?v=1&sessionId=client%3A%3Aharness");
     expect(script.body()).not.toContain('sessionId=stale');
 
     const chunk = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/chunk.js?v=1&sessionId=client%3A%3Aagent-chat' } as never, chunk.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/chunk.js?v=1&sessionId=client%3A%3Aharness' } as never, chunk.res);
     expect(chunk.statusCode()).toBe(200);
     expect(chunk.body()).toContain('agent-js');
     expect(chunk.body()).not.toContain('default-js');
-    expect(chunk.body()).toContain('./nested.js?sessionId=client%3A%3Aagent-chat');
+    expect(chunk.body()).toContain('./nested.js?sessionId=client%3A%3Aharness');
 
     const nested = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/nested.js?sessionId=client%3A%3Aagent-chat' } as never, nested.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/nested.js?sessionId=client%3A%3Aharness' } as never, nested.res);
     expect(nested.statusCode()).toBe(200);
     expect(nested.body()).toContain('agent-nested');
 
     const css = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.css?theme=dark&sessionId=client%3A%3Aagent-chat' } as never, css.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/index.css?theme=dark&sessionId=client%3A%3Aharness' } as never, css.res);
     expect(css.statusCode()).toBe(200);
-    expect(css.body()).toContain('./theme.css?sessionId=client%3A%3Aagent-chat');
-    expect(css.body()).toContain("./font.woff2?v=1&sessionId=client%3A%3Aagent-chat#font");
-    expect(css.body()).toContain('image.png?sessionId=client%3A%3Aagent-chat');
+    expect(css.body()).toContain('./theme.css?sessionId=client%3A%3Aharness');
+    expect(css.body()).toContain("./font.woff2?v=1&sessionId=client%3A%3Aharness#font");
+    expect(css.body()).toContain('image.png?sessionId=client%3A%3Aharness');
     expect(css.body()).not.toContain('sessionId=stale');
 
     const font = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/font.woff2?v=1&sessionId=client%3A%3Aagent-chat' } as never, font.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/font.woff2?v=1&sessionId=client%3A%3Aharness' } as never, font.res);
     expect(font.statusCode()).toBe(200);
     expect(font.body()).toBe('agent-font');
 
     const image = mockRes();
-    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/image.png?sessionId=client%3A%3Aagent-chat' } as never, image.res);
+    router({ method: 'GET', url: '/api/assets/panel/plugin-list.list/image.png?sessionId=client%3A%3Aharness' } as never, image.res);
     expect(image.statusCode()).toBe(200);
     expect(image.body()).toBe('agent-image');
 

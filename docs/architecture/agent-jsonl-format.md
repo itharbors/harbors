@@ -324,7 +324,7 @@ truth 删除”。tool result 的裁剪也应记录为逻辑 replace，而不是
 这些是边界而不是当前能力。引入索引、压缩或迁移时，仍须保持 JSONL 可独立验证，不能
 让数据库、压缩文件或分段 manifest 成为本任务的强依赖。
 
-## 9. Agent Chat request/broadcast 完整顺序
+## 9. Harbors Harness request/broadcast 完整顺序
 
 下列顺序描述普通流式 turn、工具审批、终态和失败的完整可观察链路。定向 request 只有
 一个目标；broadcast 可有多个订阅者，单个监听器异常不反向破坏发送者。
@@ -406,4 +406,4 @@ truth 删除”。tool result 的裁剪也应记录为逻辑 replace，而不是
 - 任何未来索引或压缩都能从 JSONL 重建，且不会被误写成 v1 当前已具备的能力。
 
 相关协议：[Agent Turn 事件协议](./agent-turn-event-protocol.md) ·
-[Agent Chat Kit 装配与回归边界](./agent-chat-kit-assembly.md)
+[Harbors Harness Kit 装配与回归边界](./harness-kit-assembly.md)

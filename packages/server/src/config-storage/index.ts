@@ -42,6 +42,8 @@ export interface ConfigStorageResolverOptions {
   roots: Readonly<{
     'application-data': string;
   }>;
+  /** Optional storage migration sources declared by the active Kit manifest. */
+  legacyKitIds?: readonly string[];
 }
 
 /**
@@ -52,6 +54,7 @@ export function resolveConfigLayerBackend(
   kitId: string,
   layer: KitConfigLayerDefinition,
   options: ConfigStorageResolverOptions,
+  legacyKitIds?: readonly string[],
 ): ConfigLayerBackend {
   if (layer.storage === null) return createMemoryConfigLayerBackend();
   if (layer.storage.driver !== 'sqlite' || layer.storage.root !== 'application-data') {
@@ -61,6 +64,7 @@ export function resolveConfigLayerBackend(
     resolveSqlitePath(options.roots['application-data'], layer.storage),
     kitId,
     layer.name,
+    legacyKitIds ?? options.legacyKitIds ?? [],
   );
 }
 
@@ -68,6 +72,7 @@ export function resolveConfigActivation(
   kitId: string,
   declaration: KitConfigDeclaration,
   options: ConfigStorageResolverOptions,
+  legacyKitIds?: readonly string[],
 ): ConfigActivation {
   const layers: RuntimeConfigLayerDefinition[] = [];
   try {
@@ -75,7 +80,7 @@ export function resolveConfigActivation(
       layers.push({
         name: layer.name,
         priority: layer.priority,
-        backend: resolveConfigLayerBackend(kitId, layer, options),
+        backend: resolveConfigLayerBackend(kitId, layer, options, legacyKitIds),
       });
     }
     return { kitId, layers, writeLayer: declaration.writeLayer };
@@ -96,11 +101,13 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
     databasePath: string,
     private readonly kitId: string,
     private readonly layerName: string,
+    legacyKitIds: readonly string[] = [],
   ) {
     const database = new Database(databasePath);
     try {
       database.pragma('journal_mode = WAL');
       ensureNamespacedSchema(database);
+      migrateLegacyConfigRows(database, kitId, layerName, legacyKitIds);
       this.statementGet = database.prepare(`
         SELECT value_json
         FROM config_values
@@ -152,6 +159,32 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
   private assertOpen(): void {
     if (this.closed) throw new ConfigStorageClosedError();
   }
+}
+
+/**
+ * Copies rows for one persistent layer in declaration order. Each backend has
+ * its own transaction, so a failed layer never leaves a partial copy while a
+ * previously opened layer may retain its completed migration.
+ */
+function migrateLegacyConfigRows(
+  database: Database.Database,
+  kitId: string,
+  layerName: string,
+  legacyKitIds: readonly string[],
+): void {
+  const sources = legacyKitIds.filter((legacyKitId) => legacyKitId !== kitId);
+  if (sources.length === 0) return;
+  const migrate = database.transaction(() => {
+    const copy = database.prepare(`
+      INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json)
+      SELECT ?, plugin_name, layer_name, key, value_json
+      FROM config_values
+      WHERE kit_id = ? AND layer_name = ?
+      ON CONFLICT (kit_id, plugin_name, layer_name, key) DO NOTHING
+    `);
+    for (const legacyKitId of sources) copy.run(kitId, legacyKitId, layerName);
+  });
+  migrate();
 }
 
 function ensureNamespacedSchema(database: Database.Database): void {

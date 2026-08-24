@@ -138,6 +138,20 @@ function kitId(value: unknown, context: string): string {
   return parsed;
 }
 
+function parseLegacyKitIds(value: unknown, currentId: string): readonly string[] {
+  if (!Array.isArray(value)) {
+    throw new Error('legacyKitIds must be an array');
+  }
+  const ids = value.map((item, index) => kitId(item, `legacyKitIds[${index}]`));
+  if (new Set(ids).size !== ids.length) {
+    throw new Error('legacyKitIds contains duplicate values');
+  }
+  if (ids.includes(currentId)) {
+    throw new Error('legacyKitIds must not contain the current Kit id');
+  }
+  return ids;
+}
+
 function configLayerName(value: unknown, context: string): string {
   const parsed = stringValue(value, context);
   if (!CONFIG_LAYER_NAME_PATTERN.test(parsed) || parsed === '.' || parsed === '..') {
@@ -323,6 +337,7 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
   exactKeys(input, [
     'schemaVersion',
     'id',
+    'legacyKitIds',
     'version',
     'channel',
     'publisher',
@@ -338,6 +353,9 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
     throw new Error(`Unsupported schemaVersion: ${String(input.schemaVersion)}`);
   }
   const id = kitId(input.id, 'id');
+  const legacyKitIds = input.legacyKitIds === undefined
+    ? undefined
+    : parseLegacyKitIds(input.legacyKitIds, id);
   const version = semverValue(input.version, 'version');
   const channel = parseChannel(input.channel, 'channel');
   const prerelease = semver.prerelease(version);
@@ -359,6 +377,7 @@ export function parseKitPackageManifest(value: unknown): KitPackageManifest {
   return {
     schemaVersion: KIT_PACKAGE_SCHEMA_VERSION,
     id,
+    ...(legacyKitIds === undefined ? {} : { legacyKitIds }),
     version,
     channel,
     publisher: stringValue(input.publisher, 'publisher'),

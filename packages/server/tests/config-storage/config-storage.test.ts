@@ -135,6 +135,49 @@ describe('config storage resolver', () => {
     reopened.close();
   });
 
+  it('copies ordered legacy Kit namespaces with current values taking precedence', () => {
+    const root = temporaryRoot();
+    const layer = sqliteLayer();
+    const firstLegacy = resolveConfigLayerBackend('kit-old-a', layer, { roots: { 'application-data': root } });
+    firstLegacy.set('from-a', 'old-a', 'plugin');
+    firstLegacy.set('shared', 'old-a-wins', 'plugin');
+    firstLegacy.destroy?.();
+    const secondLegacy = resolveConfigLayerBackend('kit-old-b', layer, { roots: { 'application-data': root } });
+    secondLegacy.set('from-b', 'old-b', 'plugin');
+    secondLegacy.set('shared', 'old-b-loses', 'plugin');
+    secondLegacy.destroy?.();
+    const current = resolveConfigLayerBackend('kit-new', layer, { roots: { 'application-data': root } });
+    current.set('shared', 'new-wins', 'plugin');
+    current.destroy?.();
+
+    const migrated = resolveConfigLayerBackend(
+      'kit-new',
+      layer,
+      { roots: { 'application-data': root } },
+      ['kit-old-a', 'kit-old-b'],
+    );
+    expect(migrated.get('from-a', 'plugin')).toBe('old-a');
+    expect(migrated.get('from-b', 'plugin')).toBe('old-b');
+    expect(migrated.get('shared', 'plugin')).toBe('new-wins');
+    migrated.destroy?.();
+
+    const database = new Database(path.join(root, 'config.sqlite'), { readonly: true });
+    expect(database.prepare('SELECT value_json FROM config_values WHERE kit_id = ? AND key = ?')
+      .get('kit-old-a', 'shared')).toEqual({ value_json: JSON.stringify('old-a-wins') });
+    expect(database.prepare('SELECT COUNT(*) AS count FROM config_values WHERE kit_id = ?')
+      .get('kit-new')).toEqual({ count: 3 });
+    database.close();
+
+    const retried = resolveConfigLayerBackend(
+      'kit-new',
+      layer,
+      { roots: { 'application-data': root } },
+      ['kit-old-a', 'kit-old-b'],
+    );
+    expect(retried.get('shared', 'plugin')).toBe('new-wins');
+    retried.destroy?.();
+  });
+
   it('uses WAL mode', () => {
     const root = temporaryRoot();
     const layer = sqliteLayer();

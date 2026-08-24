@@ -17,7 +17,7 @@ import {
   type KeyringAdapter,
   type KeyringModuleLoader,
 } from './keyring';
-import { credentialScopeDigest } from './scope';
+import { credentialAccount, credentialScopeDigest } from './scope';
 import { CredentialStore, type CredentialRecord } from './store';
 
 type UnavailableReason = 'CREDENTIALS_DISABLED' | 'CREDENTIALS_UNAVAILABLE' | 'CREDENTIALS_LOCKED';
@@ -73,6 +73,8 @@ export class CredentialVault {
   private readonly randomUuid: () => string;
   private unavailableReason?: UnavailableReason;
   private probePromise?: Promise<CredentialCapabilitySnapshot>;
+  /** One durable migration result per current credential scope. */
+  private readonly migrationPromises = new Map<string, Promise<void>>();
   private readonly locks = new Map<string, Promise<void>>();
   private lifecycle: 'open' | 'closing' | 'closed' = 'open';
   private activeOperations = 0;
@@ -95,25 +97,33 @@ export class CredentialVault {
           : undefined);
   }
 
-  bind(kitId: string, pluginName: string): PluginCredentialVault {
+  bind(
+    kitId: string,
+    pluginName: string,
+    legacyKitIds: readonly string[] = [],
+  ): PluginCredentialVault {
     const scope = credentialScopeDigest(kitId, pluginName);
     return {
       capability: () => this.refreshCapability(),
       available: async () => (await this.refreshCapability()).status === 'available',
       list: async () => this.runOperation(async () => {
         await this.ensureBackendAvailable();
+        await this.ensureScopeMigrated(scope, pluginName, legacyKitIds);
         return this.list(scope);
       }),
       get: async (id) => this.runOperation(async () => {
         await this.ensureBackendAvailable();
+        await this.ensureScopeMigrated(scope, pluginName, legacyKitIds);
         return this.get(scope, id);
       }),
       put: async (input) => this.runOperation(async () => {
         await this.ensureBackendAvailable();
+        await this.ensureScopeMigrated(scope, pluginName, legacyKitIds);
         return this.put(scope, input);
       }),
       delete: async (id) => this.runOperation(async () => {
         await this.ensureBackendAvailable();
+        await this.ensureScopeMigrated(scope, pluginName, legacyKitIds);
         return this.delete(scope, id);
       }),
     };
@@ -223,6 +233,183 @@ export class CredentialVault {
     const { store } = this.requireBackend();
     try {
       return store.listActive(scope);
+    } catch (error) {
+      throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+    }
+  }
+
+  /**
+   * Starts migration lazily, immediately before the first data operation. The
+   * public PluginCredentialVault facade is deliberately not used here: doing
+   * so would wait on this same promise recursively. Rejected promises are
+   * evicted so a transient keyring/SQLite failure can be retried.
+   */
+  private async ensureScopeMigrated(
+    scope: string,
+    pluginName: string,
+    legacyKitIds: readonly string[],
+  ): Promise<void> {
+    const sources = [...new Set(legacyKitIds)].filter((kitId) => kitId.length > 0);
+    if (sources.length === 0) return;
+    const existing = this.migrationPromises.get(scope);
+    if (existing) return existing;
+
+    const migration = this.migrateScope(scope, pluginName, sources);
+    this.migrationPromises.set(scope, migration);
+    void migration.catch(() => {
+      if (this.migrationPromises.get(scope) === migration) {
+        this.migrationPromises.delete(scope);
+      }
+    });
+    return migration;
+  }
+
+  private async migrateScope(
+    targetScope: string,
+    pluginName: string,
+    legacyKitIds: readonly string[],
+  ): Promise<void> {
+    const { store, keyring } = this.requireBackend();
+    const legacyScopes = legacyKitIds.map((kitId) => credentialScopeDigest(kitId, pluginName));
+    for (const sourceScope of legacyScopes) {
+      let records: CredentialRecord[];
+      try {
+        records = store.listActiveRecords(sourceScope);
+      } catch (error) {
+        throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+      }
+      for (const record of records) {
+        await this.withLocks([[sourceScope, record.id], [targetScope, record.id]], async () => {
+          let source: CredentialRecord | undefined;
+          try {
+            source = store.getActiveRecord(sourceScope, record.id);
+          } catch (error) {
+            throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+          }
+          if (!source) return;
+
+          let current: CredentialRecord | undefined;
+          try {
+            // Any current row, including pending/deleting, is new-value
+            // priority and must prevent copying an older source row.
+            current = store.getRecord(targetScope, record.id);
+          } catch (error) {
+            throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+          }
+          if (current) {
+            const migrationReference = credentialAccount(
+              targetScope,
+              source.id,
+              source.secretVersion,
+            );
+            // A pending row with the exact account this migration owns can be
+            // a residue from a failed keyring write. Recover it under the
+            // same lock before retrying. Any other row is a concurrent/new
+            // value and must remain untouched.
+            if (
+              current.state === 'pending'
+              && current.secretReference === migrationReference
+            ) {
+              await this.recoverMigrationPending(current);
+            } else {
+              return;
+            }
+          }
+
+          let secret: string | null;
+          try {
+            secret = await keyring.get(source.secretReference);
+          } catch (error) {
+            this.observeBackendError(error);
+            throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+          }
+          if (secret === null) throw credentialError('CREDENTIAL_OPERATION_FAILED');
+
+          let pending: CredentialRecord;
+          try {
+            pending = store.createPending({
+              scope: targetScope,
+              id: source.id,
+              label: source.label,
+              metadata: source.metadata,
+              // Preserve the source version; the scope is part of the
+              // account, so this cannot collide with the source account.
+              secretVersion: source.secretVersion,
+            });
+          } catch (error) {
+            const observation = this.observeRecord(targetScope, record.id);
+            if (observation.status === 'known' && observation.record) {
+              const migrationReference = credentialAccount(
+                targetScope,
+                source.id,
+                source.secretVersion,
+              );
+              if (
+                observation.record.state === 'pending'
+                && observation.record.secretReference === migrationReference
+              ) {
+                await this.recoverMigrationPending(observation.record);
+              } else {
+                return;
+              }
+            }
+            throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+          }
+
+          try {
+            await keyring.set(pending.secretReference, secret);
+          } catch (error) {
+            this.observeBackendError(error);
+            await this.compensatePending(pending);
+            throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+          }
+
+          let activated: boolean;
+          try {
+            activated = store.activatePending(targetScope, source.id, source.secretVersion);
+          } catch (error) {
+            const observation = this.observeRecord(targetScope, record.id);
+            if (
+              observation.status === 'known'
+              && observation.record?.state === 'active'
+              && observation.record.secretReference === pending.secretReference
+            ) return;
+            if (observation.status === 'known') await this.compensatePending(pending);
+            throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+          }
+          if (!activated) {
+            await this.compensatePending(pending);
+            throw credentialError('CREDENTIAL_PROFILE_CONFLICT');
+          }
+        });
+      }
+    }
+  }
+
+  /**
+   * Removes only a pending row that is known to belong to migration. Unlike
+   * the best-effort process-wide recovery pass, migration must surface a
+   * cleanup failure so its promise is rejected and the next operation can
+   * retry after the backend recovers.
+   */
+  private async recoverMigrationPending(record: CredentialRecord): Promise<void> {
+    const backend = this.requireBackend();
+    try {
+      await backend.keyring.delete(record.secretReference);
+    } catch (error) {
+      this.observeBackendError(error);
+      try {
+        backend.store.queueCleanup(record.secretReference);
+      } catch {
+        // The pending row itself remains the durable recovery record.
+      }
+      throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
+    }
+    try {
+      if (!backend.store.removePending(record.scope, record.id, record.secretVersion)) {
+        const current = backend.store.getRecord(record.scope, record.id);
+        if (current) throw credentialError('CREDENTIAL_OPERATION_FAILED');
+      }
     } catch (error) {
       throw stableError(error, 'CREDENTIAL_OPERATION_FAILED');
     }
@@ -626,6 +813,27 @@ export class CredentialVault {
       release();
       if (this.locks.get(key) === current) this.locks.delete(key);
     }
+  }
+
+  private async withLocks<T>(
+    locks: readonly (readonly [scope: string, id: string])[],
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const ordered = [...locks]
+      .sort(([leftScope, leftId], [rightScope, rightId]) => {
+        const left = `${leftScope}\0${leftId}`;
+        const right = `${rightScope}\0${rightId}`;
+        return left.localeCompare(right);
+      })
+      .filter(([scope, id], index, items) => (
+        index === 0 || scope !== items[index - 1][0] || id !== items[index - 1][1]
+      ));
+    const run = async (index: number): Promise<T> => {
+      if (index === ordered.length) return operation();
+      const [scope, id] = ordered[index];
+      return this.withLock(scope, id, () => run(index + 1));
+    };
+    return run(0);
   }
 }
 

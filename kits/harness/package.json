@@ -1,19 +1,19 @@
 {
-  "name": "agent-chat",
+  "name": "harness",
   "version": "0.0.1",
   "private": true,
   "scripts": {
     "build": "node ../../packages/kit-cli/dist/cli.js build .",
     "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:plugin && pnpm run test:assembly",
-    "test:plugin": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/agent-chat --config ../../kits/agent-chat/vitest.config.ts plugins/conversation/tests/runtime.smoke.test.ts",
-    "test:assembly": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/agent-chat --config ../../kits/agent-chat/vitest.config.ts tests/assembly.test.ts",
+    "test:plugin": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts plugins/conversation/tests/runtime.smoke.test.ts",
+    "test:assembly": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts tests/assembly.test.ts",
     "smoke": "node tests/web-host.smoke.mjs"
   },
   "ce-editor": {
     "kit": {
       "menuRoot": {
-        "id": "agent-chat",
-        "label": "Agent Chat"
+        "id": "harness",
+        "label": "Harbors Harness"
       },
       "layouts": {
         "default": "layout.json"
@@ -38,7 +38,7 @@
   "harbors": {
     "distribution": "builtin",
     "ci": { "runner": "ubuntu-latest" },
-    "docs": { "summary": "AI 对话工作台 Kit，提供对话列表与消息界面，后端对接 Harbors agent" },
+    "docs": { "summary": "Harbors Harness AI Agent 工作台 Kit，提供对话、执行、模型服务、预览与调试能力" },
     "resources": [],
     "storage": { "legacyDataDirectories": [] },
     "scripts": {

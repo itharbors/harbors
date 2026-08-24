@@ -1,21 +1,21 @@
-# Agent Chat Kit
+# Harbors Harness Kit
 
-内置的 AI 对话工作台 Kit，装配 Conversation、Chat、Agent、Model Service、Preview、Settings 等插件。
+内置的 Harbors Harness AI Agent 工作台 Kit，装配 Conversation、Chat、Agent、Model Service、Preview、Settings、Debug 和 Mermaid 等插件。
 
 ## Local lifecycle
 
 先由 Harbors runner 准备当前版本的公开 Framework testing/Web Host toolchain 与 Client 构建产物，再从仓库根目录执行：
 
 ```bash
-pnpm --dir kits/agent-chat install --frozen-lockfile
-pnpm --dir kits/agent-chat run build
-pnpm --dir kits/agent-chat run test:kit
-pnpm --dir kits/agent-chat run smoke
+pnpm --dir kits/harness install --frozen-lockfile
+pnpm --dir kits/harness run build
+pnpm --dir kits/harness run test:kit
+pnpm --dir kits/harness run smoke
 ```
 
 `test:kit` 依次执行 descriptor 校验、Conversation Plugin runtime smoke 和真实 Kit assembly 测试；`smoke`
 启动真实 Gateway、Server 与 Client，并通过公开 HTTP 验证 Gateway health、Kit Catalog 和
-`/kits/agent-chat` 页面。可见交互仍由 Web 浏览器验收。
+`/kits/harness` 页面。可见交互仍由 Web 浏览器验收。
 
 ## Permissions
 

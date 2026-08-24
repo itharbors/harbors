@@ -257,6 +257,22 @@ describe('parseKitPackageManifest', () => {
     expect(parseKitPackageManifest({ ...kitManifest, id: 'kit-demo' }).id).toBe('kit-demo');
   });
 
+  it('accepts ordered legacy Kit ids and leaves the field absent by default', () => {
+    expect(parseKitPackageManifest(kitManifest).legacyKitIds).toBeUndefined();
+    expect(parseKitPackageManifest({ ...kitManifest, legacyKitIds: ['kit-old', '@example/older'] }))
+      .toMatchObject({ legacyKitIds: ['kit-old', '@example/older'] });
+  });
+
+  it.each([
+    ['not an array', 'kit-old'],
+    ['an empty id', ['']],
+    ['an invalid id', ['Kit Old']],
+    ['a duplicate id', ['kit-old', 'kit-old']],
+    ['the current id', [kitManifest.id]],
+  ])('rejects invalid legacy Kit ids: %s', (_label, legacyKitIds) => {
+    expect(() => parseKitPackageManifest({ ...kitManifest, legacyKitIds })).toThrow(/legacyKitIds/i);
+  });
+
   it('rejects unsupported schema versions and unknown fields', () => {
     expect(() => parseKitPackageManifest({ ...kitManifest, schemaVersion: 2 })).toThrow(
       /schemaVersion/i,

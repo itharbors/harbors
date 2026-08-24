@@ -531,10 +531,10 @@ pnpm run check:preflight
 - 仅修改单个 Plugin：若有 Plugin 测试则显式运行；并按需执行构建与产物校验，例如
   `node scripts/ce-plugin.mjs build plugins/<name>` 后
   `node scripts/ce-plugin.mjs check plugins/<name>`。这两个 `ce-plugin` 命令不执行 Plugin
-  测试或 runtime smoke。仓库没有根级统一的 `pnpm run test:plugin`，但 Agent Chat Kit 已声明并运行
-  `pnpm --dir kits/agent-chat run test:plugin`。
+  测试或 runtime smoke。仓库没有根级统一的 `pnpm run test:plugin`，但 Harbors Harness Kit 已声明并运行
+  `pnpm --dir kits/harness run test:plugin`。
 - 仅修改单个 Kit：运行该 Kit 的构建与校验，例如 `pnpm run kits:test <slug>`、
-  `pnpm run kits:check <slug>`。各 Kit 的 `test` script 以实际 package.json 为准；Agent Chat 的
+  `pnpm run kits:check <slug>`。各 Kit 的 `test` script 以实际 package.json 为准；Harbors Harness 的
   `test:kit` 已串联 descriptor validate、Plugin runtime smoke 和 Kit assembly，不应把 Default Kit 的
   validate-only 脚本推广为所有 Kit 的语义。
 
@@ -542,24 +542,24 @@ pnpm run check:preflight
 
 - Framework runtime harness：`pnpm --filter @itharbors/server exec vitest run tests/framework/testing-harness.test.ts`。
   它验证 harness 的真实单 Plugin / Kit fixture、外部消息注入和 dispose 契约；这是 Framework 工具测试，不是
-  Agent Chat 业务 smoke。
+  Harbors Harness 业务 smoke。
 - Framework Web Host runner：`node --test scripts/lib/web-host-runner.test.mjs`。它只验证三进程启动、健康检查、
   隔离环境、日志和清理，不是 Kit 业务 smoke，也不代表浏览器中的 Kit 业务行为已通过。
-- Agent Chat Plugin runtime smoke：`pnpm --dir kits/agent-chat run test:plugin`，真实加载 Conversation Plugin，
+- Harbors Harness Plugin runtime smoke：`pnpm --dir kits/harness run test:plugin`，真实加载 Conversation Plugin，
   只模拟 Plugin 外 request/broadcast。
-- Agent Chat Kit assembly：`pnpm --dir kits/agent-chat run test:assembly`，通过公开 testing harness 加载全部
+- Harbors Harness Kit assembly：`pnpm --dir kits/harness run test:assembly`，通过公开 testing harness 加载全部
   声明 Plugin，验证真实组合 request/broadcast，不包含 Web Host 或浏览器交互。
-- Agent Chat Kit test：`pnpm --dir kits/agent-chat run test:kit`，依次执行 validate、`test:plugin` 和
+- Harbors Harness Kit test：`pnpm --dir kits/harness run test:kit`，依次执行 validate、`test:plugin` 和
   `test:assembly`。
-- Agent Chat HTTP smoke：`pnpm --dir kits/agent-chat run smoke`，启动真实 Gateway、Server、Client 并验证公开
+- Harbors Harness HTTP smoke：`pnpm --dir kits/harness run smoke`，启动真实 Gateway、Server、Client 并验证公开
   HTTP health、Kit catalog、redirect 和页面 HTML；它不执行浏览器点击或页面交互。
 - Kit `test`：`pnpm run kits:test <slug>` 先构建 toolchain 和目标 Kit，再执行 Kit 声明的 `test` script。
-  Kit `smoke` 是可选的声明脚本，只在 `pnpm run kits:check <slug>` 的适用阶段运行；Agent Chat 已声明该脚本，
+  Kit `smoke` 是可选的声明脚本，只在 `pnpm run kits:check <slug>` 的适用阶段运行；Harbors Harness 已声明该脚本，
   其他 Kit 是否有 smoke 以各自 descriptor 为准。
 
 Vitest 必须使用目标 package 作为运行根或显式指定目标测试文件；禁止把仓库 `.worktrees/` 作为测试根或发现路径。
 从仓库根启动的配置必须显式排除 `**/.worktrees/**`。测试证据要区分 `test`、可选 `smoke` 和组合的 `check`，
-并记录实际退出结果。Agent Chat HTTP smoke 已通过公开 HTTP 验证；浏览器验收另行确认 13/13 声明 Plugin 均加载且
+并记录实际退出结果。Harbors Harness HTTP smoke 已通过公开 HTTP 验证；浏览器验收另行确认 13/13 声明 Plugin 均加载且
 无 console error，不得把两者混写，也不得把 Framework runner contract 测试写成业务 smoke。
 
 `pnpm run kits:boundary` 会独立审计完整源码树；`pnpm run kits:boundary <slug>` 只审计
