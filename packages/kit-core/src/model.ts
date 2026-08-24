@@ -53,6 +53,8 @@ export interface KitConfigDeclaration {
 export interface KitPackageManifest {
   schemaVersion: 1;
   id: string;
+  /** Kit IDs whose persisted configuration and credentials can be migrated. */
+  readonly legacyKitIds?: readonly string[];
   version: string;
   channel: KitChannel;
   publisher: string;

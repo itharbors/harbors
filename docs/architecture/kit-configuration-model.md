@@ -2,7 +2,7 @@
 
 本文记录当前已实现的 Kit 配置声明、存储解析和运行时生命周期。它描述的是
 `kit.json`、Web 宿主、Framework 与配置 backend 之间的边界，不扩展模型服务、凭据
-或 DSH 迁移设计。
+或其他产品入口兼容设计。
 
 ## 目标与范围
 
@@ -18,7 +18,8 @@ Kit 可以通过 manifest 声明自己的配置层。Framework 只消费已经�
 - Kit 切换时对配置层进行 activate/deactivate 事务处理；
 - Settings 通过显式层参数写入 default 值，用户修改写入 global 层。
 
-当前模型不包含 project 配置层，也不定义模型服务、凭据或 DSH 数据迁移。
+当前模型不包含 project 配置层；Kit descriptor 的 `legacyKitIds` 仅声明配置与凭据迁移来源，
+不参与 URL、Catalog、CLI 或 runtime Kit 解析，也不形成旧入口 alias。
 
 ## Manifest 声明
 
@@ -30,6 +31,10 @@ Kit 可以通过 manifest 声明自己的配置层。Framework 只消费已经�
 | `defaultsLayer` | 默认值所在层；该层必须使用 `storage: null`。 |
 | `writeLayer` | 未显式指定层时的写入层；该层必须使用持久化 storage。 |
 | `layers` | 层名称、优先级和 storage 声明。名称及优先级不能重复。 |
+
+`legacyKitIds` 是 Kit package manifest 的可选字段，不是 `config` 子字段。它按声明顺序记录配置和凭据
+迁移来源；每个值必须是合法 Kit ID，且不得重复或等于当前 Kit ID。该字段不参与配置层解析之外的
+Kit 身份解析，也不产生旧入口 alias。
 
 storage 当前支持两种形式：
 
@@ -55,7 +60,7 @@ storage 当前支持两种形式：
 
 ### 当前内置声明
 
-`kits/default/kit.json` 和 `kits/agent-chat/kit.json` 当前都声明如下配置：
+`kits/default/kit.json` 和 `kits/harness/kit.json` 当前都声明如下配置：
 
 ```json
 {
@@ -112,6 +117,19 @@ SQLite backend 使用 WAL 模式，并在 backend 销毁后拒绝继续读写。
 越界、存储值不是合法 JSON 或 backend 已关闭时，操作失败并返回对应配置存储错误；装配
 失败会清理本次已经创建的 backend。
 
+## legacy Kit 配置迁移
+
+激活声明了 `legacyKitIds` 的 Kit 时，只有持久化 SQLite layer 执行迁移；`storage: null` 的内存
+layer 每次装配都是新的 backend，不读取或复制旧 Kit 行。每个 SQLite backend 在完成 schema 准备后
+独立开启事务，按 `legacyKitIds` 的声明顺序，把对应旧 `kit_id`、同一 `layer_name` 的配置行复制到
+当前 Kit。复制使用 `ON CONFLICT DO NOTHING`，因此当前 namespace 已有值永远优先；多个旧来源时先
+成功写入的来源占位，后续来源跳过。旧行保留，重复激活只产生冲突跳过，结果稳定且幂等。
+
+每个 layer/backend 的事务边界独立：某个 backend 迁移失败时回滚该 backend 的复制并阻断依赖它的
+Kit activation，旧行保持原样可重试；不承诺跨多个 layer 或多个 SQLite 文件的总事务。当前 Harbors
+Harness 只有一个 global SQLite layer，因此其当前配置迁移表现为单个 backend 事务。该迁移只复制
+配置数据，不改变 resolver、Catalog、URL、CLI、`runtimeKit` 或公开 Bootstrap，也不负责浏览器布局缓存。
+
 ## Framework 配置边界
 
 Framework 的配置模块只管理层排序、读写路由、变更事件和 backend 生命周期：
@@ -149,7 +167,7 @@ activate 会立即使新层成为当前层，并返回一次性的事务句柄�
 | storage root 解析、SQLite backend 和隔离键 | [`packages/server/src/config-storage/`](../../packages/server/src/config-storage/) |
 | Web root 装配 | [`packages/server/src/start.ts`](../../packages/server/src/start.ts)、[`packages/server/src/index.ts`](../../packages/server/src/index.ts)、[`packages/server/src/app.ts`](../../packages/server/src/app.ts) |
 | Editor 在 Kit 切换时激活配置 | [`packages/server/src/editor/index.ts`](../../packages/server/src/editor/index.ts) |
-| 内置 Kit 声明 | [`kits/default/kit.json`](../../kits/default/kit.json)、[`kits/agent-chat/kit.json`](../../kits/agent-chat/kit.json) |
+| 内置 Kit 声明 | [`kits/default/kit.json`](../../kits/default/kit.json)、[`kits/harness/kit.json`](../../kits/harness/kit.json) |
 
 ## 事实覆盖与验证
 
@@ -162,7 +180,9 @@ activate 会立即使新层成为当前层，并返回一次性的事务句柄�
 | 无 project 层、Settings 默认值注入 | Framework 配置边界 | 已覆盖 |
 | Kit 切换 activate/deactivate 事务 | Kit 切换与事务 | 已覆盖 |
 
-该文档的示例与当前两个内置 `kit.json` 的配置声明一致。文档校验使用
+该文档的示例与当前两个内置 `kit.json` 的配置声明一致。配置迁移会从 descriptor 声明的旧 Kit ID
+复制持久层中的缺失值到新 Kit namespace，新值优先、旧行保留且重复执行幂等；内存层和浏览器布局缓存不迁移。
+文档校验使用
 `git diff --check`；实现行为的测试位于 `packages/kit-core/tests/schema.test.ts`、
 `packages/server/tests/framework/config.test.ts` 和
 `packages/server/tests/config-storage/config-storage.test.ts`。

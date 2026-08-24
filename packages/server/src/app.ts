@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import path from 'node:path';
+import fs from 'node:fs';
 import type { SessionManager } from './session/manager';
 import type { SSEChannel } from './sse/channel';
 import { BrowserRequestBroker } from './framework/browser-request-broker';
@@ -155,11 +156,40 @@ export function createApp(
   const localWebFileRouter = createLocalWebFileRouter(manager, localWebFiles);
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
     const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
-    const catalogEntry = requestedKit
-      ? (await loadKitCatalog()).find((entry) => (
-        entry.name === requestedKit || entry.id === requestedKit
+    const catalogIdentity = options.kit ?? options.kitName;
+    const catalog = catalogIdentity !== undefined ? await loadKitCatalog() : undefined;
+    const catalogEntry = catalogIdentity !== undefined
+      ? catalog?.find((entry) => (
+        entry.name === catalogIdentity
+        || entry.id === catalogIdentity
+        || (
+          options.kit !== undefined
+          && path.isAbsolute(options.kit)
+          && normalizeKitDirectory(options.kit) === normalizeKitDirectory(entry.directory)
+        )
       ))
       : undefined;
+    // `kit` and `kitName` are catalog identities. An explicitly supplied
+    // unknown identity must not fall through to the assembly default. A
+    // `kitPath` remains a separately controlled, explicit path input and is
+    // resolved by the Editor's existing kit-path semantics.
+    const unknownExplicitIdentity = [options.kit, options.kitName]
+      .filter((identity): identity is string => identity !== undefined)
+      .find((identity) => !catalog?.some((entry) => (
+        entry.name === identity
+        || entry.id === identity
+        || (
+          options.kit === identity
+          && path.isAbsolute(identity)
+          && normalizeKitDirectory(identity) === normalizeKitDirectory(entry.directory)
+        )
+      )));
+    if (unknownExplicitIdentity !== undefined) {
+      throw new HttpError(404, 'KIT_NOT_FOUND', `Kit "${unknownExplicitIdentity}" not found`);
+    }
+    if ((options.kit !== undefined || options.kitName !== undefined) && !catalogEntry) {
+      throw new HttpError(404, 'KIT_NOT_FOUND', `Kit "${requestedKit ?? ''}" not found`);
+    }
     await registry.getOrCreate(session.sessionId, {
       ...options,
       runtimeKit: requestedKit,
@@ -398,6 +428,14 @@ const INDEX_HTML = `<!DOCTYPE html>
   <script type="module" src="/assets/index.js"></script>
 </body>
 </html>`;
+
+function normalizeKitDirectory(value: string): string {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return path.resolve(value);
+  }
+}
 
 function targetsApplicationPluginRetryRouter(requestTarget: string): boolean {
   const routePrefix = '/api/application/plugin/retry';

@@ -1,8 +1,8 @@
-# Agent Chat Kit 装配与回归边界
+# Harbors Harness Kit 装配与回归边界
 
-Agent Chat 的组合测试属于 `kits/agent-chat/tests/`，不是 Framework 的业务测试。Framework 只拥有通用的
+Harbors Harness 的组合测试属于 `kits/harness/tests/`，不是 Framework 的业务测试。Framework 只拥有通用的
 Plugin runtime harness、Kit assembly harness 和 Web Host 进程 runner；Chat、Conversation、Agent、Model Service
-和页面的业务断言由 Agent Chat Kit 自己拥有。
+和页面的业务断言由 Harbors Harness Kit 自己拥有。
 
 ## 公开测试边界
 
@@ -46,17 +46,17 @@ Framework 的 `scripts/lib/web-host-runner.mjs` 导出 `startWebHost(options)`�
 6. 停止时按逆序发送 SIGTERM，超时后对仍存活的子进程发送 SIGKILL，最后删除临时根；启动失败也执行相同清理。
 
 runner 只管理进程、端口、健康检查、日志和清理，不知道任何 Kit 的名称语义、Panel、对话、业务 request、broadcast
-或页面内容。完整 Web Host smoke 的业务测试归目标 Kit；Agent Chat 的 Kit-owned smoke wrapper 只调用这个通用
+或页面内容。完整 Web Host smoke 的业务测试归目标 Kit；Harbors Harness 的 Kit-owned smoke wrapper 只调用这个通用
 runner 并执行公开 HTTP 断言，不直接操作 `createEditor` 或 Server 私有源码。runner 的自动化测试仍只验证通用进程
 契约和隔离清理，不要把它写成 Kit 业务 smoke。
 
-## Agent Chat 装配来源
+## Harbors Harness 装配来源
 
-Agent Chat 的 Kit manifest 声明九个 Kit Plugin：`conversation`、`chat`、`model-service`、`agent`、`plugin`、
+Harbors Harness 的 Kit manifest 声明九个 Kit Plugin：`conversation`、`chat`、`model-service`、`agent`、`plugin`、
 `preview`、`debug`、`settings` 和 `mermaid`。Server assembly 还会先加载通用 Framework 插件 `panel`、
 `message`、`menu`、`config`。测试必须通过真实 Kit assembly 观察这条装配路径，不能用孤立 MessageModule 替代。
 
-本文记录已经落地的装配契约和回归链路。Agent Chat 已声明 `test:plugin`、`test:assembly`、`test:kit` 和
+本文记录已经落地的装配契约和回归链路。Harbors Harness 已声明 `test:plugin`、`test:assembly`、`test:kit` 和
 `smoke`：前两者分别验证单 Plugin runtime 与完整 Kit assembly，后者验证真实 Gateway/Server/Client 的公开
 HTTP。浏览器验收是独立层级，已确认 13/13 声明 Plugin 加载且无 console error。
 
@@ -87,15 +87,15 @@ HTTP。浏览器验收是独立层级，已确认 13/13 声明 Plugin 加载且�
 
 ## 命令与证据
 
-当前可直接验证通用实现和 Agent Chat Kit 的命令是：
+当前可直接验证通用实现和 Harbors Harness Kit 的命令是：
 
 ```bash
 pnpm --filter @itharbors/server exec vitest run tests/framework/testing-harness.test.ts
 node --test scripts/lib/web-host-runner.test.mjs
-pnpm --dir kits/agent-chat run test:plugin
-pnpm --dir kits/agent-chat run test:assembly
-pnpm --dir kits/agent-chat run test:kit
-pnpm --dir kits/agent-chat run smoke
+pnpm --dir kits/harness run test:plugin
+pnpm --dir kits/harness run test:assembly
+pnpm --dir kits/harness run test:kit
+pnpm --dir kits/harness run smoke
 pnpm run kits:test <slug>
 pnpm run kits:check <slug>
 ```

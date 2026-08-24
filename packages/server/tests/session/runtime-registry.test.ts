@@ -24,7 +24,7 @@ describe('SessionRuntimeRegistry', () => {
 
     const [defaultRuntime, agentRuntime] = await Promise.all([
       registry.getOrCreate('client-a', { runtimeKit: '@itharbors/default-kit' }),
-      registry.getOrCreate('client-a', { runtimeKit: '@itharbors/agent-chat' }),
+      registry.getOrCreate('client-a', { runtimeKit: 'harness' }),
     ]);
 
     expect(manager.get('client-a')?.sessionId).toBe('client-a');

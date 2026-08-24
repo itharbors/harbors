@@ -201,6 +201,102 @@ describe('CredentialVault', () => {
     });
   });
 
+  it('migrates profiles and secrets in legacy declaration order, preserving old data', async () => {
+    const legacyA = credentialScopeDigest('@legacy/kit-a', pluginName);
+    const legacyB = credentialScopeDigest('@legacy/kit-b', pluginName);
+    const secondId = '12345678-1234-4234-8234-1234567890ab';
+    const addActive = async (
+      sourceScope: string,
+      id: string,
+      version: string,
+      label: string,
+      secret: string,
+    ) => {
+      const pending = store.createPending({
+        scope: sourceScope,
+        id,
+        secretVersion: version,
+        label,
+        metadata: { source: sourceScope },
+      });
+      await keyring.set(pending.secretReference, secret);
+      expect(store.activatePending(sourceScope, id, version)).toBe(true);
+    };
+    await addActive(legacyA, profileId, oldVersion, '旧 A', 'secret-a');
+    await addActive(legacyB, profileId, newVersion, '旧 B', 'secret-b');
+    await addActive(legacyB, secondId, thirdVersion, '第二条', 'secret-second');
+
+    const bound = vault.bind(kitId, pluginName, ['@legacy/kit-a', '@legacy/kit-b']);
+    await expect(bound.get(profileId)).resolves.toMatchObject({
+      profile: { id: profileId, label: '旧 A' },
+      secret: 'secret-a',
+    });
+    await expect(bound.get(secondId)).resolves.toMatchObject({
+      profile: { id: secondId, label: '第二条' },
+      secret: 'secret-second',
+    });
+    expect(store.getActiveRecord(legacyA, profileId)).toBeDefined();
+    expect(store.getActiveRecord(legacyB, profileId)).toBeDefined();
+    expect(keyring.secrets.get(credentialAccount(scope, profileId, oldVersion))).toBe('secret-a');
+  });
+
+  it('evicts a rejected migration so a later operation can retry', async () => {
+    const legacyScope = credentialScopeDigest('@legacy/kit', pluginName);
+    const pending = store.createPending({
+      scope: legacyScope,
+      id: profileId,
+      secretVersion: oldVersion,
+      label: '可重试',
+      metadata: { source: 'legacy' },
+    });
+    await keyring.set(pending.secretReference, 'retry-secret');
+    expect(store.activatePending(legacyScope, profileId, oldVersion)).toBe(true);
+
+    const originalGet = keyring.get.bind(keyring);
+    let fail = true;
+    vi.spyOn(keyring, 'get').mockImplementation(async (account) => {
+      if (fail && account === pending.secretReference) {
+        fail = false;
+        throw new Error('temporary keyring read failure');
+      }
+      return originalGet(account);
+    });
+    const bound = vault.bind(kitId, pluginName, ['@legacy/kit']);
+    await expect(bound.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+    await expect(bound.get(profileId)).resolves.toMatchObject({ secret: 'retry-secret' });
+  });
+
+  it('recovers a migration pending row left after keyring set and cleanup failures', async () => {
+    const legacyScope = credentialScopeDigest('@legacy/pending', pluginName);
+    const source = store.createPending({
+      scope: legacyScope,
+      id: profileId,
+      secretVersion: oldVersion,
+      label: 'pending recovery',
+      metadata: { source: 'legacy' },
+    });
+    await keyring.set(source.secretReference, 'pending-secret');
+    expect(store.activatePending(legacyScope, profileId, oldVersion)).toBe(true);
+
+    // The failed write is compensated, but its pending-row removal fails;
+    // the next operation must identify that exact migration residue and
+    // recover it before copying the old profile again.
+    keyring.failSetAfterWrite = true;
+    vi.spyOn(store, 'removePending').mockImplementationOnce(() => {
+      throw new Error('temporary pending cleanup failure');
+    });
+    const bound = vault.bind(kitId, pluginName, ['@legacy/pending']);
+    await expect(bound.list()).rejects.toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED' });
+    expect(store.getRecord(scope, profileId)?.state).toBe('pending');
+
+    await expect(bound.get(profileId)).resolves.toMatchObject({
+      profile: { id: profileId, label: 'pending recovery' },
+      secret: 'pending-secret',
+    });
+    expect(store.getRecord(scope, profileId)?.state).toBe('active');
+    expect(store.getRecord(legacyScope, profileId)?.state).toBe('active');
+  });
+
   it('isolates identical opaque IDs across host-derived scopes', async () => {
     const mysql = vault.bind(kitId, pluginName);
     const other = vault.bind('@itharbors/kit-other', '@itharbors/other-core');

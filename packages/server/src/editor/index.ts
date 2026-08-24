@@ -287,6 +287,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     descriptor: KitDescriptor;
     kitPath: string;
     legacyDataDirectories: string[];
+    legacyKitIds: readonly string[];
     config?: KitConfigDeclaration;
   }> {
     const { resolveKit } = await import('../plugin/resolver');
@@ -361,7 +362,13 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       windowEntries: normalizedWindowEntries,
     };
 
-    return { descriptor, kitPath, legacyDataDirectories, config: publication?.config };
+    return {
+      descriptor,
+      kitPath,
+      legacyDataDirectories,
+      legacyKitIds: publication?.legacyKitIds ?? [],
+      config: publication?.config,
+    };
   }
 
   async function unloadExternalPlugins(pluginsToUnload: ActiveExternalPlugin[]): Promise<void> {
@@ -451,6 +458,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       descriptor,
       kitPath,
       legacyDataDirectories,
+      legacyKitIds,
       config: configDeclaration,
     } = await resolveAndReadKit(kitNameOrPath);
     const preparedPlugins: ActiveExternalPlugin[] = [];
@@ -472,7 +480,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         && descriptor.permissions?.includes('credentials')
         && descriptor.permissionGrants?.credentials?.includes(info.name)
         && info.capabilities?.includes('credentials')
-        ? options.credentialVault.bind(descriptor.name, info.name)
+        ? options.credentialVault.bind(descriptor.name, info.name, legacyKitIds)
         : undefined;
       preparedPlugins.push({
         path: pluginPath,
@@ -497,6 +505,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
           descriptor.name,
           configDeclaration,
           { roots: configStorageRoots },
+          legacyKitIds,
         );
         try {
           configTransaction = config.activate(activation);

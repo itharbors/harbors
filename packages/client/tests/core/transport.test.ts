@@ -54,14 +54,14 @@ describe('getSessionIdFromURL', () => {
 describe('getKitFromURL', () => {
   it('uses the Kit identifier encoded in a picker route', () => {
     vi.stubGlobal('window', {
-      location: { search: '?session=abc123', pathname: '/kits/agent-chat' },
+      location: { search: '?session=abc123', pathname: '/kits/harness' },
     });
-    expect(getKitFromURL()).toBe('agent-chat');
+    expect(getKitFromURL()).toBe('harness');
   });
 
   it('prefers an explicit Kit query parameter', () => {
     vi.stubGlobal('window', {
-      location: { search: '?kit=default', pathname: '/kits/agent-chat' },
+      location: { search: '?kit=default', pathname: '/kits/harness' },
     });
     expect(getKitFromURL()).toBe('default');
   });

@@ -4,10 +4,10 @@ import { createKitCatalogRouter } from '../../src/routes/kit-catalog';
 
 const catalog = Promise.resolve([
   {
-    id: 'mysql',
-    name: '@itharbors/kit-mysql',
-    label: 'MySQL',
-    directory: '/private/repository/kits/mysql',
+    id: 'harness',
+    name: 'harness',
+    label: 'Harbors Harness',
+    directory: '/private/repository/kits/harness',
     source: 'builtin' as const,
   },
 ]);
@@ -22,7 +22,7 @@ describe('Kit catalog routes', () => {
     expect(response.status()).toBe(200);
     expect(response.header('content-type')).toBe('application/json; charset=utf-8');
     expect(JSON.parse(response.body())).toEqual({
-      kits: [{ id: 'mysql', name: '@itharbors/kit-mysql', label: 'MySQL' }],
+      kits: [{ id: 'harness', name: 'harness', label: 'Harbors Harness' }],
     });
     expect(response.body()).not.toContain('/private/repository');
   });
@@ -31,10 +31,10 @@ describe('Kit catalog routes', () => {
     const response = mockResponse();
     const router = createKitCatalogRouter(() => catalog);
 
-    await router(mockRequest('GET', '/kits/mysql'), response.res);
+    await router(mockRequest('GET', '/kits/harness'), response.res);
 
     expect(response.status()).toBe(302);
-    expect(response.header('location')).toBe('/?kit=%40itharbors%2Fkit-mysql');
+    expect(response.header('location')).toBe('/?kit=harness');
     expect(response.body()).toBe('');
   });
 
@@ -42,16 +42,23 @@ describe('Kit catalog routes', () => {
     const response = mockResponse();
     const router = createKitCatalogRouter(() => catalog);
 
-    await router(mockRequest('GET', '/kits/mysql?session=reserved-session'), response.res);
+    await router(mockRequest('GET', '/kits/harness?session=reserved-session'), response.res);
 
     expect(response.status()).toBe(302);
-    expect(response.header('location')).toBe('/?kit=%40itharbors%2Fkit-mysql&session=reserved-session');
+    expect(response.header('location')).toBe('/?kit=harness&session=reserved-session');
   });
 
   it('rejects unknown Kit ids without treating them as filesystem paths', async () => {
     const router = createKitCatalogRouter(() => catalog);
 
     await expect(router(mockRequest('GET', '/kits/..%2Fsecret'), mockResponse().res))
+      .rejects.toMatchObject({ status: 404, code: 'KIT_NOT_FOUND' });
+  });
+
+  it('does not alias the legacy Agent Chat Kit id', async () => {
+    const router = createKitCatalogRouter(() => catalog);
+
+    await expect(router(mockRequest('GET', '/kits/agent-chat'), mockResponse().res))
       .rejects.toMatchObject({ status: 404, code: 'KIT_NOT_FOUND' });
   });
 

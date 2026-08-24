@@ -1,6 +1,6 @@
-# Agent Chat Kit 的 model-service Plugin
+# Harbors Harness Kit 的 model-service Plugin
 
-`model-service` 是 Agent Chat Kit 内负责模型访问和 Provider 配置的后台 Plugin。它把配置、凭据解析、
+`model-service` 是 Harbors Harness Kit 内负责模型访问和 Provider 配置的后台 Plugin。它把配置、凭据解析、
 Provider 协议适配、HTTP transport 和请求终态管理从 `agent` 的会话与工具循环中隔离出来。本文描述
 当前实现的消息契约和边界。Agent 的 Item 生命周期与持久化事件协议见
 `agent-turn-event-protocol.md`；本文只定义 Model Service 的请求、流式增量和取消边界。
@@ -390,7 +390,7 @@ OpenAI-compatible 请求使用 `${baseUrl}/chat/completions`、Bearer Header；�
 
 ## 实现位置与非目标
 
-当前 Plugin 位于 `kits/agent-chat/plugins/model-service`：
+当前 Plugin 位于 `kits/harness/plugins/model-service`：
 
 ```text
 model-service/

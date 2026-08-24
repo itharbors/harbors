@@ -1,7 +1,7 @@
 {
   "windows": [
     {
-      "id": "agent-chat-main",
+      "id": "harness-main",
       "type": "panel-area",
       "layout": {
         "type": "hsplit",

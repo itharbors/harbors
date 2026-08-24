@@ -121,6 +121,63 @@ describe('Framework Integration', () => {
     expect(editorMap.size).toBe(before);
   });
 
+  it.each([
+    ['unknown-kit', 'missing-kit'],
+    ['legacy-agent-chat', 'agent-chat'],
+    ['unknown-kit-path', path.join(tmpdir(), 'missing-kit')],
+  ])('rejects an explicitly unknown kit identity (%s) without creating a runtime', async (sessionId, kit) => {
+    const response = await fetch(`${baseURL}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, kit }),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'KIT_NOT_FOUND' },
+    });
+    expect(editorMap.has(sessionId)).toBe(false);
+  });
+
+  it('accepts a configured Kit directory supplied through the kit field', async () => {
+    const sessionId = 'configured-kit-directory';
+    const response = await fetch(`${baseURL}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, kit: path.resolve(testKitFixture.directory) }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(editorMap.has(`${sessionId}::${path.resolve(testKitFixture.directory)}`)).toBe(true);
+  });
+
+  it('rejects an explicitly unknown kitName without falling back to the default Kit', async () => {
+    const sessionId = 'unknown-kit-name';
+    const response = await fetch(`${baseURL}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, kitName: 'missing-kit-name' }),
+    });
+
+    expect(response.status).toBe(404);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: 'KIT_NOT_FOUND' },
+    });
+    expect(editorMap.has(sessionId)).toBe(false);
+  });
+
+  it('keeps explicit kitPath loading semantics', async () => {
+    const sessionId = 'explicit-kit-path';
+    const response = await fetch(`${baseURL}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, kitPath: testKitFixture.directory }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(editorMap.has(`${sessionId}::${testKitFixture.directory}`)).toBe(true);
+  });
+
   it('a configured external Kit augments the repository catalog without creating a session', async () => {
     const externalKit = mkdtempSync(path.join(tmpdir(), 'harbors-external-catalog-'));
     tempDirs.push(externalKit);
