@@ -76,5 +76,6 @@
 - [Task 档案](../tasks/2026-08-23-decision-feedback-loop/task.md)
 - [Task 收口总结](../tasks/2026-08-23-decision-feedback-loop/summary.md)
 - [架构决策记录](./README.md)
+- [ADR 0004：自动化开发主流程与阶段通信契约](./0004-automated-development-workflow.md)
 - [ADR 0001：插件优先、由 Kit 组合产品能力](./0001-plugin-first-architecture.md)
 - [ADR 0002：主程序收敛为单一 Web host](./0002-web-only-host.md)

@@ -16,15 +16,20 @@ git_dir=$(git -C "$repo_root" rev-parse --absolute-git-dir)
 git_common=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
 test "$git_dir" = "$git_common" || fail 'integration must run from the primary worktree'
 test "$(git -C "$repo_root" branch --show-current)" = main || fail 'primary worktree must be on main'
-git -C "$repo_root" show-ref --verify --quiet refs/remotes/origin/main \
-  || fail 'origin/main is missing; synchronize it only with separate authorization'
-main_ahead_origin=$(git -C "$repo_root" rev-list --count origin/main..main)
-main_behind_origin=$(git -C "$repo_root" rev-list --count main..origin/main)
-test "$main_behind_origin" -eq 0 \
-  || fail "main is behind origin/main by $main_behind_origin commit(s); synchronize main only with separate authorization"
+
+# origin/main is useful reporting context only. Local integration is based on
+# the checked-out main and must remain usable without a remote or a fresh fetch.
+if git -C "$repo_root" show-ref --verify --quiet refs/remotes/origin/main; then
+  main_ahead_origin=$(git -C "$repo_root" rev-list --count origin/main..main)
+  main_behind_origin=$(git -C "$repo_root" rev-list --count main..origin/main)
+else
+  main_ahead_origin=unavailable
+  main_behind_origin=unavailable
+fi
 
 test -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" \
   || fail 'primary main worktree is not clean'
+main_head=$(git -C "$repo_root" rev-parse HEAD)
 source_git_dir=$(git -C "$source_worktree" rev-parse --absolute-git-dir 2>/dev/null) \
   || fail 'source path is not a Git worktree'
 test "$source_git_dir" != "$git_common" || fail 'source must be a linked worktree'
@@ -56,8 +61,25 @@ else
 fi
 
 source_head=$(git -C "$source_worktree" rev-parse HEAD)
+source_added_paths=()
+while IFS= read -r -d '' added_path; do
+  source_added_paths+=("$added_path")
+done < <(git -C "$repo_root" diff --name-only --diff-filter=A -z "$main_head" "$source_head")
 git -C "$repo_root" merge-tree --write-tree main "$source_branch" >/dev/null \
   || fail 'integration has conflicts; no conflict resolution was attempted'
+
+rollback_squash() {
+  git -C "$repo_root" merge --abort >/dev/null 2>&1 || true
+  git -C "$repo_root" restore --source="$main_head" --staged --worktree -- . \
+    || return 1
+  for added_path in "${source_added_paths[@]}"; do
+    git -C "$repo_root" clean -fd -- "$added_path" >/dev/null \
+      || return 1
+  done
+  test "$(git -C "$repo_root" rev-parse HEAD)" = "$main_head" \
+    && test -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)"
+}
+
 case "$strategy" in
   ff)
     git -C "$repo_root" merge --ff-only "$source_branch" \
@@ -71,10 +93,13 @@ case "$strategy" in
     ;;
   squash)
     if ! git -C "$repo_root" merge --squash "$source_branch"; then
-      git -C "$repo_root" merge --abort >/dev/null 2>&1 || true
+      rollback_squash || fail 'squash integration failed and could not restore clean main'
       fail 'squash integration conflicted; no conflict resolution was attempted'
     fi
-    git -C "$repo_root" commit -m "$commit_title"
+    if ! git -C "$repo_root" commit -m "$commit_title"; then
+      rollback_squash || fail 'squash commit failed and could not restore clean main'
+      fail 'squash commit failed; main was restored to its clean pre-integration state'
+    fi
     ;;
 esac
 
@@ -84,7 +109,12 @@ test -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" \
   || fail 'Task verification failed after integration'
 test "$(git -C "$source_worktree" rev-parse HEAD)" = "$source_head" \
   || fail 'source worktree changed during integration'
-main_ahead_origin=$(git -C "$repo_root" rev-list --count origin/main..main)
-main_behind_origin=$(git -C "$repo_root" rev-list --count main..origin/main)
+if git -C "$repo_root" show-ref --verify --quiet refs/remotes/origin/main; then
+  main_ahead_origin=$(git -C "$repo_root" rev-list --count origin/main..main)
+  main_behind_origin=$(git -C "$repo_root" rev-list --count main..origin/main)
+else
+  main_ahead_origin=unavailable
+  main_behind_origin=unavailable
+fi
 printf 'INTEGRATED=1\nSTRATEGY=%s\nTASK_ID=%s\nSOURCE_BRANCH=%s\nMAIN_AHEAD_ORIGIN=%s\nMAIN_BEHIND_ORIGIN=%s\n' \
   "$strategy" "$task_id" "$source_branch" "$main_ahead_origin" "$main_behind_origin"

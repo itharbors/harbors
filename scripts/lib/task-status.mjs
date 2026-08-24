@@ -15,7 +15,7 @@ export function createInitialTaskStatus({ taskId, type, now } = {}) {
     updatedAt: now,
     stages: {
       requirements: 'completed',
-      design: 'in_progress',
+      design: 'pending',
       implementation: 'pending',
       verification: 'pending',
       consolidation: 'pending',

@@ -2,11 +2,13 @@
 
 ## 目的与基本契约
 
-本指南规定任务如何消费既有决策、收集角色反馈、验证执行一致性，并在收尾时把新的长期事实发布为下一项任务可检索的输入。闭环的核心契约是：
+本指南规定任务如何消费既有决策、收集角色反馈、验证执行一致性，并在总结沉淀时把新的长期事实发布为下一项任务可检索的输入。它嵌入[自动化开发主流程](../architecture/automated-development-workflow.md)，闭环的核心契约是：
 
 > 每个任务开始时消费已有决策，过程中验证决策，结束时生产或修正决策，并验证这些信息可以被下一个任务消费。
 
-这套闭环是现有 Task 生命周期的协作约定，不是另一套生命周期或状态机。机器阶段仍由 `status.json` 和 Task CLI 管理；本指南只定义各阶段需要产生和交接的决策信息。
+这套闭环是主流程中各 Task stage 的协作约定，不是另一套生命周期或状态机。机器阶段仍由 `status.json` 和 Task CLI 管理；本指南只定义各阶段需要产生和交接的决策信息。
+
+主流程固定为“定义任务 → 工作环境确认 → 执行计划 → 总结沉淀 → 交付处理”。工作环境确认和交付处理不新增 Task stage；定义任务对应 `requirements`，执行计划覆盖 `design`、`implementation`、`verification`，总结沉淀对应 `consolidation`。
 
 ## 完整链路
 
@@ -151,6 +153,12 @@ consolidation 对本 Task 相对启动 Context 的新增、修正、废弃和例
 
 发布时更新正文、索引、来源 Task、适用/排除条件和关联关系。若只更新外部 memory 而没有更新仓库 Markdown，不算发布完成。
 
+总结沉淀还要面向用户输出四类发现项：`blocking`（阻止验证或 ready gate）、`non_blocking`
+（不阻止本次收口的风险）、`decision_candidates`（待 approver 裁定的长期方案）和 `follow_up`
+（建议后续任务处理的事项）。自动提取只生成候选和证据索引，不等于自动批准；除 `blocking` 外，
+其他类别不阻止自动收口，但必须写入 `summary.md` 和最终报告。`decision_candidates` 只有在人工
+批准并发布后，才能进入 ADR 的 `accepted` 状态。
+
 ## 反向检索验证
 
 发布后 reviewer 使用“下一项任务的启动查询方式”做 Retrieval Verification：至少使用任务意图同义词、受影响路径、关键技术/边界词和 ADR/guide 标题关键词各检索一次，并确认：
@@ -192,7 +200,7 @@ consolidation 对本 Task 相对启动 Context 的新增、修正、废弃和例
 
 ## 非目标
 
-- 本指南不替代 Task CLI、`status.json` 或现有六阶段开发工作流。
+- 本指南不替代 Task CLI、`status.json` 或自动化开发主流程；五个内部 stages 仍是唯一机器生命周期。
 - 本指南不定义自动决策、自动批准、自动合并、自动发布或外部 memory 的实现。
 - 本指南不要求所有一次性任务证据都升级为 ADR，也不要求为角色反馈建立独立数据库。
 - 本指南不改变 Plugin、Kit、Framework 的代码边界和 Web-only host 约束。
