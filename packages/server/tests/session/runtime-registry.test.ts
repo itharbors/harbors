@@ -30,6 +30,12 @@ describe('SessionRuntimeRegistry', () => {
     expect(manager.get('client-a')?.sessionId).toBe('client-a');
     expect(defaultRuntime.editor).not.toBe(agentRuntime.editor);
     expect(registry.editors.size).toBe(2);
+
+    await expect(registry.destroy('client-a')).resolves.toBe(true);
+    expect(registry.editors.size).toBe(0);
+    expect(manager.get('client-a')).toBeUndefined();
+    expect(defaultRuntime.editor.dispose).toHaveBeenCalledOnce();
+    expect(agentRuntime.editor.dispose).toHaveBeenCalledOnce();
   });
 
   beforeEach(() => {

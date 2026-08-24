@@ -6,6 +6,7 @@ import path from 'node:path';
 import { testAssembly, testKitFixture } from '../helpers/assembly';
 import { createKitFixture } from '../../src/framework/__tests__/kit-fixture';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
+import { getRuntimeId } from '../../src/session/runtime-registry';
 
 const createServer = (
   options: Omit<Parameters<typeof createServerWithOptions>[0], 'pluginPathRoots'>,
@@ -172,7 +173,9 @@ describe('Framework Integration', () => {
       });
       expect(createResponse.status).toBe(201);
       const bootstrapResponse = await fetch(
-        `http://localhost:${customPort}/api/bootstrap/external-catalog-session`,
+        `http://localhost:${customPort}/api/bootstrap/${encodeURIComponent(
+          getRuntimeId('external-catalog-session', '@example/external-kit'),
+        )}`,
       );
       expect(bootstrapResponse.status).toBe(200);
       await expect(bootstrapResponse.json()).resolves.toMatchObject({
@@ -217,16 +220,22 @@ describe('Framework Integration', () => {
       });
       expect(response.status).toBe(201);
       const bootstrap = await fetch(
-        `http://localhost:${installedPort}/api/bootstrap/installed-session`,
+        `http://localhost:${installedPort}/api/bootstrap/${encodeURIComponent(
+          getRuntimeId('installed-session', '@example/kit-installed'),
+        )}`,
       );
       await expect(bootstrap.json()).resolves.toMatchObject({ kitName: '@example/kit-installed' });
       const mainEntry = await fetch(
-        `http://localhost:${installedPort}/api/window-entry/main?sessionId=installed-session`,
+        `http://localhost:${installedPort}/api/window-entry/main?sessionId=${encodeURIComponent(
+          getRuntimeId('installed-session', '@example/kit-installed'),
+        )}`,
       );
       expect(mainEntry.status).toBe(200);
       expect(await mainEntry.text()).toContain('installed-main-marker');
       const secondaryEntry = await fetch(
-        `http://localhost:${installedPort}/api/window-entry/secondary?sessionId=installed-session`,
+        `http://localhost:${installedPort}/api/window-entry/secondary?sessionId=${encodeURIComponent(
+          getRuntimeId('installed-session', '@example/kit-installed'),
+        )}`,
       );
       expect(secondaryEntry.status).toBe(200);
       expect(await secondaryEntry.text()).toContain('installed-secondary-marker');
@@ -345,8 +354,8 @@ describe('Framework Integration', () => {
     expect(defaultResponse.status).toBe(201);
     expect(sqliteResponse.status).toBe(201);
 
-    const defaultEditor = editorMap.get('multi-kit-default')!;
-    const sqliteEditor = editorMap.get('multi-kit-sqlite')!;
+    const defaultEditor = editorMap.get(getRuntimeId('multi-kit-default', testKitFixture.name))!;
+    const sqliteEditor = editorMap.get(getRuntimeId('multi-kit-sqlite', betaKit.name))!;
     expect(defaultEditor.kit.getCurrent()?.name).toBe(testKitFixture.name);
     expect(sqliteEditor.kit.getCurrent()?.name).toBe(betaKit.name);
 

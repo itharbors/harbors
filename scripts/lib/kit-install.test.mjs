@@ -743,6 +743,63 @@ test('rejects source and Framework snapshot symlinks before copying them', async
   );
 });
 
+test('copies package-level Framework dependencies into the snapshot without source links', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-install-framework-dependencies-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const descriptor = await createKitFixture(root, 'alpha');
+  const sourceDependency = path.join(root, 'node_modules', 'yazl');
+  await mkdir(sourceDependency, { recursive: true });
+  await writeFile(path.join(sourceDependency, 'index.js'), 'export const fixture = true;\n');
+  const packageNodeModules = path.join(root, 'packages', 'kit-cli', 'node_modules');
+  await mkdir(packageNodeModules, { recursive: true });
+  await symlink('../../../node_modules/yazl', path.join(packageNodeModules, 'yazl'));
+  await writeFile(
+    path.join(root, 'packages', 'kit-cli', 'package.json'),
+    '{"name":"@example/kit-cli","version":"1.2.3","dependencies":{"yazl":"^3.3.1"}}\n',
+  );
+
+  const result = await ensureKitInstall({
+    descriptor,
+    cacheRoot: path.join(root, 'cache'),
+    pnpmExecutable: descriptor.pnpmExecutable,
+  });
+
+  const snapshotDependency = path.join(
+    result.runRoot,
+    'repository',
+    'packages',
+    'kit-cli',
+    'node_modules',
+    'yazl',
+  );
+  assert.equal((await lstat(snapshotDependency)).isSymbolicLink(), false);
+  assert.equal(await readFile(path.join(snapshotDependency, 'index.js'), 'utf8'), 'export const fixture = true;\n');
+});
+
+test('rejects package-level Framework dependency links that escape the repository', async (t) => {
+  const root = await mkdtemp(path.join(tmpdir(), 'kit-install-framework-dependency-link-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const descriptor = await createKitFixture(root, 'alpha');
+  const outside = await mkdtemp(path.join(tmpdir(), 'kit-install-framework-dependency-outside-'));
+  t.after(() => rm(outside, { recursive: true, force: true }));
+  const packageNodeModules = path.join(root, 'packages', 'kit-cli', 'node_modules');
+  await mkdir(packageNodeModules, { recursive: true });
+  await symlink(outside, path.join(packageNodeModules, 'escape'));
+  await writeFile(
+    path.join(root, 'packages', 'kit-cli', 'package.json'),
+    '{"name":"@example/kit-cli","version":"1.2.3","dependencies":{"escape":"1.0.0"}}\n',
+  );
+
+  await assert.rejects(
+    ensureKitInstall({
+      descriptor,
+      cacheRoot: path.join(root, 'cache'),
+      pnpmExecutable: descriptor.pnpmExecutable,
+    }),
+    /Framework dependency symbolic link escapes the repository/iu,
+  );
+});
+
 test('rejects cross-platform local dependency escapes in root, workspace, and lock metadata', async (t) => {
   const root = await mkdtemp(path.join(tmpdir(), 'kit-install-portable-paths-'));
   t.after(() => rm(root, { recursive: true, force: true }));

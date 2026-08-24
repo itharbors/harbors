@@ -87,30 +87,42 @@ export class SessionRuntimeRegistry {
       }
     })();
 
-    this.pending.set(sessionId, pending);
+    this.pending.set(runtimeId, pending);
     return pending;
   }
 
   async destroy(sessionId: string): Promise<boolean> {
-    const existed = this.manager.get(sessionId) !== undefined
-      || this.runtimes.has(sessionId)
-      || this.pending.has(sessionId);
+    const runtimePrefix = `${sessionId}::`;
+    const runtimeIds = new Set<string>([
+      ...[...this.runtimes.keys()].filter((runtimeId) => (
+        runtimeId === sessionId || runtimeId.startsWith(runtimePrefix)
+      )),
+      ...[...this.pending.keys()].filter((runtimeId) => (
+        runtimeId === sessionId || runtimeId.startsWith(runtimePrefix)
+      )),
+    ]);
+    const existed = this.manager.get(sessionId) !== undefined || runtimeIds.size > 0;
     if (!existed) return false;
 
-    const pending = this.pending.get(sessionId);
-    if (pending) {
+    const pendingRuntimes = [...runtimeIds]
+      .map((runtimeId) => this.pending.get(runtimeId))
+      .filter((pending): pending is Promise<SessionRuntime> => pending !== undefined);
+    for (const pending of pendingRuntimes) {
       try {
         await pending;
       } catch {
-        this.manager.destroy(sessionId);
-        return true;
+        // A failed runtime is already removed by its factory transaction;
+        // continue so other runtimes belonging to the client session are
+        // still disposed.
       }
     }
 
-    const editor = this.runtimes.get(sessionId);
-    this.runtimes.delete(sessionId);
+    const editors = [...runtimeIds]
+      .map((runtimeId) => [runtimeId, this.runtimes.get(runtimeId)] as const)
+      .filter((entry): entry is readonly [string, Editor] => entry[1] !== undefined);
+    for (const [runtimeId] of editors) this.runtimes.delete(runtimeId);
     try {
-      await editor?.dispose();
+      for (const [, editor] of editors) await editor.dispose();
     } finally {
       this.manager.destroy(sessionId);
     }

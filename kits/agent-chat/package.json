@@ -4,8 +4,10 @@
   "private": true,
   "scripts": {
     "build": "node ../../packages/kit-cli/dist/cli.js build .",
-    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:assembly",
-    "test:assembly": "pnpm --dir ../../packages/server exec vitest run kits/agent-chat/tests/assembly.test.ts --root ../.. --config packages/server/vitest.config.ts"
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:plugin && pnpm run test:assembly",
+    "test:plugin": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/agent-chat --config ../../kits/agent-chat/vitest.config.ts plugins/conversation/tests/runtime.smoke.test.ts",
+    "test:assembly": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/agent-chat --config ../../kits/agent-chat/vitest.config.ts tests/assembly.test.ts",
+    "smoke": "node tests/web-host.smoke.mjs"
   },
   "ce-editor": {
     "kit": {
@@ -41,7 +43,8 @@
     "storage": { "legacyDataDirectories": [] },
     "scripts": {
       "build": "build",
-      "test": "test:kit"
+      "test": "test:kit",
+      "smoke": "smoke"
     }
   },
   "devDependencies": {

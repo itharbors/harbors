@@ -399,6 +399,154 @@ async function assertSafeCopyTree(root, context, filter) {
   await visit(root);
 }
 
+async function assertFrameworkDependencyTreeContained(root, repositoryRoot) {
+  async function visit(directory) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isSymbolicLink()) {
+        let canonicalTarget;
+        try {
+          canonicalTarget = await realpath(entryPath);
+        } catch (error) {
+          throw new Error(`Framework dependency symbolic link target must exist: ${path.relative(repositoryRoot, entryPath)}`, { cause: error });
+        }
+        if (!isInside(canonicalTarget, repositoryRoot)) {
+          throw new Error(`Framework dependency symbolic link escapes the repository: ${path.relative(repositoryRoot, entryPath)}`);
+        }
+      } else if (entry.isDirectory()) {
+        await visit(entryPath);
+      }
+    }
+  }
+  await visit(root);
+}
+
+async function copyFrameworkPackageDependencies(repositoryRoot, workingRepositoryRoot) {
+  async function copyPackage(sourceEntry, destinationEntry, activeCopies) {
+    let sourceInfo = await lstat(sourceEntry);
+    let source = sourceEntry;
+    if (sourceInfo.isSymbolicLink()) {
+      source = await realpath(sourceEntry);
+      if (!isInside(source, repositoryRoot)) {
+        throw new Error(`Framework dependency symbolic link escapes the repository: ${path.relative(repositoryRoot, sourceEntry)}`);
+      }
+      sourceInfo = await lstat(source);
+    }
+    if (activeCopies.has(source)) return;
+    activeCopies.add(source);
+    if (sourceInfo.isDirectory()) {
+      await assertFrameworkDependencyTreeContained(source, repositoryRoot);
+      await cp(source, destinationEntry, {
+        recursive: true,
+        dereference: true,
+        filter: (candidate) => !path.relative(source, candidate).split(path.sep).includes('node_modules'),
+      });
+      const dependencyRoots = [path.join(source, 'node_modules')];
+      let packageStoreRoot = path.dirname(source);
+      while (packageStoreRoot !== repositoryRoot && path.basename(packageStoreRoot) !== 'node_modules') {
+        packageStoreRoot = path.dirname(packageStoreRoot);
+      }
+      if (path.basename(packageStoreRoot) === 'node_modules') {
+        dependencyRoots.push(packageStoreRoot);
+      }
+      let packageJson;
+      try {
+        packageJson = JSON.parse(await readFile(path.join(source, 'package.json'), 'utf8'));
+      } catch {
+        packageJson = {};
+      }
+      const dependencyNames = new Set([
+        ...Object.keys(packageJson.dependencies ?? {}),
+        ...Object.keys(packageJson.devDependencies ?? {}),
+        ...Object.keys(packageJson.optionalDependencies ?? {}),
+      ]);
+      for (const dependencyName of dependencyNames) {
+        for (const dependencyRoot of dependencyRoots) {
+          const dependencySource = path.join(dependencyRoot, ...dependencyName.split('/'));
+          try {
+            await lstat(dependencySource);
+          } catch (error) {
+            if (error.code === 'ENOENT') continue;
+            throw error;
+          }
+          const dependencyDestination = path.join(destinationEntry, 'node_modules', ...dependencyName.split('/'));
+          await mkdir(path.dirname(dependencyDestination), { recursive: true });
+          await copyPackage(dependencySource, dependencyDestination, activeCopies);
+          break;
+        }
+      }
+    } else if (sourceInfo.isFile()) {
+      await mkdir(path.dirname(destinationEntry), { recursive: true });
+      await cp(source, destinationEntry, { dereference: true });
+    } else {
+      throw new Error(`Framework dependency contains unsupported entry: ${path.relative(repositoryRoot, sourceEntry)}`);
+    }
+    activeCopies.delete(source);
+  }
+
+  for (const name of ['packages', 'plugins']) {
+    const sourceRoot = path.join(repositoryRoot, name);
+    let entries;
+    try {
+      entries = await readdir(sourceRoot, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue;
+      const source = path.join(sourceRoot, entry.name, 'node_modules');
+      let sourceInfo;
+      try {
+        sourceInfo = await lstat(source);
+      } catch (error) {
+        if (error.code === 'ENOENT') continue;
+        throw error;
+      }
+      if (!sourceInfo.isDirectory() || sourceInfo.isSymbolicLink()) {
+        throw new Error(`Framework package node_modules must be a real directory: ${path.relative(repositoryRoot, source)}`);
+      }
+      const destination = path.join(workingRepositoryRoot, name, entry.name, 'node_modules');
+      let packageJson;
+      try {
+        packageJson = JSON.parse(await readFile(path.join(sourceRoot, entry.name, 'package.json'), 'utf8'));
+      } catch {
+        packageJson = {};
+      }
+      const dependencyNames = new Set([
+        ...Object.keys(packageJson.dependencies ?? {}),
+        ...Object.keys(packageJson.devDependencies ?? {}),
+        ...Object.keys(packageJson.optionalDependencies ?? {}),
+      ]);
+      let copiedDependency = false;
+      for (const dependencyName of dependencyNames) {
+        const dependencySource = path.join(source, ...dependencyName.split('/'));
+        try {
+          await lstat(dependencySource);
+        } catch (error) {
+          if (error.code === 'ENOENT') continue;
+          throw error;
+        }
+        await copyPackage(
+          dependencySource,
+          path.join(destination, ...dependencyName.split('/')),
+          new Set(),
+        );
+        copiedDependency = true;
+      }
+      const binSource = path.join(source, '.bin');
+      try {
+        await lstat(binSource);
+        await cp(binSource, path.join(destination, '.bin'), { recursive: true, dereference: true });
+        await assertSafeCopyTree(path.join(destination, '.bin'), 'Framework snapshot', () => true);
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+      }
+      if (copiedDependency) await assertSafeCopyTree(destination, 'Framework snapshot', () => true);
+    }
+  }
+}
+
 function assertPortablePath(value, context, { allowParent = true } = {}) {
   if (typeof value !== 'string' || value.length === 0
     || value.includes('\\') || value.includes('%') || value.includes('\0')
@@ -722,6 +870,7 @@ async function injectFrameworkSnapshot(repositoryRoot, workingRepositoryRoot, ru
       () => true,
     );
   }
+  await copyFrameworkPackageDependencies(repositoryRoot, workingRepositoryRoot);
   for (const name of ['package.json', 'tsconfig.json']) {
     const source = path.join(repositoryRoot, name);
     let sourceInfo;

@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc -p tsconfig.build.json",
+    "build": "tsc -p tsconfig.build.json && node src/testing/build-testing.mjs",
     "typecheck": "tsc --noEmit",
     "test": "pnpm run typecheck && vitest run"
   },

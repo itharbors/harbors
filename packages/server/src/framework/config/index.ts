@@ -203,15 +203,17 @@ export class ConfigModule implements EditorConfig {
     assertOwner(owner);
     const pluginName = owner.pluginName;
     const kitId = owner.kitId;
+    const storageNamespace = kitId === '__framework__' && pluginName === 'config' ? '' : pluginName;
     return {
-      get: (key, layer) => this.getScoped(kitId, pluginName, key, layer),
-      set: (key, value, layer) => this.setScoped(kitId, pluginName, key, value, layer),
-      delete: (key, layer) => this.deleteScoped(kitId, pluginName, key, layer),
+      get: (key, layer) => this.getScoped(kitId, storageNamespace, key, layer),
+      set: (key, value, layer) => this.setScoped(kitId, storageNamespace, key, value, layer),
+      delete: (key, layer) => this.deleteScoped(kitId, storageNamespace, key, layer),
       subscribe: (listener) => {
         this.requireOwnerKit(kitId);
         return this.subscribe((event) => {
           const activeForOwner = kitId === '__framework__' || this.activeKitId === kitId;
-          if (activeForOwner && event.pluginName === pluginName) {
+          const receivesHostEvent = pluginName === 'config' && event.pluginName === undefined;
+          if (activeForOwner && (receivesHostEvent || event.pluginName === pluginName)) {
             listener({ key: event.key, type: event.type, action: event.action });
           }
         });

@@ -38,8 +38,8 @@ test('removes build-cache records and existing build outputs', async (t) => {
     await mkdir(join(rootDir, 'kits', slug), { recursive: true });
     await writeFile(join(rootDir, 'kits', slug, 'package.json'), JSON.stringify({
       name: `@fixture/kit-${index}`,
-      workspaces: ['packages/*'],
     }));
+    await writeFile(join(rootDir, 'kits', slug, 'pnpm-workspace.yaml'), 'packages:\n  - packages/*\n');
   }
   for (const [index, kitWorkspace] of kitWorkspaces.entries()) {
     await mkdir(join(kitWorkspace, 'dist'), { recursive: true });

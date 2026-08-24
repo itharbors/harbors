@@ -4,7 +4,21 @@ type MessageModuleOptions = {
   dispatchPanelRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchBrowserRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchPanelBroadcast?: (plugin: string, topic: string, panelMethod: string, args: unknown[]) => void;
+  /**
+   * Host-side observation only. The callback is deliberately fire-and-forget
+   * and errors from it must never affect message dispatch.
+   */
+  observe?: (event: MessageObservation) => void;
 };
+
+export interface MessageObservation {
+  readonly kind: 'request' | 'broadcast';
+  readonly caller?: string;
+  readonly plugin?: string;
+  readonly name?: string;
+  readonly topic?: string;
+  readonly args: readonly unknown[];
+}
 
 function requestKey(plugin: string, name: string): string {
   return `${plugin}:${name}`;
@@ -109,11 +123,13 @@ export class MessageModule {
   }
 
   async request(plugin: string, name: string, ...args: unknown[]): Promise<unknown> {
+    this.observe({ kind: 'request', plugin, name, args: [...args] });
     return this.dispatchRequest(undefined, plugin, name, args);
   }
 
   /** Host-internal request entry point carrying the trusted caller identity. */
   async requestFrom(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown> {
+    this.observe({ kind: 'request', caller: callerPlugin, plugin, name, args: [...args] });
     return this.dispatchRequest(callerPlugin, plugin, name, args);
   }
 
@@ -186,6 +202,7 @@ export class MessageModule {
   }
 
   broadcast(topic: string, ...args: unknown[]): void {
+    this.observe({ kind: 'broadcast', topic, args: [...args] });
     const routes = this.queryMatchingBroadcasts(topic);
 
     for (const route of routes) {
@@ -224,5 +241,13 @@ export class MessageModule {
   destroy(): void {
     this.registry.request.clear();
     this.registry.broadcast.clear();
+  }
+
+  private observe(event: MessageObservation): void {
+    try {
+      this.options.observe?.(event);
+    } catch {
+      // Observation is diagnostic only and must not change message behavior.
+    }
   }
 }
