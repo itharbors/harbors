@@ -47,13 +47,16 @@ describe('discoverApplicationPlugins', () => {
     return fs.realpathSync(pluginDir);
   }
 
-  function validHarbors(legacyDataDirectories: string[] = []) {
+  function validHarbors(
+    legacyDataDirectories: string[] = [],
+    legacyPluginDataDirectories: Record<string, string[]> = {},
+  ) {
     return {
       distribution: 'builtin',
       ci: { runner: 'ubuntu-latest' },
       docs: { summary: 'test kit' },
       resources: [],
-      storage: { legacyDataDirectories },
+      storage: { legacyDataDirectories, legacyPluginDataDirectories },
       scripts: { build: 'build', test: 'test' },
     };
   }
@@ -133,6 +136,71 @@ describe('discoverApplicationPlugins', () => {
       path: pluginPath,
       kits: ['@scope/kit-a'],
       legacyDataDirectories: ['legacy-a'],
+    }]);
+  });
+
+  it('adds only the startup owner-scoped legacy storage grant', async () => {
+    const ownerPath = createPlugin(assembly.pluginsDir, 'storage-owner', '@scope/storage-owner');
+    const siblingPath = createPlugin(assembly.pluginsDir, 'storage-sibling', '@scope/storage-sibling');
+    const kitPath = createKit('a', '@scope/kit-a', ['@scope/storage-owner', '@scope/storage-sibling']);
+    const manifestPath = path.join(kitPath, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.harbors = validHarbors(['kit-wide'], { '@scope/storage-owner': ['owner-only'] });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plugins).toEqual([
+      {
+        name: '@scope/storage-owner',
+        path: ownerPath,
+        kits: ['@scope/kit-a'],
+        legacyDataDirectories: ['kit-wide', 'owner-only'],
+      },
+      {
+        name: '@scope/storage-sibling',
+        path: siblingPath,
+        kits: ['@scope/kit-a'],
+        legacyDataDirectories: ['kit-wide'],
+      },
+    ]);
+  });
+
+  it('rejects owner-scoped legacy storage grants for undeclared Plugins', async () => {
+    createPlugin(assembly.pluginsDir, 'storage-owner', '@scope/storage-owner');
+    const kitPath = createKit('a', '@scope/kit-a', ['@scope/storage-owner']);
+    const manifestPath = path.join(kitPath, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.harbors = validHarbors([], { '@scope/not-declared': ['owner-only'] });
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.plugins).toEqual([]);
+    expect(result.diagnostics).toContainEqual(expect.objectContaining({
+      code: 'INVALID_KIT_MANIFEST',
+      kit: '@scope/kit-a',
+      plugin: '@scope/not-declared',
+    }));
+  });
+
+  it('treats prototype-named Plugin grants as own metadata entries', async () => {
+    const pluginPath = createPlugin(assembly.pluginsDir, 'constructor-plugin', 'constructor');
+    const kitPath = createKit('b', '@scope/kit-prototype-owner', ['constructor']);
+    const manifestPath = path.join(kitPath, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest.harbors = validHarbors([], JSON.parse('{"constructor":["owner-only"]}'));
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    const result = await discoverApplicationPlugins({ assembly });
+
+    expect(result.diagnostics).toEqual([]);
+    expect(result.plugins).toEqual([{
+      name: 'constructor',
+      path: pluginPath,
+      kits: ['@scope/kit-prototype-owner'],
+      legacyDataDirectories: ['owner-only'],
     }]);
   });
 

@@ -35,6 +35,8 @@ export type PluginMessageRouteDeclaration = readonly string[] | PluginMessageRou
 
 export interface PluginInfo {
   name: string;
+  /** Stable diagnostic key used for this owner's private storage directories. */
+  storageOwnerKey?: string;
   version: string;
   path: string;
   kind: PluginKind;

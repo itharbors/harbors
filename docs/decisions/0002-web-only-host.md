@@ -15,7 +15,9 @@
 3. 仓库只内置 `default` Kit；其他 Kit 作为独立源码目录维护。
 4. 删除 Electron、桌面打包、自动更新、Tray、BrowserWindow、桌面 IPC、Notification Host 和桌面 Kit Manager。
 5. 保留通用的 Kit descriptor、制品校验与本地打包能力，不建立远程 Kit 发布流程。
-6. Server 运行数据写入 `.data/`，不得进入源码目录或 Git。
+6. Server、Kit 配置与 Plugin 运行数据统一写入用户级 application data root `~/.harbors/`，不得进入源码 checkout、worktree 或 Git。开发与稳定入口使用同一物理根；测试必须显式注入临时根。
+
+2026-08-25 修订第 6 项：原 `.data/` 结论会把正式数据绑定到某个 checkout，并使开发入口继续在 `packages/server` 生成 `.editor.db` 与 Plugin 目录。新入口在打开数据库前非破坏地合并这些 legacy 数据，源文件保留；此修订不改变 Web-only 宿主决策。
 
 ## 替代方案
 
@@ -32,6 +34,7 @@
 - 浏览器成为唯一受支持交互入口，开发和验收默认使用 `pnpm dev`；稳定运行验收使用先构建后执行的 `pnpm start`。
 - 不再提供托盘、多原生窗口、桌面通知、自动更新或签名桌面安装包。
 - Client 不依赖 Electron bridge，插件子进程始终使用 Node。
+- checkout/worktree 不再拥有正式运行数据；`DB_PATH` 只显式覆盖 Server 数据库，不隐式改变 Kit 或 Plugin application data root。
 - Kit 制品仅用于本地校验、分发或导入，不触发远程 Release、Tag 或 Registry 发布。
 - 旧桌面发行和本地安装文档不再描述当前能力。
 

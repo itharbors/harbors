@@ -1,4 +1,5 @@
-import { lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { link, lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
@@ -174,18 +175,30 @@ function throwIfAborted(signal: AbortSignal): void {
 
 /** Harbors 自主管理的 agent：参考 Harness，用只追加事件日志维护 session/turn。 */
 export class HarborsAdapter implements AgentAdapter {
-  constructor(private readonly modelService: ModelServiceClient, storageRoot: string) {
+  constructor(
+    private readonly modelService: ModelServiceClient,
+    storageRoot: string,
+    legacyDataRoots: readonly string[] = [],
+  ) {
     if (typeof storageRoot !== 'string' || !storageRoot.trim() || !isAbsolute(storageRoot)) {
       throw new Error('MISSING_RUNTIME_DATA');
     }
     const root = resolve(storageRoot);
     this.storageDir = join(root, 'storage-v1', 'sessions');
     this.trashDir = join(root, 'storage-v1', '.harbors-trash');
+    this.legacyDataRoots = Object.freeze(legacyDataRoots.map((candidate) => {
+      if (typeof candidate !== 'string' || !candidate.trim() || !isAbsolute(candidate)) {
+        throw new Error('INVALID_LEGACY_RUNTIME_DATA');
+      }
+      return resolve(candidate);
+    }));
   }
   private stopped = false;
   private readonly abortController = new AbortController();
   private readonly storageDir: string;
   private readonly trashDir: string;
+  private readonly legacyDataRoots: readonly string[];
+  private initialization?: Promise<void>;
   private readonly eventWriteQueues = new Map<string, Promise<void>>();
   private readonly deletedSessions = new Set<string>();
   /** 同一会话只保留一个可变快照，避免并发 API 各自 load 后用过期 events.length 分配重复 seq。 */
@@ -202,6 +215,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async createConversation(project?: string, input?: AgentTurnInput): Promise<AgentConversation> {
+    await this.ensureInitialized();
     throwIfAborted(this.abortController.signal);
     const options = normalizeTurnOptions(input);
     const sandboxMode = options.sandboxMode ? assertSandboxMode(options.sandboxMode) : DEFAULT_SANDBOX_MODE;
@@ -241,6 +255,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async listConversations(): Promise<AgentConversation[]> {
+    await this.ensureInitialized();
     await mkdir(this.storageDir, { recursive: true });
     const entries = await readdir(this.storageDir, { withFileTypes: true });
     const ids = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && SESSION_ID_PATTERN.test(entry.name.slice(0, -'.jsonl'.length))).map((entry) => entry.name.slice(0, -'.jsonl'.length));
@@ -249,6 +264,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async deleteConversation(id: string): Promise<void> {
+    await this.ensureInitialized();
     throwIfAborted(this.abortController.signal);
     if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
     const session = await this.load(id);
@@ -287,6 +303,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async renameConversation(id: string, title: string): Promise<AgentConversation> {
+    await this.ensureInitialized();
     throwIfAborted(this.abortController.signal);
     const trimmed = title.trim();
     if (!trimmed) throw new Error('会话标题不能为空');
@@ -297,11 +314,13 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationTrace(id: string, turnId?: string): Promise<AgentTraceEvent[]> {
+    await this.ensureInitialized();
     const events = (await this.refreshSession(id)).events;
     return events.filter((event) => !turnId || event.turnId === turnId || event.data.turnId === turnId || String(event.data.turn) === turnId).map((event) => ({ ...event, data: { ...event.data } }));
   }
 
   async getConversationTraceSince(id: string, afterSeq = -1): Promise<AgentTraceBatch> {
+    await this.ensureInitialized();
     const session = await this.refreshSession(id);
     const normalizedAfterSeq = normalizeTraceSeq(afterSeq);
     return {
@@ -312,6 +331,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationTracePage(id: string, options?: AgentTracePageOptions): Promise<AgentTracePage> {
+    await this.ensureInitialized();
     const session = await this.refreshSession(id);
     const page = paginateTraceEvents(session.events, options);
     return {
@@ -321,6 +341,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async sendMessage(id: string, content: string, input?: AgentTurnInput, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void, onStatus?: (status: string) => void): Promise<string> {
+    await this.ensureInitialized();
     if (this.stopped) throw new Error('Harbors adapter has been stopped');
     if (this.activeTurnControllers.has(id)) throw new Error('该会话已有正在执行的 turn');
     const session = await this.load(id);
@@ -412,6 +433,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationSettings(id: string): Promise<AgentTurnOptions> {
+    await this.ensureInitialized();
     const session = await this.refreshSession(id);
     return {
       ...(session.model ? { model: session.model } : {}),
@@ -424,6 +446,7 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationContext(id: string): Promise<AgentContextUsage> {
+    await this.ensureInitialized();
     const session = await this.refreshSession(id);
     const catalog = await this.modelService.getCatalog();
     const model = session.model || catalog.defaultModel || catalog.models[0]?.id || 'unknown';
@@ -441,11 +464,13 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   async getConversationPermissions(id: string): Promise<AgentPermissionState> {
+    await this.ensureInitialized();
     const session = await this.refreshSession(id);
     return { sandboxMode: session.sandboxMode, approvalPolicy: session.approvalPolicy };
   }
 
   async setConversationPermissions(id: string, permissions: Partial<AgentPermissionState>): Promise<AgentPermissionState> {
+    await this.ensureInitialized();
     const session = await this.load(id);
     if (permissions.sandboxMode && assertSandboxMode(permissions.sandboxMode) !== session.sandboxMode) {
       await this.appendEvent(session, 'sandbox/mode', { mode: assertSandboxMode(permissions.sandboxMode) });
@@ -732,6 +757,76 @@ export class HarborsAdapter implements AgentAdapter {
     return { text: boundedSummary(output.trim()), ...(response.usage ? { usage: response.usage } : {}) };
   }
 
+  private ensureInitialized(): Promise<void> {
+    this.initialization ??= this.importLegacySessions();
+    return this.initialization;
+  }
+
+  private async importLegacySessions(): Promise<void> {
+    const counters = { discovered: 0, imported: 0, skipped: 0, conflicted: 0, failed: 0 };
+    if (this.legacyDataRoots.length === 0) return;
+    await mkdir(this.storageDir, { recursive: true });
+    for (const legacyRoot of this.legacyDataRoots) {
+      const sourceDirectory = join(legacyRoot, 'sessions');
+      let entries: import('node:fs').Dirent[];
+      try {
+        const sourceStat = await lstat(sourceDirectory);
+        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
+          counters.failed += 1;
+          continue;
+        }
+        entries = await readdir(sourceDirectory, { withFileTypes: true });
+      } catch (error) {
+        if (isNodeError(error, 'ENOENT')) continue;
+        counters.failed += 1;
+        continue;
+      }
+      for (const entry of entries) {
+        if (!entry.name.endsWith('.jsonl')) continue;
+        counters.discovered += 1;
+        const id = entry.name.slice(0, -'.jsonl'.length);
+        if (!entry.isFile() || !SESSION_ID_PATTERN.test(id)) {
+          counters.failed += 1;
+          continue;
+        }
+        try {
+          const raw = await readStableLegacySession(join(sourceDirectory, entry.name));
+          const decoded = decodeJsonl(raw, { repairTrailingLine: false });
+          if (decoded.header.id !== id) throw new Error('LEGACY_SESSION_ID_MISMATCH');
+          const target = this.logPathFor(id);
+          await withSessionFileLock(target, async () => {
+            if (await fileExists(this.tombstonePathFor(id))) {
+              counters.skipped += 1;
+              return;
+            }
+            if (await fileExists(target)) {
+              counters.skipped += 1;
+              return;
+            }
+            const temporary = `${target}.${process.pid}.${randomUUID()}.import`;
+            try {
+              await writeSessionFile(temporary, raw, 'wx', true);
+              try {
+                await link(temporary, target);
+                await syncDirectoryPath(this.storageDir);
+                counters.imported += 1;
+              } catch (error) {
+                if (!isNodeError(error, 'EEXIST')) throw error;
+                counters.skipped += 1;
+              }
+            } finally {
+              await unlink(temporary).catch(() => undefined);
+            }
+          });
+        } catch (error) {
+          counters.failed += 1;
+          console.warn(`[agent] legacy session import failed: ${id} ${migrationErrorCode(error)}`);
+        }
+      }
+    }
+    console.info(`[agent] legacy session import ${JSON.stringify(counters)}`);
+  }
+
   private logPathFor(id: string): string { if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID'); return join(this.storageDir, `${id}.jsonl`); }
   private tombstonePathFor(id: string): string { if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID'); return join(this.storageDir, `${id}.deleted`); }
   private headerFor(session: StoredSession): SessionHeader { return { type: 'session', version: SESSION_FORMAT_VERSION, id: session.id, createdAt: Date.parse(session.createdAt), ...(session.project ? { cwd: session.project } : {}), ...turnSettings(session), ...permissionSettings(session) }; }
@@ -962,6 +1057,49 @@ async function writeSessionFile(path: string, contents: string, flag: 'wx' | 'w'
   }
 }
 
+async function readStableLegacySession(path: string): Promise<string> {
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const before = await handle.stat();
+    if (!before.isFile()) throw new Error('LEGACY_SESSION_NOT_REGULAR');
+    const raw = await handle.readFile('utf8');
+    const after = await handle.stat();
+    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
+      throw new Error('LEGACY_SESSION_CHANGED');
+    }
+    return raw;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function fileExists(path: string): Promise<boolean> {
+  try {
+    await lstat(path);
+    return true;
+  } catch (error) {
+    if (isNodeError(error, 'ENOENT')) return false;
+    throw error;
+  }
+}
+
+async function syncDirectoryPath(directory: string): Promise<void> {
+  const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY);
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+function migrationErrorCode(error: unknown): string {
+  if (error instanceof Error && 'code' in error && typeof (error as NodeJS.ErrnoException).code === 'string') {
+    return (error as NodeJS.ErrnoException).code!;
+  }
+  if (error instanceof Error && /^[A-Z0-9_:-]+$/u.test(error.message)) return error.message;
+  return 'LEGACY_SESSION_IMPORT_FAILED';
+}
+
 async function appendSessionLine(path: string, line: string, sync = false): Promise<void> {
   const handle = await open(path, 'a');
   try {
@@ -1093,9 +1231,15 @@ async function withSessionFileLock<T>(sessionPath: string, run: () => Promise<T>
       await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 10 + Math.floor(Math.random() * 20)));
     }
   }
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    void handle.utimes(now, now).catch(() => undefined);
+  }, Math.floor(SESSION_LOCK_STALE_MS / 4));
+  heartbeat.unref();
   try {
     return await run();
   } finally {
+    clearInterval(heartbeat);
     await handle.close().catch(() => undefined);
     try {
       const current = JSON.parse(await readFile(lockPath, 'utf8')) as { token?: unknown };

@@ -16,6 +16,7 @@ interface KitStartupDeclaration {
   path: string;
   startupPlugins: string[];
   legacyDataDirectories: string[];
+  legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
   permissions: KitPermission[];
 }
 
@@ -37,6 +38,10 @@ export async function discoverApplicationPlugins(
 
   for (const declaration of declarations) {
     for (const pluginName of declaration.startupPlugins) {
+      const legacyDataDirectories = [...new Set([
+        ...declaration.legacyDataDirectories,
+        ...readOwnerLegacyDirectories(declaration.legacyPluginDataDirectories, pluginName),
+      ])];
       let pluginPath: string;
       try {
         pluginPath = await resolvePlugin(pluginName, {
@@ -72,8 +77,8 @@ export async function discoverApplicationPlugins(
           ...(declaration.permissions.length > 0
             ? { permissions: [...declaration.permissions] }
             : {}),
-          ...(declaration.legacyDataDirectories.length > 0
-            ? { legacyDataDirectories: [...declaration.legacyDataDirectories] }
+          ...(legacyDataDirectories.length > 0
+            ? { legacyDataDirectories }
             : {}),
         };
         byName.set(pluginName, spec);
@@ -82,7 +87,7 @@ export async function discoverApplicationPlugins(
       }
       if (existing.path === pluginPath) {
         if (!existing.kits.includes(declaration.name)) existing.kits.push(declaration.name);
-        for (const directory of declaration.legacyDataDirectories) {
+        for (const directory of legacyDataDirectories) {
           existing.legacyDataDirectories ??= [];
           if (!existing.legacyDataDirectories.includes(directory)) {
             existing.legacyDataDirectories.push(directory);
@@ -189,16 +194,22 @@ async function readKitDeclaration(
     return undefined;
   }
   const startupPlugins = isRecord(startup) ? startup.plugins : undefined;
-  const legacyDataDirectories = readLegacyDataDirectories(
+  const legacyStorage = readLegacyStorage(
     manifest as Record<string, unknown>,
     name,
     diagnostics,
   );
-  if (!legacyDataDirectories) return undefined;
+  if (!legacyStorage) return undefined;
   const permissions = await readKitPermissions(kitPath, name, diagnostics);
   if (!permissions) return undefined;
   if (startupPlugins === undefined) {
-    return { name, path: kitPath, startupPlugins: [], legacyDataDirectories, permissions };
+    const unknownOwner = Object.keys(legacyStorage.legacyPluginDataDirectories)
+      .find((owner) => !(ordinaryPlugins ?? []).includes(owner));
+    if (unknownOwner) {
+      diagnostics.push(unknownLegacyOwnerDiagnostic(name, unknownOwner));
+      return undefined;
+    }
+    return { name, path: kitPath, startupPlugins: [], ...legacyStorage, permissions };
   }
   if (!isStringArray(startupPlugins) || new Set(startupPlugins).size !== startupPlugins.length) {
     diagnostics.push({
@@ -219,7 +230,14 @@ async function readKitDeclaration(
     });
     return undefined;
   }
-  return { name, path: kitPath, startupPlugins, legacyDataDirectories, permissions };
+  const declaredOwners = new Set([...(ordinaryPlugins ?? []), ...startupPlugins]);
+  const unknownOwner = Object.keys(legacyStorage.legacyPluginDataDirectories)
+    .find((owner) => !declaredOwners.has(owner));
+  if (unknownOwner) {
+    diagnostics.push(unknownLegacyOwnerDiagnostic(name, unknownOwner));
+    return undefined;
+  }
+  return { name, path: kitPath, startupPlugins, ...legacyStorage, permissions };
 }
 
 async function readKitPermissions(
@@ -244,15 +262,19 @@ async function readKitPermissions(
   }
 }
 
-function readLegacyDataDirectories(
+function readLegacyStorage(
   manifest: Record<string, unknown>,
   kitName: string,
   diagnostics: ApplicationDiagnostic[],
-): string[] | undefined {
+): Pick<KitStartupDeclaration, 'legacyDataDirectories' | 'legacyPluginDataDirectories'> | undefined {
   const harbors = manifest.harbors;
-  if (harbors === undefined) return [];
+  if (harbors === undefined) return { legacyDataDirectories: [], legacyPluginDataDirectories: {} };
   try {
-    return [...parseRepositoryKitPackage(harbors).legacyDataDirectories];
+    const storage = parseRepositoryKitPackage(harbors);
+    return {
+      legacyDataDirectories: [...storage.legacyDataDirectories],
+      legacyPluginDataDirectories: storage.legacyPluginDataDirectories,
+    };
   } catch (error) {
     diagnostics.push({
       code: 'INVALID_KIT_MANIFEST',
@@ -261,6 +283,22 @@ function readLegacyDataDirectories(
     });
     return undefined;
   }
+}
+
+function unknownLegacyOwnerDiagnostic(kitName: string, pluginName: string): ApplicationDiagnostic {
+  return {
+    code: 'INVALID_KIT_MANIFEST',
+    kit: kitName,
+    plugin: pluginName,
+    message: `Kit "${kitName}" grants legacy data to undeclared Plugin "${pluginName}"`,
+  };
+}
+
+function readOwnerLegacyDirectories(
+  directories: Readonly<Record<string, readonly string[]>>,
+  owner: string,
+): readonly string[] {
+  return Object.hasOwn(directories, owner) ? directories[owner] ?? [] : [];
 }
 
 function validateKitShell(kit: Record<string, unknown>): string | undefined {

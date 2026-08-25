@@ -42,7 +42,10 @@
     "ci": { "runner": "ubuntu-latest" },
     "docs": { "summary": "Harbors Harness AI Agent 工作台 Kit，提供对话、执行、模型服务、预览与调试能力" },
     "resources": [],
-    "storage": { "legacyDataDirectories": [] },
+    "storage": {
+      "legacyDataDirectories": [],
+      "legacyPluginDataDirectories": { "agent": ["pi-agent"] }
+    },
     "scripts": {
       "build": "build",
       "test": "test:kit",

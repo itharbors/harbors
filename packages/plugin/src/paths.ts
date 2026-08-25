@@ -74,7 +74,7 @@ export async function createPluginPaths({
 }: CreatePluginPathsOptions, fileSystem: PluginPathFileSystem = defaultFileSystem): Promise<PluginPaths> {
   try {
     const normalizedRoots = normalizeRoots(roots);
-    const ownerKey = encodeOwner(owner);
+    const ownerKey = pluginStorageOwnerKey(owner);
     if (new Set(legacyDataDirectories).size !== legacyDataDirectories.length) {
       throw new PluginStorageUnavailableError();
     }
@@ -148,7 +148,7 @@ function normalizeAbsolute(value: string): string {
   return path.resolve(value);
 }
 
-function encodeOwner(owner: string): string {
+export function pluginStorageOwnerKey(owner: string): string {
   if (typeof owner !== 'string' || owner.length === 0 || owner.includes('\0')) {
     throw new PluginStorageUnavailableError();
   }

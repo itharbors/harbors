@@ -66,7 +66,10 @@ const basePackageJson = {
     ci: { runner: 'ubuntu-latest' },
     docs: { summary: 'Zeta fixture' },
     resources: [],
-    storage: { legacyDataDirectories: [] },
+    storage: {
+      legacyDataDirectories: [],
+      legacyPluginDataDirectories: { '@example/plugin': ['legacy-plugin'] },
+    },
     scripts: { build: 'build', test: 'test:kit', smoke: 'smoke' },
   },
 };
@@ -88,6 +91,7 @@ test('discovers a temporary Kit without a static slug list', async () => {
         ciRunner: kit.ciRunner,
         summary: kit.summary,
         menuRoot: kit.menuRoot,
+        legacyPluginDataDirectories: kit.legacyPluginDataDirectories,
       },
       {
         slug: 'zeta',
@@ -97,8 +101,11 @@ test('discovers a temporary Kit without a static slug list', async () => {
         ciRunner: 'ubuntu-latest',
         summary: 'Zeta fixture',
         menuRoot: { id: 'zeta', label: 'Zeta' },
+        legacyPluginDataDirectories: { '@example/plugin': ['legacy-plugin'] },
       },
     );
+    assert.ok(Object.isFrozen(kit.legacyPluginDataDirectories));
+    assert.ok(Object.isFrozen(kit.legacyPluginDataDirectories['@example/plugin']));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

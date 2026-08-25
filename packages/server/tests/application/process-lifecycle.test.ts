@@ -26,7 +26,7 @@ describe('server process lifecycle', () => {
   it('wires the production entry to the server stop lifecycle', () => {
     const source = fs.readFileSync(path.resolve(import.meta.dirname, '../../src/index.ts'), 'utf8');
 
-    expect(source).toContain('startServerUntilShutdown(() => start(PORT), stop)');
+    expect(source).toContain('startServerUntilShutdown(() => start(START_CONFIG.port), stop)');
   });
 
   it('waits for shutdown cleanup when startup is cancelled by a signal', async () => {

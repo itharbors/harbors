@@ -139,6 +139,16 @@ OS 权限沙箱，也不把受信插件变成不受信代码。子进程仍以�
 并拥有该账号可访问的文件系统权限；`runtime.paths` 提供 owner 专属 data/cache/temp 路径，但不能
 替代操作系统访问控制。
 
+Web 宿主将这些路径稳定映射到 `~/.harbors/plugins/{data,cache,temp}/<owner-key>/`，开发与正式
+启动使用同一数据根，不以当前 checkout、worktree 或 `process.cwd()` 决定位置。`PluginInfo` 的
+`storageOwnerKey` 暴露同一个 SHA-256 owner key，供日志和诊断把哈希目录关联回 Plugin owner；它
+不是授权凭据，也不应参与业务访问控制。
+
+历史目录只能由 Kit 装配声明授权。Kit 可用 `harbors.storage.legacyPluginDataDirectories` 按 Plugin
+owner 指定目录，Framework 只把对应路径注入该 Plugin 的 `runtime.paths.legacyData`；Plugin 不能
+通过自己的 manifest 声明任意 home 目录。legacy 路径只用于非破坏迁移，新数据仍必须写入 owner
+专属 `data` 路径。
+
 child env 从 Framework 父环境的副本开始，然后只删除权威固定键 `HARBORS_APPLICATION_TOKEN`、
 `HARBORS_NOTIFICATION_PORT`、`HARBORS_NOTIFICATION_OWNER_TOKEN`、
 `HARBORS_CREDENTIAL_TRANSPORT_SECRET`，以及集成方显式提供的 `secretEnvironmentKeys`。这不是通用

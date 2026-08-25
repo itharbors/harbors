@@ -528,6 +528,30 @@ canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒
 运行，使用 Framework cwd，并拥有该账号的文件系统权限。新插件应优先使用
 `ctx.paths.data/cache/temp/legacyData`；这些 owner 专属路径和环境过滤都不是文件访问隔离。
 
+Web 宿主默认把 owner 专属路径放在
+`~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。开发与正式启动共享该根，Plugin 不应从
+`process.cwd()`、源码目录或 `homedir()` 自行推导持久数据位置。需要诊断磁盘目录归属时，可读取
+inspection 中的 `PluginInfo.storageOwnerKey`；该值只用于映射和日志，不是权限令牌。
+
+Kit 若要让某个 Plugin 导入改名前的用户数据，应在 Kit 的 `package.json` 按 owner 做最小授权：
+
+```json
+{
+  "harbors": {
+    "storage": {
+      "legacyDataDirectories": [],
+      "legacyPluginDataDirectories": {
+        "agent": ["pi-agent"]
+      }
+    }
+  }
+}
+```
+
+Framework 只会把 `pi-agent` 注入 `agent` 的 `ctx.paths.legacyData`，同一 Kit 的其他 Plugin 不会得到
+该路径。目录名必须是 canonical basename，映射键必须属于该 Kit 已声明的 Plugin；legacy source
+应只读、迁移应幂等且保留源数据，新数据继续写入 `ctx.paths.data`。
+
 child env 从 Framework 父环境的副本开始，然后删除权威固定 host secret 键和集成方显式提供的
 `secretEnvironmentKeys`。固定 Application token、Notification owner token 与 credential transport
 secret 不会进入插件 argv/env，但这不是通用 secret detector，也不是只传安全值的 allowlist：未登记

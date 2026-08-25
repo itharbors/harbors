@@ -164,6 +164,75 @@ test('存储路径只来自 runtime data，不读取历史环境变量目录', a
   }
 });
 
+test('owner legacy data 导入有效 active JSONL，忽略 trash 与损坏文件且保留源数据', async () => {
+  const runtimeData = await mkdtemp(join(tmpdir(), 'harbors-agent-import-runtime-'));
+  const legacyData = await mkdtemp(join(tmpdir(), 'harbors-agent-import-legacy-'));
+  const legacySessions = join(legacyData, 'sessions');
+  const trash = join(legacySessions, '.harbors-trash');
+  await mkdir(trash, { recursive: true });
+  const legacyId = '11111111-1111-4111-8111-111111111111';
+  const canonicalId = '22222222-2222-4222-8222-222222222222';
+  const mismatchId = '33333333-3333-4333-8333-333333333333';
+  const legacyRaw = `${JSON.stringify({ type: 'session', version: 0, id: legacyId, createdAt: 1, cwd: '/legacy' })}\n`;
+  const canonicalRaw = `${JSON.stringify(canonicalMeta(canonicalId))}\n`;
+  await writeFile(join(legacySessions, `${legacyId}.jsonl`), legacyRaw, 'utf8');
+  await writeFile(join(legacySessions, `${canonicalId}.jsonl`), canonicalRaw, 'utf8');
+  await writeFile(join(legacySessions, `${mismatchId}.jsonl`), `${JSON.stringify({ type: 'session', version: 0, id: legacyId, createdAt: 1 })}\n`, 'utf8');
+  await writeFile(join(legacySessions, '44444444-4444-4444-8444-444444444444.jsonl'), '{broken\n', 'utf8');
+  await writeFile(join(trash, '55555555-5555-4555-8555-555555555555.jsonl'), legacyRaw, 'utf8');
+  const adapter = new HarborsAdapter(modelService, runtimeData, [legacyData]);
+  try {
+    const conversations = await adapter.listConversations();
+    assert.deepEqual(conversations.map((conversation) => conversation.id).sort(), [legacyId, canonicalId].sort());
+    assert.equal(await readFile(sessionPath(runtimeData, legacyId), 'utf8'), legacyRaw);
+    assert.equal(await readFile(sessionPath(runtimeData, canonicalId), 'utf8'), canonicalRaw);
+    assert.equal(await readFile(join(legacySessions, `${legacyId}.jsonl`), 'utf8'), legacyRaw);
+    assert.equal((await readdir(join(runtimeData, 'storage-v1', 'sessions'))).some((name) => name.startsWith('55555555')), false);
+  } finally {
+    adapter.stop();
+    await rm(runtimeData, { recursive: true, force: true });
+    await rm(legacyData, { recursive: true, force: true });
+  }
+});
+
+test('legacy import 在 create 前完成，尊重目标与 tombstone，并可由两个实例幂等竞争', async () => {
+  const runtimeData = await mkdtemp(join(tmpdir(), 'harbors-agent-import-race-runtime-'));
+  const legacyData = await mkdtemp(join(tmpdir(), 'harbors-agent-import-race-legacy-'));
+  const legacySessions = join(legacyData, 'sessions');
+  await mkdir(legacySessions, { recursive: true });
+  await mkdir(join(runtimeData, 'storage-v1', 'sessions'), { recursive: true });
+  const importedId = '66666666-6666-4666-8666-666666666666';
+  const existingId = '77777777-7777-4777-8777-777777777777';
+  const deletedId = '88888888-8888-4888-8888-888888888888';
+  const rawFor = (id: string, cwd: string) => `${JSON.stringify({ type: 'session', version: 0, id, createdAt: 1, cwd })}\n`;
+  await writeFile(join(legacySessions, `${importedId}.jsonl`), rawFor(importedId, '/imported'), 'utf8');
+  await writeFile(join(legacySessions, `${existingId}.jsonl`), rawFor(existingId, '/legacy'), 'utf8');
+  await writeFile(join(legacySessions, `${deletedId}.jsonl`), rawFor(deletedId, '/deleted'), 'utf8');
+  const existingRaw = rawFor(existingId, '/target');
+  await writeFile(sessionPath(runtimeData, existingId), existingRaw, 'utf8');
+  await writeFile(join(runtimeData, 'storage-v1', 'sessions', `${deletedId}.deleted`), '{}', 'utf8');
+  const first = new HarborsAdapter(modelService, runtimeData, [legacyData]);
+  const second = new HarborsAdapter(modelService, runtimeData, [legacyData]);
+  try {
+    const [created, listed] = await Promise.all([
+      first.createConversation('/new'),
+      second.listConversations(),
+    ]);
+    assert.equal((await readdir(join(runtimeData, 'storage-v1', 'sessions'))).filter((name) => name === `${importedId}.jsonl`).length, 1);
+    assert.equal(await readFile(sessionPath(runtimeData, existingId), 'utf8'), existingRaw);
+    await assert.rejects(readFile(sessionPath(runtimeData, deletedId), 'utf8'), /ENOENT/);
+    const ids = new Set([created.id, ...listed.map((conversation) => conversation.id), ...(await first.listConversations()).map((conversation) => conversation.id)]);
+    assert.equal(ids.has(importedId), true);
+    assert.equal(ids.has(existingId), true);
+    assert.equal(ids.has(deletedId), false);
+  } finally {
+    first.stop();
+    second.stop();
+    await rm(runtimeData, { recursive: true, force: true });
+    await rm(legacyData, { recursive: true, force: true });
+  }
+});
+
 test('legacy v0 普通读取不改写 header 或原始事件', async () => {
   await withStorage(async (directory, adapter) => {
     const id = '55555555-5555-4555-8555-555555555555';

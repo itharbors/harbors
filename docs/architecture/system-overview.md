@@ -17,7 +17,9 @@ flowchart LR
     Panel -- "受控 runtime API" --> Gateway
 ```
 
-`pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程：Gateway 和 Server 监听源码变化，Client 由 Vite 提供 HMR。`pnpm start` 则在先完成构建后启动单个 Web Server，直接提供构建后的 Client 资产，默认监听 `48381`，从 `kits/default` 装配内置 Kit，并把运行数据写入 `.data/`；它不启动开发代理、源码监听或 HMR。
+`pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程：Gateway 和 Server 监听源码变化，Client 由 Vite 提供 HMR。`pnpm start` 则在先完成构建后启动单个 Web Server，直接提供构建后的 Client 资产，默认监听 `48381`，从 `kits/default` 装配内置 Kit；它不启动开发代理、源码监听或 HMR。两个入口都把正式运行数据写入 `~/.harbors/`，不以当前 cwd、checkout 或 worktree 推导数据根。
+
+默认布局为：Server 状态使用 `~/.harbors/harbors.db`，Kit 配置使用 `~/.harbors/config.sqlite`，Plugin owner 私有数据使用 `~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。启动前迁移会从项目 `.data/harbors.db`、`packages/server/.editor.db` 和旧 Plugin data 根只导入目标缺失的数据；已有目标记录优先，源文件不会自动删除。
 
 ## Workspace 职责
 

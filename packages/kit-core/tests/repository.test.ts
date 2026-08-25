@@ -37,11 +37,13 @@ describe('parseRepositoryKitPackage', () => {
       scripts: { build: 'build', test: 'test:kit', smoke: 'smoke' },
       resources: [],
       legacyDataDirectories: [],
+      legacyPluginDataDirectories: {},
     });
     expect(Object.isFrozen(metadata)).toBe(true);
     expect(Object.isFrozen(metadata.scripts)).toBe(true);
     expect(Object.isFrozen(metadata.resources)).toBe(true);
     expect(Object.isFrozen(metadata.legacyDataDirectories)).toBe(true);
+    expect(Object.isFrozen(metadata.legacyPluginDataDirectories)).toBe(true);
   });
 
   it('accepts a builtin distribution', () => {
@@ -86,11 +88,27 @@ describe('parseRepositoryKitPackage', () => {
     const metadata = parseRepositoryKitPackage({
       ...validHarbors,
       resources: ['plugins/demo/main/dist', 'resources/icon.png'],
-      storage: { legacyDataDirectories: ['agent-guard', 'scheduler'] },
+      storage: {
+        legacyDataDirectories: ['agent-guard', 'scheduler'],
+        legacyPluginDataDirectories: { agent: ['pi-agent'] },
+      },
     });
 
     expect(metadata.resources).toEqual(['plugins/demo/main/dist', 'resources/icon.png']);
     expect(metadata.legacyDataDirectories).toEqual(['agent-guard', 'scheduler']);
+    expect(metadata.legacyPluginDataDirectories).toEqual({ agent: ['pi-agent'] });
+    expect(Object.isFrozen(metadata.legacyPluginDataDirectories.agent)).toBe(true);
+  });
+
+  it('rejects invalid owner-scoped legacy data grants', () => {
+    expect(() => parseRepositoryKitPackage({
+      ...validHarbors,
+      storage: { legacyDataDirectories: [], legacyPluginDataDirectories: { '../agent': ['pi-agent'] } },
+    })).toThrow(/invalid Plugin owner/u);
+    expect(() => parseRepositoryKitPackage({
+      ...validHarbors,
+      storage: { legacyDataDirectories: [], legacyPluginDataDirectories: { agent: ['pi/agent'] } },
+    })).toThrow(/single canonical directory name/u);
   });
 
   it('rejects unknown harbors fields', () => {

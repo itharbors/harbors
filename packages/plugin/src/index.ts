@@ -25,13 +25,14 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withPluginDefinitionLock } from './load-lock.js';
-import { createPluginPaths, type PluginPaths } from './paths.js';
+import { createPluginPaths, pluginStorageOwnerKey, type PluginPaths } from './paths.js';
 import type { PluginCredentialVault } from './credentials.js';
 import { parsePluginPackageManifest } from './manifest.js';
 
 export { Plugin } from './plugin.js';
 export {
   createPluginPaths,
+  pluginStorageOwnerKey,
   PLUGIN_STORAGE_UNAVAILABLE,
   PluginStorageUnavailableError,
 } from './paths.js';
@@ -323,6 +324,7 @@ export class PluginModule {
       : undefined;
     return {
       name: manifest.name,
+      storageOwnerKey: pluginStorageOwnerKey(manifest.name),
       version: manifest.version,
       path: absPath,
       kind: registration.kind,

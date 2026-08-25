@@ -19,6 +19,7 @@ export interface RepositoryKitPackageMetadata {
   readonly scripts: RepositoryKitScripts;
   readonly resources: readonly string[];
   readonly legacyDataDirectories: readonly string[];
+  readonly legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface RepositoryKitDescriptor {
@@ -37,11 +38,13 @@ export interface RepositoryKitDescriptor {
   readonly scripts: RepositoryKitScripts;
   readonly resources: readonly string[];
   readonly legacyDataDirectories: readonly string[];
+  readonly legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
   readonly manifest: KitPackageManifest;
   readonly packageJson: Readonly<Record<string, unknown>>;
 }
 
 type UnknownRecord = Record<string, unknown>;
+const PLUGIN_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
 function record(value: unknown, context: string): UnknownRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -100,14 +103,10 @@ function parseResources(value: unknown): readonly string[] {
   return resources;
 }
 
-function parseLegacyDataDirectories(value: unknown): readonly string[] {
-  const input = record(value, 'harbors.storage');
-  exactKeys(input, ['legacyDataDirectories'], 'harbors.storage');
-  if (!Array.isArray(input.legacyDataDirectories)) {
-    throw new Error('harbors.storage.legacyDataDirectories must be an array');
-  }
-  const directories = input.legacyDataDirectories.map((directory, index) => {
-    const parsed = stringValue(directory, `harbors.storage.legacyDataDirectories[${index}]`);
+function parseLegacyDirectoryArray(value: unknown, context: string): readonly string[] {
+  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
+  const directories = value.map((directory, index) => {
+    const parsed = stringValue(directory, `${context}[${index}]`);
     if (
       parsed.includes('/')
       || parsed.includes('\\')
@@ -117,15 +116,41 @@ function parseLegacyDataDirectories(value: unknown): readonly string[] {
       || parsed.startsWith('/')
     ) {
       throw new Error(
-        `harbors.storage.legacyDataDirectories[${index}] must be a single canonical directory name`,
+        `${context}[${index}] must be a single canonical directory name`,
       );
     }
     return parsed;
   });
   if (new Set(directories).size !== directories.length) {
-    throw new Error('harbors.storage.legacyDataDirectories contains duplicate values');
+    throw new Error(`${context} contains duplicate values`);
   }
   return directories;
+}
+
+function parseStorage(value: unknown): {
+  legacyDataDirectories: readonly string[];
+  legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
+} {
+  const input = record(value, 'harbors.storage');
+  exactKeys(input, ['legacyDataDirectories', 'legacyPluginDataDirectories'], 'harbors.storage');
+  const legacyDataDirectories = input.legacyDataDirectories === undefined
+    ? []
+    : parseLegacyDirectoryArray(input.legacyDataDirectories, 'harbors.storage.legacyDataDirectories');
+  const pluginInput = input.legacyPluginDataDirectories === undefined
+    ? {}
+    : record(input.legacyPluginDataDirectories, 'harbors.storage.legacyPluginDataDirectories');
+  const legacyPluginDataDirectories = Object.freeze(Object.fromEntries(
+    Object.entries(pluginInput).map(([pluginName, directories]) => {
+      if (!PLUGIN_NAME_PATTERN.test(pluginName)) {
+        throw new Error('harbors.storage.legacyPluginDataDirectories contains invalid Plugin owner');
+      }
+      return [pluginName, Object.freeze(parseLegacyDirectoryArray(
+        directories,
+        `harbors.storage.legacyPluginDataDirectories.${pluginName}`,
+      ))];
+    }),
+  ));
+  return { legacyDataDirectories, legacyPluginDataDirectories };
 }
 
 function parseScripts(value: unknown): RepositoryKitScripts {
@@ -171,9 +196,9 @@ export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageM
   const summary = stringValue(docs.summary, 'harbors.docs.summary');
 
   const resources = input.resources === undefined ? [] : parseResources(input.resources);
-  const legacyDataDirectories = input.storage === undefined
-    ? []
-    : parseLegacyDataDirectories(input.storage);
+  const storage = input.storage === undefined
+    ? { legacyDataDirectories: [], legacyPluginDataDirectories: Object.freeze({}) }
+    : parseStorage(input.storage);
   const scripts = parseScripts(input.scripts);
 
   return Object.freeze({
@@ -183,6 +208,7 @@ export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageM
     summary,
     scripts: Object.freeze(scripts),
     resources: Object.freeze(resources),
-    legacyDataDirectories: Object.freeze(legacyDataDirectories),
+    legacyDataDirectories: Object.freeze(storage.legacyDataDirectories),
+    legacyPluginDataDirectories: storage.legacyPluginDataDirectories,
   });
 }

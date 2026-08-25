@@ -391,8 +391,10 @@ pnpm run clean
 - `plugins/*` 和 `kits/*/plugins/*` 的 main/panel `dist/`；
 - coverage、Vite/Vitest cache 和 `*.tsbuildinfo`。
 
-Server 开发入口默认把 SQLite 文件写到 Server workspace 的 `.editor.db`。该文件及
-`-shm`、`-wal` 是本地运行状态，不属于 clean 脚本的构建产物清单。
+Server 开发与正式入口默认共用 `~/.harbors/harbors.db`，Plugin 的 `data/cache/temp` 也统一位于
+`~/.harbors/plugins/`，不再在 Server workspace 生成运行数据。历史 `.data/harbors.db`、
+`packages/server/.editor.db` 和旧 Plugin data 会在启动前非破坏地导入，源文件不会由 clean 或迁移
+自动删除。`DB_PATH` 只覆盖 Server DB；Plugin 根需使用各自的显式绝对路径环境变量覆盖。
 
 ## 端口冲突
 

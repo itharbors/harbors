@@ -7,6 +7,7 @@ import {
   PluginModule,
   PluginStatus,
   createPluginPaths,
+  pluginStorageOwnerKey,
   type PluginPathRoots,
   type PluginRuntimeHost,
 } from '../src/index.js';
@@ -146,6 +147,7 @@ describe('@itharbors/magnet standalone runtime', () => {
     expect(module.getInfo('@example/plugin')).toBeUndefined();
     await expect(module.inspect(pluginDirectory)).resolves.toMatchObject({
       name: '@example/plugin',
+      storageOwnerKey: pluginStorageOwnerKey('@example/plugin'),
       version: '1.0.0',
     });
 

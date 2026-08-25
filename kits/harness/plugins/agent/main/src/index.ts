@@ -56,8 +56,14 @@ function requireAdapter(source: AgentSource): AgentAdapter {
   return adapters[source];
 }
 
-function createAdapters(modelService: ModelServiceClient, storageRoot: string): Record<AgentSource, AgentAdapter> {
-  const result: Record<AgentSource, AgentAdapter> = { harbors: new HarborsAdapter(modelService, storageRoot) };
+function createAdapters(
+  modelService: ModelServiceClient,
+  storageRoot: string,
+  legacyDataRoots: readonly string[] = [],
+): Record<AgentSource, AgentAdapter> {
+  const result: Record<AgentSource, AgentAdapter> = {
+    harbors: new HarborsAdapter(modelService, storageRoot, legacyDataRoots),
+  };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
     result[source].setTraceEventListener?.((adapterConversationId, event) => {
@@ -346,7 +352,7 @@ editor.plugin.define({
         webSearch: requestModelServiceWebSearch,
         onDelta: subscribeModelServiceDelta,
       };
-      adapters = createAdapters(modelService, runtime?.paths?.data);
+      adapters = createAdapters(modelService, runtime?.paths?.data, runtime?.paths?.legacyData ?? []);
       try {
         await refreshConversations();
       } catch (err) {
