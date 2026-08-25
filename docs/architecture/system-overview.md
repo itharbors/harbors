@@ -11,6 +11,7 @@ flowchart LR
     Gateway -- "页面资源" --> Client["Vite Client :49382"]
     Server --> AppRuntime["Application Runtime"]
     Server --> Sessions["Session Runtime"]
+    Server --> Identity["User / Device Authorization"]
     Server --> DB[("SQLite")]
     Client --> Panel["Panel iframe"]
     Client -- "HTTP + SSE" --> Gateway
@@ -51,6 +52,8 @@ flowchart TD
 ```
 
 每个 session 拥有独立 Editor。Kit、插件、布局、菜单与消息路由的权威状态在 Server；Client 只保存渲染所需快照和短暂交互状态。
+
+Server 同时持有 User、授权设备和 Session owner 的权威关系。所有携带基础或复合 runtime ID 的 HTTP/SSE 入口在访问 Editor 前经过同一 owner 策略；本地管理入口可查看用户与未分配 Session，远程设备只获得绑定用户的公开摘要。Client 的裸入口按“用户 → Session → Kit”选择，不再自行生成或默认认领 Session。
 
 ## 依赖方向
 

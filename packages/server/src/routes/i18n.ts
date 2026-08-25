@@ -5,10 +5,11 @@ import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isRecord } from '../http/validation';
 
-export function createI18nRouter(editorMap: Map<string, Editor>) {
+export function createI18nRouter(editorMap: Map<string, Editor>, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function i18nRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://localhost');
     const sessionId = url.searchParams.get('sessionId');
+    if (sessionId) assertAccess?.(req, sessionId);
     const editor = sessionId ? editorMap.get(sessionId) : undefined;
 
     if (!editor) {

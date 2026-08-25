@@ -85,6 +85,10 @@ export class BrowserRequestBroker {
     return this.pending.size;
   }
 
+  getPendingSessionId(requestId: string): string | undefined {
+    return this.pending.get(requestId)?.sessionId;
+  }
+
   destroy(): void {
     if (this.destroyed && this.pending.size === 0) return;
     this.destroyed = true;

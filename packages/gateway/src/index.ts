@@ -1,5 +1,4 @@
-import http from 'node:http';
-import { selectGatewayTarget } from './routing';
+import { createGatewayProxyServer } from './proxy';
 import {
   resolveGatewayCredentialMode,
   resolveGatewayUpstreamHost,
@@ -15,50 +14,11 @@ resolveGatewayCredentialMode(process.env);
 
 const UPSTREAM_HOST = resolveGatewayUpstreamHost(HOST);
 
-function proxy(req: http.IncomingMessage, res: http.ServerResponse, targetPort: number): void {
-  const forwardedFor = req.socket.remoteAddress ?? '';
-  const existingForwardedFor = req.headers['x-forwarded-for'];
-  const xForwardedFor = existingForwardedFor
-    ? `${existingForwardedFor}, ${forwardedFor}`
-    : forwardedFor;
-
-  const headers = Object.fromEntries(
-    Object.entries(req.headers).filter(([k]) => k !== 'host'),
-  );
-  headers['x-forwarded-for'] = xForwardedFor;
-
-  const options: http.RequestOptions = {
-    hostname: UPSTREAM_HOST,
-    port: targetPort,
-    path: req.url,
-    method: req.method,
-    headers,
-  };
-
-  const proxyReq = http.request(options, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
-    proxyRes.pipe(res);
-  });
-
-  proxyReq.on('error', (err) => {
-    console.error(`Proxy error to :${targetPort}:`, err.message);
-    if (!res.headersSent) {
-      res.statusCode = 502;
-      res.end('Bad Gateway');
-    }
-  });
-
-  req.pipe(proxyReq);
-}
-
-const server = http.createServer((req, res) => {
-  const url = req.url || '/';
-
-  if (selectGatewayTarget(url, IS_PROD) === 'server') {
-    proxy(req, res, SERVER_PORT);
-  } else {
-    proxy(req, res, CLIENT_PORT);
-  }
+const server = createGatewayProxyServer({
+  serverPort: SERVER_PORT,
+  clientPort: CLIENT_PORT,
+  isProduction: IS_PROD,
+  upstreamHost: UPSTREAM_HOST,
 });
 
 server.listen(PORT, HOST, () => {

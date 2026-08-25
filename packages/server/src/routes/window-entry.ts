@@ -4,7 +4,7 @@ import path from 'node:path';
 import type { Editor } from '../editor/types';
 import { HttpError } from '../http/errors';
 
-export function createWindowEntryRouter(editorMap: Map<string, Editor>) {
+export function createWindowEntryRouter(editorMap: Map<string, Editor>, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function windowEntryRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://localhost');
     const match = url.pathname.match(/^\/api\/window-entry\/(main|secondary)$/);
@@ -14,6 +14,7 @@ export function createWindowEntryRouter(editorMap: Map<string, Editor>) {
     }
 
     const sessionId = url.searchParams.get('sessionId') || url.searchParams.get('session') || '';
+    if (sessionId) assertAccess?.(req, sessionId);
     const editor = editorMap.get(sessionId);
     const kit = editor?.kit.getCurrent();
     if (!editor || !kit) {

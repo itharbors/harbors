@@ -5,13 +5,14 @@ import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isRecord } from '../http/validation';
 
-export function createMenuTriggerRouter(editorMap: Map<string, Editor>) {
+export function createMenuTriggerRouter(editorMap: Map<string, Editor>, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function menuTriggerRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
     }
 
     const body = await readJson(req, isMenuTriggerInput);
+    assertAccess?.(req, body.sessionId);
 
     const editor = editorMap.get(body.sessionId);
     if (!editor) {

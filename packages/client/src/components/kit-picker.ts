@@ -1,4 +1,8 @@
-import type { PublicKitCatalogEntry } from '@itharbors/plugin-types';
+import type {
+  PublicKitCatalogEntry,
+  PublicSessionSummary,
+  WorkbenchContext,
+} from '@itharbors/plugin-types';
 import '../styles/kit-picker.css';
 
 interface PendingDevice {
@@ -6,17 +10,33 @@ interface PendingDevice {
   ip: string;
   userAgent: string;
   requestedAt: number;
+  displayName: string;
 }
 
 interface AuthorizedDevice {
   deviceId: string;
+  userId: string;
   createdAt: number;
   expiresAt: number;
   lastSeenAt: number;
+  user?: { userId: string; displayName: string };
 }
 
-export function renderKitPicker(host: HTMLElement, kits: PublicKitCatalogEntry[], sessionId: string): void {
-  host.replaceChildren(createPickerShell(kits, sessionId));
+export interface KitPickerOptions {
+  context: WorkbenchContext;
+  selectedSessionId: string | null;
+  onSessionSelected(sessionId: string): void;
+  onSessionCleared(): void;
+  onContextChanged(): void;
+}
+
+export function renderKitPicker(
+  host: HTMLElement,
+  kits: PublicKitCatalogEntry[],
+  input: string | KitPickerOptions,
+): void {
+  const options = typeof input === 'string' ? legacyOptions(input) : input;
+  host.replaceChildren(createPickerShell(kits, options));
 }
 
 export function renderKitPickerLoading(host: HTMLElement): void {
@@ -50,7 +70,7 @@ export function renderKitPickerError(host: HTMLElement, retry: () => void): void
   host.replaceChildren(alert);
 }
 
-function createPickerShell(kits: PublicKitCatalogEntry[], sessionId: string): HTMLElement {
+function createPickerShell(kits: PublicKitCatalogEntry[], options: KitPickerOptions): HTMLElement {
   const shell = element('div', 'kit-picker-shell');
 
   const tabs = element('nav', 'kit-tabs');
@@ -67,7 +87,7 @@ function createPickerShell(kits: PublicKitCatalogEntry[], sessionId: string): HT
 
   const workbenchPanel = element('div', 'kit-tab-panel');
   workbenchPanel.setAttribute('role', 'tabpanel');
-  workbenchPanel.append(createWorkbenchView(kits, sessionId));
+  workbenchPanel.append(createWorkbenchView(kits, options));
 
   const authPanel = element('div', 'kit-tab-panel');
   authPanel.setAttribute('role', 'tabpanel');
@@ -97,7 +117,7 @@ function createPickerShell(kits: PublicKitCatalogEntry[], sessionId: string): HT
   return shell;
 }
 
-function createWorkbenchView(kits: PublicKitCatalogEntry[], sessionId: string): HTMLElement {
+function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOptions): HTMLElement {
   const main = element('main', 'kit-picker-body');
   main.setAttribute('aria-labelledby', 'kit-picker-title');
 
@@ -122,6 +142,147 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], sessionId: string): 
     element('p', 'kit-picker-lede', '每个工作台使用独立会话。选择一个 Kit，在当前浏览器中开始工作。'),
   );
 
+  const contextTrack = element('section', 'workbench-context-track');
+  contextTrack.setAttribute('aria-label', '用户与 Session');
+  const status = element('p', 'workbench-context-status');
+  status.setAttribute('aria-live', 'polite');
+  const userField = element('label', 'workbench-context-field');
+  userField.append(element('span', 'workbench-context-label', '用户'));
+  const userSelect = element('select', 'workbench-context-select');
+  const users = options.context.users;
+  for (const user of users) {
+    const option = element('option', '', user.displayName);
+    option.value = user.userId;
+    userSelect.append(option);
+  }
+  const initialOwner = options.context.currentUser?.userId
+    ?? options.context.sessions.find((session) => session.sessionId === options.selectedSessionId)?.ownerUserId
+    ?? users[0]?.userId
+    ?? '';
+  userSelect.value = initialOwner;
+  userSelect.disabled = options.context.actor === 'user';
+  userField.append(userSelect);
+
+  const sessionField = element('label', 'workbench-context-field');
+  sessionField.append(element('span', 'workbench-context-label', 'Session'));
+  const sessionSelect = element('select', 'workbench-context-select');
+  sessionField.append(sessionSelect);
+  const createSession = element('button', 'workbench-context-action', '＋ 新建 Session');
+  createSession.type = 'button';
+  const createUser = element('button', 'workbench-context-action', '＋ 创建用户');
+  createUser.type = 'button';
+  createUser.hidden = options.context.actor !== 'local-admin';
+  const renameUser = element('button', 'workbench-context-action', '重命名用户');
+  renameUser.type = 'button';
+  renameUser.hidden = options.context.actor !== 'local-admin';
+  const claim = element('button', 'workbench-context-action', '归属未分配 Session');
+  claim.type = 'button';
+  claim.hidden = options.context.actor !== 'local-admin' || options.context.ownerlessSessions.length === 0;
+  const ownerlessSelect = element('select', 'workbench-context-select workbench-ownerless-select');
+  ownerlessSelect.setAttribute('aria-label', '未分配 Session');
+  ownerlessSelect.hidden = claim.hidden;
+  for (const session of options.context.ownerlessSessions) {
+    const option = element('option', '', `${shortId(session.sessionId)} · ${formatTime(session.lastAccessAt)}`);
+    option.value = session.sessionId;
+    ownerlessSelect.append(option);
+  }
+
+  const updateLinks = (sessionId: string | null) => {
+    for (const link of main.querySelectorAll<HTMLAnchorElement>('.kit-link')) {
+      const kitId = link.dataset.kitId ?? '';
+      if (sessionId) {
+        link.href = `/kits/${encodeURIComponent(kitId)}?session=${encodeURIComponent(sessionId)}`;
+        link.removeAttribute('aria-disabled');
+        link.tabIndex = 0;
+      } else {
+        link.removeAttribute('href');
+        link.setAttribute('aria-disabled', 'true');
+        link.tabIndex = -1;
+      }
+    }
+  };
+  const refreshSessions = () => {
+    const owned = options.context.sessions.filter((session) => session.ownerUserId === userSelect.value);
+    sessionSelect.replaceChildren();
+    const placeholder = element('option', '', owned.length ? '选择 Session' : '暂无 Session，请新建');
+    placeholder.value = '';
+    sessionSelect.append(placeholder);
+    for (const session of owned) {
+      const option = element('option', '', `${shortId(session.sessionId)} · ${formatTime(session.lastAccessAt)}`);
+      option.value = session.sessionId;
+      sessionSelect.append(option);
+    }
+    const selected = owned.some((session) => session.sessionId === options.selectedSessionId)
+      ? options.selectedSessionId
+      : null;
+    sessionSelect.value = selected ?? '';
+    updateLinks(selected);
+  };
+  userSelect.addEventListener('change', () => {
+    options.selectedSessionId = null;
+    options.onSessionCleared();
+    refreshSessions();
+    status.textContent = '已切换用户，请选择或新建 Session。';
+  });
+  sessionSelect.addEventListener('change', () => {
+    const selected = sessionSelect.value || null;
+    options.selectedSessionId = selected;
+    updateLinks(selected);
+    if (selected) options.onSessionSelected(selected);
+  });
+  createSession.addEventListener('click', async () => {
+    if (!userSelect.value) {
+      status.textContent = '请先创建或选择用户。';
+      return;
+    }
+    createSession.disabled = true;
+    try {
+      const response = await fetch('/api/workbench/session', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ userId: userSelect.value }),
+      });
+      if (!response.ok) throw new Error(String(response.status));
+      const session = await response.json() as PublicSessionSummary;
+      options.onSessionSelected(session.sessionId);
+      options.onContextChanged();
+    } catch {
+      status.textContent = '无法新建 Session，请重试。';
+    } finally {
+      createSession.disabled = false;
+    }
+  });
+  createUser.addEventListener('click', async () => {
+    const displayName = window.prompt('输入用户显示名')?.trim();
+    if (!displayName) return;
+    const response = await fetch('/api/workbench/user', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName }),
+    });
+    if (response.ok) options.onContextChanged();
+    else status.textContent = '无法创建用户，请重试。';
+  });
+  renameUser.addEventListener('click', async () => {
+    const current = users.find((user) => user.userId === userSelect.value);
+    if (!current) return;
+    const displayName = window.prompt('修改用户显示名', current.displayName)?.trim();
+    if (!displayName) return;
+    const response = await fetch(`/api/workbench/user/${encodeURIComponent(current.userId)}`, {
+      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName }),
+    });
+    if (response.ok) options.onContextChanged();
+    else status.textContent = '无法修改显示名，请重试。';
+  });
+  claim.addEventListener('click', async () => {
+    const target = options.context.ownerlessSessions.find((session) => session.sessionId === ownerlessSelect.value);
+    if (!target || !userSelect.value || !window.confirm(`将 Session ${shortId(target.sessionId)} 归属给当前用户？此操作不能撤销。`)) return;
+    const response = await fetch(`/api/workbench/session/${encodeURIComponent(target.sessionId)}/claim`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: userSelect.value }),
+    });
+    if (response.ok) options.onContextChanged();
+    else status.textContent = '无法归属 Session，它可能已被处理。';
+  });
+  contextTrack.append(userField, sessionField, createSession, createUser, renameUser, ownerlessSelect, claim, status);
+
   const berth = element('section', 'kit-berth');
   berth.setAttribute('aria-label', '可用 Kit');
   const berthHeader = element('div', 'kit-berth-heading');
@@ -141,7 +302,7 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], sessionId: string): 
   } else {
     const list = element('ul', 'kit-list');
     list.setAttribute('role', 'list');
-    for (const kit of kits) list.append(createKitItem(kit, sessionId));
+    for (const kit of kits) list.append(createKitItem(kit, options.selectedSessionId ?? ''));
     berth.append(list);
   }
 
@@ -151,7 +312,8 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], sessionId: string): 
     element('span', '', 'ITHARBORS WORKBENCH'),
   );
 
-  main.append(masthead, intro, berth, footer);
+  main.append(masthead, intro, contextTrack, berth, footer);
+  refreshSessions();
   return main;
 }
 
@@ -182,6 +344,23 @@ function createKitItem(kit: PublicKitCatalogEntry, sessionId: string): HTMLLIEle
   return item;
 }
 
+function legacyOptions(sessionId: string): KitPickerOptions {
+  const now = Date.now();
+  return {
+    context: {
+      actor: 'local-admin',
+      currentUser: null,
+      users: [{ userId: 'legacy-user', displayName: '当前用户', createdAt: now, updatedAt: now }],
+      sessions: [{ sessionId, ownerUserId: 'legacy-user', createdAt: now, lastAccessAt: now }],
+      ownerlessSessions: [],
+    },
+    selectedSessionId: sessionId,
+    onSessionSelected: () => undefined,
+    onSessionCleared: () => undefined,
+    onContextChanged: () => undefined,
+  };
+}
+
 function createAuthView(): HTMLElement {
   const container = element('div', 'auth-view');
   container.append(
@@ -202,8 +381,8 @@ async function refreshAuthView(container: HTMLElement): Promise<void> {
   authorizedList.replaceChildren(element('div', 'auth-loading', '加载中…'));
 
   try {
-    const [pending, authorized] = await Promise.all([fetchPending(), fetchAuthorized()]);
-    renderPendingList(pendingList, pending);
+    const [pending, authorized, context] = await Promise.all([fetchPending(), fetchAuthorized(), fetchWorkbenchContext()]);
+    renderPendingList(pendingList, pending, context.users);
     renderAuthorizedList(authorizedList, authorized);
   } catch {
     pendingList.replaceChildren(element('div', 'auth-error', '无法加载待授权列表'));
@@ -211,14 +390,14 @@ async function refreshAuthView(container: HTMLElement): Promise<void> {
   }
 }
 
-function renderPendingList(host: HTMLElement, devices: PendingDevice[]): void {
+function renderPendingList(host: HTMLElement, devices: PendingDevice[], users: WorkbenchContext['users']): void {
   if (devices.length === 0) {
     host.replaceChildren(element('div', 'auth-empty', '暂无待授权请求'));
     return;
   }
   const list = element('ul', 'auth-device-list');
   for (const device of devices) {
-    list.append(createPendingItem(device, () => void refreshAuthView(host.closest('.auth-view') ?? host)));
+    list.append(createPendingItem(device, users, () => void refreshAuthView(host.closest('.auth-view') ?? host)));
   }
   host.replaceChildren(list);
 }
@@ -235,20 +414,36 @@ function renderAuthorizedList(host: HTMLElement, devices: AuthorizedDevice[]): v
   host.replaceChildren(list);
 }
 
-function createPendingItem(device: PendingDevice, onChanged: () => void): HTMLLIElement {
+function createPendingItem(device: PendingDevice, users: WorkbenchContext['users'], onChanged: () => void): HTMLLIElement {
   const item = element('li', 'auth-device-item');
   const info = element('div', 'auth-device-info');
   info.append(
     element('div', 'auth-device-id', shortId(device.deviceId)),
+    element('div', 'auth-device-meta', `申请名称: ${device.displayName || '未填写'}`),
     element('div', 'auth-device-meta', `IP: ${device.ip || '未知'}`),
     element('div', 'auth-device-meta', `UA: ${device.userAgent || '未知'}`),
     element('div', 'auth-device-meta', `请求时间: ${formatTime(device.requestedAt)}`),
   );
   const actions = element('div', 'auth-device-actions');
+  const userSelect = element('select', 'auth-user-select');
+  const createOption = element('option', '', `新建用户：${device.displayName || '远程用户'}`);
+  createOption.value = '';
+  userSelect.append(createOption);
+  for (const user of users) {
+    const option = element('option', '', `绑定已有用户：${user.displayName}`);
+    option.value = user.userId;
+    userSelect.append(option);
+  }
   const approveBtn = element('button', 'auth-btn auth-btn-approve', '授权');
   approveBtn.addEventListener('click', async () => {
     try {
-      await fetch(`/api/auth/approve/${encodeURIComponent(device.deviceId)}`, { method: 'POST' });
+      await fetch(`/api/auth/approve/${encodeURIComponent(device.deviceId)}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(userSelect.value
+          ? { userId: userSelect.value }
+          : { displayName: device.displayName || '远程用户' }),
+      });
       onChanged();
     } catch {
       // ignore
@@ -263,7 +458,7 @@ function createPendingItem(device: PendingDevice, onChanged: () => void): HTMLLI
       // ignore
     }
   });
-  actions.append(approveBtn, rejectBtn);
+  actions.append(userSelect, approveBtn, rejectBtn);
   item.append(info, actions);
   return item;
 }
@@ -274,6 +469,7 @@ function createAuthorizedItem(device: AuthorizedDevice, onChanged: () => void): 
   const expiresIn = Math.max(0, Math.floor((device.expiresAt - Date.now()) / (1000 * 60 * 60 * 24)));
   info.append(
     element('div', 'auth-device-id', shortId(device.deviceId)),
+    element('div', 'auth-device-meta', `用户: ${device.user?.displayName || shortId(device.userId)}`),
     element('div', 'auth-device-meta', `授权时间: ${formatTime(device.createdAt)}`),
     element('div', 'auth-device-meta', `到期时间: ${formatTime(device.expiresAt)}（${expiresIn} 天后）`),
     element('div', 'auth-device-meta', `最后活跃: ${formatTime(device.lastSeenAt)}`),
@@ -314,6 +510,12 @@ async function fetchAuthorized(): Promise<AuthorizedDevice[]> {
   if (!resp.ok) throw new Error(`Failed to fetch authorized: ${resp.status}`);
   const data = await resp.json() as { authorized?: AuthorizedDevice[] };
   return data.authorized ?? [];
+}
+
+async function fetchWorkbenchContext(): Promise<WorkbenchContext> {
+  const response = await fetch('/api/workbench/context', { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Failed to fetch workbench context: ${response.status}`);
+  return response.json() as Promise<WorkbenchContext>;
 }
 
 function shortId(id: string): string {

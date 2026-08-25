@@ -19,6 +19,7 @@ import { CredentialStore } from './credentials/store.js';
 import { SessionStore } from './session/store.js';
 
 const DATABASE_TABLES = [
+  'users',
   'authorized_devices',
   'credential_profiles',
   'credential_secret_cleanup',
@@ -35,6 +36,8 @@ export interface ApplicationDataMigrationOptions {
   pluginDataRoot: string;
   legacyPluginDataRoots: readonly string[];
   logger?: Pick<Console, 'info' | 'warn'>;
+  /** @internal Deterministic publication hook used only by migration race tests. */
+  beforeTargetPublish?: () => void | Promise<void>;
 }
 
 export interface MigrationCounters {
@@ -69,7 +72,12 @@ export async function migrateApplicationData(
   await ensurePrivateDirectory(options.applicationDataDir);
   const lockPath = path.join(options.applicationDataDir, '.application-data-migration-v1.lock');
   return withMigrationLock(lockPath, async () => {
-    const database = await migrateDatabases(options.dbPath, options.legacyDbPaths, options.applicationDataDir);
+    const database = await migrateDatabases(
+      options.dbPath,
+      options.legacyDbPaths,
+      options.applicationDataDir,
+      options.beforeTargetPublish,
+    );
     const plugins = await migratePluginData(
       options.applicationDataDir,
       options.pluginDataRoot,
@@ -86,6 +94,7 @@ async function migrateDatabases(
   targetPath: string,
   legacyPaths: readonly string[],
   temporaryRoot: string,
+  beforeTargetPublish?: () => void | Promise<void>,
 ): Promise<MigrationCounters> {
   const counters = emptyCounters();
   const snapshots: Snapshot[] = [];
@@ -115,20 +124,30 @@ async function migrateDatabases(
     await ensurePrivateDirectory(path.dirname(targetPath));
 
     let mergeIntoExistingTarget = await inspectRegularFile(targetPath);
+    await preflightDatabaseSchemas(
+      mergeIntoExistingTarget ? targetPath : undefined,
+      snapshots,
+      temporaryRoot,
+    );
     if (!mergeIntoExistingTarget) {
       const temporaryTarget = path.join(path.dirname(targetPath), `.harbors-db-${process.pid}-${randomUUID()}.tmp`);
       const stagedCounters = emptyCounters();
       try {
         createCurrentDatabaseSchema(temporaryTarget);
         await mergeSnapshots(temporaryTarget, snapshots, stagedCounters);
+        createCurrentDatabaseSchema(temporaryTarget);
         await validateAndSyncDatabase(temporaryTarget);
         try {
+          await beforeTargetPublish?.();
           await link(temporaryTarget, targetPath);
           await syncDirectory(path.dirname(targetPath));
           addCounters(counters, stagedCounters);
         } catch (error) {
           if (!isNodeError(error, 'EEXIST')) throw error;
           mergeIntoExistingTarget = true;
+          // The target appeared after the initial preflight. Validate the
+          // actual competing file before any schema upgrade or merge write.
+          await preflightDatabaseSchemas(targetPath, snapshots, temporaryRoot);
         }
       } finally {
         await removeDatabaseArtifacts(temporaryTarget);
@@ -136,11 +155,59 @@ async function migrateDatabases(
     }
 
     if (!(await inspectRegularFile(targetPath))) throw new Error('APPLICATION_DATABASE_TARGET_INVALID');
-    if (mergeIntoExistingTarget) await mergeSnapshots(targetPath, snapshots, counters);
+    if (mergeIntoExistingTarget) {
+      // Upgrade the target first so a current identity-bearing source can be
+      // merged into an older, otherwise valid application database.
+      createCurrentDatabaseSchema(targetPath);
+      await mergeSnapshots(targetPath, snapshots, counters);
+    }
+    createCurrentDatabaseSchema(targetPath);
     await validateAndSyncDatabase(targetPath);
     return counters;
   } finally {
     await Promise.all(snapshots.map((snapshot) => unlink(snapshot.path).catch(() => undefined)));
+  }
+}
+
+async function preflightDatabaseSchemas(
+  targetPath: string | undefined,
+  snapshots: readonly Snapshot[],
+  temporaryRoot: string,
+): Promise<void> {
+  const referencePath = path.join(
+    temporaryRoot,
+    `.current-schema-${process.pid}-${randomUUID()}.sqlite`,
+  );
+  try {
+    createCurrentDatabaseSchema(referencePath);
+    const reference = new Database(referencePath, { readonly: true, fileMustExist: true });
+    try {
+      const candidates = [
+        ...(targetPath ? [{ path: targetPath, label: 'target database' }] : []),
+        ...snapshots.map((snapshot) => ({ path: snapshot.path, label: 'legacy snapshot' })),
+      ];
+      for (const candidate of candidates) {
+        const database = new Database(candidate.path, { readonly: true, fileMustExist: true });
+        try {
+          assertDatabaseIntegrity(database, candidate.label);
+          for (const table of DATABASE_TABLES) {
+            const columns = tableColumns(database, table);
+            if (columns.length === 0) continue;
+            const currentColumns = tableColumns(reference, table);
+            if (!sameSchema(columns, currentColumns)
+              && !isApprovedIdentitySchemaUpgrade(table, columns, currentColumns)) {
+              throw new Error(`APPLICATION_DATABASE_SCHEMA_MISMATCH:${table}`);
+            }
+          }
+        } finally {
+          database.close();
+        }
+      }
+    } finally {
+      reference.close();
+    }
+  } finally {
+    await removeDatabaseArtifacts(referencePath);
   }
 }
 
@@ -181,7 +248,10 @@ function mergeDatabase(
     const sourceColumns = tableColumns(source, table);
     if (sourceColumns.length === 0) continue;
     const targetColumns = tableColumns(target, table);
-    if (!sameSchema(sourceColumns, targetColumns)) throw new Error(`APPLICATION_DATABASE_SCHEMA_MISMATCH:${table}`);
+    if (!sameSchema(sourceColumns, targetColumns)
+      && !isApprovedIdentitySchemaUpgrade(table, sourceColumns, targetColumns)) {
+      throw new Error(`APPLICATION_DATABASE_SCHEMA_MISMATCH:${table}`);
+    }
     const primary = sourceColumns.filter((column) => column.pk > 0).sort((left, right) => left.pk - right.pk);
     if (primary.length === 0) throw new Error(`APPLICATION_DATABASE_PRIMARY_KEY_MISSING:${table}`);
     const names = sourceColumns.map((column) => column.name);
@@ -219,6 +289,25 @@ function sameSchema(left: readonly ColumnInfo[], right: readonly ColumnInfo[]): 
       && column.pk === candidate.pk
       && String(column.dflt_value) === String(candidate.dflt_value);
   });
+}
+
+function isApprovedIdentitySchemaUpgrade(
+  table: string,
+  source: readonly ColumnInfo[],
+  target: readonly ColumnInfo[],
+): boolean {
+  const approvedColumn = table === 'authorized_devices'
+    ? 'userId'
+    : table === 'sessions'
+      ? 'ownerUserId'
+      : undefined;
+  if (!approvedColumn || target.length !== source.length + 1) return false;
+  const added = target.find((column) => column.name === approvedColumn);
+  if (!added || added.type !== 'TEXT' || added.notnull !== 0 || added.pk !== 0 || added.dflt_value !== null) {
+    return false;
+  }
+  const projected = target.filter((column) => column.name !== approvedColumn);
+  return sameSchema(source, projected);
 }
 
 function createCurrentDatabaseSchema(databasePath: string): void {

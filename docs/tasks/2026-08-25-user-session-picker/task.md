@@ -19,9 +19,11 @@ Type: `feature`
 ## 范围
 
 - `packages/server` 中用户身份、设备授权绑定、Session owner、用户/Session 查询与创建 API，以及相应持久化和测试。
+- `packages/gateway` 中可信原始客户端地址的代理边界，确保唯一 Web Host 经 Gateway 访问时不会把远程请求提升为本地管理员。
 - `packages/plugin-types` 中 Client 可见的最小用户与 Session 摘要协议。
 - `packages/client` 中远程设备申请授权时的显示名输入、授权管理中的用户绑定，以及工作台入口的用户/Session 选择、加载、错误和空状态。
 - 当前正式 Session/授权架构文档及本 Task 档案。
+- 为完成唯一 Web Host 浏览器验收而必需的隔离 Web Host 测试辅助修正。
 - 对既有授权设备与无 owner Session 的非破坏兼容策略；旧记录不得因 schema 升级被删除。
 
 ## 非目标
@@ -82,3 +84,5 @@ Type: `feature`
 
 - 初始讨论从 Session 是否隔离项目开始，逐步收敛为 `User 1:N Session`。
 - 用户最终通过当前工作台页面批注确认：在该入口增加用户 / Session 选择；选择用户后可继续已有 Session 或重新分配一个 Session。本 Task 以该最终入口行为为准，不继续扩展 Project 或实时协作范围。
+- consolidation 反向检索发现开发 Gateway 会让 Server 只看到 loopback 上游地址，远程请求可能被误判为本地管理员；该问题直接破坏本 Task 的 owner 安全边界，因此扩围到 Gateway 原始客户端地址传递与真实代理链路测试。
+- 浏览器验收发现隔离 Web Host helper 的插件存储根不满足安全目录拓扑，无法启动 Kit runtime；为满足完整入口验收，允许对该测试辅助做最小修正并增加回归覆盖。

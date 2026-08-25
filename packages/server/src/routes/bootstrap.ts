@@ -4,7 +4,7 @@ import { sendJson } from './utils';
 import { HttpError } from '../http/errors';
 import { PROTOCOL_VERSION, type BootstrapInfo } from '@itharbors/plugin-types';
 
-export function createBootstrapRouter(editorMap: Map<string, Editor>) {
+export function createBootstrapRouter(editorMap: Map<string, Editor>, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function bootstrapRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://localhost');
     const match = url.pathname.match(/^\/api\/bootstrap\/(.+)$/);
@@ -14,6 +14,7 @@ export function createBootstrapRouter(editorMap: Map<string, Editor>) {
     }
 
     const sessionId = decodeURIComponent(match[1]);
+    assertAccess?.(req, sessionId);
     const editor = editorMap.get(sessionId);
     if (!editor) {
       throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');

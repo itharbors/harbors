@@ -117,6 +117,61 @@
   line-height: 1.75;
 }
 
+.workbench-context-track {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(180px, .8fr) minmax(240px, 1.2fr) auto auto;
+  gap: 12px;
+  align-items: end;
+  margin: 28px 0 8px;
+  padding: 18px;
+  border: 1px solid rgb(169 199 247 / 16%);
+  border-radius: 14px;
+  background: rgb(24 34 49 / 72%);
+}
+
+.workbench-context-field { display: grid; gap: 7px; }
+.workbench-context-label {
+  color: var(--kit-steel);
+  font: 10px/1 "SFMono-Regular", Consolas, monospace;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}
+.workbench-context-select,
+.auth-user-select,
+.auth-waiting-name {
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid rgb(169 199 247 / 24%);
+  border-radius: 9px;
+  color: var(--kit-mist);
+  background: #111722;
+}
+.workbench-context-action {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid rgb(91 141 239 / 42%);
+  border-radius: 9px;
+  color: var(--kit-signal-ice);
+  background: rgb(91 141 239 / 10%);
+  cursor: pointer;
+}
+.workbench-context-status {
+  grid-column: 1 / -1;
+  min-height: 1.2em;
+  margin: 0;
+  color: var(--kit-steel);
+  font-size: 12px;
+}
+.workbench-context-select:focus-visible,
+.workbench-context-action:focus-visible,
+.auth-user-select:focus-visible,
+.auth-waiting-name:focus-visible {
+  outline: 2px solid var(--kit-signal-ice);
+  outline-offset: 2px;
+}
+.kit-link[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+
 .kit-berth {
   position: relative;
   align-self: center;
@@ -335,6 +390,8 @@
   .kit-symbol { width: 42px; height: 42px; }
   .kit-open { grid-column: 2; }
   .kit-host-mode { display: none; }
+  .workbench-context-track { grid-template-columns: 1fr; }
+  .workbench-context-status { grid-column: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {

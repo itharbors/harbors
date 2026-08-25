@@ -6,12 +6,13 @@ export interface Session {
   savedFileList: string[];
   createdAt: number;
   lastAccessAt: number;
+  ownerUserId: string | null;
 }
 
 export class SessionManager {
   constructor(private store: SessionStore) {}
 
-  getOrCreate(sessionId: string, workspacePath = ''): Session {
+  getOrCreate(sessionId: string, workspacePath = '', ownerUserId: string | null = null): Session {
     const existing = this.store.get(sessionId);
     if (existing) {
       const now = Date.now();
@@ -26,6 +27,7 @@ export class SessionManager {
       savedFileList: '[]',
       createdAt: now,
       lastAccessAt: now,
+      ownerUserId,
     };
     this.store.upsert(row);
     return rowToSession(row);
@@ -40,6 +42,14 @@ export class SessionManager {
   destroy(sessionId: string): void {
     this.store.delete(sessionId);
   }
+
+  list(ownerUserId?: string | null): Session[] {
+    return this.store.list(ownerUserId).map(rowToSession);
+  }
+
+  claim(sessionId: string, ownerUserId: string): boolean {
+    return this.store.claim(sessionId, ownerUserId);
+  }
 }
 
 function rowToSession(row: SessionRow): Session {
@@ -49,5 +59,6 @@ function rowToSession(row: SessionRow): Session {
     savedFileList: JSON.parse(row.savedFileList),
     createdAt: row.createdAt,
     lastAccessAt: row.lastAccessAt,
+    ownerUserId: row.ownerUserId ?? null,
   };
 }

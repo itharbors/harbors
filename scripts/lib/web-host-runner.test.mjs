@@ -1,8 +1,22 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import path from 'node:path';
 import test from 'node:test';
 
-import { startWebHost } from './web-host-runner.mjs';
+import { createIsolatedPluginPathRoots, startWebHost } from './web-host-runner.mjs';
+
+test('keeps every isolated Plugin path strictly below applicationData', () => {
+  const roots = createIsolatedPluginPathRoots('/tmp/web-host-isolation');
+  assert.deepEqual(roots, {
+    applicationData: '/tmp/web-host-isolation/application-data',
+    data: '/tmp/web-host-isolation/application-data/plugins/data',
+    cache: '/tmp/web-host-isolation/application-data/plugins/cache',
+    temp: '/tmp/web-host-isolation/application-data/plugins/temp',
+  });
+  for (const directory of [roots.data, roots.cache, roots.temp]) {
+    assert.equal(path.relative(roots.applicationData, directory).startsWith('..'), false);
+  }
+});
 
 function fixtureChild() {
   const child = new EventEmitter();

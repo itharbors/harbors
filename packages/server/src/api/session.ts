@@ -4,6 +4,8 @@ import type { Session } from '../session/manager';
 import { randomUUID } from 'node:crypto';
 import { HttpError } from '../http/errors';
 import { readJson, sendJson } from '../http/json';
+import type { RequestActor } from '../auth';
+import type { SessionAccessPolicy } from '../session/access-policy';
 
 export { readBody } from '../http/json';
 
@@ -24,6 +26,7 @@ export function createSessionRouter(
   manager: SessionManager,
   onSessionCreated?: (session: Session, options: SessionCreateOptions) => void | Promise<void>,
   onSessionDeleted?: (sessionId: string) => boolean | Promise<boolean>,
+  access?: { resolveActor(req: IncomingMessage): RequestActor; policy: SessionAccessPolicy },
 ) {
   return async function sessionRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://localhost');
@@ -33,6 +36,7 @@ export function createSessionRouter(
     const deleteMatch = path.match(/^\/api\/session\/(.+)$/);
     if (deleteMatch && method === 'DELETE') {
       const sessionId = decodeURIComponent(deleteMatch[1]);
+      if (access) access.policy.assertAccess(access.resolveActor(req), sessionId);
       let deleted: boolean;
       if (onSessionDeleted) {
         deleted = await onSessionDeleted(sessionId);
@@ -57,6 +61,7 @@ export function createSessionRouter(
       if (!session) {
         throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
       }
+      if (access) access.policy.assertAccess(access.resolveActor(req), session.sessionId);
       sendJson(res, 200, session);
       return;
     }
@@ -65,9 +70,17 @@ export function createSessionRouter(
     if (path === '/api/session' && method === 'POST') {
       const options = await readJson(req, isSessionCreateRequest, { emptyValue: {} });
       const { sessionId, workspacePath } = options;
+      const actor = access?.resolveActor(req);
+      if (actor?.kind === 'anonymous') throw new HttpError(403, 'DEVICE_NOT_AUTHORIZED', 'Device is not authorized');
+      if (actor?.kind === 'user' && sessionId) {
+        const existing = manager.get(sessionId);
+        if (!existing || existing.ownerUserId !== actor.userId) {
+          throw new HttpError(403, 'SESSION_FORBIDDEN', 'Remote clients cannot create or claim arbitrary Session IDs');
+        }
+      }
       const id = sessionId || randomUUID();
       const existedBefore = manager.get(id) !== undefined;
-      const session = manager.getOrCreate(id, workspacePath || '');
+      const session = manager.getOrCreate(id, workspacePath || '', actor?.kind === 'user' ? actor.userId : null);
       try {
         if (!options.deferred) await onSessionCreated?.(session, options);
       } catch (error) {

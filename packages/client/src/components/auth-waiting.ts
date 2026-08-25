@@ -1,4 +1,5 @@
 import '../styles/kit-picker.css';
+import { getRequestedDisplayName, setRequestedDisplayName } from '../core/storage';
 
 export function renderWaitingForAuthorization(host: HTMLElement): () => void {
   host.replaceChildren(createWaitingPage());
@@ -37,7 +38,16 @@ function createWaitingPage(): HTMLElement {
   deviceId.style.cssText = 'display:block;margin-top:4px;color:#a9c7f7;font-family:"SFMono-Regular",Consolas,monospace;font-size:13px;';
 
   deviceInfo.append(label, deviceId);
-  card.append(spinner, title, desc, deviceInfo);
+  const nameLabel = element('label', 'auth-waiting-name-label', '你的显示名');
+  const nameInput = element('input', 'auth-waiting-name');
+  nameInput.type = 'text';
+  nameInput.maxLength = 80;
+  nameInput.autocomplete = 'name';
+  nameInput.placeholder = '例如：张三';
+  nameInput.value = getRequestedDisplayName();
+  nameInput.addEventListener('input', () => setRequestedDisplayName(nameInput.value));
+  nameLabel.append(nameInput);
+  card.append(spinner, title, desc, nameLabel, deviceInfo);
   main.append(card);
   return main;
 }

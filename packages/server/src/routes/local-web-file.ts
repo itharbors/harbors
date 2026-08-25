@@ -135,6 +135,7 @@ export class LocalWebFileStore {
 export function createLocalWebFileRouter(
   manager: SessionManager,
   store: LocalWebFileStore,
+  assertAccess?: (req: IncomingMessage, sessionId: string) => void,
 ) {
   return async function localWebFileRouter(
     req: IncomingMessage,
@@ -159,6 +160,7 @@ export function createLocalWebFileRouter(
     if (!sessionId || !manager.get(sessionId)) {
       throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
     }
+    assertAccess?.(req, sessionId);
     const fileName = url.searchParams.get('name') ?? '';
     const staged = await store.stage(sessionId, fileName, req);
     res.setHeader('Cache-Control', 'no-store');
