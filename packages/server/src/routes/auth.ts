@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AuthManager } from '../auth';
-import { getDeviceId, isLocalRequest } from '../auth';
+import { AuthorizationRequestConflictError, getDeviceId, getIdentityDeviceId, isLocalRequest } from '../auth';
 import { HttpError } from '../http/errors';
 import { readJson, sendJson } from '../http/json';
 
@@ -12,12 +12,41 @@ export function createAuthRouter(auth: AuthManager) {
 
     // GET /api/auth/status?deviceId=xxx
     if (path === '/api/auth/status' && method === 'GET') {
-      const deviceId = url.searchParams.get('deviceId') || getDeviceId(req);
-      if (!deviceId) {
-        throw new HttpError(400, 'DEVICE_ID_REQUIRED', 'Device ID is required');
+      const queryDeviceId = url.searchParams.get('deviceId') ?? undefined;
+      const identityDeviceId = getIdentityDeviceId(req);
+      if (queryDeviceId && identityDeviceId && queryDeviceId !== identityDeviceId) {
+        throw new HttpError(400, 'DEVICE_ID_MISMATCH', 'Device ID does not match the request identity');
       }
-      const status = auth.getStatus(deviceId, req, url.searchParams.get('displayName') ?? undefined);
+      const deviceId = validateDeviceId(identityDeviceId || queryDeviceId || getDeviceId(req));
+      const status = auth.readStatus(deviceId);
       sendJson(res, 200, status);
+      return;
+    }
+
+    // GET /api/auth/users
+    if (path === '/api/auth/users' && method === 'GET') {
+      validateDeviceId(getIdentityDeviceId(req));
+      sendJson(res, 200, {
+        users: auth.users.list().map(({ userId, displayName }) => ({ userId, displayName })),
+      });
+      return;
+    }
+
+    // POST /api/auth/request
+    if (path === '/api/auth/request' && method === 'POST') {
+      const deviceId = validateDeviceId(getIdentityDeviceId(req));
+      const { userId } = await readJson(req, isRequestInput);
+      if (auth.devices.isAuthorized(deviceId)) {
+        throw new HttpError(409, 'DEVICE_ALREADY_AUTHORIZED', 'Authorized devices cannot switch users');
+      }
+      try {
+        sendJson(res, 201, auth.requestAuthorization(deviceId, req, userId));
+      } catch (error) {
+        if (error instanceof AuthorizationRequestConflictError) {
+          throw new HttpError(409, 'AUTH_REQUEST_USER_CONFLICT', error.message);
+        }
+        throw new HttpError(404, 'USER_NOT_FOUND', 'User not found');
+      }
       return;
     }
 
@@ -37,10 +66,20 @@ export function createAuthRouter(auth: AuthManager) {
     if (approveMatch && method === 'POST') {
       const deviceId = decodeURIComponent(approveMatch[1]);
       const options = await readJson(req, isApproveInput, { emptyValue: {} });
+      const pending = auth.pending.get(deviceId);
+      if (!pending) throw new HttpError(404, 'AUTH_REQUEST_NOT_FOUND', 'Authorization request not found');
       let device;
       try {
-        device = auth.approve(deviceId, options);
-      } catch {
+        if (pending.requestedUserId) {
+          if (options.displayName !== undefined || (options.userId !== undefined && options.userId !== pending.requestedUserId)) {
+            throw new HttpError(409, 'REQUESTED_USER_MISMATCH', 'Authorization must use the requested user');
+          }
+          device = auth.approveRequested(deviceId);
+        } else {
+          device = auth.approve(deviceId, options);
+        }
+      } catch (error) {
+        if (error instanceof HttpError) throw error;
         throw new HttpError(404, 'USER_NOT_FOUND', 'User not found');
       }
       sendJson(res, 200, { ...device, user: auth.users.get(device.userId) });
@@ -87,6 +126,20 @@ export function createAuthRouter(auth: AuthManager) {
 
     throw new HttpError(404, 'NOT_FOUND', 'Not found');
   };
+}
+
+function validateDeviceId(deviceId: string | undefined): string {
+  if (!deviceId || deviceId.length > 128) {
+    throw new HttpError(400, 'DEVICE_ID_REQUIRED', 'A valid Device ID is required');
+  }
+  return deviceId;
+}
+
+function isRequestInput(value: unknown): value is { userId: string } {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+    && typeof (value as { userId?: unknown }).userId === 'string'
+    && (value as { userId: string }).userId.length > 0
+    && (value as { userId: string }).userId.length <= 128;
 }
 
 function isApproveInput(value: unknown): value is { userId?: string; displayName?: string } {

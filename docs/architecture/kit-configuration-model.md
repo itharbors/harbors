@@ -90,7 +90,7 @@ storage 当前支持两种形式：
 ## Web 宿主与存储路径
 
 `application-data` 是 manifest 使用的抽象 root，不是由 Kit 或 Plugin 自己解析的路径。
-Web 宿主在正式入口将它解析为用户主目录下的 `~/.harbors`，并通过
+Web 宿主默认将它解析为用户主目录下的 `~/.harbors`，也可由统一启动参数解析为自定义绝对 data root，并通过
 `configStorageRoots` 传入 Editor。宿主启动时确保该目录存在。
 
 Framework 只接收抽象的 `ConfigLayerBackend`，由 config-storage 根据 Kit 声明选择内存
@@ -98,12 +98,12 @@ backend 或 SQLite backend。这样 Framework 不感知 `~/.harbors`、当前工
 路径约定。
 
 直接嵌入或测试调用 `createServer` 时，如果没有显式提供 `configStorageRoots`，服务端会
-回退到 `pluginPathRoots.applicationData`；显式提供的 root 必须是绝对路径。正式 Web 入口
-仍显式传入 `~/.harbors`，不通过模型配置环境变量改变该路径。
+回退到 `pluginPathRoots.applicationData`；显式提供的 root 必须是绝对路径。正式与开发 Web 入口都从
+`HARBORS_DATA_ROOT` 派生并显式传入相同 root，Kit 模型自身不读取启动环境。
 
 ## SQLite 数据隔离
 
-持久化层默认使用 `~/.harbors/config.sqlite`。多个 Kit 可以共享同一个 SQLite 文件；表中
+持久化层默认使用 `~/.harbors/config.sqlite`；自定义 data root 时使用 `<root>/config.sqlite`。多个 Kit 可以共享同一个 SQLite 文件；表中
 每条配置记录由以下组合键唯一确定：
 
 ```text

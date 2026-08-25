@@ -56,6 +56,10 @@ export class UserStore {
     return result.changes > 0 ? this.get(userId) : undefined;
   }
 
+  delete(userId: string): boolean {
+    return this.db.prepare('DELETE FROM users WHERE userId = ?').run(userId).changes > 0;
+  }
+
   close(): void {
     if (this.ownsDatabase) this.db.close();
   }

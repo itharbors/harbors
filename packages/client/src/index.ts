@@ -17,29 +17,38 @@ import { isKitCatalogResponse, selectHostEntry } from './core/host-entry';
 import {
   clearStoredSessionId,
   getDeviceId,
-  getRequestedDisplayName,
-  getStoredSessionId,
   isLocalHostname,
   setStoredSessionId,
 } from './core/storage';
-import { renderWaitingForAuthorization } from './components/auth-waiting';
+import {
+  renderAuthorizationLoadError,
+  renderAuthorizationUserPicker,
+  renderWaitingForAuthorization,
+  type AuthorizationUser,
+} from './components/auth-waiting';
 import type { WorkbenchContext } from '@itharbors/plugin-types';
+import type { KitPickerResumeState } from './components/kit-picker';
 
 const app = document.querySelector('#app');
 
 const deviceId = getDeviceId();
 setupFetchWithDeviceId(deviceId);
 
-export async function startClientApp(): Promise<void> {
-  if (!(app instanceof HTMLElement)) return;
+export async function startClientApp(
+  resumeState?: KitPickerResumeState,
+  host: Element | null = app,
+  remoteAccess = !isLocalHostname(),
+  authorizationPollDelayMs = 2000,
+): Promise<void> {
+  if (!(host instanceof HTMLElement)) return;
 
   // Remote access: check device authorization before proceeding.
-  if (!isLocalHostname()) {
-    const authorized = await waitForAuthorization();
+  if (remoteAccess) {
+    const authorized = await waitForAuthorization(host, authorizationPollDelayMs);
     if (!authorized) return;
   }
 
-  renderKitPickerLoading(app);
+  renderKitPickerLoading(host);
   try {
     const entry = selectHostEntry(new URL(window.location.href));
     const response = await fetch('/api/kits', { headers: { accept: 'application/json' } });
@@ -48,28 +57,28 @@ export async function startClientApp(): Promise<void> {
     if (!isKitCatalogResponse(catalog)) throw new Error('Kit catalog response is invalid');
 
     if (entry === 'editor') {
-      app.innerHTML = '<editor-app></editor-app>';
+      host.innerHTML = '<editor-app></editor-app>';
       return;
     }
     const context = await fetchWorkbenchContext();
-    const sessionId = selectStoredSession(context);
-    renderKitPicker(app, catalog.kits, {
+    const sessionId = selectUrlSession(context);
+    renderKitPicker(host, catalog.kits, {
       context,
       selectedSessionId: sessionId,
+      resumeState,
       onSessionSelected: persistSelectedSession,
       onSessionCleared: clearSelectedSession,
-      onContextChanged: () => void startClientApp(),
+      onContextChanged: (nextState) => void startClientApp(nextState, host, remoteAccess, authorizationPollDelayMs),
     });
   } catch {
-    renderKitPickerError(app, () => void startClientApp());
+    renderKitPickerError(host, () => void startClientApp(resumeState, host, remoteAccess, authorizationPollDelayMs));
   }
 }
 
-function selectStoredSession(context: WorkbenchContext): string | null {
+export function selectUrlSession(context: WorkbenchContext): string | null {
   const url = new URL(window.location.href);
   const existing = url.searchParams.get('session') || url.searchParams.get('sessionId');
-  const candidate = existing || getStoredSessionId();
-  const visible = candidate && context.sessions.some((session) => session.sessionId === candidate);
+  const visible = existing && context.sessions.some((session) => session.sessionId === existing);
   if (!visible) {
     clearStoredSessionId();
     url.searchParams.delete('session');
@@ -77,8 +86,8 @@ function selectStoredSession(context: WorkbenchContext): string | null {
     window.history.replaceState({}, '', url.toString());
     return null;
   }
-  persistSelectedSession(candidate);
-  return candidate;
+  persistSelectedSession(existing);
+  return existing;
 }
 
 function persistSelectedSession(sessionId: string): void {
@@ -103,32 +112,88 @@ async function fetchWorkbenchContext(): Promise<WorkbenchContext> {
   return response.json() as Promise<WorkbenchContext>;
 }
 
-async function waitForAuthorization(): Promise<boolean> {
-  const stop = renderWaitingForAuthorization(app as HTMLElement);
-  try {
-    while (true) {
-      const status = await fetchAuthStatus();
-      if (status === 'authorized') return true;
-      await delay(2000);
+export async function waitForAuthorization(host: HTMLElement, pollDelayMs = 2000): Promise<boolean> {
+  while (true) {
+    let status: AuthorizationStatus;
+    try {
+      status = await fetchAuthStatus();
+    } catch {
+      await waitForAuthorizationRetry(host);
+      continue;
     }
-  } catch {
-    stop();
-    return false;
-  } finally {
-    stop();
+    if (status.status === 'authorized') return true;
+    if (status.status === 'pending' && status.requestedUser) {
+      renderWaitingForAuthorization(host, status.requestedUser);
+      const result = await waitForPendingDecision(pollDelayMs);
+      if (result === 'authorized') return true;
+      if (result === 'retry') await waitForAuthorizationRetry(host);
+      continue;
+    }
+
+    let users: AuthorizationUser[];
+    try {
+      users = await fetchAuthorizationUsers();
+    } catch {
+      await waitForAuthorizationRetry(host);
+      continue;
+    }
+    await selectAndRequestAuthorization(host, users);
   }
 }
 
-async function fetchAuthStatus(): Promise<'authorized' | 'pending' | 'unauthorized'> {
-  const displayName = getRequestedDisplayName();
-  const response = await fetch(`/api/auth/status?deviceId=${encodeURIComponent(deviceId)}&displayName=${encodeURIComponent(displayName)}`, {
+interface AuthorizationStatus {
+  status: 'authorized' | 'pending' | 'unauthorized';
+  requestedUser?: AuthorizationUser;
+}
+
+async function fetchAuthStatus(): Promise<AuthorizationStatus> {
+  const response = await fetch('/api/auth/status', {
     headers: { accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`Auth status request failed: ${response.status}`);
-  const data = await response.json() as { status?: string };
-  if (data.status === 'authorized') return 'authorized';
-  if (data.status === 'pending') return 'pending';
-  return 'unauthorized';
+  const data = await response.json() as AuthorizationStatus;
+  if (data.status === 'authorized' || data.status === 'pending') return data;
+  return { status: 'unauthorized' };
+}
+
+async function fetchAuthorizationUsers(): Promise<AuthorizationUser[]> {
+  const response = await fetch('/api/auth/users', { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Authorization users request failed: ${response.status}`);
+  const data = await response.json() as { users?: AuthorizationUser[] };
+  return Array.isArray(data.users) ? data.users : [];
+}
+
+function selectAndRequestAuthorization(host: HTMLElement, users: AuthorizationUser[]): Promise<void> {
+  return new Promise((resolve) => {
+    renderAuthorizationUserPicker(host, users, async (user) => {
+      const response = await fetch('/api/auth/request', {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify({ userId: user.userId }),
+      });
+      if (!response.ok) throw new Error(`Authorization request failed: ${response.status}`);
+      const data = await response.json() as AuthorizationStatus;
+      renderWaitingForAuthorization(host, data.requestedUser ?? user);
+      resolve();
+    }, resolve);
+  });
+}
+
+async function waitForPendingDecision(pollDelayMs: number): Promise<'authorized' | 'rejected' | 'retry'> {
+  while (true) {
+    await delay(pollDelayMs);
+    try {
+      const status = await fetchAuthStatus();
+      if (status.status === 'authorized') return 'authorized';
+      if (status.status === 'unauthorized') return 'rejected';
+    } catch {
+      return 'retry';
+    }
+  }
+}
+
+function waitForAuthorizationRetry(host: HTMLElement): Promise<void> {
+  return new Promise((resolve) => renderAuthorizationLoadError(host, resolve));
 }
 
 function setupFetchWithDeviceId(id: string): void {

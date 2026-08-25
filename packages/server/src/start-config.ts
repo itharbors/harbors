@@ -5,6 +5,7 @@ import type { PluginPathRoots } from '@itharbors/magnet';
 
 export interface StartEnv {
   DB_PATH?: string;
+  HARBORS_DATA_ROOT?: string;
   PORT?: string;
   HARBORS_SERVER_PORT?: string;
   HARBORS_BIND_HOST?: string;
@@ -31,19 +32,24 @@ const DEFAULT_DB_FILENAME = 'harbors.db';
 /**
  * Resolve the Web host startup configuration from the repository and user home.
  *
- * The database path follows this priority:
- * 1. `DB_PATH` environment variable (resolved to an absolute path).
- * 2. A stable file inside the user application data root: `~/.harbors/harbors.db`.
- *
- * `DB_PATH` only moves the Server database. Plugin and Kit data keep using the
- * stable application data root unless their explicit roots are overridden.
+ * The unified data root defaults to `~/.harbors`. `HARBORS_DATA_ROOT` moves
+ * the database, configuration storage, and all Plugin roots together. The
+ * legacy component-specific variables remain higher-priority compatibility
+ * overrides.
  */
 export function resolveStartConfig(
   repositoryRoot: string,
   env: StartEnv = process.env,
   homeDirectory: string = homedir(),
 ): StartConfig {
-  const applicationDataDir = path.join(homeDirectory, '.harbors');
+  const defaultApplicationDataDir = path.join(homeDirectory, '.harbors');
+  const explicitDataRoot = env.HARBORS_DATA_ROOT?.trim();
+  const applicationDataDir = absoluteOverride(
+    explicitDataRoot,
+    defaultApplicationDataDir,
+    'HARBORS_DATA_ROOT',
+  );
+  const usesCustomDataRoot = applicationDataDir !== path.resolve(defaultApplicationDataDir);
   const explicitDbPath = env.DB_PATH?.trim();
   const dbPath = explicitDbPath
     ? path.resolve(explicitDbPath)
@@ -60,11 +66,11 @@ export function resolveStartConfig(
     applicationDataDir,
     configDataDir: applicationDataDir,
     dbPath,
-    legacyDbPaths: explicitDbPath ? [] : [
+    legacyDbPaths: explicitDbPath || usesCustomDataRoot ? [] : [
       path.join(repositoryRoot, '.data', DEFAULT_DB_FILENAME),
       path.join(repositoryRoot, 'packages', 'server', '.editor.db'),
     ],
-    legacyPluginDataRoots: [
+    legacyPluginDataRoots: usesCustomDataRoot ? [] : [
       path.join(repositoryRoot, '.data', 'plugins'),
       path.join(repositoryRoot, 'packages', 'server', 'plugins', 'data'),
     ],

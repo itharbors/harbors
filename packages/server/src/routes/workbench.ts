@@ -50,6 +50,23 @@ export function createWorkbenchRouter(
       return;
     }
 
+    if (userMatch && req.method === 'DELETE') {
+      if (actor.kind !== 'local-admin') throw new HttpError(403, 'LOCAL_ONLY', 'Local host access required');
+      if (!auth) throw new HttpError(503, 'AUTH_UNAVAILABLE', 'User storage is unavailable');
+      const userId = decodeURIComponent(userMatch[1]);
+      if (!auth.users.get(userId)) throw new HttpError(404, 'USER_NOT_FOUND', 'User not found');
+      const hasSessions = manager.list(userId).length > 0;
+      const hasDevices = auth.devices.list().some((device) => device.userId === userId);
+      const hasPendingRequests = auth.pending.list().some((request) => request.requestedUserId === userId);
+      if (hasSessions || hasDevices || hasPendingRequests) {
+        throw new HttpError(409, 'USER_IN_USE', 'Remove this user\'s Sessions and authorized devices first');
+      }
+      auth.users.delete(userId);
+      res.statusCode = 204;
+      res.end();
+      return;
+    }
+
     if (url.pathname === '/api/workbench/session' && req.method === 'POST') {
       const body = await readJson(req, isCreateSessionInput, { emptyValue: {} });
       const ownerUserId = actor.kind === 'user' ? actor.userId : body.userId;

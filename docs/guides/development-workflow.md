@@ -252,6 +252,8 @@ pnpm dev
 
 `pnpm dev` 启动 Gateway、Server 和 Client 三个开发进程：Gateway 与 Server 使用 `tsx watch` 监听源码，Client 使用 Vite 提供 HMR。浏览器应访问 Gateway `http://localhost:49380`，由它将 API 和 SSE 路由到 Server，不要将 Vite 端口当作完整应用入口。
 
+Dev 默认读取正式数据根 `~/.harbors`。需要隔离数据时显式运行 `pnpm dev -- --data-root /absolute/path`；这会一起切换 Session 数据库、Kit 配置和 Plugin data/cache/temp，而不是只切换数据库。
+
 Web 栈运行统一 Kit host，裸地址显示 Kit 选择页，并提供开发直达地址：
 
 ```text
@@ -298,6 +300,7 @@ pnpm start
 ```
 
 `pnpm start` 只启动 Server，直接提供已构建的 Client 资产，不包含 Gateway、源码监听或 HMR。
+它不会自动执行前面的 build，并与 Dev 使用相同的 `pnpm start -- --data-root /absolute/path` 参数。
 
 ## 构建
 
@@ -391,10 +394,12 @@ pnpm run clean
 - `plugins/*` 和 `kits/*/plugins/*` 的 main/panel `dist/`；
 - coverage、Vite/Vitest cache 和 `*.tsbuildinfo`。
 
-Server 开发与正式入口默认共用 `~/.harbors/harbors.db`，Plugin 的 `data/cache/temp` 也统一位于
-`~/.harbors/plugins/`，不再在 Server workspace 生成运行数据。历史 `.data/harbors.db`、
+Server 开发与正式入口默认共用 `~/.harbors` 完整数据根，其中包含 `harbors.db`、`config.sqlite` 和
+`plugins/{data,cache,temp}`，不再在 Server workspace 生成运行数据。历史 `.data/harbors.db`、
 `packages/server/.editor.db` 和旧 Plugin data 会在启动前非破坏地导入，源文件不会由 clean 或迁移
-自动删除。`DB_PATH` 只覆盖 Server DB；Plugin 根需使用各自的显式绝对路径环境变量覆盖。
+自动删除。`--data-root` 优先于 `HARBORS_DATA_ROOT`，非默认根不导入这些 legacy 数据；`DB_PATH` 与 Plugin
+细分绝对路径变量仅作更高优先级兼容覆盖。一个 data root 同时只应由一个 Host 使用，当前不以生命周期锁强制。
+Credential profile 元数据随数据库切换，但真实 secret 仍位于 OS Keychain。
 
 ## 端口冲突
 

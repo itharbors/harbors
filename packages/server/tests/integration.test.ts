@@ -98,6 +98,155 @@ describe('Server Integration', () => {
     expect(JSON.stringify(context)).not.toContain('workspacePath');
     expect(context).toMatchObject({ actor: 'local-admin' });
     expect((context.sessions as Array<{ sessionId: string }>).some((item) => item.sessionId === session.sessionId)).toBe(true);
+
+    const deleteInUse = await fetch(`${baseURL}/api/workbench/user/${user.userId}`, { method: 'DELETE' });
+    expect(deleteInUse.status).toBe(409);
+    await expect(deleteInUse.json()).resolves.toMatchObject({ error: { code: 'USER_IN_USE' } });
+  });
+
+  it('deletes only users without Sessions or authorized devices', async () => {
+    const disposable = testServer.auth.users.create('可删除用户');
+    const deleted = await fetch(`${baseURL}/api/workbench/user/${disposable.userId}`, { method: 'DELETE' });
+    expect(deleted.status).toBe(204);
+    expect(testServer.auth.users.get(disposable.userId)).toBeUndefined();
+
+    const bound = testServer.auth.users.create('已授权用户');
+    testServer.auth.devices.authorize('bound-device', bound.userId);
+    const deleteBound = await fetch(`${baseURL}/api/workbench/user/${bound.userId}`, { method: 'DELETE' });
+    expect(deleteBound.status).toBe(409);
+    expect(testServer.auth.users.get(bound.userId)).toBeDefined();
+  });
+
+  it('rejects user deletion from remote and anonymous actors', async () => {
+    const remote = testServer.auth.users.create('远程用户');
+    testServer.auth.devices.authorize('remote-device', remote.userId);
+    const remoteDelete = await fetch(`${baseURL}/api/workbench/user/${remote.userId}`, {
+      method: 'DELETE',
+      headers: { 'x-forwarded-for': '203.0.113.7', 'x-device-id': 'remote-device' },
+    });
+    expect(remoteDelete.status).toBe(403);
+    await expect(remoteDelete.json()).resolves.toMatchObject({ error: { code: 'LOCAL_ONLY' } });
+
+    const anonymousDelete = await fetch(`${baseURL}/api/workbench/user/${remote.userId}`, {
+      method: 'DELETE',
+      headers: { 'x-forwarded-for': '203.0.113.7' },
+    });
+    expect(anonymousDelete.status).toBe(403);
+    await expect(anonymousDelete.json()).resolves.toMatchObject({ error: { code: 'DEVICE_NOT_AUTHORIZED' } });
+    expect(testServer.auth.users.get(remote.userId)).toBeDefined();
+  });
+
+  it('lets an anonymous remote device request one existing user without exposing workbench data', async () => {
+    const requestedUser = testServer.auth.users.create('远程申请用户');
+    const otherUser = testServer.auth.users.create('其他用户');
+    const remoteHeaders = { 'x-forwarded-for': '203.0.113.9', 'x-device-id': 'remote-login-device' };
+
+    const initialStatus = await fetch(`${baseURL}/api/auth/status?deviceId=remote-login-device`, { headers: remoteHeaders });
+    await expect(initialStatus.json()).resolves.toMatchObject({ status: 'unauthorized' });
+    expect(testServer.auth.pending.get('remote-login-device')).toBeUndefined();
+
+    const usersResponse = await fetch(`${baseURL}/api/auth/users`, { headers: remoteHeaders });
+    const usersPayload = await usersResponse.json() as { users: Array<Record<string, unknown>> };
+    expect(usersResponse.status).toBe(200);
+    expect(usersPayload.users).toContainEqual({ userId: requestedUser.userId, displayName: requestedUser.displayName });
+    expect(Object.keys(usersPayload.users.find((user) => user.userId === requestedUser.userId)!).sort()).toEqual(['displayName', 'userId']);
+    expect(JSON.stringify(usersPayload)).not.toContain('sessionId');
+
+    const unknownRequest = await fetch(`${baseURL}/api/auth/request`, {
+      method: 'POST', headers: { ...remoteHeaders, 'content-type': 'application/json', 'x-device-id': 'unknown-user-device' },
+      body: JSON.stringify({ userId: 'missing-user' }),
+    });
+    expect(unknownRequest.status).toBe(404);
+    expect(testServer.auth.pending.get('unknown-user-device')).toBeUndefined();
+
+    const request = await fetch(`${baseURL}/api/auth/request`, {
+      method: 'POST', headers: { ...remoteHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: requestedUser.userId }),
+    });
+    expect(request.status).toBe(201);
+    await expect(request.json()).resolves.toMatchObject({
+      status: 'pending', requestedUser: { userId: requestedUser.userId, displayName: requestedUser.displayName },
+    });
+
+    const idempotentRequest = await fetch(`${baseURL}/api/auth/request`, {
+      method: 'POST', headers: { ...remoteHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: requestedUser.userId }),
+    });
+    expect(idempotentRequest.status).toBe(201);
+    const conflictingRequest = await fetch(`${baseURL}/api/auth/request`, {
+      method: 'POST', headers: { ...remoteHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: otherUser.userId }),
+    });
+    expect(conflictingRequest.status).toBe(409);
+    expect(testServer.auth.pending.get('remote-login-device')?.requestedUserId).toBe(requestedUser.userId);
+
+    const mismatchStatus = await fetch(`${baseURL}/api/auth/status?deviceId=another-device`, { headers: remoteHeaders });
+    expect(mismatchStatus.status).toBe(400);
+
+    const userOverride = await fetch(`${baseURL}/api/auth/approve/remote-login-device`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: otherUser.userId }),
+    });
+    expect(userOverride.status).toBe(409);
+    const nameOverride = await fetch(`${baseURL}/api/auth/approve/remote-login-device`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName: '替代用户' }),
+    });
+    expect(nameOverride.status).toBe(409);
+
+    const deletePendingUser = await fetch(`${baseURL}/api/workbench/user/${requestedUser.userId}`, { method: 'DELETE' });
+    expect(deletePendingUser.status).toBe(409);
+
+    const approve = await fetch(`${baseURL}/api/auth/approve/remote-login-device`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(approve.status).toBe(200);
+    await expect(approve.json()).resolves.toMatchObject({ userId: requestedUser.userId });
+
+    const noPending = await fetch(`${baseURL}/api/auth/approve/no-pending-device`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(noPending.status).toBe(404);
+
+    const lastSeenAt = testServer.auth.devices.get('remote-login-device')!.lastSeenAt;
+    const authorizedStatus = await fetch(`${baseURL}/api/auth/status?deviceId=remote-login-device`, { headers: remoteHeaders });
+    await expect(authorizedStatus.json()).resolves.toMatchObject({
+      status: 'authorized', user: { userId: requestedUser.userId, displayName: requestedUser.displayName },
+    });
+    expect(testServer.auth.devices.get('remote-login-device')!.lastSeenAt).toBe(lastSeenAt);
+
+    const switchRequest = await fetch(`${baseURL}/api/auth/request`, {
+      method: 'POST', headers: { ...remoteHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: otherUser.userId }),
+    });
+    expect(switchRequest.status).toBe(409);
+    expect(testServer.auth.pending.get('remote-login-device')).toBeUndefined();
+
+    const remotePendingList = await fetch(`${baseURL}/api/auth/pending`, { headers: remoteHeaders });
+    expect(remotePendingList.status).toBe(403);
+    const wrongUsersMethod = await fetch(`${baseURL}/api/auth/users`, { method: 'POST', headers: remoteHeaders });
+    expect(wrongUsersMethod.status).toBe(403);
+    const wrongRequestMethod = await fetch(`${baseURL}/api/auth/request`, { headers: remoteHeaders });
+    expect(wrongRequestMethod.status).toBe(403);
+  });
+
+  it('refuses approval when the requested user disappears', async () => {
+    const user = testServer.auth.users.create('即将删除的用户');
+    const request = await fetch(`${baseURL}/api/auth/request`, {
+      method: 'POST',
+      headers: {
+        'x-forwarded-for': '203.0.113.10',
+        'x-device-id': 'deleted-request-user-device',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ userId: user.userId }),
+    });
+    expect(request.status).toBe(201);
+    testServer.auth.users.delete(user.userId);
+
+    const approve = await fetch(`${baseURL}/api/auth/approve/deleted-request-user-device`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(approve.status).toBe(404);
+    expect(testServer.auth.devices.get('deleted-request-user-device')).toBeUndefined();
   });
 
   it('DELETE /api/session/:id disposes the runtime and deletes persistent state', async () => {

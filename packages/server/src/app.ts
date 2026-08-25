@@ -260,7 +260,10 @@ export function createApp(
     if (isRemoteUnauthorized(req)) {
       const pathname = new URL(url, 'http://localhost').pathname;
       const isApiRoute = pathname.startsWith('/api/') || pathname.startsWith('/sse/');
-      const isAllowedRoute = pathname === '/api/auth/status' || pathname === '/api/health';
+      const method = req.method || 'GET';
+      const isAllowedRoute = pathname === '/api/health'
+        || (method === 'GET' && (pathname === '/api/auth/status' || pathname === '/api/auth/users'))
+        || (method === 'POST' && pathname === '/api/auth/request');
       if (isApiRoute && !isAllowedRoute) {
         throw new HttpError(403, 'DEVICE_NOT_AUTHORIZED', 'This device is not authorized for remote access');
       }

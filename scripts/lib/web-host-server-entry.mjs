@@ -1,22 +1,30 @@
 import path from 'node:path';
-import { mkdir } from 'node:fs/promises';
 
 import { createDefaultAssemblyConfig } from '../../packages/server/src/assembly/config.ts';
 import { createServer } from '../../packages/server/src/server.ts';
-import { createIsolatedPluginPathRoots } from './web-host-runner.mjs';
+import { ensureDataDir, resolveStartConfig } from '../../packages/server/src/start-config.ts';
+import { migrateApplicationData } from '../../packages/server/src/application-data-migration.ts';
 
 const rootDir = process.cwd();
-const tempRoot = process.env.HARBORS_TEST_DATA_ROOT;
 const sources = parseSources(process.env.HARBORS_KIT_SOURCES);
 const defaultKit = requireValue(process.env.CE_DEFAULT_KIT, 'CE_DEFAULT_KIT');
-if (!tempRoot) throw new Error('HARBORS_TEST_DATA_ROOT is required');
+const config = resolveStartConfig(rootDir, process.env);
+if (!process.env.HARBORS_DATA_ROOT) throw new Error('HARBORS_DATA_ROOT is required');
 
-const pluginPathRoots = createIsolatedPluginPathRoots(tempRoot);
-const configStorageRoots = { 'application-data': path.join(tempRoot, 'config') };
+const pluginPathRoots = config.pluginPathRoots;
+const configStorageRoots = { 'application-data': config.configDataDir };
 await Promise.all([
-  ...Object.values(pluginPathRoots).map((directory) => mkdir(directory, { recursive: true })),
-  mkdir(configStorageRoots['application-data'], { recursive: true }),
+  ...Object.values(pluginPathRoots).map((directory) => ensureDataDir(directory)),
+  ensureDataDir(configStorageRoots['application-data']),
+  ensureDataDir(path.dirname(config.dbPath)),
 ]);
+await migrateApplicationData({
+  applicationDataDir: config.applicationDataDir,
+  dbPath: config.dbPath,
+  legacyDbPaths: config.legacyDbPaths,
+  pluginDataRoot: config.pluginPathRoots.data,
+  legacyPluginDataRoots: config.legacyPluginDataRoots,
+});
 
 const server = createServer({
   assembly: createDefaultAssemblyConfig(rootDir, { kitSources: sources, defaultKit }),
@@ -26,7 +34,7 @@ const server = createServer({
   applicationHostMode: 'web',
   credentialMode: process.env.HARBORS_CREDENTIAL_MODE,
   ...(process.env.HARBORS_CREDENTIAL_MODE === 'on' ? { credentialVault: createMemoryCredentialVault() } : {}),
-  dbPath: process.env.DB_PATH,
+  dbPath: config.dbPath,
   host: process.env.HARBORS_BIND_HOST ?? '127.0.0.1',
 });
 

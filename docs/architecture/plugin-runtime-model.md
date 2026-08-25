@@ -139,8 +139,8 @@ OS 权限沙箱，也不把受信插件变成不受信代码。子进程仍以�
 并拥有该账号可访问的文件系统权限；`runtime.paths` 提供 owner 专属 data/cache/temp 路径，但不能
 替代操作系统访问控制。
 
-Web 宿主将这些路径稳定映射到 `~/.harbors/plugins/{data,cache,temp}/<owner-key>/`，开发与正式
-启动使用同一数据根，不以当前 checkout、worktree 或 `process.cwd()` 决定位置。`PluginInfo` 的
+Web 宿主默认将这些路径映射到 `~/.harbors/plugins/{data,cache,temp}/<owner-key>/`；开发与正式
+启动使用同一数据根语义，并可通过统一的绝对 data root 一起切换，不以当前 checkout、worktree 或 `process.cwd()` 决定位置。`PluginInfo` 的
 `storageOwnerKey` 暴露同一个 SHA-256 owner key，供日志和诊断把哈希目录关联回 Plugin owner；它
 不是授权凭据，也不应参与业务访问控制。
 
