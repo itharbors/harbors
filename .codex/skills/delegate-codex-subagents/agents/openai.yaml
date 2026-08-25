@@ -1,4 +1,4 @@
 interface:
-  display_name: "内置 Luna High Subagent 委派"
-  short_description: "使用内置 Luna High 并行拆分任务，主 Agent 专注验收"
-  default_prompt: "使用 $delegate-codex-subagents 拆分、并行派发内置 Luna High Subagent 并验收当前任务。"
+  display_name: "子 Agent 委派"
+  short_description: "面向独立工作单元的子 Agent 拆分、并行委派与最终验收"
+  default_prompt: "使用 $delegate-codex-subagents 拆分并行工作，委派给内置子 Agent 后完成验收。"
