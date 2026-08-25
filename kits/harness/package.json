@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "build": "node ../../packages/kit-cli/dist/cli.js build .",
-    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:plugin && pnpm run test:assembly",
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:unit && pnpm run test:plugin && pnpm run test:assembly",
+    "test:unit": "pnpm run build && pnpm run test:unit:run",
+    "test:unit:run": "pnpm --dir ../.. exec tsx --test \"kits/harness/plugins/**/{main/src,panel.*/src}/**/*.test.{ts,tsx}\" \"kits/harness/plugins/*/*.test.{ts,tsx}\"",
     "test:plugin": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts plugins/conversation/tests/runtime.smoke.test.ts",
     "test:assembly": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts tests/assembly.test.ts",
     "smoke": "node tests/web-host.smoke.mjs"

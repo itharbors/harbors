@@ -1,73 +1,50 @@
 import React from 'react';
-import { createRoot } from 'react-dom/client';
+import { createRoot, type Root } from 'react-dom/client';
 import App from './app.js';
+import { createPanelEventBridge } from './panel-event-bridge.js';
 
-const setters: Record<string, (data: any) => void> = {};
-let cachedConversationSelected: unknown;
-let hasCachedConversationSelected = false;
-const cachedTraceAppends: unknown[] = [];
-let cachedModelCatalog: unknown;
-let hasCachedModelCatalog = false;
+const eventBridge = createPanelEventBridge();
+let reactRoot: Root | null = null;
 
-function registerSetter(key: string, setter: (data: any) => void): void {
-  setters[key] = setter;
-  if (key === 'conversation.selected' && hasCachedConversationSelected) {
-    setter(cachedConversationSelected);
-  }
-  if (key === 'agent.conversation.trace.append' && cachedTraceAppends.length > 0) {
-    const pending = cachedTraceAppends.splice(0);
-    for (const value of pending) setter(value);
-  }
-  if (key === 'model-service.catalog.changed' && hasCachedModelCatalog) {
-    setter(cachedModelCatalog);
-  }
+function unmount(): void {
+  reactRoot?.unmount();
+  reactRoot = null;
+  eventBridge.reset();
 }
 
 export default {
   async mount(ctx: any) {
+    unmount();
     const root = document.getElementById('panel-root');
     if (root) {
-      createRoot(root).render(
+      reactRoot = createRoot(root);
+      reactRoot.render(
         React.createElement(App, {
           ctx,
-          registerSetter,
+          registerSetter: eventBridge.registerSetter,
         })
       );
     }
   },
+  unmount,
   methods: {
     onConversationChanged(data: unknown) {
-      setters['agent.conversation.changed']?.(data);
-      return data;
+      return eventBridge.onConversationChanged(data);
     },
     onConversationSelected(data: unknown) {
-      cachedConversationSelected = data;
-      hasCachedConversationSelected = true;
-      setters['conversation.selected']?.(data);
-      return data;
+      return eventBridge.onConversationSelected(data);
     },
     onConversationTraceAppend(data: unknown) {
-      const setter = setters['agent.conversation.trace.append'];
-      if (setter) setter(data);
-      else {
-        cachedTraceAppends.push(data);
-        if (cachedTraceAppends.length > 256) cachedTraceAppends.shift();
-      }
-      return data;
+      return eventBridge.onConversationTraceAppend(data);
     },
     onMessageDelta(data: unknown) {
-      setters['agent.message.delta']?.(data);
-      return data;
+      return eventBridge.onMessageDelta(data);
     },
     onMessageStatus(data: unknown) {
-      setters['agent.message.status']?.(data);
-      return data;
+      return eventBridge.onMessageStatus(data);
     },
     onModelCatalogChanged(data: unknown) {
-      cachedModelCatalog = data;
-      hasCachedModelCatalog = true;
-      setters['model-service.catalog.changed']?.(data);
-      return data;
+      return eventBridge.onModelCatalogChanged(data);
     },
   },
 };
