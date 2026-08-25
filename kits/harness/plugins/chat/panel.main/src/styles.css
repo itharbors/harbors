@@ -104,7 +104,7 @@ html, body, #panel-root { width: 100%; height: 100%; min-height: 0; margin: 0; o
 .option-popover-item:hover { background: #262d38; color: #edf2f8; }
 .option-popover-item.selected { color: #e5eaf2; }
 .option-popover-check { flex: 0 0 14px; color: #6f97cf; font-size: 12px; }
-.option-picker select { width: 132px; min-width: 0; max-width: 132px; overflow: hidden; border: 1px solid #3a4351; border-radius: 7px; outline: 0; background: #181d25; padding: 5px 22px 5px 8px; color: #e5eaf2; font: inherit; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
+.option-picker select { width: 132px; min-width: 0; max-width: 132px; height: 28px; overflow: hidden; border: 1px solid #3a4351; border-radius: 7px; outline: 0; background: #181d25; padding: 0 22px 0 8px; color: #e5eaf2; font: inherit; cursor: pointer; text-overflow: ellipsis; white-space: nowrap; }
 .permission-picker select { width: 116px; max-width: 116px; }
 .option-picker select:disabled { cursor: default; opacity: .78; }
 .send-button { background: #e5eaf2; color: #172033; font-weight: 800; }
