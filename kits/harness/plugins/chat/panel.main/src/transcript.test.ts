@@ -13,6 +13,17 @@ test('transcript rows do not use content-visibility lazy rendering', async () =>
   assert.doesNotMatch(styles, /transcript-turn-row-optimized/);
 });
 
+test('composer selects use an explicit cross-browser height', async () => {
+  const styleFiles = ['./styles.css', './index.css'];
+  for (const styleFile of styleFiles) {
+    const styles = await readFile(new URL(styleFile, import.meta.url), 'utf8');
+    const rule = /\.option-picker select\s*\{([^}]*)\}/u.exec(styles)?.[1];
+    assert.ok(rule, `${styleFile} must define .option-picker select`);
+    assert.match(rule, /\bheight:\s*28px\s*;/u);
+    assert.match(rule, /\bpadding:\s*0 22px 0 8px\s*;/u);
+  }
+});
+
 function messagesForTurns(turns: number[]): MessageData[] {
   return turns.flatMap((turn) => [
     { id: `u-${turn}`, role: 'user' as const, content: `user ${turn}`, turn },

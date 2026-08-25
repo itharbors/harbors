@@ -868,12 +868,13 @@ html, body, #panel-root {
   width: 132px;
   min-width: 0;
   max-width: 132px;
+  height: 28px;
   overflow: hidden;
   border: 1px solid #3a4351;
   border-radius: 7px;
   outline: 0;
   background: #181d25;
-  padding: 5px 22px 5px 8px;
+  padding: 0 22px 0 8px;
   color: #e5eaf2;
   font: inherit;
   cursor: pointer;
