@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-25-user-session-picker",
+  "type": "feature",
+  "updatedAt": "2026-08-25T07:56:00.850Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "pending",
+    "implementation": "pending",
+    "verification": "pending",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}
