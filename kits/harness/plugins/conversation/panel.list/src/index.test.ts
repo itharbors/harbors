@@ -5,9 +5,8 @@ import definition from '../dist/index.js';
 
 test('点击新对话通过 Panel SDK 请求 select(null)，并把草稿广播交给 Chat 订阅方', async () => {
   const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
-  const previousWindow = globalThis.window;
-  const previousDocument = globalThis.document;
-  const previousHTMLElement = globalThis.HTMLElement;
+  const globalKeys = ['window', 'document', 'HTMLElement'] as const;
+  const previousGlobals = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   Object.assign(globalThis, {
     window: dom.window,
     document: dom.window.document,
@@ -62,12 +61,23 @@ test('点击新对话通过 Panel SDK 请求 select(null)，并把草稿广播�
       plugin === 'conversation' && name === 'select' && args.length === 1 && args[0] === null
     )));
     assert.deepEqual(chatStates, [draftState]);
+
+    definition.unmount();
+    definition.unmount();
+    assert.equal(dom.window.document.getElementById('panel-root')?.childElementCount, 0);
+    definition.methods.onConversationChanged([{ id: 'late' }]);
+    assert.equal(dom.window.document.getElementById('panel-root')?.childElementCount, 0);
+
+    await definition.mount(context);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(dom.window.document.querySelector('button[aria-label="新建对话"]'), '卸载后应可重新挂载');
   } finally {
-    definition.unmount?.();
-    Object.assign(globalThis, {
-      window: previousWindow,
-      document: previousDocument,
-      HTMLElement: previousHTMLElement,
-    });
+    definition.unmount();
+    dom.window.close();
+    for (const key of globalKeys) {
+      const descriptor = previousGlobals.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
   }
 });

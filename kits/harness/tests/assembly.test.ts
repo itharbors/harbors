@@ -118,6 +118,21 @@ describe('Harbors Harness Kit real assembly', () => {
     expect(layout.windows?.map((window) => window.id)).toEqual(['harness-main']);
     expect(runtime.plugin.info('chat')?.contribute?.panel?.main).toBeDefined();
     expect(runtime.plugin.info('conversation')?.contribute?.panel?.list).toBeDefined();
+    expect(runtime.plugin.info('settings')?.contribute?.menu).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'view/panels/ce-settings-settings',
+        message: 'openSettingsPanel',
+      }),
+    ]));
+    expect(runtime.messages.queryRequest('settings', 'openSettingsPanel')).toMatchObject({
+      plugin: 'settings',
+      name: 'openSettingsPanel',
+      methods: ['openSettingsPanel'],
+      location: 'server',
+    });
+    await expect(runtime.messages.request('settings', 'openSettingsPanel')).resolves.toMatchObject({
+      panelName: 'settings.settings',
+    });
 
     for (const [plugin, name] of [
       ['agent', 'createConversation'], ['agent', 'sendMessage'], ['agent', 'getConversationTrace'],
@@ -138,7 +153,10 @@ describe('Harbors Harness Kit real assembly', () => {
 
     expect(result.content).toBe('装配通过');
     expect(runtime.observer.events.some((event) => event.kind === 'request' && event.plugin === 'model-service' && event.name === 'complete')).toBe(true);
-    const topics = runtime.observer.events.filter((event) => event.kind === 'broadcast').map((event) => event.topic);
+    const topics = await waitFor(
+      async () => runtime.observer.events.filter((event) => event.kind === 'broadcast').map((event) => event.topic),
+      (value) => value.includes('agent.message.status'),
+    );
     expect(topics).toContain('model-service.complete.delta');
     expect(topics).toContain('agent.conversation.trace.append');
     expect(topics).toContain('agent.message.delta');
