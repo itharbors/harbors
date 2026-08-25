@@ -1,25 +1,30 @@
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createServer } from './server.js';
 import { createDefaultAssemblyConfig, discoverBuiltinKitSources } from './assembly/config.js';
 import { ensureDataDir, resolveStartConfig } from './start-config.js';
+import { migrateApplicationData } from './application-data-migration.js';
 
-const rootDir = process.cwd();
-const { dataDir, configDataDir, dbPath, port, host } = resolveStartConfig(rootDir, process.env);
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const config = resolveStartConfig(rootDir, process.env);
+const { applicationDataDir, configDataDir, dbPath, port, host, pluginPathRoots } = config;
 
-await ensureDataDir(dataDir);
+await ensureDataDir(applicationDataDir);
 await ensureDataDir(configDataDir);
 await ensureDataDir(path.dirname(dbPath));
+await migrateApplicationData({
+  applicationDataDir,
+  dbPath,
+  legacyDbPaths: config.legacyDbPaths,
+  pluginDataRoot: pluginPathRoots.data,
+  legacyPluginDataRoots: config.legacyPluginDataRoots,
+});
 
 const server = createServer({
   assembly: createDefaultAssemblyConfig(rootDir, {
     kitSources: await discoverBuiltinKitSources(rootDir),
   }),
-  pluginPathRoots: {
-    applicationData: dataDir,
-    data: path.join(dataDir, 'plugins'),
-    cache: path.join(dataDir, 'cache'),
-    temp: path.join(dataDir, 'temp'),
-  },
+  pluginPathRoots,
   configStorageRoots: { 'application-data': configDataDir },
   host,
   port,
@@ -42,6 +47,8 @@ const shutdown = async (): Promise<void> => {
 try {
   const actualPort = await server.start(port);
   console.log(`Server running at http://localhost:${actualPort}`);
+  console.log(`Application data: ${applicationDataDir}`);
+  console.log(`Database: ${dbPath}`);
 } catch (error) {
   console.error('Failed to start server:', error);
   process.exit(1);

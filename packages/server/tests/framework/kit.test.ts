@@ -27,6 +27,7 @@ function createCredentialKit(
     manifestVersion?: string;
     permissionGrants?: unknown;
     legacyKitIds?: readonly string[];
+    legacyPluginDataDirectories?: Readonly<Record<string, readonly string[]>>;
     config?: KitConfigDeclaration;
   } = {},
 ): string {
@@ -47,6 +48,19 @@ function createCredentialKit(
         windowEntries: { main: 'main.html', secondary: 'secondary.html' },
       },
     },
+    ...(options.legacyPluginDataDirectories ? {
+      harbors: {
+        distribution: 'builtin',
+        ci: { runner: 'ubuntu-latest' },
+        docs: { summary: 'Credential fixture' },
+        resources: [],
+        storage: {
+          legacyDataDirectories: [],
+          legacyPluginDataDirectories: options.legacyPluginDataDirectories,
+        },
+        scripts: { build: 'build', test: 'test' },
+      },
+    } : {}),
   });
   writeJson(path.join(kitDir, 'kit.json'), {
     schemaVersion: 1,
@@ -83,10 +97,12 @@ function createCredentialKit(
     });
     fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), `
       let credentials;
+      let paths;
       editor.plugin.define({
-        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
+        lifecycle: { load(runtime) { credentials = runtime.credentials; paths = runtime.paths; } },
         methods: {
           hasCredentials() { return credentials !== undefined; },
+          legacyData() { return paths.legacyData; },
           put(input) { return credentials.put(input); },
           get(id) { return credentials.get(id); },
         },
@@ -469,6 +485,42 @@ describe('KitModule', () => {
       'SELECT value_json FROM config_values WHERE kit_id = ? AND key = ?',
     ).get('legacy-kit', 'theme')).toEqual({ value_json: JSON.stringify('legacy') });
     reopened.close();
+  });
+
+  it('injects owner-scoped legacy data only into the granted Kit Plugin', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-owner-legacy-data-'));
+    temporaryRoots.push(root);
+    const applicationData = path.join(root, 'application-data');
+    fs.mkdirSync(path.join(applicationData, 'pi-agent'), { recursive: true });
+    const kitDir = createCredentialKit(root, 'owner-legacy', '@scope/owner-legacy', [], {
+      legacyPluginDataDirectories: { '@scope/mysql-core': ['pi-agent'] },
+    });
+    const editor = createEditor('owner-legacy', {
+      assembly: assemblyFor(kitDir),
+      pluginPathRoots: createTestPluginPathRoots(applicationData),
+    });
+
+    await editor.kit.load();
+
+    expect(editor.plugin.callPlugin('@scope/mysql-core', 'legacyData'))
+      .toEqual([path.join(applicationData, 'pi-agent')]);
+    expect(editor.plugin.callPlugin('@scope/mysql-explorer', 'legacyData')).toEqual([]);
+    await editor.dispose();
+  });
+
+  it('rejects owner-scoped legacy data grants for undeclared Plugins', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-unknown-legacy-owner-'));
+    temporaryRoots.push(root);
+    const kitDir = createCredentialKit(root, 'unknown-legacy-owner', '@scope/unknown-legacy-owner', [], {
+      legacyPluginDataDirectories: { '@scope/not-declared': ['pi-agent'] },
+    });
+    const editor = createEditor('unknown-legacy-owner', {
+      assembly: assemblyFor(kitDir),
+      pluginPathRoots: createTestPluginPathRoots(),
+    });
+
+    await expect(editor.kit.load()).rejects.toThrow(/undeclared Plugin/u);
+    await editor.dispose();
   });
 
   it('revokes the old credential lease and binds a new owner on successful Kit switch', async () => {

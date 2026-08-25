@@ -87,6 +87,7 @@ export async function loadTrustedMarketKit({ repositoryRoot, slug }) {
     scripts: metadata.scripts,
     resources: metadata.resources,
     legacyDataDirectories: metadata.legacyDataDirectories,
+    legacyPluginDataDirectories: metadata.legacyPluginDataDirectories,
     manifest: deepFreeze(JSON.parse(JSON.stringify(manifest))),
     packageJson: deepFreeze(JSON.parse(JSON.stringify(packageJson))),
   });

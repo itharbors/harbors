@@ -47,6 +47,9 @@ interface KitPackageJson {
       layouts?: Record<string, string>;
       theme?: unknown;
       plugin?: string[];
+      startup?: {
+        plugins?: string[];
+      };
       menuRoot?: {
         id?: unknown;
         label?: unknown;
@@ -287,6 +290,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     descriptor: KitDescriptor;
     kitPath: string;
     legacyDataDirectories: string[];
+    legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
     legacyKitIds: readonly string[];
     config?: KitConfigDeclaration;
   }> {
@@ -335,9 +339,19 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     if (publication && publication.version !== pkg.version) {
       throw new Error(`Invalid Kit at ${kitPath}: kit.json version must match package version`);
     }
-    const legacyDataDirectories = pkg.harbors === undefined
-      ? []
-      : [...parseRepositoryKitPackage(pkg.harbors).legacyDataDirectories];
+    const repositoryMetadata = pkg.harbors === undefined
+      ? undefined
+      : parseRepositoryKitPackage(pkg.harbors);
+    const legacyDataDirectories = [...(repositoryMetadata?.legacyDataDirectories ?? [])];
+    const legacyPluginDataDirectories = repositoryMetadata?.legacyPluginDataDirectories ?? {};
+    const declaredPluginOwners = new Set([
+      ...plugins,
+      ...(pkg['ce-editor'].kit.startup?.plugins ?? []),
+    ]);
+    const unknownLegacyOwner = Object.keys(legacyPluginDataDirectories).find((owner) => !declaredPluginOwners.has(owner));
+    if (unknownLegacyOwner) {
+      throw new Error(`Kit "${pkg.name}" grants legacy data to undeclared Plugin "${unknownLegacyOwner}"`);
+    }
     const assemblySource = assembly.kitSources.find((source) => (
       path.resolve(source.directory) === path.resolve(kitPath)
     ));
@@ -366,6 +380,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       descriptor,
       kitPath,
       legacyDataDirectories,
+      legacyPluginDataDirectories,
       legacyKitIds: publication?.legacyKitIds ?? [],
       config: publication?.config,
     };
@@ -458,6 +473,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       descriptor,
       kitPath,
       legacyDataDirectories,
+      legacyPluginDataDirectories,
       legacyKitIds,
       config: configDeclaration,
     } = await resolveAndReadKit(kitNameOrPath);
@@ -486,7 +502,12 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         path: pluginPath,
         name: info.name,
         kitId: descriptor.name,
-        legacyDataDirectories,
+        legacyDataDirectories: [...new Set([
+          ...legacyDataDirectories,
+          ...(Object.hasOwn(legacyPluginDataDirectories, info.name)
+            ? legacyPluginDataDirectories[info.name] ?? []
+            : []),
+        ])],
         credentials,
       });
     }
