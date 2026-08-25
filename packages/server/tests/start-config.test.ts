@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { ensureDataDir, resolveStartConfig } from '../src/start-config';
+import { applyStartArgumentsToEnv, parseStartArguments } from '../src/start-args';
 
 describe('resolveStartConfig', () => {
   it('uses DB_PATH when provided, resolved to an absolute path', () => {
@@ -43,6 +44,43 @@ describe('resolveStartConfig', () => {
     ]);
   });
 
+  it('moves every persistent root together with HARBORS_DATA_ROOT', () => {
+    const config = resolveStartConfig('/project', { HARBORS_DATA_ROOT: '/srv/harbors-alpha' }, '/users/tester');
+    expect(config.applicationDataDir).toBe('/srv/harbors-alpha');
+    expect(config.configDataDir).toBe('/srv/harbors-alpha');
+    expect(config.dbPath).toBe('/srv/harbors-alpha/harbors.db');
+    expect(config.pluginPathRoots).toEqual({
+      applicationData: '/srv/harbors-alpha',
+      data: '/srv/harbors-alpha/plugins/data',
+      cache: '/srv/harbors-alpha/plugins/cache',
+      temp: '/srv/harbors-alpha/plugins/temp',
+    });
+    expect(config.legacyDbPaths).toEqual([]);
+    expect(config.legacyPluginDataRoots).toEqual([]);
+  });
+
+  it('rejects a relative HARBORS_DATA_ROOT', () => {
+    expect(() => resolveStartConfig('/project', { HARBORS_DATA_ROOT: 'relative' }, '/users/tester'))
+      .toThrow(/HARBORS_DATA_ROOT.*absolute/u);
+  });
+
+  it('keeps component overrides above the unified data root', () => {
+    const config = resolveStartConfig('/project', {
+      HARBORS_DATA_ROOT: '/srv/harbors-alpha',
+      DB_PATH: '/srv/harbors-alpha/custom.db',
+      HARBORS_PLUGIN_DATA_ROOT: '/srv/harbors-alpha/custom-plugin-data',
+    }, '/users/tester');
+    expect(config.dbPath).toBe('/srv/harbors-alpha/custom.db');
+    expect(config.pluginPathRoots.data).toBe('/srv/harbors-alpha/custom-plugin-data');
+    expect(config.pluginPathRoots.cache).toBe('/srv/harbors-alpha/plugins/cache');
+  });
+
+  it('retains legacy migration when an explicit root resolves to the default root', () => {
+    const config = resolveStartConfig('/project', { HARBORS_DATA_ROOT: '/users/tester/.harbors' }, '/users/tester');
+    expect(config.legacyDbPaths).toHaveLength(2);
+    expect(config.legacyPluginDataRoots).toHaveLength(2);
+  });
+
   it('resolves config storage under the injected user home directory', () => {
     const config = resolveStartConfig('/project', {}, '/users/tester');
     expect(config.configDataDir).toBe('/users/tester/.harbors');
@@ -72,6 +110,30 @@ describe('resolveStartConfig', () => {
     expect(config.dbPath).toBe('/custom/server.db');
     expect(config.pluginPathRoots.applicationData).toBe('/users/tester/.harbors');
     expect(config.pluginPathRoots.data).toBe('/users/tester/.harbors/custom-data');
+  });
+});
+
+describe('parseStartArguments', () => {
+  it('accepts both data-root forms and canonicalizes the value', () => {
+    expect(parseStartArguments(['--data-root', '/srv/data/../harbors']).dataRoot).toBe('/srv/harbors');
+    expect(parseStartArguments(['--data-root=/srv/harbors']).dataRoot).toBe('/srv/harbors');
+  });
+
+  it('supports the pnpm separator and help', () => {
+    expect(parseStartArguments(['--', '--help'])).toEqual({ dataRoot: undefined, help: true });
+  });
+
+  it('rejects relative, missing, duplicate, and unknown arguments', () => {
+    expect(() => parseStartArguments(['--data-root', 'relative'])).toThrow(/absolute/u);
+    expect(() => parseStartArguments(['--data-root'])).toThrow(/requires/u);
+    expect(() => parseStartArguments(['--data-root=/one', '--data-root=/two'])).toThrow(/once/u);
+    expect(() => parseStartArguments(['--unknown'])).toThrow(/Unknown start argument/u);
+  });
+
+  it('applies a CLI data root over the inherited environment for child processes', () => {
+    const env = { HARBORS_DATA_ROOT: '/old/root', KEEP: 'value' };
+    expect(applyStartArgumentsToEnv(env, parseStartArguments(['--data-root=/new/root']))).toBe(env);
+    expect(env).toEqual({ HARBORS_DATA_ROOT: '/new/root', KEEP: 'value' });
   });
 });
 

@@ -11,6 +11,7 @@ interface PendingDevice {
   userAgent: string;
   requestedAt: number;
   displayName: string;
+  requestedUserId?: string;
 }
 
 interface AuthorizedDevice {
@@ -27,7 +28,16 @@ export interface KitPickerOptions {
   selectedSessionId: string | null;
   onSessionSelected(sessionId: string): void;
   onSessionCleared(): void;
-  onContextChanged(): void;
+  onContextChanged(resumeState?: KitPickerResumeState): void;
+  resumeState?: KitPickerResumeState;
+  navigate?(href: string): void;
+}
+
+export interface KitPickerResumeState {
+  step: 'user' | 'session' | 'kit';
+  selectedUserId: string | null;
+  selectedSessionId: string | null;
+  createNewSession?: boolean;
 }
 
 export function renderKitPicker(
@@ -37,6 +47,7 @@ export function renderKitPicker(
 ): void {
   const options = typeof input === 'string' ? legacyOptions(input) : input;
   host.replaceChildren(createPickerShell(kits, options));
+  if (options.resumeState) host.querySelector<HTMLElement>('#kit-picker-title')?.focus();
 }
 
 export function renderKitPickerLoading(host: HTMLElement): void {
@@ -60,8 +71,8 @@ export function renderKitPickerError(host: HTMLElement, retry: () => void): void
   alert.setAttribute('role', 'alert');
   alert.append(
     errorMark,
-    element('strong', '', '无法读取 Kit 列表'),
-    element('span', '', '确认服务仍在运行，然后重新加载列表。'),
+    element('strong', '', '无法打开工作台入口'),
+    element('span', '', '确认服务仍在运行，然后重新加载。'),
   );
   const button = element('button', 'kit-retry', '重新加载');
   button.setAttribute('type', 'button');
@@ -83,7 +94,8 @@ function createPickerShell(kits: PublicKitCatalogEntry[], options: KitPickerOpti
   authTab.setAttribute('role', 'tab');
   authTab.setAttribute('aria-selected', 'false');
 
-  tabs.append(workbenchTab, authTab);
+  tabs.append(workbenchTab);
+  if (options.context.actor === 'local-admin') tabs.append(authTab);
 
   const workbenchPanel = element('div', 'kit-tab-panel');
   workbenchPanel.setAttribute('role', 'tabpanel');
@@ -120,208 +132,520 @@ function createPickerShell(kits: PublicKitCatalogEntry[], options: KitPickerOpti
 function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOptions): HTMLElement {
   const main = element('main', 'kit-picker-body');
   main.setAttribute('aria-labelledby', 'kit-picker-title');
+  const masthead = createMasthead();
+  const stage = element('div', 'kit-flow-stage');
+  const live = element('p', 'kit-flow-live');
+  live.setAttribute('aria-live', 'polite');
+  const footer = element('footer', 'kit-picker-footer');
+  footer.append(element('span', '', '同一端口 · 独立 Session'), element('span', '', 'ITHARBORS WORKBENCH'));
+  main.append(masthead, stage, live, footer);
 
-  const masthead = element('header', 'kit-masthead');
-  const identity = element('div', 'kit-host-identity');
-  identity.append(
-    element('span', 'kit-host-mark', 'IH'),
-    element('span', 'kit-host-name', 'ITHARBORS'),
-  );
-  masthead.append(
-    identity,
-    element('span', 'kit-host-mode', 'Web Host / Multi-Kit'),
-  );
+  const restored = options.selectedSessionId
+    ? options.context.sessions.find((session) => session.sessionId === options.selectedSessionId)
+    : undefined;
+  const remoteUserId = options.context.actor === 'user' ? options.context.currentUser?.userId ?? null : null;
+  const resume = options.resumeState;
+  let sessionSummaries = [...options.context.sessions];
+  const state: KitPickerResumeState = resume
+    ? normalizeResumeState(resume, options.context)
+    : restored
+      ? { step: 'kit', selectedUserId: restored.ownerUserId, selectedSessionId: restored.sessionId }
+      : { step: remoteUserId ? 'session' : 'user', selectedUserId: remoteUserId, selectedSessionId: null };
+  let creationLocked = false;
+  let returnFocusId: string | null = null;
+  let allowDefaultSession = options.resumeState?.createNewSession !== true;
 
-  const intro = element('section', 'kit-picker-intro');
-  const eyebrow = element('p', 'kit-picker-eyebrow', '多 Kit 主机');
-  const title = element('h1', '', '选择工作台');
-  title.id = 'kit-picker-title';
-  intro.append(
-    eyebrow,
-    title,
-    element('p', 'kit-picker-lede', '每个工作台使用独立会话。选择一个 Kit，在当前浏览器中开始工作。'),
-  );
+  const renderStep = (focusTitle = false) => {
+    stage.replaceChildren();
+    stage.className = `kit-flow-stage kit-flow-step-${state.step}`;
+    if (options.context.actor === 'user' && !options.context.currentUser) {
+      stage.append(createIdentityUnavailable(() => window.location.reload()));
+      return;
+    }
+    if (state.step === 'user') stage.append(createUserStep());
+    if (state.step === 'session') stage.append(createSessionStep());
+    if (state.step === 'kit') stage.append(createKitStep());
+    if (focusTitle) stage.querySelector<HTMLElement>('#kit-picker-title')?.focus();
+  };
 
-  const contextTrack = element('section', 'workbench-context-track');
-  contextTrack.setAttribute('aria-label', '用户与 Session');
-  const status = element('p', 'workbench-context-status');
-  status.setAttribute('aria-live', 'polite');
-  const userField = element('label', 'workbench-context-field');
-  userField.append(element('span', 'workbench-context-label', '用户'));
-  const userSelect = element('select', 'workbench-context-select');
-  const users = options.context.users;
-  for (const user of users) {
-    const option = element('option', '', user.displayName);
-    option.value = user.userId;
-    userSelect.append(option);
-  }
-  const initialOwner = options.context.currentUser?.userId
-    ?? options.context.sessions.find((session) => session.sessionId === options.selectedSessionId)?.ownerUserId
-    ?? users[0]?.userId
-    ?? '';
-  userSelect.value = initialOwner;
-  userSelect.disabled = options.context.actor === 'user';
-  userField.append(userSelect);
+  const moveTo = (step: KitPickerResumeState['step'], focusTitle = true) => {
+    state.step = step;
+    live.textContent = step === 'user' ? '请选择使用者' : step === 'session' ? '请选择 Session' : '请选择工作台';
+    renderStep(focusTitle);
+  };
 
-  const sessionField = element('label', 'workbench-context-field');
-  sessionField.append(element('span', 'workbench-context-label', 'Session'));
-  const sessionSelect = element('select', 'workbench-context-select');
-  sessionField.append(sessionSelect);
-  const createSession = element('button', 'workbench-context-action', '＋ 新建 Session');
-  createSession.type = 'button';
-  const createUser = element('button', 'workbench-context-action', '＋ 创建用户');
-  createUser.type = 'button';
-  createUser.hidden = options.context.actor !== 'local-admin';
-  const renameUser = element('button', 'workbench-context-action', '重命名用户');
-  renameUser.type = 'button';
-  renameUser.hidden = options.context.actor !== 'local-admin';
-  const claim = element('button', 'workbench-context-action', '归属未分配 Session');
-  claim.type = 'button';
-  claim.hidden = options.context.actor !== 'local-admin' || options.context.ownerlessSessions.length === 0;
-  const ownerlessSelect = element('select', 'workbench-context-select workbench-ownerless-select');
-  ownerlessSelect.setAttribute('aria-label', '未分配 Session');
-  ownerlessSelect.hidden = claim.hidden;
-  for (const session of options.context.ownerlessSessions) {
-    const option = element('option', '', `${shortId(session.sessionId)} · ${formatTime(session.lastAccessAt)}`);
-    option.value = session.sessionId;
-    ownerlessSelect.append(option);
-  }
+  const createUserStep = (): HTMLElement => {
+    const section = createStepSection('使用者', '选择使用者', '选择你的头像，继续进入工作台。');
+    const grid = element('div', 'kit-user-grid');
+    for (const user of options.context.users) {
+      const group = element('div', 'kit-user-choice');
+      const card = createUserCard(createAvatar(user.userId, user.displayName), user.displayName);
+      card.dataset.userId = user.userId;
+      card.id = `kit-user-${safeDomId(user.userId)}`;
+      const chooseUser = () => {
+        state.selectedUserId = user.userId;
+        state.selectedSessionId = null;
+        allowDefaultSession = true;
+        returnFocusId = card.id;
+        options.onSessionCleared();
+        moveTo('session');
+      };
+      card.addEventListener('click', (event) => {
+        if (event.target instanceof HTMLInputElement) return;
+        chooseUser();
+      });
+      card.addEventListener('keydown', (event) => {
+        if (event.target !== card || (event.key !== 'Enter' && event.key !== ' ')) return;
+        event.preventDefault();
+        chooseUser();
+      });
+      const actions = element('div', 'kit-user-actions');
+      actions.setAttribute('role', 'group');
+      actions.setAttribute('aria-label', `${user.displayName}的用户操作`);
+      const rename = element('button', 'kit-user-action kit-user-rename', '改');
+      rename.type = 'button';
+      rename.title = `重命名 ${user.displayName}`;
+      rename.setAttribute('aria-label', `重命名 ${user.displayName}`);
+      rename.addEventListener('click', () => showUserEditor(card, user, rename));
+      const remove = element('button', 'kit-user-action kit-user-delete', '删');
+      remove.type = 'button';
+      remove.title = `删除 ${user.displayName}`;
+      remove.setAttribute('aria-label', `删除 ${user.displayName}`);
+      remove.addEventListener('click', () => showDeleteConfirmation(group, actions, user, rename, remove));
+      actions.append(rename, remove);
+      group.append(card, actions);
+      grid.append(group);
+    }
+    const create = createUserCard(element('span', 'kit-user-create-mark', '＋'), '新用户');
+    create.classList.add('kit-user-create');
+    create.addEventListener('click', (event) => {
+      if (event.target instanceof HTMLInputElement) return;
+      showUserEditor(create);
+    });
+    create.addEventListener('keydown', (event) => {
+      if (event.target !== create || (event.key !== 'Enter' && event.key !== ' ')) return;
+      event.preventDefault();
+      showUserEditor(create);
+    });
+    grid.append(create);
+    section.append(grid);
+    if (options.context.users.length === 0) {
+      section.append(element('p', 'kit-flow-hint', '这里还没有用户。创建一个用户后即可继续。'));
+    }
+    return section;
 
-  const updateLinks = (sessionId: string | null) => {
-    for (const link of main.querySelectorAll<HTMLAnchorElement>('.kit-link')) {
-      const kitId = link.dataset.kitId ?? '';
-      if (sessionId) {
-        link.href = `/kits/${encodeURIComponent(kitId)}?session=${encodeURIComponent(sessionId)}`;
-        link.removeAttribute('aria-disabled');
-        link.tabIndex = 0;
-      } else {
-        link.removeAttribute('href');
-        link.setAttribute('aria-disabled', 'true');
-        link.tabIndex = -1;
+    function createUserCard(mark: HTMLElement, label: string): HTMLElement {
+      const card = element('div', 'kit-user-card');
+      card.tabIndex = 0;
+      card.setAttribute('role', 'button');
+      card.setAttribute('aria-label', label);
+      card.append(mark, element('span', 'kit-user-name', label));
+      return card;
+    }
+
+    function showDeleteConfirmation(
+      group: HTMLElement,
+      actions: HTMLElement,
+      user: WorkbenchContext['users'][number],
+      rename: HTMLButtonElement,
+      remove: HTMLButtonElement,
+    ): void {
+      if (section.querySelector('.kit-user-delete-confirming')) return;
+      group.classList.add('kit-user-delete-confirming');
+      const cancel = element('button', 'kit-user-action kit-user-delete-cancel', '取消');
+      cancel.type = 'button';
+      cancel.setAttribute('aria-label', `取消删除 ${user.displayName}`);
+      const confirm = element('button', 'kit-user-action kit-user-delete-confirm', '删除');
+      confirm.type = 'button';
+      confirm.setAttribute('aria-label', `确认删除 ${user.displayName}`);
+      const restore = () => {
+        group.classList.remove('kit-user-delete-confirming');
+        actions.replaceChildren(rename, remove);
+        remove.focus();
+      };
+      cancel.addEventListener('click', restore);
+      confirm.addEventListener('click', async () => {
+        cancel.disabled = true;
+        confirm.disabled = true;
+        group.setAttribute('aria-busy', 'true');
+        live.textContent = `正在删除 ${user.displayName}…`;
+        try {
+          const response = await fetch(`/api/workbench/user/${encodeURIComponent(user.userId)}`, { method: 'DELETE' });
+          if (!response.ok) {
+            if (response.status === 409) throw new Error('in-use');
+            throw new Error(String(response.status));
+          }
+          options.onContextChanged({ ...state, step: 'user', selectedUserId: null, selectedSessionId: null });
+        } catch (error) {
+          group.removeAttribute('aria-busy');
+          group.classList.remove('kit-user-delete-confirming');
+          const inUse = error instanceof Error && error.message === 'in-use';
+          const message = inUse ? '该用户仍有 Session 或授权设备，暂不能删除。' : '删除失败，请重试。';
+          const status = element('span', 'kit-user-action-error', inUse ? '仍在使用' : '删除失败');
+          actions.replaceChildren(status, rename, remove);
+          remove.disabled = false;
+          live.textContent = message;
+          remove.focus();
+        }
+      });
+      actions.replaceChildren(cancel, confirm);
+      confirm.focus();
+    }
+
+    function showUserEditor(card: HTMLElement, user?: WorkbenchContext['users'][number], returnTarget?: HTMLButtonElement): void {
+      if (section.querySelector('.kit-user-editor')) return;
+      const isRename = !!user;
+      const name = card.querySelector<HTMLElement>('.kit-user-name');
+      if (!name) return;
+      const input = document.createElement('input');
+      input.className = 'kit-user-name kit-user-editor-input';
+      input.name = 'displayName';
+      input.type = 'text';
+      input.setAttribute('aria-label', isRename ? `${user!.displayName}的新名称` : '新用户名称');
+      input.setAttribute('aria-description', '按 Enter 确认，按 Escape 取消');
+      input.placeholder = isRename ? '用户名称' : '输入名称';
+      input.required = true;
+      input.maxLength = 80;
+      input.autocomplete = 'off';
+      input.value = user?.displayName ?? '';
+      name.replaceWith(input);
+      card.classList.add('kit-user-editor');
+      card.setAttribute('aria-busy', 'false');
+      card.removeAttribute('role');
+      card.tabIndex = -1;
+      let editingLocked = false;
+      let editorClosed = false;
+      const focusInputWithoutViewportShift = () => {
+        input.focus({ preventScroll: true });
+      };
+
+      const close = (restoreFocus = true) => {
+        if (editingLocked || editorClosed) return;
+        editorClosed = true;
+        input.replaceWith(name);
+        card.classList.remove('kit-user-editor', 'kit-user-editor-invalid');
+        card.removeAttribute('aria-busy');
+        card.setAttribute('role', 'button');
+        card.tabIndex = 0;
+        if (restoreFocus) (returnTarget ?? card).focus();
+      };
+      input.addEventListener('blur', () => close(false));
+      input.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+          event.preventDefault();
+          close();
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          void save();
+        }
+      });
+
+      const save = async () => {
+        if (editingLocked) return;
+        const displayName = input.value.trim();
+        if (!displayName) {
+          card.classList.add('kit-user-editor-invalid');
+          input.setAttribute('aria-invalid', 'true');
+          input.placeholder = '请输入名称';
+          live.textContent = '请输入用户名称。';
+          focusInputWithoutViewportShift();
+          return;
+        }
+        if (displayName.length > 80) {
+          card.classList.add('kit-user-editor-invalid');
+          input.setAttribute('aria-invalid', 'true');
+          live.textContent = '用户名称不能超过 80 个字符。';
+          focusInputWithoutViewportShift();
+          return;
+        }
+        editingLocked = true;
+        card.classList.remove('kit-user-editor-invalid');
+        card.setAttribute('aria-busy', 'true');
+        input.disabled = true;
+        input.removeAttribute('aria-invalid');
+        live.textContent = isRename ? '正在保存用户名称…' : '正在创建用户…';
+        try {
+          const response = await fetch(user ? `/api/workbench/user/${encodeURIComponent(user.userId)}` : '/api/workbench/user', {
+            method: user ? 'PATCH' : 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ displayName }),
+          });
+          if (!response.ok) throw new Error(String(response.status));
+          if (user) {
+            options.onContextChanged({ ...state, step: 'user' });
+          } else {
+            const created = await response.json() as { userId: string };
+            options.onContextChanged({ step: 'session', selectedUserId: created.userId, selectedSessionId: null });
+          }
+        } catch {
+          editingLocked = false;
+          card.setAttribute('aria-busy', 'false');
+          card.classList.add('kit-user-editor-invalid');
+          input.disabled = false;
+          input.setAttribute('aria-invalid', 'true');
+          live.textContent = isRename ? '未保存名称，请重试。' : '未创建用户，请重试。';
+          focusInputWithoutViewportShift();
+        }
+      };
+      focusInputWithoutViewportShift();
+    }
+  };
+
+  const createSessionStep = (): HTMLElement => {
+    const user = selectedUser(options.context, state.selectedUserId);
+    if (!user) {
+      state.step = 'user';
+      return createUserStep();
+    }
+    const section = createStepSection(user.displayName, '选择 Session', '继续之前的工作，或保持不选并在继续时创建新的 Session。');
+    section.setAttribute('aria-busy', 'false');
+    if (options.context.actor === 'local-admin') {
+      const back = backButton('选择用户', () => {
+        state.selectedSessionId = null;
+        options.onSessionCleared();
+        moveTo('user');
+        if (returnFocusId) stage.querySelector<HTMLElement>(`#${returnFocusId}`)?.focus();
+      });
+      section.prepend(back);
+    }
+    const owned = sessionSummaries
+      .filter((session) => session.ownerUserId === user.userId)
+      .sort((left, right) => right.lastAccessAt - left.lastAccessAt);
+    if (allowDefaultSession && !state.selectedSessionId && owned.length > 0) {
+      state.selectedSessionId = owned[0].sessionId;
+      options.onSessionSelected(owned[0].sessionId);
+      live.textContent = `已默认选择最近使用的 Session ${shortId(owned[0].sessionId)}`;
+    }
+    const fieldset = element('fieldset', 'kit-session-fieldset');
+    fieldset.append(element('legend', 'kit-session-legend', '最近使用'));
+    if (owned.length === 0) {
+      fieldset.append(element('p', 'kit-empty-copy', '还没有可继续的 Session。'));
+    } else {
+      for (const session of owned) fieldset.append(createSessionChoice(session));
+    }
+    const clear = element('button', 'kit-session-clear', '不选择，创建新 Session');
+    clear.type = 'button';
+    clear.setAttribute('aria-pressed', String(state.selectedSessionId === null));
+    clear.addEventListener('click', () => {
+      state.selectedSessionId = null;
+      allowDefaultSession = false;
+      options.onSessionCleared();
+      for (const radio of fieldset.querySelectorAll<HTMLInputElement>('input[type="radio"]')) radio.checked = false;
+      clear.setAttribute('aria-pressed', 'true');
+      live.textContent = '已选择在继续时创建新 Session';
+    });
+    const continueButton = element('button', 'kit-primary-action', '继续选择工作台');
+    continueButton.type = 'button';
+    continueButton.addEventListener('click', async () => {
+      if (state.selectedSessionId) {
+        moveTo('kit');
+        return;
+      }
+      if (creationLocked) return;
+      creationLocked = true;
+      section.setAttribute('aria-busy', 'true');
+      setSessionControlsDisabled(section, true);
+      section.querySelector('.kit-creation-error')?.remove();
+      live.textContent = '正在创建 Session…';
+      try {
+        const response = await fetch('/api/workbench/session', {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: user.userId }),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+        const session = await response.json() as PublicSessionSummary;
+        if (!sessionSummaries.some((item) => item.sessionId === session.sessionId)) {
+          sessionSummaries = [...sessionSummaries, session];
+        }
+        state.selectedSessionId = session.sessionId;
+        options.onSessionSelected(session.sessionId);
+        creationLocked = false;
+        moveTo('kit');
+      } catch {
+        creationLocked = false;
+        section.setAttribute('aria-busy', 'false');
+        setSessionControlsDisabled(section, false);
+        live.textContent = '未创建 Session，请重试。';
+        const alert = element('p', 'kit-creation-error', '未创建 Session，请重试。');
+        alert.setAttribute('role', 'alert');
+        section.append(alert);
+      }
+    });
+    const note = element('p', 'kit-flow-hint', '未选择时，继续后会先创建新 Session，再选择工作台。');
+    section.append(fieldset, clear, note, continueButton);
+    if (options.context.actor === 'local-admin' && options.context.ownerlessSessions.length) section.append(createOwnerlessArea(user.userId));
+    return section;
+
+    function createSessionChoice(session: PublicSessionSummary): HTMLElement {
+      const entry = element('div', 'kit-session-entry');
+      const label = element('label', 'kit-session-option');
+      const radio = document.createElement('input');
+      radio.type = 'radio';
+      radio.name = 'workbench-session';
+      radio.value = session.sessionId;
+      radio.checked = state.selectedSessionId === session.sessionId;
+      radio.addEventListener('change', () => {
+        state.selectedSessionId = session.sessionId;
+        allowDefaultSession = true;
+        options.onSessionSelected(session.sessionId);
+        clear.setAttribute('aria-pressed', 'false');
+        live.textContent = `已选择 Session ${shortId(session.sessionId)}`;
+      });
+      const copy = element('span', 'kit-session-copy');
+      copy.append(element('strong', '', shortId(session.sessionId)), element('span', '', `最近使用 ${formatTime(session.lastAccessAt)}`));
+      label.append(radio, copy);
+      const actions = element('div', 'kit-session-actions');
+      actions.setAttribute('role', 'group');
+      actions.setAttribute('aria-label', `${shortId(session.sessionId)} 的 Session 操作`);
+      const remove = element('button', 'kit-session-action kit-session-delete', '删');
+      remove.type = 'button';
+      remove.title = `删除 Session ${shortId(session.sessionId)}`;
+      remove.setAttribute('aria-label', `删除 Session ${shortId(session.sessionId)}`);
+      remove.addEventListener('click', () => showSessionDeleteConfirmation());
+      actions.append(remove);
+      entry.append(label, actions);
+      return entry;
+
+      function showSessionDeleteConfirmation(): void {
+        if (fieldset.querySelector('.kit-session-delete-confirming')) return;
+        entry.classList.add('kit-session-delete-confirming');
+        const cancel = element('button', 'kit-session-action kit-session-delete-cancel', '取消');
+        cancel.type = 'button';
+        cancel.setAttribute('aria-label', `取消删除 Session ${shortId(session.sessionId)}`);
+        const confirm = element('button', 'kit-session-action kit-session-delete-confirm', '删除');
+        confirm.type = 'button';
+        confirm.setAttribute('aria-label', `确认删除 Session ${shortId(session.sessionId)}`);
+        const warning = element('span', 'kit-session-delete-warning', '将关闭运行中的工作台，并永久删除状态。');
+        warning.id = `kit-session-delete-warning-${safeDomId(session.sessionId)}`;
+        confirm.setAttribute('aria-describedby', warning.id);
+        const restore = () => {
+          entry.classList.remove('kit-session-delete-confirming');
+          warning.remove();
+          actions.replaceChildren(remove);
+          remove.focus();
+        };
+        cancel.addEventListener('click', restore);
+        confirm.addEventListener('click', async () => {
+          cancel.disabled = true;
+          confirm.disabled = true;
+          section.setAttribute('aria-busy', 'true');
+          setSessionControlsDisabled(section, true);
+          live.textContent = `正在删除 Session ${shortId(session.sessionId)}…`;
+          try {
+            const response = await fetch(`/api/session/${encodeURIComponent(session.sessionId)}`, { method: 'DELETE' });
+            if (!response.ok) throw new Error(String(response.status));
+            sessionSummaries = sessionSummaries.filter((item) => item.sessionId !== session.sessionId);
+            if (state.selectedSessionId === session.sessionId) {
+              state.selectedSessionId = null;
+              allowDefaultSession = true;
+              options.onSessionCleared();
+            }
+            live.textContent = `已删除 Session ${shortId(session.sessionId)}`;
+            renderStep(true);
+          } catch {
+            section.setAttribute('aria-busy', 'false');
+            setSessionControlsDisabled(section, false);
+            entry.classList.remove('kit-session-delete-confirming');
+            warning.remove();
+            const status = element('span', 'kit-session-action-error', '删除失败');
+            actions.replaceChildren(status, remove);
+            live.textContent = 'Session 删除失败，请重试。';
+            remove.focus();
+          }
+        });
+        actions.replaceChildren(cancel, confirm);
+        entry.append(warning);
+        confirm.focus();
       }
     }
   };
-  const refreshSessions = () => {
-    const owned = options.context.sessions.filter((session) => session.ownerUserId === userSelect.value);
-    sessionSelect.replaceChildren();
-    const placeholder = element('option', '', owned.length ? '选择 Session' : '暂无 Session，请新建');
-    placeholder.value = '';
-    sessionSelect.append(placeholder);
-    for (const session of owned) {
+
+  const createOwnerlessArea = (userId: string): HTMLElement => {
+    const details = element('details', 'kit-ownerless-area');
+    const summary = element('summary', '', '恢复旧 Session');
+    const select = element('select', 'workbench-ownerless-select');
+    select.setAttribute('aria-label', '未分配 Session');
+    for (const session of options.context.ownerlessSessions) {
       const option = element('option', '', `${shortId(session.sessionId)} · ${formatTime(session.lastAccessAt)}`);
       option.value = session.sessionId;
-      sessionSelect.append(option);
+      select.append(option);
     }
-    const selected = owned.some((session) => session.sessionId === options.selectedSessionId)
-      ? options.selectedSessionId
-      : null;
-    sessionSelect.value = selected ?? '';
-    updateLinks(selected);
+    const claim = element('button', 'kit-secondary-action', '归属给当前用户');
+    claim.type = 'button';
+    claim.addEventListener('click', async () => {
+      const target = options.context.ownerlessSessions.find((session) => session.sessionId === select.value);
+      if (!target || !window.confirm(`将 Session ${shortId(target.sessionId)} 归属给当前用户？此操作不能撤销。`)) return;
+      try {
+        const response = await fetch(`/api/workbench/session/${encodeURIComponent(target.sessionId)}/claim`, {
+          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId }),
+        });
+        if (!response.ok) throw new Error(String(response.status));
+        options.onSessionSelected(target.sessionId);
+        options.onContextChanged({ step: 'session', selectedUserId: userId, selectedSessionId: target.sessionId });
+      } catch {
+        live.textContent = '无法归属 Session，它可能已被处理。';
+      }
+    });
+    details.append(summary, select, claim);
+    return details;
   };
-  userSelect.addEventListener('change', () => {
-    options.selectedSessionId = null;
-    options.onSessionCleared();
-    refreshSessions();
-    status.textContent = '已切换用户，请选择或新建 Session。';
-  });
-  sessionSelect.addEventListener('change', () => {
-    const selected = sessionSelect.value || null;
-    options.selectedSessionId = selected;
-    updateLinks(selected);
-    if (selected) options.onSessionSelected(selected);
-  });
-  createSession.addEventListener('click', async () => {
-    if (!userSelect.value) {
-      status.textContent = '请先创建或选择用户。';
-      return;
+
+  const createKitStep = (): HTMLElement => {
+    const user = selectedUser(options.context, state.selectedUserId);
+    if (!user) {
+      state.step = options.context.actor === 'user' ? 'session' : 'user';
+      return state.step === 'session' ? createSessionStep() : createUserStep();
     }
-    createSession.disabled = true;
-    try {
-      const response = await fetch('/api/workbench/session', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ userId: userSelect.value }),
-      });
-      if (!response.ok) throw new Error(String(response.status));
-      const session = await response.json() as PublicSessionSummary;
-      options.onSessionSelected(session.sessionId);
-      options.onContextChanged();
-    } catch {
-      status.textContent = '无法新建 Session，请重试。';
-    } finally {
-      createSession.disabled = false;
+    if (!state.selectedSessionId) {
+      state.step = 'session';
+      return createSessionStep();
     }
-  });
-  createUser.addEventListener('click', async () => {
-    const displayName = window.prompt('输入用户显示名')?.trim();
-    if (!displayName) return;
-    const response = await fetch('/api/workbench/user', {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName }),
+    const section = createStepSection(`${user.displayName} · ${shortId(state.selectedSessionId)}`, '选择工作台', '选择一个 Kit，开始工作。');
+    const back = backButton('选择 Session', () => {
+      moveTo('session', false);
+      const target = state.selectedSessionId
+        ? stage.querySelector<HTMLInputElement>(`input[value="${cssEscape(state.selectedSessionId)}"]`)
+        : stage.querySelector<HTMLButtonElement>('.kit-session-clear');
+      target?.focus();
     });
-    if (response.ok) options.onContextChanged();
-    else status.textContent = '无法创建用户，请重试。';
-  });
-  renameUser.addEventListener('click', async () => {
-    const current = users.find((user) => user.userId === userSelect.value);
-    if (!current) return;
-    const displayName = window.prompt('修改用户显示名', current.displayName)?.trim();
-    if (!displayName) return;
-    const response = await fetch(`/api/workbench/user/${encodeURIComponent(current.userId)}`, {
-      method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName }),
-    });
-    if (response.ok) options.onContextChanged();
-    else status.textContent = '无法修改显示名，请重试。';
-  });
-  claim.addEventListener('click', async () => {
-    const target = options.context.ownerlessSessions.find((session) => session.sessionId === ownerlessSelect.value);
-    if (!target || !userSelect.value || !window.confirm(`将 Session ${shortId(target.sessionId)} 归属给当前用户？此操作不能撤销。`)) return;
-    const response = await fetch(`/api/workbench/session/${encodeURIComponent(target.sessionId)}/claim`, {
-      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: userSelect.value }),
-    });
-    if (response.ok) options.onContextChanged();
-    else status.textContent = '无法归属 Session，它可能已被处理。';
-  });
-  contextTrack.append(userField, sessionField, createSession, createUser, renameUser, ownerlessSelect, claim, status);
+    section.prepend(back);
+    const berth = element('section', 'kit-berth');
+    berth.setAttribute('aria-label', '可用 Kit');
+    berth.setAttribute('aria-busy', 'false');
+    const header = element('div', 'kit-berth-heading');
+    header.append(element('span', '', '可用工作台'), element('span', 'kit-count', `${kits.length} KIT${kits.length === 1 ? '' : 'S'}`));
+    berth.append(header);
+    if (kits.length === 0) {
+      const empty = element('div', 'kit-empty');
+      empty.append(element('strong', '', '没有可用的 Kit'), element('p', '', '检查 kits 目录中的 package.json，确认 Kit manifest 完整有效。'));
+      berth.append(empty);
+    } else {
+      const list = element('ul', 'kit-list');
+      list.setAttribute('role', 'list');
+      for (const kit of kits) list.append(createKitItem(kit, () => openKit(kit.id)));
+      berth.append(list);
+    }
+    section.append(berth);
+    return section;
+  };
 
-  const berth = element('section', 'kit-berth');
-  berth.setAttribute('aria-label', '可用 Kit');
-  const berthHeader = element('div', 'kit-berth-heading');
-  berthHeader.append(
-    element('span', '', '可用工作台'),
-    element('span', 'kit-count', `${kits.length} KIT${kits.length === 1 ? '' : 'S'}`),
-  );
-  berth.append(berthHeader);
+  const openKit = (kitId: string) => {
+    const sessionId = state.selectedSessionId;
+    if (!sessionId) return;
+    const href = `/kits/${encodeURIComponent(kitId)}?session=${encodeURIComponent(sessionId)}`;
+    if (options.navigate) options.navigate(href);
+    else window.location.assign(href);
+  };
 
-  if (kits.length === 0) {
-    const empty = element('div', 'kit-empty');
-    empty.append(
-      element('strong', '', '没有可用的 Kit'),
-      element('p', '', '检查 kits 目录中的 package.json，确认 Kit manifest 完整有效。'),
-    );
-    berth.append(empty);
-  } else {
-    const list = element('ul', 'kit-list');
-    list.setAttribute('role', 'list');
-    for (const kit of kits) list.append(createKitItem(kit, options.selectedSessionId ?? ''));
-    berth.append(list);
-  }
-
-  const footer = element('footer', 'kit-picker-footer');
-  footer.append(
-    element('span', '', '同一端口 · 独立 Session'),
-    element('span', '', 'ITHARBORS WORKBENCH'),
-  );
-
-  main.append(masthead, intro, contextTrack, berth, footer);
-  refreshSessions();
+  renderStep();
   return main;
 }
 
-function createKitItem(kit: PublicKitCatalogEntry, sessionId: string): HTMLLIElement {
+function createKitItem(kit: PublicKitCatalogEntry, open: () => void): HTMLLIElement {
   const item = element('li', 'kit-item');
-  const link = element('a', 'kit-link');
+  const link = element('button', 'kit-link');
+  link.type = 'button';
   link.dataset.kitId = kit.id;
-  link.href = `/kits/${encodeURIComponent(kit.id)}?session=${encodeURIComponent(sessionId)}`;
+  link.addEventListener('click', open);
 
   const symbol = element('span', 'kit-symbol', monogram(kit.label));
   symbol.setAttribute('aria-hidden', 'true');
@@ -358,7 +682,77 @@ function legacyOptions(sessionId: string): KitPickerOptions {
     onSessionSelected: () => undefined,
     onSessionCleared: () => undefined,
     onContextChanged: () => undefined,
+    resumeState: { step: 'kit', selectedUserId: 'legacy-user', selectedSessionId: sessionId },
   };
+}
+
+function createMasthead(): HTMLElement {
+  const masthead = element('header', 'kit-masthead');
+  const identity = element('div', 'kit-host-identity');
+  identity.append(element('span', 'kit-host-mark', 'IH'), element('span', 'kit-host-name', 'ITHARBORS'));
+  masthead.append(identity, element('span', 'kit-host-mode', 'Web Host / Multi-Kit'));
+  return masthead;
+}
+
+function createStepSection(eyebrowText: string, titleText: string, ledeText: string): HTMLElement {
+  const section = element('section', 'kit-flow-section');
+  const intro = element('header', 'kit-picker-intro');
+  const title = element('h1', '', titleText);
+  title.id = 'kit-picker-title';
+  title.tabIndex = -1;
+  intro.append(element('p', 'kit-picker-eyebrow', eyebrowText), title, element('p', 'kit-picker-lede', ledeText));
+  section.append(intro);
+  return section;
+}
+
+function createAvatar(userId: string, name: string): HTMLElement {
+  const avatar = element('span', `kit-user-avatar kit-user-avatar-${hash(userId) % 5}`, monogram(name));
+  avatar.setAttribute('aria-hidden', 'true');
+  return avatar;
+}
+
+function createIdentityUnavailable(reload: () => void): HTMLElement {
+  const section = createStepSection('身份不可用', '无法确认当前用户', '此设备的授权没有关联可用用户。请重新加载或联系主机管理员。');
+  const alert = element('p', 'kit-creation-error', '当前授权身份不可用。');
+  alert.setAttribute('role', 'alert');
+  const button = element('button', 'kit-primary-action', '重新加载');
+  button.type = 'button';
+  button.addEventListener('click', reload);
+  section.append(alert, button);
+  return section;
+}
+
+function backButton(label: string, action: () => void): HTMLElement {
+  const nav = element('nav', 'kit-step-nav');
+  nav.setAttribute('aria-label', '步骤导航');
+  const button = element('button', 'kit-back-action', `← 上一步 · ${label}`);
+  button.type = 'button';
+  button.addEventListener('click', action);
+  nav.append(button);
+  return nav;
+}
+
+function selectedUser(context: WorkbenchContext, id: string | null) {
+  return context.users.find((user) => user.userId === id) ?? (context.currentUser?.userId === id ? context.currentUser : undefined);
+}
+
+function normalizeResumeState(state: KitPickerResumeState, context: WorkbenchContext): KitPickerResumeState {
+  const fixedUser = context.actor === 'user' ? context.currentUser?.userId ?? null : state.selectedUserId;
+  const validUser = fixedUser && selectedUser(context, fixedUser) ? fixedUser : null;
+  const validSession = state.selectedSessionId && context.sessions.some((session) => session.sessionId === state.selectedSessionId && session.ownerUserId === validUser)
+    ? state.selectedSessionId : null;
+  const step = context.actor === 'user' && !validUser ? 'session' : state.step === 'user' && context.actor === 'user' ? 'session' : !validUser && state.step !== 'user' ? 'user' : state.step;
+  return { step, selectedUserId: validUser, selectedSessionId: validSession };
+}
+
+function safeDomId(value: string): string { return value.replace(/[^a-zA-Z0-9_-]/g, '-'); }
+function cssEscape(value: string): string { return globalThis.CSS?.escape ? globalThis.CSS.escape(value) : value.replace(/["\\]/g, '\\$&'); }
+function hash(value: string): number { return [...value].reduce((result, char) => ((result * 31) + char.charCodeAt(0)) >>> 0, 0); }
+
+function setSessionControlsDisabled(section: HTMLElement, disabled: boolean): void {
+  for (const control of section.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('button, input, select')) {
+    control.disabled = disabled;
+  }
 }
 
 function createAuthView(): HTMLElement {
@@ -417,22 +811,27 @@ function renderAuthorizedList(host: HTMLElement, devices: AuthorizedDevice[]): v
 function createPendingItem(device: PendingDevice, users: WorkbenchContext['users'], onChanged: () => void): HTMLLIElement {
   const item = element('li', 'auth-device-item');
   const info = element('div', 'auth-device-info');
+  const requestedUser = device.requestedUserId ? users.find((user) => user.userId === device.requestedUserId) : undefined;
   info.append(
     element('div', 'auth-device-id', shortId(device.deviceId)),
-    element('div', 'auth-device-meta', `申请名称: ${device.displayName || '未填写'}`),
+    element('div', 'auth-device-meta', requestedUser
+      ? `申请用户: ${requestedUser.displayName}`
+      : `申请名称: ${device.displayName || '未填写'}`),
     element('div', 'auth-device-meta', `IP: ${device.ip || '未知'}`),
     element('div', 'auth-device-meta', `UA: ${device.userAgent || '未知'}`),
     element('div', 'auth-device-meta', `请求时间: ${formatTime(device.requestedAt)}`),
   );
   const actions = element('div', 'auth-device-actions');
-  const userSelect = element('select', 'auth-user-select');
-  const createOption = element('option', '', `新建用户：${device.displayName || '远程用户'}`);
-  createOption.value = '';
-  userSelect.append(createOption);
-  for (const user of users) {
-    const option = element('option', '', `绑定已有用户：${user.displayName}`);
-    option.value = user.userId;
-    userSelect.append(option);
+  const userSelect = device.requestedUserId ? null : element('select', 'auth-user-select');
+  if (userSelect) {
+    const createOption = element('option', '', `新建用户：${device.displayName || '远程用户'}`);
+    createOption.value = '';
+    userSelect.append(createOption);
+    for (const user of users) {
+      const option = element('option', '', `绑定已有用户：${user.displayName}`);
+      option.value = user.userId;
+      userSelect.append(option);
+    }
   }
   const approveBtn = element('button', 'auth-btn auth-btn-approve', '授权');
   approveBtn.addEventListener('click', async () => {
@@ -440,9 +839,11 @@ function createPendingItem(device: PendingDevice, users: WorkbenchContext['users
       await fetch(`/api/auth/approve/${encodeURIComponent(device.deviceId)}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(userSelect.value
-          ? { userId: userSelect.value }
-          : { displayName: device.displayName || '远程用户' }),
+        body: JSON.stringify(userSelect
+          ? userSelect.value
+            ? { userId: userSelect.value }
+            : { displayName: device.displayName || '远程用户' }
+          : {}),
       });
       onChanged();
     } catch {
@@ -458,7 +859,8 @@ function createPendingItem(device: PendingDevice, users: WorkbenchContext['users
       // ignore
     }
   });
-  actions.append(userSelect, approveBtn, rejectBtn);
+  if (userSelect) actions.append(userSelect);
+  actions.append(approveBtn, rejectBtn);
   item.append(info, actions);
   return item;
 }

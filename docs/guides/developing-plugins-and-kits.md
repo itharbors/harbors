@@ -529,7 +529,8 @@ canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒
 `ctx.paths.data/cache/temp/legacyData`；这些 owner 专属路径和环境过滤都不是文件访问隔离。
 
 Web 宿主默认把 owner 专属路径放在
-`~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。开发与正式启动共享该根，Plugin 不应从
+`~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。开发与正式启动共享数据根语义；宿主使用
+`--data-root` 时这些路径随数据库和 Kit 配置整体切换。Plugin 不应从
 `process.cwd()`、源码目录或 `homedir()` 自行推导持久数据位置。需要诊断磁盘目录归属时，可读取
 inspection 中的 `PluginInfo.storageOwnerKey`；该值只用于映射和日志，不是权限令牌。
 
@@ -620,6 +621,9 @@ test、validate 和本地产物检查。
 ```bash
 pnpm dev -- --kit ./kits/my-kit
 ```
+
+若需隔离验证数据，组合使用 `pnpm dev -- --kit ./kits/my-kit --data-root /absolute/path`。不传
+`--data-root` 时 Dev 会读取正式的 `~/.harbors`，不会因为 development profile 自动创建临时数据。
 
 `--kit` 是直达快捷方式：它把外部 Kit 临时追加到 Catalog，并在服务就绪后只自动打开该 Kit；
 它不会隐藏仓库中的其他 Kit，也不会改变 Web 根页面。使用内置浏览器调试时，从启动日志复制

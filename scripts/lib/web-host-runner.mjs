@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer as createTcpServer } from 'node:net';
@@ -23,8 +23,10 @@ export async function startWebHost(options = {}) {
   };
 
   try {
+    const dataRoot = config.dataRoot ?? path.join(tempRoot, 'data');
+    if (config.dataRoot) await assertExternalDataRoot(tempRoot, dataRoot);
     const ports = await config.allocatePorts();
-    const environment = createEnvironment(config, tempRoot, ports);
+    const environment = createEnvironment(config, ports, dataRoot);
     const processSpecs = createProcessSpecs(config, environment);
 
     for (const spec of processSpecs) {
@@ -48,6 +50,7 @@ export async function startWebHost(options = {}) {
       baseUrl,
       ports: Object.freeze({ ...ports }),
       tempRoot,
+      dataRoot,
       logs: state.logs,
       health,
       stop: () => stopHost({ state, removeDirectory: config.removeDirectory, tempRoot, stopTimeoutMs: config.stopTimeoutMs }),
@@ -64,8 +67,8 @@ export async function allocateWebHostPorts() {
   return Object.freeze({ gateway: values[0], server: values[1], client: values[2], notification: values[3] });
 }
 
-export function createIsolatedPluginPathRoots(tempRoot) {
-  const applicationData = path.join(tempRoot, 'application-data');
+export function createIsolatedPluginPathRoots(dataRoot) {
+  const applicationData = dataRoot;
   return Object.freeze({
     applicationData,
     data: path.join(applicationData, 'plugins', 'data'),
@@ -85,6 +88,7 @@ function normalizeOptions(options) {
   }
   return {
     repositoryRoot,
+    dataRoot: options.dataRoot === undefined ? undefined : canonicalDirectory(options.dataRoot, 'dataRoot'),
     kitSources,
     defaultKit: options.defaultKit,
     environment: options.environment ?? {},
@@ -130,8 +134,7 @@ function positiveInteger(value, context) {
   return value;
 }
 
-function createEnvironment(config, tempRoot, ports) {
-  const dataRoot = path.join(tempRoot, 'data');
+function createEnvironment(config, ports, dataRoot) {
   const common = {
     ...process.env,
     ...config.environment,
@@ -144,14 +147,52 @@ function createEnvironment(config, tempRoot, ports) {
     HARBORS_KIT_SOURCES: JSON.stringify(config.kitSources),
     CE_DEFAULT_KIT: config.defaultKit,
     HARBORS_CREDENTIAL_MODE: config.environment.HARBORS_CREDENTIAL_MODE ?? 'off',
-    DB_PATH: path.join(dataRoot, 'harbors.db'),
+    HARBORS_DATA_ROOT: dataRoot,
   };
+  // A runner owns the complete data boundary. Do not let inherited granular
+  // compatibility overrides escape its temporary or caller-provided root.
+  delete common.DB_PATH;
+  delete common.HARBORS_PLUGIN_DATA_ROOT;
+  delete common.HARBORS_PLUGIN_CACHE_ROOT;
+  delete common.HARBORS_PLUGIN_TEMP_ROOT;
   return {
     common,
-    gateway: { ...common, PORT: String(ports.gateway), SERVER_PORT: String(ports.server), CLIENT_PORT: String(ports.client) },
-    server: { ...common, PORT: String(ports.server), HARBORS_TEST_DATA_ROOT: dataRoot },
+    gateway: {
+      ...common,
+      HARBORS_BIND_HOST: '0.0.0.0',
+      PORT: String(ports.gateway),
+      SERVER_PORT: String(ports.server),
+      CLIENT_PORT: String(ports.client),
+    },
+    server: { ...common, PORT: String(ports.server) },
     client: { ...common, CLIENT_PORT: String(ports.client) },
   };
+}
+
+async function assertExternalDataRoot(tempRoot, dataRoot) {
+  const [physicalTempRoot, physicalDataRoot] = await Promise.all([
+    resolvePhysicalPath(tempRoot),
+    resolvePhysicalPath(dataRoot),
+  ]);
+  if (isSameOrDescendant(tempRoot, dataRoot) || isSameOrDescendant(physicalTempRoot, physicalDataRoot)) {
+    throw new TypeError('dataRoot must be outside the runner temporary directory');
+  }
+}
+
+function isSameOrDescendant(parent, candidate) {
+  const relative = path.relative(parent, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+async function resolvePhysicalPath(value) {
+  try {
+    return await realpath(value);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+    const parent = path.dirname(value);
+    if (parent === value) return value;
+    return path.join(await resolvePhysicalPath(parent), path.basename(value));
+  }
 }
 
 function createProcessSpecs(config, environment) {

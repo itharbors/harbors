@@ -14,6 +14,14 @@ export interface DeviceAuthStatus {
   deviceId: string;
   expiresAt?: number;
   user?: PublicUser;
+  requestedUser?: Pick<PublicUser, 'userId' | 'displayName'>;
+}
+
+export class AuthorizationRequestConflictError extends Error {
+  constructor() {
+    super('This device already has a pending request for another user');
+    this.name = 'AuthorizationRequestConflictError';
+  }
 }
 
 export class AuthManager {
@@ -55,6 +63,45 @@ export class AuthManager {
     return { status: 'pending', deviceId };
   }
 
+  readStatus(deviceId: string): DeviceAuthStatus {
+    if (this.devices.isAuthorized(deviceId)) {
+      const device = this.devices.get(deviceId);
+      return {
+        status: 'authorized',
+        deviceId,
+        expiresAt: device?.expiresAt,
+        user: device ? this.users.get(device.userId) : undefined,
+      };
+    }
+    const pending = this.pending.get(deviceId);
+    if (!pending) return { status: 'unauthorized', deviceId };
+    const requested = pending.requestedUserId ? this.users.get(pending.requestedUserId) : undefined;
+    return {
+      status: 'pending',
+      deviceId,
+      requestedUser: requested ? { userId: requested.userId, displayName: requested.displayName } : undefined,
+    };
+  }
+
+  requestAuthorization(deviceId: string, req: IncomingMessage, userId: string): DeviceAuthStatus {
+    const user = this.users.get(userId);
+    if (!user) throw new Error('User not found');
+    const existing = this.pending.get(deviceId);
+    if (existing?.requestedUserId && existing.requestedUserId !== userId) {
+      throw new AuthorizationRequestConflictError();
+    }
+    this.pending.add(deviceId, {
+      ip: getClientIp(req),
+      userAgent: req.headers['user-agent'] ?? '',
+      requestedUserId: user.userId,
+    });
+    return {
+      status: 'pending',
+      deviceId,
+      requestedUser: { userId: user.userId, displayName: user.displayName },
+    };
+  }
+
   approve(deviceId: string, options: { userId?: string; displayName?: string; ttlMs?: number } = {}): AuthorizedDevice {
     const pending = this.pending.get(deviceId);
     const user = options.userId
@@ -63,6 +110,13 @@ export class AuthManager {
     if (!user) throw new Error('User not found');
     this.pending.remove(deviceId);
     return this.devices.authorize(deviceId, user.userId, options.ttlMs ?? DEFAULT_TTL_MS);
+  }
+
+  approveRequested(deviceId: string): AuthorizedDevice {
+    const requestedUserId = this.pending.get(deviceId)?.requestedUserId;
+    if (!requestedUserId || !this.users.get(requestedUserId)) throw new Error('Requested user not found');
+    this.pending.remove(deviceId);
+    return this.devices.authorize(deviceId, requestedUserId, DEFAULT_TTL_MS);
   }
 
   reject(deviceId: string): void {
@@ -150,7 +204,17 @@ export function getDeviceId(req: IncomingMessage): string | undefined {
   const url = new URL(req.url || '/', 'http://localhost');
   const queryDeviceId = url.searchParams.get('deviceId');
   if (queryDeviceId && queryDeviceId.length > 0) return queryDeviceId;
-  // Fallback to cookie for requests from iframes (panels) that don't have the fetch wrapper.
+  return getCookieDeviceId(req);
+}
+
+export function getIdentityDeviceId(req: IncomingMessage): string | undefined {
+  const header = req.headers['x-device-id'];
+  if (typeof header === 'string' && header.length > 0) return header;
+  // Cookie fallback supports browser requests that cannot set custom headers.
+  return getCookieDeviceId(req);
+}
+
+function getCookieDeviceId(req: IncomingMessage): string | undefined {
   const cookieHeader = req.headers.cookie;
   if (typeof cookieHeader === 'string') {
     const match = cookieHeader.match(/(?:^|;\s*)deviceId=([^;]+)/);

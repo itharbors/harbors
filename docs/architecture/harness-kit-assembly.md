@@ -40,10 +40,12 @@ Framework 的 `scripts/lib/web-host-runner.mjs` 导出 `startWebHost(options)`�
 
 1. 校验绝对 `repositoryRoot`、非空 `kitSources`、`defaultKit` 和超时参数；
 2. 分配 Gateway、Server、Client、notification 四个隔离端口；
-3. 创建临时数据根，并向三个进程传入 Kit sources、default Kit、端口和数据路径；
+3. 默认创建临时数据根，也允许调用方显式传入外部持久根；runner 清除继承的数据库/Plugin 细分路径覆盖，只向三个进程传入统一 `HARBORS_DATA_ROOT`、Kit sources、default Kit 和端口；
 4. 启动 Gateway、Server、Client，轮询 Gateway `/api/health`，保存有限 stdout/stderr 日志；
-5. 返回 `baseUrl`、`ports`、`tempRoot`、`logs`、`health()` 和幂等 `stop()`；
-6. 停止时按逆序发送 SIGTERM，超时后对仍存活的子进程发送 SIGKILL，最后删除临时根；启动失败也执行相同清理。
+5. 返回 `baseUrl`、`ports`、实际 `dataRoot`、`tempRoot`、`logs`、`health()` 和幂等 `stop()`；
+6. 停止时按逆序发送 SIGTERM，超时后对仍存活的子进程发送 SIGKILL，最后只删除 runner 自建临时根；外部 data root 必须位于临时根之外，正常停止和启动失败都不得删除它。
+
+runner 只把 Gateway 绑定到 IPv4 wildcard `0.0.0.0`，使隔离 Web Host 可以通过主机 IPv4 地址验收远程授权流程；Server 与 Vite Client 仍绑定 `127.0.0.1`，内部 health polling 也继续使用 loopback `baseUrl`。因此 Gateway 是唯一对外端口，上游不能绕过其转发地址清洗与授权边界。
 
 runner 只管理进程、端口、健康检查、日志和清理，不知道任何 Kit 的名称语义、Panel、对话、业务 request、broadcast
 或页面内容。完整 Web Host smoke 的业务测试归目标 Kit；Harbors Harness 的 Kit-owned smoke wrapper 只调用这个通用

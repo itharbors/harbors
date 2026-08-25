@@ -4,9 +4,23 @@ import { createServer } from './server.js';
 import { createDefaultAssemblyConfig, discoverBuiltinKitSources } from './assembly/config.js';
 import { ensureDataDir, resolveStartConfig } from './start-config.js';
 import { migrateApplicationData } from './application-data-migration.js';
+import { applyStartArgumentsToEnv, parseStartArguments, startHelp } from './start-args.js';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const config = resolveStartConfig(rootDir, process.env);
+let startArguments;
+try {
+  startArguments = parseStartArguments(process.argv.slice(2));
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  console.error(startHelp());
+  process.exit(1);
+}
+if (startArguments.help) {
+  console.log(startHelp());
+  process.exit(0);
+}
+const startEnv = applyStartArgumentsToEnv(process.env, startArguments);
+const config = resolveStartConfig(rootDir, startEnv);
 const { applicationDataDir, configDataDir, dbPath, port, host, pluginPathRoots } = config;
 
 await ensureDataDir(applicationDataDir);
@@ -30,6 +44,7 @@ const server = createServer({
   port,
   clientAssetsRoot: path.join(rootDir, 'packages', 'client', 'dist'),
   applicationHostMode: 'web',
+  credentialMode: process.env.HARBORS_CREDENTIAL_MODE,
   dbPath,
 });
 

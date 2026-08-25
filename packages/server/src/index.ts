@@ -10,13 +10,19 @@ import { migrateApplicationData } from './application-data-migration';
 const APPLICATION_HOST_SECRETS = captureApplicationHostSecrets(process.env);
 const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const START_CONFIG = resolveStartConfig(REPOSITORY_ROOT, process.env);
-const { applicationDataDir: APPLICATION_DATA_ROOT, dbPath: DB_PATH, pluginPathRoots: PLUGIN_PATH_ROOTS } = START_CONFIG;
+const {
+  applicationDataDir: APPLICATION_DATA_ROOT,
+  configDataDir: CONFIG_DATA_ROOT,
+  dbPath: DB_PATH,
+  pluginPathRoots: PLUGIN_PATH_ROOTS,
+} = START_CONFIG;
 const DEFAULT_KIT = process.env.CE_DEFAULT_KIT || process.env.KIT || process.env.DEFAULT_KIT;
 
 const APPLICATION_HOST_MODE = process.env.HARBORS_HOST_MODE === 'desktop' ? 'desktop' : 'web';
 const HOST = process.env.HARBORS_BIND_HOST;
 
 await ensureDataDir(APPLICATION_DATA_ROOT);
+await ensureDataDir(CONFIG_DATA_ROOT);
 await ensureDataDir(path.dirname(DB_PATH));
 await migrateApplicationData({
   applicationDataDir: APPLICATION_DATA_ROOT,
@@ -40,7 +46,7 @@ const { start, stop } = createServer({
     env: process.env,
   },
   pluginPathRoots: PLUGIN_PATH_ROOTS,
-  configStorageRoots: { 'application-data': APPLICATION_DATA_ROOT },
+  configStorageRoots: { 'application-data': CONFIG_DATA_ROOT },
   host: HOST,
 });
 

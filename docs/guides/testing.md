@@ -63,6 +63,14 @@ Framework 只提供 `scripts/lib/web-host-runner.mjs` 的通用进程生命周�
 端口，创建临时数据根，传入 Kit sources 和 default Kit，轮询 `/api/health`，收集有限日志，并在 finally 中按
 逆序发送 SIGTERM、必要时 SIGKILL，最后删除临时目录。
 
+runner 默认通过 `HARBORS_DATA_ROOT` 使用自建临时根，并清除继承的 `DB_PATH` 与 Plugin 细分 root，避免测试
+环境逃逸到正式数据。显式传入外部绝对 `dataRoot` 时，该目录必须位于 runner 临时根之外；正常停止和启动失败
+都只删除 runner 自建临时目录，不删除外部 root。普通 `pnpm dev` 本身不提供测试隔离，未指定时读取 `~/.harbors`。
+
+runner 的 Gateway 监听 IPv4 wildcard `0.0.0.0`，可用主机 IPv4 地址验收远程设备授权；Server 与 Vite Client
+仍只监听 `127.0.0.1`，Gateway 是唯一对外端口。测试或手工验收不得直接公开、转发或共享上游端口。runner 的
+health 与生命周期控制继续访问 loopback，不依赖外部网卡是否可达。
+
 runner 不知道 Chat、Panel、对话或任何具体 Kit 的业务语义；它不能包含 Kit 名称、业务 request、broadcast 或
 页面断言。Kit-owned smoke wrapper 可以调用这个通用 runner，但不得 import `packages/server/src/**` 等 Framework
 私有源码或直接操作 `createEditor`；wrapper 只负责把 runner 的公开生命周期结果转换为 Kit-owned 的公开 HTTP

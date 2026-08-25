@@ -17,9 +17,9 @@ sequenceDiagram
     G->>C: 页面与静态资源
 ```
 
-`pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程；Gateway 和 Server 监听源码变化，Client 使用 Vite HMR。`pnpm start` 使用 `packages/server/src/start.ts` 直接启动单个稳定 Web Server，提供已构建的 Client 资产，不启用开发代理、源码监听或 HMR；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。两个入口的正式运行数据都位于 `~/.harbors/`。
+`pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程；Gateway 和 Server 监听源码变化，Client 使用 Vite HMR。`pnpm start` 使用 `packages/server/src/start.ts` 直接启动单个稳定 Web Server，提供预先构建的 Client 资产，不启用开发代理、源码监听或 HMR；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。两个入口默认数据根都为 `~/.harbors/`，并以相同的 `--data-root <absolute-path>` / `HARBORS_DATA_ROOT` 契约整体切换数据库、配置和 Plugin roots。
 
-Server 在 `createServer()` 打开 SQLite 前执行 application data migration：对旧数据库生成 WAL 一致性快照，按 `.data/harbors.db`、`packages/server/.editor.db` 的固定顺序只导入目标缺失主键，再迁移旧 Plugin persistent data。迁移有 application root lock、事务和 no-overwrite 原子发布；已有目标值、Agent tombstone 和所有源文件均保留。`DB_PATH` 只覆盖 Server DB，不再隐式移动 Plugin 或 Kit config 根。
+Server 在 `createServer()` 打开 SQLite 前执行 application data migration：对旧数据库生成 WAL 一致性快照，按 `.data/harbors.db`、`packages/server/.editor.db` 的固定顺序只导入目标缺失主键，再迁移旧 Plugin persistent data。迁移有 application root lock、事务和 no-overwrite 原子发布；已有目标值、Agent tombstone 和所有源文件均保留。迁移只在默认正式根启用；非默认自定义根从空的 legacy source 集合启动。`DB_PATH` 只覆盖 Server DB，不隐式移动 Plugin 或 Kit config 根。
 
 ## 会话创建与 bootstrap
 

@@ -7,11 +7,6 @@ import { createPnpmSpawnSpec } from './lib/pnpm-spawn.mjs';
 
 const parsed = parseArgs(process.argv.slice(2));
 
-if (parsed.help) {
-  printHelp();
-  process.exit(0);
-}
-
 if (parsed.errors.length > 0) {
   for (const error of parsed.errors) {
     console.error(error);
@@ -20,8 +15,14 @@ if (parsed.errors.length > 0) {
   process.exit(1);
 }
 
+if (parsed.help) {
+  printHelp();
+  process.exit(0);
+}
+
 const requestedKit = normalizeKitArgument(parsed.kit);
 const baseEnv = { ...process.env };
+if (parsed.dataRoot) baseEnv.HARBORS_DATA_ROOT = parsed.dataRoot;
 const kitsDir = path.join(process.cwd(), 'kits');
 const kitSources = await discoverKitSources(kitsDir);
 const stack = createDevStackEnvironments(
@@ -108,6 +109,7 @@ function printDevPages(port, pages) {
 function parseArgs(args) {
   const result = {
     kit: '',
+    dataRoot: undefined,
     help: false,
     errors: [],
   };
@@ -154,6 +156,33 @@ function parseArgs(args) {
       continue;
     }
 
+    let dataRoot;
+    if (arg === '--data-root') {
+      dataRoot = args[index + 1];
+      if (!dataRoot || dataRoot.startsWith('--')) {
+        result.errors.push('--data-root requires an absolute path');
+        continue;
+      }
+      index += 1;
+    } else if (arg.startsWith('--data-root=')) {
+      dataRoot = arg.slice('--data-root='.length);
+      if (!dataRoot) {
+        result.errors.push('--data-root requires an absolute path');
+        continue;
+      }
+    }
+
+    if (dataRoot !== undefined) {
+      if (result.dataRoot !== undefined) {
+        result.errors.push('--data-root may only be specified once');
+      } else if (!path.isAbsolute(dataRoot)) {
+        result.errors.push('--data-root must be an absolute path');
+      } else {
+        result.dataRoot = path.resolve(dataRoot);
+      }
+      continue;
+    }
+
     result.errors.push(`Unknown dev argument: ${arg}`);
   }
 
@@ -165,11 +194,16 @@ function printHelp() {
 Usage:
   pnpm dev
   pnpm dev -- --kit <kit-package-name-or-path>
+  pnpm dev -- --data-root <absolute-path>
 
 Examples:
   pnpm dev -- --kit <package-name>
   pnpm dev -- --kit ./kits/<name>
   pnpm dev -- --kit-path /absolute/path/to/kit
+  pnpm dev -- --data-root /absolute/path/to/harbors-data
+
+By default Harbors reads ~/.harbors. Use --data-root to switch the database,
+configuration, and Plugin data/cache/temp as one unit.
 `.trim());
 }
 

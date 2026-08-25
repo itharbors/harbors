@@ -15,6 +15,7 @@ export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'dev
   const common = {
     ...baseEnv,
     HARBORS_RUNTIME_PROFILE: runtimeProfile,
+    HARBORS_BIND_HOST: '127.0.0.1',
     HARBORS_NOTIFICATION_PORT: String(ports.notification),
   };
   delete common.PORT;
@@ -24,6 +25,7 @@ export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'dev
     ports,
     gatewayEnv: {
       ...common,
+      HARBORS_BIND_HOST: '0.0.0.0',
       PORT: String(ports.gateway),
       SERVER_PORT: String(ports.server),
       CLIENT_PORT: String(ports.client),
