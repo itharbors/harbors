@@ -3,18 +3,20 @@ export interface PendingAuthorization {
   ip: string;
   userAgent: string;
   requestedAt: number;
+  displayName: string;
 }
 
 export class PendingAuthorizationStore {
   private readonly pending = new Map<string, PendingAuthorization>();
 
-  add(deviceId: string, info: { ip: string; userAgent: string }): PendingAuthorization {
+  add(deviceId: string, info: { ip: string; userAgent: string; displayName?: string }): PendingAuthorization {
     const existing = this.pending.get(deviceId);
     const entry: PendingAuthorization = {
       deviceId,
       ip: info.ip,
       userAgent: info.userAgent,
       requestedAt: existing?.requestedAt ?? Date.now(),
+      displayName: info.displayName?.trim() || existing?.displayName || '',
     };
     this.pending.set(deviceId, entry);
     return entry;

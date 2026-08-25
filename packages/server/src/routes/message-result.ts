@@ -5,13 +5,15 @@ import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isRecord } from '../http/validation';
 
-export function createMessageResultRouter(broker: BrowserRequestBroker) {
+export function createMessageResultRouter(broker: BrowserRequestBroker, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function messageResultRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
       throw new HttpError(405, 'METHOD_NOT_ALLOWED', 'Method not allowed');
     }
 
     const body = await readJson(req, isMessageResultInput);
+    const pendingSessionId = broker.getPendingSessionId(body.requestId);
+    if (pendingSessionId) assertAccess?.(req, pendingSessionId);
     const status = broker.resolve(body.sessionId, body.requestId, body.result);
     if (status === 'wrong-session') {
       throw new HttpError(409, 'REQUEST_SESSION_MISMATCH', 'Request belongs to another session');

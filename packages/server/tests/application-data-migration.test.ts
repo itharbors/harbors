@@ -57,6 +57,16 @@ function insertSession(database: Database.Database, id: string, workspacePath: s
     .run(id, workspacePath, '[]', timestamp, timestamp);
 }
 
+function upgradeIdentitySchema(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE users (
+      userId TEXT PRIMARY KEY, displayName TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
+    );
+    ALTER TABLE authorized_devices ADD COLUMN userId TEXT;
+    ALTER TABLE sessions ADD COLUMN ownerUserId TEXT;
+  `);
+}
+
 function silentLogger() {
   return { info() {}, warn() {} };
 }
@@ -90,6 +100,111 @@ async function runMigrationProcess(options: Omit<Parameters<typeof migrateApplic
 }
 
 describe('application data migration', () => {
+  it('merges old identity rows into a current target and keeps them non-destructively compatible', async () => {
+    const root = await makeRoot();
+    const applicationData = path.join(root, 'home', '.harbors');
+    const targetPath = path.join(applicationData, 'harbors.db');
+    const sourcePath = path.join(root, '.data', 'harbors.db');
+    await mkdir(applicationData, { recursive: true });
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    const target = createDatabase(targetPath);
+    upgradeIdentitySchema(target);
+    target.close();
+    const source = createDatabase(sourcePath);
+    source.prepare('INSERT INTO authorized_devices VALUES (?, ?, ?, ?)').run('legacy-device', 1, 9999999999999, 2);
+    insertSession(source, 'legacy-session', '/legacy', 3);
+    source.close();
+
+    await migrateApplicationData({
+      applicationDataDir: applicationData, dbPath: targetPath, legacyDbPaths: [sourcePath],
+      pluginDataRoot: path.join(applicationData, 'plugins', 'data'), legacyPluginDataRoots: [], logger: silentLogger(),
+    });
+    const result = new Database(targetPath, { readonly: true });
+    expect(result.prepare('SELECT ownerUserId FROM sessions WHERE sessionId = ?').get('legacy-session'))
+      .toEqual({ ownerUserId: null });
+    expect(result.prepare('SELECT userId FROM authorized_devices WHERE deviceId = ?').get('legacy-device'))
+      .toEqual({ userId: 'legacy-device-legacy-device' });
+    expect(result.prepare('SELECT displayName FROM users WHERE userId = ?').get('legacy-device-legacy-device'))
+      .toEqual({ displayName: '设备 legacy-d' });
+    result.close();
+  });
+
+  it('upgrades an old target before merging a current identity source', async () => {
+    const root = await makeRoot();
+    const applicationData = path.join(root, 'home', '.harbors');
+    const targetPath = path.join(applicationData, 'harbors.db');
+    const sourcePath = path.join(root, '.data', 'harbors.db');
+    await mkdir(applicationData, { recursive: true });
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    createDatabase(targetPath).close();
+    const source = createDatabase(sourcePath);
+    upgradeIdentitySchema(source);
+    source.prepare('INSERT INTO users VALUES (?, ?, ?, ?)').run('current-user', '当前用户', 1, 1);
+    source.prepare('INSERT INTO authorized_devices VALUES (?, ?, ?, ?, ?)')
+      .run('current-device', 1, 9999999999999, 2, 'current-user');
+    source.prepare('INSERT INTO sessions VALUES (?, ?, ?, ?, ?, ?)')
+      .run('current-session', '/current', '[]', 3, 3, 'current-user');
+    source.close();
+
+    await migrateApplicationData({
+      applicationDataDir: applicationData, dbPath: targetPath, legacyDbPaths: [sourcePath],
+      pluginDataRoot: path.join(applicationData, 'plugins', 'data'), legacyPluginDataRoots: [], logger: silentLogger(),
+    });
+    const result = new Database(targetPath, { readonly: true });
+    expect(result.prepare('SELECT displayName FROM users WHERE userId = ?').get('current-user'))
+      .toEqual({ displayName: '当前用户' });
+    expect(result.prepare('SELECT userId FROM authorized_devices WHERE deviceId = ?').get('current-device'))
+      .toEqual({ userId: 'current-user' });
+    expect(result.prepare('SELECT ownerUserId FROM sessions WHERE sessionId = ?').get('current-session'))
+      .toEqual({ ownerUserId: 'current-user' });
+    result.close();
+  });
+
+  it('re-preflights an EEXIST race target before any schema write', async () => {
+    const root = await makeRoot();
+    const applicationData = path.join(root, 'home', '.harbors');
+    const targetPath = path.join(applicationData, 'harbors.db');
+    const sourcePath = path.join(root, '.data', 'harbors.db');
+    await mkdir(path.dirname(sourcePath), { recursive: true });
+    const source = createDatabase(sourcePath);
+    insertSession(source, 'source-session', '/source', 1);
+    source.close();
+    let competingBytes: Buffer | undefined;
+
+    await expect(migrateApplicationData({
+      applicationDataDir: applicationData,
+      dbPath: targetPath,
+      legacyDbPaths: [sourcePath],
+      pluginDataRoot: path.join(applicationData, 'plugins', 'data'),
+      legacyPluginDataRoots: [],
+      logger: silentLogger(),
+      beforeTargetPublish: async () => {
+        const competing = createDatabase(targetPath);
+        competing.prepare('INSERT INTO authorized_devices VALUES (?, ?, ?, ?)')
+          .run('race-device', 21, 9999999999999, 22);
+        insertSession(competing, 'race-session', '/race-before-failure', 23);
+        competing.exec('ALTER TABLE sessions ADD COLUMN unknownRaceColumn TEXT');
+        competing.close();
+        competingBytes = await readFile(targetPath);
+      },
+    })).rejects.toThrow(/SCHEMA_MISMATCH:sessions/u);
+
+    expect(competingBytes).toBeDefined();
+    expect(await readFile(targetPath)).toEqual(competingBytes);
+    const unchanged = new Database(targetPath, { readonly: true });
+    expect(unchanged.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'users'").get())
+      .toEqual({ count: 0 });
+    expect(unchanged.prepare('PRAGMA table_info(authorized_devices)').all())
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'userId' })]));
+    expect(unchanged.prepare('PRAGMA table_info(sessions)').all())
+      .toEqual(expect.arrayContaining([expect.objectContaining({ name: 'unknownRaceColumn' })]));
+    expect(unchanged.prepare('SELECT * FROM authorized_devices WHERE deviceId = ?').get('race-device'))
+      .toMatchObject({ deviceId: 'race-device', createdAt: 21, lastSeenAt: 22 });
+    expect(unchanged.prepare('SELECT workspacePath FROM sessions WHERE sessionId = ?').get('race-session'))
+      .toEqual({ workspacePath: '/race-before-failure' });
+    unchanged.close();
+  });
+
   it('merges both legacy databases and persistent Plugin files without deleting sources', async () => {
     const root = await makeRoot();
     const applicationData = path.join(root, 'home', '.harbors');
@@ -210,7 +325,11 @@ describe('application data migration', () => {
     await mkdir(applicationData, { recursive: true });
     await mkdir(path.dirname(sourcePath), { recursive: true });
     const target = createDatabase(targetPath);
+    target.prepare('INSERT INTO authorized_devices VALUES (?, ?, ?, ?)')
+      .run('target-device', 11, 9999999999999, 12);
+    insertSession(target, 'target-session', '/target-before-failure', 13);
     target.close();
+    const targetBytesBeforeFailure = await readFile(targetPath);
     const source = createDatabase(sourcePath);
     source.exec('ALTER TABLE sessions ADD COLUMN incompatible TEXT');
     source.close();
@@ -232,6 +351,20 @@ describe('application data migration', () => {
       legacyPluginDataRoots: [],
       logger: silentLogger(),
     })).rejects.toThrow(/SCHEMA_MISMATCH:sessions/u);
+
+    expect(await readFile(targetPath)).toEqual(targetBytesBeforeFailure);
+    const unchangedTarget = new Database(targetPath, { readonly: true });
+    expect(unchangedTarget.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'users'").get())
+      .toEqual({ count: 0 });
+    expect(unchangedTarget.prepare('PRAGMA table_info(authorized_devices)').all())
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'userId' })]));
+    expect(unchangedTarget.prepare('PRAGMA table_info(sessions)').all())
+      .not.toEqual(expect.arrayContaining([expect.objectContaining({ name: 'ownerUserId' })]));
+    expect(unchangedTarget.prepare('SELECT * FROM authorized_devices WHERE deviceId = ?').get('target-device'))
+      .toMatchObject({ deviceId: 'target-device', createdAt: 11, lastSeenAt: 12 });
+    expect(unchangedTarget.prepare('SELECT workspacePath FROM sessions WHERE sessionId = ?').get('target-session'))
+      .toEqual({ workspacePath: '/target-before-failure' });
+    unchangedTarget.close();
 
     const legacyPluginRoot = path.join(root, 'legacy-plugins');
     const outside = path.join(root, 'outside');

@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 
 import { createDefaultAssemblyConfig } from '../../packages/server/src/assembly/config.ts';
 import { createServer } from '../../packages/server/src/server.ts';
+import { createIsolatedPluginPathRoots } from './web-host-runner.mjs';
 
 const rootDir = process.cwd();
 const tempRoot = process.env.HARBORS_TEST_DATA_ROOT;
@@ -10,12 +11,7 @@ const sources = parseSources(process.env.HARBORS_KIT_SOURCES);
 const defaultKit = requireValue(process.env.CE_DEFAULT_KIT, 'CE_DEFAULT_KIT');
 if (!tempRoot) throw new Error('HARBORS_TEST_DATA_ROOT is required');
 
-const pluginPathRoots = {
-  applicationData: path.join(tempRoot, 'application-data'),
-  data: path.join(tempRoot, 'plugins', 'data'),
-  cache: path.join(tempRoot, 'plugins', 'cache'),
-  temp: path.join(tempRoot, 'plugins', 'temp'),
-};
+const pluginPathRoots = createIsolatedPluginPathRoots(tempRoot);
 const configStorageRoots = { 'application-data': path.join(tempRoot, 'config') };
 await Promise.all([
   ...Object.values(pluginPathRoots).map((directory) => mkdir(directory, { recursive: true })),

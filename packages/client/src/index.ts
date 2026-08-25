@@ -15,12 +15,15 @@ import {
 } from './components/kit-picker';
 import { isKitCatalogResponse, selectHostEntry } from './core/host-entry';
 import {
+  clearStoredSessionId,
   getDeviceId,
+  getRequestedDisplayName,
   getStoredSessionId,
   isLocalHostname,
   setStoredSessionId,
 } from './core/storage';
 import { renderWaitingForAuthorization } from './components/auth-waiting';
+import type { WorkbenchContext } from '@itharbors/plugin-types';
 
 const app = document.querySelector('#app');
 
@@ -39,7 +42,6 @@ export async function startClientApp(): Promise<void> {
   renderKitPickerLoading(app);
   try {
     const entry = selectHostEntry(new URL(window.location.href));
-    const sessionId = entry === 'picker' ? await reservePickerSession() : '';
     const response = await fetch('/api/kits', { headers: { accept: 'application/json' } });
     if (!response.ok) throw new Error(`Kit catalog request failed: ${response.status}`);
     const catalog: unknown = await response.json();
@@ -49,41 +51,56 @@ export async function startClientApp(): Promise<void> {
       app.innerHTML = '<editor-app></editor-app>';
       return;
     }
-    renderKitPicker(app, catalog.kits, sessionId);
+    const context = await fetchWorkbenchContext();
+    const sessionId = selectStoredSession(context);
+    renderKitPicker(app, catalog.kits, {
+      context,
+      selectedSessionId: sessionId,
+      onSessionSelected: persistSelectedSession,
+      onSessionCleared: clearSelectedSession,
+      onContextChanged: () => void startClientApp(),
+    });
   } catch {
     renderKitPickerError(app, () => void startClientApp());
   }
 }
 
-async function reservePickerSession(): Promise<string> {
+function selectStoredSession(context: WorkbenchContext): string | null {
   const url = new URL(window.location.href);
   const existing = url.searchParams.get('session') || url.searchParams.get('sessionId');
-  if (existing) {
-    setStoredSessionId(existing);
-    return existing;
-  }
-
-  // Reuse the persisted session ID if available.
-  const stored = getStoredSessionId();
-  if (stored) {
-    url.searchParams.set('session', stored);
+  const candidate = existing || getStoredSessionId();
+  const visible = candidate && context.sessions.some((session) => session.sessionId === candidate);
+  if (!visible) {
+    clearStoredSessionId();
+    url.searchParams.delete('session');
+    url.searchParams.delete('sessionId');
     window.history.replaceState({}, '', url.toString());
-    return stored;
+    return null;
   }
+  persistSelectedSession(candidate);
+  return candidate;
+}
 
-  const response = await fetch('/api/session', {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ deferred: true }),
-  });
-  if (!response.ok) throw new Error(`Session reservation failed: ${response.status}`);
-  const session: unknown = await response.json();
-  if (!isSessionReservation(session)) throw new Error('Session reservation response is invalid');
-
-  setStoredSessionId(session.sessionId);
-  url.searchParams.set('session', session.sessionId);
+function persistSelectedSession(sessionId: string): void {
+  setStoredSessionId(sessionId);
+  const url = new URL(window.location.href);
+  url.searchParams.set('session', sessionId);
+  url.searchParams.delete('sessionId');
   window.history.replaceState({}, '', url.toString());
-  return session.sessionId;
+}
+
+function clearSelectedSession(): void {
+  clearStoredSessionId();
+  const url = new URL(window.location.href);
+  url.searchParams.delete('session');
+  url.searchParams.delete('sessionId');
+  window.history.replaceState({}, '', url.toString());
+}
+
+async function fetchWorkbenchContext(): Promise<WorkbenchContext> {
+  const response = await fetch('/api/workbench/context', { headers: { accept: 'application/json' } });
+  if (!response.ok) throw new Error(`Workbench context request failed: ${response.status}`);
+  return response.json() as Promise<WorkbenchContext>;
 }
 
 async function waitForAuthorization(): Promise<boolean> {
@@ -103,7 +120,8 @@ async function waitForAuthorization(): Promise<boolean> {
 }
 
 async function fetchAuthStatus(): Promise<'authorized' | 'pending' | 'unauthorized'> {
-  const response = await fetch(`/api/auth/status?deviceId=${encodeURIComponent(deviceId)}`, {
+  const displayName = getRequestedDisplayName();
+  const response = await fetch(`/api/auth/status?deviceId=${encodeURIComponent(deviceId)}&displayName=${encodeURIComponent(displayName)}`, {
     headers: { accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`Auth status request failed: ${response.status}`);
@@ -111,13 +129,6 @@ async function fetchAuthStatus(): Promise<'authorized' | 'pending' | 'unauthoriz
   if (data.status === 'authorized') return 'authorized';
   if (data.status === 'pending') return 'pending';
   return 'unauthorized';
-}
-
-function isSessionReservation(value: unknown): value is { sessionId: string } {
-  return typeof value === 'object'
-    && value !== null
-    && typeof (value as { sessionId?: unknown }).sessionId === 'string'
-    && (value as { sessionId: string }).sessionId.length > 0;
 }
 
 function setupFetchWithDeviceId(id: string): void {

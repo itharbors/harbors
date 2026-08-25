@@ -79,6 +79,27 @@ describe('Server Integration', () => {
     expect(data.workspacePath).toBe('/tmp/auto');
   });
 
+  it('creates a user, allocates an owned Session, and exposes only public workbench summaries', async () => {
+    const userResponse = await fetch(`${baseURL}/api/workbench/user`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ displayName: '张三' }),
+    });
+    expect(userResponse.status).toBe(201);
+    const user = await userResponse.json() as { userId: string };
+    const sessionResponse = await fetch(`${baseURL}/api/workbench/session`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: user.userId }),
+    });
+    expect(sessionResponse.status).toBe(201);
+    const session = await sessionResponse.json() as { sessionId: string; ownerUserId: string };
+    expect(session.ownerUserId).toBe(user.userId);
+
+    const contextResponse = await fetch(`${baseURL}/api/workbench/context`);
+    const context = await contextResponse.json() as Record<string, unknown>;
+    expect(contextResponse.status).toBe(200);
+    expect(JSON.stringify(context)).not.toContain('workspacePath');
+    expect(context).toMatchObject({ actor: 'local-admin' });
+    expect((context.sessions as Array<{ sessionId: string }>).some((item) => item.sessionId === session.sessionId)).toBe(true);
+  });
+
   it('DELETE /api/session/:id disposes the runtime and deletes persistent state', async () => {
     const createResponse = await fetch(`${baseURL}/api/session`, {
       method: 'POST',

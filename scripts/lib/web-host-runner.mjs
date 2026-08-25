@@ -64,6 +64,16 @@ export async function allocateWebHostPorts() {
   return Object.freeze({ gateway: values[0], server: values[1], client: values[2], notification: values[3] });
 }
 
+export function createIsolatedPluginPathRoots(tempRoot) {
+  const applicationData = path.join(tempRoot, 'application-data');
+  return Object.freeze({
+    applicationData,
+    data: path.join(applicationData, 'plugins', 'data'),
+    cache: path.join(applicationData, 'plugins', 'cache'),
+    temp: path.join(applicationData, 'plugins', 'temp'),
+  });
+}
+
 function normalizeOptions(options) {
   const repositoryRoot = canonicalDirectory(options.repositoryRoot ?? process.cwd(), 'repositoryRoot');
   const kitSources = normalizeKitSources(options.kitSources);

@@ -9,6 +9,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { HttpError } from '../../src/http/errors';
 import { sendHttpError } from '../../src/http/json';
+import { SessionAccessPolicy } from '../../src/session/access-policy';
 
 function mockReq(method: string, url: string, body?: object | string | Buffer): IncomingMessage {
   const readable = new Readable({
@@ -112,6 +113,29 @@ describe('Session API Routes', () => {
 
     expect(data.sessionId).toBeDefined();
     expect(data.workspacePath).toBe('/tmp/new');
+  });
+
+  it('remote legacy POST creates only an actor-owned Session and rejects arbitrary IDs', async () => {
+    const policy = new SessionAccessPolicy(manager, {
+      resolveBaseSessionId: () => undefined,
+      get: () => undefined,
+      editors: new Map(),
+    });
+    const actor = { kind: 'user' as const, userId: 'remote-user', deviceId: 'remote-device' };
+    const guarded = createSessionRouter(manager, undefined, undefined, {
+      resolveActor: () => actor,
+      policy,
+    });
+    const created = mockRes();
+    await invoke(guarded, mockReq('POST', '/api/session', { deferred: true }), created.res);
+    const session = JSON.parse(await created.body()) as { sessionId: string; ownerUserId: string | null };
+    expect(created.statusCode()).toBe(201);
+    expect(session.ownerUserId).toBe('remote-user');
+
+    const forged = mockRes();
+    await invoke(guarded, mockReq('POST', '/api/session', { sessionId: 'ownerless-forged', deferred: true }), forged.res);
+    expect(forged.statusCode()).toBe(403);
+    expect(manager.get('ownerless-forged')).toBeUndefined();
   });
 
   it('POST /api/session sets a custom sessionId', async () => {

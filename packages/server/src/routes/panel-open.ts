@@ -5,7 +5,7 @@ import { readJson } from '../http/json';
 import { HttpError } from '../http/errors';
 import { isNonEmptyString, isOptionalString, isRecord } from '../http/validation';
 
-export function createPanelOpenRouter(editorMap: Map<string, Editor>) {
+export function createPanelOpenRouter(editorMap: Map<string, Editor>, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function panelOpenRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://localhost');
     if (req.method !== 'POST' || url.pathname !== '/api/panel/open') {
@@ -18,6 +18,7 @@ export function createPanelOpenRouter(editorMap: Map<string, Editor>) {
     if (!sessionId || !isNonEmptyString(body.panelName)) {
       throw new HttpError(400, 'INVALID_REQUEST', 'Missing sessionId or panelName');
     }
+    assertAccess?.(req, sessionId);
 
     const editor = editorMap.get(sessionId);
     if (!editor) {

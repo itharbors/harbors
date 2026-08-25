@@ -7,6 +7,7 @@ import type { PanelModule } from '../framework/panel';
 import type { PanelRegistration } from '../framework/panel/types';
 import { PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
 import type { PanelRequestCapability } from './panel-request-capability';
+import { HttpError } from '../http/errors';
 
 export { createPanelFileRuntime, PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
 
@@ -512,12 +513,22 @@ function readPanelAsset(filePath: string, sessionId: string | null): Buffer | st
 
 export function createPanelAssetRouter(
   source: PanelAssetSource,
-  options: { panelRequestCapability?: PanelRequestCapability } = {},
+  options: {
+    panelRequestCapability?: PanelRequestCapability;
+    assertSessionAccess?: (req: IncomingMessage, sessionId: string) => void;
+    allowUnscopedFallback?: (req: IncomingMessage) => boolean;
+  } = {},
 ) {
   return function panelAssetRouter(req: IncomingMessage, res: ServerResponse): void {
     const url = new URL(req.url || '/', 'http://localhost');
     const panelMatch = url.pathname.match(/^\/api\/assets\/panel\/([^/]+)\/(.+)$/);
     const pluginAssetMatch = url.pathname.match(/^\/api\/assets\/plugin\/([^/]+)\/(.+)$/);
+    const requestedSessionId = getSessionId(url);
+    if (requestedSessionId) {
+      options.assertSessionAccess?.(req, requestedSessionId);
+    } else if (source instanceof Map && options.allowUnscopedFallback?.(req) === false) {
+      throw new HttpError(403, 'SESSION_REQUIRED', 'Remote asset requests must identify an accessible Session');
+    }
 
     if (req.method !== 'GET') {
       res.statusCode = 404;

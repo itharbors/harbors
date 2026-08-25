@@ -39,8 +39,10 @@ import {
 } from './routes/local-web-file';
 import { createAuthRouter } from './routes/auth';
 import type { AuthManager } from './auth';
-import { getDeviceId, isLocalRequest } from './auth';
+import { getDeviceId, isLocalRequest, resolveRequestActor } from './auth';
 import { createPanelRequestCapability } from './routes/panel-request-capability';
+import { SessionAccessPolicy } from './session/access-policy';
+import { createWorkbenchRouter } from './routes/workbench';
 
 type CredentialVaultBindingSource = Pick<CredentialVault, 'bind' | 'capability'>;
 
@@ -150,10 +152,16 @@ export function createApp(
     }
   });
   const editorMap = registry.editors as Map<string, Editor>;
+  const auth = appOptions.authManager;
+  const actorFor = (req: IncomingMessage) => resolveRequestActor(req, auth);
+  const accessPolicy = new SessionAccessPolicy(manager, registry);
+  const assertSessionAccess = (req: IncomingMessage, sessionId: string) => {
+    accessPolicy.assertAccess(actorFor(req), sessionId);
+  };
   const localWebFiles = new LocalWebFileStore({
     rootDirectory: path.join(appOptions.pluginPathRoots.temp, 'local-web-files'),
   });
-  const localWebFileRouter = createLocalWebFileRouter(manager, localWebFiles);
+  const localWebFileRouter = createLocalWebFileRouter(manager, localWebFiles, assertSessionAccess);
   const sessionRouter = createSessionRouter(manager, async (session, options) => {
     const requestedKit = options.kit ?? options.kitName ?? options.kitPath;
     const catalogIdentity = options.kit ?? options.kitName;
@@ -202,19 +210,23 @@ export function createApp(
     const destroyed = await registry.destroy(sessionId);
     if (destroyed) await localWebFiles.cleanupSession(sessionId);
     return destroyed;
-  });
-  const bootstrapRouter = createBootstrapRouter(editorMap);
-  const i18nRouter = createI18nRouter(editorMap);
+  }, { resolveActor: actorFor, policy: accessPolicy });
+  const bootstrapRouter = createBootstrapRouter(editorMap, assertSessionAccess);
+  const i18nRouter = createI18nRouter(editorMap, assertSessionAccess);
   const panelRequestCapability = createPanelRequestCapability();
-  const panelAssetRouter = createPanelAssetRouter(editorMap, { panelRequestCapability });
-  const messageRequestRouter = createMessageRequestRouter(editorMap, { panelRequestCapability });
-  const messageBroadcastRouter = createMessageBroadcastRouter(editorMap);
-  const messageResultRouter = createMessageResultRouter(broker);
-  const menuTriggerRouter = createMenuTriggerRouter(editorMap);
-  const windowEntryRouter = createWindowEntryRouter(editorMap);
-  const windowGroupRouter = createWindowGroupRouter(editorMap);
-  const panelOpenRouter = createPanelOpenRouter(editorMap);
-  const panelInstanceRouter = createPanelInstanceRouter(editorMap);
+  const panelAssetRouter = createPanelAssetRouter(editorMap, {
+    panelRequestCapability,
+    assertSessionAccess,
+    allowUnscopedFallback: (req) => actorFor(req).kind === 'local-admin',
+  });
+  const messageRequestRouter = createMessageRequestRouter(editorMap, { panelRequestCapability, assertSessionAccess });
+  const messageBroadcastRouter = createMessageBroadcastRouter(editorMap, assertSessionAccess);
+  const messageResultRouter = createMessageResultRouter(broker, assertSessionAccess);
+  const menuTriggerRouter = createMenuTriggerRouter(editorMap, assertSessionAccess);
+  const windowEntryRouter = createWindowEntryRouter(editorMap, assertSessionAccess);
+  const windowGroupRouter = createWindowGroupRouter(editorMap, assertSessionAccess);
+  const panelOpenRouter = createPanelOpenRouter(editorMap, assertSessionAccess);
+  const panelInstanceRouter = createPanelInstanceRouter(editorMap, assertSessionAccess);
   const applicationBootstrapRouter = createApplicationBootstrapRouter(appOptions.applicationRuntime);
   const applicationEventsRouter = createApplicationEventsRouter(appOptions.applicationRuntime);
   const applicationMenuTriggerRouter = createApplicationMenuTriggerRouter(
@@ -229,8 +241,8 @@ export function createApp(
   const clientAssetRouter = appOptions.clientAssetsRoot
     ? createClientAssetRouter(appOptions.clientAssetsRoot)
     : undefined;
-  const auth = appOptions.authManager;
   const authRouter = auth ? createAuthRouter(auth) : undefined;
+  const workbenchRouter = createWorkbenchRouter(manager, auth, actorFor);
 
   const isRemoteUnauthorized = (req: IncomingMessage): boolean => {
     if (!auth) return false;
@@ -261,6 +273,7 @@ export function createApp(
 
     // Session SSE endpoint
     if (url.startsWith('/sse/')) {
+      assertSessionAccess(req, decodeURIComponent(new URL(url, 'http://localhost').pathname.slice('/sse/'.length)));
       handleSSE(req, res, channel);
       return;
     }
@@ -346,6 +359,11 @@ export function createApp(
     // Auth routes
     if (authRouter && url.startsWith('/api/auth/')) {
       await authRouter(req, res);
+      return;
+    }
+
+    if (url.startsWith('/api/workbench/')) {
+      await workbenchRouter(req, res);
       return;
     }
 

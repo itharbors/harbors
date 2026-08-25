@@ -36,7 +36,7 @@ function normalizeMessageRequestError(error: unknown): HttpError {
 
 export function createMessageRequestRouter(
   editorMap: Map<string, Editor>,
-  options: { panelRequestCapability?: PanelRequestCapability } = {},
+  options: { panelRequestCapability?: PanelRequestCapability; assertSessionAccess?: (req: IncomingMessage, sessionId: string) => void } = {},
 ) {
   return async function messageRequestRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     if (req.method !== 'POST') {
@@ -49,6 +49,7 @@ export function createMessageRequestRouter(
     if (!sessionId) {
       throw new HttpError(400, 'INVALID_REQUEST', 'Missing sessionId parameter');
     }
+    options.assertSessionAccess?.(req, sessionId);
 
     const editor = editorMap.get(sessionId);
     if (!editor) {

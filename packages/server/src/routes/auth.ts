@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { AuthManager } from '../auth';
 import { getDeviceId, isLocalRequest } from '../auth';
 import { HttpError } from '../http/errors';
-import { sendJson } from '../http/json';
+import { readJson, sendJson } from '../http/json';
 
 export function createAuthRouter(auth: AuthManager) {
   return async function authRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
@@ -16,7 +16,7 @@ export function createAuthRouter(auth: AuthManager) {
       if (!deviceId) {
         throw new HttpError(400, 'DEVICE_ID_REQUIRED', 'Device ID is required');
       }
-      const status = auth.getStatus(deviceId, req);
+      const status = auth.getStatus(deviceId, req, url.searchParams.get('displayName') ?? undefined);
       sendJson(res, 200, status);
       return;
     }
@@ -36,8 +36,14 @@ export function createAuthRouter(auth: AuthManager) {
     const approveMatch = path.match(/^\/api\/auth\/approve\/(.+)$/);
     if (approveMatch && method === 'POST') {
       const deviceId = decodeURIComponent(approveMatch[1]);
-      const device = auth.approve(deviceId);
-      sendJson(res, 200, device);
+      const options = await readJson(req, isApproveInput, { emptyValue: {} });
+      let device;
+      try {
+        device = auth.approve(deviceId, options);
+      } catch {
+        throw new HttpError(404, 'USER_NOT_FOUND', 'User not found');
+      }
+      sendJson(res, 200, { ...device, user: auth.users.get(device.userId) });
       return;
     }
 
@@ -81,4 +87,11 @@ export function createAuthRouter(auth: AuthManager) {
 
     throw new HttpError(404, 'NOT_FOUND', 'Not found');
   };
+}
+
+function isApproveInput(value: unknown): value is { userId?: string; displayName?: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const input = value as Record<string, unknown>;
+  return (input.userId === undefined || typeof input.userId === 'string')
+    && (input.displayName === undefined || typeof input.displayName === 'string');
 }

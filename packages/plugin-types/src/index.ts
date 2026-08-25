@@ -25,3 +25,4 @@ export * from './protocol/kit-catalog.js';
 export * from './protocol/layout.js';
 export * from './protocol/message.js';
 export * from './protocol/version.js';
+export * from './protocol/workbench.js';

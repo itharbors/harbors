@@ -1,5 +1,6 @@
 const DEVICE_ID_KEY = 'harbors.deviceId';
 const SESSION_ID_KEY = 'harbors.sessionId';
+const DISPLAY_NAME_KEY = 'harbors.displayName';
 
 function read(key: string): string | null {
   try {
@@ -53,6 +54,18 @@ export function getStoredSessionId(): string | null {
 
 export function setStoredSessionId(sessionId: string): void {
   write(SESSION_ID_KEY, sessionId);
+}
+
+export function clearStoredSessionId(): void {
+  try { window.localStorage.removeItem(SESSION_ID_KEY); } catch { /* ignore */ }
+}
+
+export function getRequestedDisplayName(): string {
+  return read(DISPLAY_NAME_KEY) ?? '';
+}
+
+export function setRequestedDisplayName(displayName: string): void {
+  write(DISPLAY_NAME_KEY, displayName.trim());
 }
 
 export function isLocalHostname(): boolean {

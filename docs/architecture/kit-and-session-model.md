@@ -6,7 +6,15 @@ Kit 决定 Web 工作台具有哪些产品能力，session 负责隔离这些能
 
 Session 的持久元数据存在 SQLite，运行时对象由 `SessionRuntimeRegistry` 在 Server 内存中管理。每个 Editor 独立持有 PluginModule、PanelModule、MessageModule、MenuModule、KitModule、WindowManager、config store 与 i18n 状态。路由可读取注册表的只读视图，但不得维护第二份运行时 map。
 
-session 一旦建立，其 Kit 就是该 session 的权威状态。URL 中后续出现其他 Kit 参数不会触发隐式切换。空闲 session 由注册表统一回收，应用停止时先停止接受新请求，再逆序卸载插件。
+Web Host 的最小身份关系为 `User 1:N AuthorizedDevice` 与 `User 1:N Session`。`userId` 是 Server 生成的稳定 opaque ID，显示名只用于展示且允许重名；设备授权把远程设备绑定到一个 User，撤销设备不会删除 User 或 Session。Session 的 `ownerUserId` 是 HTTP、SSE、Panel asset 与消息路由的统一访问依据，Kit 复合 runtime ID 通过 `SessionRuntimeRegistry` 保存的 `runtimeId -> baseSessionId` 索引回到基础 Session，不允许把字符串拆分结果当作安全事实。
+
+Session owner 只约束 Framework 的 Session/runtime HTTP 与 SSE 访问，不构成 Project、workspacePath 或文件系统级隔离，也不授予多人协作、目录沙箱或跨 Session 文件权限。需要工作区或文件系统安全边界时必须另行设计，不能从 `ownerUserId` 推导。
+
+请求身份只有本地主机管理员、已授权设备对应的 User 与匿名三类。Gateway 会删除客户端提供的 `X-Forwarded-For`，再用真实入站 socket 地址覆盖；Server 仅在立即上游 socket 为 loopback 时接受这个单值合法 IP。远程直连 Server 时请求头不能覆盖真实 socket，也不能提升权限；本地经 Gateway 访问仍保持管理员身份。远程请求不能提交 `userId` 改变身份，只能访问 owner 与设备 User 匹配的 Session；无 owner 的旧 Session 仅在本地工作台显示，并可被管理员一次性归属。
+
+SQLite 升级只增建 `users` 表并为授权设备、Session 增加 nullable owner 列。既有授权设备会获得独立兼容 User，既有 Session 保持未分配，原授权期限、Session 内容和运行数据都不删除。工作台通过 `/api/workbench/context` 获取不含本地路径的公开投影，通过 Server 分配的新 opaque Session ID 继续或新建工作台。
+
+session 下的每个 Kit runtime 都拥有独立 Editor；同一基础 Session 可以同时具有多个 Kit runtime，但它们共享同一个 Session owner。URL 中后续出现其他 Kit 参数不会触发已存在 runtime 的隐式切换。空闲 session 由注册表统一回收，应用停止时先停止接受新请求，再逆序卸载插件。
 
 ## Kit descriptor 与 manifest
 

@@ -307,6 +307,7 @@ export function createServer(options: ServerOptions) {
     channel,
     broker,
     registry,
+    auth,
     editorMap,
     applicationRuntime,
   };

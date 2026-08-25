@@ -35,6 +35,7 @@ export class SessionRuntimeRegistryClosedError extends Error {
 export class SessionRuntimeRegistry {
   private readonly runtimes = new Map<string, Editor>();
   private readonly pending = new Map<string, Promise<SessionRuntime>>();
+  private readonly runtimeOwners = new Map<string, string>();
   private accepting = true;
   private disposePromise: Promise<void> | undefined;
 
@@ -49,6 +50,10 @@ export class SessionRuntimeRegistry {
 
   get(sessionId: string): Editor | undefined {
     return this.runtimes.get(sessionId);
+  }
+
+  resolveBaseSessionId(runtimeId: string): string | undefined {
+    return this.runtimeOwners.get(runtimeId);
   }
 
   getOrCreate(
@@ -76,6 +81,7 @@ export class SessionRuntimeRegistry {
       try {
         const editor = await this.createRuntime(session, options);
         this.runtimes.set(runtimeId, editor);
+        this.runtimeOwners.set(runtimeId, session.sessionId);
         return { session, editor };
       } catch (error) {
         if (!existedBefore) {
@@ -121,6 +127,7 @@ export class SessionRuntimeRegistry {
       .map((runtimeId) => [runtimeId, this.runtimes.get(runtimeId)] as const)
       .filter((entry): entry is readonly [string, Editor] => entry[1] !== undefined);
     for (const [runtimeId] of editors) this.runtimes.delete(runtimeId);
+    for (const runtimeId of runtimeIds) this.runtimeOwners.delete(runtimeId);
     try {
       for (const [, editor] of editors) await editor.dispose();
     } finally {
@@ -141,6 +148,7 @@ export class SessionRuntimeRegistry {
     await Promise.allSettled(this.pending.values());
     const editors = Array.from(this.runtimes.values());
     this.runtimes.clear();
+    this.runtimeOwners.clear();
     const results = await Promise.allSettled(editors.map((editor) => editor.dispose()));
     const errors = results.flatMap((result) => (
       result.status === 'rejected' ? [result.reason] : []
