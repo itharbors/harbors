@@ -562,6 +562,41 @@ html, body, #panel-root {
 .dir-picker-close:hover {
   color: #e6ecf3;
 }
+.dir-picker-recent {
+  padding: 10px 16px;
+  border-bottom: 1px solid #2a323d;
+}
+.dir-picker-recent-title {
+  margin-bottom: 8px;
+  color: #7c8898;
+  font-size: 11.5px;
+  letter-spacing: .04em;
+}
+.dir-picker-recent-list {
+  display: flex;
+  max-height: 104px;
+  flex-wrap: wrap;
+  gap: 6px;
+  overflow-y: auto;
+}
+.dir-picker-recent-item {
+  padding: 5px 10px;
+  border: 1px solid #333c4a;
+  border-radius: 999px;
+  background: #20262f;
+  color: #c2ccd8;
+  font-size: 12px;
+  cursor: pointer;
+}
+.dir-picker-recent-item:hover {
+  border-color: #557;
+  background: #2a3240;
+  color: #edf2f8;
+}
+.dir-picker-recent-item:disabled {
+  opacity: .55;
+  cursor: wait;
+}
 .dir-picker-path {
   display: flex;
   gap: 8px;

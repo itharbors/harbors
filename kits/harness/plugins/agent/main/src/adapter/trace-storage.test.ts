@@ -648,6 +648,73 @@ test('归档查询严格只读，读取 v1/legacy 并且 tombstone symlink 不�
   });
 });
 
+test('永久删除归档会话同时移除归档与 tombstone，并对同 ID 活动文件冲突 fail closed', async () => {
+  await withStorage(async (directory, adapter) => {
+    const deleted = await adapter.createConversation('/deleted');
+    await adapter.archiveConversation(deleted.id);
+    const sessions = join(directory, 'storage-v1', 'sessions');
+    const trash = join(directory, 'storage-v1', '.harbors-trash');
+    const tombstonePath = join(sessions, `${deleted.id}.deleted`);
+    const archiveBasename = JSON.parse(await readFile(tombstonePath, 'utf8')).archiveBasename as string;
+    const archivePath = join(trash, archiveBasename);
+    assert.deepEqual(await adapter.deleteArchivedConversation(deleted.id), { id: deleted.id });
+    await assert.rejects(lstat(tombstonePath), { code: 'ENOENT' });
+    await assert.rejects(lstat(archivePath), { code: 'ENOENT' });
+    assert.deepEqual(await adapter.listArchivedConversations(), []);
+    await assert.rejects(adapter.deleteArchivedConversation(deleted.id), /ARCHIVE_NOT_FOUND/);
+
+    const conflicted = await adapter.createConversation('/conflicted');
+    await adapter.archiveConversation(conflicted.id);
+    const conflictTombstone = join(sessions, `${conflicted.id}.deleted`);
+    const conflictArchive = join(trash, JSON.parse(await readFile(conflictTombstone, 'utf8')).archiveBasename as string);
+    const tombstoneBefore = await readFile(conflictTombstone);
+    const archiveBefore = await readFile(conflictArchive);
+    await writeFile(sessionPath(directory, conflicted.id), 'unexpected active evidence', 'utf8');
+    await assert.rejects(adapter.deleteArchivedConversation(conflicted.id), /ARCHIVE_CONFLICT/);
+    assert.deepEqual(await readFile(conflictTombstone), tombstoneBefore);
+    assert.deepEqual(await readFile(conflictArchive), archiveBefore);
+    assert.equal(await readFile(sessionPath(directory, conflicted.id), 'utf8'), 'unexpected active evidence');
+  });
+});
+
+test('永久删除的可补偿失败恢复归档，物理删除后的失败显式保留不一致证据', async () => {
+  await withStorage(async (directory, creator) => {
+    const recoverable = await creator.createConversation('/recoverable');
+    await creator.archiveConversation(recoverable.id);
+    const sessions = join(directory, 'storage-v1', 'sessions');
+    const trash = join(directory, 'storage-v1', '.harbors-trash');
+    const recoverableTombstone = join(sessions, `${recoverable.id}.deleted`);
+    const recoverableTombstoneRaw = await readFile(recoverableTombstone);
+    const recoverableArchive = join(trash, JSON.parse(recoverableTombstoneRaw.toString('utf8')).archiveBasename as string);
+    const recoverableArchiveRaw = await readFile(recoverableArchive);
+    const recoverableAdapter = new HarborsAdapter(modelService, directory, [], {
+      async unlink(path) {
+        if (path === recoverableArchive) throw new Error('FAIL_ARCHIVE_UNLINK');
+        await unlink(path);
+      },
+    });
+    try { await assert.rejects(recoverableAdapter.deleteArchivedConversation(recoverable.id), /ARCHIVE_OPERATION_FAILED/); }
+    finally { recoverableAdapter.stop(); }
+    assert.deepEqual(await readFile(recoverableTombstone), recoverableTombstoneRaw);
+    assert.deepEqual(await readFile(recoverableArchive), recoverableArchiveRaw);
+
+    const inconsistent = await creator.createConversation('/inconsistent');
+    await creator.archiveConversation(inconsistent.id);
+    const inconsistentTombstone = join(sessions, `${inconsistent.id}.deleted`);
+    const inconsistentArchive = join(trash, JSON.parse(await readFile(inconsistentTombstone, 'utf8')).archiveBasename as string);
+    let failed = false;
+    const inconsistentAdapter = new HarborsAdapter(modelService, directory, [], {
+      async syncDirectory(path) {
+        if (!failed && path === trash) { failed = true; throw new Error('FAIL_FINAL_TRASH_SYNC'); }
+      },
+    });
+    try { await assert.rejects(inconsistentAdapter.deleteArchivedConversation(inconsistent.id), /ARCHIVE_STATE_INCONSISTENT/); }
+    finally { inconsistentAdapter.stop(); }
+    assert.equal((await lstat(inconsistentTombstone)).isFile(), true);
+    await assert.rejects(lstat(inconsistentArchive), { code: 'ENOENT' });
+  });
+});
+
 test('归档每个文件提交 failpoint 都完整补偿并保持原会话 bytes/mtime', async () => {
   const cases: Array<{
     name: string;

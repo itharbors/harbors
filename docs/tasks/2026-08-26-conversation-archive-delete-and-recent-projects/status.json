@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-26-conversation-archive-delete-and-recent-projects",
+  "type": "feature",
+  "updatedAt": "2026-08-26T14:27:21.856Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "in_progress",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}

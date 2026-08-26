@@ -186,8 +186,13 @@ test('归档 Main request 返回显式 envelope、白名单摘要并仅成功广
     assert.equal(listed.ok, true); assert.equal(listed.value[0].id, created.id);
     const restored = await loadedPlugin.methods.restoreConversation(created.id);
     assert.equal(restored.ok, true); assert.equal(restored.value.id, created.id);
-    assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'archive').length, 1);
+    assert.equal((await loadedPlugin.methods.archiveConversation(created.id)).ok, true);
+    const deleted = await loadedPlugin.methods.deleteArchivedConversation(created.id);
+    assert.deepEqual(deleted, { ok: true, value: { id: created.id } });
+    assert.deepEqual(await loadedPlugin.methods.listArchivedConversations(), { ok: true, value: [] });
+    assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'archive').length, 2);
     assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'restore').length, 1);
+    assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'delete').length, 1);
   } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
 });
 

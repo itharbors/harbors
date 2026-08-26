@@ -6,6 +6,7 @@ import Transcript, { nextDisplayTurn } from './transcript.js';
 import { captureLinkClick, createLinkClickedPayload, createLinkClickSequenceGate } from './link-click.js';
 import { applyMessageDeltaUpdates, createMessageDeltaScheduler, shouldIgnorePendingBottomScroll, type MessageDeltaUpdate } from './update-scheduler.js';
 import { readModelCatalogPayload, selectModelForCatalog, type ModelCatalogOption } from './model-catalog.js';
+import { validateKnownProject } from './directory-picker.js';
 import './index.css';
 
 type Source = 'harbors';
@@ -181,6 +182,7 @@ function DirectoryPicker({ ctx, initialPath, onCancel, onConfirm }: { ctx: any; 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [manualPath, setManualPath] = useState('');
+  const [knownProjects, setKnownProjects] = useState<string[]>([]);
 
   const browse = useCallback(async (dir?: string) => {
     setLoading(true); setError(null);
@@ -197,6 +199,32 @@ function DirectoryPicker({ ctx, initialPath, onCancel, onConfirm }: { ctx: any; 
 
   useEffect(() => { void browse(initialPath || undefined); }, [browse, initialPath]);
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const result = await ctx.message.request('conversation', 'listKnownProjects') as { ok: boolean; value?: string[] };
+        if (!cancelled && result && result.ok === true && Array.isArray(result.value)) {
+          setKnownProjects(result.value.filter((path) => typeof path === 'string' && path.trim()));
+        }
+      } catch {
+        // Ignore failures; the file system browser remains available.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [ctx]);
+
+  const confirmKnownProject = useCallback(async (path: string) => {
+    setLoading(true); setError(null);
+    try {
+      onConfirm(await validateKnownProject(ctx.message.request.bind(ctx.message), path));
+    } catch (err) {
+      setError(`项目目录不可用：${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setLoading(false);
+    }
+  }, [ctx, onConfirm]);
+
   return (
     <div className="dir-picker-overlay" onClick={onCancel}>
       <div className="dir-picker" onClick={(event) => event.stopPropagation()}>
@@ -204,6 +232,18 @@ function DirectoryPicker({ ctx, initialPath, onCancel, onConfirm }: { ctx: any; 
           <span>选择项目目录</span>
           <button type="button" className="dir-picker-close" onClick={onCancel} aria-label="关闭">×</button>
         </div>
+        {knownProjects.length > 0 && (
+          <div className="dir-picker-recent">
+            <div className="dir-picker-recent-title">最近项目</div>
+            <div className="dir-picker-recent-list">
+              {knownProjects.map((path) => (
+                <button key={path} type="button" className="dir-picker-recent-item" title={path} disabled={loading} onClick={() => void confirmKnownProject(path)}>
+                  {path.split('/').filter(Boolean).slice(-2).join(' / ') || path}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="dir-picker-path">
           <input
             type="text"

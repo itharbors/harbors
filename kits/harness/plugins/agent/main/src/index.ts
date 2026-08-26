@@ -20,7 +20,7 @@ interface Conversation extends AgentConversation {
   active?: boolean;
 }
 
-type ConversationChangedAction = 'create' | 'archive' | 'restore' | 'rename' | 'update';
+type ConversationChangedAction = 'create' | 'archive' | 'restore' | 'rename' | 'update' | 'delete';
 
 interface ConversationChangedPayload {
   id: string;
@@ -565,6 +565,14 @@ editor.plugin.define({
         conversations.sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
         broadcastConversationChanged('restore', id, conversation);
         return { ok: true, value: { ...conversation } };
+      } catch (error) { return archiveFailure(error); }
+    },
+    async deleteArchivedConversation(id: string): Promise<BusinessResult<{ id: string }>> {
+      try {
+        const route = parseConversationId(id);
+        const result = await requireAdapter(route.source).deleteArchivedConversation(route.adapterId);
+        broadcastConversationChanged('delete', id);
+        return { ok: true, value: { id: conversationId(route.source, result.id) } };
       } catch (error) { return archiveFailure(error); }
     },
     async renameConversation(id: string, title: string) {

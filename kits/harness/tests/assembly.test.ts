@@ -318,11 +318,18 @@ describe('Harbors Harness Kit real assembly', () => {
     expect(restored).toMatchObject({ ok: true, value: { id: first.id } });
     expect(await runtime.messages.request('conversation', 'getState')).toMatchObject({ selectedConversationId: second.id });
     expect(await runtime.messages.request('agent', 'getConversationTrace', first.id)).toEqual(traceBefore);
+    expect(await runtime.messages.requestFrom('conversation', 'conversation', 'archiveConversation', first.id)).toMatchObject({ ok: true, value: { id: first.id } });
+    expect(await runtime.messages.requestFrom('conversation', 'conversation', 'deleteArchivedConversation', first.id)).toEqual({ ok: true, value: { id: first.id } });
+    expect(await runtime.messages.requestFrom('conversation', 'conversation', 'listArchivedConversations')).toEqual({ ok: true, value: [] });
     const events = runtime.observer.events;
     const archiveRequest = events.find((event) => event.kind === 'request' && event.caller === 'conversation' && event.plugin === 'agent' && event.name === 'archiveConversation');
     const archiveBroadcast = events.find((event) => event.kind === 'broadcast' && event.topic === 'agent.conversation.changed' && (event.args[0] as any)?.action === 'archive');
+    const deleteRequest = events.find((event) => event.kind === 'request' && event.caller === 'conversation' && event.plugin === 'agent' && event.name === 'deleteArchivedConversation');
+    const deleteBroadcast = events.find((event) => event.kind === 'broadcast' && event.topic === 'agent.conversation.changed' && (event.args[0] as any)?.action === 'delete');
     expect(archiveRequest).toBeDefined(); expect(archiveBroadcast).toBeDefined();
     expect(archiveRequest!.sequence).toBeLessThan(archiveBroadcast!.sequence);
+    expect(deleteRequest).toBeDefined(); expect(deleteBroadcast).toBeDefined();
+    expect(deleteRequest!.sequence).toBeLessThan(deleteBroadcast!.sequence);
   });
 
   it('rejects an active archive without side effects and persists archive/restore across assembly restart', async () => {
@@ -414,7 +421,9 @@ describe('Harbors Harness Kit real assembly', () => {
     await runtime.kit.load();
     const created = await runtime.messages.request('agent', 'createConversation', 'harbors', projectRoot) as { id: string };
     await runtime.messages.request('conversation', 'select', created.id);
-    for (const [route, args] of [['listArchivedConversations', []], ['archiveConversation', [created.id]], ['restoreConversation', [created.id]]] as const) {
+    const archived = await runtime.messages.request('conversation', 'archiveConversation', created.id) as { ok: boolean; value?: { id: string } };
+    const archivedId = archived.ok ? archived.value!.id : created.id;
+    for (const [route, args] of [['listArchivedConversations', []], ['archiveConversation', [created.id]], ['restoreConversation', [archivedId]], ['deleteArchivedConversation', [archivedId]]] as const) {
       const beforeDisk = snapshotTree(applicationData);
       const beforeList = await runtime.messages.request('agent', 'listConversations');
       const beforeState = await runtime.messages.request('conversation', 'getState');
@@ -426,7 +435,11 @@ describe('Harbors Harness Kit real assembly', () => {
       expect(await runtime.messages.request('conversation', 'getState')).toEqual(beforeState);
       expect(runtime.observer.events.filter((event) => event.kind === 'broadcast')).toHaveLength(beforeBroadcasts);
     }
-    await expect(runtime.messages.requestFrom('conversation', 'agent', 'listArchivedConversations')).resolves.toEqual({ ok: true, value: [] });
+    await expect(runtime.messages.request('conversation', 'deleteArchivedConversation', archivedId)).rejects.toThrow(/not permitted/);
+    await expect(runtime.messages.requestFrom('chat', 'conversation', 'deleteArchivedConversation', archivedId)).rejects.toThrow(/not permitted/);
+    await expect(runtime.messages.requestFrom('settings', 'conversation', 'listKnownProjects')).rejects.toThrow(/not permitted/);
+    await expect(runtime.messages.requestFrom('chat', 'conversation', 'listKnownProjects')).resolves.toMatchObject({ ok: true });
+    await expect(runtime.messages.requestFrom('conversation', 'agent', 'listArchivedConversations')).resolves.toMatchObject({ ok: true });
   });
 });
 

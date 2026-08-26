@@ -20,5 +20,8 @@ header > p:last-child { margin: 0; color: #9ba7b2; line-height: 1.5; }
 button { border: 1px solid #477d6a; border-radius: 8px; padding: 8px 12px; color: #eafff6; background: #205644; cursor: pointer; }
 button:hover:not(:disabled) { background: #286b54; } button:disabled { opacity: .55; cursor: wait; }
 button:focus-visible { outline: 2px solid #92e7c5; outline-offset: 2px; }
+button.danger { border-color: #7d4747; background: #562020; color: #ffeaea; }
+button.danger:hover:not(:disabled) { background: #6b2828; }
+.archive-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .empty { padding: 30px 12px; border: 1px dashed #364049; border-radius: 12px; color: #8f9aa4; text-align: center; }
 @media (max-width: 360px) { .archive-settings { padding: 16px; } .feedback { align-items: stretch; flex-direction: column; padding-bottom: 10px; } .archive-meta { grid-template-columns: 1fr; gap: 2px; } .archive-meta dd { margin-bottom: 7px; } button { width: 100%; } }
