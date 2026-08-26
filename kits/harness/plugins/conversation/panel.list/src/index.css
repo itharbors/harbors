@@ -108,6 +108,13 @@ html, body {
   background: #222936;
 }
 
+.conversation-card.unavailable {
+  cursor: not-allowed;
+  opacity: .72;
+}
+
+.conversation-card.unavailable:hover { background: transparent; }
+
 .conversation-card.active {
   background: rgba(61, 94, 145, .16);
   border-color: rgba(87, 126, 185, .35);
@@ -181,6 +188,13 @@ html, body {
   font-weight: 650;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.conversation-unavailable {
+  flex: 0 0 auto;
+  color: #e3a56d;
+  font-size: 10px;
+  font-weight: 650;
 }
 
 .conversation-menu {

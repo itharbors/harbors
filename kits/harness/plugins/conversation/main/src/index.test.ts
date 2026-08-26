@@ -70,6 +70,32 @@ test('草稿和空选择不伪造 selectedProject', async () => {
   }
 });
 
+test('不可用会话保留在公开列表但不会进入选择、归档或回退状态', async () => {
+  const unavailable = { id: 'harbors:broken', title: '无法读取的对话', availability: 'unavailable', errorCode: 'CONVERSATION_FILE_INVALID' };
+  const healthy = { id: 'harbors:healthy', title: 'Healthy', project: '/workspace' };
+  let archiveCalls = 0;
+  const runtime = { message: {
+    broadcast() {},
+    request(_target: string, method: string) {
+      if (method === 'listConversations') return Promise.resolve([unavailable, healthy]);
+      if (method === 'archiveConversation') { archiveCalls += 1; return Promise.resolve({ ok: true, value: { id: healthy.id, source: 'harbors', title: healthy.title, archivedAt: new Date(0).toISOString(), status: 'available' } }); }
+      throw new Error(`unexpected ${method}`);
+    },
+  } };
+
+  plugin.lifecycle.load(runtime);
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(plugin.methods.getState().selectedConversationId, healthy.id);
+    await assert.rejects(plugin.methods.select(unavailable.id), /conversation is unavailable/);
+    assert.deepEqual(await plugin.methods.archiveConversation(unavailable.id), { ok: false, error: { code: 'CONVERSATION_NOT_FOUND', message: '对话不存在，请刷新后重试' } });
+    assert.equal(archiveCalls, 0);
+    assert.equal((await plugin.methods.archiveConversation(healthy.id)).ok, true);
+    assert.equal(plugin.methods.getState().selectedConversationId, null);
+    assert.ok(plugin.methods.getState().draft);
+  } finally { plugin.lifecycle.unload(); }
+});
+
 test('Panel 新建请求通过 selected 广播让订阅面板进入草稿态', async () => {
   const broadcasts: Array<[string, unknown]> = [];
   let resolveInitial!: (value: unknown) => void;

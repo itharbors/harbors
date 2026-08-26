@@ -8,6 +8,7 @@ type BusinessResult<T> = { ok: true; value: T } | { ok: false; error: { code: Ar
 
 interface ConversationSummary {
   id: string; project?: string; title?: string; active?: boolean; createdAt?: string; updatedAt?: string;
+  availability?: 'available' | 'unavailable'; errorCode?: string;
 }
 interface ArchivedConversationSummary {
   id: string; source: AgentSource; title: string; project?: string; createdAt?: string; updatedAt?: string;
@@ -47,6 +48,8 @@ function createGeneration(): string {
 }
 function describeError(error: unknown): string { return error instanceof Error && error.message ? error.message : typeof error === 'string' ? error : '未知错误'; }
 function isRunning(id: string | null): boolean { return Boolean(id && conversations.some((item) => item.id === id && item.active)); }
+function isAvailable(value: ConversationSummary | undefined): value is ConversationSummary { return Boolean(value && value.availability !== 'unavailable'); }
+function firstAvailable(): ConversationSummary | undefined { return conversations.find(isAvailable); }
 function copyState(): ConversationState {
   const selectedProject = state.selectedConversationId ? conversations.find((item) => item.id === state.selectedConversationId)?.project : undefined;
   return { selectedConversationId: state.selectedConversationId, ...(selectedProject ? { selectedProject } : {}), draft: state.draft ? { ...state.draft } : null, running: isRunning(state.selectedConversationId), generation: state.generation, revision: state.revision };
@@ -60,7 +63,7 @@ function normalizeConversation(value: unknown): ConversationSummary | null {
   if (!value || typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   if (typeof record.id !== 'string' || !record.id) return null;
-  return { id: record.id, ...(typeof record.project === 'string' ? { project: record.project } : {}), ...(typeof record.title === 'string' ? { title: record.title } : {}), ...(typeof record.active === 'boolean' ? { active: record.active } : {}), ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}), ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}) };
+  return { id: record.id, ...(typeof record.project === 'string' ? { project: record.project } : {}), ...(typeof record.title === 'string' ? { title: record.title } : {}), ...(typeof record.active === 'boolean' ? { active: record.active } : {}), ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}), ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}), ...(record.availability === 'available' || record.availability === 'unavailable' ? { availability: record.availability } : {}), ...(typeof record.errorCode === 'string' ? { errorCode: record.errorCode } : {}) };
 }
 function normalizeConversations(value: unknown): ConversationSummary[] {
   return Array.isArray(value) ? value.flatMap((item) => { const normalized = normalizeConversation(item); return normalized ? [normalized] : []; }) : [];
@@ -90,7 +93,7 @@ function applyArchive(id: string, archived?: ArchivedConversationSummary): void 
   const previous = conversations[index];
   conversations = conversations.filter((item) => item.id !== id);
   if (!wasSelected) return;
-  const next = conversations[index] ?? conversations[index - 1];
+  const next = conversations.slice(index).find(isAvailable) ?? conversations.slice(0, index).reverse().find(isAvailable);
   if (next) updateState(next.id, null);
   else updateState(null, { source: 'harbors', project: archived?.project || previous.project || process.cwd() });
 }
@@ -107,8 +110,8 @@ function applyConversationChanged(payload: ConversationChangedPayload): void {
   else if (payload.action === 'create') {
     const conversation = normalizeConversation(payload.conversation);
     if (conversation && !conversations.some((item) => item.id === payload.id)) conversations.unshift(conversation);
-    if (!state.draft && (!state.selectedConversationId || !conversations.some((item) => item.id === state.selectedConversationId))) {
-      updateState(conversations[0]?.id ?? null, null);
+    if (!state.draft && (!state.selectedConversationId || !isAvailable(conversations.find((item) => item.id === state.selectedConversationId)))) {
+      updateState(firstAvailable()?.id ?? null, null);
       return;
     }
   }
@@ -125,8 +128,9 @@ async function initializeActivity(generation: number): Promise<void> {
       if (generation !== lifecycleGeneration || !runtime) throw new Error('[conversation] plugin is not loaded');
       if (epoch !== activityEpoch) continue;
       conversations = normalizeConversations(value);
-      if (!state.draft && state.selectedConversationId && !conversations.some((item) => item.id === state.selectedConversationId)) updateState(conversations[0]?.id ?? null, null);
-      else if (!state.draft && !state.selectedConversationId && conversations[0]) updateState(conversations[0].id, null);
+      const initial = firstAvailable();
+      if (!state.draft && state.selectedConversationId && !isAvailable(conversations.find((item) => item.id === state.selectedConversationId))) updateState(initial?.id ?? null, null);
+      else if (!state.draft && !state.selectedConversationId && initial) updateState(initial.id, null);
       return;
     } catch (error) {
       if (generation !== lifecycleGeneration || !runtime) throw new Error('[conversation] plugin is not loaded');
@@ -190,7 +194,7 @@ editor.plugin.define({
       await awaitInitialization();
       if (typeof id !== 'string' || !id) return { ok: false, error: { code: 'INVALID_CONVERSATION_ID', message: ERROR_MESSAGES.INVALID_CONVERSATION_ID } };
       return enqueueMutation(id, async (currentRuntime, generation) => {
-        if (!conversations.some((item) => item.id === id)) return { ok: false, error: { code: 'CONVERSATION_NOT_FOUND', message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND } };
+        if (!isAvailable(conversations.find((item) => item.id === id))) return { ok: false, error: { code: 'CONVERSATION_NOT_FOUND', message: ERROR_MESSAGES.CONVERSATION_NOT_FOUND } };
         const result = normalizeBusinessResult(await currentRuntime.message.request('agent', 'archiveConversation', id), normalizeArchived);
         if (result.ok && generation === lifecycleGeneration && currentRuntime === runtime) applyArchive(id, result.value);
         return result;
@@ -213,7 +217,7 @@ editor.plugin.define({
       if (currentRuntime !== runtime || generation !== lifecycleGeneration) throw new Error('[conversation] plugin is not loaded');
       if (command !== selectionSequence) return copyState();
       if (epoch === activityEpoch) conversations = normalizeConversations(refreshed);
-      if (!conversations.some((item) => item.id === id)) throw new Error('[conversation] conversation does not exist');
+      if (!isAvailable(conversations.find((item) => item.id === id))) throw new Error('[conversation] conversation is unavailable');
       return updateState(id, null);
     },
   },

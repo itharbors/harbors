@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -188,6 +188,38 @@ test('归档 Main request 返回显式 envelope、白名单摘要并仅成功广
     assert.equal(restored.ok, true); assert.equal(restored.value.id, created.id);
     assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'archive').length, 1);
     assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'restore').length, 1);
+  } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
+});
+
+test('活动列表公开损坏会话的最小不可用摘要且保留健康会话', async () => {
+  assert.ok(loadedPlugin);
+  const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-corrupt-'));
+  const runtime = {
+    paths: { data: storageDir }, config: { get() { return undefined; }, set() {}, delete() {} },
+    message: { broadcast() {}, request(_target: string, method: string) {
+      if (method === 'getCatalog') return Promise.resolve({ models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' });
+      throw new Error(`unexpected ${method}`);
+    } },
+  };
+  try {
+    await loadedPlugin.lifecycle.load(runtime);
+    const healthy = await loadedPlugin.methods.createConversation('harbors', '/workspace');
+    const corruptId = '44444444-4444-4444-8444-444444444444';
+    const sessions = join(storageDir, 'storage-v1', 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(join(sessions, `${corruptId}.jsonl`), `${JSON.stringify({ type: 'session', version: 0, id: corruptId, createdAt: Date.now() })}\nnot-json\n`, 'utf8');
+
+    const listed = await loadedPlugin.methods.listConversations();
+    assert.equal(listed.some((item: any) => item.id === healthy.id && item.availability === 'available'), true);
+    const unavailable = listed.find((item: any) => item.id === `harbors:${corruptId}`);
+    assert.deepEqual(unavailable, {
+      id: `harbors:${corruptId}`,
+      source: 'harbors',
+      title: '无法读取的对话',
+      availability: 'unavailable',
+      errorCode: 'CONVERSATION_FILE_INVALID',
+    });
+    for (const forbidden of ['adapterId', 'project', 'preview', 'lastMessage', 'model', 'sandboxMode', 'approvalPolicy']) assert.equal(forbidden in unavailable, false);
   } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
 });
 

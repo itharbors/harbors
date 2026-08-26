@@ -495,13 +495,30 @@ test('canonical 尾部中断修复后仍保持 canonical envelope 与连续 ordi
   });
 });
 
-test('列表遇到中间损坏日志会明确失败', async () => {
+test('列表隔离损坏日志并显式返回不可用摘要，健康会话和原始证据保持不变', async () => {
   await withStorage(async (directory, adapter) => {
-    const id = '44444444-4444-4444-8444-444444444444';
-    const header = { type: 'session', version: 0, id, createdAt: Date.now() };
-    await mkdir(join(directory, 'storage-v1', 'sessions'), { recursive: true });
-    await writeFile(sessionPath(directory, id), `${JSON.stringify(header)}\nnot-json\n`, 'utf8');
-    await assert.rejects(adapter.listConversations(), /Invalid Harbors session JSON/);
+    const healthy = await adapter.createConversation('/healthy');
+    const corruptId = '44444444-4444-4444-8444-444444444444';
+    const corruptPath = sessionPath(directory, corruptId);
+    const header = { type: 'session', version: 0, id: corruptId, createdAt: Date.now() };
+    const raw = `${JSON.stringify(header)}\nnot-json\n`;
+    await writeFile(corruptPath, raw, 'utf8');
+    const before = await lstat(corruptPath);
+
+    const listed = await adapter.listConversations();
+    assert.equal(listed.some((item) => item.id === healthy.id && item.availability === 'available'), true);
+    assert.deepEqual(listed.find((item) => item.id === corruptId), {
+      id: corruptId,
+      title: '无法读取的对话',
+      availability: 'unavailable',
+      errorCode: 'CONVERSATION_FILE_INVALID',
+    });
+    await assert.rejects(adapter.getConversationTrace(corruptId), /Invalid Harbors session JSON/);
+    await assert.rejects(adapter.renameConversation(corruptId, '不得写入'), /Invalid Harbors session JSON/);
+    await assert.rejects(adapter.archiveConversation(corruptId), /Invalid Harbors session JSON/);
+    const after = await lstat(corruptPath);
+    assert.equal(await readFile(corruptPath, 'utf8'), raw);
+    assert.equal(after.mtimeMs, before.mtimeMs);
   });
 });
 
@@ -544,7 +561,7 @@ test('文件名与 canonical 或 legacy 会话身份不一致时读写均 fail c
       const broadcasts: unknown[] = [];
       adapter.setTraceEventListener((_conversationId, event) => broadcasts.push(event));
 
-      await assert.rejects(adapter.listConversations(), /SESSION_ID_MISMATCH/);
+      assert.deepEqual(await adapter.listConversations(), [{ id: filenameId, title: '无法读取的对话', availability: 'unavailable', errorCode: 'CONVERSATION_FILE_INVALID' }]);
       await assert.rejects(adapter.getConversationTrace(filenameId), /SESSION_ID_MISMATCH/);
       await assert.rejects(adapter.renameConversation(filenameId, '不得写入'), /SESSION_ID_MISMATCH/);
       assert.equal(await readFile(path, 'utf8'), original, current.name);

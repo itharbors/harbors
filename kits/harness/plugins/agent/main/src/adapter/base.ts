@@ -117,6 +117,10 @@ export interface AgentOptions {
 export interface AgentConversation {
   id: string;
   title: string;
+  /** 列表读取时的可用性；损坏会话只允许作为不可交互的安全摘要出现。 */
+  availability?: 'available' | 'unavailable';
+  /** 不可用摘要的稳定诊断码；不得包含路径或底层异常。 */
+  errorCode?: 'CONVERSATION_FILE_INVALID';
   preview?: string;
   createdAt?: string;
   updatedAt?: string;
