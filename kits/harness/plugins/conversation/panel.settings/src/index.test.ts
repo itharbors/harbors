@@ -54,3 +54,30 @@ test('设置页业务失败读取 envelope，transport 异常使用不可用提�
   assert.match(source, /result\.ok === false/); assert.match(source, /归档服务暂不可用/);
   assert.doesNotMatch(source, /request\('agent'/); assert.match(css, /focus-visible/); assert.match(css, /max-width: 360px/);
 });
+
+test('永久删除必须确认，确认后请求 Conversation 并刷新列表', async () => {
+  const html = await readFile(new URL('./index.html', import.meta.url), 'utf8');
+  const dom = new JSDOM(html, { url: 'https://host.test/conversation-settings' });
+  const previousWindow = globalThis.window; const previousDocument = globalThis.document;
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document });
+  let archived = true;
+  const calls: unknown[][] = [];
+  try {
+    definition.mount({ message: { request: async (owner: string, name: string, ...args: unknown[]) => {
+      calls.push([owner, name, ...args]);
+      if (name === 'listArchivedConversations') return { ok: true, value: archived ? [{ id: 'harbors:a', source: 'harbors', title: 'A', archivedAt: new Date(1).toISOString(), status: 'available' }] : [] };
+      if (name === 'deleteArchivedConversation') { archived = false; return { ok: true, value: { id: args[0] } }; }
+      throw new Error(`unexpected ${name}`);
+    } } });
+    await tick();
+    const deleteButton = [...dom.window.document.querySelectorAll<HTMLButtonElement>('.archive-card button')].find((button) => button.textContent === '删除')!;
+    dom.window.confirm = () => false;
+    deleteButton.click(); await tick();
+    assert.equal(calls.some((call) => call[1] === 'deleteArchivedConversation'), false);
+    dom.window.confirm = () => true;
+    deleteButton.click(); await tick(); await tick();
+    assert.ok(calls.some((call) => call[1] === 'deleteArchivedConversation' && call[2] === 'harbors:a'));
+    assert.equal(dom.window.document.querySelectorAll('.archive-card').length, 0);
+    assert.match(dom.window.document.getElementById('status')?.textContent || '', /归档对话已删除/);
+  } finally { definition.unmount(); Object.assign(globalThis, { window: previousWindow, document: previousDocument }); }
+});

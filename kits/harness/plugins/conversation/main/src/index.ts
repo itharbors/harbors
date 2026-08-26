@@ -20,10 +20,11 @@ interface ConversationState {
   running: boolean; generation: string; revision: number;
 }
 type ConversationChangedPayload =
-  | { action: 'create' | 'rename' | 'update' | 'restore'; id: string; conversation?: ConversationSummary }
+  | { action: 'create' | 'rename' | 'update' | 'restore' | 'delete'; id: string; conversation?: ConversationSummary }
   | { action: 'archive'; id: string; archived?: ArchivedConversationSummary };
 
 const INITIAL_RETRY_DELAYS_MS = [25, 50, 100, 250, 500, 1000];
+const KNOWN_PROJECT_LIMIT = 12;
 const ERROR_MESSAGES: Record<ArchiveErrorCode, string> = {
   INVALID_CONVERSATION_ID: '对话标识无效', CONVERSATION_NOT_FOUND: '对话不存在，请刷新后重试',
   CONVERSATION_ACTIVE: '对话仍在运行，请先停止后再归档', ARCHIVE_NOT_FOUND: '归档不存在，请刷新后重试',
@@ -208,6 +209,55 @@ editor.plugin.define({
         if (result.ok && generation === lifecycleGeneration && currentRuntime === runtime) applyRestore(result.value);
         return result;
       });
+    },
+    async deleteArchivedConversation(id: string): Promise<BusinessResult<{ id: string }>> {
+      await awaitInitialization();
+      if (typeof id !== 'string' || !id) return { ok: false, error: { code: 'INVALID_CONVERSATION_ID', message: ERROR_MESSAGES.INVALID_CONVERSATION_ID } };
+      return enqueueMutation(id, async (currentRuntime) => {
+        const result = normalizeBusinessResult(await currentRuntime.message.request('agent', 'deleteArchivedConversation', id), (input) => {
+          if (!input || typeof input !== 'object') return null;
+          const record = input as { id?: unknown };
+          return typeof record.id === 'string' && record.id ? { id: record.id } : null;
+        });
+        return result;
+      });
+    },
+    async listKnownProjects(): Promise<BusinessResult<string[]>> {
+      const currentRuntime = runtime; if (!currentRuntime) throw new Error('[conversation] plugin is not loaded');
+      await awaitInitialization();
+      if (currentRuntime !== runtime) throw new Error('[conversation] plugin is not loaded');
+      const seen = new Map<string, number>();
+      for (const conversation of conversations) {
+        if (typeof conversation.project === 'string' && conversation.project.trim()) {
+          const time = Date.parse(conversation.updatedAt || conversation.createdAt || '');
+          const current = seen.get(conversation.project);
+          if (current === undefined || time > current) seen.set(conversation.project, Number.isFinite(time) ? time : 0);
+        }
+      }
+      try {
+        const archived = await currentRuntime.message.request('agent', 'listArchivedConversations');
+        if (currentRuntime !== runtime) throw new Error('[conversation] plugin is not loaded');
+        const result = normalizeBusinessResult(archived, (input) => {
+          if (!Array.isArray(input)) return null;
+          const items = input.map(normalizeArchived);
+          return items.some((item) => item === null) ? null : items as ArchivedConversationSummary[];
+        });
+        if (result.ok) {
+          for (const item of result.value) {
+            if (typeof item.project === 'string' && item.project.trim()) {
+              const time = Date.parse(item.archivedAt || '');
+              const current = seen.get(item.project);
+              if (current === undefined || time > current) seen.set(item.project, Number.isFinite(time) ? time : 0);
+            }
+          }
+        }
+      } catch {
+        if (currentRuntime !== runtime) throw new Error('[conversation] plugin is not loaded');
+        // Ignore archived list failure; still return projects from active conversations.
+      }
+      const projects = [...seen.entries()].sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]))
+        .slice(0, KNOWN_PROJECT_LIMIT).map(([project]) => project);
+      return { ok: true, value: projects };
     },
     async select(id: string | null, draft?: { project?: string }) {
       const command = ++selectionSequence; const currentRuntime = runtime; const generation = lifecycleGeneration; const epoch = activityEpoch;

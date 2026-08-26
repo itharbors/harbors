@@ -423,6 +423,49 @@ export class HarborsAdapter implements AgentAdapter {
     return { ...restoredConversation };
   }
 
+  async deleteArchivedConversation(id: string): Promise<{ id: string }> {
+    throwIfAborted(this.abortController.signal);
+    if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
+    const source = this.logPathFor(id);
+    const tombstonePath = this.tombstonePathFor(id);
+    if (!await fileExists(tombstonePath)) throw new Error('ARCHIVE_NOT_FOUND');
+    await this.enqueueSessionWrite(id, async () => {
+      await withSessionFileLock(source, async () => {
+        if (await fileExists(source)) throw new Error('ARCHIVE_CONFLICT');
+        const record = await readArchiveRecord(this.storageDir, this.trashDir, id);
+        if (!record) throw new Error('ARCHIVE_NOT_FOUND');
+        if (record.summary.status !== 'available' || !record.archivePath || !record.tombstoneRaw) {
+          throw new Error(record.summary.errorCode || 'ARCHIVE_TOMBSTONE_INVALID');
+        }
+        let tombstoneRemoved = false;
+        let archiveRemoved = false;
+        try {
+          await this.archiveFileOperations.unlink(tombstonePath); tombstoneRemoved = true;
+          await this.archiveFileOperations.syncDirectory(this.storageDir);
+          await this.archiveFileOperations.unlink(record.archivePath); archiveRemoved = true;
+          await this.archiveFileOperations.syncDirectory(this.trashDir);
+        } catch (error) {
+          let compensationFailed = false;
+          if (tombstoneRemoved) {
+            try {
+              await this.archiveFileOperations.writeExclusive(tombstonePath, record.tombstoneRaw!);
+              await this.archiveFileOperations.syncFile(tombstonePath);
+              await this.archiveFileOperations.syncDirectory(this.storageDir);
+            } catch { compensationFailed = true; }
+          }
+          if (archiveRemoved) {
+            // Archive JSONL bytes are gone; cannot restore. Mark inconsistent.
+            compensationFailed = true;
+          }
+          throw new Error(compensationFailed ? 'ARCHIVE_STATE_INCONSISTENT' : 'ARCHIVE_OPERATION_FAILED', { cause: error });
+        }
+      });
+      this.deletedSessions.add(id);
+      this.sessions.delete(id); this.sessionLoads.delete(id); this.sessionRefreshes.delete(id);
+    });
+    return { id };
+  }
+
   async renameConversation(id: string, title: string): Promise<AgentConversation> {
     await this.ensureInitialized();
     throwIfAborted(this.abortController.signal);

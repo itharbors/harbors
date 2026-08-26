@@ -235,6 +235,9 @@ export interface AgentAdapter {
   /** 将归档恢复为原 ID 的活动对话。 */
   restoreConversation(id: string): Promise<AgentConversation>;
 
+  /** 永久删除归档对话及其 tombstone；不可恢复。 */
+  deleteArchivedConversation(id: string): Promise<{ id: string }>;
+
   /** 重命名对话；返回更新后的会话摘要。不支持的 adapter 可省略。 */
   renameConversation?(id: string, title: string): Promise<AgentConversation>;
 

@@ -34,6 +34,7 @@
           "listArchivedConversations": { "methods": ["listArchivedConversations"], "callers": ["conversation"] },
           "archiveConversation": { "methods": ["archiveConversation"], "callers": ["conversation"] },
           "restoreConversation": { "methods": ["restoreConversation"], "callers": ["conversation"] },
+          "deleteArchivedConversation": { "methods": ["deleteArchivedConversation"], "callers": ["conversation"] },
           "renameConversation": ["renameConversation"],
           "getConversationTrace": ["getConversationTrace"],
           "getConversationTraceSince": ["getConversationTraceSince"],

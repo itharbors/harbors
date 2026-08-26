@@ -301,3 +301,36 @@ test('unload 不伪装已提交结果，并中断同 ID 队列中尚未提交的
   await assert.rejects(queued, /plugin is not loaded/);
   assert.equal(calls, 1);
 });
+
+test('删除归档经 Conversation 转发稳定 envelope，最近项目去重排序并限制数量', async () => {
+  const active = Array.from({ length: 14 }, (_, index) => ({
+    id: `harbors:${index}`,
+    title: String(index),
+    project: `/workspace/${index}`,
+    updatedAt: new Date(index * 1000).toISOString(),
+  }));
+  const calls: Array<[string, string, ...unknown[]]> = [];
+  const runtime = { message: {
+    broadcast() {},
+    request(target: string, method: string, ...args: unknown[]) {
+      calls.push([target, method, ...args]);
+      if (method === 'listConversations') return Promise.resolve(active);
+      if (method === 'listArchivedConversations') return Promise.resolve({ ok: true, value: [
+        { id: 'harbors:old', source: 'harbors', title: 'Old', project: '/workspace/3', archivedAt: new Date(20_000).toISOString(), status: 'available' },
+        { id: 'harbors:new', source: 'harbors', title: 'New', project: '/workspace/archived', archivedAt: new Date(19_000).toISOString(), status: 'available' },
+      ] });
+      if (method === 'deleteArchivedConversation') return Promise.resolve({ ok: true, value: { id: args[0] } });
+      throw new Error(`unexpected ${method}`);
+    },
+  } };
+  plugin.lifecycle.load(runtime);
+  try {
+    const projects = await plugin.methods.listKnownProjects();
+    assert.equal(projects.ok, true);
+    assert.equal(projects.value.length, 12);
+    assert.deepEqual(projects.value.slice(0, 3), ['/workspace/3', '/workspace/archived', '/workspace/13']);
+    assert.equal(new Set(projects.value).size, projects.value.length);
+    assert.deepEqual(await plugin.methods.deleteArchivedConversation('harbors:old'), { ok: true, value: { id: 'harbors:old' } });
+    assert.ok(calls.some((call) => call[0] === 'agent' && call[1] === 'deleteArchivedConversation' && call[2] === 'harbors:old'));
+  } finally { plugin.lifecycle.unload(); }
+});

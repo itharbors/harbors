@@ -30,7 +30,9 @@
           "select": ["select"],
           "listArchivedConversations": ["listArchivedConversations"],
           "archiveConversation": ["archiveConversation"],
-          "restoreConversation": ["restoreConversation"]
+          "restoreConversation": ["restoreConversation"],
+          "deleteArchivedConversation": { "methods": ["deleteArchivedConversation"], "callers": ["conversation"] },
+          "listKnownProjects": { "methods": ["listKnownProjects"], "callers": ["chat"] }
         },
         "broadcast": {
           "agent.conversation.changed": ["onConversationChanged", "panel.onConversationChanged"],
