@@ -176,7 +176,6 @@ export const hubbertTools: HubBertTool[] = [
     },
   },
   // —— 技能 ——
-  { name: 'list_skills', description: '列出可按需加载的本地 Skill。先调用它确认名称，再调用 load_skill。', input_schema: { type: 'object', properties: {} } },
   { name: 'load_skill', description: '读取一个 Skill 的完整 SKILL.md 指引。', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
   // —— 多模态 ——
   {
@@ -286,10 +285,9 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
 
   if (name === 'list_files') return cap((await readdir(resolveToolPath(root, string(input.path), permission?.sandboxMode), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
   const catalog = permission?.skillCatalog || await discoverSkillCatalog(root);
-  if (name === 'list_skills') return catalog.text || '未发现 Skill';
   if (name === 'load_skill') {
     const skill = catalog.entries.find((entry) => entry.name === required(input.name, 'name'));
-    if (!skill) throw new Error('Skill 不存在；请先调用 list_skills');
+    if (!skill) throw new Error('Skill 不在当前 Turn 的可用 Skill 目录中');
     return loadDiscoveredSkill(skill);
   }
 

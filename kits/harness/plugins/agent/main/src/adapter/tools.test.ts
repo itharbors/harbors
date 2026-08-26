@@ -3,7 +3,8 @@ import { mkdtemp, mkdir, readFile, symlink, writeFile, rm } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { runHubBertTool } from './tools.js';
+import { discoverSkillCatalog } from './skills.js';
+import { hubbertTools, runHubBertTool } from './tools.js';
 
 const dangerPermission = {
   conversationId: 'test',
@@ -50,6 +51,25 @@ test('文件工具允许 workspace 内路径并拒绝规范化后的越界路径
     assert.match(await runHubBertTool('read', { file_path: 'src/../src/file.txt' }, workspace), /ok/);
     await assert.rejects(runHubBertTool('read', { file_path: '../outside.txt' }, workspace, undefined, workspacePermission), /拒绝|超出当前工作区|符号链接/);
     await assert.rejects(runHubBertTool('read', { file_path: '' }, workspace), /缺少参数/);
+  } finally {
+    await rm(workspace, { recursive: true, force: true });
+  }
+});
+
+test('模型工具只暴露按需加载并允许直接加载当前 Turn 的 Skill', async () => {
+  const workspace = await mkdtemp(join(tmpdir(), 'harbors-agent-tools-skill-'));
+  try {
+    await mkdir(join(workspace, '.agents/skills/direct-load'), { recursive: true });
+    await writeFile(join(workspace, '.agents/skills/direct-load/SKILL.md'), '---\nname: direct-load\ndescription: Direct load fixture\n---\nUse this directly.\n', 'utf8');
+    const skillCatalog = await discoverSkillCatalog(workspace, join(workspace, '.user-skills'));
+    const permission = { ...workspacePermission, skillCatalog };
+
+    assert.equal(hubbertTools.some((tool) => tool.name === 'list_skills'), false);
+    assert.equal(hubbertTools.some((tool) => tool.name === 'load_skill'), true);
+    assert.match(await runHubBertTool('load_skill', { name: 'direct-load' }, workspace, undefined, permission), /Use this directly\./);
+    const missingError = await runHubBertTool('load_skill', { name: 'missing' }, workspace, undefined, permission).then(() => '', String);
+    assert.match(missingError, /当前 Turn 的可用 Skill 目录/);
+    assert.doesNotMatch(missingError, /list_skills/);
   } finally {
     await rm(workspace, { recursive: true, force: true });
   }
