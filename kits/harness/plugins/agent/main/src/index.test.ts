@@ -17,6 +17,7 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
     'agent.defaults.sandboxMode': 'danger-full-access',
     'agent.defaults.approvalPolicy': 'always',
   };
+  let lastCompleteSystem = '';
   const runtime = {
     paths: { data: storageDir },
     config: {
@@ -35,7 +36,7 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
       async request(target: string, method: string, input?: any) {
         assert.equal(target, 'model-service');
         if (method === 'getCatalog') return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' };
-        if (method === 'complete') return { requestId: input.requestId, model: input.model || 'test-model', message: { role: 'assistant', content: 'ok' } };
+        if (method === 'complete') { lastCompleteSystem = input.system || ''; return { requestId: input.requestId, model: input.model || 'test-model', message: { role: 'assistant', content: 'ok' } }; }
         if (method === 'cancel') return { status: 'cancelled' };
         throw new Error(`unexpected model-service method: ${method}`);
       },
@@ -57,39 +58,48 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
     assert.equal(existingOptions.selection.sandboxMode, 'read-only');
     assert.equal(existingOptions.selection.approvalPolicy, 'ask');
 
-    assert.deepEqual(plugin.methods.getSettings(), {
-      sandboxMode: 'danger-full-access',
-      approvalPolicy: 'always',
-      global: { sandboxMode: true, approvalPolicy: true },
-    });
-    const saved = plugin.methods.saveSettings({ sandboxMode: 'read-only', approvalPolicy: 'ask' });
+    const initialSettings = await plugin.methods.getSettings();
+    assert.equal(initialSettings.sandboxMode, 'danger-full-access');
+    assert.equal(initialSettings.approvalPolicy, 'always');
+    assert.deepEqual(initialSettings.custom, { configured: false, applied: false, code: 'disabled' });
+    const saved = await plugin.methods.saveSettings({ sandboxMode: 'read-only', approvalPolicy: 'ask', customInstructions: '下一 Turn 使用中文' });
     assert.deepEqual(values, {
       'agent.defaults.sandboxMode': 'read-only',
       'agent.defaults.approvalPolicy': 'ask',
+      'agent.instructions.custom': '下一 Turn 使用中文',
     });
-    assert.deepEqual(saved, {
-      sandboxMode: 'read-only',
-      approvalPolicy: 'ask',
-      global: { sandboxMode: true, approvalPolicy: true },
-    });
+    assert.equal(saved.sandboxMode, 'read-only');
+    assert.equal(saved.approvalPolicy, 'ask');
+    assert.equal(saved.customInstructions, '下一 Turn 使用中文');
+    assert.deepEqual(saved.custom, { configured: true, applied: true, code: 'ok' });
     // The method must return the values read back from config, not merely the submitted draft.
-    assert.deepEqual(plugin.methods.getSettings(), saved);
+    assert.deepEqual(await plugin.methods.getSettings(), saved);
     const configSet = runtime.config.set;
     runtime.config.set = () => {};
-    assert.throws(() => plugin.methods.saveSettings({ sandboxMode: 'danger-full-access', approvalPolicy: 'always' }), /not persisted/);
+    await assert.rejects(plugin.methods.saveSettings({ sandboxMode: 'danger-full-access', approvalPolicy: 'always', customInstructions: 'x' }), /not persisted/);
     runtime.config.set = configSet;
-    assert.throws(() => plugin.methods.saveSettings({ sandboxMode: 'invalid', approvalPolicy: 'ask' }), /invalid sandbox mode/);
-    assert.throws(() => plugin.methods.saveSettings({ sandboxMode: 'read-only', approvalPolicy: 'ask', extra: true }), /only sandboxMode and approvalPolicy/);
-    assert.deepEqual(plugin.methods.getSettings(), {
-      sandboxMode: 'read-only',
-      approvalPolicy: 'ask',
-      global: { sandboxMode: true, approvalPolicy: true },
-    });
-    assert.deepEqual(plugin.methods.resetSettings(), {
-      sandboxMode: 'workspace-write',
-      approvalPolicy: 'ask',
-      global: { sandboxMode: false, approvalPolicy: false },
-    });
+    await assert.rejects(plugin.methods.saveSettings({ sandboxMode: 'invalid', approvalPolicy: 'ask', customInstructions: '' }), /invalid sandbox mode/);
+    await assert.rejects(plugin.methods.saveSettings({ sandboxMode: 'read-only', approvalPolicy: 'ask', customInstructions: '', extra: true }), /only sandboxMode/);
+    const current = await plugin.methods.getSettings();
+    assert.equal(current.customInstructions, '下一 Turn 使用中文');
+    const reset = await plugin.methods.resetSettings();
+    assert.equal(reset.sandboxMode, 'workspace-write');
+    assert.equal(reset.approvalPolicy, 'ask');
+    assert.deepEqual(reset.custom, { configured: false, applied: false, code: 'disabled' });
+    values['agent.instructions.custom'] = { malicious: 'must not enter system' };
+    const invalid = await plugin.methods.getSettings();
+    assert.deepEqual(invalid.custom, { configured: true, applied: false, code: 'invalid_type' });
+    assert.equal(invalid.customInstructions, '');
+    const invalidConversation = await plugin.methods.createConversation('harbors', storageDir);
+    await plugin.methods.sendMessage(invalidConversation.id, 'verify invalid config');
+    assert.doesNotMatch(lastCompleteSystem, /must not enter system/);
+    values['agent.instructions.custom'] = `secret-${'你'.repeat(2731)}`;
+    const oversized = await plugin.methods.getSettings();
+    assert.deepEqual(oversized.custom, { configured: true, applied: false, code: 'too_large' });
+    assert.equal(oversized.customInstructions, '');
+    const oversizedConversation = await plugin.methods.createConversation('harbors', storageDir);
+    await plugin.methods.sendMessage(oversizedConversation.id, 'verify oversized config');
+    assert.doesNotMatch(lastCompleteSystem, /secret-/);
   } finally {
     await plugin.lifecycle.unload();
     await rm(storageDir, { recursive: true, force: true });

@@ -5,10 +5,10 @@ import { readFileSync, writeFileSync as fsWriteFileSync, mkdirSync, existsSync, 
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
 import { isIP } from 'node:net';
-import { homedir } from 'node:os';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { promisify } from 'node:util';
 import type { AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentSandboxMode } from './base.js';
+import { discoverSkillCatalog, loadDiscoveredSkill, type SkillCatalog } from './skills.js';
 
 const exec = promisify(execFile);
 const MAX_OUTPUT = 12_000;
@@ -247,6 +247,7 @@ export interface HubBertToolPermissionContext extends AgentPermissionState {
   step: number;
   requestPermission?: (request: Omit<AgentPermissionRequest, 'requestId' | 'conversationId' | 'turn' | 'step' | 'signal'> & { signal?: AbortSignal }) => Promise<AgentPermissionOutcome>;
   webSearch?: (query: string, signal?: AbortSignal) => Promise<string>;
+  skillCatalog?: SkillCatalog;
 }
 
 class SandboxPermissionRequiredError extends Error {
@@ -284,11 +285,12 @@ async function runHubBertToolText(name: string, input: Record<string, unknown>, 
   const root = resolve(workspace);
 
   if (name === 'list_files') return cap((await readdir(resolveToolPath(root, string(input.path), permission?.sandboxMode), { withFileTypes: true })).map((entry) => `${entry.isDirectory() ? 'd' : 'f'} ${entry.name}`).join('\n'));
-  if (name === 'list_skills') return cap((await skills(root)).map((skill) => skill.name).join('\n') || '未发现 Skill');
+  const catalog = permission?.skillCatalog || await discoverSkillCatalog(root);
+  if (name === 'list_skills') return catalog.text || '未发现 Skill';
   if (name === 'load_skill') {
-    const skill = (await skills(root)).find((entry) => entry.name === required(input.name, 'name'));
+    const skill = catalog.entries.find((entry) => entry.name === required(input.name, 'name'));
     if (!skill) throw new Error('Skill 不存在；请先调用 list_skills');
-    return cap(await readFile(skill.path, 'utf8'));
+    return loadDiscoveredSkill(skill);
   }
 
   if (name === 'read') return runRead(root, input, permission?.sandboxMode);
@@ -565,19 +567,6 @@ function executeBash(command: string, cwd: string, timeoutMs: number, signal?: A
     timer = setTimeout(() => { kill(); finish(new ToolExecutionError('BASH_TIMEOUT', `bash 执行超时（${timeoutMs}ms）`)); }, timeoutMs);
     if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
   });
-}
-
-async function skills(workspace: string): Promise<Array<{ name: string; path: string }>> {
-  const roots = [resolve(workspace, '.agents/skills'), resolve(homedir(), '.agents/skills')];
-  const found: Array<{ name: string; path: string }> = [];
-  for (const root of roots) {
-    try {
-      for (const entry of await readdir(root, { withFileTypes: true })) {
-        if (entry.isDirectory()) found.push({ name: entry.name, path: resolve(root, entry.name, 'SKILL.md') });
-      }
-    } catch { /* optional root */ }
-  }
-  return [...new Map(found.map((skill) => [skill.name, skill])).values()];
 }
 
 interface GrepMatch { path: string; lineNumber: number; line: string; }

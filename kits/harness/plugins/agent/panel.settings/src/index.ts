@@ -4,7 +4,10 @@ type MessageRequest = (plugin: string, name: string, ...args: unknown[]) => Prom
 type Settings = {
   sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access';
   approvalPolicy: 'ask' | 'always';
-  global: { sandboxMode: boolean; approvalPolicy: boolean };
+  customInstructions: string;
+  custom: { configured: boolean; applied: boolean; code: string };
+  instructionSources: { coreVersion: string; workspace: { sources: string[]; omitted: number; errors: number }; skills: { total: number; included: number; omitted: number; truncated: number; errors: number; shadowed: number } };
+  global: { sandboxMode: boolean; approvalPolicy: boolean; customInstructions: boolean };
 };
 
 type PendingRequest = { reject: (error: Error) => void };
@@ -46,15 +49,17 @@ function hasTagName(value: Element | null, tagName: string): boolean {
   return Boolean(value && typeof value.tagName === 'string' && value.tagName.toLowerCase() === tagName);
 }
 
-function controls(): { sandboxMode: HTMLSelectElement; approvalPolicy: HTMLSelectElement; save: HTMLButtonElement; reset: HTMLButtonElement } | null {
+function controls(): { sandboxMode: HTMLSelectElement; approvalPolicy: HTMLSelectElement; customInstructions: HTMLTextAreaElement; save: HTMLButtonElement; reset: HTMLButtonElement } | null {
   const sandboxMode = activeDocument?.getElementById('sandbox-mode');
   const approvalPolicy = activeDocument?.getElementById('approval-policy');
+  const customInstructions = activeDocument?.getElementById('custom-instructions');
   const save = activeDocument?.getElementById('save-button');
   const reset = activeDocument?.getElementById('reset-button');
-  if (!hasTagName(sandboxMode, 'select') || !hasTagName(approvalPolicy, 'select') || !hasTagName(save, 'button') || !hasTagName(reset, 'button')) return null;
+  if (!hasTagName(sandboxMode, 'select') || !hasTagName(approvalPolicy, 'select') || !hasTagName(customInstructions, 'textarea') || !hasTagName(save, 'button') || !hasTagName(reset, 'button')) return null;
   return {
     sandboxMode: sandboxMode as HTMLSelectElement,
     approvalPolicy: approvalPolicy as HTMLSelectElement,
+    customInstructions: customInstructions as HTMLTextAreaElement,
     save: save as HTMLButtonElement,
     reset: reset as HTMLButtonElement,
   };
@@ -65,6 +70,26 @@ function applySettings(settings: Settings): void {
   if (!elements) return;
   elements.sandboxMode.value = settings.sandboxMode;
   elements.approvalPolicy.value = settings.approvalPolicy;
+  elements.customInstructions.value = settings.customInstructions;
+  updateByteCount();
+  const core = activeDocument?.getElementById('core-version');
+  const customState = activeDocument?.getElementById('custom-state');
+  const workspace = activeDocument?.getElementById('workspace-sources');
+  const skills = activeDocument?.getElementById('skill-sources');
+  if (core) core.textContent = settings.instructionSources.coreVersion;
+  if (customState) customState.textContent = `Custom：${settings.custom.applied ? '已启用' : `未应用（${settings.custom.code}）`}`;
+  if (workspace) workspace.textContent = `Workspace：${settings.instructionSources.workspace.sources.length} 个来源，省略 ${settings.instructionSources.workspace.omitted}，错误 ${settings.instructionSources.workspace.errors}`;
+  if (skills) skills.textContent = `Skills：${settings.instructionSources.skills.included}/${settings.instructionSources.skills.total}，省略 ${settings.instructionSources.skills.omitted}，裁剪 ${settings.instructionSources.skills.truncated}，错误 ${settings.instructionSources.skills.errors}`;
+}
+
+function updateByteCount(): number {
+  const elements = controls();
+  const counter = activeDocument?.getElementById('custom-byte-count');
+  if (!elements || !counter) return 0;
+  const count = new TextEncoder().encode(elements.customInstructions.value).byteLength;
+  counter.textContent = `${count} / 8192 bytes`;
+  counter.dataset.over = String(count > 8192);
+  return count;
 }
 
 async function loadSettings(): Promise<void> {
@@ -90,9 +115,10 @@ function bindForm(): void {
       const settings = await requestSettings('saveSettings', {
         sandboxMode: elements.sandboxMode.value,
         approvalPolicy: elements.approvalPolicy.value,
+        customInstructions: elements.customInstructions.value,
       }) as Settings;
       applySettings(settings);
-      setStatus('设置已保存，仅影响新对话；当前对话不变。', 'success');
+      setStatus('设置已保存。权限默认仅影响新对话；自定义指令从下一 Turn 生效。', 'success');
     } catch (error) {
       if (activeDocument) setStatus(errorFrom(error).message, 'error');
     } finally {
@@ -117,7 +143,7 @@ function bindForm(): void {
     try {
       const settings = await requestSettings('resetSettings') as Settings;
       applySettings(settings);
-      setStatus('已恢复默认设置，仅影响新对话；当前对话不变。', 'success');
+      setStatus('已恢复默认。权限默认仅影响新对话；自定义指令从下一 Turn 生效。', 'success');
     } catch (error) {
       if (activeDocument) setStatus(errorFrom(error).message, 'error');
     } finally {
@@ -126,10 +152,12 @@ function bindForm(): void {
     }
   };
   form.addEventListener('submit', onSubmit);
+  elements.customInstructions.addEventListener('input', updateByteCount);
   elements.save.addEventListener('click', onSaveClick);
   elements.reset.addEventListener('click', onReset);
   removeFormListeners = () => {
     form.removeEventListener('submit', onSubmit);
+    elements.customInstructions.removeEventListener('input', updateByteCount);
     elements.save.removeEventListener('click', onSaveClick);
     elements.reset.removeEventListener('click', onReset);
   };

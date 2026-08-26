@@ -35,6 +35,22 @@
             <span class="field-help">控制需要额外权限的操作是否先询问。</span>
           </label>
         </section>
+        <section class="settings-card instruction-card" aria-labelledby="instructions-title">
+          <h2 id="instructions-title">Agent 指令</h2>
+          <p class="source-row"><span>基础规则</span><code id="core-version">—</code></p>
+          <label class="field" for="custom-instructions">
+            <span class="field-label">全局自定义指令</span>
+            <textarea id="custom-instructions" name="customInstructions" rows="8" maxlength="8192"></textarea>
+            <span class="field-help">这是宽泛偏好，不能覆盖 Core、当前直接请求或更具体的工作区规则。保存或重置后从下一 Turn 起对新旧对话生效。</span>
+            <span id="custom-byte-count" class="byte-count">0 / 8192 bytes</span>
+          </label>
+          <div class="sources" aria-label="当前默认工作区的指令来源">
+            <p id="custom-state">Custom：未启用</p>
+            <p id="workspace-sources">Workspace：0 个来源</p>
+            <p id="skill-sources">Skills：0 个</p>
+            <p class="field-help">此处只显示脱敏摘要；实际会话来源以每个 Turn 的 Trace 为准。</p>
+          </div>
+        </section>
         <div class="actions">
           <button id="reset-button" class="secondary" type="button">恢复默认</button>
           <button id="save-button" class="primary" type="submit">保存设置</button>
