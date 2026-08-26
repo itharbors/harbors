@@ -8,6 +8,8 @@ interface ConversationData {
   preview?: string;
   source: 'harbors';
   project?: string;
+  createdAt?: string;
+  updatedAt?: string;
   /** 该会话是否正在执行 agent turn。 */
   active?: boolean;
 }
@@ -70,8 +72,45 @@ function normalizeConversation(value: unknown): ConversationData | null {
     ...(typeof record.preview === 'string' ? { preview: record.preview } : {}),
     source: 'harbors',
     ...(typeof record.project === 'string' ? { project: record.project } : {}),
+    ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}),
+    ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}),
     ...(typeof record.active === 'boolean' ? { active: record.active } : {}),
   };
+}
+
+function sortByUpdatedAt(values: ConversationData[]): ConversationData[] {
+  return [...values].sort((left, right) => {
+    const leftTime = Date.parse(left.updatedAt || left.createdAt || '');
+    const rightTime = Date.parse(right.updatedAt || right.createdAt || '');
+    return (Number.isFinite(rightTime) ? rightTime : 0) - (Number.isFinite(leftTime) ? leftTime : 0);
+  });
+}
+
+function applyConversationChange(previous: ConversationData[], value: unknown): ConversationData[] {
+  if (!value || typeof value !== 'object') return previous;
+  const payload = value as { action?: string; id?: string; conversation?: unknown };
+  if (typeof payload.id !== 'string' || !payload.action) return previous;
+  const { action, id } = payload;
+  if (action === 'create') {
+    const conversation = normalizeConversation(payload.conversation);
+    if (conversation && !previous.some((item) => item.id === id)) return [conversation, ...previous];
+    return previous;
+  }
+  if (action === 'archive' || action === 'delete') return previous.filter((item) => item.id !== id);
+  if (action === 'restore') {
+    const conversation = normalizeConversation(payload.conversation);
+    if (!conversation) return previous;
+    const restored = previous.some((item) => item.id === id)
+      ? previous.map((item) => item.id === id ? { ...item, ...conversation } : item)
+      : [...previous, conversation];
+    return sortByUpdatedAt(restored);
+  }
+  if (action === 'rename' || action === 'update') {
+    const conversation = normalizeConversation(payload.conversation);
+    if (!conversation) return previous;
+    return previous.map((item) => item.id === id ? { ...item, ...conversation } : item);
+  }
+  return previous;
 }
 
 export default function App({
@@ -86,6 +125,7 @@ export default function App({
   const [error, setError] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+  const [archivingIds, setArchivingIds] = useState<Set<string>>(() => new Set());
   const sequenceRef = useRef(0);
   const uiStateArrivalSequenceRef = useRef(0);
   const latestUiArrivalSequenceRef = useRef(-1);
@@ -127,29 +167,6 @@ export default function App({
       return list;
     };
 
-    const applyConversationChanged = (value: unknown) => {
-      if (!value || typeof value !== 'object') return;
-      const payload = value as { action?: string; id?: string; conversation?: unknown };
-      if (typeof payload.id !== 'string' || !payload.action) return;
-      const { action, id } = payload;
-      setConversations((prev) => {
-        if (action === 'create') {
-          const conversation = normalizeConversation(payload.conversation);
-          if (conversation && !prev.some((item) => item.id === id)) return [conversation, ...prev];
-          return prev;
-        }
-        if (action === 'delete') {
-          return prev.filter((item) => item.id !== id);
-        }
-        if (action === 'rename' || action === 'update') {
-          const conversation = normalizeConversation(payload.conversation);
-          if (!conversation) return prev;
-          return prev.map((item) => item.id === id ? { ...item, ...conversation } : item);
-        }
-        return prev;
-      });
-    };
-
     const applyUiState = (value: unknown, arrivalSequence = ++uiStateArrivalSequenceRef.current) => {
       if (!value || typeof value !== 'object') return false;
       const state = value as Partial<ConversationUiState>;
@@ -178,7 +195,7 @@ export default function App({
 
     registerSetter('agent.conversation.changed', (data: unknown) => {
       sequenceRef.current += 1;
-      if (!disposed) applyConversationChanged(data);
+      if (!disposed) setConversations((previous) => applyConversationChange(previous, data));
     });
     registerSetter('conversation.selected', (data: unknown) => {
       sequenceRef.current += 1;
@@ -237,12 +254,26 @@ export default function App({
 
   const handleArchive = async (id: string, event: ReactMouseEvent) => {
     event.stopPropagation();
+    if (archivingIds.has(id)) return;
+    setArchivingIds((current) => new Set(current).add(id));
     try {
-      await ctx.message.request('agent', 'deleteConversation', id);
+      const result = await ctx.message.request('conversation', 'archiveConversation', id) as {
+        ok?: boolean;
+        value?: { id?: string };
+        error?: { message?: string };
+      };
+      if (result?.ok !== true) {
+        setError(`归档对话失败：${result?.error?.message || '归档请求失败，请重试'}`);
+        return;
+      }
+      const archivedId = typeof result.value?.id === 'string' ? result.value.id : id;
+      setConversations((previous) => applyConversationChange(previous, { action: 'archive', id: archivedId }));
       setError(null);
     } catch (err) {
       console.error('Failed to archive conversation:', describeError(err));
-      setError(`归档对话失败：${describeError(err)}`);
+      setError(`归档服务暂不可用：${describeError(err)}`);
+    } finally {
+      setArchivingIds((current) => { const next = new Set(current); next.delete(id); return next; });
     }
   };
 
@@ -331,7 +362,7 @@ export default function App({
                     <summary className="more-btn" aria-label={`更多操作：${conversation.title}`} aria-haspopup="menu" title="更多操作">•••</summary>
                     <div className="conversation-menu-popover" role="menu">
                       <button type="button" role="menuitem" onClick={(event) => startRename(conversation, event)}>重命名</button>
-                      <button type="button" role="menuitem" onClick={(event) => handleArchive(conversation.id, event)}>归档</button>
+                      <button type="button" role="menuitem" disabled={archivingIds.has(conversation.id)} aria-busy={archivingIds.has(conversation.id)} onClick={(event) => handleArchive(conversation.id, event)}>{archivingIds.has(conversation.id) ? '正在归档…' : '归档'}</button>
                     </div>
                   </details>
                 </article>

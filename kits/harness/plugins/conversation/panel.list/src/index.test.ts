@@ -81,3 +81,47 @@ test('点击新对话通过 Panel SDK 请求 select(null)，并把草稿广播�
     }
   }
 });
+
+test('archive/restore broadcast 幂等收敛，archive 成功 response 无 broadcast 也移除条目', async () => {
+  const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
+  const globalKeys = ['window', 'document', 'HTMLElement'] as const;
+  const previousGlobals = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement });
+  const initial = [
+    { id: 'harbors:a', title: 'A', source: 'harbors', project: '/workspace', updatedAt: '2026-08-25T00:00:00.000Z' },
+    { id: 'harbors:b', title: 'B', source: 'harbors', project: '/workspace', updatedAt: '2026-08-24T00:00:00.000Z' },
+  ];
+  const context = { message: { async request(plugin: string, name: string, ...args: unknown[]) {
+    if (plugin === 'agent' && name === 'listConversations') return initial;
+    if (plugin === 'conversation' && name === 'getState') return { selectedConversationId: 'harbors:a', draft: null, running: false, generation: 'list-projection', revision: 1 };
+    if (plugin === 'conversation' && name === 'archiveConversation') return { ok: true, value: { id: args[0] } };
+    throw new Error(`unexpected request: ${plugin}.${name}`);
+  } } };
+  const titles = () => Array.from(dom.window.document.querySelectorAll('.conversation-card-title')).map((node) => node.textContent);
+  try {
+    await definition.mount(context);
+    for (let attempt = 0; attempt < 20 && titles().length < 2; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(titles(), ['A', 'B']);
+
+    definition.methods.onConversationChanged({ action: 'archive', id: 'harbors:a' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(titles(), ['B']);
+    const restored = { id: 'harbors:a', title: 'A restored', source: 'harbors', project: '/workspace', updatedAt: '2026-08-26T00:00:00.000Z' };
+    definition.methods.onConversationChanged({ action: 'restore', id: 'harbors:a', conversation: restored });
+    definition.methods.onConversationChanged({ action: 'restore', id: 'harbors:a', conversation: restored });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(titles(), ['A restored', 'B']);
+
+    const bCard = Array.from(dom.window.document.querySelectorAll<HTMLElement>('.conversation-card')).find((card) => card.textContent?.includes('B'))!;
+    const archiveButton = Array.from(bCard.querySelectorAll<HTMLButtonElement>('button')).find((button) => button.textContent === '归档')!;
+    archiveButton.click(); await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(titles(), ['A restored']);
+  } finally {
+    definition.unmount(); dom.window.close();
+    for (const key of globalKeys) {
+      const descriptor = previousGlobals.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+});

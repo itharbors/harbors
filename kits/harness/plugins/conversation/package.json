@@ -11,12 +11,26 @@
           "title": "对话列表",
           "width": 280,
           "minWidth": 200
+        },
+        "settings": {
+          "entry": "./panel.settings/dist/index.html",
+          "title": "对话设置",
+          "width": 520,
+          "minWidth": 280
         }
+      },
+      "settings": {
+        "schemaVersion": 3,
+        "panel": "settings",
+        "order": 20
       },
       "message": {
         "request": {
           "getState": ["getState"],
-          "select": ["select"]
+          "select": ["select"],
+          "listArchivedConversations": ["listArchivedConversations"],
+          "archiveConversation": ["archiveConversation"],
+          "restoreConversation": ["restoreConversation"]
         },
         "broadcast": {
           "agent.conversation.changed": ["onConversationChanged", "panel.onConversationChanged"],

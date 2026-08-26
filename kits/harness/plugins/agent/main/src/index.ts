@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
 import { HarborsAdapter, type ModelServiceClient, type ModelServiceCompleteRequest, type ModelServiceDelta } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
@@ -17,13 +17,21 @@ interface Conversation extends AgentConversation {
   active?: boolean;
 }
 
-type ConversationChangedAction = 'create' | 'delete' | 'rename' | 'update';
+type ConversationChangedAction = 'create' | 'archive' | 'restore' | 'rename' | 'update';
 
 interface ConversationChangedPayload {
   id: string;
   action: ConversationChangedAction;
   conversation?: Conversation;
+  archived?: PublicArchivedConversation;
 }
+
+type ArchiveErrorCode = 'INVALID_CONVERSATION_ID' | 'CONVERSATION_NOT_FOUND' | 'CONVERSATION_ACTIVE' | 'ARCHIVE_NOT_FOUND' | 'ARCHIVE_CONFLICT' | 'ARCHIVE_FILE_INVALID' | 'ARCHIVE_TOMBSTONE_INVALID' | 'ARCHIVE_OPERATION_FAILED' | 'ARCHIVE_STATE_INCONSISTENT';
+type BusinessResult<T> = { ok: true; value: T } | { ok: false; error: { code: ArchiveErrorCode; message: string } };
+interface PublicArchivedConversation { id: string; source: 'harbors'; title: string; project?: string; createdAt?: string; updatedAt?: string; archivedAt: string; status: 'available' | 'unavailable'; errorCode?: string }
+const ARCHIVE_ERRORS: Record<ArchiveErrorCode, string> = {
+  INVALID_CONVERSATION_ID: '对话标识无效', CONVERSATION_NOT_FOUND: '对话不存在，请刷新后重试', CONVERSATION_ACTIVE: '对话仍在运行，请先停止后再归档', ARCHIVE_NOT_FOUND: '归档不存在，请刷新后重试', ARCHIVE_CONFLICT: '同一对话已存在，无法覆盖', ARCHIVE_FILE_INVALID: '归档文件已损坏，无法恢复', ARCHIVE_TOMBSTONE_INVALID: '归档记录不一致，无法恢复', ARCHIVE_OPERATION_FAILED: '归档操作失败，原状态已恢复，请重试', ARCHIVE_STATE_INCONSISTENT: '归档状态异常，已保留诊断证据',
+};
 
 let conversations: Conversation[] = [];
 let activeMessageIds = new Map<string, string>();
@@ -91,9 +99,21 @@ function normalizeTraceSeq(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= -1 ? value : -1;
 }
 
-function broadcastConversationChanged(action: ConversationChangedAction, id: string, conversation?: Conversation): void {
-  const payload: ConversationChangedPayload = { id, action, ...(conversation ? { conversation: { ...conversation } } : {}) };
-  runtime?.message.broadcast('agent.conversation.changed', payload);
+function broadcastConversationChanged(action: ConversationChangedAction, id: string, conversation?: Conversation, archived?: PublicArchivedConversation): void {
+  const payload: ConversationChangedPayload = { id, action, ...(conversation ? { conversation: { ...conversation } } : {}), ...(archived ? { archived: { ...archived } } : {}) };
+  try { runtime?.message.broadcast('agent.conversation.changed', payload); } catch (error) { console.error('[agent] conversation broadcast failed after commit:', error); }
+}
+
+function archiveFailure(error: unknown): BusinessResult<never> {
+  const message = error instanceof Error ? error.message : String(error);
+  const code = (Object.keys(ARCHIVE_ERRORS) as ArchiveErrorCode[]).find((candidate) => message === candidate || message.startsWith(`${candidate}:`))
+    || (message === 'SESSION_ID_INVALID' || message.includes('invalid conversation id') ? 'INVALID_CONVERSATION_ID' : undefined);
+  if (!code) throw error instanceof Error ? error : new Error(message);
+  return { ok: false, error: { code, message: ARCHIVE_ERRORS[code] } };
+}
+
+function publicArchived(source: AgentSource, value: AgentArchivedConversation): PublicArchivedConversation {
+  return { id: conversationId(source, value.id), source, title: value.title, archivedAt: value.archivedAt, status: value.status, ...(value.project ? { project: value.project } : {}), ...(value.createdAt ? { createdAt: value.createdAt } : {}), ...(value.updatedAt ? { updatedAt: value.updatedAt } : {}), ...(value.errorCode ? { errorCode: value.errorCode } : {}) };
 }
 
 async function adapterOptions(source: AgentSource): Promise<AgentOptions> {
@@ -471,12 +491,32 @@ editor.plugin.define({
       broadcastConversationChanged('create', conv.id, conv);
       return { ...conv };
     },
-    async deleteConversation(id: string) {
-      const route = parseConversationId(id);
-      await requireAdapter(route.source).deleteConversation(route.adapterId);
-      conversations = conversations.filter((conversation) => conversation.id !== id);
-      broadcastConversationChanged('delete', id);
-      return id;
+    async listArchivedConversations(): Promise<BusinessResult<PublicArchivedConversation[]>> {
+      try {
+        const values = await requireAdapter('harbors').listArchivedConversations();
+        return { ok: true, value: values.map((value) => publicArchived('harbors', value)) };
+      } catch (error) { return archiveFailure(error); }
+    },
+    async archiveConversation(id: string): Promise<BusinessResult<PublicArchivedConversation>> {
+      try {
+        const route = parseConversationId(id);
+        if (!conversations.some((conversation) => conversation.id === id)) return { ok: false, error: { code: 'CONVERSATION_NOT_FOUND', message: ARCHIVE_ERRORS.CONVERSATION_NOT_FOUND } };
+        const archived = publicArchived(route.source, await requireAdapter(route.source).archiveConversation(route.adapterId));
+        conversations = conversations.filter((conversation) => conversation.id !== id);
+        broadcastConversationChanged('archive', id, undefined, archived);
+        return { ok: true, value: archived };
+      } catch (error) { return archiveFailure(error); }
+    },
+    async restoreConversation(id: string): Promise<BusinessResult<Conversation>> {
+      try {
+        const route = parseConversationId(id);
+        const restored = await requireAdapter(route.source).restoreConversation(route.adapterId);
+        const conversation: Conversation = { ...restored, id, adapterId: route.adapterId, source: route.source, active: false };
+        if (!conversations.some((item) => item.id === id)) conversations.push(conversation);
+        conversations.sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
+        broadcastConversationChanged('restore', id, conversation);
+        return { ok: true, value: { ...conversation } };
+      } catch (error) { return archiveFailure(error); }
     },
     async renameConversation(id: string, title: string) {
       const trimmed = typeof title === 'string' ? title.trim() : '';
