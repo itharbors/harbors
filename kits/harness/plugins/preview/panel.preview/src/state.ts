@@ -6,17 +6,19 @@ export interface PreviewContent {
   language?: string;
   content?: string;
   error?: string;
-  snapshotHtml?: string;
-  snapshotError?: string;
-  mode?: 'direct' | 'snapshot';
-  snapshotLoading?: boolean;
-  directAllowed?: boolean;
   proxySessionId?: string;
   proxyPort?: number;
   proxyPath?: string;
   proxyUrl?: string;
   proxyError?: string;
   proxyLoading?: boolean;
+  viewportWidth?: number;
+  viewportHeight?: number;
+  interactionMode?: 'direct' | 'virtual';
+  panX?: number;
+  panY?: number;
+  cursorX?: number;
+  cursorY?: number;
 }
 
 export interface PreviewTab {

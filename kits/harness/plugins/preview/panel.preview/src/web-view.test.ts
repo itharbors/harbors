@@ -2,61 +2,50 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 
-import { webContentMarkup } from './web-view.ts';
+import { syncWebContent, webContentMarkup } from './web-view.ts';
 
 const dom = new JSDOM('<!doctype html>');
 Object.assign(globalThis, { window: dom.window, document: dom.window.document });
-const { sanitizeSnapshotHtml } = await import('./index.ts');
 
-test('renders direct pages with an explicit web sandbox and a snapshot switch', () => {
-  const markup = webContentMarkup({ url: 'https://example.test/page', mode: 'direct', directAllowed: true });
-  assert.match(markup, /sandbox="" referrerpolicy="no-referrer"/);
-  assert.match(markup, /data-preview-web-mode="snapshot"/);
-  assert.match(markup, /网页直连可能受目标站点嵌入策略限制/);
-});
-
-test('renders the proxy iframe with only the required sandbox capabilities', () => {
+test('renders one fixed-size restricted proxy iframe and accessible viewport controls', () => {
   const markup = webContentMarkup({
-    url: 'http://example.test/page',
-    proxyUrl: 'http://127.0.0.1:49391/preview/session/test',
-    proxyLoading: false,
-    mode: 'direct',
+    proxyUrl: 'http://127.0.0.1:49391/preview-proxy/session/root',
+    proxySessionId: 'session', viewportWidth: 1600, viewportHeight: 1000, interactionMode: 'direct',
   });
-  assert.match(markup, /src="http:\/\/127\.0\.0\.1:49391\/preview\/session\/test"/);
+  assert.match(markup, /style="width:1600px;height:1000px"/);
   assert.match(markup, /sandbox="allow-scripts"/);
-  assert.doesNotMatch(markup, /allow-forms|allow-same-origin/);
-  assert.match(markup, /referrerpolicy="no-referrer"/);
-  assert.doesNotMatch(markup, /allow-top-navigation|allow-popups|allow-downloads/);
-  assert.match(markup, /首版限制登录、表单和部分交互/);
+  assert.doesNotMatch(markup, /allow-forms|allow-same-origin|allow-popups|allow-downloads|srcdoc/);
+  assert.match(markup, /data-preview-viewport-width/);
+  assert.match(markup, /data-preview-interaction-mode="direct" aria-pressed="true"/);
+  assert.doesNotMatch(markup, /data-preview-gesture-layer/);
+  assert.doesNotMatch(markup, /安全快照|重试快照|fetchWebPage/);
 });
 
-test('renders snapshots in srcdoc without scripts or same-origin permission', () => {
-  const markup = webContentMarkup({
-    url: 'https://example.test/page',
-    mode: 'snapshot',
-    snapshotHtml: '<script>alert("not parent")</script><img src="image.png">',
-  });
-  assert.match(markup, /sandbox="" referrerpolicy="no-referrer"><\/iframe>/);
-  assert.match(markup, /srcdoc="&lt;!doctype html/);
-  assert.match(markup, /&lt;script&gt;alert/);
-  assert.doesNotMatch(markup, /srcdoc="[^\"]*allow-scripts/);
-  assert.match(markup, /Content-Security-Policy/);
+test('renders the virtual gesture layer with textual cursor feedback', () => {
+  const markup = webContentMarkup({ proxyUrl: 'http://127.0.0.1:49391/page', interactionMode: 'virtual' });
+  assert.match(markup, /data-preview-gesture-layer="true" tabindex="0" role="application"/);
+  assert.match(markup, /滑动移动，轻点左键，长按右键/);
+  assert.match(markup, />虚拟鼠标</);
 });
 
-test('sanitizes snapshot resource and executable elements', () => {
-  const clean = sanitizeSnapshotHtml('<script>x()</script><img src="x"><link href="x"><svg></svg><div onclick="x()" style="color:red">ok</div>');
-  assert.doesNotMatch(clean, /script|img|link|svg|onclick/);
-  assert.match(clean, /style="color:red"/);
+test('syncs mode and size without replacing the existing iframe', () => {
+  const view = document.createElement('section');
+  view.innerHTML = webContentMarkup({ proxyUrl: 'http://127.0.0.1:49391/page' });
+  const frame = view.querySelector('iframe');
+  assert.equal(syncWebContent(view, {
+    proxyUrl: 'http://127.0.0.1:49391/page', viewportWidth: 1440, viewportHeight: 900, interactionMode: 'virtual',
+  }), true);
+  assert.equal(view.querySelector('iframe'), frame);
+  assert.equal(view.querySelector<HTMLElement>('[data-preview-web-canvas]')?.style.width, '1440px');
+  assert.ok(view.querySelector('[data-preview-gesture-layer]'));
+  assert.equal(syncWebContent(view, { proxyUrl: 'http://127.0.0.1:49391/page', interactionMode: 'direct' }), true);
+  assert.equal(view.querySelector('iframe'), frame);
+  assert.equal(view.querySelector('[data-preview-gesture-layer]'), null);
+  assert.equal(syncWebContent(view, { proxyUrl: 'http://127.0.0.1:49391/other' }), false);
 });
 
-test('renders local HTML as an offline snapshot without a file direct iframe', () => {
-  const markup = webContentMarkup({
-    url: 'file:///tmp/example.html',
-    mode: 'snapshot',
-    directAllowed: false,
-    snapshotHtml: '<h1>Local</h1>',
-  });
-  assert.match(markup, /Content-Security-Policy/);
-  assert.doesNotMatch(markup, /src="file:/);
-  assert.match(markup, /srcdoc=/);
+test('shows a proxy-only failure without any fallback iframe', () => {
+  const markup = webContentMarkup({ proxyError: 'blocked' });
+  assert.match(markup, /代理失败：blocked/);
+  assert.doesNotMatch(markup, /iframe|srcdoc|安全快照/);
 });

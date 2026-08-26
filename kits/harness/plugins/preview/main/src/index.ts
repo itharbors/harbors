@@ -3,7 +3,6 @@ import { basename, extname } from 'node:path';
 
 import { filePathFromPreviewLink, validatePreviewLink } from './uri.js';
 import { ProxyService } from './proxy/server.js';
-import { fetchWebPage } from './web.js';
 
 declare const editor: any;
 
@@ -17,10 +16,6 @@ interface PreviewContent {
   language?: string;
   content?: string;
   error?: string;
-  snapshotHtml?: string;
-  snapshotBaseUrl?: string;
-  mode?: 'direct' | 'snapshot';
-  directAllowed?: boolean;
 }
 
 const TEXT_EXTENSIONS = new Set([
@@ -106,17 +101,6 @@ const definition = {
         }
         if (TEXT_EXTENSIONS.has(ext) || !ext) {
           const content = await readTextFile(filePath);
-          if (ext === '.html' || ext === '.htm') {
-            return {
-              kind: 'url',
-              url: validation.link.href,
-              title: basename(filePath),
-              snapshotHtml: content,
-              snapshotBaseUrl: validation.link.href,
-              mode: 'snapshot',
-              directAllowed: false,
-            };
-          }
           return {
             kind: 'file',
             path: filePath,
@@ -139,9 +123,6 @@ const definition = {
           error: err instanceof Error ? err.message : String(err),
         };
       }
-    },
-    async fetchWebPage(payload: unknown) {
-      return fetchWebPage(payload);
     },
     async openProxyPage(payload: unknown) {
       return proxyService.openProxyPage(payload);
