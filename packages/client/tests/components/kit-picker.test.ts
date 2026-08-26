@@ -11,6 +11,7 @@ const kits = [
 
 describe('Kit picker login flow', () => {
   afterEach(() => {
+    vi.useRealTimers();
     document.body.innerHTML = '';
     window.history.replaceState({}, '', '/');
     vi.unstubAllGlobals();
@@ -76,6 +77,8 @@ describe('Kit picker login flow', () => {
     click(host, '.kit-primary-action');
     await vi.waitFor(() => expect(calls).toEqual(['post', 'persist:new-session']));
     expect(host.querySelector('h1')?.textContent).toBe('选择工作台');
+    expectFeedback(host, 'success', '已创建 Session new-session');
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('请选择工作台');
     expect(host.querySelector('.kit-picker-eyebrow')?.textContent).toContain('new-session');
     click(host, '[data-kit-id="default"]');
     expect(calls).toEqual(['post', 'persist:new-session', 'navigate:/kits/default?session=new-session']);
@@ -130,6 +133,8 @@ describe('Kit picker login flow', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     complete(new Response(null, { status: 204 }));
     await vi.waitFor(() => expect(host.querySelectorAll('.kit-session-entry')).toHaveLength(1));
+    expectFeedback(host, 'success', '已删除 Session s1');
+    expect(host.querySelector('.kit-flow-live')?.textContent).not.toContain('正在删除');
     expect(fetchMock).toHaveBeenCalledWith('/api/session/s1', { method: 'DELETE' });
     expect(cleared).toHaveBeenCalledTimes(2);
     expect(host.querySelector('input[value="s1"]')).toBeNull();
@@ -146,7 +151,10 @@ describe('Kit picker login flow', () => {
     click(host, '.kit-session-entry:has(input[value="s1"]) .kit-session-delete');
     click(host, '.kit-session-delete-confirm');
 
-    await vi.waitFor(() => expect(host.querySelector('.kit-session-action-error')?.textContent).toBe('删除失败'));
+    await vi.waitFor(() => expectFeedback(host, 'error', '未能删除 Session s1，请重试。'));
+    expect(document.activeElement).toBe(host.querySelector('.kit-session-entry:has(input[value="s1"]) .kit-session-delete'));
+    expect(host.querySelector('.kit-session-action-error')).toBeNull();
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
     expect(host.querySelector<HTMLInputElement>('input[value="s1"]')?.checked).toBe(true);
     expect(host.querySelectorAll('.kit-session-entry')).toHaveLength(2);
     expect(cleared).toHaveBeenCalledOnce();
@@ -167,6 +175,22 @@ describe('Kit picker login flow', () => {
     await vi.waitFor(() => expect(host.querySelector('input[value="s1"]')).toBeNull());
     expect(host.querySelector('input:checked')).toBeNull();
     expect(selected).toHaveBeenCalledOnce();
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
+  });
+
+  it('clears deletion progress after removing the last Session', async () => {
+    const context = baseContext();
+    context.sessions = context.sessions.filter((session) => session.sessionId === 's1' || session.ownerUserId === 'u2');
+    const host = mount();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(null, { status: 204 })));
+    renderKitPicker(host, kits, opts({ context }));
+    click(host, '.kit-user-card[data-user-id="u1"]');
+    click(host, '.kit-session-delete');
+    click(host, '.kit-session-delete-confirm');
+
+    await vi.waitFor(() => expect(host.querySelector('.kit-session-entry')).toBeNull());
+    expectFeedback(host, 'success', '已删除 Session s1');
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
   });
 
   it('shares a creation lock and recovers after a failure', async () => {
@@ -190,10 +214,13 @@ describe('Kit picker login flow', () => {
     expect(host.querySelector('h1')?.textContent).toBe('选择 Session');
     expect(host.querySelector('input:checked')).toBeNull();
     complete(new Response('{}', { status: 500 }));
-    await vi.waitFor(() => expect(host.querySelector('[role="alert"]')?.textContent).toContain('未创建 Session'));
+    await vi.waitFor(() => expectFeedback(host, 'error', '未能创建 Session，请检查连接后重试。'));
     expect(host.querySelector('h1')?.textContent).toBe('选择 Session');
     expect(host.querySelector('.kit-flow-section')?.getAttribute('aria-busy')).toBe('false');
     expect(host.querySelector<HTMLButtonElement>('.kit-primary-action')?.disabled).toBe(false);
+    expect(document.activeElement).toBe(host.querySelector('.kit-primary-action'));
+    expect(host.querySelector('.kit-creation-error')).toBeNull();
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
   });
 
   it('lets an explicit resume state override an URL-restored Session and focuses its title after mounting', async () => {
@@ -281,8 +308,19 @@ describe('Kit picker login flow', () => {
     expect(createCard.getAttribute('role')).toBeNull();
     createInput.value = '新用户';
     createInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await vi.waitFor(() => expect(createChanged).toHaveBeenCalledWith({ step: 'session', selectedUserId: 'u3', selectedSessionId: null }));
+    await vi.waitFor(() => expect(createChanged).toHaveBeenCalledWith({
+      step: 'session',
+      selectedUserId: 'u3',
+      selectedSessionId: null,
+      feedback: { kind: 'success', message: '已创建用户“新用户”' },
+    }));
+    expect(createHost.querySelector('.kit-flow-live')?.textContent).toBe('');
     expect(createFetch).toHaveBeenCalledWith('/api/workbench/user', expect.objectContaining({ method: 'POST', body: JSON.stringify({ displayName: '新用户' }) }));
+    const refreshedContext = baseContext();
+    refreshedContext.users.push({ userId: 'u3', displayName: '新用户', createdAt: 2, updatedAt: 2 });
+    renderKitPicker(createHost, kits, opts({ context: refreshedContext, resumeState: createChanged.mock.calls[0][0] }));
+    expect(createHost.querySelector('h1')?.textContent).toBe('选择 Session');
+    expectFeedback(createHost, 'success', '已创建用户“新用户”');
 
     const claimHost = mount();
     const claimCalls: string[] = [];
@@ -333,7 +371,13 @@ describe('Kit picker login flow', () => {
     const input = host.querySelector<HTMLInputElement>('.kit-user-editor-input')!;
     input.value = '新的张三';
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith({ step: 'user', selectedUserId: null, selectedSessionId: null }));
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith({
+      step: 'user',
+      selectedUserId: null,
+      selectedSessionId: null,
+      feedback: { kind: 'success', message: '已将用户重命名为“新的张三”' },
+    }));
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
     expect(fetchMock).toHaveBeenCalledWith('/api/workbench/user/u1', expect.objectContaining({ method: 'PATCH', body: JSON.stringify({ displayName: '新的张三' }) }));
   });
 
@@ -355,11 +399,17 @@ describe('Kit picker login flow', () => {
 
     click(host, '.kit-user-delete');
     click(host, '.kit-user-delete-confirm');
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith({ step: 'user', selectedUserId: null, selectedSessionId: null }));
+    await vi.waitFor(() => expect(changed).toHaveBeenCalledWith({
+      step: 'user',
+      selectedUserId: null,
+      selectedSessionId: null,
+      feedback: { kind: 'success', message: '已删除用户“张三”' },
+    }));
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
     expect(fetchMock).toHaveBeenCalledWith('/api/workbench/user/u1', { method: 'DELETE' });
   });
 
-  it('keeps an in-use user and shows a compact deletion conflict', async () => {
+  it('keeps an in-use user and explains the deletion recovery path in a Tip', async () => {
     const host = mount();
     const changed = vi.fn();
     vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 409 })));
@@ -367,13 +417,124 @@ describe('Kit picker login flow', () => {
 
     click(host, '.kit-user-delete');
     click(host, '.kit-user-delete-confirm');
-    await vi.waitFor(() => expect(host.querySelector('.kit-user-action-error')?.textContent).toBe('仍在使用'));
+    await vi.waitFor(() => expectFeedback(
+      host,
+      'error',
+      '无法删除“张三”：该用户仍有关联 Session、授权设备或待授权请求。请先删除 Session，并在“授权管理”撤销或拒绝关联设备。',
+    ));
     expect(host.querySelectorAll('.kit-user-card[data-user-id]')).toHaveLength(2);
     expect(host.querySelector('.kit-user-rename')).not.toBeNull();
+    expect(host.querySelector('.kit-user-action-error')).toBeNull();
+    expect(document.activeElement).toBe(host.querySelector('.kit-user-delete'));
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
     expect(changed).not.toHaveBeenCalled();
   });
 
-  it('uses entry-level errors and approved responsive/a11y tokens', () => {
+  it('keeps failed user edits inline while presenting their result as an accessible Tip', async () => {
+    const createHost = mount();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
+    renderKitPicker(createHost, kits, opts());
+    click(createHost, '.kit-user-create');
+    const createInput = createHost.querySelector<HTMLInputElement>('.kit-user-editor-input')!;
+    createInput.value = '保留的名称';
+    createInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => expectFeedback(createHost, 'error', '未能创建用户，请检查连接后重试。'));
+    expect(createHost.querySelector<HTMLInputElement>('.kit-user-editor-input')?.value).toBe('保留的名称');
+    expect(document.activeElement).toBe(createInput);
+    expect(createHost.querySelector('.kit-flow-live')?.textContent).toBe('');
+
+    createHost.remove();
+    const renameHost = mount();
+    renderKitPicker(renameHost, kits, opts());
+    click(renameHost, '.kit-user-rename');
+    const renameInput = renameHost.querySelector<HTMLInputElement>('.kit-user-editor-input')!;
+    renameInput.value = '未保存的新名称';
+    renameInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await vi.waitFor(() => expectFeedback(renameHost, 'error', '未能保存用户名称，请检查连接后重试。'));
+    expect(renameHost.querySelector<HTMLInputElement>('.kit-user-editor-input')?.value).toBe('未保存的新名称');
+    expect(document.activeElement).toBe(renameInput);
+    expect(renameHost.querySelector('.kit-flow-live')?.textContent).toBe('');
+  });
+
+  it('uses a generic user deletion Tip for non-conflict failures', async () => {
+    const host = mount();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
+    renderKitPicker(host, kits, opts());
+
+    click(host, '.kit-user-delete');
+    click(host, '.kit-user-delete-confirm');
+    await vi.waitFor(() => expectFeedback(host, 'error', '未能删除用户“张三”，请重试。'));
+    expect(document.activeElement).toBe(host.querySelector('.kit-user-delete'));
+    expect(host.querySelector('.kit-flow-live')?.textContent).toBe('');
+  });
+
+  it('replaces Tips and separates visible duration from final removal', async () => {
+    vi.useFakeTimers();
+    const successHost = mount();
+    renderKitPicker(successHost, kits, opts({
+      resumeState: {
+        step: 'user', selectedUserId: null, selectedSessionId: null,
+        feedback: { kind: 'success', message: '已完成操作' },
+      },
+    }));
+    expectFeedback(successHost, 'success', '已完成操作');
+    vi.advanceTimersByTime(3_999);
+    expect(successHost.querySelector('.kit-feedback-leaving')).toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(successHost.querySelector('.kit-feedback-tip')?.classList).toContain('kit-feedback-leaving');
+    vi.advanceTimersByTime(199);
+    expect(successHost.querySelector('.kit-feedback-tip')).not.toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(successHost.querySelector('.kit-feedback-tip')).toBeNull();
+
+    successHost.remove();
+    const errorHost = mount();
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 500 })));
+    renderKitPicker(errorHost, kits, opts());
+    click(errorHost, '.kit-user-delete');
+    click(errorHost, '.kit-user-delete-confirm');
+    await Promise.resolve();
+    await Promise.resolve();
+    expectFeedback(errorHost, 'error', '未能删除用户“张三”，请重试。');
+    vi.advanceTimersByTime(4_000);
+
+    click(errorHost, '.kit-user-choice:nth-child(2) .kit-user-delete');
+    click(errorHost, '.kit-user-choice:nth-child(2) .kit-user-delete-confirm');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(errorHost.querySelectorAll('.kit-feedback-tip')).toHaveLength(1);
+    expectFeedback(errorHost, 'error', '未能删除用户“李四”，请重试。');
+    vi.advanceTimersByTime(4_000);
+    expect(errorHost.querySelector('.kit-feedback-leaving')).toBeNull();
+    vi.advanceTimersByTime(4_000);
+    expect(errorHost.querySelector('.kit-feedback-tip')?.classList).toContain('kit-feedback-leaving');
+    vi.advanceTimersByTime(199);
+    expect(errorHost.querySelector('.kit-feedback-tip')).not.toBeNull();
+    vi.advanceTimersByTime(1);
+    expect(errorHost.querySelector('.kit-feedback-tip')).toBeNull();
+  });
+
+  it('removes reduced-motion Tips deterministically and never intercepts workbench actions', () => {
+    vi.useFakeTimers();
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    const host = mount();
+    renderKitPicker(host, kits, opts({
+      resumeState: {
+        step: 'user', selectedUserId: null, selectedSessionId: null,
+        feedback: { kind: 'success', message: '已完成操作' },
+      },
+    }));
+
+    expect(host.querySelector('.kit-feedback-region')?.parentElement).toBe(host.querySelector('.kit-picker-body'));
+    expect(host.querySelector('.kit-feedback-region')?.nextElementSibling).toBe(host.querySelector('.kit-flow-live'));
+    click(host, '.kit-user-card[data-user-id="u1"]');
+    expect(host.querySelector('h1')?.textContent).toBe('选择 Session');
+    expectFeedback(host, 'success', '已完成操作');
+    vi.advanceTimersByTime(4_000);
+    expect(host.querySelector('.kit-feedback-tip')).toBeNull();
+  });
+
+  it('uses floating feedback and approved responsive/a11y tokens', () => {
     const host = mount();
     renderKitPickerError(host, vi.fn());
     expect(host.querySelector('[role="alert"]')?.textContent).toContain('无法打开工作台入口');
@@ -395,10 +556,19 @@ describe('Kit picker login flow', () => {
     expect(css).toMatch(/\.kit-user-editor-input:focus\s*{[^}]*outline:\s*none;/s);
     expect(css).toMatch(/\.kit-user-editor-input:focus-visible\s*{[^}]*border-bottom-color:[^}]*outline:\s*none;/s);
     expect(css).toMatch(/\.kit-picker-intro h1:focus\s*{[^}]*outline:\s*none;/s);
+    expect(css).toMatch(/\.kit-feedback-region\s*{[^}]*position:\s*fixed;[^}]*pointer-events:\s*none;/s);
+    expect(css).toMatch(/\.kit-feedback-tip\s*{[^}]*width:\s*min\(420px, 100%\);[^}]*pointer-events:\s*none;/s);
+    expect(css).toContain('env(safe-area-inset-top)');
+    expect(css).toContain('env(safe-area-inset-left)');
+    expect(css).toContain('env(safe-area-inset-right)');
+    expect(css).toMatch(/\.kit-feedback-message\s*{[^}]*overflow-wrap:\s*anywhere;/s);
+    expect(css).not.toMatch(/\.kit-user-action-error\s*{/);
+    expect(css).not.toMatch(/\.kit-session-action-error\s*{/);
     expect(css).toContain('env(safe-area-inset-bottom)');
     expect(css).toMatch(/grid-template-columns:\s*repeat\(2/);
     expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*reduce\)/);
     expect(css).toMatch(/\.kit-flow-stage\s*{[^}]*animation:\s*none;/s);
+    expect(css).toMatch(/\.kit-feedback-tip,[^}]*\.kit-feedback-leaving\s*{[^}]*animation:\s*none;[^}]*transform:\s*none;/s);
     const html = fs.readFileSync(path.resolve('index.html'), 'utf8');
     expect(html).toMatch(/#app\s*{[^}]*overflow:\s*clip;/s);
   });
@@ -437,6 +607,16 @@ function click(host: HTMLElement, selector: string): void {
   const target = host.querySelector<HTMLElement>(selector);
   if (!target) throw new Error(`Missing target: ${selector}`);
   target.click();
+}
+
+function expectFeedback(host: HTMLElement, kind: 'success' | 'error', message: string): void {
+  const feedback = host.querySelector<HTMLElement>('.kit-feedback-tip');
+  expect(feedback?.textContent).toContain(message);
+  expect(feedback?.getAttribute('role')).toBe(kind === 'success' ? 'status' : 'alert');
+  expect(feedback?.getAttribute('aria-live')).toBe(kind === 'success' ? 'polite' : 'assertive');
+  expect(feedback?.getAttribute('aria-atomic')).toBe('true');
+  expect(feedback?.getAttribute('tabindex')).toBeNull();
+  expect(feedback?.querySelector('.kit-feedback-mark')?.getAttribute('aria-hidden')).toBe('true');
 }
 
 function json(value: unknown, status = 200): Response {

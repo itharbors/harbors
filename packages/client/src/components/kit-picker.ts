@@ -38,6 +38,12 @@ export interface KitPickerResumeState {
   selectedUserId: string | null;
   selectedSessionId: string | null;
   createNewSession?: boolean;
+  feedback?: WorkbenchFeedback;
+}
+
+export interface WorkbenchFeedback {
+  kind: 'success' | 'error';
+  message: string;
 }
 
 export function renderKitPicker(
@@ -134,11 +140,13 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
   main.setAttribute('aria-labelledby', 'kit-picker-title');
   const masthead = createMasthead();
   const stage = element('div', 'kit-flow-stage');
+  const feedbackRegion = element('div', 'kit-feedback-region');
+  feedbackRegion.setAttribute('aria-label', '操作反馈');
   const live = element('p', 'kit-flow-live');
   live.setAttribute('aria-live', 'polite');
   const footer = element('footer', 'kit-picker-footer');
   footer.append(element('span', '', '同一端口 · 独立 Session'), element('span', '', 'ITHARBORS WORKBENCH'));
-  main.append(masthead, stage, live, footer);
+  main.append(masthead, stage, feedbackRegion, live, footer);
 
   const restored = options.selectedSessionId
     ? options.context.sessions.find((session) => session.sessionId === options.selectedSessionId)
@@ -154,6 +162,48 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
   let creationLocked = false;
   let returnFocusId: string | null = null;
   let allowDefaultSession = options.resumeState?.createNewSession !== true;
+  let activeFeedback: HTMLElement | null = null;
+  let dismissTimer: number | undefined;
+  let removalTimer: number | undefined;
+
+  const removeFeedback = (feedback: HTMLElement) => {
+    if (activeFeedback !== feedback) return;
+    feedback.remove();
+    activeFeedback = null;
+    dismissTimer = undefined;
+    removalTimer = undefined;
+  };
+
+  const showFeedback = (feedback: WorkbenchFeedback) => {
+    if (dismissTimer !== undefined) window.clearTimeout(dismissTimer);
+    if (removalTimer !== undefined) window.clearTimeout(removalTimer);
+    activeFeedback?.remove();
+
+    const tip = element('div', `kit-feedback-tip kit-feedback-${feedback.kind}`);
+    tip.setAttribute('role', feedback.kind === 'success' ? 'status' : 'alert');
+    tip.setAttribute('aria-live', feedback.kind === 'success' ? 'polite' : 'assertive');
+    tip.setAttribute('aria-atomic', 'true');
+    const mark = element('span', 'kit-feedback-mark', feedback.kind === 'success' ? '✓' : '!');
+    mark.setAttribute('aria-hidden', 'true');
+    tip.append(mark, element('span', 'kit-feedback-message', feedback.message));
+    feedbackRegion.replaceChildren(tip);
+    activeFeedback = tip;
+
+    const visibleDuration = feedback.kind === 'success' ? 4_000 : 8_000;
+    dismissTimer = window.setTimeout(() => {
+      if (activeFeedback !== tip) return;
+      if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+        removeFeedback(tip);
+        return;
+      }
+      tip.classList.add('kit-feedback-leaving');
+      removalTimer = window.setTimeout(() => removeFeedback(tip), 200);
+    }, visibleDuration);
+  };
+
+  const finishOperationAnnouncement = (progressMessage: string) => {
+    if (live.textContent === progressMessage) live.textContent = '';
+  };
 
   const renderStep = (focusTitle = false) => {
     stage.replaceChildren();
@@ -268,23 +318,33 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
         cancel.disabled = true;
         confirm.disabled = true;
         group.setAttribute('aria-busy', 'true');
-        live.textContent = `正在删除 ${user.displayName}…`;
+        const progressMessage = `正在删除 ${user.displayName}…`;
+        live.textContent = progressMessage;
         try {
           const response = await fetch(`/api/workbench/user/${encodeURIComponent(user.userId)}`, { method: 'DELETE' });
           if (!response.ok) {
             if (response.status === 409) throw new Error('in-use');
             throw new Error(String(response.status));
           }
-          options.onContextChanged({ ...state, step: 'user', selectedUserId: null, selectedSessionId: null });
+          finishOperationAnnouncement(progressMessage);
+          options.onContextChanged({
+            ...state,
+            step: 'user',
+            selectedUserId: null,
+            selectedSessionId: null,
+            feedback: { kind: 'success', message: `已删除用户“${user.displayName}”` },
+          });
         } catch (error) {
+          finishOperationAnnouncement(progressMessage);
           group.removeAttribute('aria-busy');
           group.classList.remove('kit-user-delete-confirming');
           const inUse = error instanceof Error && error.message === 'in-use';
-          const message = inUse ? '该用户仍有 Session 或授权设备，暂不能删除。' : '删除失败，请重试。';
-          const status = element('span', 'kit-user-action-error', inUse ? '仍在使用' : '删除失败');
-          actions.replaceChildren(status, rename, remove);
+          const message = inUse
+            ? `无法删除“${user.displayName}”：该用户仍有关联 Session、授权设备或待授权请求。请先删除 Session，并在“授权管理”撤销或拒绝关联设备。`
+            : `未能删除用户“${user.displayName}”，请重试。`;
+          actions.replaceChildren(rename, remove);
           remove.disabled = false;
-          live.textContent = message;
+          showFeedback({ kind: 'error', message });
           remove.focus();
         }
       });
@@ -363,7 +423,8 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
         card.setAttribute('aria-busy', 'true');
         input.disabled = true;
         input.removeAttribute('aria-invalid');
-        live.textContent = isRename ? '正在保存用户名称…' : '正在创建用户…';
+        const progressMessage = isRename ? '正在保存用户名称…' : '正在创建用户…';
+        live.textContent = progressMessage;
         try {
           const response = await fetch(user ? `/api/workbench/user/${encodeURIComponent(user.userId)}` : '/api/workbench/user', {
             method: user ? 'PATCH' : 'POST',
@@ -371,19 +432,33 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
             body: JSON.stringify({ displayName }),
           });
           if (!response.ok) throw new Error(String(response.status));
+          finishOperationAnnouncement(progressMessage);
           if (user) {
-            options.onContextChanged({ ...state, step: 'user' });
+            options.onContextChanged({
+              ...state,
+              step: 'user',
+              feedback: { kind: 'success', message: `已将用户重命名为“${displayName}”` },
+            });
           } else {
             const created = await response.json() as { userId: string };
-            options.onContextChanged({ step: 'session', selectedUserId: created.userId, selectedSessionId: null });
+            options.onContextChanged({
+              step: 'session',
+              selectedUserId: created.userId,
+              selectedSessionId: null,
+              feedback: { kind: 'success', message: `已创建用户“${displayName}”` },
+            });
           }
         } catch {
+          finishOperationAnnouncement(progressMessage);
           editingLocked = false;
           card.setAttribute('aria-busy', 'false');
           card.classList.add('kit-user-editor-invalid');
           input.disabled = false;
           input.setAttribute('aria-invalid', 'true');
-          live.textContent = isRename ? '未保存名称，请重试。' : '未创建用户，请重试。';
+          showFeedback({
+            kind: 'error',
+            message: isRename ? '未能保存用户名称，请检查连接后重试。' : '未能创建用户，请检查连接后重试。',
+          });
           focusInputWithoutViewportShift();
         }
       };
@@ -445,8 +520,8 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
       creationLocked = true;
       section.setAttribute('aria-busy', 'true');
       setSessionControlsDisabled(section, true);
-      section.querySelector('.kit-creation-error')?.remove();
-      live.textContent = '正在创建 Session…';
+      const progressMessage = '正在创建 Session…';
+      live.textContent = progressMessage;
       try {
         const response = await fetch('/api/workbench/session', {
           method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId: user.userId }),
@@ -459,15 +534,16 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
         state.selectedSessionId = session.sessionId;
         options.onSessionSelected(session.sessionId);
         creationLocked = false;
+        finishOperationAnnouncement(progressMessage);
         moveTo('kit');
+        showFeedback({ kind: 'success', message: `已创建 Session ${shortId(session.sessionId)}` });
       } catch {
+        finishOperationAnnouncement(progressMessage);
         creationLocked = false;
         section.setAttribute('aria-busy', 'false');
         setSessionControlsDisabled(section, false);
-        live.textContent = '未创建 Session，请重试。';
-        const alert = element('p', 'kit-creation-error', '未创建 Session，请重试。');
-        alert.setAttribute('role', 'alert');
-        section.append(alert);
+        showFeedback({ kind: 'error', message: '未能创建 Session，请检查连接后重试。' });
+        continueButton.focus();
       }
     });
     const note = element('p', 'kit-flow-hint', '未选择时，继续后会先创建新 Session，再选择工作台。');
@@ -529,7 +605,8 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
           confirm.disabled = true;
           section.setAttribute('aria-busy', 'true');
           setSessionControlsDisabled(section, true);
-          live.textContent = `正在删除 Session ${shortId(session.sessionId)}…`;
+          const progressMessage = `正在删除 Session ${shortId(session.sessionId)}…`;
+          live.textContent = progressMessage;
           try {
             const response = await fetch(`/api/session/${encodeURIComponent(session.sessionId)}`, { method: 'DELETE' });
             if (!response.ok) throw new Error(String(response.status));
@@ -539,16 +616,17 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
               allowDefaultSession = true;
               options.onSessionCleared();
             }
-            live.textContent = `已删除 Session ${shortId(session.sessionId)}`;
+            finishOperationAnnouncement(progressMessage);
             renderStep(true);
+            showFeedback({ kind: 'success', message: `已删除 Session ${shortId(session.sessionId)}` });
           } catch {
+            finishOperationAnnouncement(progressMessage);
             section.setAttribute('aria-busy', 'false');
             setSessionControlsDisabled(section, false);
             entry.classList.remove('kit-session-delete-confirming');
             warning.remove();
-            const status = element('span', 'kit-session-action-error', '删除失败');
-            actions.replaceChildren(status, remove);
-            live.textContent = 'Session 删除失败，请重试。';
+            actions.replaceChildren(remove);
+            showFeedback({ kind: 'error', message: `未能删除 Session ${shortId(session.sessionId)}，请重试。` });
             remove.focus();
           }
         });
@@ -637,6 +715,7 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
   };
 
   renderStep();
+  if (resume?.feedback) showFeedback(resume.feedback);
   return main;
 }
 
