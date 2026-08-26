@@ -5,7 +5,9 @@ import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
-import { loadWorkspaceInstructions } from './instructions.js';
+import { loadWorkspaceInstructionResult } from './instructions.js';
+import { discoverSkillCatalog, type SkillCatalog } from './skills.js';
+import { composeTurnSystemInstructions, validateCustomInstructions, type CustomInstructionValidation } from './system-instructions.js';
 import { paginateTraceEvents } from './trace-pagination.js';
 import { normalizeLegacyTraceEvent } from './protocol.js';
 import { canonicalRecordFromTraceEvent, canonicalRecordsFromTrace, canonicalSessionMeta, decodeJsonl, encodeCanonicalRecord, encodeJsonl, type CanonicalRecord } from './jsonl-format.js';
@@ -130,6 +132,20 @@ export interface ModelServiceDelta {
   delta: { type: 'text' | 'reasoning' | 'tool-call'; text?: string; callId?: string; name?: string; arguments?: string };
 }
 
+export interface TurnInstructionBundle {
+  system?: string;
+  audit: {
+    promptVersion: string;
+    promptDigest: string;
+    custom: { configured: boolean; applied: boolean; code: string };
+    workspace: { sources: string[]; omitted: number; errors: number };
+    skills: { total: number; included: number; omitted: number; truncated: number; errors: number; shadowed: number };
+  };
+  skillCatalog: SkillCatalog;
+}
+
+export type TurnInstructionProvider = (workspace: string, custom: CustomInstructionValidation) => Promise<TurnInstructionBundle>;
+
 interface AppendEventOptions {
   surfaceOp?: AgentTraceEvent['surfaceOp'];
   sourceEventSeqs?: number[];
@@ -168,6 +184,15 @@ const SESSION_LOCK_TIMEOUT_MS = 10_000;
 const SESSION_LOCK_STALE_MS = 30_000;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
+async function defaultTurnInstructions(workspace: string, custom: CustomInstructionValidation): Promise<TurnInstructionBundle> {
+  const [workspaceInstructions, skillCatalog] = await Promise.all([
+    loadWorkspaceInstructionResult(workspace),
+    discoverSkillCatalog(workspace),
+  ]);
+  const composed = composeTurnSystemInstructions({ custom, workspace: workspaceInstructions, skills: skillCatalog });
+  return { ...composed, skillCatalog };
+}
+
 function throwIfAborted(signal: AbortSignal): void {
   if (!signal.aborted) return;
   throw signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped');
@@ -196,6 +221,8 @@ export class HarborsAdapter implements AgentAdapter {
     storageRoot: string,
     legacyDataRoots: readonly string[] = [],
     archiveFileOperations: Partial<ArchiveFileOperations> = {},
+    private readonly instructionSettingsProvider: () => CustomInstructionValidation = () => validateCustomInstructions(undefined),
+    private readonly turnInstructionProvider?: TurnInstructionProvider,
   ) {
     if (typeof storageRoot !== 'string' || !storageRoot.trim() || !isAbsolute(storageRoot)) {
       throw new Error('MISSING_RUNTIME_DATA');
@@ -228,6 +255,7 @@ export class HarborsAdapter implements AgentAdapter {
   private traceEventListener?: AgentTraceEventListener;
   private readonly activeTurnControllers = new Map<string, AbortController>();
   private readonly activeTurnCompletions = new Map<string, Promise<void>>();
+  private readonly loadedSkillsByTurn = new Map<string, Set<string>>();
 
   setTraceEventListener(listener?: AgentTraceEventListener): void {
     this.traceEventListener = listener;
@@ -463,17 +491,18 @@ export class HarborsAdapter implements AgentAdapter {
     try {
       const response = await this.runTurn(session, turn, signal, onStatus, onDelta);
       throwIfAborted(signal);
-      await this.appendEvent(session, 'turn/end', { turn, reason: { kind: 'completed' } });
+      await this.appendEvent(session, 'turn/end', { turn, loadedSkills: [...(this.loadedSkillsByTurn.get(`${session.id}:${turn}`) || [])].sort(), reason: { kind: 'completed' } });
       throwIfAborted(signal);
       return response;
     } catch (error) {
       const envelope = toModelServiceErrorEnvelope(error);
       const kind = signal.aborted || envelope.code === 'MODEL_SERVICE_CANCELLED' ? 'cancelled' : envelope.code.includes('TIMEOUT') ? 'timed_out' : envelope.code.includes('REJECT') ? 'rejected' : 'failed';
-      await this.appendEvent(session, 'turn/end', { turn, reason: { kind, error: envelope } });
+      await this.appendEvent(session, 'turn/end', { turn, loadedSkills: [...(this.loadedSkillsByTurn.get(`${session.id}:${turn}`) || [])].sort(), reason: { kind, error: envelope } });
       throw asModelServiceError(error, envelope);
     } finally {
       if (this.activeTurnControllers.get(id) === turnController) this.activeTurnControllers.delete(id);
       if (this.activeTurnCompletions.get(id) === completion) this.activeTurnCompletions.delete(id);
+      this.loadedSkillsByTurn.delete(`${session.id}:${turn}`);
       completeTurn();
     }
   }
@@ -574,7 +603,16 @@ export class HarborsAdapter implements AgentAdapter {
 
   private async runModelToolLoop(session: StoredSession, turn: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void): Promise<string> {
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
-    const systemPrompt = await loadWorkspaceInstructions(workspace);
+    let custom: CustomInstructionValidation;
+    try { custom = this.instructionSettingsProvider(); } catch { custom = validateCustomInstructions(undefined, true); }
+    const bundle = this.turnInstructionProvider
+      ? await this.turnInstructionProvider(workspace, custom)
+      : await defaultTurnInstructions(workspace, custom);
+    const { skillCatalog } = bundle;
+    const composed = bundle;
+    const systemPrompt = bundle.system;
+    const loadedSkills = new Set<string>();
+    this.loadedSkillsByTurn.set(`${session.id}:${turn}`, loadedSkills);
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
     let overflowRetries = 0;
@@ -593,7 +631,7 @@ export class HarborsAdapter implements AgentAdapter {
         let streamedText = '';
         let acceptedSequence = 0;
         await this.appendItemEvent(session, 'item/started', turn, step, assistantItemId, 'message', { role: 'assistant', content: '' }, 'started');
-        await this.appendEvent(session, 'request/context', { turn, step, requestId, generation, provider: 'model-service', model, ...turnSettings(session), ...permissionSettings(session) });
+        await this.appendEvent(session, 'request/context', { turn, step, requestId, generation, provider: 'model-service', model, promptVersion: composed.audit.promptVersion, promptDigest: composed.audit.promptDigest, instructionSources: { custom: composed.audit.custom, workspace: composed.audit.workspace, skills: composed.audit.skills }, loadedSkills: [...loadedSkills].sort(), ...turnSettings(session), ...permissionSettings(session) });
         const messages = toModelServiceMessages(session.events, session.surface);
         const response = await this.completeModel({ requestId, generation, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default', stream: true }, signal, (delta) => {
           if (delta.requestId !== requestId || delta.generation !== generation || delta.sequence !== acceptedSequence) return;
@@ -638,7 +676,7 @@ export class HarborsAdapter implements AgentAdapter {
           await this.appendItemEvent(session, 'item/started', turn, step, call.id, 'tool-call', { callId: call.id, name: call.name, arguments: call.arguments }, 'started');
           await this.appendEvent(session, 'tool/call', { turn, step, itemId: call.id, callId: call.id, name: call.name, arguments: call.arguments, item: { kind: 'tool-call', itemId: call.id, phase: 'started' } });
         }
-        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step);
+        const results = await this.executeToolCalls(calls, workspace, signal, onStatus, session, turn, step, skillCatalog, loadedSkills);
         const guardReason = updateToolFailureGuard(failureGuard, calls, results);
         if (guardReason) {
           await this.appendEvent(session, 'turn/stop', { turn, step, reason: { kind: 'tool-loop-guard', message: guardReason } });
@@ -689,25 +727,25 @@ export class HarborsAdapter implements AgentAdapter {
     }
   }
 
-  private async executeToolCalls(calls: ToolCall[], workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number): Promise<ToolResult[]> {
+  private async executeToolCalls(calls: ToolCall[], workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number, skillCatalog: SkillCatalog, loadedSkills: Set<string>): Promise<ToolResult[]> {
     const results = new Array<ToolResult>(calls.length);
     let index = 0;
     while (index < calls.length) {
       if (isParallelTool(calls[index].name)) {
         const start = index;
         while (index < calls.length && isParallelTool(calls[index].name)) index += 1;
-        const group = calls.slice(start, index).map((call, offset) => this.executeOneTool(call, workspace, signal, onStatus, session, turn, step, start + offset));
+        const group = calls.slice(start, index).map((call, offset) => this.executeOneTool(call, workspace, signal, onStatus, session, turn, step, start + offset, skillCatalog, loadedSkills));
         const groupResults = await Promise.all(group);
         groupResults.forEach((result, offset) => { results[start + offset] = result; });
       } else {
-        results[index] = await this.executeOneTool(calls[index], workspace, signal, onStatus, session, turn, step, index);
+        results[index] = await this.executeOneTool(calls[index], workspace, signal, onStatus, session, turn, step, index, skillCatalog, loadedSkills);
         index += 1;
       }
     }
     return results;
   }
 
-  private async executeOneTool(call: ToolCall, workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number, _index: number): Promise<ToolResult> {
+  private async executeOneTool(call: ToolCall, workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number, _index: number, skillCatalog: SkillCatalog, loadedSkills: Set<string>): Promise<ToolResult> {
     onStatus?.(`正在执行 ${call.name}…`);
     try {
       const result = await runHubBertToolContent(call.name, call.input, workspace, signal, {
@@ -717,8 +755,10 @@ export class HarborsAdapter implements AgentAdapter {
         sandboxMode: session.sandboxMode,
         approvalPolicy: session.approvalPolicy,
         webSearch: this.modelService.webSearch?.bind(this.modelService),
+        skillCatalog,
         requestPermission: ({ toolName, currentMode, requestedMode, justification, signal: requestSignal }) => this.requestPermission(session, turn, step, call.id, toolName, currentMode, requestedMode, justification, requestSignal),
       });
+      if (call.name === 'load_skill' && typeof call.input.name === 'string') loadedSkills.add(call.input.name);
       const toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };
       const resultItemId = `${call.id}:result`;
       await this.appendItemEvent(session, 'item/started', turn, step, resultItemId, 'tool-result', { callId: call.id }, 'started');

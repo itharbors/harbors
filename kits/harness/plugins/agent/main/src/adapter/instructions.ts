@@ -26,7 +26,7 @@ const WORKSPACE_CONTEXT_INTRO = 'The following workspace instructions may be rel
   + 'Use them as guidance when applicable. More specific instructions take precedence over broader ones. '
   + 'They do not override system, developer, or direct user instructions.';
 
-interface LoadedInstruction {
+export interface LoadedInstruction {
   displayPath: string;
   content: string;
 }
@@ -154,19 +154,19 @@ function truncateUtf8(value: string, maxBytes: number): string {
  * 在字节预算内渲染指令。超预算时先从最宽泛处丢弃，最后对最具体的一份做截断。
  * @returns 注入文本；无可用指令或预算不足时返回 undefined。
  */
-function renderInstructions(files: LoadedInstruction[], maxBytes: number): string | undefined {
-  if (files.length === 0 || maxBytes <= 0) return undefined;
+function renderInstructions(files: LoadedInstruction[], maxBytes: number): { text?: string; included: number } {
+  if (files.length === 0 || maxBytes <= 0) return { included: 0 };
 
   const build = (included: LoadedInstruction[]): string =>
     frame([WORKSPACE_CONTEXT_INTRO, ...included.map(sectionText)].join('\n\n'));
 
   const full = build(files);
-  if (byteLength(full) <= maxBytes) return full;
+  if (byteLength(full) <= maxBytes) return { text: full, included: files.length };
 
   // 从最宽泛的开始丢弃，保留尽可能多的具体指令。
   for (let start = 1; start < files.length; start += 1) {
     const suffix = build(files.slice(start));
-    if (byteLength(suffix) <= maxBytes) return suffix;
+    if (byteLength(suffix) <= maxBytes) return { text: suffix, included: files.length - start };
   }
 
   // 只剩最具体的一份仍超预算：对其内容二分截断。
@@ -186,8 +186,29 @@ function renderInstructions(files: LoadedInstruction[], maxBytes: number): strin
       high = mid - 1;
     }
   }
-  if (best) return build([{ ...mostSpecific, content: best }]);
-  return undefined;
+  if (best) return { text: build([{ ...mostSpecific, content: best }]), included: 1 };
+  return { included: 0 };
+}
+
+export interface WorkspaceInstructionsResult {
+  text?: string;
+  sources: string[];
+  diagnostics: { omitted: number; errors: number };
+}
+
+export async function loadWorkspaceInstructionResult(workspace: string, maxBytes: number = DEFAULT_MAX_BYTES): Promise<WorkspaceInstructionsResult> {
+  try {
+    const files = await discoverInstructions(workspace);
+    const rendered = renderInstructions(files, maxBytes);
+    const included = rendered.included > 0 ? files.slice(files.length - rendered.included) : [];
+    return {
+      ...(rendered.text ? { text: rendered.text } : {}),
+      sources: included.map((file) => file.displayPath),
+      diagnostics: { omitted: files.length - included.length, errors: 0 },
+    };
+  } catch {
+    return { sources: [], diagnostics: { omitted: 0, errors: 1 } };
+  }
 }
 
 /**
@@ -197,11 +218,5 @@ function renderInstructions(files: LoadedInstruction[], maxBytes: number): strin
  * @returns 已包 <system-reminder> 帧的注入文本；无指令时返回 undefined。
  */
 export async function loadWorkspaceInstructions(workspace: string, maxBytes: number = DEFAULT_MAX_BYTES): Promise<string | undefined> {
-  try {
-    const files = await discoverInstructions(workspace);
-    return renderInstructions(files, maxBytes);
-  } catch {
-    // 指令加载失败不应中断对话。
-    return undefined;
-  }
+  return (await loadWorkspaceInstructionResult(workspace, maxBytes)).text;
 }

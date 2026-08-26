@@ -63,6 +63,34 @@ test('工具调用结果会在下一次 model-service 请求中保留 assistant 
   }
 });
 
+test('compaction request never receives Turn system instructions', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-compaction-system-'));
+  const requests: any[] = [];
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model', contextWindow: 1_000 }], defaultModel: 'test-model' }; },
+    async complete(request) {
+      requests.push(request);
+      if (request.purpose === 'compaction') return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: 'short checkpoint' } };
+      const turnRequests = requests.filter((item) => item.purpose === 'turn').length;
+      return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: turnRequests === 1 ? 'a'.repeat(2_000) : 'done' } };
+    },
+    async cancel(requestId) { return { requestId, state: 'completed' }; },
+  };
+  const adapter = new HarborsAdapter(client, storage);
+  try {
+    const conversation = await adapter.createConversation('/tmp');
+    await adapter.sendMessage(conversation.id, 'first');
+    assert.equal(await adapter.sendMessage(conversation.id, 'b'.repeat(1_000)), 'done');
+    const compaction = requests.find((request) => request.purpose === 'compaction');
+    assert.ok(compaction);
+    assert.equal(Object.hasOwn(compaction, 'system'), false);
+    assert.equal(requests.filter((request) => request.purpose === 'turn').every((request) => typeof request.system === 'string'), true);
+  } finally {
+    adapter.stop();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
+
 test('上下文窗口只使用 model-service catalog，缺失时回退默认值', async () => {
   const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-context-'));
   const previousContext = process.env.HARBORS_AGENT_CONTEXT_WINDOW;

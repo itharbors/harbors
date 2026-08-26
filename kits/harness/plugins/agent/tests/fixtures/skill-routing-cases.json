@@ -1,0 +1,6 @@
+[
+  { "id": "explicit", "input": "Use the demo Skill before acting.", "expectedSkill": "demo", "expectLoad": true, "expectValidation": true },
+  { "id": "implicit", "input": "Perform the uniquely described demo workflow.", "expectedSkill": "demo", "expectLoad": true, "expectValidation": true },
+  { "id": "unmatched", "input": "Answer: 2 + 2.", "expectedSkill": null, "expectLoad": false, "expectValidation": false },
+  { "id": "broken", "input": "Use the oversized Skill safely.", "expectedSkill": "oversized", "expectLoad": true, "expectValidation": false }
+]

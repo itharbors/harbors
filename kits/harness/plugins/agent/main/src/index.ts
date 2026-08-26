@@ -4,6 +4,9 @@ import { normalizeTurnOptions } from './adapter/base.js';
 import { HarborsAdapter, type ModelServiceClient, type ModelServiceCompleteRequest, type ModelServiceDelta } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
 import { adapterPermissionDefaults, configuredPermissionDefaults, DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE, isApprovalPolicy, isSandboxMode, selectedOptions, withPermissionDefaults } from './permissions.js';
+import { loadWorkspaceInstructionResult } from './adapter/instructions.js';
+import { discoverSkillCatalog } from './adapter/skills.js';
+import { AGENT_CORE_VERSION, validateCustomInstructions, type CustomInstructionValidation } from './adapter/system-instructions.js';
 
 declare const editor: any;
 
@@ -70,7 +73,7 @@ function createAdapters(
   legacyDataRoots: readonly string[] = [],
 ): Record<AgentSource, AgentAdapter> {
   const result: Record<AgentSource, AgentAdapter> = {
-    harbors: new HarborsAdapter(modelService, storageRoot, legacyDataRoots),
+    harbors: new HarborsAdapter(modelService, storageRoot, legacyDataRoots, {}, readCustomInstructionSetting),
   };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
@@ -226,14 +229,28 @@ function assertApprovalPolicy(value: string): AgentApprovalPolicy {
 
 const AGENT_SANDBOX_MODE_KEY = 'agent.defaults.sandboxMode';
 const AGENT_APPROVAL_POLICY_KEY = 'agent.defaults.approvalPolicy';
+const AGENT_CUSTOM_INSTRUCTIONS_KEY = 'agent.instructions.custom';
 
 interface AgentSettings {
   sandboxMode: AgentSandboxMode;
   approvalPolicy: AgentApprovalPolicy;
+  customInstructions: string;
+  custom: Omit<CustomInstructionValidation, 'value'>;
+  instructionSources: {
+    coreVersion: string;
+    workspace: { sources: string[]; omitted: number; errors: number };
+    skills: { total: number; included: number; omitted: number; truncated: number; errors: number; shadowed: number };
+  };
   global: {
     sandboxMode: boolean;
     approvalPolicy: boolean;
+    customInstructions: boolean;
   };
+}
+
+function readCustomInstructionSetting(): CustomInstructionValidation {
+  try { return validateCustomInstructions(runtime?.config?.get?.(AGENT_CUSTOM_INSTRUCTIONS_KEY, 'global')); }
+  catch { return validateCustomInstructions(undefined, true); }
 }
 
 function readGlobalSetting(key: string): { value: unknown; configured: boolean } {
@@ -245,49 +262,66 @@ function readGlobalSetting(key: string): { value: unknown; configured: boolean }
   }
 }
 
-function getSettings(): AgentSettings {
+async function getSettings(): Promise<AgentSettings> {
   const sandboxMode = readGlobalSetting(AGENT_SANDBOX_MODE_KEY);
   const approvalPolicy = readGlobalSetting(AGENT_APPROVAL_POLICY_KEY);
+  const custom = readCustomInstructionSetting();
+  const workspacePath = process.env.HARBORS_AGENT_WORKSPACE || process.cwd();
+  const [workspace, skills] = await Promise.all([loadWorkspaceInstructionResult(workspacePath), discoverSkillCatalog(workspacePath)]);
   return {
     sandboxMode: isSandboxMode(sandboxMode.value) ? sandboxMode.value : DEFAULT_SANDBOX_MODE,
     approvalPolicy: isApprovalPolicy(approvalPolicy.value) ? approvalPolicy.value : DEFAULT_APPROVAL_POLICY,
+    customInstructions: custom.applied ? custom.value : '',
+    custom: { configured: custom.configured, applied: custom.applied, code: custom.code },
+    instructionSources: { coreVersion: AGENT_CORE_VERSION, workspace: { sources: workspace.sources, ...workspace.diagnostics }, skills: skills.diagnostics },
     global: {
       sandboxMode: sandboxMode.configured && isSandboxMode(sandboxMode.value),
       approvalPolicy: approvalPolicy.configured && isApprovalPolicy(approvalPolicy.value),
+      customInstructions: custom.configured && custom.applied,
     },
   };
 }
 
-function assertSettingsInput(input: unknown): { sandboxMode: AgentSandboxMode; approvalPolicy: AgentApprovalPolicy } {
+function assertSettingsInput(input: unknown): { sandboxMode: AgentSandboxMode; approvalPolicy: AgentApprovalPolicy; customInstructions: string } {
   if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('[agent] settings must be an object');
   const value = input as Record<string, unknown>;
   const keys = Object.keys(value).sort();
-  if (keys.length !== 2 || keys[0] !== 'approvalPolicy' || keys[1] !== 'sandboxMode') {
-    throw new Error('[agent] settings must contain only sandboxMode and approvalPolicy');
+  if (keys.length !== 3 || keys[0] !== 'approvalPolicy' || keys[1] !== 'customInstructions' || keys[2] !== 'sandboxMode') {
+    throw new Error('[agent] settings must contain only sandboxMode, approvalPolicy and customInstructions');
   }
   if (!isSandboxMode(value.sandboxMode)) throw new Error(`[agent] invalid sandbox mode: ${String(value.sandboxMode)}`);
   if (!isApprovalPolicy(value.approvalPolicy)) throw new Error(`[agent] invalid approval policy: ${String(value.approvalPolicy)}`);
-  return { sandboxMode: value.sandboxMode, approvalPolicy: value.approvalPolicy };
+  const custom = validateCustomInstructions(value.customInstructions);
+  if (custom.code === 'invalid_type') throw new Error('[agent] custom instructions must be a string');
+  if (custom.code === 'too_large') throw new Error('[agent] custom instructions exceed 8192 UTF-8 bytes');
+  return { sandboxMode: value.sandboxMode, approvalPolicy: value.approvalPolicy, customInstructions: custom.value };
 }
 
-function saveSettings(input: unknown): AgentSettings {
+async function saveSettings(input: unknown): Promise<AgentSettings> {
   const settings = assertSettingsInput(input);
   if (!runtime?.config?.set) throw new Error('[agent] config is unavailable');
   runtime.config.set(AGENT_SANDBOX_MODE_KEY, settings.sandboxMode, 'global');
   runtime.config.set(AGENT_APPROVAL_POLICY_KEY, settings.approvalPolicy, 'global');
-  const persisted = getSettings();
+  runtime.config.set(AGENT_CUSTOM_INSTRUCTIONS_KEY, settings.customInstructions, 'global');
+  const persisted = await getSettings();
+  const expectedCustomCode = settings.customInstructions === '' ? 'disabled' : 'ok';
   if (persisted.sandboxMode !== settings.sandboxMode || persisted.approvalPolicy !== settings.approvalPolicy
-    || !persisted.global.sandboxMode || !persisted.global.approvalPolicy) {
+    || persisted.customInstructions !== settings.customInstructions || !persisted.global.sandboxMode || !persisted.global.approvalPolicy
+    || !persisted.custom.configured || persisted.custom.code !== expectedCustomCode
+    || (settings.customInstructions !== '' && !persisted.global.customInstructions)) {
     throw new Error('[agent] settings were not persisted');
   }
   return persisted;
 }
 
-function resetSettings(): AgentSettings {
+async function resetSettings(): Promise<AgentSettings> {
   if (!runtime?.config?.delete) throw new Error('[agent] config is unavailable');
   runtime.config.delete(AGENT_SANDBOX_MODE_KEY, 'global');
   runtime.config.delete(AGENT_APPROVAL_POLICY_KEY, 'global');
-  return getSettings();
+  runtime.config.delete(AGENT_CUSTOM_INSTRUCTIONS_KEY, 'global');
+  const persisted = await getSettings();
+  if (persisted.custom.configured || persisted.custom.applied || persisted.custom.code !== 'disabled' || persisted.customInstructions) throw new Error('[agent] custom instructions were not reset');
+  return persisted;
 }
 
 /**
