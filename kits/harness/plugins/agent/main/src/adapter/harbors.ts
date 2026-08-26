@@ -2,7 +2,7 @@ import { constants } from 'node:fs';
 import { link, lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
 import { loadWorkspaceInstructions } from './instructions.js';
@@ -173,12 +173,29 @@ function throwIfAborted(signal: AbortSignal): void {
   throw signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped');
 }
 
+export interface ArchiveFileOperations {
+  rename(source: string, destination: string): Promise<void>;
+  unlink(path: string): Promise<void>;
+  writeExclusive(path: string, contents: string): Promise<void>;
+  syncFile(path: string): Promise<void>;
+  syncDirectory(path: string): Promise<void>;
+}
+
+const DEFAULT_ARCHIVE_FILE_OPERATIONS: ArchiveFileOperations = {
+  rename,
+  unlink,
+  async writeExclusive(path, contents) { await writeSessionFile(path, contents, 'wx'); },
+  syncFile: syncFilePath,
+  syncDirectory: syncDirectoryPath,
+};
+
 /** Harbors 自主管理的 agent：参考 Harness，用只追加事件日志维护 session/turn。 */
 export class HarborsAdapter implements AgentAdapter {
   constructor(
     private readonly modelService: ModelServiceClient,
     storageRoot: string,
     legacyDataRoots: readonly string[] = [],
+    archiveFileOperations: Partial<ArchiveFileOperations> = {},
   ) {
     if (typeof storageRoot !== 'string' || !storageRoot.trim() || !isAbsolute(storageRoot)) {
       throw new Error('MISSING_RUNTIME_DATA');
@@ -192,12 +209,14 @@ export class HarborsAdapter implements AgentAdapter {
       }
       return resolve(candidate);
     }));
+    this.archiveFileOperations = { ...DEFAULT_ARCHIVE_FILE_OPERATIONS, ...archiveFileOperations };
   }
   private stopped = false;
   private readonly abortController = new AbortController();
   private readonly storageDir: string;
   private readonly trashDir: string;
   private readonly legacyDataRoots: readonly string[];
+  private readonly archiveFileOperations: ArchiveFileOperations;
   private initialization?: Promise<void>;
   private readonly eventWriteQueues = new Map<string, Promise<void>>();
   private readonly deletedSessions = new Set<string>();
@@ -263,43 +282,104 @@ export class HarborsAdapter implements AgentAdapter {
     return sessions.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).map(toConversation);
   }
 
-  async deleteConversation(id: string): Promise<void> {
+  async listArchivedConversations(): Promise<AgentArchivedConversation[]> {
+    return readArchivedConversations(this.storageDir, this.trashDir);
+  }
+
+  async archiveConversation(id: string): Promise<AgentArchivedConversation> {
     await this.ensureInitialized();
     throwIfAborted(this.abortController.signal);
+    if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
     if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
-    const session = await this.load(id);
+    let session: StoredSession;
+    try { session = await this.load(id); } catch (error) {
+      if (isNodeError(error, 'ENOENT') || (error instanceof Error && error.message === 'SESSION_DELETED')) throw new Error('CONVERSATION_NOT_FOUND', { cause: error });
+      throw error;
+    }
+    const archivedAt = new Date().toISOString();
+    const archiveBasename = `${id}-${Date.parse(archivedAt)}-${randomUUID()}.jsonl`;
+    const archivePath = join(this.trashDir, archiveBasename);
+    const tombstonePath = this.tombstonePathFor(id);
+    const tombstone = JSON.stringify({ version: 1, id, archivedAt, archiveBasename });
     await this.enqueueSessionWrite(id, async () => {
       if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
-      if (this.deletedSessions.has(id)) throw new Error('SESSION_DELETED');
-      const source = session.logPath;
-      if (!source) throw new Error(`Harbors session has no storage path: ${id}`);
+      const source = session.logPath || this.logPathFor(id);
       await mkdir(this.trashDir, { recursive: true });
       await withSessionFileLock(source, async () => {
-        await this.assertNotDeletedOnDisk(id);
-        await this.assertRegularSessionFile(source);
-        const trashPath = join(this.trashDir, `${id}-${Date.now()}-${randomUUID()}.jsonl`);
-        let moved = false;
-        try {
-          await rename(source, trashPath);
-          moved = true;
-        } catch (error) {
-          if (isNodeError(error, 'ENOENT')) throw new Error('SESSION_NOT_FOUND', { cause: error });
-          throw new Error('SESSION_DELETE_FAILED', { cause: error });
+        const existingArchives = await readdir(this.trashDir, { withFileTypes: true });
+        if (await fileExists(tombstonePath) || await fileExists(archivePath)
+          || existingArchives.some((entry) => entry.name.startsWith(`${id}-`) && entry.name.endsWith('.jsonl'))) {
+          throw new Error('ARCHIVE_CONFLICT');
         }
+        let raw: string;
+        try { await this.assertRegularSessionFile(source); raw = await readStableLegacySession(source); assertArchiveSession(raw, id); }
+        catch (error) { throw new Error('ARCHIVE_FILE_INVALID', { cause: error }); }
+        let moved = false;
+        let tombstoneCreated = false;
         try {
-          await writeFile(this.tombstonePathFor(id), JSON.stringify({ id, deletedAt: Date.now() }), { encoding: 'utf8', flag: 'wx' });
+          await this.archiveFileOperations.rename(source, archivePath); moved = true;
+          await this.archiveFileOperations.syncDirectory(this.trashDir);
+          await this.archiveFileOperations.writeExclusive(tombstonePath, tombstone); tombstoneCreated = true;
+          await this.archiveFileOperations.syncFile(tombstonePath);
+          await this.archiveFileOperations.syncDirectory(this.storageDir);
         } catch (error) {
-          if (moved) {
-            await rename(trashPath, source).catch(() => undefined);
+          let compensationFailed = false;
+          if (tombstoneCreated || await fileExists(tombstonePath).catch(() => false)) {
+            try { await this.archiveFileOperations.unlink(tombstonePath); await this.archiveFileOperations.syncDirectory(this.storageDir); } catch { compensationFailed = true; }
           }
-          throw new Error('SESSION_DELETE_FAILED', { cause: error });
+          if (moved) {
+            try { await this.archiveFileOperations.rename(archivePath, source); await this.archiveFileOperations.syncDirectory(this.trashDir); await this.archiveFileOperations.syncDirectory(this.storageDir); } catch { compensationFailed = true; }
+          }
+          throw new Error(compensationFailed ? 'ARCHIVE_STATE_INCONSISTENT' : 'ARCHIVE_OPERATION_FAILED', { cause: error });
         }
       });
       this.deletedSessions.add(id);
-      this.sessions.delete(id);
-      this.sessionLoads.delete(id);
-      this.sessionRefreshes.delete(id);
+      this.sessions.delete(id); this.sessionLoads.delete(id); this.sessionRefreshes.delete(id);
     });
+    return { id, title: session.title, ...(session.project ? { project: session.project } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt, archivedAt, status: 'available' };
+  }
+
+  async restoreConversation(id: string): Promise<AgentConversation> {
+    throwIfAborted(this.abortController.signal);
+    if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
+    const source = this.logPathFor(id);
+    const tombstonePath = this.tombstonePathFor(id);
+    if (!await fileExists(tombstonePath)) throw new Error('ARCHIVE_NOT_FOUND');
+    let restoredConversation: AgentConversation | undefined;
+    await this.enqueueSessionWrite(id, async () => {
+      await withSessionFileLock(source, async () => {
+        if (await fileExists(source)) throw new Error('ARCHIVE_CONFLICT');
+        const record = await readArchiveRecord(this.storageDir, this.trashDir, id);
+        if (!record) throw new Error('ARCHIVE_NOT_FOUND');
+        if (record.summary.status !== 'available' || !record.archivePath || !record.tombstoneRaw || !record.conversation) throw new Error(record.summary.errorCode || 'ARCHIVE_TOMBSTONE_INVALID');
+        restoredConversation = record.conversation;
+        let moved = false;
+        let tombstoneRemoved = false;
+        try {
+          await this.archiveFileOperations.rename(record.archivePath, source); moved = true;
+          await this.archiveFileOperations.syncDirectory(this.trashDir); await this.archiveFileOperations.syncDirectory(this.storageDir);
+          await this.archiveFileOperations.unlink(tombstonePath); tombstoneRemoved = true;
+          await this.archiveFileOperations.syncDirectory(this.storageDir);
+        } catch (error) {
+          let compensationFailed = false;
+          if (moved) {
+            try { await this.archiveFileOperations.rename(source, record.archivePath); await this.archiveFileOperations.syncDirectory(this.storageDir); await this.archiveFileOperations.syncDirectory(this.trashDir); } catch { compensationFailed = true; }
+          }
+          if (tombstoneRemoved) {
+            try {
+              await this.archiveFileOperations.writeExclusive(tombstonePath, record.tombstoneRaw);
+              await this.archiveFileOperations.syncFile(tombstonePath);
+              await this.archiveFileOperations.syncDirectory(this.storageDir);
+            } catch { compensationFailed = true; }
+          }
+          throw new Error(compensationFailed ? 'ARCHIVE_STATE_INCONSISTENT' : 'ARCHIVE_OPERATION_FAILED', { cause: error });
+        }
+      });
+      this.deletedSessions.delete(id);
+      this.sessions.delete(id); this.sessionLoads.delete(id); this.sessionRefreshes.delete(id);
+    });
+    if (!restoredConversation) throw new Error('ARCHIVE_STATE_INCONSISTENT');
+    return { ...restoredConversation };
   }
 
   async renameConversation(id: string, title: string): Promise<AgentConversation> {
@@ -1036,6 +1116,108 @@ export class HarborsAdapter implements AgentAdapter {
   }
 }
 
+interface ArchiveRecord {
+  summary: AgentArchivedConversation;
+  archivePath?: string;
+  tombstoneRaw?: string;
+  conversation?: AgentConversation;
+}
+
+async function readArchivedConversations(storageDir: string, trashDir: string): Promise<AgentArchivedConversation[]> {
+  let entries: import('node:fs').Dirent[];
+  try { entries = await readdir(storageDir, { withFileTypes: true }); } catch (error) { if (isNodeError(error, 'ENOENT')) return []; throw error; }
+  const ids = entries.map((entry) => entry.name).filter((name) => name.endsWith('.deleted'))
+    .map((name) => name.slice(0, -'.deleted'.length)).filter((id) => SESSION_ID_PATTERN.test(id));
+  const records = await Promise.all(ids.map((id) => readArchiveRecord(storageDir, trashDir, id)));
+  return records.flatMap((record) => record ? [record.summary] : []).sort((left, right) => Date.parse(right.archivedAt) - Date.parse(left.archivedAt) || left.id.localeCompare(right.id));
+}
+
+async function readArchiveRecord(storageDir: string, trashDir: string, id: string): Promise<ArchiveRecord | null> {
+  const tombstonePath = join(storageDir, `${id}.deleted`);
+  let tombstoneStat: import('node:fs').Stats;
+  try { tombstoneStat = await lstat(tombstonePath); } catch (error) { if (isNodeError(error, 'ENOENT')) return null; throw error; }
+  const fallbackArchivedAt = canonicalIso(tombstoneStat.mtimeMs) || new Date(0).toISOString();
+  const unavailable = (errorCode: string): ArchiveRecord => ({ summary: { id, title: '无法读取的归档对话', archivedAt: fallbackArchivedAt, status: 'unavailable', errorCode } });
+  if (!tombstoneStat.isFile() || tombstoneStat.isSymbolicLink()) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+  let tombstoneRaw: string;
+  try { tombstoneRaw = await readStableLegacySession(tombstonePath); } catch { return unavailable('ARCHIVE_TOMBSTONE_INVALID'); }
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(tombstoneRaw) as Record<string, unknown>; } catch { return unavailable('ARCHIVE_TOMBSTONE_INVALID'); }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+  const keys = Object.keys(parsed).sort();
+  let archivedAt = fallbackArchivedAt;
+  let archiveBasename: string | undefined;
+  if (keys.join(',') === 'archiveBasename,archivedAt,id,version' && parsed.version === 1 && parsed.id === id && typeof parsed.archivedAt === 'string' && typeof parsed.archiveBasename === 'string') {
+    const date = new Date(parsed.archivedAt);
+    if (Number.isNaN(date.valueOf()) || date.toISOString() !== parsed.archivedAt) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+    archivedAt = parsed.archivedAt;
+    const pattern = new RegExp(`^${id}-${Date.parse(archivedAt)}-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.jsonl$`, 'iu');
+    if (!pattern.test(parsed.archiveBasename)) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+    archiveBasename = parsed.archiveBasename;
+  } else if (keys.join(',') === 'deletedAt,id' && parsed.id === id && typeof parsed.deletedAt === 'number' && Number.isSafeInteger(parsed.deletedAt) && parsed.deletedAt >= 0) {
+    const legacyArchivedAt = canonicalIso(parsed.deletedAt);
+    if (!legacyArchivedAt) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+    archivedAt = legacyArchivedAt;
+  } else return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+
+  let trashEntries: import('node:fs').Dirent[];
+  try { trashEntries = await readdir(trashDir, { withFileTypes: true }); } catch (error) { if (isNodeError(error, 'ENOENT')) return unavailable('ARCHIVE_TOMBSTONE_INVALID'); throw error; }
+  const candidates = trashEntries.map((entry) => entry.name).filter((name) => name.startsWith(`${id}-`) && name.endsWith('.jsonl'));
+  if (candidates.length !== 1 || (archiveBasename && candidates[0] !== archiveBasename)) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
+  archiveBasename ??= candidates[0];
+  const archivePath = join(trashDir, archiveBasename);
+  let archiveStat: import('node:fs').Stats;
+  try { archiveStat = await lstat(archivePath); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
+  if (!archiveStat.isFile() || archiveStat.isSymbolicLink()) return unavailable('ARCHIVE_FILE_INVALID');
+  let raw: string;
+  try { raw = await readStableLegacySession(archivePath); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
+  let decoded: ReturnType<typeof decodeJsonl>;
+  try { decoded = decodeJsonl(raw, { repairTrailingLine: false }); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
+  if (decoded.header.id !== id) return unavailable('ARCHIVE_FILE_INVALID');
+  const last = decoded.events.at(-1);
+  const createdAt = canonicalIso(decoded.header.createdAt);
+  const updatedAt = canonicalIso(last?.time ?? decoded.header.createdAt);
+  if (!createdAt || !updatedAt || decoded.events.some((event) => !canonicalIso(event.time))) return unavailable('ARCHIVE_FILE_INVALID');
+  if (decoded.format === 'canonical') {
+    const records = decoded.records as Array<{ timestamp: string; type: string; payload: Record<string, unknown> }>;
+    if (records.some((record) => canonicalIsoString(record.timestamp) !== record.timestamp)) return unavailable('ARCHIVE_FILE_INVALID');
+    const sessionMeta = records[0];
+    if (sessionMeta?.type !== 'session_meta' || canonicalIsoString(sessionMeta.payload.created_at) !== sessionMeta.payload.created_at) return unavailable('ARCHIVE_FILE_INVALID');
+  }
+  let settings: AgentTurnOptions & AgentPermissionState;
+  try { settings = settingsFromEvents(decoded.events, decoded.header); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
+  const title = titleFromEvents(decoded.events);
+  const preview = projectMessages(decoded.events).at(-1)?.content;
+  return {
+    summary: {
+      id, title, ...(decoded.header.cwd ? { project: decoded.header.cwd } : {}),
+      createdAt, updatedAt,
+      archivedAt, status: 'available',
+    },
+    archivePath, tombstoneRaw,
+    conversation: { id, title, ...(decoded.header.cwd ? { project: decoded.header.cwd } : {}), ...settings, ...(preview ? { preview: preview.slice(0, 120) } : {}), createdAt, updatedAt },
+  };
+}
+
+function canonicalIso(value: number): string | null {
+  if (!Number.isFinite(value)) return null;
+  try { return new Date(value).toISOString(); } catch { return null; }
+}
+
+function canonicalIsoString(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const time = Date.parse(value);
+  const canonical = canonicalIso(time);
+  return canonical === value ? canonical : null;
+}
+
+function assertArchiveSession(raw: string, id: string): void {
+  try {
+    const decoded = decodeJsonl(raw, { repairTrailingLine: false });
+    if (decoded.header.id !== id) throw new Error('ARCHIVE_FILE_INVALID');
+  } catch (error) { throw new Error('ARCHIVE_FILE_INVALID', { cause: error }); }
+}
+
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; arguments: string; }
 interface ToolResult { content: string; isError: boolean; image?: HubBertToolImage; }
 
@@ -1086,6 +1268,17 @@ async function fileExists(path: string): Promise<boolean> {
 async function syncDirectoryPath(directory: string): Promise<void> {
   const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY);
   try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+async function syncFilePath(path: string): Promise<void> {
+  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const value = await handle.stat();
+    if (!value.isFile()) throw new Error('ARCHIVE_TOMBSTONE_INVALID');
     await handle.sync();
   } finally {
     await handle.close();

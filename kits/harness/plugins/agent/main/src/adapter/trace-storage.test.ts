@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { HarborsAdapter, type ModelServiceClient } from './harbors.js';
+import { HarborsAdapter, type ArchiveFileOperations, type ModelServiceClient } from './harbors.js';
 
 const modelService: ModelServiceClient = {
   async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
@@ -316,7 +316,7 @@ test('删除后另一 adapter 的缓存写入失败且不会重建源日志', as
       const conversation = await first.createConversation('/workspace');
       await second.getConversationTrace(conversation.id);
       const path = sessionPath(directory, conversation.id);
-      await first.deleteConversation(conversation.id);
+      await first.archiveConversation(conversation.id);
       await assert.rejects(second.renameConversation(conversation.id, '禁止复活'), /SESSION_DELETED/);
       await assert.rejects(readFile(path), /ENOENT/);
     } finally {
@@ -325,7 +325,7 @@ test('删除后另一 adapter 的缓存写入失败且不会重建源日志', as
   });
 });
 
-test('删除移动失败时不遗留 tombstone，源日志仍可读', async () => {
+test('归档移动失败时不遗留 tombstone，源日志仍可读', async () => {
   await withStorage(async (directory, adapter) => {
     const conversation = await adapter.createConversation('/workspace');
     const source = sessionPath(directory, conversation.id);
@@ -333,7 +333,7 @@ test('删除移动失败时不遗留 tombstone，源日志仍可读', async () =
     await mkdir(trash, { recursive: true });
     await chmod(trash, 0o500);
     try {
-      await assert.rejects(adapter.deleteConversation(conversation.id), /SESSION_DELETE_FAILED/);
+      await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_OPERATION_FAILED/);
       const records = await readDiskRecords(source);
       assert.equal(records[0]?.type, 'session_meta');
       assert.equal(records[0]?.payload.schema_version, 1);
@@ -358,7 +358,7 @@ test('既有 session JSONL 为 symlink 时读写删均 fail closed', async () =>
     try {
       await assert.rejects(adapter.getConversationTrace(conversation.id), /SESSION_FILE_INVALID/);
       await assert.rejects(adapter.renameConversation(conversation.id, '拒绝符号链接'), /SESSION_FILE_INVALID/);
-      await assert.rejects(adapter.deleteConversation(conversation.id), /SESSION_FILE_INVALID/);
+      await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_FILE_INVALID/);
     } finally {
       await unlink(source);
       await rename(target, source);
@@ -553,7 +553,7 @@ test('文件名与 canonical 或 legacy 会话身份不一致时读写均 fail c
   }
 });
 
-test('活动会话不能删除，普通删除原子移动到 trash', async () => {
+test('活动会话不能归档，普通归档可恢复', async () => {
   await withStorage(async (directory, adapter) => {
     const conversation = await adapter.createConversation('/workspace');
     const client = modelService;
@@ -569,17 +569,409 @@ test('活动会话不能删除，普通删除原子移动到 trash', async () =>
     try {
       const sending = activeAdapter.sendMessage(conversation.id, 'hello');
       while (!(activeAdapter as any).activeTurnControllers.has(conversation.id)) await new Promise((resolve) => setTimeout(resolve, 1));
-      await assert.rejects(activeAdapter.deleteConversation(conversation.id), /CONVERSATION_ACTIVE/);
+      await assert.rejects(activeAdapter.archiveConversation(conversation.id), /CONVERSATION_ACTIVE/);
       release?.();
       await sending;
     } finally {
       activeAdapter.stop();
     }
 
-    await adapter.deleteConversation(conversation.id);
+    const beforeRestore = await adapter.getConversationTrace(conversation.id);
+    const archived = await adapter.archiveConversation(conversation.id);
+    assert.equal(archived.status, 'available');
     await assert.rejects(adapter.getConversationTrace(conversation.id), /SESSION_DELETED|ENOENT/);
     const trash = join(directory, 'storage-v1', '.harbors-trash');
     const entries = await readdir(trash);
     assert.equal(entries.some((entry) => entry.startsWith(`${conversation.id}-`) && entry.endsWith('.jsonl')), true);
+    const restored = await adapter.restoreConversation(conversation.id);
+    assert.equal(restored.id, conversation.id);
+    assert.deepEqual(await adapter.getConversationTrace(conversation.id), beforeRestore);
   });
+});
+
+test('归档查询严格只读，读取 v1/legacy 并且 tombstone symlink 不被跟随', async () => {
+  await withStorage(async (directory, adapter) => {
+    const active = await adapter.createConversation('/active');
+    const archived = await adapter.createConversation('/archived');
+    const summary = await adapter.archiveConversation(archived.id);
+    const sessions = join(directory, 'storage-v1', 'sessions');
+    const trash = join(directory, 'storage-v1', '.harbors-trash');
+    const tombstone = join(sessions, `${archived.id}.deleted`);
+    const tombstoneValue = JSON.parse(await readFile(tombstone, 'utf8'));
+    assert.deepEqual(Object.keys(tombstoneValue).sort(), ['archiveBasename', 'archivedAt', 'id', 'version']);
+    assert.equal(tombstoneValue.version, 1);
+    assert.equal(tombstoneValue.id, archived.id);
+    assert.equal(new Date(tombstoneValue.archivedAt).toISOString(), tombstoneValue.archivedAt);
+    assert.match(tombstoneValue.archiveBasename, new RegExp(`^${archived.id}-${Date.parse(tombstoneValue.archivedAt)}-`));
+    const archive = join(trash, tombstoneValue.archiveBasename);
+    const before = await Promise.all([tombstone, archive, sessionPath(directory, active.id)].map(async (path) => ({ path, raw: await readFile(path), stat: await lstat(path) })));
+    assert.deepEqual(await adapter.listArchivedConversations(), [summary]);
+    const after = await Promise.all(before.map(async ({ path }) => ({ path, raw: await readFile(path), stat: await lstat(path) })));
+    for (let index = 0; index < before.length; index += 1) {
+      assert.deepEqual(after[index].raw, before[index].raw);
+      assert.equal(after[index].stat.mtimeMs, before[index].stat.mtimeMs);
+    }
+
+    const legacyAt = 1234;
+    await writeFile(tombstone, JSON.stringify({ id: archived.id, deletedAt: legacyAt }), 'utf8');
+    const legacy = await adapter.listArchivedConversations();
+    assert.equal(legacy[0].archivedAt, new Date(legacyAt).toISOString());
+
+    const badId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const target = join(directory, 'symlink-target');
+    await writeFile(target, 'secret-target', 'utf8');
+    const targetBefore = await lstat(target);
+    await symlink(target, join(sessions, `${badId}.deleted`));
+    const values = await adapter.listArchivedConversations();
+    const unavailable = values.find((item) => item.id === badId);
+    assert.equal(unavailable?.status, 'unavailable');
+    assert.equal(unavailable?.errorCode, 'ARCHIVE_TOMBSTONE_INVALID');
+    assert.equal(await readFile(target, 'utf8'), 'secret-target');
+    assert.equal((await lstat(target)).mtimeMs, targetBefore.mtimeMs);
+  });
+});
+
+test('归档每个文件提交 failpoint 都完整补偿并保持原会话 bytes/mtime', async () => {
+  const cases: Array<{
+    name: string;
+    operations(directory: string): Partial<ArchiveFileOperations>;
+  }> = [
+    {
+      name: 'rename',
+      operations: () => ({ async rename() { throw new Error('FAIL_RENAME'); } }),
+    },
+    {
+      name: 'trash directory sync',
+      operations: (directory) => {
+        let failed = false;
+        return { async syncDirectory(path) {
+          if (!failed && path === join(directory, 'storage-v1', '.harbors-trash')) { failed = true; throw new Error('FAIL_TRASH_SYNC'); }
+        } };
+      },
+    },
+    {
+      name: 'exclusive tombstone write',
+      operations: () => ({ async writeExclusive() { throw new Error('FAIL_WRITE'); } }),
+    },
+    {
+      name: 'tombstone file sync',
+      operations: () => ({ async syncFile() { throw new Error('FAIL_FILE_SYNC'); } }),
+    },
+    {
+      name: 'sessions directory sync',
+      operations: (directory) => {
+        let failed = false;
+        return { async syncDirectory(path) {
+          if (!failed && path === join(directory, 'storage-v1', 'sessions')) { failed = true; throw new Error('FAIL_SESSIONS_SYNC'); }
+        } };
+      },
+    },
+  ];
+
+  for (const current of cases) {
+    await withStorage(async (directory, creator) => {
+      const conversation = await creator.createConversation('/workspace');
+      const activePath = sessionPath(directory, conversation.id);
+      const before = { raw: await readFile(activePath), stat: await lstat(activePath) };
+      const adapter = new HarborsAdapter(modelService, directory, [], current.operations(directory));
+      try {
+        await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_OPERATION_FAILED/, current.name);
+      } finally {
+        adapter.stop();
+      }
+      const after = { raw: await readFile(activePath), stat: await lstat(activePath) };
+      assert.deepEqual(after.raw, before.raw, current.name);
+      assert.equal(after.stat.mtimeMs, before.stat.mtimeMs, current.name);
+      assert.equal((await readdir(join(directory, 'storage-v1', 'sessions'))).includes(`${conversation.id}.deleted`), false, current.name);
+      assert.equal((await readdir(join(directory, 'storage-v1', '.harbors-trash'))).some((name) => name.startsWith(`${conversation.id}-`) && name.endsWith('.jsonl')), false, current.name);
+    });
+  }
+});
+
+test('恢复每个文件提交 failpoint 都回滚到原 archive 与 tombstone bytes', async () => {
+  const cases: Array<{
+    name: string;
+    operations(directory: string): Partial<ArchiveFileOperations>;
+  }> = [
+    {
+      name: 'rename',
+      operations: () => ({ async rename() { throw new Error('FAIL_RENAME'); } }),
+    },
+    {
+      name: 'trash directory sync',
+      operations: (directory) => {
+        let failed = false;
+        return { async syncDirectory(path) {
+          if (!failed && path === join(directory, 'storage-v1', '.harbors-trash')) { failed = true; throw new Error('FAIL_TRASH_SYNC'); }
+        } };
+      },
+    },
+    {
+      name: 'sessions directory sync after rename',
+      operations: (directory) => {
+        let failed = false;
+        return { async syncDirectory(path) {
+          if (!failed && path === join(directory, 'storage-v1', 'sessions')) { failed = true; throw new Error('FAIL_SESSIONS_SYNC'); }
+        } };
+      },
+    },
+    {
+      name: 'tombstone unlink',
+      operations: () => ({ async unlink() { throw new Error('FAIL_UNLINK'); } }),
+    },
+    {
+      name: 'final sessions directory sync',
+      operations: (directory) => {
+        let sessionsSyncs = 0;
+        return { async syncDirectory(path) {
+          if (path === join(directory, 'storage-v1', 'sessions') && ++sessionsSyncs === 2) throw new Error('FAIL_FINAL_SYNC');
+        } };
+      },
+    },
+  ];
+
+  for (const current of cases) {
+    await withStorage(async (directory, creator) => {
+      const conversation = await creator.createConversation('/workspace');
+      await creator.archiveConversation(conversation.id);
+      const sessions = join(directory, 'storage-v1', 'sessions');
+      const trash = join(directory, 'storage-v1', '.harbors-trash');
+      const tombstonePath = join(sessions, `${conversation.id}.deleted`);
+      const tombstoneRaw = await readFile(tombstonePath);
+      const archiveBasename = JSON.parse(tombstoneRaw.toString('utf8')).archiveBasename as string;
+      const archivePath = join(trash, archiveBasename);
+      const archiveBefore = { raw: await readFile(archivePath), stat: await lstat(archivePath) };
+      const adapter = new HarborsAdapter(modelService, directory, [], current.operations(directory));
+      try {
+        await assert.rejects(adapter.restoreConversation(conversation.id), /ARCHIVE_OPERATION_FAILED/, current.name);
+      } finally {
+        adapter.stop();
+      }
+      const archiveAfter = { raw: await readFile(archivePath), stat: await lstat(archivePath) };
+      assert.deepEqual(archiveAfter.raw, archiveBefore.raw, current.name);
+      assert.equal(archiveAfter.stat.mtimeMs, archiveBefore.stat.mtimeMs, current.name);
+      assert.deepEqual(await readFile(tombstonePath), tombstoneRaw, current.name);
+      await assert.rejects(lstat(sessionPath(directory, conversation.id)), { code: 'ENOENT' }, current.name);
+    });
+  }
+});
+
+test('补偿 failpoint 返回不一致并保留可诊断磁盘证据', async () => {
+  await withStorage(async (directory, creator) => {
+    const conversation = await creator.createConversation('/workspace');
+    let renameCalls = 0;
+    const adapter = new HarborsAdapter(modelService, directory, [], {
+      async rename(source, destination) {
+        renameCalls += 1;
+        if (renameCalls === 2) throw new Error('FAIL_COMPENSATION_RENAME');
+        await rename(source, destination);
+      },
+      async syncDirectory() { throw new Error('FAIL_COMMIT_SYNC'); },
+    });
+    try {
+      await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_STATE_INCONSISTENT/);
+    } finally {
+      adapter.stop();
+    }
+    await assert.rejects(lstat(sessionPath(directory, conversation.id)), { code: 'ENOENT' });
+    assert.equal((await readdir(join(directory, 'storage-v1', '.harbors-trash'))).some((name) => name.startsWith(`${conversation.id}-`) && name.endsWith('.jsonl')), true);
+    assert.equal((await readdir(join(directory, 'storage-v1', 'sessions'))).includes(`${conversation.id}.deleted`), false);
+  });
+});
+
+test('同 ID orphan archive 在锁内被视为冲突且不触碰活动日志', async () => {
+  await withStorage(async (directory, adapter) => {
+    const conversation = await adapter.createConversation('/workspace');
+    const activePath = sessionPath(directory, conversation.id);
+    const before = { raw: await readFile(activePath), stat: await lstat(activePath) };
+    const trash = join(directory, 'storage-v1', '.harbors-trash');
+    await mkdir(trash, { recursive: true });
+    const orphan = join(trash, `${conversation.id}-0-aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa.jsonl`);
+    await writeFile(orphan, 'orphan evidence', 'utf8');
+
+    await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_CONFLICT/);
+    assert.deepEqual(await readFile(activePath), before.raw);
+    assert.equal((await lstat(activePath)).mtimeMs, before.stat.mtimeMs);
+    assert.equal(await readFile(orphan, 'utf8'), 'orphan evidence');
+    assert.equal((await readdir(join(directory, 'storage-v1', 'sessions'))).includes(`${conversation.id}.deleted`), false);
+  });
+});
+
+test('极端与非 canonical tombstone/header/event 时间只使对应归档 unavailable', async () => {
+  await withStorage(async (directory, adapter) => {
+    const healthy = await adapter.createConversation('/healthy');
+    const extreme = await adapter.createConversation('/extreme');
+    const nonCanonical = await adapter.createConversation('/non-canonical');
+    const nonCanonicalEvent = await adapter.createConversation('/non-canonical-event');
+    await adapter.archiveConversation(healthy.id);
+    await adapter.archiveConversation(extreme.id);
+    await adapter.archiveConversation(nonCanonical.id);
+    await adapter.archiveConversation(nonCanonicalEvent.id);
+    const sessions = join(directory, 'storage-v1', 'sessions');
+    const trash = join(directory, 'storage-v1', '.harbors-trash');
+
+    const extremeTombstone = join(sessions, `${extreme.id}.deleted`);
+    await writeFile(extremeTombstone, JSON.stringify({ id: extreme.id, deletedAt: Number.MAX_SAFE_INTEGER }), 'utf8');
+
+    const nonCanonicalTombstone = join(sessions, `${nonCanonical.id}.deleted`);
+    const nonCanonicalValue = JSON.parse(await readFile(nonCanonicalTombstone, 'utf8'));
+    const archivePath = join(trash, nonCanonicalValue.archiveBasename);
+    const records = (await readFile(archivePath, 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line));
+    records[0].timestamp = records[0].timestamp.replace('Z', '+00:00');
+    records[0].payload.created_at = records[0].payload.created_at.replace('Z', '+00:00');
+    await writeFile(archivePath, `${records.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf8');
+
+    const eventTombstone = JSON.parse(await readFile(join(sessions, `${nonCanonicalEvent.id}.deleted`), 'utf8'));
+    const eventArchivePath = join(trash, eventTombstone.archiveBasename);
+    const eventRecords = (await readFile(eventArchivePath, 'utf8')).trimEnd().split('\n').map((line) => JSON.parse(line));
+    eventRecords[1].timestamp = eventRecords[1].timestamp.replace('Z', '+00:00');
+    await writeFile(eventArchivePath, `${eventRecords.map((record) => JSON.stringify(record)).join('\n')}\n`, 'utf8');
+
+    const listed = await adapter.listArchivedConversations();
+    assert.equal(listed.find((item) => item.id === healthy.id)?.status, 'available');
+    assert.deepEqual(listed.find((item) => item.id === extreme.id)?.errorCode, 'ARCHIVE_TOMBSTONE_INVALID');
+    assert.deepEqual(listed.find((item) => item.id === nonCanonical.id)?.errorCode, 'ARCHIVE_FILE_INVALID');
+    assert.deepEqual(listed.find((item) => item.id === nonCanonicalEvent.id)?.errorCode, 'ARCHIVE_FILE_INVALID');
+    assert.equal(listed.length, 4);
+  });
+});
+
+test('restore 使用事务内已验证摘要，提交后不再调用可能失败的活动 load', async () => {
+  await withStorage(async (directory, creator) => {
+    const conversation = await creator.createConversation('/workspace');
+    await creator.renameConversation(conversation.id, '保留标题');
+    await creator.archiveConversation(conversation.id);
+    const adapter = new HarborsAdapter(modelService, directory);
+    (adapter as any).load = async () => { throw new Error('POST_COMMIT_LOAD_MUST_NOT_RUN'); };
+    try {
+      const restored = await adapter.restoreConversation(conversation.id);
+      assert.equal(restored.id, conversation.id);
+      assert.equal(restored.title, '保留标题');
+      assert.equal(restored.project, '/workspace');
+      assert.equal((await readFile(sessionPath(directory, conversation.id), 'utf8')).length > 0, true);
+    } finally { adapter.stop(); }
+  });
+});
+
+test('补偿 unlink/write/file sync/directory sync 的二次 failpoint 均 fail closed 并保留证据', async () => {
+  await withStorage(async (directory, creator) => {
+    const conversation = await creator.createConversation('/archive-unlink');
+    let sessionsSyncFailed = false;
+    const adapter = new HarborsAdapter(modelService, directory, [], {
+      async syncDirectory(path) {
+        if (!sessionsSyncFailed && path.endsWith('/sessions')) { sessionsSyncFailed = true; throw new Error('FAIL_COMMIT_SYNC'); }
+      },
+      async unlink() { throw new Error('FAIL_COMPENSATION_UNLINK'); },
+    });
+    try { await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_STATE_INCONSISTENT/); } finally { adapter.stop(); }
+    assert.equal((await readdir(join(directory, 'storage-v1', 'sessions'))).includes(`${conversation.id}.deleted`), true);
+    assert.equal((await readdir(join(directory, 'storage-v1', '.harbors-trash'))).some((name) => name.startsWith(`${conversation.id}-`) && name.endsWith('.jsonl')), false);
+    assert.equal((await readFile(sessionPath(directory, conversation.id), 'utf8')).length > 0, true);
+  });
+
+  for (const compensation of ['write', 'file-sync'] as const) {
+    await withStorage(async (directory, creator) => {
+      const conversation = await creator.createConversation(`/restore-${compensation}`);
+      await creator.archiveConversation(conversation.id);
+      const tombstonePath = join(directory, 'storage-v1', 'sessions', `${conversation.id}.deleted`);
+      const tombstoneRaw = await readFile(tombstonePath);
+      let sessionsSyncs = 0;
+      const adapter = new HarborsAdapter(modelService, directory, [], {
+        async syncDirectory(path) {
+          if (path.endsWith('/sessions') && ++sessionsSyncs === 2) throw new Error('FAIL_COMMIT_SYNC');
+        },
+        ...(compensation === 'write' ? { async writeExclusive() { throw new Error('FAIL_COMPENSATION_WRITE'); } } : {}),
+        ...(compensation === 'file-sync' ? { async syncFile() { throw new Error('FAIL_COMPENSATION_FILE_SYNC'); } } : {}),
+      });
+      try { await assert.rejects(adapter.restoreConversation(conversation.id), /ARCHIVE_STATE_INCONSISTENT/); } finally { adapter.stop(); }
+      const tombstoneExists = await lstat(tombstonePath).then(() => true, () => false);
+      assert.equal(tombstoneExists, compensation === 'file-sync');
+      if (tombstoneExists) assert.deepEqual(await readFile(tombstonePath), tombstoneRaw);
+      assert.equal((await readdir(join(directory, 'storage-v1', '.harbors-trash'))).some((name) => name.startsWith(`${conversation.id}-`) && name.endsWith('.jsonl')), true);
+      await assert.rejects(lstat(sessionPath(directory, conversation.id)), { code: 'ENOENT' });
+    });
+  }
+
+  await withStorage(async (directory, creator) => {
+    const conversation = await creator.createConversation('/archive-directory-sync');
+    const adapter = new HarborsAdapter(modelService, directory, [], {
+      async syncDirectory(path) { if (path.endsWith('/.harbors-trash')) throw new Error('FAIL_DIRECTORY_SYNC'); },
+    });
+    try { await assert.rejects(adapter.archiveConversation(conversation.id), /ARCHIVE_STATE_INCONSISTENT/); } finally { adapter.stop(); }
+    assert.equal((await readFile(sessionPath(directory, conversation.id), 'utf8')).length > 0, true);
+  });
+});
+
+test('restore 反向 rename、两目录 sync 与 tombstone 重建后 sync 的补偿 failpoint 保留现场', async () => {
+  const cases: Array<{
+    name: string;
+    operations(): Partial<ArchiveFileOperations>;
+    expectedActive: boolean;
+  }> = [
+    {
+      name: 'reverse rename', expectedActive: true,
+      operations() {
+        let renames = 0; let trashSyncs = 0;
+        return {
+          async rename(source, destination) { if (++renames === 2) throw new Error('FAIL_REVERSE_RENAME'); await rename(source, destination); },
+          async syncDirectory(path) { if (path.endsWith('/.harbors-trash') && ++trashSyncs === 1) throw new Error('FAIL_COMMIT_TRASH_SYNC'); },
+        };
+      },
+    },
+    {
+      name: 'compensation sessions sync', expectedActive: false,
+      operations() {
+        let trashSyncs = 0;
+        return { async syncDirectory(path) {
+          if (path.endsWith('/.harbors-trash') && ++trashSyncs === 1) throw new Error('FAIL_COMMIT_TRASH_SYNC');
+          if (path.endsWith('/sessions')) throw new Error('FAIL_COMPENSATION_SESSIONS_SYNC');
+        } };
+      },
+    },
+    {
+      name: 'compensation trash sync', expectedActive: false,
+      operations() {
+        let sessionsSyncs = 0; let trashSyncs = 0;
+        return { async syncDirectory(path) {
+          if (path.endsWith('/sessions') && ++sessionsSyncs === 1) throw new Error('FAIL_COMMIT_SESSIONS_SYNC');
+          if (path.endsWith('/.harbors-trash') && ++trashSyncs === 2) throw new Error('FAIL_COMPENSATION_TRASH_SYNC');
+        } };
+      },
+    },
+    {
+      name: 'rebuilt tombstone sessions sync', expectedActive: false,
+      operations() {
+        let sessionsSyncs = 0;
+        return { async syncDirectory(path) {
+          if (path.endsWith('/sessions')) {
+            sessionsSyncs += 1;
+            if (sessionsSyncs === 2) throw new Error('FAIL_FINAL_COMMIT_SYNC');
+            if (sessionsSyncs === 4) throw new Error('FAIL_REBUILT_TOMBSTONE_SYNC');
+          }
+        } };
+      },
+    },
+  ];
+
+  for (const current of cases) {
+    await withStorage(async (directory, creator) => {
+      const conversation = await creator.createConversation(`/${current.name}`);
+      await creator.archiveConversation(conversation.id);
+      const sessions = join(directory, 'storage-v1', 'sessions');
+      const trash = join(directory, 'storage-v1', '.harbors-trash');
+      const tombstonePath = join(sessions, `${conversation.id}.deleted`);
+      const tombstoneRaw = await readFile(tombstonePath);
+      const archiveBasename = JSON.parse(tombstoneRaw.toString('utf8')).archiveBasename as string;
+      const archivePath = join(trash, archiveBasename);
+      const archiveRaw = await readFile(archivePath);
+      const adapter = new HarborsAdapter(modelService, directory, [], current.operations());
+      try { await assert.rejects(adapter.restoreConversation(conversation.id), /ARCHIVE_STATE_INCONSISTENT/, current.name); } finally { adapter.stop(); }
+      const activeExists = await lstat(sessionPath(directory, conversation.id)).then(() => true, () => false);
+      assert.equal(activeExists, current.expectedActive, current.name);
+      const archiveExists = await lstat(archivePath).then(() => true, () => false);
+      assert.equal(archiveExists, !current.expectedActive, current.name);
+      if (archiveExists) assert.deepEqual(await readFile(archivePath), archiveRaw, current.name);
+      assert.deepEqual(await readFile(tombstonePath), tombstoneRaw, current.name);
+    });
+  }
 });

@@ -137,6 +137,17 @@ export interface AgentConversation {
   source?: AgentSource;
 }
 
+export interface AgentArchivedConversation {
+  id: string;
+  title: string;
+  project?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  archivedAt: string;
+  status: 'available' | 'unavailable';
+  errorCode?: string;
+}
+
 export interface AgentChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
@@ -211,8 +222,14 @@ export interface AgentAdapter {
   /** 列出所有对话 */
   listConversations(): Promise<AgentConversation[]>;
 
-  /** 删除对话 */
-  deleteConversation(id: string): Promise<void>;
+  /** 可恢复归档摘要；不包含路径、消息或工具结果。 */
+  listArchivedConversations(): Promise<AgentArchivedConversation[]>;
+
+  /** 将活动对话迁移到可恢复归档。 */
+  archiveConversation(id: string): Promise<AgentArchivedConversation>;
+
+  /** 将归档恢复为原 ID 的活动对话。 */
+  restoreConversation(id: string): Promise<AgentConversation>;
 
   /** 重命名对话；返回更新后的会话摘要。不支持的 adapter 可省略。 */
   renameConversation?(id: string, title: string): Promise<AgentConversation>;

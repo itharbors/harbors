@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-26-conversation-archive-settings",
+  "type": "feature",
+  "updatedAt": "2026-08-26T08:35:46.519Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": null
+}

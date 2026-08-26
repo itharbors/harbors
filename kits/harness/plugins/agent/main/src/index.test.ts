@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -146,4 +146,57 @@ test('runtime webSearch 使用结构化 requestId，并在 abort 时取消且忽
     await loadedPlugin.lifecycle.unload();
     await rm(storageDir, { recursive: true, force: true });
   }
+});
+
+test('归档 Main request 返回显式 envelope、白名单摘要并仅成功广播', async () => {
+  assert.ok(loadedPlugin);
+  const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-archive-'));
+  const broadcasts: Array<[string, any]> = [];
+  const runtime = {
+    paths: { data: storageDir }, config: { get() { return undefined; }, set() {}, delete() {} },
+    message: {
+      broadcast(topic: string, value: unknown) { broadcasts.push([topic, value]); },
+      request(_target: string, method: string) {
+        if (method === 'getCatalog') return Promise.resolve({ models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' });
+        throw new Error(`unexpected ${method}`);
+      },
+    },
+  };
+  try {
+    await loadedPlugin.lifecycle.load(runtime);
+    const created = await loadedPlugin.methods.createConversation('harbors', '/workspace');
+    const failed = await loadedPlugin.methods.archiveConversation('invalid');
+    assert.deepEqual(failed, { ok: false, error: { code: 'INVALID_CONVERSATION_ID', message: '对话标识无效' } });
+    assert.equal(broadcasts.some(([, value]) => value?.action === 'archive'), false);
+    const archived = await loadedPlugin.methods.archiveConversation(created.id);
+    assert.equal(archived.ok, true);
+    assert.deepEqual(Object.keys(archived.value).sort(), ['archivedAt', 'createdAt', 'id', 'project', 'source', 'status', 'title', 'updatedAt']);
+    assert.equal('adapterId' in archived.value, false); assert.equal('preview' in archived.value, false);
+    const listed = await loadedPlugin.methods.listArchivedConversations();
+    assert.equal(listed.ok, true); assert.equal(listed.value[0].id, created.id);
+    const restored = await loadedPlugin.methods.restoreConversation(created.id);
+    assert.equal(restored.ok, true); assert.equal(restored.value.id, created.id);
+    assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'archive').length, 1);
+    assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'restore').length, 1);
+  } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
+});
+
+test('归档 Main 仅映射已知业务错误，adapter unavailable 与未知 IO 继续抛异常', async () => {
+  assert.ok(loadedPlugin);
+  const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-archive-unknown-'));
+  const runtime = {
+    paths: { data: storageDir }, config: { get() { return undefined; }, set() {}, delete() {} },
+    message: { broadcast() {}, request(_target: string, method: string) {
+      if (method === 'getCatalog') return Promise.resolve({ models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' });
+      throw new Error(`unexpected ${method}`);
+    } },
+  };
+  try {
+    await loadedPlugin.lifecycle.load(runtime);
+    const sessions = join(storageDir, 'storage-v1', 'sessions');
+    await rm(sessions, { recursive: true, force: true });
+    await writeFile(sessions, 'not a directory', 'utf8');
+    await assert.rejects(loadedPlugin.methods.listArchivedConversations(), /ENOTDIR/);
+  } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
+  await assert.rejects(loadedPlugin.methods.listArchivedConversations(), /adapters are not initialized/);
 });
