@@ -138,12 +138,25 @@ async function refreshConversations(): Promise<Conversation[]> {
   const results = await Promise.allSettled((['harbors'] as const).map(async (source) => ({ source, conversations: await requireAdapter(source).listConversations() })));
   conversations = results.flatMap((result) => {
     if (result.status === 'rejected') { console.error('[agent] failed to list conversations:', result.reason); return []; }
-    return result.value.conversations.map((conversation) => {
+    return result.value.conversations.map((conversation): Conversation => {
       const id = conversationId(result.value.source, conversation.id);
+      if (conversation.availability === 'unavailable') {
+        return {
+          id,
+          adapterId: conversation.id,
+          source: result.value.source,
+          title: '无法读取的对话',
+          availability: 'unavailable' as const,
+          errorCode: 'CONVERSATION_FILE_INVALID' as const,
+        };
+      }
       const local = localById.get(id);
-      return { ...conversation, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), ...(conversation.timeoutMs !== undefined || local?.timeoutMs !== undefined ? { timeoutMs: conversation.timeoutMs ?? local?.timeoutMs } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage, active: activeMessageIds.has(id) };
+      return { ...conversation, availability: 'available' as const, ...(conversation.model || local?.model ? { model: conversation.model || local?.model } : {}), ...(conversation.reasoningEffort || local?.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort || local?.reasoningEffort } : {}), ...(conversation.serviceTier || local?.serviceTier ? { serviceTier: conversation.serviceTier || local?.serviceTier } : {}), ...(conversation.timeoutMs !== undefined || local?.timeoutMs !== undefined ? { timeoutMs: conversation.timeoutMs ?? local?.timeoutMs } : {}), sandboxMode: conversation.sandboxMode || local?.sandboxMode || DEFAULT_SANDBOX_MODE, approvalPolicy: conversation.approvalPolicy || local?.approvalPolicy || DEFAULT_APPROVAL_POLICY, id, adapterId: conversation.id, source: result.value.source, project: conversation.project || 'Harbors', lastMessage: local?.lastMessage, active: activeMessageIds.has(id) };
     });
-  }).sort((left, right) => Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || ''));
+  }).sort((left, right) => {
+    if (left.availability !== right.availability) return left.availability === 'unavailable' ? 1 : -1;
+    return Date.parse(right.updatedAt || right.createdAt || '') - Date.parse(left.updatedAt || left.createdAt || '') || left.id.localeCompare(right.id);
+  });
   return conversations.map((conversation) => ({ ...conversation }));
 }
 
@@ -455,7 +468,9 @@ editor.plugin.define({
       return { path: base, parent: parent === base ? null : parent, home: os.homedir(), directories };
     },
     async listConversations() {
-      return refreshConversations();
+      return (await refreshConversations()).map((conversation) => conversation.availability === 'unavailable'
+        ? { id: conversation.id, source: conversation.source, title: conversation.title, availability: conversation.availability, errorCode: conversation.errorCode }
+        : { ...conversation });
     },
     async getDraftOptions(source: AgentSource) {
       const options = await adapterOptions(source);

@@ -7,6 +7,8 @@ interface ConversationData {
   lastMessage?: string;
   preview?: string;
   source: 'harbors';
+  availability?: 'available' | 'unavailable';
+  errorCode?: string;
   project?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -71,6 +73,8 @@ function normalizeConversation(value: unknown): ConversationData | null {
     ...(typeof record.lastMessage === 'string' ? { lastMessage: record.lastMessage } : {}),
     ...(typeof record.preview === 'string' ? { preview: record.preview } : {}),
     source: 'harbors',
+    ...(record.availability === 'available' || record.availability === 'unavailable' ? { availability: record.availability } : {}),
+    ...(typeof record.errorCode === 'string' ? { errorCode: record.errorCode } : {}),
     ...(typeof record.project === 'string' ? { project: record.project } : {}),
     ...(typeof record.createdAt === 'string' ? { createdAt: record.createdAt } : {}),
     ...(typeof record.updatedAt === 'string' ? { updatedAt: record.updatedAt } : {}),
@@ -331,8 +335,9 @@ export default function App({
             <div className="project-group-heading"><span>{project}</span><span>{projectConversations.length}</span></div>
             {projectConversations.map((conversation) => {
               const isRenaming = renamingId === conversation.id;
+              const unavailable = conversation.availability === 'unavailable';
               return (
-                <article key={conversation.id} className={`conversation-card ${uiState.selectedConversationId === conversation.id ? 'active' : ''}`} role="button" tabIndex={0} onClick={() => { if (!isRenaming) handleSelect(conversation.id); }} onKeyDown={(event) => { if (event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
+                <article key={conversation.id} className={`conversation-card ${uiState.selectedConversationId === conversation.id ? 'active' : ''} ${unavailable ? 'unavailable' : ''}`} role="button" aria-disabled={unavailable || undefined} tabIndex={unavailable ? -1 : 0} onClick={() => { if (!unavailable && !isRenaming) handleSelect(conversation.id); }} onKeyDown={(event) => { if (unavailable || event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
                   <div className="conversation-card-content">
                     <div className="conversation-card-title-row">
                       {isRenaming ? (
@@ -353,18 +358,19 @@ export default function App({
                       ) : (
                         <span className="conversation-card-title">{conversation.title}</span>
                       )}
+                      {unavailable && <span className="conversation-unavailable">数据损坏，暂不可用</span>}
                     </div>
                   </div>
                   {conversation.active && (
                     <span className="conversation-spinner" role="status" aria-label="正在执行" title="正在执行…" />
                   )}
-                  <details className="conversation-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+                  {!unavailable && <details className="conversation-menu" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
                     <summary className="more-btn" aria-label={`更多操作：${conversation.title}`} aria-haspopup="menu" title="更多操作">•••</summary>
                     <div className="conversation-menu-popover" role="menu">
                       <button type="button" role="menuitem" onClick={(event) => startRename(conversation, event)}>重命名</button>
                       <button type="button" role="menuitem" disabled={archivingIds.has(conversation.id)} aria-busy={archivingIds.has(conversation.id)} onClick={(event) => handleArchive(conversation.id, event)}>{archivingIds.has(conversation.id) ? '正在归档…' : '归档'}</button>
                     </div>
-                  </details>
+                  </details>}
                 </article>
               );
             })}

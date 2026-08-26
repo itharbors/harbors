@@ -306,8 +306,21 @@ export class HarborsAdapter implements AgentAdapter {
     await mkdir(this.storageDir, { recursive: true });
     const entries = await readdir(this.storageDir, { withFileTypes: true });
     const ids = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && SESSION_ID_PATTERN.test(entry.name.slice(0, -'.jsonl'.length))).map((entry) => entry.name.slice(0, -'.jsonl'.length));
-    const sessions = await Promise.all(ids.map((id) => this.refreshSession(id)));
-    return sessions.sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)).map(toConversation);
+    const results = await Promise.allSettled(ids.map((id) => this.refreshSession(id)));
+    const conversations = results.map((result, index): AgentConversation => {
+      if (result.status === 'fulfilled') return { ...toConversation(result.value), availability: 'available' };
+      console.error(`[agent] failed to load conversation ${ids[index]}:`, result.reason);
+      return {
+        id: ids[index],
+        title: '无法读取的对话',
+        availability: 'unavailable',
+        errorCode: 'CONVERSATION_FILE_INVALID',
+      };
+    });
+    return conversations.sort((left, right) => {
+      if (left.availability !== right.availability) return left.availability === 'unavailable' ? 1 : -1;
+      return Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || '') || left.id.localeCompare(right.id);
+    });
   }
 
   async listArchivedConversations(): Promise<AgentArchivedConversation[]> {

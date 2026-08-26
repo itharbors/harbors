@@ -125,3 +125,45 @@ test('archive/restore broadcast 幂等收敛，archive 成功 response 无 broad
     }
   }
 });
+
+test('损坏会话显示不可用提示且鼠标键盘和菜单均不可操作', async () => {
+  const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
+  const globalKeys = ['window', 'document', 'HTMLElement'] as const;
+  const previousGlobals = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement });
+  const selectCalls: string[] = [];
+  const context = { message: { async request(plugin: string, name: string, ...args: unknown[]) {
+    if (plugin === 'agent' && name === 'listConversations') return [
+      { id: 'harbors:broken', title: '无法读取的对话', source: 'harbors', availability: 'unavailable', errorCode: 'CONVERSATION_FILE_INVALID' },
+      { id: 'harbors:healthy', title: 'Healthy', source: 'harbors', project: '/workspace' },
+    ];
+    if (plugin === 'conversation' && name === 'getState') return { selectedConversationId: 'harbors:healthy', draft: null, running: false, generation: 'unavailable-projection', revision: 1 };
+    if (plugin === 'conversation' && name === 'select') { selectCalls.push(String(args[0])); return {}; }
+    throw new Error(`unexpected request: ${plugin}.${name}`);
+  } } };
+  try {
+    await definition.mount(context);
+    for (let attempt = 0; attempt < 20 && dom.window.document.querySelectorAll('.conversation-card').length < 2; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    const broken = Array.from(dom.window.document.querySelectorAll<HTMLElement>('.conversation-card')).find((card) => card.textContent?.includes('无法读取的对话'))!;
+    assert.equal(broken.getAttribute('aria-disabled'), 'true');
+    assert.equal(broken.tabIndex, -1);
+    assert.match(broken.textContent || '', /数据损坏，暂不可用/);
+    assert.equal(broken.querySelector('details'), null);
+    broken.click();
+    broken.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(selectCalls, []);
+
+    const healthy = Array.from(dom.window.document.querySelectorAll<HTMLElement>('.conversation-card')).find((card) => card.textContent?.includes('Healthy'))!;
+    healthy.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.deepEqual(selectCalls, ['harbors:healthy']);
+  } finally {
+    definition.unmount(); dom.window.close();
+    for (const key of globalKeys) {
+      const descriptor = previousGlobals.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+});
