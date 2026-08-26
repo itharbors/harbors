@@ -23,6 +23,7 @@ describe('Agent Plugin runtime smoke', () => {
     await writeFile(path.join(workspace, '.agents/skills/demo/SKILL.md'), '---\nname: demo\ndescription: Demo runtime skill\n---\nFollow this demo.\n');
     await mkdir(path.join(workspace, '.agents/skills/oversized'), { recursive: true });
     await writeFile(path.join(workspace, '.agents/skills/oversized/SKILL.md'), `---\nname: oversized\ndescription: Oversized runtime skill\n---\n${'x'.repeat(12_100)}\n`);
+    await writeFile(path.join(workspace, 'ordinary.txt'), 'ordinary workspace content\n');
     const completeRequests: any[] = [];
     const harness = createKitAssemblyHarness({ projectRoot, kitDirectory: path.join(projectRoot, 'kits/harness'), kitName: 'harness', paths: { applicationData } });
     harnesses.push(harness);
@@ -34,6 +35,7 @@ describe('Agent Plugin runtime smoke', () => {
       if (completeRequests.length === 1) return { requestId: (input as any).requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: [
         { id: 'load-demo', name: 'load_skill', arguments: '{"name":"demo"}' },
         { id: 'load-oversized', name: 'load_skill', arguments: '{"name":"oversized"}' },
+        { id: 'read-ordinary', name: 'read', arguments: '{"file_path":"ordinary.txt"}' },
       ] } };
       return { requestId: (input as any).requestId, model: 'test-model', message: { role: 'assistant', content: 'done' } };
     } });
@@ -53,6 +55,8 @@ describe('Agent Plugin runtime smoke', () => {
     expect(completeRequests[0].system).toContain('@@harbors-section agent_core');
     expect(completeRequests[0].system).toContain('Always mention runtime evidence.');
     expect(completeRequests[0].system).toContain('Demo runtime skill');
+    expect(completeRequests[0].tools.map((tool: any) => tool.name)).toContain('load_skill');
+    expect(completeRequests[0].tools.map((tool: any) => tool.name)).not.toContain('list_skills');
     expect(harness.observer.events.some((event) => event.kind === 'request' && event.plugin === 'model-service' && event.name === 'getCatalog')).toBe(true);
     expect(harness.observer.events.some((event) => event.kind === 'request' && event.plugin === 'model-service' && event.name === 'complete')).toBe(true);
     const trace = await Promise.resolve(harness.plugin.call<any[]>('agent', 'getConversationTrace', conversation.id));
@@ -66,13 +70,15 @@ describe('Agent Plugin runtime smoke', () => {
     expect(requestContexts.map((event) => event.data.loadedSkills)).toEqual([[], ['demo']]);
     expect(requestContexts[1].data.promptDigest).toBe(requestContext.data.promptDigest);
     expect(completeRequests[1].system).toBe(completeRequests[0].system);
-    const loadResults = trace.filter((event) => event.type === 'tool/result').map((event) => event.data.item.snapshot);
-    const loadResultsByCallId = new Map(loadResults.map((result) => [result.callId, result]));
-    expect([...loadResultsByCallId.keys()].sort()).toEqual(['load-demo', 'load-oversized']);
-    expect(loadResultsByCallId.get('load-demo')).toMatchObject({ callId: 'load-demo', isError: false });
-    expect(loadResultsByCallId.get('load-demo')?.result).toContain('Follow this demo.');
-    expect(loadResultsByCallId.get('load-oversized')).toMatchObject({ callId: 'load-oversized', isError: true });
-    expect(loadResultsByCallId.get('load-oversized')?.result).toMatch(/12000 UTF-8/);
+    const toolResults = trace.filter((event) => event.type === 'tool/result').map((event) => event.data.item.snapshot);
+    const toolResultsByCallId = new Map(toolResults.map((result) => [result.callId, result]));
+    expect([...toolResultsByCallId.keys()].sort()).toEqual(['load-demo', 'load-oversized', 'read-ordinary']);
+    expect(toolResultsByCallId.get('load-demo')).toMatchObject({ callId: 'load-demo', isError: false });
+    expect(toolResultsByCallId.get('load-demo')?.result).toContain('Follow this demo.');
+    expect(toolResultsByCallId.get('load-oversized')).toMatchObject({ callId: 'load-oversized', isError: true });
+    expect(toolResultsByCallId.get('load-oversized')?.result).toMatch(/12000 UTF-8/);
+    expect(toolResultsByCallId.get('read-ordinary')).toMatchObject({ callId: 'read-ordinary', isError: false });
+    expect(toolResultsByCallId.get('read-ordinary')?.result).toContain('ordinary workspace content');
     expect(trace.find((event) => event.type === 'turn/end')?.data.loadedSkills).toEqual(['demo']);
 
     const database = new Database(path.join(applicationData, 'config.sqlite'));
