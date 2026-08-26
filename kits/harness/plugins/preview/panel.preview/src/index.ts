@@ -1,6 +1,16 @@
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import { webContentMarkup } from './web-view.js';
+import { syncWebContent, webContentMarkup } from './web-view.js';
+import {
+  LONG_PRESS_MS,
+  clampPan,
+  clampViewportHeight,
+  clampViewportWidth,
+  isTapDistance,
+  moveCursor,
+  normalizeViewportState,
+  type ViewportState,
+} from './viewport.js';
 
 import { validatePreviewLink, type PreviewLinkPayload } from './uri.js';
 import {
@@ -34,11 +44,6 @@ interface TabDom {
 
 interface WebPageContent extends PreviewContent {
   kind: 'url';
-  snapshotHtml?: string;
-  snapshotError?: string;
-  mode?: 'direct' | 'snapshot';
-  snapshotLoading?: boolean;
-  directAllowed?: boolean;
 }
 
 export interface ProxySessionResponse {
@@ -90,15 +95,6 @@ export function buildProxyUrl(response: ProxySessionResponse, locationHref = win
   return proxy.href;
 }
 
-export function sanitizeSnapshotHtml(html: string): string {
-  return DOMPurify.sanitize(html, {
-    USE_PROFILES: { html: true },
-    FORBID_TAGS: ['script', 'iframe', 'object', 'embed', 'base', 'meta', 'form', 'img', 'link', 'audio', 'video', 'source', 'track', 'svg', 'math'],
-    FORBID_ATTR: ['srcdoc'],
-    ALLOW_UNKNOWN_PROTOCOLS: false,
-  });
-}
-
 let ctx: PanelContext | null = null;
 let previewState: PreviewState = createPreviewState();
 let nextTabId = 0;
@@ -106,6 +102,7 @@ let nextRequestId = 0;
 let mountGeneration = 0;
 let selectionRevision = 0;
 const sessionDom = new Map<string, Map<string, TabDom>>();
+const resizeObservers = new WeakMap<HTMLElement, ResizeObserver>();
 
 function renderMarkdown(content: string): string {
   try {
@@ -128,9 +125,7 @@ function contentMarkup(content: PreviewContent): string {
   }
 
   if (content.kind === 'url') {
-    const web = content as WebPageContent;
-    const safeHtml = web.snapshotHtml === undefined ? undefined : sanitizeSnapshotHtml(web.snapshotHtml);
-    return webContentMarkup({ ...web, snapshotHtml: safeHtml });
+    return webContentMarkup(content as WebPageContent);
   }
 
   if (content.kind === 'file' && content.language === 'image') {
@@ -153,9 +148,28 @@ function contentMarkup(content: PreviewContent): string {
 
 function updateTabDom(sessionKey: string, tab: PreviewTab, dom: TabDom): void {
   if (dom.content === tab.content) return;
+  const gesture = dom.view.querySelector<HTMLElement>('[data-preview-gesture-layer]');
+  if (gesture && dom.content?.interactionMode === 'virtual' && tab.content.interactionMode !== 'virtual') cleanupGesture(gesture);
+  if (dom.content?.kind === 'url' && tab.content.kind === 'url' && syncWebContent(dom.view, tab.content)) {
+    bindWebViewEvents(dom.view, sessionKey, tab.id);
+    layoutWebView(dom.view, tab.content);
+    dom.content = tab.content;
+    return;
+  }
   dom.view.innerHTML = contentMarkup(tab.content);
   bindWebViewEvents(dom.view, sessionKey, tab.id);
+  if (tab.content.kind === 'url') layoutWebView(dom.view, tab.content);
   dom.content = tab.content;
+}
+
+function cleanupTabDom(view: HTMLElement): void {
+  const gesture = view.querySelector<HTMLElement>('[data-preview-gesture-layer]');
+  if (gesture) cleanupGesture(gesture);
+  const clip = view.querySelector<HTMLElement>('[data-preview-web-clip]');
+  if (clip) {
+    resizeObservers.get(clip)?.disconnect();
+    resizeObservers.delete(clip);
+  }
 }
 
 function closeTab(sessionKey: string, id: string): void {
@@ -191,26 +205,195 @@ function bindNavigationEvents(nav: HTMLElement): void {
 }
 
 function bindWebViewEvents(view: HTMLElement, sessionKey: string, tabId: string): void {
-  view.querySelectorAll<HTMLElement>('[data-preview-web-mode]').forEach((button) => {
+  view.querySelectorAll<HTMLElement>('[data-preview-interaction-mode]').forEach((button) => {
+    if (button.dataset.previewBound) return;
+    button.dataset.previewBound = 'true';
     button.addEventListener('click', (event) => {
       event.stopPropagation();
-      const mode = button.dataset.previewWebMode;
-      if (mode !== 'direct' && mode !== 'snapshot') return;
+      const mode = button.dataset.previewInteractionMode;
+      if (mode !== 'direct' && mode !== 'virtual') return;
       const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
       if (tab?.content.kind !== 'url') return;
+      const current = normalizeViewportState(tab.content);
+      const clip = view.querySelector<HTMLElement>('[data-preview-web-clip]');
+      const cursorPatch: Partial<ViewportState> = {};
+      if (mode === 'virtual' && clip && clip.clientWidth > 0 && clip.clientHeight > 0
+        && (current.cursorX < current.panX || current.cursorX >= current.panX + clip.clientWidth
+          || current.cursorY < current.panY || current.cursorY >= current.panY + clip.clientHeight)) {
+        cursorPatch.cursorX = Math.min(current.viewportWidth - 1, current.panX + Math.floor(clip.clientWidth / 2));
+        cursorPatch.cursorY = Math.min(current.viewportHeight - 1, current.panY + Math.floor(clip.clientHeight / 2));
+      }
       previewState = updatePreviewTab(previewState, sessionKey, tabId, {
-        content: { ...tab.content, mode },
+        content: { ...tab.content, interactionMode: mode, ...cursorPatch },
       });
       renderState();
     });
   });
-  view.querySelectorAll<HTMLElement>('[data-preview-web-retry]').forEach((button) => {
-    button.addEventListener('click', (event) => {
-      event.stopPropagation();
-      const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
-      if (tab?.content.kind === 'url') void loadWebPage(sessionKey, tabId, tab.href, tab.title, tab.originalHref);
+  const bindDimension = (selector: string, dimension: 'viewportWidth' | 'viewportHeight') => {
+    const input = view.querySelector<HTMLInputElement>(selector);
+    if (!input || input.dataset.previewBound) return;
+    input.dataset.previewBound = 'true';
+    input.addEventListener('change', () => {
+      const value = dimension === 'viewportWidth' ? clampViewportWidth(input.valueAsNumber) : clampViewportHeight(input.valueAsNumber);
+      updateWebState(sessionKey, tabId, { [dimension]: value }, view);
     });
+  };
+  bindDimension('[data-preview-viewport-width]', 'viewportWidth');
+  bindDimension('[data-preview-viewport-height]', 'viewportHeight');
+  const gesture = view.querySelector<HTMLElement>('[data-preview-gesture-layer]');
+  if (gesture && !gesture.dataset.previewBound) {
+    gesture.dataset.previewBound = 'true';
+    bindGestureEvents(gesture, view, sessionKey, tabId);
+  }
+  const clip = view.querySelector<HTMLElement>('[data-preview-web-clip]');
+  if (clip && !clip.dataset.previewResizeBound) {
+    clip.dataset.previewResizeBound = 'true';
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(() => {
+        const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
+        if (tab?.content.kind !== 'url') return;
+        const state = normalizeViewportState(tab.content);
+        const clamped = moveCursor(state, 0, 0, clip.clientWidth, clip.clientHeight);
+        if (clamped.panX !== state.panX || clamped.panY !== state.panY) updateWebState(sessionKey, tabId, clamped, view);
+        else layoutWebView(view, tab.content);
+      });
+      observer.observe(clip);
+      resizeObservers.set(clip, observer);
+    }
+  }
+}
+
+interface ActiveGesture {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  lastX: number;
+  lastY: number;
+  moved: boolean;
+  longPressed: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+const activeGestures = new WeakMap<HTMLElement, ActiveGesture>();
+
+function cleanupGesture(layer: HTMLElement): void {
+  const active = activeGestures.get(layer);
+  if (!active) return;
+  if (active.timer) clearTimeout(active.timer);
+  try { layer.releasePointerCapture?.(active.pointerId); } catch { /* pointer capture may already be released */ }
+  activeGestures.delete(layer);
+}
+
+function updateWebState(sessionKey: string, tabId: string, patch: Partial<ViewportState>, view?: HTMLElement): void {
+  const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
+  if (tab?.content.kind !== 'url') return;
+  let normalized = normalizeViewportState({ ...tab.content, ...patch });
+  const clip = view?.querySelector<HTMLElement>('[data-preview-web-clip]');
+  if (clip) {
+    normalized = 'viewportWidth' in patch || 'viewportHeight' in patch
+      ? moveCursor(normalized, 0, 0, clip.clientWidth, clip.clientHeight)
+      : clampPan(normalized, clip.clientWidth, clip.clientHeight);
+  }
+  previewState = updatePreviewTab(previewState, sessionKey, tabId, {
+    content: { ...tab.content, ...normalized },
   });
+  if (previewState.selectedSessionKey === sessionKey) renderState();
+}
+
+function layoutWebView(view: HTMLElement, content: PreviewContent): void {
+  const clip = view.querySelector<HTMLElement>('[data-preview-web-clip]');
+  const canvas = view.querySelector<HTMLElement>('[data-preview-web-canvas]');
+  if (!clip || !canvas) return;
+  const state = clampPan(normalizeViewportState(content), clip.clientWidth, clip.clientHeight);
+  const offsetX = state.viewportWidth < clip.clientWidth ? Math.floor((clip.clientWidth - state.viewportWidth) / 2) : -state.panX;
+  const offsetY = state.viewportHeight < clip.clientHeight ? Math.floor((clip.clientHeight - state.viewportHeight) / 2) : -state.panY;
+  canvas.style.transform = `translate(${offsetX}px, ${offsetY}px)`;
+  const cursor = view.querySelector<HTMLElement>('[data-preview-virtual-cursor]');
+  if (cursor) cursor.style.transform = `translate(${offsetX + state.cursorX}px, ${offsetY + state.cursorY}px)`;
+}
+
+function postPointerCommand(view: HTMLElement, content: PreviewContent, command: 'move' | 'click' | 'contextmenu'): void {
+  const state = normalizeViewportState(content);
+  const frame = view.querySelector<HTMLIFrameElement>('.preview-iframe');
+  if (!frame?.contentWindow || !content.proxySessionId) return;
+  frame.contentWindow.postMessage({
+    version: 1,
+    type: 'harbors.preview.pointer',
+    sessionId: content.proxySessionId,
+    command,
+    x: state.cursorX,
+    y: state.cursorY,
+    viewportWidth: state.viewportWidth,
+    viewportHeight: state.viewportHeight,
+  }, '*');
+}
+
+function bindGestureEvents(layer: HTMLElement, view: HTMLElement, sessionKey: string, tabId: string): void {
+  layer.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape') {
+      event.preventDefault();
+      cleanupGesture(layer);
+      updateWebState(sessionKey, tabId, { interactionMode: 'direct' }, view);
+    }
+  });
+  layer.addEventListener('pointerdown', (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    event.preventDefault();
+    cleanupGesture(layer);
+    const active: ActiveGesture = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      lastX: event.clientX,
+      lastY: event.clientY,
+      moved: false,
+      longPressed: false,
+    };
+    active.timer = setTimeout(() => {
+      const current = activeGestures.get(layer);
+      if (current !== active || current.moved) return;
+      current.longPressed = true;
+      const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
+      if (tab?.content.kind === 'url') postPointerCommand(view, tab.content, 'contextmenu');
+    }, LONG_PRESS_MS);
+    activeGestures.set(layer, active);
+    try { layer.setPointerCapture?.(event.pointerId); } catch { /* unsupported host */ }
+  });
+  layer.addEventListener('pointermove', (event) => {
+    const active = activeGestures.get(layer);
+    if (!active || active.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const totalX = event.clientX - active.startX;
+    const totalY = event.clientY - active.startY;
+    if (!isTapDistance(totalX, totalY)) {
+      active.moved = true;
+      if (active.timer) clearTimeout(active.timer);
+      active.timer = undefined;
+    }
+    const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
+    const clip = view.querySelector<HTMLElement>('[data-preview-web-clip]');
+    if (tab?.content.kind !== 'url' || !clip) return;
+    const next = moveCursor(normalizeViewportState(tab.content), event.clientX - active.lastX, event.clientY - active.lastY, clip.clientWidth, clip.clientHeight);
+    active.lastX = event.clientX;
+    active.lastY = event.clientY;
+    updateWebState(sessionKey, tabId, next);
+    const current = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
+    if (current?.content.kind === 'url') postPointerCommand(view, current.content, 'move');
+  });
+  const finish = (event: PointerEvent, cancelled: boolean) => {
+    const active = activeGestures.get(layer);
+    if (!active || active.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    const tap = isTapDistance(event.clientX - active.startX, event.clientY - active.startY);
+    const shouldClick = !cancelled && !active.longPressed && tap;
+    cleanupGesture(layer);
+    if (shouldClick) {
+      const tab = getPreviewSession(previewState, sessionKey).tabs.find((item) => item.id === tabId);
+      if (tab?.content.kind === 'url') postPointerCommand(view, tab.content, 'click');
+    }
+  };
+  layer.addEventListener('pointerup', (event) => finish(event, false));
+  layer.addEventListener('pointercancel', (event) => finish(event, true));
 }
 
 function ensureRoot(root: HTMLElement): { nav: HTMLElement; body: HTMLElement } {
@@ -254,6 +437,7 @@ function renderState(): void {
     const activeIds = new Set(current.tabs.map((tab) => tab.id));
     for (const [id, item] of entries) {
       if (!activeIds.has(id)) {
+        cleanupTabDom(item.view);
         item.view.remove();
         entries.delete(id);
       }
@@ -271,6 +455,11 @@ function renderState(): void {
       updateTabDom(key, tab, item);
       if (item.view.parentElement !== body) body.appendChild(item.view);
       item.view.hidden = key !== sessionKey || tab.id !== current.activeId;
+      if (!item.view.hidden && tab.content.kind === 'url') layoutWebView(item.view, tab.content);
+      if (item.view.hidden) {
+        const gesture = item.view.querySelector<HTMLElement>('[data-preview-gesture-layer]');
+        if (gesture) cleanupGesture(gesture);
+      }
     }
   }
 
@@ -302,7 +491,7 @@ async function loadWebPage(sessionKey: string, tabId: string, href: string, titl
   const requestId = ++nextRequestId;
   previewState = updatePreviewTab(previewState, sessionKey, tabId, {
     requestId,
-    content: { kind: 'url', url: href, title, mode: 'direct', proxyLoading: true, snapshotLoading: true },
+    content: { kind: 'url', url: href, title, proxyLoading: true, ...normalizeViewportState() },
   });
   if (previewState.selectedSessionKey === sessionKey) renderState();
   let targetProtocol: string;
@@ -329,9 +518,6 @@ async function loadWebPage(sessionKey: string, tabId: string, href: string, titl
   } else {
     void openProxyPage(sessionKey, tabId, requestId, href, originalHref, targetProtocol.slice(0, -1));
   }
-  // Snapshot fetching is deliberately independent: a slow/failed snapshot must
-  // never delay the proxy iframe becoming available.
-  void loadSnapshot(sessionKey, tabId, requestId, href, originalHref);
 }
 
 function updateWebPage(sessionKey: string, tabId: string, requestId: number, update: Partial<PreviewContent>): void {
@@ -350,6 +536,7 @@ async function openProxyPage(sessionKey: string, tabId: string, requestId: numbe
       href,
       originalHref,
       protocol,
+      controlOrigin: new URL(window.location.href).origin,
     }));
     openedSessionId = result.sessionId;
     const proxyUrl = buildProxyUrl(result);
@@ -365,7 +552,6 @@ async function openProxyPage(sessionKey: string, tabId: string, requestId: numbe
       proxyUrl,
       proxyError: undefined,
       proxyLoading: false,
-      mode: 'direct',
     });
   } catch (err) {
     if (openedSessionId) {
@@ -374,28 +560,6 @@ async function openProxyPage(sessionKey: string, tabId: string, requestId: numbe
     updateWebPage(sessionKey, tabId, requestId, {
       proxyLoading: false,
       proxyError: err instanceof Error ? err.message : String(err),
-    });
-  }
-}
-
-async function loadSnapshot(sessionKey: string, tabId: string, requestId: number, href: string, originalHref: string): Promise<void> {
-  try {
-    const result = await ctx?.message.request('preview', 'fetchWebPage', {
-      href,
-      originalHref,
-      protocol: new URL(href).protocol.slice(0, -1),
-    }) as WebPageContent;
-    if (result) {
-      updateWebPage(sessionKey, tabId, requestId, {
-        snapshotHtml: result.snapshotHtml,
-        snapshotError: result.snapshotError,
-        snapshotLoading: false,
-      });
-    }
-  } catch (err) {
-    updateWebPage(sessionKey, tabId, requestId, {
-      snapshotLoading: false,
-      snapshotError: err instanceof Error ? err.message : String(err),
     });
   }
 }
@@ -451,7 +615,7 @@ async function handleLinkClicked(data: unknown): Promise<void> {
     title: fallbackTitle,
     requestId,
     content: isUrl
-      ? { kind: 'url', url: payload.href, title: fallbackTitle, mode: 'direct', proxyLoading: true, snapshotLoading: true }
+      ? { kind: 'url', url: payload.href, title: fallbackTitle, proxyLoading: true, ...normalizeViewportState() }
       : { kind: 'file', path: payload.href, title: fallbackTitle },
   });
   if (!opened.created) return;
@@ -487,6 +651,9 @@ export default {
     ctx = context;
     const root = document.getElementById('panel-root');
     if (root) {
+      for (const entries of sessionDom.values()) {
+        for (const item of entries.values()) cleanupTabDom(item.view);
+      }
       root.innerHTML = '';
       root.dataset.previewEventsBound = '';
       sessionDom.clear();

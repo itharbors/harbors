@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
 
-test('built panel bundle switches a mounted web tab to a snapshot on click', async () => {
+test('built panel bundle keeps the proxy iframe while switching interaction modes', async () => {
   const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://127.0.0.1:49380/panel' });
   Object.assign(globalThis, {
     window: dom.window,
@@ -19,9 +19,6 @@ test('built panel bundle switches a mounted web tab to a snapshot on click', asy
         if (name === 'openProxyPage') {
           return { sessionId: 'built-session', port: 49391, path: '/preview-proxy/built-session/root', expiresAt: Date.now() + 60_000 };
         }
-        if (name === 'fetchWebPage') {
-          return { kind: 'url', url: payload.href, title: '网页', snapshotHtml: '<h1>built snapshot</h1>', directAllowed: false };
-        }
         return true;
       },
     },
@@ -30,17 +27,15 @@ test('built panel bundle switches a mounted web tab to a snapshot on click', asy
   await panel.mount(context);
   await panel.methods.onLinkClicked({ href: 'https://example.test/built', originalHref: 'https://example.test/built', protocol: 'https', text: 'built' });
   await new Promise((resolve) => setTimeout(resolve, 10));
-  const button = document.querySelector<HTMLButtonElement>('[data-preview-web-mode="snapshot"]');
-  assert.ok(button);
-  assert.equal(button.disabled, false);
-  button.click();
-  assert.ok(document.querySelector('iframe[srcdoc]'));
-  assert.equal(document.querySelector<HTMLButtonElement>('[data-preview-web-mode="snapshot"]')?.disabled, true);
-  document.querySelector<HTMLButtonElement>('[data-preview-web-mode="direct"]')?.click();
-  assert.ok(document.querySelector('iframe[src]'));
-  document.querySelector<HTMLButtonElement>('[data-preview-web-retry]')?.click();
-  await new Promise((resolve) => setTimeout(resolve, 10));
-  assert.ok(document.querySelector('iframe[src]'));
+  const frame = document.querySelector('iframe');
+  assert.ok(frame);
+  document.querySelector<HTMLButtonElement>('[data-preview-interaction-mode="virtual"]')?.click();
+  assert.equal(document.querySelector('iframe'), frame);
+  assert.ok(document.querySelector('[data-preview-gesture-layer]'));
+  document.querySelector<HTMLButtonElement>('[data-preview-interaction-mode="direct"]')?.click();
+  assert.equal(document.querySelector('iframe'), frame);
+  assert.equal(document.querySelector('[data-preview-gesture-layer]'), null);
+  assert.equal(requests.includes('fetchWebPage'), false);
   document.querySelector<HTMLButtonElement>('[data-preview-close-id="tab-1"]')?.click();
   assert.equal(document.querySelector('.preview-tab-view'), null);
   assert.ok(requests.includes('closeProxyPage'));

@@ -55,6 +55,7 @@ interface Cookie {
 interface Session {
   id: string;
   target: URL;
+  controlOrigin: string;
   createdAt: number;
   lastUsedAt: number;
   requests: number;
@@ -278,6 +279,146 @@ function rewriteHtml(body: string, base: URL, register: (url: URL) => string): s
   return output;
 }
 
+export function normalizeControlOrigin(value: unknown): string {
+  if (typeof value !== 'string' || value.length === 0 || value.length > 2048) throw new Error('控制来源无效');
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error('控制来源无效');
+  }
+  if (url.protocol !== 'http:' || url.username || url.password || value !== url.origin) throw new Error('控制来源无效');
+  return url.origin;
+}
+
+function scriptValue(value: string): string {
+  return JSON.stringify(value).replace(/[<>&\u2028\u2029]/g, (character) => ({
+    '<': '\\u003c', '>': '\\u003e', '&': '\\u0026', '\u2028': '\\u2028', '\u2029': '\\u2029',
+  })[character] || character);
+}
+
+function pointerBridgeSource(sessionId: string, controlOrigin: string): string {
+  const sessionValue = scriptValue(sessionId);
+  const originValue = scriptValue(controlOrigin);
+  return `(() => {
+  'use strict';
+  const sessionId = ${sessionValue};
+  const controlOrigin = ${originValue};
+  const keys = ['command','sessionId','type','version','viewportHeight','viewportWidth','x','y'];
+  const commands = new Set(['move','click','contextmenu']);
+  const mouse = (target, type, data) => target.dispatchEvent(new MouseEvent(type, {
+    bubbles: true, cancelable: true, composed: true, view: window,
+    clientX: data.x, clientY: data.y,
+    button: type === 'contextmenu' ? 2 : 0,
+    buttons: type === 'mousedown' ? 1 : 0,
+  }));
+  window.addEventListener('message', (event) => {
+    const data = event.data;
+    if (event.source !== parent || event.origin !== controlOrigin || !data || typeof data !== 'object' || Array.isArray(data)) return;
+    if (Object.keys(data).sort().join(',') !== keys.join(',')) return;
+    if (data.version !== 1 || data.type !== 'harbors.preview.pointer' || data.sessionId !== sessionId || !commands.has(data.command)) return;
+    if (![data.x, data.y, data.viewportWidth, data.viewportHeight].every(Number.isInteger)) return;
+    if (data.viewportWidth !== window.innerWidth || data.viewportHeight !== window.innerHeight) return;
+    if (data.x < 0 || data.y < 0 || data.x >= data.viewportWidth || data.y >= data.viewportHeight) return;
+    const target = document.elementFromPoint(data.x, data.y);
+    if (!target) return;
+    if (data.command === 'move') mouse(target, 'mousemove', data);
+    else if (data.command === 'click') {
+      mouse(target, 'mousedown', data);
+      mouse(target, 'mouseup', data);
+      mouse(target, 'click', data);
+    } else mouse(target, 'contextmenu', data);
+  });
+})();`;
+}
+
+export function pointerBridgeScript(sessionId: string, controlOrigin: string, xhtml = false): string {
+  const source = pointerBridgeSource(sessionId, controlOrigin);
+  return xhtml
+    ? `<script type="application/javascript"><![CDATA[\n${source}\n]]></script>`
+    : `<script>${source}</script>`;
+}
+
+const RAW_TEXT_TAGS = new Set(['script', 'style', 'textarea', 'title', 'xmp', 'iframe', 'noembed', 'noframes', 'noscript']);
+
+function tagEnd(html: string, start: number): number {
+  let quote = '';
+  for (let index = start; index < html.length; index += 1) {
+    const character = html[index];
+    if (quote) {
+      if (character === quote) quote = '';
+    } else if (character === '"' || character === "'") quote = character;
+    else if (character === '>') return index;
+  }
+  return -1;
+}
+
+function insertionPoint(html: string, xhtml: boolean): number {
+  let rawText = '';
+  let closingHtml = -1;
+  for (let index = 0; index < html.length;) {
+    const open = html.indexOf('<', index);
+    if (open < 0) break;
+    if (rawText) {
+      const candidate = html.slice(open).match(/^<\s*\/\s*([a-z][a-z0-9:-]*)(?=[\t\n\f\r />])/i);
+      if (!candidate || candidate[1].toLowerCase() !== rawText) {
+        index = open + 1;
+        continue;
+      }
+      const end = tagEnd(html, open + candidate[0].length);
+      if (end < 0) break;
+      rawText = '';
+      index = end + 1;
+      continue;
+    }
+    if (html.startsWith('<!--', open)) {
+      const end = html.indexOf('-->', open + 4);
+      if (end < 0) break;
+      index = end + 3;
+      continue;
+    }
+    if (html.startsWith('<![CDATA[', open)) {
+      const end = html.indexOf(']]>', open + 9);
+      if (end < 0) break;
+      index = end + 3;
+      continue;
+    }
+    if (html.startsWith('<?', open)) {
+      const end = html.indexOf('?>', open + 2);
+      if (end < 0) break;
+      index = end + 2;
+      continue;
+    }
+    if (html.startsWith('<!', open)) {
+      const end = tagEnd(html, open + 2);
+      if (end < 0) break;
+      index = end + 1;
+      continue;
+    }
+    const match = html.slice(open).match(/^<\s*(\/?)\s*([a-z][a-z0-9:-]*)(?=[\t\n\f\r />])/i);
+    if (!match) {
+      index = open + 1;
+      continue;
+    }
+    const end = tagEnd(html, open + match[0].length);
+    if (end < 0) break;
+    const closing = match[1] === '/';
+    const name = match[2].toLowerCase();
+    if (closing && name === 'body') return open;
+    if (closing && name === 'html' && closingHtml < 0) closingHtml = open;
+    if (!xhtml && !closing && name === 'plaintext') return open;
+    if (!xhtml && !closing && RAW_TEXT_TAGS.has(name)) rawText = name;
+    index = end + 1;
+  }
+  return closingHtml >= 0 ? closingHtml : html.length;
+}
+
+export function injectPointerBridge(body: string, sessionId: string, controlOrigin: string, xhtml = false): string {
+  const bridge = pointerBridgeScript(sessionId, controlOrigin, xhtml);
+  const point = insertionPoint(body, xhtml);
+  return `${body.slice(0, point)}${bridge}${body.slice(point)}`;
+}
+
 function rewriteCss(body: string, base: URL, register: (url: URL) => string): string {
   return body.replace(/url\(\s*(['"]?)(.*?)\1\s*\)/gi, (all, quote: string, value: string) => {
     return `url(${quote}${rewriteUrl(value, base, register)}${quote})`;
@@ -292,6 +433,7 @@ function contentType(headers: http.IncomingHttpHeaders): string {
 }
 
 function isHtml(type: string): boolean { return /^text\/html(?:;|$)|^application\/xhtml\+xml(?:;|$)/i.test(type); }
+function isXhtml(type: string): boolean { return /^application\/xhtml\+xml(?:;|$)/i.test(type); }
 function isCss(type: string): boolean { return /^text\/css(?:;|$)/i.test(type); }
 function headerValue(value: string | string[] | undefined): string | undefined { return Array.isArray(value) ? value[0] : value; }
 
@@ -329,12 +471,13 @@ export class ProxyService {
   async openProxyPage(input: unknown): Promise<ProxySessionInfo> {
     if (!input || typeof input !== 'object' || typeof (input as { href?: unknown }).href !== 'string') throw new Error('需要有效的网页地址');
     const target = new URL((input as { href: string }).href);
+    const controlOrigin = normalizeControlOrigin((input as { controlOrigin?: unknown }).controlOrigin);
     await publicAddresses(target, this.lookupImpl);
     this.cleanupExpiredSessions();
     if (this.sessions.size >= this.options.maxSessions) throw new Error('代理会话数量已达上限 / Preview session limit reached');
     const id = randomBytes(32).toString('base64url');
     const session: Session = {
-      id, target, createdAt: this.now(), lastUsedAt: this.now(), requests: 0,
+      id, target, controlOrigin, createdAt: this.now(), lastUsedAt: this.now(), requests: 0,
       cookies: [], resources: new Map(), reverseResources: new Map(),
     };
     session.resources.set('root', target);
@@ -534,7 +677,8 @@ export class ProxyService {
       if (method !== 'HEAD') body = await readBody(response.body, this.options.maxBodyBytes);
       if (isHtml(type)) {
         const text = body.toString('utf8');
-        body = Buffer.from(rewriteHtml(text, target, (url) => this.resourcePath(session, url)));
+        const rewritten = rewriteHtml(text, target, (url) => this.resourcePath(session, url));
+        body = Buffer.from(injectPointerBridge(rewritten, session.id, session.controlOrigin, isXhtml(type)));
       } else if (isCss(type)) {
         body = Buffer.from(rewriteCss(body.toString('utf8'), target, (url) => this.resourcePath(session, url)));
       }
