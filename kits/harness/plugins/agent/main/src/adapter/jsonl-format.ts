@@ -429,7 +429,10 @@ function validateCanonicalSemantics(records: readonly DecodedRecord[]): void {
     validateEventReferences(payload, record.ordinal - 1, priorEventSeqs);
     const itemId = nonEmptyString(payload.item_id);
     const existing = itemId ? itemStates.get(itemId) : undefined;
-    if (existing?.completed) throw new Error('ITEM_AFTER_COMPLETED');
+    // 生命周期校验只针对 response_item（item/started|delta|completed）。
+    // event_msg（如 tool/result、user/message）是内容记录，在 item 完成后
+    // 仍可能因裁剪/压缩被替换写入，不应触发 ITEM_AFTER_COMPLETED。
+    if (record.type === 'response_item' && existing?.completed) throw new Error('ITEM_AFTER_COMPLETED');
     if (record.type === 'response_item') {
       const response = record.payload as ResponseItemPayload;
       const itemKind = normalizeItemKind(response.item_kind);

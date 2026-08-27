@@ -1981,7 +1981,10 @@ function pruneToolResultEvent(event: AgentTraceEvent): { data: Record<string, un
   const nextText = `${points.slice(0, TOOL_RESULT_PRUNE_HEAD_CHARS).join('')}\n...[tool result pruned]\n${points.slice(-TOOL_RESULT_PRUNE_TAIL_CHARS).join('')}`;
   const nextContent = content.map((block, index) => index === textIndex ? { ...block, text: nextText } : block);
   const nextMessage = { ...message, content: blocks.map((block, index) => index === 0 ? { ...block, content: nextContent } : block) };
-  return { data: { ...event.data, message: nextMessage }, charsBefore: text.length, charsAfter: nextText.length };
+  // 裁剪只是对 surface 上已有 tool/result 的替换，不是新的 item 生命周期事件。
+  // 去掉 itemId/item，避免 canonical 校验把它当成已完成 item 的后续记录而报 ITEM_AFTER_COMPLETED。
+  const { itemId, item, ...rest } = event.data;
+  return { data: { ...rest, message: nextMessage }, charsBefore: text.length, charsAfter: nextText.length };
 }
 
 function frameSummary(summary: string): string {
