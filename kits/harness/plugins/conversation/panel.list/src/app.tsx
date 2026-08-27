@@ -130,7 +130,6 @@ export default function App({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const [archivingIds, setArchivingIds] = useState<Set<string>>(() => new Set());
-  const sequenceRef = useRef(0);
   const uiStateArrivalSequenceRef = useRef(0);
   const latestUiArrivalSequenceRef = useRef(-1);
   const latestUiGenerationRef = useRef<string | null>(null);
@@ -139,6 +138,10 @@ export default function App({
 
   useEffect(() => {
     let disposed = false;
+    // 初始列表基线是否就绪；就绪前到达的变更先缓冲，基线建立后再按序重放，
+    // 避免加载期间的广播落在空列表上而丢失（例如交互结束的 active=false）。
+    let listReady = false;
+    const pendingChanges: unknown[] = [];
     const pendingDelays = new Set<() => void>();
     const wait = (delay: number) => new Promise<void>((resolve) => {
       let timer: ReturnType<typeof setTimeout>;
@@ -166,7 +169,11 @@ export default function App({
       return { error: `${label}：${describeError(lastError)}` };
     }
     const applyList = (value: unknown) => {
-      const list = Array.isArray(value) ? (value as ConversationData[]) : [];
+      const baseline = Array.isArray(value) ? (value as ConversationData[]) : [];
+      // 用初始快照建立基线，再重放加载期间缓冲的变更，确保广播不被丢弃。
+      const list = pendingChanges.reduce<ConversationData[]>((current, change) => applyConversationChange(current, change), baseline);
+      pendingChanges.length = 0;
+      listReady = true;
       setConversations(list);
       return list;
     };
@@ -198,17 +205,17 @@ export default function App({
     };
 
     registerSetter('agent.conversation.changed', (data: unknown) => {
-      sequenceRef.current += 1;
-      if (!disposed) setConversations((previous) => applyConversationChange(previous, data));
+      if (disposed) return;
+      // 基线未就绪前缓冲变更，就绪后直接增量应用。
+      if (!listReady) { pendingChanges.push(data); return; }
+      setConversations((previous) => applyConversationChange(previous, data));
     });
     registerSetter('conversation.selected', (data: unknown) => {
-      sequenceRef.current += 1;
       if (!disposed) {
         if (applyUiState(data, ++uiStateArrivalSequenceRef.current)) setError(null);
       }
     });
 
-    const requestId = sequenceRef.current;
     const initialUiRequestSequence = ++uiStateArrivalSequenceRef.current;
     Promise.all([
       requestWithRetry('加载对话列表', () => ctx.message.request('agent', 'listConversations')),
@@ -217,7 +224,8 @@ export default function App({
       if (disposed || listResult.disposed || uiStateResult.disposed) return;
 
       const errors = [listResult.error, uiStateResult.error].filter((value): value is string => Boolean(value));
-      if (requestId === sequenceRef.current && !listResult.error) applyList(listResult.value);
+      // 无论初始列表成功或失败都建立基线并放开缓冲，避免加载失败后广播被永久吞掉。
+      applyList(listResult.error ? [] : listResult.value);
       if (!uiStateResult.error) applyUiState(uiStateResult.value, initialUiRequestSequence);
       if (errors.length > 0) {
         console.error('Failed to load conversations:', errors.join('；'));
@@ -236,8 +244,7 @@ export default function App({
 
   const handleNew = async () => {
     try {
-      // 忽略初始化中的旧选择结果，避免它覆盖刚进入的草稿态。
-      sequenceRef.current += 1;
+      // 草稿态由 conversation.selected 的 generation/revision 去重保护，旧的初始状态不会覆盖它。
       await ctx.message.request('conversation', 'select', null);
       setError(null);
     } catch (err) {

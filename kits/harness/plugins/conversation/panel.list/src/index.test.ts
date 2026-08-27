@@ -167,3 +167,44 @@ test('损坏会话显示不可用提示且鼠标键盘和菜单均不可操作',
     }
   }
 });
+
+test('交互结束后 spinner 消失：加载期间到达广播不应丢弃列表或遗留 active', async () => {
+  const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
+  const globalKeys = ['window', 'document', 'HTMLElement'] as const;
+  const previousGlobals = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement });
+  // listConversations 在初始加载时返回该会话 active=true（正在执行）。
+  const listActive = [{ id: 'harbors:a', title: 'A', source: 'harbors', project: '/workspace', updatedAt: '2026-08-26T00:00:00.000Z', active: true }];
+  let releaseList: (value: unknown) => void = () => {};
+  const listGate = new Promise<unknown>((resolve) => { releaseList = resolve; });
+  const context = { message: {
+    broadcast() {},
+    async request(plugin: string, name: string) {
+      if (plugin === 'agent' && name === 'listConversations') return listGate;
+      if (plugin === 'conversation' && name === 'getState') return { selectedConversationId: 'harbors:a', draft: null, running: true, generation: 'g', revision: 1 };
+      throw new Error(`unexpected request: ${plugin}.${name}`);
+    },
+  } };
+  const spinnerCount = () => dom.window.document.querySelectorAll('.conversation-spinner').length;
+  const titles = () => Array.from(dom.window.document.querySelectorAll('.conversation-card-title')).map((node) => node.textContent);
+  try {
+    await definition.mount(context);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 加载尚未 resolve 时，交互结束的两条广播先到达。
+    definition.methods.onConversationSelected({ selectedConversationId: 'harbors:a', draft: null, running: false, generation: 'g', revision: 2 });
+    definition.methods.onConversationChanged({ action: 'update', id: 'harbors:a', conversation: { ...listActive[0], active: false } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    // 现在列表 resolve（快照仍是 active=true）。
+    releaseList(listActive);
+    for (let attempt = 0; attempt < 30 && titles().length < 1; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
+    assert.deepEqual(titles(), ['A'], '列表不应因加载期间的广播被丢弃');
+    assert.equal(spinnerCount(), 0, '交互结束后 spinner 应消失');
+  } finally {
+    definition.unmount(); dom.window.close();
+    for (const key of globalKeys) {
+      const descriptor = previousGlobals.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+});
