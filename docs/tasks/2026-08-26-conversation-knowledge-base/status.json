@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-26-conversation-knowledge-base",
+  "type": "feature",
+  "updatedAt": "2026-08-26T13:12:35.728Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "pending",
+    "implementation": "pending",
+    "verification": "pending",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}
