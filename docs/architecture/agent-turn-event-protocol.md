@@ -2,7 +2,7 @@
 
 Harbors Harness 的事件以 `conversationId`、`turnId`、`itemId` 和 `requestId` 关联。`conversationId` 标识持久化会话；`turnId` 标识一次 Agent 执行；`itemId` 标识该 turn 内的消息、推理、工具或审批项；`requestId` 只用于一次定向请求及其响应（例如 Model Service 完成请求或权限审批）。
 
-Agent 是事件序列的唯一生产者。事件写入 JSONL 并得到单调递增的 `seq` 后，才通过 `agent.conversation.trace.append` 广播给 Chat。事件顶层和 `data` 同时携带关联键，便于新旧消费者共存；读取旧日志时按 `turn` 推导稳定的 `legacy-turn-<n>`，不回写原始历史内容。
+Agent 是事件序列的唯一生产者。事件提交 `agent-context-store` 并得到 Conversation 内单调递增的 `seq` 后，才通过 `agent.conversation.trace.append` 广播给 Chat。事件顶层和 `data` 同时携带关联键，便于现有消费者读取；Context Store 不再导入旧 JSONL。
 
 ## Item 生命周期
 

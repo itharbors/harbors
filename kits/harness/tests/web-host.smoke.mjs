@@ -45,21 +45,33 @@ try {
   assert.equal(legacyPath.status, 404);
   assert.equal(legacyPath.headers.get('location'), null);
 
-  const legacySessionId = 'legacy-agent-chat-session';
-  const legacySession = await fetch(`${host.baseUrl}/api/session`, {
+  const smokeUserResponse = await fetch(`${host.baseUrl}/api/workbench/user`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ sessionId: legacySessionId, kit: 'agent-chat' }),
+    body: JSON.stringify({ displayName: 'Harness Smoke' }),
   });
-  assert.equal(legacySession.status, 404);
-  assert.deepEqual(await legacySession.json(), {
+  assert.equal(smokeUserResponse.status, 201);
+  const smokeUser = await smokeUserResponse.json();
+  const smokeSessionResponse = await fetch(`${host.baseUrl}/api/workbench/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ userId: smokeUser.userId }),
+  });
+  assert.equal(smokeSessionResponse.status, 201);
+  const smokeSession = await smokeSessionResponse.json();
+
+  const legacySessionInitialization = await fetch(`${host.baseUrl}/api/session`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ sessionId: smokeSession.sessionId, kit: 'agent-chat' }),
+  });
+  assert.equal(legacySessionInitialization.status, 404);
+  assert.deepEqual(await legacySessionInitialization.json(), {
     error: { code: 'KIT_NOT_FOUND', message: 'Kit "agent-chat" not found', details: null },
   });
-  const legacySessionLookup = await fetch(`${host.baseUrl}/api/session/${legacySessionId}`);
-  assert.equal(legacySessionLookup.status, 404);
-  assert.deepEqual(await legacySessionLookup.json(), {
-    error: { code: 'SESSION_NOT_FOUND', message: 'Session not found', details: null },
-  });
+  const existingSessionLookup = await fetch(`${host.baseUrl}/api/session/${smokeSession.sessionId}`);
+  assert.equal(existingSessionLookup.status, 200);
+  assert.equal((await existingSessionLookup.json()).sessionId, smokeSession.sessionId);
 } finally {
   await host.stop();
 }

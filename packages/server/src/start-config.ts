@@ -18,8 +18,6 @@ export interface StartConfig {
   applicationDataDir: string;
   configDataDir: string;
   dbPath: string;
-  legacyDbPaths: readonly string[];
-  legacyPluginDataRoots: readonly string[];
   pluginPathRoots: PluginPathRoots;
   port: number;
   host: string;
@@ -30,15 +28,13 @@ const DEFAULT_HOST = '0.0.0.0';
 const DEFAULT_DB_FILENAME = 'harbors.db';
 
 /**
- * Resolve the Web host startup configuration from the repository and user home.
+ * Resolve the Web host startup configuration from the user home and environment.
  *
  * The unified data root defaults to `~/.harbors`. `HARBORS_DATA_ROOT` moves
  * the database, configuration storage, and all Plugin roots together. The
- * legacy component-specific variables remain higher-priority compatibility
- * overrides.
+ * explicit component-specific variables remain higher-priority overrides.
  */
 export function resolveStartConfig(
-  repositoryRoot: string,
   env: StartEnv = process.env,
   homeDirectory: string = homedir(),
 ): StartConfig {
@@ -49,7 +45,6 @@ export function resolveStartConfig(
     defaultApplicationDataDir,
     'HARBORS_DATA_ROOT',
   );
-  const usesCustomDataRoot = applicationDataDir !== path.resolve(defaultApplicationDataDir);
   const explicitDbPath = env.DB_PATH?.trim();
   const dbPath = explicitDbPath
     ? path.resolve(explicitDbPath)
@@ -66,14 +61,6 @@ export function resolveStartConfig(
     applicationDataDir,
     configDataDir: applicationDataDir,
     dbPath,
-    legacyDbPaths: explicitDbPath || usesCustomDataRoot ? [] : [
-      path.join(repositoryRoot, '.data', DEFAULT_DB_FILENAME),
-      path.join(repositoryRoot, 'packages', 'server', '.editor.db'),
-    ],
-    legacyPluginDataRoots: usesCustomDataRoot ? [] : [
-      path.join(repositoryRoot, '.data', 'plugins'),
-      path.join(repositoryRoot, 'packages', 'server', 'plugins', 'data'),
-    ],
     pluginPathRoots,
     port,
     host,

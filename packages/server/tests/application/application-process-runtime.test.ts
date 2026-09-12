@@ -42,7 +42,6 @@ describe('ApplicationRuntime process integration', () => {
       message: { request: { ping: ['ping'] } },
     });
     first.permissions = ['notifications'];
-    first.legacyDataDirectories = ['legacy-private-name'];
     const second = createPlugin('second', '@scope/second');
     const harness = new SupervisorHarness();
     const events: Array<ReturnType<ApplicationRuntime['getBootstrap']>> = [];
@@ -96,7 +95,6 @@ describe('ApplicationRuntime process integration', () => {
       data: expect.stringMatching(/^\//u),
       cache: expect.stringMatching(/^\//u),
       temp: expect.stringMatching(/^\//u),
-      legacyData: [path.join(root, 'legacy-private-name')],
     });
     expect(firstPayload.runtime.hostMode).toBe('desktop');
     expect(firstPayload.runtime.notificationCapability).toBe(true);
@@ -1066,7 +1064,7 @@ describe('ApplicationRuntime process integration', () => {
       version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
-      'ce-editor': { contribute },
+      'ce-editor': { schemaVersion: 1, contribute },
     }));
     fs.writeFileSync(path.join(pluginPath, 'main', 'dist', 'index.js'),
       `globalThis.__applicationImports.push(${JSON.stringify(name)}); editor.plugin.define({ methods: {} });`);

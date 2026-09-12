@@ -49,9 +49,8 @@ export interface WorkbenchFeedback {
 export function renderKitPicker(
   host: HTMLElement,
   kits: PublicKitCatalogEntry[],
-  input: string | KitPickerOptions,
+  options: KitPickerOptions,
 ): void {
-  const options = typeof input === 'string' ? legacyOptions(input) : input;
   host.replaceChildren(createPickerShell(kits, options));
   if (options.resumeState) host.querySelector<HTMLElement>('#kit-picker-title')?.focus();
 }
@@ -340,7 +339,7 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
           group.classList.remove('kit-user-delete-confirming');
           const inUse = error instanceof Error && error.message === 'in-use';
           const message = inUse
-            ? `无法删除“${user.displayName}”：该用户仍有关联 Session、授权设备或待授权请求。请先删除 Session，并在“授权管理”撤销或拒绝关联设备。`
+            ? `无法删除“${user.displayName}”：该用户仍有关联 Session。请先删除 Session。`
             : `未能删除用户“${user.displayName}”，请重试。`;
           actions.replaceChildren(rename, remove);
           remove.disabled = false;
@@ -548,7 +547,6 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
     });
     const note = element('p', 'kit-flow-hint', '未选择时，继续后会先创建新 Session，再选择工作台。');
     section.append(fieldset, clear, note, continueButton);
-    if (options.context.actor === 'local-admin' && options.context.ownerlessSessions.length) section.append(createOwnerlessArea(user.userId));
     return section;
 
     function createSessionChoice(session: PublicSessionSummary): HTMLElement {
@@ -637,36 +635,6 @@ function createWorkbenchView(kits: PublicKitCatalogEntry[], options: KitPickerOp
     }
   };
 
-  const createOwnerlessArea = (userId: string): HTMLElement => {
-    const details = element('details', 'kit-ownerless-area');
-    const summary = element('summary', '', '恢复旧 Session');
-    const select = element('select', 'workbench-ownerless-select');
-    select.setAttribute('aria-label', '未分配 Session');
-    for (const session of options.context.ownerlessSessions) {
-      const option = element('option', '', `${shortId(session.sessionId)} · ${formatTime(session.lastAccessAt)}`);
-      option.value = session.sessionId;
-      select.append(option);
-    }
-    const claim = element('button', 'kit-secondary-action', '归属给当前用户');
-    claim.type = 'button';
-    claim.addEventListener('click', async () => {
-      const target = options.context.ownerlessSessions.find((session) => session.sessionId === select.value);
-      if (!target || !window.confirm(`将 Session ${shortId(target.sessionId)} 归属给当前用户？此操作不能撤销。`)) return;
-      try {
-        const response = await fetch(`/api/workbench/session/${encodeURIComponent(target.sessionId)}/claim`, {
-          method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ userId }),
-        });
-        if (!response.ok) throw new Error(String(response.status));
-        options.onSessionSelected(target.sessionId);
-        options.onContextChanged({ step: 'session', selectedUserId: userId, selectedSessionId: target.sessionId });
-      } catch {
-        live.textContent = '无法归属 Session，它可能已被处理。';
-      }
-    });
-    details.append(summary, select, claim);
-    return details;
-  };
-
   const createKitStep = (): HTMLElement => {
     const user = selectedUser(options.context, state.selectedUserId);
     if (!user) {
@@ -745,24 +713,6 @@ function createKitItem(kit: PublicKitCatalogEntry, open: () => void): HTMLLIElem
   link.append(symbol, copy, action);
   item.append(link);
   return item;
-}
-
-function legacyOptions(sessionId: string): KitPickerOptions {
-  const now = Date.now();
-  return {
-    context: {
-      actor: 'local-admin',
-      currentUser: null,
-      users: [{ userId: 'legacy-user', displayName: '当前用户', createdAt: now, updatedAt: now }],
-      sessions: [{ sessionId, ownerUserId: 'legacy-user', createdAt: now, lastAccessAt: now }],
-      ownerlessSessions: [],
-    },
-    selectedSessionId: sessionId,
-    onSessionSelected: () => undefined,
-    onSessionCleared: () => undefined,
-    onContextChanged: () => undefined,
-    resumeState: { step: 'kit', selectedUserId: 'legacy-user', selectedSessionId: sessionId },
-  };
 }
 
 function createMasthead(): HTMLElement {

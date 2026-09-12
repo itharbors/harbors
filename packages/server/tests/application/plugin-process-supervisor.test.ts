@@ -1602,7 +1602,7 @@ function initializePayload(): InitializeApplicationPluginPayload {
     entryPath: '/plugins/fixture/index.js',
     pluginName: 'fixture',
     runtime: {
-      paths: { data: '/data', cache: '/cache', temp: '/temp', legacyData: [] },
+      paths: { data: '/data', cache: '/cache', temp: '/temp' },
       hostMode: 'web',
       pluginSnapshot: {
         registered: [{

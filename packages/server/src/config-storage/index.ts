@@ -42,8 +42,6 @@ export interface ConfigStorageResolverOptions {
   roots: Readonly<{
     'application-data': string;
   }>;
-  /** Optional storage migration sources declared by the active Kit manifest. */
-  legacyKitIds?: readonly string[];
 }
 
 /**
@@ -54,7 +52,6 @@ export function resolveConfigLayerBackend(
   kitId: string,
   layer: KitConfigLayerDefinition,
   options: ConfigStorageResolverOptions,
-  legacyKitIds?: readonly string[],
 ): ConfigLayerBackend {
   if (layer.storage === null) return createMemoryConfigLayerBackend();
   if (layer.storage.driver !== 'sqlite' || layer.storage.root !== 'application-data') {
@@ -64,7 +61,6 @@ export function resolveConfigLayerBackend(
     resolveSqlitePath(options.roots['application-data'], layer.storage),
     kitId,
     layer.name,
-    legacyKitIds ?? options.legacyKitIds ?? [],
   );
 }
 
@@ -72,7 +68,6 @@ export function resolveConfigActivation(
   kitId: string,
   declaration: KitConfigDeclaration,
   options: ConfigStorageResolverOptions,
-  legacyKitIds?: readonly string[],
 ): ConfigActivation {
   const layers: RuntimeConfigLayerDefinition[] = [];
   try {
@@ -80,7 +75,7 @@ export function resolveConfigActivation(
       layers.push({
         name: layer.name,
         priority: layer.priority,
-        backend: resolveConfigLayerBackend(kitId, layer, options, legacyKitIds),
+        backend: resolveConfigLayerBackend(kitId, layer, options),
       });
     }
     return { kitId, layers, writeLayer: declaration.writeLayer };
@@ -101,13 +96,11 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
     databasePath: string,
     private readonly kitId: string,
     private readonly layerName: string,
-    legacyKitIds: readonly string[] = [],
   ) {
     const database = new Database(databasePath);
     try {
       database.pragma('journal_mode = WAL');
-      ensureNamespacedSchema(database);
-      migrateLegacyConfigRows(database, kitId, layerName, legacyKitIds);
+      ensureCurrentSchema(database);
       this.statementGet = database.prepare(`
         SELECT value_json
         FROM config_values
@@ -161,70 +154,17 @@ export class SqliteConfigLayerBackend implements ConfigLayerBackend {
   }
 }
 
-/**
- * Copies rows for one persistent layer in declaration order. Each backend has
- * its own transaction, so a failed layer never leaves a partial copy while a
- * previously opened layer may retain its completed migration.
- */
-function migrateLegacyConfigRows(
-  database: Database.Database,
-  kitId: string,
-  layerName: string,
-  legacyKitIds: readonly string[],
-): void {
-  const sources = legacyKitIds.filter((legacyKitId) => legacyKitId !== kitId);
-  if (sources.length === 0) return;
-  const migrate = database.transaction(() => {
-    const copy = database.prepare(`
-      INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json)
-      SELECT ?, plugin_name, layer_name, key, value_json
-      FROM config_values
-      WHERE kit_id = ? AND layer_name = ?
-      ON CONFLICT (kit_id, plugin_name, layer_name, key) DO NOTHING
-    `);
-    for (const legacyKitId of sources) copy.run(kitId, legacyKitId, layerName);
-  });
-  migrate();
-}
-
-function ensureNamespacedSchema(database: Database.Database): void {
-  const existing = database.prepare(`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'config_values'
-  `).get() as { name?: string } | undefined;
-  if (!existing) {
-    database.exec(`
-      CREATE TABLE config_values (
-        kit_id TEXT NOT NULL,
-        plugin_name TEXT NOT NULL,
-        layer_name TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        PRIMARY KEY (kit_id, plugin_name, layer_name, key)
-      )
-    `);
-    return;
-  }
-
-  const columns = database.prepare('PRAGMA table_info(config_values)').all() as Array<{ name?: string }>;
-  if (columns.some((column) => column.name === 'plugin_name')) return;
-
-  // Keep the old table as a legacy copy. Its values are imported into the
-  // empty namespace so existing EditorConfig consumers remain readable.
-  database.transaction(() => {
-    database.exec(`
-      ALTER TABLE config_values RENAME TO config_values_legacy;
-      CREATE TABLE config_values (
-        kit_id TEXT NOT NULL,
-        plugin_name TEXT NOT NULL,
-        layer_name TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        PRIMARY KEY (kit_id, plugin_name, layer_name, key)
-      );
-      INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json)
-        SELECT kit_id, '', layer_name, key, value_json FROM config_values_legacy;
-    `);
-  })();
+function ensureCurrentSchema(database: Database.Database): void {
+  database.exec(`
+    CREATE TABLE IF NOT EXISTS config_values (
+      kit_id TEXT NOT NULL,
+      plugin_name TEXT NOT NULL,
+      layer_name TEXT NOT NULL,
+      key TEXT NOT NULL,
+      value_json TEXT NOT NULL,
+      PRIMARY KEY (kit_id, plugin_name, layer_name, key)
+    )
+  `);
 }
 
 function resolveSqlitePath(applicationDataRoot: string, storage: Exclude<ConfigStorage, null>): string {

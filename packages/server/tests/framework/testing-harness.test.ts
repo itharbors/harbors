@@ -23,7 +23,7 @@ function createPlugin(code: string, name = 'harness-plugin'): string {
     version: '1.0.0',
     type: 'module',
     main: './main/dist/index.js',
-    'ce-editor': {},
+    'ce-editor': { schemaVersion: 1 },
   }));
   fs.writeFileSync(path.join(pluginPath, 'main', 'dist', 'index.js'), code);
   disposables.push(() => fs.rmSync(root, { recursive: true, force: true }));

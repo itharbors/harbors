@@ -7,7 +7,7 @@ import { createKitAssemblyHarness, type KitAssemblyHarness } from '@itharbors/se
 
 const kitDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(kitDirectory, '../..');
-const pluginNames = ['conversation', 'chat', 'model-service', 'agent', 'plugin', 'preview', 'debug', 'settings', 'mermaid'];
+const pluginNames = ['conversation', 'chat', 'model-service', 'agent-context-store', 'agent', 'plugin', 'preview', 'debug', 'settings', 'mermaid'];
 const layout = JSON.parse(fs.readFileSync(path.join(kitDirectory, 'layout.json'), 'utf8')) as { windows?: Array<{ id?: string }> };
 
 function createCredentialVault() {
@@ -181,6 +181,11 @@ describe('Harbors Harness Kit real assembly', () => {
     expect(trace.map((event) => event.seq)).toEqual([...trace].map((event) => event.seq).sort((a, b) => a - b));
     expect(trace.filter((event) => event.type === 'item/started').length).toBeGreaterThan(0);
     expect(trace.some((event) => event.type === 'item/completed' && event.data.item?.phase === 'completed')).toBe(true);
+    const context = trace.find((event) => event.type === 'request/context')!;
+    expect(context.data.builderVersion).toBe('candidate-v1');
+    expect(context.data.planId).toEqual(expect.any(String));
+    expect(context.data.shadowBuilderVersion).toBeUndefined();
+    expect(context.data.shadowPlanId).toBeUndefined();
   });
 
   it('routes approval asked/resolved through the real Agent and persists a rejected tool result', async () => {
@@ -317,7 +322,9 @@ describe('Harbors Harness Kit real assembly', () => {
     const restored = await runtime.messages.requestFrom('conversation', 'conversation', 'restoreConversation', first.id) as any;
     expect(restored).toMatchObject({ ok: true, value: { id: first.id } });
     expect(await runtime.messages.request('conversation', 'getState')).toMatchObject({ selectedConversationId: second.id });
-    expect(await runtime.messages.request('agent', 'getConversationTrace', first.id)).toEqual(traceBefore);
+    const restoredTrace = await runtime.messages.request('agent', 'getConversationTrace', first.id) as Array<Record<string, any>>;
+    expect(restoredTrace.slice(0, (traceBefore as Array<unknown>).length)).toEqual(traceBefore);
+    expect(restoredTrace.slice(-2).map((event) => event.type)).toEqual(['conversation/archive', 'conversation/restore']);
     expect(await runtime.messages.requestFrom('conversation', 'conversation', 'archiveConversation', first.id)).toMatchObject({ ok: true, value: { id: first.id } });
     expect(await runtime.messages.requestFrom('conversation', 'conversation', 'deleteArchivedConversation', first.id)).toEqual({ ok: true, value: { id: first.id } });
     expect(await runtime.messages.requestFrom('conversation', 'conversation', 'listArchivedConversations')).toEqual({ ok: true, value: [] });
@@ -351,67 +358,44 @@ describe('Harbors Harness Kit real assembly', () => {
       () => runtime.messages.request('agent', 'getConversationTrace', conversation.id) as Promise<Array<{ type: string }>>,
       (trace) => trace.some((event) => event.type === 'item/delta'),
     );
-    const localId = conversation.id.slice('harbors:'.length);
-    const activeBefore = snapshotTree(applicationData).find((entry) => entry.path.endsWith(`/sessions/${localId}.jsonl`));
+    const traceWhileActive = await runtime.messages.request('agent', 'getConversationTrace', conversation.id);
     const stateBefore = await waitFor(
       () => runtime.messages.request('conversation', 'getState') as Promise<{ running: boolean }>,
       (value) => value.running,
     );
     const archiveBroadcastsBefore = runtime.observer.events.filter((event) => event.kind === 'broadcast' && event.topic === 'agent.conversation.changed' && (event.args[0] as any)?.action === 'archive').length;
     await expect(runtime.messages.requestFrom('conversation', 'conversation', 'archiveConversation', conversation.id)).resolves.toMatchObject({ ok: false, error: { code: 'CONVERSATION_ACTIVE' } });
-    expect(snapshotTree(applicationData).find((entry) => entry.path.endsWith(`/sessions/${localId}.jsonl`))).toEqual(activeBefore);
-    expect(snapshotTree(applicationData).some((entry) => entry.path.endsWith(`/sessions/${localId}.deleted`) || entry.path.includes(`/.harbors-trash/${localId}-`))).toBe(false);
+    expect(await runtime.messages.request('agent', 'getConversationTrace', conversation.id)).toEqual(traceWhileActive);
     expect(await runtime.messages.request('conversation', 'getState')).toEqual(stateBefore);
     expect(runtime.observer.events.filter((event) => event.kind === 'broadcast' && event.topic === 'agent.conversation.changed' && (event.args[0] as any)?.action === 'archive')).toHaveLength(archiveBroadcastsBefore);
 
     expect(await runtime.messages.request('agent', 'stopConversation', conversation.id)).toBe(true);
     await expect(sending).rejects.toMatchObject({ code: 'MODEL_SERVICE_CANCELLED' }); pending.close();
     const traceBefore = await runtime.messages.request('agent', 'getConversationTrace', conversation.id);
-    const activeBytesBefore = snapshotTree(applicationData).find((entry) => entry.path.endsWith(`/sessions/${localId}.jsonl`))?.bytes;
-    expect(activeBytesBefore).toBeDefined();
     await expect(runtime.messages.requestFrom('conversation', 'conversation', 'archiveConversation', conversation.id)).resolves.toMatchObject({ ok: true, value: { id: conversation.id } });
     await runtime.dispose();
 
     const restarted = createAssembly('assembly-archive-restart', applicationData); harnesses.push(restarted); await restarted.kit.load();
     await expect(restarted.messages.requestFrom('conversation', 'conversation', 'listArchivedConversations')).resolves.toMatchObject({ ok: true, value: [expect.objectContaining({ id: conversation.id })] });
     await expect(restarted.messages.requestFrom('conversation', 'conversation', 'restoreConversation', conversation.id)).resolves.toMatchObject({ ok: true, value: { id: conversation.id } });
-    const restoredBytes = snapshotTree(applicationData).find((entry) => entry.path.endsWith(`/sessions/${localId}.jsonl`))?.bytes;
-    expect(restoredBytes).toBe(activeBytesBefore);
     const traceAfter = await restarted.messages.request('agent', 'getConversationTrace', conversation.id) as Array<Record<string, any>>;
-    expect(traceAfter).toHaveLength((traceBefore as Array<unknown>).length);
-    expect(traceAfter.map((event) => [event.type, event.seq, event.data])).toEqual((traceBefore as Array<Record<string, any>>).map((event) => [event.type, event.seq, event.data]));
+    expect(traceAfter.slice(0, (traceBefore as Array<unknown>).length).map((event) => [event.type, event.seq, event.data])).toEqual((traceBefore as Array<Record<string, any>>).map((event) => [event.type, event.seq, event.data]));
+    expect(traceAfter.slice(-2).map((event) => event.type)).toEqual(['conversation/archive', 'conversation/restore']);
   });
 
-  it('fails closed for damaged tombstone/archive restore and preserves bytes, mtime, state, and broadcasts', async () => {
+  it('fails closed for a damaged SQLite store and does not replace it with an empty database', async () => {
     const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-assembly-archive-damaged-'));
     temporaryDirectories.push(applicationData);
     const runtime = createAssembly('assembly-archive-damaged', applicationData); harnesses.push(runtime); await runtime.kit.load();
-    const tombstoneConversation = await runtime.messages.request('agent', 'createConversation', 'harbors', projectRoot) as { id: string };
-    const archiveConversation = await runtime.messages.request('agent', 'createConversation', 'harbors', projectRoot) as { id: string };
-    await runtime.messages.requestFrom('conversation', 'conversation', 'archiveConversation', tombstoneConversation.id);
-    await runtime.messages.requestFrom('conversation', 'conversation', 'archiveConversation', archiveConversation.id);
-
-    const tombstoneLocalId = tombstoneConversation.id.slice('harbors:'.length);
-    const archiveLocalId = archiveConversation.id.slice('harbors:'.length);
-    const tree = snapshotTree(applicationData);
-    const tombstoneRelative = tree.find((entry) => entry.path.endsWith(`/sessions/${tombstoneLocalId}.deleted`))!.path;
-    const archiveTombstoneRelative = tree.find((entry) => entry.path.endsWith(`/sessions/${archiveLocalId}.deleted`))!.path;
-    const archiveTombstonePath = path.join(applicationData, archiveTombstoneRelative);
-    const archiveBasename = JSON.parse(fs.readFileSync(archiveTombstonePath, 'utf8')).archiveBasename as string;
-    const archiveRelative = tree.find((entry) => entry.path.endsWith(`/.harbors-trash/${archiveBasename}`))!.path;
-    fs.writeFileSync(path.join(applicationData, tombstoneRelative), '{bad tombstone', 'utf8');
-    fs.writeFileSync(path.join(applicationData, archiveRelative), 'bad archive\n', 'utf8');
-
-    const evidencePaths = [tombstoneRelative, archiveTombstoneRelative, archiveRelative];
-    const evidenceBefore = snapshotTree(applicationData).filter((entry) => evidencePaths.includes(entry.path));
-    const stateBefore = await runtime.messages.request('conversation', 'getState');
-    const successfulBroadcastsBefore = runtime.observer.events.filter((event) => event.kind === 'broadcast' && event.topic === 'agent.conversation.changed' && (event.args[0] as any)?.action === 'restore').length;
-    await expect(runtime.messages.requestFrom('conversation', 'conversation', 'restoreConversation', tombstoneConversation.id)).resolves.toMatchObject({ ok: false, error: { code: 'ARCHIVE_TOMBSTONE_INVALID' } });
-    await expect(runtime.messages.requestFrom('conversation', 'conversation', 'restoreConversation', archiveConversation.id)).resolves.toMatchObject({ ok: false, error: { code: 'ARCHIVE_FILE_INVALID' } });
-    expect(snapshotTree(applicationData).filter((entry) => evidencePaths.includes(entry.path))).toEqual(evidenceBefore);
-    expect(await runtime.messages.request('conversation', 'getState')).toEqual(stateBefore);
-    expect(runtime.observer.events.filter((event) => event.kind === 'broadcast' && event.topic === 'agent.conversation.changed' && (event.args[0] as any)?.action === 'restore')).toHaveLength(successfulBroadcastsBefore);
-    expect(snapshotTree(applicationData).some((entry) => entry.path.endsWith(`/sessions/${tombstoneLocalId}.jsonl`) || entry.path.endsWith(`/sessions/${archiveLocalId}.jsonl`))).toBe(false);
+    await runtime.messages.request('agent', 'createConversation', 'harbors', projectRoot);
+    await runtime.dispose();
+    const sqlite = snapshotTree(applicationData).find((entry) => entry.path.endsWith('/context.sqlite'))!;
+    const sqlitePath = path.join(applicationData, sqlite.path);
+    fs.writeFileSync(sqlitePath, 'damaged sqlite evidence', 'utf8');
+    const damaged = fs.readFileSync(sqlitePath);
+    const restarted = createAssembly('assembly-archive-damaged', applicationData); harnesses.push(restarted);
+    await expect(restarted.kit.load()).rejects.toThrow();
+    expect(fs.readFileSync(sqlitePath)).toEqual(damaged);
   });
 
   it('rejects non-Conversation callers for every Agent archive route without side effects', async () => {
@@ -424,15 +408,15 @@ describe('Harbors Harness Kit real assembly', () => {
     const archived = await runtime.messages.request('conversation', 'archiveConversation', created.id) as { ok: boolean; value?: { id: string } };
     const archivedId = archived.ok ? archived.value!.id : created.id;
     for (const [route, args] of [['listArchivedConversations', []], ['archiveConversation', [created.id]], ['restoreConversation', [archivedId]], ['deleteArchivedConversation', [archivedId]]] as const) {
-      const beforeDisk = snapshotTree(applicationData);
       const beforeList = await runtime.messages.request('agent', 'listConversations');
       const beforeState = await runtime.messages.request('conversation', 'getState');
+      const beforeTrace = await runtime.messages.request('agent', 'getConversationTrace', archivedId).catch(() => null);
       const beforeBroadcasts = runtime.observer.events.filter((event) => event.kind === 'broadcast').length;
       await expect(runtime.messages.request('agent', route, ...args)).rejects.toThrow(/not permitted/);
       for (const caller of ['settings', 'agent', 'chat']) await expect(runtime.messages.requestFrom(caller, 'agent', route, ...args)).rejects.toThrow(/not permitted/);
-      expect(snapshotTree(applicationData)).toEqual(beforeDisk);
       expect(await runtime.messages.request('agent', 'listConversations')).toEqual(beforeList);
       expect(await runtime.messages.request('conversation', 'getState')).toEqual(beforeState);
+      expect(await runtime.messages.request('agent', 'getConversationTrace', archivedId).catch(() => null)).toEqual(beforeTrace);
       expect(runtime.observer.events.filter((event) => event.kind === 'broadcast')).toHaveLength(beforeBroadcasts);
     }
     await expect(runtime.messages.request('conversation', 'deleteArchivedConversation', archivedId)).rejects.toThrow(/not permitted/);

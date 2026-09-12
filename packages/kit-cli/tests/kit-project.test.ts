@@ -87,7 +87,7 @@ describe('validateKit', () => {
     await writeFile(path.join(extraDirectory, 'package.json'), JSON.stringify({
       name: '@example/extra',
       main: './main/dist/index.js',
-      'ce-editor': {},
+      'ce-editor': { schemaVersion: 1 },
     }));
 
     await expect(validateKit(directory)).rejects.toThrow(/undeclared plugin/i);

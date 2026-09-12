@@ -13,6 +13,7 @@ const harnesses: KitAssemblyHarness[] = [];
 
 afterEach(async () => {
   while (harnesses.length) await harnesses.pop()!.dispose();
+  delete process.env.HARBORS_AGENT_CONTEXT_MODE;
 });
 
 describe('Agent Plugin runtime smoke', () => {
@@ -63,6 +64,8 @@ describe('Agent Plugin runtime smoke', () => {
     const requestContexts = trace.filter((event) => event.type === 'request/context');
     expect(requestContexts).toHaveLength(2);
     const requestContext = requestContexts[0];
+    expect(requestContexts.every((event) => typeof event.data.planId === 'string' && event.data.builderVersion === 'candidate-v1')).toBe(true);
+    expect(requestContexts.every((event) => /^[0-9a-f]{64}$/.test(event.data.historyDigest))).toBe(true);
     expect(requestContext.data.promptVersion).toBe('harbors-agent-core/v1');
     expect(requestContext.data.promptDigest).toMatch(/^sha256:[0-9a-f]{64}$/);
     expect(JSON.stringify(requestContext.data.instructionSources)).not.toContain('Always mention runtime evidence.');
@@ -70,6 +73,9 @@ describe('Agent Plugin runtime smoke', () => {
     expect(requestContexts.map((event) => event.data.loadedSkills)).toEqual([[], ['demo']]);
     expect(requestContexts[1].data.promptDigest).toBe(requestContext.data.promptDigest);
     expect(completeRequests[1].system).toBe(completeRequests[0].system);
+    const secondMessages = completeRequests[1].messages as Array<{ role: string; toolCallId?: string; toolCalls?: unknown[] }>;
+    expect(secondMessages.some((message) => message.role === 'assistant' && Array.isArray(message.toolCalls) && message.toolCalls.length === 3)).toBe(true);
+    expect(secondMessages.filter((message) => message.role === 'tool').map((message) => message.toolCallId).sort()).toEqual(['load-demo', 'load-oversized', 'read-ordinary']);
     const toolResults = trace.filter((event) => event.type === 'tool/result').map((event) => event.data.item.snapshot);
     const toolResultsByCallId = new Map(toolResults.map((result) => [result.callId, result]));
     expect([...toolResultsByCallId.keys()].sort()).toEqual(['load-demo', 'load-oversized', 'read-ordinary']);

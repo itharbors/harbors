@@ -6,7 +6,7 @@ export interface SessionRow {
   savedFileList: string;
   createdAt: number;
   lastAccessAt: number;
-  ownerUserId?: string | null;
+  ownerUserId: string;
 }
 
 export class SessionStore {
@@ -15,7 +15,6 @@ export class SessionStore {
   private stmtUpsert: Database.Statement;
   private stmtDelete: Database.Statement;
   private stmtList: Database.Statement;
-  private stmtClaim: Database.Statement;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -26,15 +25,10 @@ export class SessionStore {
         workspacePath TEXT NOT NULL DEFAULT '',
         savedFileList TEXT NOT NULL DEFAULT '[]',
         createdAt INTEGER NOT NULL DEFAULT 0,
-        lastAccessAt INTEGER NOT NULL DEFAULT 0
+        lastAccessAt INTEGER NOT NULL DEFAULT 0,
+        ownerUserId TEXT NOT NULL
       )
     `);
-    this.db.transaction(() => {
-      const columns = this.db.pragma('table_info(sessions)') as Array<{ name: string }>;
-      if (!columns.some((column) => column.name === 'ownerUserId')) {
-        this.db.exec('ALTER TABLE sessions ADD COLUMN ownerUserId TEXT');
-      }
-    })();
     this.stmtGet = this.db.prepare('SELECT * FROM sessions WHERE sessionId = ?');
     this.stmtUpsert = this.db.prepare(`
       INSERT INTO sessions (sessionId, workspacePath, savedFileList, createdAt, lastAccessAt, ownerUserId)
@@ -43,13 +37,10 @@ export class SessionStore {
         workspacePath = excluded.workspacePath,
         savedFileList = excluded.savedFileList,
         lastAccessAt = excluded.lastAccessAt,
-        ownerUserId = COALESCE(sessions.ownerUserId, excluded.ownerUserId)
+        ownerUserId = sessions.ownerUserId
     `);
     this.stmtDelete = this.db.prepare('DELETE FROM sessions WHERE sessionId = ?');
     this.stmtList = this.db.prepare('SELECT * FROM sessions ORDER BY lastAccessAt DESC');
-    this.stmtClaim = this.db.prepare(
-      'UPDATE sessions SET ownerUserId = ? WHERE sessionId = ? AND ownerUserId IS NULL',
-    );
   }
 
   get(sessionId: string): SessionRow | undefined {
@@ -57,23 +48,16 @@ export class SessionStore {
   }
 
   upsert(row: SessionRow): void {
-    this.stmtUpsert.run({ ...row, ownerUserId: row.ownerUserId ?? null });
+    this.stmtUpsert.run(row);
   }
 
   delete(sessionId: string): void {
     this.stmtDelete.run(sessionId);
   }
 
-  list(ownerUserId?: string | null): SessionRow[] {
+  list(ownerUserId?: string): SessionRow[] {
     if (ownerUserId === undefined) return this.stmtList.all() as SessionRow[];
-    if (ownerUserId === null) {
-      return this.db.prepare('SELECT * FROM sessions WHERE ownerUserId IS NULL ORDER BY lastAccessAt DESC').all() as SessionRow[];
-    }
     return this.db.prepare('SELECT * FROM sessions WHERE ownerUserId = ? ORDER BY lastAccessAt DESC').all(ownerUserId) as SessionRow[];
-  }
-
-  claim(sessionId: string, ownerUserId: string): boolean {
-    return this.stmtClaim.run(ownerUserId, sessionId).changes > 0;
   }
 
   close(): void {

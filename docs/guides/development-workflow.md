@@ -395,10 +395,9 @@ pnpm run clean
 - coverage、Vite/Vitest cache 和 `*.tsbuildinfo`。
 
 Server 开发与正式入口默认共用 `~/.harbors` 完整数据根，其中包含 `harbors.db`、`config.sqlite` 和
-`plugins/{data,cache,temp}`，不再在 Server workspace 生成运行数据。历史 `.data/harbors.db`、
-`packages/server/.editor.db` 和旧 Plugin data 会在启动前非破坏地导入，源文件不会由 clean 或迁移
-自动删除。`--data-root` 优先于 `HARBORS_DATA_ROOT`，非默认根不导入这些 legacy 数据；`DB_PATH` 与 Plugin
-细分绝对路径变量仅作更高优先级兼容覆盖。一个 data root 同时只应由一个 Host 使用，当前不以生命周期锁强制。
+`plugins/{data,cache,temp}`，不再在 Server workspace 生成运行数据，也不扫描或导入项目内旧数据源。
+`--data-root` 优先于 `HARBORS_DATA_ROOT`；`DB_PATH` 与 Plugin 细分绝对路径变量仅作更高优先级底层覆盖。
+一个 data root 同时只应由一个 Host 使用，当前不以生命周期锁强制。
 Credential profile 元数据随数据库切换，但真实 secret 仍位于 OS Keychain。
 
 ## 端口冲突

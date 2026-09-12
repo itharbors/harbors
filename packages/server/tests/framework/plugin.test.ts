@@ -25,6 +25,7 @@ function writePlugin(root: string, name: string, code = 'editor.plugin.define({ 
     version: '0.0.1',
     main: './dist/index.js',
     'ce-editor': {
+      schemaVersion: 1,
       contribute: {
         panel: {
           main: {
@@ -65,7 +66,6 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
         cache: path.join(root, 'plugins', 'cache'),
         temp: path.join(root, 'plugins', 'temp'),
       },
-      legacyDataDirectories: [],
     },
   };
 }
@@ -108,6 +108,7 @@ describe('plugin build discovery', () => {
         version: '0.0.1',
         main: './main/dist/index.js',
         'ce-editor': {
+          schemaVersion: 1,
           contribute: {
             panel: {
               preview: './panel.preview/dist/index.html',
@@ -137,6 +138,7 @@ describe('plugin build discovery', () => {
         version: '0.0.1',
         main: './main/dist/index.js',
         'ce-editor': {
+          schemaVersion: 1,
           contribute: {
             panel: {
               preview: {
@@ -175,6 +177,7 @@ describe('plugin build discovery', () => {
         version: '0.0.1',
         main: './main/dist/index.js',
         'ce-editor': {
+          schemaVersion: 1,
           contribute: {
             panel: {
               preview: {
@@ -259,7 +262,7 @@ describe('PluginModule', () => {
       name: '@scope/declared-main',
         version: '0.0.1',
       main: './main/dist/index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.writeFileSync(path.join(dir, 'main', 'dist', 'index.js'), 'editor.plugin.define({ methods: { ping: () => "pong" } });');
 
@@ -287,6 +290,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: { debug: { entry: './panel/dist/index.html' } },
           message: {
@@ -330,6 +334,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             preview: './panel.preview/dist/index.html',
@@ -352,6 +357,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             preview: {
@@ -385,6 +391,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './src/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {},
       },
     }));
@@ -404,6 +411,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: '../outside/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {},
       },
     }));
@@ -420,6 +428,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {},
       },
     }));
@@ -442,6 +451,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             preview: {
@@ -465,6 +475,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             preview: {
@@ -487,6 +498,7 @@ describe('PluginModule', () => {
         version: '0.0.1',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             preview: {
@@ -509,7 +521,7 @@ describe('PluginModule', () => {
       name: '@scope/define-plugin',
         version: '0.0.1',
       main: './dist/index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'dist', 'index.js'), `
@@ -542,7 +554,7 @@ describe('PluginModule', () => {
       name: '@scope/missing-define',
         version: '0.0.1',
       main: './dist/index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.mkdirSync(path.join(dir, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(dir, 'dist', 'index.js'), 'export const nope = 1;');

@@ -26,16 +26,21 @@ function temporaryDirectory(prefix: string): string {
   return directory;
 }
 
-function createPlugin(root: string, code: string): string {
-  const directory = path.join(root, 'example-plugin');
+function createPlugin(
+  root: string,
+  code: string,
+  options: { directory?: string; name?: string; requires?: readonly string[] } = {},
+): string {
+  const directory = path.join(root, options.directory ?? 'example-plugin');
   fs.mkdirSync(path.join(directory, 'main', 'dist'), { recursive: true });
   fs.writeFileSync(path.join(directory, 'package.json'), JSON.stringify({
-    name: '@example/plugin',
+    name: options.name ?? '@example/plugin',
     version: '1.0.0',
     type: 'module',
     main: './main/dist/index.js',
     'ce-editor': {
       schemaVersion: 1,
+      ...(options.requires ? { requires: { plugins: options.requires } } : {}),
       contribute: {
         message: { request: { greet: ['greet'] } },
       },
@@ -156,14 +161,13 @@ describe('@itharbors/magnet standalone runtime', () => {
       host: createHost(module),
       paths: {
         roots: createRoots(path.join(root, 'application-data')),
-        legacyDataDirectories: [],
       },
     });
 
     expect(module.callPlugin('@example/plugin', 'greet', 'Harbors'))
       .toBe('standalone-consumer:hello Harbors');
     await module.unload(pluginDirectory);
-    expect(() => module.callPlugin('@example/plugin', 'greet')).toThrow(/not loaded/);
+    expect(() => module.callPlugin('@example/plugin', 'greet')).toThrow(/not Running/);
     module.unregister(pluginDirectory);
     expect(module.listRegistered()).toEqual([]);
   });
@@ -211,13 +215,17 @@ describe('@itharbors/magnet standalone runtime', () => {
   it('creates owner-isolated storage paths', async () => {
     const root = temporaryDirectory('itharbors-plugin-paths-');
     const roots = createRoots(root);
-    const left = await createPluginPaths({ roots, owner: '@example/left', legacyDataDirectories: [] });
-    const right = await createPluginPaths({ roots, owner: '@example/right', legacyDataDirectories: [] });
+    const left = await createPluginPaths({ roots, owner: '@example/left' });
+    const right = await createPluginPaths({ roots, owner: '@example/right' });
 
     expect(left.data).not.toBe(right.data);
-    expect(fs.statSync(left.data).isDirectory()).toBe(true);
+    for (const directory of [left.data, left.cache, left.temp]) {
+      expect(fs.statSync(directory).isDirectory()).toBe(true);
+    }
     if (process.platform !== 'win32') {
-      expect(fs.statSync(left.data).mode & 0o777).toBe(0o700);
+      for (const directory of [left.data, left.cache, left.temp]) {
+        expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
+      }
     }
   });
 
@@ -251,14 +259,133 @@ describe('@itharbors/magnet standalone runtime', () => {
       host: createHost(module),
       paths: {
         roots: createRoots(path.join(root, 'application-data')),
-        legacyDataDirectories: [],
       },
     });
 
     expect(module.callPlugin('@example/cjs-plugin', 'greet', 'Harbors'))
       .toBe('standalone-consumer:hello Harbors');
     await module.unload(pluginDirectory);
-    expect(() => module.callPlugin('@example/cjs-plugin', 'greet')).toThrow(/not loaded/);
+    expect(() => module.callPlugin('@example/cjs-plugin', 'greet')).toThrow(/not Running/);
+  });
+
+  it('requires dependencies to be Running and protects them from unload or replacement', async () => {
+    const root = temporaryDirectory('itharbors-plugin-dependencies-');
+    const dependency = createPlugin(
+      root,
+      `editor.plugin.define({ methods: { value() { return 'dependency'; } } });`,
+      { directory: 'dependency', name: '@example/dependency' },
+    );
+    const dependent = createPlugin(
+      root,
+      `editor.plugin.define({
+        lifecycle: { load(runtime) { runtime.plugin.callPlugin('@example/dependency', 'value'); } },
+        methods: {},
+      });`,
+      {
+        directory: 'dependent',
+        name: '@example/dependent',
+        requires: ['@example/dependency'],
+      },
+    );
+    const replacement = createPlugin(
+      root,
+      `editor.plugin.define({ methods: { value() { return 'replacement'; } } });`,
+      { directory: 'replacement', name: '@example/dependency' },
+    );
+    const module = new PluginModule();
+    const loadOptions = {
+      scope: 'session' as const,
+      host: createHost(module),
+      paths: { roots: createRoots(path.join(root, 'application-data')) },
+    };
+    await module.register(dependency);
+    await module.register(dependent);
+    await module.register(replacement);
+
+    await expect(module.load(dependent, loadOptions)).rejects.toMatchObject({
+      code: 'PLUGIN_NOT_RUNNING',
+      plugin: '@example/dependent',
+      dependency: '@example/dependency',
+    });
+    await module.load(dependency, loadOptions);
+    await module.load(dependent, loadOptions);
+
+    try {
+      module.callPlugin('@example/dependency', 'missingMethod');
+      throw new Error('Expected callPlugin to fail');
+    } catch (error) {
+      expect(error).toMatchObject({
+        code: 'PLUGIN_METHOD_NOT_FOUND',
+        plugin: '@example/dependency',
+      });
+    }
+
+    await expect(module.unload(dependency)).rejects.toMatchObject({
+      code: 'PLUGIN_DEPENDENTS_RUNNING',
+      plugin: '@example/dependency',
+      dependency: '@example/dependent',
+    });
+    await expect(module.load(replacement, loadOptions)).rejects.toMatchObject({
+      code: 'PLUGIN_DEPENDENTS_RUNNING',
+      plugin: '@example/dependency',
+      dependency: '@example/dependent',
+    });
+
+    await module.unload(dependent);
+    await module.unload(dependency);
+  });
+
+  it('returns stable callPlugin errors', () => {
+    const module = new PluginModule();
+    try {
+      module.callPlugin('@example/missing', 'value');
+      throw new Error('Expected callPlugin to fail');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'PLUGIN_NOT_RUNNING', plugin: '@example/missing' });
+    }
+  });
+
+  it('does not expose a Plugin through callPlugin before lifecycle load completes', async () => {
+    const root = temporaryDirectory('itharbors-plugin-loading-');
+    const globalScope = globalThis as typeof globalThis & {
+      __pluginLoadStarted?: () => void;
+      __releasePluginLoad?: Promise<void>;
+    };
+    let markStarted!: () => void;
+    const started = new Promise<void>((resolve) => { markStarted = resolve; });
+    let releaseLoad!: () => void;
+    globalScope.__pluginLoadStarted = markStarted;
+    globalScope.__releasePluginLoad = new Promise<void>((resolve) => { releaseLoad = resolve; });
+    const pluginDirectory = createPlugin(root, `
+      editor.plugin.define({
+        lifecycle: {
+          async load() {
+            globalThis.__pluginLoadStarted();
+            await globalThis.__releasePluginLoad;
+          },
+        },
+        methods: { value() { return 'ready'; } },
+      });
+    `);
+    const module = new PluginModule();
+    await module.register(pluginDirectory);
+    const loading = module.load(pluginDirectory, {
+      scope: 'session',
+      host: createHost(module),
+      paths: { roots: createRoots(path.join(root, 'application-data')) },
+    });
+
+    try {
+      await started;
+      expect(() => module.callPlugin('@example/plugin', 'value')).toThrow(/not Running/);
+      releaseLoad();
+      await loading;
+      expect(module.callPlugin('@example/plugin', 'value')).toBe('ready');
+      await module.unload(pluginDirectory);
+    } finally {
+      delete globalScope.__pluginLoadStarted;
+      delete globalScope.__releasePluginLoad;
+    }
   });
 
   it('reads the latest manifest and entry at load time after registration', async () => {
@@ -286,7 +413,7 @@ describe('@itharbors/magnet standalone runtime', () => {
     await module.load(pluginDirectory, {
       scope: 'session',
       host: createHost(module),
-      paths: { roots: createRoots(path.join(root, 'application-data')), legacyDataDirectories: [] },
+      paths: { roots: createRoots(path.join(root, 'application-data')) },
     });
     expect(module.getInfo('@example/plugin')).toMatchObject({ version: '2.0.0', entry: nextEntry });
     expect(module.callPlugin('@example/plugin', 'value')).toBe('v2');
@@ -315,7 +442,6 @@ describe('@itharbors/magnet standalone runtime', () => {
       host: createHost(module),
       paths: {
         roots: createRoots(path.join(root, 'application-data')),
-        legacyDataDirectories: [],
       },
     };
 
@@ -356,7 +482,6 @@ describe('@itharbors/magnet standalone runtime', () => {
       host: createHost(module),
       paths: {
         roots: createRoots(path.join(root, 'application-data')),
-        legacyDataDirectories: [],
       },
     };
 

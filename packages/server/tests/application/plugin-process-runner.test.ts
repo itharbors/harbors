@@ -101,7 +101,7 @@ describe('application plugin process runner', () => {
     expect(inspected).toEqual({
       frozen: true,
       mode: 'web',
-      paths: { data: '/data', cache: '/cache', temp: '/temp', legacyData: ['/legacy'] },
+      paths: { data: '/data', cache: '/cache', temp: '/temp' },
       plugins: ['fixture-plugin'],
       menu: { tree: ['initial'] },
       service: true,
@@ -1389,7 +1389,7 @@ function initializePayload(entryPath: string) {
     entryPath,
     pluginName: 'fixture-plugin',
     runtime: {
-      paths: { data: '/data', cache: '/cache', temp: '/temp', legacyData: ['/legacy'] },
+      paths: { data: '/data', cache: '/cache', temp: '/temp' },
       hostMode: 'web' as const,
       pluginSnapshot: {
         registered: [{

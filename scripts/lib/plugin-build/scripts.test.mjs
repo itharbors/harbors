@@ -130,7 +130,7 @@ test('plugin discovery rejects a symlinked declared output path', () => {
     fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({
       name: '@fixture/symlinked-plugin',
       main: './main/dist/index.js',
-      'ce-editor': {},
+      'ce-editor': { schemaVersion: 1 },
     }));
 
     assert.throws(() => discoverPlugin(pluginDir), /symbolic links/i);

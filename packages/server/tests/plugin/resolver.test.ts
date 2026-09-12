@@ -25,7 +25,7 @@ describe('resolvePlugin', () => {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: pkgName,
       main: 'index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.writeFileSync(path.join(dir, 'index.js'), '');
     return dir;
@@ -37,7 +37,7 @@ describe('resolvePlugin', () => {
     fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({
       name: pkgName,
       main: 'index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.writeFileSync(path.join(dir, 'index.js'), '');
     return dir;
@@ -80,7 +80,7 @@ describe('resolvePlugin', () => {
     fs.writeFileSync(path.join(realPluginDir, 'package.json'), JSON.stringify({
       name: '@scope/background',
       main: 'index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.writeFileSync(path.join(realPluginDir, 'index.js'), '');
     fs.symlinkSync(realPluginDir, path.join(pluginsDir, 'background'));
@@ -96,7 +96,7 @@ describe('resolvePlugin', () => {
     fs.writeFileSync(path.join(nodeModulesDir, 'package.json'), JSON.stringify({
       name: '@scope/nm-plugin',
       main: 'dist/index.js',
-      'ce-editor': { contribute: {} },
+      'ce-editor': { schemaVersion: 1, contribute: {} },
     }));
     fs.writeFileSync(path.join(nodeModulesDir, 'dist', 'index.js'), '');
     fs.writeFileSync(path.join(projectRoot, 'package.json'), JSON.stringify({ name: 'test-project' }));

@@ -48,6 +48,7 @@ describe('panel plugin contributions', () => {
       type: 'module',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             inspector: {

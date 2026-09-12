@@ -1,0 +1,10 @@
+{
+  "name": "agent-context-store",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.cjs",
+  "ce-editor": {
+    "schemaVersion": 1,
+    "contribute": {}
+  }
+}

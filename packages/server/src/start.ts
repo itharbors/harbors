@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { createServer } from './server.js';
 import { createDefaultAssemblyConfig, discoverBuiltinKitSources } from './assembly/config.js';
 import { ensureDataDir, resolveStartConfig } from './start-config.js';
-import { migrateApplicationData } from './application-data-migration.js';
 import { applyStartArgumentsToEnv, parseStartArguments, startHelp } from './start-args.js';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -20,20 +19,12 @@ if (startArguments.help) {
   process.exit(0);
 }
 const startEnv = applyStartArgumentsToEnv(process.env, startArguments);
-const config = resolveStartConfig(rootDir, startEnv);
+const config = resolveStartConfig(startEnv);
 const { applicationDataDir, configDataDir, dbPath, port, host, pluginPathRoots } = config;
 
 await ensureDataDir(applicationDataDir);
 await ensureDataDir(configDataDir);
 await ensureDataDir(path.dirname(dbPath));
-await migrateApplicationData({
-  applicationDataDir,
-  dbPath,
-  legacyDbPaths: config.legacyDbPaths,
-  pluginDataRoot: pluginPathRoots.data,
-  legacyPluginDataRoots: config.legacyPluginDataRoots,
-});
-
 const server = createServer({
   assembly: createDefaultAssemblyConfig(rootDir, {
     kitSources: await discoverBuiltinKitSources(rootDir),

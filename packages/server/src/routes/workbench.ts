@@ -25,8 +25,7 @@ export function createWorkbenchRouter(
         actor: actor.kind,
         currentUser,
         users: actor.kind === 'local-admin' ? users : currentUser ? [currentUser] : [],
-        sessions: sessions.filter((session) => session.ownerUserId !== null).map(toSummary),
-        ownerlessSessions: actor.kind === 'local-admin' ? manager.list(null).map(toSummary) : [],
+        sessions: sessions.map(toSummary),
       });
       return;
     }
@@ -56,10 +55,14 @@ export function createWorkbenchRouter(
       const userId = decodeURIComponent(userMatch[1]);
       if (!auth.users.get(userId)) throw new HttpError(404, 'USER_NOT_FOUND', 'User not found');
       const hasSessions = manager.list(userId).length > 0;
-      const hasDevices = auth.devices.list().some((device) => device.userId === userId);
-      const hasPendingRequests = auth.pending.list().some((request) => request.requestedUserId === userId);
-      if (hasSessions || hasDevices || hasPendingRequests) {
-        throw new HttpError(409, 'USER_IN_USE', 'Remove this user\'s Sessions and authorized devices first');
+      if (hasSessions) {
+        throw new HttpError(409, 'USER_IN_USE', 'Remove this user\'s Sessions first');
+      }
+      for (const device of auth.devices.list()) {
+        if (device.userId === userId) auth.devices.revoke(device.deviceId);
+      }
+      for (const request of auth.pending.list()) {
+        if (request.requestedUserId === userId) auth.pending.remove(request.deviceId);
       }
       auth.users.delete(userId);
       res.statusCode = 204;
@@ -78,25 +81,11 @@ export function createWorkbenchRouter(
       return;
     }
 
-    const claim = url.pathname.match(/^\/api\/workbench\/session\/([^/]+)\/claim$/u);
-    if (claim && req.method === 'POST') {
-      if (actor.kind !== 'local-admin') throw new HttpError(403, 'LOCAL_ONLY', 'Local host access required');
-      const body = await readJson(req, isUserInput);
-      if (!auth?.users.get(body.userId)) throw new HttpError(404, 'USER_NOT_FOUND', 'User not found');
-      const sessionId = decodeURIComponent(claim[1]);
-      const existing = manager.get(sessionId);
-      if (!existing) throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
-      if (existing.ownerUserId !== null) throw new HttpError(409, 'SESSION_ALREADY_OWNED', 'Session already has an owner');
-      if (!manager.claim(sessionId, body.userId)) throw new HttpError(409, 'SESSION_CLAIM_CONFLICT', 'Session claim conflicted');
-      sendJson(res, 200, toSummary(manager.get(sessionId)!));
-      return;
-    }
-
     throw new HttpError(404, 'NOT_FOUND', 'Not found');
   };
 }
 
-function toSummary(session: { sessionId: string; ownerUserId: string | null; createdAt: number; lastAccessAt: number }) {
+function toSummary(session: { sessionId: string; ownerUserId: string; createdAt: number; lastAccessAt: number }) {
   return {
     sessionId: session.sessionId,
     ownerUserId: session.ownerUserId,
@@ -109,11 +98,6 @@ function isDisplayNameInput(value: unknown): value is { displayName: string } {
   return !!value && typeof value === 'object' && typeof (value as { displayName?: unknown }).displayName === 'string'
     && (value as { displayName: string }).displayName.trim().length > 0
     && (value as { displayName: string }).displayName.trim().length <= 80;
-}
-
-function isUserInput(value: unknown): value is { userId: string } {
-  return !!value && typeof value === 'object' && typeof (value as { userId?: unknown }).userId === 'string'
-    && (value as { userId: string }).userId.length > 0;
 }
 
 function isCreateSessionInput(value: unknown): value is { userId?: string } {

@@ -136,10 +136,11 @@ test('cancel and unload expose stable error codes', async () => {
   const pending = new Promise<Response>((resolve) => { release = () => resolve(response({ choices: [{ message: { content: 'late' } }] })); });
   const service = makeService(async () => pending);
   const completion = service.complete(input);
-  assert.deepEqual(service.cancel('r-1'), { requestId: 'r-1', state: 'cancelled' });
+  assert.throws(() => service.cancel('r-1' as any), (error: any) => error.code === 'INVALID_INPUT');
+  assert.deepEqual(service.cancel({ requestId: 'r-1' }), { requestId: 'r-1', state: 'cancelled' });
   release();
   await assert.rejects(completion, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
-  assert.deepEqual(service.cancel('r-1'), { requestId: 'r-1', state: 'completed' });
+  assert.deepEqual(service.cancel({ requestId: 'r-1' }), { requestId: 'r-1', state: 'already_cancelled' });
   const stopped = makeService(async () => pending);
   const stoppedCompletion = stopped.complete({ ...input, requestId: 'stopped' });
   stopped.unload();

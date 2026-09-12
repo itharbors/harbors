@@ -7,7 +7,6 @@ export interface ApplicationPluginSpec {
   path: string;
   kits: string[];
   permissions?: KitPermission[];
-  legacyDataDirectories?: string[];
 }
 
 export type ApplicationDiagnosticCode =

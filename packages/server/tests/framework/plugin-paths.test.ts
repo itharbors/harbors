@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { chmod, lstat, mkdir, mkdtemp, open, realpath, rename, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, lstat, mkdir, mkdtemp, open, realpath, rename, stat, symlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -45,17 +45,14 @@ describe('createPluginPaths', () => {
     const first = await createPluginPaths({
       roots,
       owner: '@itharbors/agent-guard-background',
-      legacyDataDirectories: ['agent-guard'],
     });
     const repeated = await createPluginPaths({
       roots,
       owner: '@itharbors/agent-guard-background',
-      legacyDataDirectories: ['agent-guard'],
     });
     const second = await createPluginPaths({
       roots,
       owner: '@itharbors/scheduler-service',
-      legacyDataDirectories: [],
     });
 
     expect(first).toEqual(repeated);
@@ -64,9 +61,7 @@ describe('createPluginPaths', () => {
     expect(first.data).not.toBe(second.data);
     expect(first.cache).not.toBe(second.cache);
     expect(first.temp).not.toBe(second.temp);
-    expect(first.legacyData).toEqual([path.join(roots.applicationData, 'agent-guard')]);
     expect(Object.isFrozen(first)).toBe(true);
-    expect(Object.isFrozen(first.legacyData)).toBe(true);
 
     for (const directory of [first.data, first.cache, first.temp]) {
       expect((await lstat(directory)).isDirectory()).toBe(true);
@@ -75,7 +70,6 @@ describe('createPluginPaths', () => {
         expect((await lstat(directory)).mode & 0o777).toBe(0o700);
       }
     }
-    await expect(lstat(first.legacyData[0])).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it('never exposes a raw scoped owner as path traversal', async () => {
@@ -83,7 +77,6 @@ describe('createPluginPaths', () => {
     const result = await createPluginPaths({
       roots,
       owner: '@scope/../../foreign-plugin',
-      legacyDataDirectories: [],
     });
 
     for (const [root, directory] of [
@@ -107,28 +100,8 @@ describe('createPluginPaths', () => {
     await expect(createPluginPaths({
       roots,
       owner: '@itharbors/example-plugin',
-      legacyDataDirectories: [],
     })).rejects.toThrow(/plugin storage unavailable/iu);
     expect(await lstat(actualData)).toMatchObject({});
-  });
-
-  it('rejects existing legacy symlinks and non-directory entries', async () => {
-    const roots = await makeRoots();
-    const outside = await mkdtemp(path.join(os.tmpdir(), 'harbors-plugin-legacy-outside-'));
-    temporaryRoots.push(outside);
-    await symlink(outside, path.join(roots.applicationData, 'legacy-link'), 'dir');
-    await writeFile(path.join(roots.applicationData, 'legacy-file'), 'not a directory');
-
-    await expect(createPluginPaths({
-      roots,
-      owner: '@itharbors/example-plugin',
-      legacyDataDirectories: ['legacy-link'],
-    })).rejects.toThrow(/plugin storage unavailable/iu);
-    await expect(createPluginPaths({
-      roots,
-      owner: '@itharbors/example-plugin',
-      legacyDataDirectories: ['legacy-file'],
-    })).rejects.toThrow(/plugin storage unavailable/iu);
   });
 
   it('fails closed when a newly created path component is swapped with a symlink', async () => {
@@ -161,7 +134,6 @@ describe('createPluginPaths', () => {
     await expect(createPluginPaths({
       roots,
       owner: '@itharbors/example-plugin',
-      legacyDataDirectories: [],
     }, fileSystem)).rejects.toThrow(/plugin storage unavailable/iu);
     expect(swapped).toBe(true);
     expect(postSwapMkdirCount).toBe(0);
@@ -194,7 +166,6 @@ describe('createPluginPaths', () => {
     await expect(createPluginPaths({
       roots,
       owner: '@itharbors/example-plugin',
-      legacyDataDirectories: [],
     }, fileSystem)).rejects.toThrow(/plugin storage unavailable/iu);
     expect(swapped).toBe(true);
     expect((await lstat(path.join(outside, 'data'))).isDirectory()).toBe(true);
@@ -231,7 +202,6 @@ describe('createPluginPaths', () => {
     await expect(createPluginPaths({
       roots,
       owner: '@itharbors/example-plugin',
-      legacyDataDirectories: [],
     }, fileSystem)).rejects.toThrow(/plugin storage unavailable/iu);
     expect(swapped).toBe(true);
     expect((await stat(outside)).mode & 0o777).toBe(0o755);
@@ -241,24 +211,8 @@ describe('createPluginPaths', () => {
     const roots = await makeRoots();
 
     await expect(createPluginPaths({
-      roots,
-      owner: '@itharbors/example-plugin',
-      legacyDataDirectories: ['../foreign'],
-    })).rejects.toThrow(/plugin storage unavailable/iu);
-    await expect(createPluginPaths({
-      roots,
-      owner: '@itharbors/example-plugin',
-      legacyDataDirectories: ['foreign\\directory'],
-    })).rejects.toThrow(/plugin storage unavailable/iu);
-    await expect(createPluginPaths({
-      roots,
-      owner: '@itharbors/example-plugin',
-      legacyDataDirectories: ['duplicate', 'duplicate'],
-    })).rejects.toThrow(/plugin storage unavailable/iu);
-    await expect(createPluginPaths({
       roots: { ...roots, cache: 'relative/cache' },
       owner: '@itharbors/example-plugin',
-      legacyDataDirectories: [],
     })).rejects.toThrow(/plugin storage unavailable/iu);
   });
 });

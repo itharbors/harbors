@@ -1,5 +1,6 @@
 import semver from 'semver';
 import type { PluginMessageRoute, PluginMessageRouteDeclaration } from './types.js';
+import { PluginDependencyError } from './dependencies.js';
 
 export const PLUGIN_PACKAGE_SCHEMA_VERSION = 1 as const;
 export const PLUGIN_CAPABILITIES = ['credentials', 'plugin-lifecycle'] as const;
@@ -34,6 +35,7 @@ export interface PluginPackageManifest {
   readonly main: string;
   readonly capabilities: readonly PluginCapability[];
   readonly assets: Readonly<{ public: readonly string[] }>;
+  readonly requires: Readonly<{ plugins: readonly string[] }>;
   readonly contribute: PluginContributionManifest;
 }
 
@@ -85,6 +87,25 @@ function stringArray(value: unknown, context: string): string[] {
   const result = value.map((item, index) => nonEmptyString(item, `${context}[${index}]`));
   if (new Set(result).size !== result.length) throw new Error(`${context} contains duplicate values`);
   return result;
+}
+
+function parsePluginRequirements(value: unknown, pluginName: string): Readonly<{ plugins: readonly string[] }> {
+  try {
+    if (value === undefined) return Object.freeze({ plugins: Object.freeze([]) });
+    const input = record(value, `Plugin ${pluginName} requires`);
+    exactKeys(input, ['plugins'], `Plugin ${pluginName} requires`);
+    const plugins = stringArray(input.plugins, `Plugin ${pluginName} requires.plugins`);
+    if (plugins.some((dependency) => !PACKAGE_NAME_PATTERN.test(dependency))) {
+      throw new Error(`Plugin ${pluginName} requires.plugins must contain valid plugin names`);
+    }
+    return Object.freeze({ plugins: Object.freeze(plugins) });
+  } catch (error) {
+    throw new PluginDependencyError(
+      'PLUGIN_DEPENDENCY_INVALID',
+      error instanceof Error ? error.message : `Plugin ${pluginName} requires is invalid`,
+      { plugin: pluginName },
+    );
+  }
 }
 
 function parseMessageRoute(value: unknown, context: string): PluginMessageRouteDeclaration {
@@ -233,8 +254,8 @@ export function parsePluginPackageManifest(value: unknown): PluginPackageManifes
   }
 
   const ceEditor = record(pkg['ce-editor'], `Plugin ${name} ce-editor`);
-  exactKeys(ceEditor, ['schemaVersion', 'capabilities', 'assets', 'contribute'], `Plugin ${name} ce-editor`);
-  const schemaVersion = ceEditor.schemaVersion ?? PLUGIN_PACKAGE_SCHEMA_VERSION;
+  exactKeys(ceEditor, ['schemaVersion', 'capabilities', 'assets', 'requires', 'contribute'], `Plugin ${name} ce-editor`);
+  const schemaVersion = ceEditor.schemaVersion;
   if (schemaVersion !== PLUGIN_PACKAGE_SCHEMA_VERSION) {
     throw new Error(`Plugin ${name} has unsupported ce-editor.schemaVersion ${String(schemaVersion)}`);
   }
@@ -258,6 +279,7 @@ export function parsePluginPackageManifest(value: unknown): PluginPackageManifes
     : stringArray(assetsInput.public, `Plugin ${name} public assets`).map((entry, index) => (
       portableRelativePath(entry, `Plugin ${name} public assets[${index}]`)
     ));
+  const requires = parsePluginRequirements(ceEditor.requires, name);
 
   const contributeInput = ceEditor.contribute === undefined
     ? {}
@@ -297,6 +319,7 @@ export function parsePluginPackageManifest(value: unknown): PluginPackageManifes
     main,
     capabilities: Object.freeze(capabilities),
     assets: Object.freeze({ public: Object.freeze(publicAssets) }),
+    requires,
     contribute: Object.freeze({
       ...unknownContributions,
       ...(panels === undefined ? {} : { panel: panels }),

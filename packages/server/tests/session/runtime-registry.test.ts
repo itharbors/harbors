@@ -17,8 +17,7 @@ describe('SessionRuntimeRegistry', () => {
   let manager: SessionManager;
 
   it('keeps one persistent client session while creating isolated Kit runtimes', async () => {
-    const store = new SessionStore(':memory:');
-    manager = new SessionManager(store);
+    manager.getOrCreate('client-a', '', 'user-a');
     const factory = vi.fn((session: { sessionId: string }) => createDisposableEditor(session.sessionId));
     const registry = new SessionRuntimeRegistry(manager, factory);
 
@@ -55,9 +54,10 @@ describe('SessionRuntimeRegistry', () => {
       return createDisposableEditor(session.sessionId);
     });
     const registry = new SessionRuntimeRegistry(manager, createRuntime);
+    manager.getOrCreate('same-session', '/workspace', 'user-a');
 
-    const firstPending = registry.getOrCreate('same-session', { workspacePath: '/workspace' });
-    const secondPending = registry.getOrCreate('same-session', { workspacePath: '/ignored' });
+    const firstPending = registry.getOrCreate('same-session', {});
+    const secondPending = registry.getOrCreate('same-session', {});
     release();
     const [first, second] = await Promise.all([firstPending, secondPending]);
 
@@ -72,7 +72,8 @@ describe('SessionRuntimeRegistry', () => {
     await expect(registry.destroy('same-session')).resolves.toBe(false);
   });
 
-  it('removes a newly created session when runtime creation fails', async () => {
+  it('does not change persistent state when runtime creation fails', async () => {
+    manager.getOrCreate('failed-session', '', 'user-a');
     const registry = new SessionRuntimeRegistry(manager, async () => {
       throw new Error('runtime creation failed');
     });
@@ -80,7 +81,15 @@ describe('SessionRuntimeRegistry', () => {
     await expect(registry.getOrCreate('failed-session', {})).rejects.toThrow('runtime creation failed');
 
     expect(registry.get('failed-session')).toBeUndefined();
-    expect(manager.get('failed-session')).toBeUndefined();
+    expect(manager.get('failed-session')).toBeDefined();
+  });
+
+  it('rejects runtime creation for an unknown persistent Session', async () => {
+    const createRuntime = vi.fn(() => createDisposableEditor('missing'));
+    const registry = new SessionRuntimeRegistry(manager, createRuntime);
+
+    await expect(registry.getOrCreate('missing', {})).rejects.toThrow('does not exist');
+    expect(createRuntime).not.toHaveBeenCalled();
   });
 
   it('disposes every runtime even when one disposal fails', async () => {
@@ -90,6 +99,8 @@ describe('SessionRuntimeRegistry', () => {
       editors.set(session.sessionId, editor);
       return editor;
     });
+    manager.getOrCreate('first', '', 'user-a');
+    manager.getOrCreate('second', '', 'user-a');
     await registry.getOrCreate('first', {});
     await registry.getOrCreate('second', {});
     vi.mocked(editors.get('first')!.dispose).mockRejectedValueOnce(new Error('first cleanup failed'));
@@ -118,6 +129,7 @@ describe('SessionRuntimeRegistry', () => {
       return editor;
     });
 
+    manager.getOrCreate('pending', '', 'user-a');
     const pending = registry.getOrCreate('pending', {});
     const closing = registry.disposeAll();
     const late = registry.getOrCreate('late', {});

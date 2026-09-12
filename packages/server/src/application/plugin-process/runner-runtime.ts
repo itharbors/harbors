@@ -8,7 +8,7 @@ export interface InitializeApplicationPluginPayload {
   entryPath: string;
   pluginName: string;
   runtime: {
-    paths: { data: string; cache: string; temp: string; legacyData: string[] };
+    paths: { data: string; cache: string; temp: string };
     hostMode: 'desktop' | 'web';
     pluginSnapshot: ApplicationPluginSnapshot;
     menuSnapshot: unknown;

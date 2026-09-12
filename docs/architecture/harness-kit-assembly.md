@@ -54,13 +54,13 @@ runner 并执行公开 HTTP 断言，不直接操作 `createEditor` 或 Server �
 
 ## Harbors Harness 装配来源
 
-Harbors Harness 的 Kit manifest 声明九个 Kit Plugin：`conversation`、`chat`、`model-service`、`agent`、`plugin`、
+Harbors Harness 的 Kit manifest 声明十个 Kit Plugin：`conversation`、`chat`、`model-service`、`agent-context-store`、`agent`、`plugin`、
 `preview`、`debug`、`settings` 和 `mermaid`。Server assembly 还会先加载通用 Framework 插件 `panel`、
 `message`、`menu`、`config`。测试必须通过真实 Kit assembly 观察这条装配路径，不能用孤立 MessageModule 替代。
 
 本文记录已经落地的装配契约和回归链路。Harbors Harness 已声明 `test:plugin`、`test:assembly`、`test:kit` 和
 `smoke`：前两者分别验证单 Plugin runtime 与完整 Kit assembly，后者验证真实 Gateway/Server/Client 的公开
-HTTP。浏览器验收是独立层级，已确认 13/13 声明 Plugin 加载且无 console error。
+HTTP。浏览器验收是独立层级，已确认 14/14 Plugin（4 个 Framework + 10 个 Kit）加载且无 console error。
 
 ## request/broadcast 顺序
 
@@ -72,7 +72,7 @@ HTTP。浏览器验收是独立层级，已确认 13/13 声明 Plugin 加载且�
 3. Model Service 收到外部 Provider 的确定性 test double 响应后 broadcast `model-service.complete.delta`。
    Agent 只接受匹配 request identity、generation 且 sequence 单调的 delta。
 4. Agent 将模型增量 broadcast 为 `agent.message.delta`，供 Chat 更新可见消息。
-5. Agent 每次持久化 trace 后 broadcast `agent.conversation.trace.append`；Chat 使用 conversation、turn、item
+5. Agent 每次通过 Context Store 持久化 trace 后 broadcast `agent.conversation.trace.append`；Chat 使用 conversation、turn、item
    和 sequence 重建 transcript，最终 snapshot 作为 item 完成状态。
 6. Agent broadcast `agent.message.status`，并以 `turn/end` 记录 `completed`、`failed`、`cancelled`、
    `timed_out` 或 `rejected` 终态。
@@ -105,7 +105,7 @@ pnpm run kits:check <slug>
 `test:plugin` 只加载 Conversation Plugin 并模拟 Plugin 外 request/broadcast；`test:assembly` 通过公开 testing
 harness 加载全部声明 Plugin 并验证真实组合消息链路；`test:kit` 依次执行 validate、前两者；`smoke` 启动真实
 Gateway、Server、Client 并通过公开 HTTP 验证 health、Kit catalog、redirect 和页面 HTML。自动 smoke 不执行
-浏览器点击或页面交互；浏览器验收单独确认 13/13 Plugin 加载和无 console error。`kits:test` 构建 toolchain 和
+浏览器点击或页面交互；浏览器验收单独确认 14/14 Plugin 加载和无 console error。`kits:test` 构建 toolchain 和
 目标 Kit 后执行其声明的 `test` script；`kits:check` 在 build、test、validate 后只对声明了 `harbors.scripts.smoke`
 的 Kit 执行 smoke，并在适用时执行制品检查。每次实际验证仍需在 Task summary 或 `.work/` 记录命令、退出结果、
 边界和未覆盖风险。

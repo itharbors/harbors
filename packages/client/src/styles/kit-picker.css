@@ -982,11 +982,6 @@
 .kit-empty-copy { color: var(--kit-steel); font-size: 13px; line-height: 1.6; text-align: center; }
 .kit-flow-hint { margin: 12px auto 0; }
 .kit-empty-copy { padding: 26px; border: 1px dashed rgb(169 199 247 / 18%); border-radius: 14px; }
-.kit-ownerless-area { width: min(720px, 100%); margin: 30px auto 0; padding-top: 18px; border-top: 1px solid rgb(169 199 247 / 12%); color: var(--kit-steel); }
-.kit-ownerless-area summary { min-height: 44px; cursor: pointer; }
-.kit-ownerless-area[open] { display: grid; grid-template-columns: 1fr auto; gap: 10px; }
-.kit-ownerless-area[open] summary { grid-column: 1 / -1; }
-.workbench-ownerless-select { min-height: 44px; padding: 8px 10px; border: 1px solid rgb(169 199 247 / 24%); border-radius: 9px; color: var(--kit-mist); background: var(--kit-harbor-ink); }
 .kit-creation-error { width: min(720px, 100%); margin: 16px auto 0; color: #f4b3b3; text-align: center; }
 
 .kit-flow-step-kit .kit-step-nav,
@@ -1023,8 +1018,6 @@
   .kit-user-card { grid-template-rows: 92px 44px; }
   .kit-step-nav { margin-bottom: 22px; }
   .kit-session-copy { align-items: start; flex-direction: column; gap: 5px; }
-  .kit-ownerless-area[open] { grid-template-columns: 1fr; }
-  .kit-ownerless-area[open] summary { grid-column: 1; }
 }
 
 @media (hover: none) {

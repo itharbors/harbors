@@ -57,7 +57,7 @@ describe('local Web file route', () => {
 
   it('stages a selected file as a read-only session copy and removes it with the session', async () => {
     const sessionId = 'local-file-session';
-    server.manager.getOrCreate(sessionId);
+    server.manager.getOrCreate(sessionId, '', 'local-test-user');
 
     const contents = Buffer.from('SQLite format 3\0test payload');
     const upload = await fetch(
@@ -123,7 +123,7 @@ describe('local Web file route', () => {
 
   it('removes remaining staged files when the Server stops', async () => {
     const sessionId = 'server-stop-file-session';
-    server.manager.getOrCreate(sessionId);
+    server.manager.getOrCreate(sessionId, '', 'local-test-user');
     const response = await fetch(
       `${baseUrl}/api/local-file/open/${sessionId}?name=shutdown.sqlite`,
       {

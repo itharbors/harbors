@@ -32,26 +32,14 @@ export class DeviceStore {
     this.db = typeof source === 'string' ? new Database(source) : source;
     this.db.pragma('journal_mode = WAL');
     this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        userId TEXT PRIMARY KEY,
-        displayName TEXT NOT NULL,
-        createdAt INTEGER NOT NULL,
-        updatedAt INTEGER NOT NULL
-      );
       CREATE TABLE IF NOT EXISTS authorized_devices (
         deviceId TEXT PRIMARY KEY,
+        userId TEXT NOT NULL,
         createdAt INTEGER NOT NULL DEFAULT 0,
         expiresAt INTEGER NOT NULL DEFAULT 0,
         lastSeenAt INTEGER NOT NULL DEFAULT 0
       )
     `);
-    this.db.transaction(() => {
-      const columns = this.db.pragma('table_info(authorized_devices)') as Array<{ name: string }>;
-      if (!columns.some((column) => column.name === 'userId')) {
-        this.db.exec('ALTER TABLE authorized_devices ADD COLUMN userId TEXT');
-      }
-      this.migrateLegacyDevices();
-    })();
     this.stmtGet = this.db.prepare('SELECT * FROM authorized_devices WHERE deviceId = ?');
     this.stmtUpsert = this.db.prepare(`
       INSERT INTO authorized_devices (deviceId, userId, createdAt, expiresAt, lastSeenAt)
@@ -110,25 +98,6 @@ export class DeviceStore {
     if (this.ownsDatabase) this.db.close();
   }
 
-  private migrateLegacyDevices(): void {
-    const migrate = this.db.transaction(() => {
-      const rows = this.db.prepare(
-        'SELECT deviceId, createdAt, lastSeenAt FROM authorized_devices WHERE userId IS NULL',
-      ).all() as Array<{ deviceId: string; createdAt: number; lastSeenAt: number }>;
-      const insertUser = this.db.prepare(`
-        INSERT OR IGNORE INTO users (userId, displayName, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?)
-      `);
-      const bind = this.db.prepare('UPDATE authorized_devices SET userId = ? WHERE deviceId = ? AND userId IS NULL');
-      for (const row of rows) {
-        const userId = `legacy-device-${row.deviceId}`;
-        const timestamp = row.createdAt || row.lastSeenAt || Date.now();
-        insertUser.run(userId, `设备 ${shortId(row.deviceId)}`, timestamp, timestamp);
-        bind.run(userId, row.deviceId);
-      }
-    });
-    migrate();
-  }
 }
 
 function rowToDevice(row: AuthorizedDeviceRow): AuthorizedDevice {
@@ -139,10 +108,6 @@ function rowToDevice(row: AuthorizedDeviceRow): AuthorizedDevice {
     expiresAt: row.expiresAt,
     lastSeenAt: row.lastSeenAt,
   };
-}
-
-function shortId(value: string): string {
-  return value.length > 8 ? value.slice(0, 8) : value;
 }
 
 export { DEFAULT_TTL_MS };

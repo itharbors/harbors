@@ -221,9 +221,8 @@ export class ModelService {
     }
   }
 
-  cancel(input: CancelInput | string): CancelOutput {
-    const legacy = typeof input === 'string';
-    const requestId = typeof input === 'string' ? input : input?.requestId;
+  cancel(input: CancelInput): CancelOutput {
+    const requestId = input?.requestId;
     if (typeof requestId !== 'string' || !requestId) throw new ModelServiceError('INVALID_INPUT', '取消请求输入无效', { requestId: typeof requestId === 'string' ? requestId : '' });
     const entry = this.active.get(requestId);
     if (entry) {
@@ -239,7 +238,7 @@ export class ModelService {
       return { requestId, state: 'already_cancelled' };
     }
     const terminal = this.terminal.get(requestId);
-    if (terminal === 'cancelled') return legacy ? { requestId, state: 'completed' } : { requestId, state: 'already_cancelled' };
+    if (terminal === 'cancelled') return { requestId, state: 'already_cancelled' };
     if (terminal) return { requestId, state: terminal };
     return { requestId, state: 'not_found' };
   }

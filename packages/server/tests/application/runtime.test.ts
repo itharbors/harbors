@@ -35,7 +35,7 @@ describe('ApplicationRuntime', () => {
       version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
-      'ce-editor': { contribute },
+      'ce-editor': { schemaVersion: 1, contribute },
     }));
     fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), code);
     return { name, path: pluginDir, kits: [`${name}-kit`] };
@@ -96,7 +96,7 @@ describe('ApplicationRuntime', () => {
     await plugin.load(sessionSpec.path, {
       scope: 'session',
       host,
-      paths: { roots: pluginPathRoots(), legacyDataDirectories: [] },
+      paths: { roots: pluginPathRoots() },
     });
 
     expect(plugin.callPlugin(sessionSpec.name, 'ping', 'value')).toEqual(['session', 'value']);

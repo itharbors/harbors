@@ -145,7 +145,7 @@ describe('resolver uses explicit directories only', () => {
       name: 'menu',
       type: 'module',
       main: 'index.js',
-      'ce-editor': {},
+      'ce-editor': { schemaVersion: 1 },
     });
 
     const resolved = await resolvePlugin('menu', {
@@ -169,13 +169,13 @@ describe('resolver uses explicit directories only', () => {
       name: 'alpha',
       type: 'module',
       main: 'index.js',
-      'ce-editor': {},
+      'ce-editor': { schemaVersion: 1 },
     });
     writePkg(path.join(kitBPlugins, 'beta'), {
       name: 'beta',
       type: 'module',
       main: 'index.js',
-      'ce-editor': {},
+      'ce-editor': { schemaVersion: 1 },
     });
 
     await expect(resolvePlugin('beta', {

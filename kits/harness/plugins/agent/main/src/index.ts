@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
-import { HarborsAdapter, type ModelServiceClient, type ModelServiceCompleteRequest, type ModelServiceDelta } from './adapter/harbors.js';
+import { HarborsAdapter, type ContextStoreClient, type ModelServiceClient, type ModelServiceCompleteRequest, type ModelServiceDelta } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
 import { adapterPermissionDefaults, configuredPermissionDefaults, DEFAULT_APPROVAL_POLICY, DEFAULT_SANDBOX_MODE, isApprovalPolicy, isSandboxMode, selectedOptions, withPermissionDefaults } from './permissions.js';
 import { loadWorkspaceInstructionResult } from './adapter/instructions.js';
@@ -29,11 +29,11 @@ interface ConversationChangedPayload {
   archived?: PublicArchivedConversation;
 }
 
-type ArchiveErrorCode = 'INVALID_CONVERSATION_ID' | 'CONVERSATION_NOT_FOUND' | 'CONVERSATION_ACTIVE' | 'ARCHIVE_NOT_FOUND' | 'ARCHIVE_CONFLICT' | 'ARCHIVE_FILE_INVALID' | 'ARCHIVE_TOMBSTONE_INVALID' | 'ARCHIVE_OPERATION_FAILED' | 'ARCHIVE_STATE_INCONSISTENT';
+type ArchiveErrorCode = 'INVALID_CONVERSATION_ID' | 'CONVERSATION_NOT_FOUND' | 'CONVERSATION_ACTIVE' | 'CONVERSATION_BUSY' | 'CONVERSATION_ARCHIVED' | 'CONVERSATION_DELETED' | 'STORE_VERSION_STALE' | 'MIGRATION_FAILED' | 'DATABASE_CORRUPT' | 'ARCHIVE_NOT_FOUND' | 'ARCHIVE_CONFLICT' | 'ARCHIVE_FILE_INVALID' | 'ARCHIVE_TOMBSTONE_INVALID' | 'ARCHIVE_OPERATION_FAILED' | 'ARCHIVE_STATE_INCONSISTENT';
 type BusinessResult<T> = { ok: true; value: T } | { ok: false; error: { code: ArchiveErrorCode; message: string } };
 interface PublicArchivedConversation { id: string; source: 'harbors'; title: string; project?: string; createdAt?: string; updatedAt?: string; archivedAt: string; status: 'available' | 'unavailable'; errorCode?: string }
 const ARCHIVE_ERRORS: Record<ArchiveErrorCode, string> = {
-  INVALID_CONVERSATION_ID: '对话标识无效', CONVERSATION_NOT_FOUND: '对话不存在，请刷新后重试', CONVERSATION_ACTIVE: '对话仍在运行，请先停止后再归档', ARCHIVE_NOT_FOUND: '归档不存在，请刷新后重试', ARCHIVE_CONFLICT: '同一对话已存在，无法覆盖', ARCHIVE_FILE_INVALID: '归档文件已损坏，无法恢复', ARCHIVE_TOMBSTONE_INVALID: '归档记录不一致，无法恢复', ARCHIVE_OPERATION_FAILED: '归档操作失败，原状态已恢复，请重试', ARCHIVE_STATE_INCONSISTENT: '归档状态异常，已保留诊断证据',
+  INVALID_CONVERSATION_ID: '对话标识无效', CONVERSATION_NOT_FOUND: '对话不存在，请刷新后重试', CONVERSATION_ACTIVE: '对话仍在运行，请先停止后再归档', CONVERSATION_BUSY: '对话正在被其他运行实例使用，请稍后重试', CONVERSATION_ARCHIVED: '对话已经归档', CONVERSATION_DELETED: '对话已经永久删除，不能恢复', STORE_VERSION_STALE: '当前运行实例连接的是旧存储版本，请重启后重试', MIGRATION_FAILED: '对话存储初始化或版本发布失败，已停止写入', DATABASE_CORRUPT: '对话数据库损坏，已停止写入', ARCHIVE_NOT_FOUND: '归档不存在，请刷新后重试', ARCHIVE_CONFLICT: '同一对话已存在，无法覆盖', ARCHIVE_FILE_INVALID: '归档文件已损坏，无法恢复', ARCHIVE_TOMBSTONE_INVALID: '归档记录不一致，无法恢复', ARCHIVE_OPERATION_FAILED: '归档操作失败，原状态已恢复，请重试', ARCHIVE_STATE_INCONSISTENT: '归档状态异常，已保留诊断证据',
 };
 
 let conversations: Conversation[] = [];
@@ -69,11 +69,10 @@ function requireAdapter(source: AgentSource): AgentAdapter {
 
 function createAdapters(
   modelService: ModelServiceClient,
-  storageRoot: string,
-  legacyDataRoots: readonly string[] = [],
+  contextStore: ContextStoreClient,
 ): Record<AgentSource, AgentAdapter> {
   const result: Record<AgentSource, AgentAdapter> = {
-    harbors: new HarborsAdapter(modelService, storageRoot, legacyDataRoots, {}, readCustomInstructionSetting),
+    harbors: new HarborsAdapter(modelService, contextStore, readCustomInstructionSetting),
   };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
     result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
@@ -109,7 +108,10 @@ function broadcastConversationChanged(action: ConversationChangedAction, id: str
 
 function archiveFailure(error: unknown): BusinessResult<never> {
   const message = error instanceof Error ? error.message : String(error);
-  const code = (Object.keys(ARCHIVE_ERRORS) as ArchiveErrorCode[]).find((candidate) => message === candidate || message.startsWith(`${candidate}:`))
+  const structuredCode = error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+    ? (error as { code: string }).code
+    : undefined;
+  const code = (Object.keys(ARCHIVE_ERRORS) as ArchiveErrorCode[]).find((candidate) => structuredCode === candidate || message === candidate || message.startsWith(`${candidate}:`))
     || (message === 'SESSION_ID_INVALID' || message.includes('invalid conversation id') ? 'INVALID_CONVERSATION_ID' : undefined);
   if (!code) throw error instanceof Error ? error : new Error(message);
   return { ok: false, error: { code, message: ARCHIVE_ERRORS[code] } };
@@ -419,7 +421,15 @@ editor.plugin.define({
         webSearch: requestModelServiceWebSearch,
         onDelta: subscribeModelServiceDelta,
       };
-      adapters = createAdapters(modelService, runtime?.paths?.data, runtime?.paths?.legacyData ?? []);
+      // Context Store is a hard runtime dependency.
+      if (typeof runtime?.plugin?.callPlugin !== 'function') {
+        throw new Error('CONTEXT_STORE_NOT_READY');
+      }
+      const contextStore = new Proxy({}, {
+        get: (_target, method) => (...args: unknown[]) => runtime.plugin.callPlugin('agent-context-store', String(method), ...args),
+      }) as ContextStoreClient;
+      if (!contextStore.getStatus().ready) throw new Error('CONTEXT_STORE_NOT_READY');
+      adapters = createAdapters(modelService, contextStore);
       try {
         await refreshConversations();
       } catch (err) {

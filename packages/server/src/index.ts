@@ -1,15 +1,12 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createServer, parseKitSources } from './server';
 import { startServerUntilShutdown } from './process-lifecycle';
 import { captureApplicationHostSecrets } from './application/host-environment';
 import { resolveApplicationPluginRunner } from './application/plugin-process/spawn';
 import { ensureDataDir, resolveStartConfig } from './start-config';
-import { migrateApplicationData } from './application-data-migration';
 
 const APPLICATION_HOST_SECRETS = captureApplicationHostSecrets(process.env);
-const REPOSITORY_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
-const START_CONFIG = resolveStartConfig(REPOSITORY_ROOT, process.env);
+const START_CONFIG = resolveStartConfig(process.env);
 const {
   applicationDataDir: APPLICATION_DATA_ROOT,
   configDataDir: CONFIG_DATA_ROOT,
@@ -24,14 +21,6 @@ const HOST = process.env.HARBORS_BIND_HOST;
 await ensureDataDir(APPLICATION_DATA_ROOT);
 await ensureDataDir(CONFIG_DATA_ROOT);
 await ensureDataDir(path.dirname(DB_PATH));
-await migrateApplicationData({
-  applicationDataDir: APPLICATION_DATA_ROOT,
-  dbPath: DB_PATH,
-  legacyDbPaths: START_CONFIG.legacyDbPaths,
-  pluginDataRoot: PLUGIN_PATH_ROOTS.data,
-  legacyPluginDataRoots: START_CONFIG.legacyPluginDataRoots,
-});
-
 const { start, stop } = createServer({
   dbPath: DB_PATH,
   defaultKit: DEFAULT_KIT,

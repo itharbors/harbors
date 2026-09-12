@@ -7,6 +7,7 @@
     "build": "postcss ./panel.main/src/styles.css -o ./panel.main/src/index.css"
   },
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "panel": {
         "main": {

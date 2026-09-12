@@ -176,7 +176,7 @@ export interface AgentTraceEvent {
   seq: number;
   time: number;
   data: Record<string, unknown>;
-  /** 新协议关联键。旧 JSONL 事件没有这些字段时由读取层按 data/seq 兼容推导。 */
+  /** 事件关联键。 */
   conversationId?: string;
   turnId?: string;
   itemId?: string;

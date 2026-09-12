@@ -27,17 +27,6 @@ function createKit(name: string, plugins: TestPlugin[]): string {
   }).directory;
 }
 
-function validHarbors() {
-  return {
-    distribution: 'builtin',
-    ci: { runner: 'ubuntu-latest' },
-    docs: { summary: 'test kit' },
-    resources: [],
-    storage: { legacyDataDirectories: [] },
-    scripts: { build: 'build', test: 'test' },
-  };
-}
-
 function createDefaultKitFixture(): string {
   return createKit('@example/kit-source', [
     {
@@ -205,29 +194,6 @@ function assemblyForKits(...kitDirectories: string[]) {
 }
 
 describe('kit lifecycle', () => {
-  it('rejects malformed repository metadata through the shared Kit parser', async () => {
-    const invalidMetadata = [
-      null,
-      { ...validHarbors(), storage: { legacyDataDirectories: [], unknown: true } },
-      { ...validHarbors(), unknown: true },
-    ];
-    for (const [index, harbors] of invalidMetadata.entries()) {
-      const kitDir = createKit(`@example/kit-invalid-metadata-${index}`, []);
-      const manifestPath = path.join(kitDir, 'package.json');
-      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-      manifest.harbors = harbors;
-      writeJson(manifestPath, manifest);
-      const editor = createEditor(`kit-invalid-metadata-${index}`, { assembly: assemblyForKits(kitDir) });
-
-      try {
-        await expect(editor.kit.load(kitDir)).rejects.toThrow(/harbors/iu);
-      } finally {
-        await editor.dispose();
-        removeKits(kitDir);
-      }
-    }
-  });
-
   it('keeps builtin plugins loaded and unloads external kit plugins on switch', async () => {
     const defaultKit = createDefaultKitFixture();
     const alternateKit = createAlternateKitFixture();
@@ -273,6 +239,150 @@ describe('kit lifecycle', () => {
       expect(topLevelIds).not.toContain('File');
     } finally {
       removeKits(defaultKit, alternateKit);
+    }
+  });
+
+  it('loads hard dependencies in stable topological order and unloads them in reverse', async () => {
+    const dependentKit = createKit('@example/kit-dependency-order', [
+      {
+        name: '@example/dependent',
+        dir: 'dependent',
+        requires: ['@example/dependency'],
+        code: `editor.plugin.define({
+          lifecycle: {
+            load() { globalThis.__pluginDependencyOrder.push('load:dependent'); },
+            unload() { globalThis.__pluginDependencyOrder.push('unload:dependent'); },
+          },
+          methods: {},
+        });`,
+      },
+      {
+        name: '@example/unrelated',
+        dir: 'unrelated',
+        code: `editor.plugin.define({
+          lifecycle: { load() { globalThis.__pluginDependencyOrder.push('load:unrelated'); } },
+          methods: {},
+        });`,
+      },
+      {
+        name: '@example/dependency',
+        dir: 'dependency',
+        code: `editor.plugin.define({
+          lifecycle: {
+            load() { globalThis.__pluginDependencyOrder.push('load:dependency'); },
+            unload() { globalThis.__pluginDependencyOrder.push('unload:dependency'); },
+          },
+          methods: {},
+        });`,
+      },
+    ]);
+    const alternateKit = createAlternateKitFixture();
+    const editor = createEditor('kit-dependency-order', {
+      assembly: assemblyForKits(dependentKit, alternateKit),
+    });
+    const globalScope = globalThis as typeof globalThis & { __pluginDependencyOrder?: string[] };
+    globalScope.__pluginDependencyOrder = [];
+
+    try {
+      await editor.kit.load(dependentKit);
+      expect(globalScope.__pluginDependencyOrder).toEqual([
+        'load:unrelated',
+        'load:dependency',
+        'load:dependent',
+      ]);
+
+      await editor.kit.switchKit(alternateKit);
+      expect(globalScope.__pluginDependencyOrder?.slice(-2)).toEqual([
+        'unload:dependent',
+        'unload:dependency',
+      ]);
+    } finally {
+      delete globalScope.__pluginDependencyOrder;
+      removeKits(dependentKit, alternateKit);
+    }
+  });
+
+  it('rejects static hard-dependency errors before unloading the active Kit', async () => {
+    const sourceKit = createKit('@example/kit-preflight-source', [
+      {
+        name: '@example/source',
+        dir: 'source',
+        code: `editor.plugin.define({
+          lifecycle: {
+            unload() { globalThis.__pluginPreflightUnloadCount += 1; },
+          },
+          methods: {},
+        });`,
+      },
+    ]);
+    const missingKit = createKit('@example/kit-preflight-missing', [
+      {
+        name: '@example/consumer',
+        dir: 'consumer',
+        requires: ['@example/missing'],
+      },
+    ]);
+    const selfKit = createKit('@example/kit-preflight-self', [
+      {
+        name: '@example/self',
+        dir: 'self',
+        requires: ['@example/self'],
+      },
+    ]);
+    const cycleKit = createKit('@example/kit-preflight-cycle', [
+      {
+        name: '@example/left',
+        dir: 'left',
+        requires: ['@example/right'],
+      },
+      {
+        name: '@example/right',
+        dir: 'right',
+        requires: ['@example/left'],
+      },
+    ]);
+    const editor = createEditor('kit-dependency-preflight', {
+      assembly: assemblyForKits(sourceKit, missingKit, selfKit, cycleKit),
+    });
+    const globalScope = globalThis as typeof globalThis & { __pluginPreflightUnloadCount?: number };
+    globalScope.__pluginPreflightUnloadCount = 0;
+
+    try {
+      await editor.kit.load(sourceKit);
+      for (const invalid of [
+        {
+          directory: missingKit,
+          error: {
+            code: 'PLUGIN_DEPENDENCY_MISSING',
+            plugin: '@example/consumer',
+            dependency: '@example/missing',
+          },
+        },
+        {
+          directory: selfKit,
+          error: {
+            code: 'PLUGIN_DEPENDENCY_INVALID',
+            plugin: '@example/self',
+            dependency: '@example/self',
+          },
+        },
+        {
+          directory: cycleKit,
+          error: {
+            code: 'PLUGIN_DEPENDENCY_CYCLE',
+            plugin: '@example/left',
+            dependency: '@example/right',
+          },
+        },
+      ]) {
+        await expect(editor.kit.switchKit(invalid.directory)).rejects.toMatchObject(invalid.error);
+      }
+      expect(globalScope.__pluginPreflightUnloadCount).toBe(0);
+      expect(editor.kit.getCurrent()?.name).toBe('@example/kit-preflight-source');
+      expect(editor.plugin.listLoaded()).toContain('@example/source');
+    } finally {
+      delete globalScope.__pluginPreflightUnloadCount;
+      removeKits(sourceKit, missingKit, selfKit, cycleKit);
     }
   });
 
@@ -396,8 +506,8 @@ describe('kit lifecycle', () => {
 
       expect(failure).toBeInstanceOf(AggregateError);
       expect((failure as AggregateError).errors).toEqual(expect.arrayContaining([
-        expect.objectContaining({ message: 'bad plugin load failed' }),
-        expect.objectContaining({ message: 'old plugin restore failed' }),
+        expect.objectContaining({ code: 'PLUGIN_LOAD_FAILED', plugin: 'bad-plugin', cause: expect.objectContaining({ message: 'bad plugin load failed' }) }),
+        expect.objectContaining({ code: 'PLUGIN_LOAD_FAILED', plugin: 'rollback-source-plugin', cause: expect.objectContaining({ message: 'old plugin restore failed' }) }),
       ]));
       expect((editor as unknown as { isUsable(): boolean }).isUsable()).toBe(false);
       await expect(editor.kit.load(sourceKit)).rejects.toThrow('Editor is unavailable');

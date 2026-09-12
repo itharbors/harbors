@@ -1,6 +1,3 @@
-import { constants } from 'node:fs';
-import { link, lstat, mkdir, open, readdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
 import { normalizeTurnOptions } from './base.js';
@@ -9,8 +6,6 @@ import { loadWorkspaceInstructionResult } from './instructions.js';
 import { discoverSkillCatalog, type SkillCatalog } from './skills.js';
 import { composeTurnSystemInstructions, validateCustomInstructions, type CustomInstructionValidation } from './system-instructions.js';
 import { paginateTraceEvents } from './trace-pagination.js';
-import { normalizeLegacyTraceEvent } from './protocol.js';
-import { canonicalRecordFromTraceEvent, canonicalRecordsFromTrace, canonicalSessionMeta, decodeJsonl, encodeCanonicalRecord, encodeJsonl, type CanonicalRecord } from './jsonl-format.js';
 
 interface StoredSession {
   id: string;
@@ -27,24 +22,6 @@ interface StoredSession {
   events: AgentTraceEvent[];
   /** Current model-visible event sequence, folded from the append-only log. */
   surface: number[];
-  logPath?: string;
-  format?: 'legacy' | 'canonical';
-  persistedSize?: number;
-  persistedMtimeMs?: number;
-}
-
-interface SessionHeader {
-  type: 'session';
-  version: 0;
-  id: string;
-  createdAt: number;
-  cwd?: string;
-  model?: string;
-  reasoningEffort?: string;
-  serviceTier?: string;
-  timeoutMs?: number;
-  sandboxMode?: AgentSandboxMode;
-  approvalPolicy?: AgentApprovalPolicy;
 }
 
 interface CompactionPolicy {
@@ -125,6 +102,21 @@ export interface ModelServiceClient {
   onDelta?(requestId: string, listener: (delta: ModelServiceDelta) => void): () => void;
 }
 
+export interface ContextStoreClient {
+  getStatus(): { ready: boolean; schemaVersion: number; storeVersion: string };
+  createConversation(input: Record<string, unknown>): AgentConversation & { status?: string };
+  listConversations(status?: 'active' | 'archived'): Array<AgentConversation & { status?: string; archivedAt?: string; availability?: 'available' | 'unavailable'; errorCode?: string }>;
+  loadConversation(id: string): { conversation: AgentConversation & AgentPermissionState; events: AgentTraceEvent[]; currentState?: Array<{ stateId: string; kind: string; value: unknown; sourceSeq: number }> };
+  appendEvent(input: { conversationId: string; idempotencyKey: string; event: Omit<AgentTraceEvent, 'seq' | 'conversationId'> }): AgentTraceEvent;
+  getConversationTrace(id: string): AgentTraceEvent[];
+  getConversationTraceSince(id: string, afterSeq?: number): AgentTraceBatch;
+  buildContext(input: Record<string, unknown>): { messages: ModelServiceMessage[]; sourceSeqs: number[]; planId: string; historyDigest: string; tokenBreakdown: { available: number; used: number } };
+  recallHistory(input: { conversationId: string; query?: string; anchors?: string[]; limit?: number }): Array<{ event: AgentTraceEvent; sourceSeqs: number[] }>;
+  archiveConversation(id: string): AgentConversation;
+  restoreConversation(id: string): AgentConversation;
+  deleteArchivedConversation(id: string): { id: string };
+}
+
 export interface ModelServiceDelta {
   requestId: string;
   generation: string;
@@ -152,7 +144,6 @@ interface AppendEventOptions {
 }
 
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
-const SESSION_FORMAT_VERSION = 0;
 const MAX_STORED_VALUE_CHARS = 12_000;
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 const DEFAULT_COMPACTION_POLICY: CompactionPolicy = { thresholdRatio: 0.8, retainRatio: 0.16, maxTokens: 8_192, maxOverflowRetries: 1 };
@@ -180,8 +171,6 @@ const COMPACTION_INSTRUCTION = [
 ].join('\n');
 const DEFAULT_SANDBOX_MODE: AgentSandboxMode = 'workspace-write';
 const DEFAULT_APPROVAL_POLICY: AgentApprovalPolicy = 'ask';
-const SESSION_LOCK_TIMEOUT_MS = 10_000;
-const SESSION_LOCK_STALE_MS = 30_000;
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
 async function defaultTurnInstructions(workspace: string, custom: CustomInstructionValidation): Promise<TurnInstructionBundle> {
@@ -198,59 +187,22 @@ function throwIfAborted(signal: AbortSignal): void {
   throw signal.reason instanceof Error ? signal.reason : new Error('Harbors adapter has been stopped');
 }
 
-export interface ArchiveFileOperations {
-  rename(source: string, destination: string): Promise<void>;
-  unlink(path: string): Promise<void>;
-  writeExclusive(path: string, contents: string): Promise<void>;
-  syncFile(path: string): Promise<void>;
-  syncDirectory(path: string): Promise<void>;
-}
-
-const DEFAULT_ARCHIVE_FILE_OPERATIONS: ArchiveFileOperations = {
-  rename,
-  unlink,
-  async writeExclusive(path, contents) { await writeSessionFile(path, contents, 'wx'); },
-  syncFile: syncFilePath,
-  syncDirectory: syncDirectoryPath,
-};
-
 /** Harbors 自主管理的 agent：参考 Harness，用只追加事件日志维护 session/turn。 */
 export class HarborsAdapter implements AgentAdapter {
   constructor(
     private readonly modelService: ModelServiceClient,
-    storageRoot: string,
-    legacyDataRoots: readonly string[] = [],
-    archiveFileOperations: Partial<ArchiveFileOperations> = {},
+    private readonly contextStore: ContextStoreClient,
     private readonly instructionSettingsProvider: () => CustomInstructionValidation = () => validateCustomInstructions(undefined),
     private readonly turnInstructionProvider?: TurnInstructionProvider,
   ) {
-    if (typeof storageRoot !== 'string' || !storageRoot.trim() || !isAbsolute(storageRoot)) {
-      throw new Error('MISSING_RUNTIME_DATA');
-    }
-    const root = resolve(storageRoot);
-    this.storageDir = join(root, 'storage-v1', 'sessions');
-    this.trashDir = join(root, 'storage-v1', '.harbors-trash');
-    this.legacyDataRoots = Object.freeze(legacyDataRoots.map((candidate) => {
-      if (typeof candidate !== 'string' || !candidate.trim() || !isAbsolute(candidate)) {
-        throw new Error('INVALID_LEGACY_RUNTIME_DATA');
-      }
-      return resolve(candidate);
-    }));
-    this.archiveFileOperations = { ...DEFAULT_ARCHIVE_FILE_OPERATIONS, ...archiveFileOperations };
+    if (!contextStore?.getStatus().ready) throw new Error('CONTEXT_STORE_NOT_READY');
   }
   private stopped = false;
   private readonly abortController = new AbortController();
-  private readonly storageDir: string;
-  private readonly trashDir: string;
-  private readonly legacyDataRoots: readonly string[];
-  private readonly archiveFileOperations: ArchiveFileOperations;
-  private initialization?: Promise<void>;
   private readonly eventWriteQueues = new Map<string, Promise<void>>();
-  private readonly deletedSessions = new Set<string>();
   /** 同一会话只保留一个可变快照，避免并发 API 各自 load 后用过期 events.length 分配重复 seq。 */
   private readonly sessions = new Map<string, StoredSession>();
   private readonly sessionLoads = new Map<string, Promise<StoredSession>>();
-  private readonly sessionRefreshes = new Map<string, Promise<StoredSession>>();
   private permissionRequester?: AgentPermissionRequester;
   private traceEventListener?: AgentTraceEventListener;
   private readonly activeTurnControllers = new Map<string, AbortController>();
@@ -283,18 +235,16 @@ export class HarborsAdapter implements AgentAdapter {
       updatedAt: now.toISOString(),
       events: [],
       surface: [],
-      logPath: this.logPathFor(id),
     };
-    await mkdir(this.storageDir, { recursive: true });
-    await withSessionFileLock(session.logPath!, async () => {
-      await this.assertNotDeletedOnDisk(id);
-      await this.assertRegularSessionFile(session.logPath!, true);
-      await writeSessionFile(session.logPath!, encodeCanonicalRecord(canonicalSessionMeta(this.headerFor(session))), 'wx', true);
+    this.contextStore.createConversation({
+      id: session.id,
+      title: session.title,
+      ...(session.project ? { project: session.project } : {}),
+      ...turnSettings(session),
+      ...permissionSettings(session),
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt,
     });
-    const initialStat = await stat(session.logPath!);
-    session.persistedSize = initialStat.size;
-    session.persistedMtimeMs = initialStat.mtimeMs;
-    session.format = 'canonical';
     this.sessions.set(id, session);
     await this.appendEvent(session, 'sandbox/mode', { mode: session.sandboxMode });
     await this.appendEvent(session, 'approval/policy', { policy: session.approvalPolicy });
@@ -303,28 +253,20 @@ export class HarborsAdapter implements AgentAdapter {
 
   async listConversations(): Promise<AgentConversation[]> {
     await this.ensureInitialized();
-    await mkdir(this.storageDir, { recursive: true });
-    const entries = await readdir(this.storageDir, { withFileTypes: true });
-    const ids = entries.filter((entry) => entry.isFile() && entry.name.endsWith('.jsonl') && SESSION_ID_PATTERN.test(entry.name.slice(0, -'.jsonl'.length))).map((entry) => entry.name.slice(0, -'.jsonl'.length));
-    const results = await Promise.allSettled(ids.map((id) => this.refreshSession(id)));
-    const conversations = results.map((result, index): AgentConversation => {
-      if (result.status === 'fulfilled') return { ...toConversation(result.value), availability: 'available' };
-      console.error(`[agent] failed to load conversation ${ids[index]}:`, result.reason);
-      return {
-        id: ids[index],
-        title: '无法读取的对话',
-        availability: 'unavailable',
-        errorCode: 'CONVERSATION_FILE_INVALID',
-      };
-    });
-    return conversations.sort((left, right) => {
-      if (left.availability !== right.availability) return left.availability === 'unavailable' ? 1 : -1;
-      return Date.parse(right.updatedAt || '') - Date.parse(left.updatedAt || '') || left.id.localeCompare(right.id);
-    });
+    return this.contextStore.listConversations('active').map((conversation) => ({ ...conversation, availability: conversation.availability === 'unavailable' ? 'unavailable' as const : 'available' as const, ...(conversation.errorCode ? { errorCode: conversation.errorCode } : {}) }));
   }
 
   async listArchivedConversations(): Promise<AgentArchivedConversation[]> {
-    return readArchivedConversations(this.storageDir, this.trashDir);
+    return this.contextStore.listConversations('archived').map((conversation) => ({
+      id: conversation.id,
+      title: conversation.title,
+      ...(conversation.project ? { project: conversation.project } : {}),
+      ...(conversation.createdAt ? { createdAt: conversation.createdAt } : {}),
+      ...(conversation.updatedAt ? { updatedAt: conversation.updatedAt } : {}),
+      archivedAt: conversation.archivedAt || conversation.updatedAt || conversation.createdAt || new Date(0).toISOString(),
+      status: conversation.availability === 'unavailable' ? 'unavailable' as const : 'available' as const,
+      ...(conversation.errorCode ? { errorCode: conversation.errorCode } : {}),
+    }));
   }
 
   async archiveConversation(id: string): Promise<AgentArchivedConversation> {
@@ -332,138 +274,26 @@ export class HarborsAdapter implements AgentAdapter {
     throwIfAborted(this.abortController.signal);
     if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
     if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
-    let session: StoredSession;
-    try { session = await this.load(id); } catch (error) {
-      if (isNodeError(error, 'ENOENT') || (error instanceof Error && error.message === 'SESSION_DELETED')) throw new Error('CONVERSATION_NOT_FOUND', { cause: error });
-      throw error;
-    }
-    const archivedAt = new Date().toISOString();
-    const archiveBasename = `${id}-${Date.parse(archivedAt)}-${randomUUID()}.jsonl`;
-    const archivePath = join(this.trashDir, archiveBasename);
-    const tombstonePath = this.tombstonePathFor(id);
-    const tombstone = JSON.stringify({ version: 1, id, archivedAt, archiveBasename });
-    await this.enqueueSessionWrite(id, async () => {
-      if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
-      const source = session.logPath || this.logPathFor(id);
-      await mkdir(this.trashDir, { recursive: true });
-      await withSessionFileLock(source, async () => {
-        const existingArchives = await readdir(this.trashDir, { withFileTypes: true });
-        if (await fileExists(tombstonePath) || await fileExists(archivePath)
-          || existingArchives.some((entry) => entry.name.startsWith(`${id}-`) && entry.name.endsWith('.jsonl'))) {
-          throw new Error('ARCHIVE_CONFLICT');
-        }
-        let raw: string;
-        try { await this.assertRegularSessionFile(source); raw = await readStableLegacySession(source); assertArchiveSession(raw, id); }
-        catch (error) { throw new Error('ARCHIVE_FILE_INVALID', { cause: error }); }
-        let moved = false;
-        let tombstoneCreated = false;
-        try {
-          await this.archiveFileOperations.rename(source, archivePath); moved = true;
-          await this.archiveFileOperations.syncDirectory(this.trashDir);
-          await this.archiveFileOperations.writeExclusive(tombstonePath, tombstone); tombstoneCreated = true;
-          await this.archiveFileOperations.syncFile(tombstonePath);
-          await this.archiveFileOperations.syncDirectory(this.storageDir);
-        } catch (error) {
-          let compensationFailed = false;
-          if (tombstoneCreated || await fileExists(tombstonePath).catch(() => false)) {
-            try { await this.archiveFileOperations.unlink(tombstonePath); await this.archiveFileOperations.syncDirectory(this.storageDir); } catch { compensationFailed = true; }
-          }
-          if (moved) {
-            try { await this.archiveFileOperations.rename(archivePath, source); await this.archiveFileOperations.syncDirectory(this.trashDir); await this.archiveFileOperations.syncDirectory(this.storageDir); } catch { compensationFailed = true; }
-          }
-          throw new Error(compensationFailed ? 'ARCHIVE_STATE_INCONSISTENT' : 'ARCHIVE_OPERATION_FAILED', { cause: error });
-        }
-      });
-      this.deletedSessions.add(id);
-      this.sessions.delete(id); this.sessionLoads.delete(id); this.sessionRefreshes.delete(id);
-    });
-    return { id, title: session.title, ...(session.project ? { project: session.project } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt, archivedAt, status: 'available' };
+    const conversation = this.contextStore.archiveConversation(id);
+    this.sessions.delete(id);
+    const archivedAt = conversation.updatedAt || new Date().toISOString();
+    return { id, title: conversation.title, ...(conversation.project ? { project: conversation.project } : {}), ...(conversation.createdAt ? { createdAt: conversation.createdAt } : {}), ...(conversation.updatedAt ? { updatedAt: conversation.updatedAt } : {}), archivedAt, status: 'available' };
   }
 
   async restoreConversation(id: string): Promise<AgentConversation> {
     throwIfAborted(this.abortController.signal);
     if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
-    const source = this.logPathFor(id);
-    const tombstonePath = this.tombstonePathFor(id);
-    if (!await fileExists(tombstonePath)) throw new Error('ARCHIVE_NOT_FOUND');
-    let restoredConversation: AgentConversation | undefined;
-    await this.enqueueSessionWrite(id, async () => {
-      await withSessionFileLock(source, async () => {
-        if (await fileExists(source)) throw new Error('ARCHIVE_CONFLICT');
-        const record = await readArchiveRecord(this.storageDir, this.trashDir, id);
-        if (!record) throw new Error('ARCHIVE_NOT_FOUND');
-        if (record.summary.status !== 'available' || !record.archivePath || !record.tombstoneRaw || !record.conversation) throw new Error(record.summary.errorCode || 'ARCHIVE_TOMBSTONE_INVALID');
-        restoredConversation = record.conversation;
-        let moved = false;
-        let tombstoneRemoved = false;
-        try {
-          await this.archiveFileOperations.rename(record.archivePath, source); moved = true;
-          await this.archiveFileOperations.syncDirectory(this.trashDir); await this.archiveFileOperations.syncDirectory(this.storageDir);
-          await this.archiveFileOperations.unlink(tombstonePath); tombstoneRemoved = true;
-          await this.archiveFileOperations.syncDirectory(this.storageDir);
-        } catch (error) {
-          let compensationFailed = false;
-          if (moved) {
-            try { await this.archiveFileOperations.rename(source, record.archivePath); await this.archiveFileOperations.syncDirectory(this.storageDir); await this.archiveFileOperations.syncDirectory(this.trashDir); } catch { compensationFailed = true; }
-          }
-          if (tombstoneRemoved) {
-            try {
-              await this.archiveFileOperations.writeExclusive(tombstonePath, record.tombstoneRaw);
-              await this.archiveFileOperations.syncFile(tombstonePath);
-              await this.archiveFileOperations.syncDirectory(this.storageDir);
-            } catch { compensationFailed = true; }
-          }
-          throw new Error(compensationFailed ? 'ARCHIVE_STATE_INCONSISTENT' : 'ARCHIVE_OPERATION_FAILED', { cause: error });
-        }
-      });
-      this.deletedSessions.delete(id);
-      this.sessions.delete(id); this.sessionLoads.delete(id); this.sessionRefreshes.delete(id);
-    });
-    if (!restoredConversation) throw new Error('ARCHIVE_STATE_INCONSISTENT');
-    return { ...restoredConversation };
+    const restored = this.contextStore.restoreConversation(id);
+    this.sessions.delete(id);
+    return { ...restored };
   }
 
   async deleteArchivedConversation(id: string): Promise<{ id: string }> {
     throwIfAborted(this.abortController.signal);
     if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
-    const source = this.logPathFor(id);
-    const tombstonePath = this.tombstonePathFor(id);
-    if (!await fileExists(tombstonePath)) throw new Error('ARCHIVE_NOT_FOUND');
-    await this.enqueueSessionWrite(id, async () => {
-      await withSessionFileLock(source, async () => {
-        if (await fileExists(source)) throw new Error('ARCHIVE_CONFLICT');
-        const record = await readArchiveRecord(this.storageDir, this.trashDir, id);
-        if (!record) throw new Error('ARCHIVE_NOT_FOUND');
-        if (record.summary.status !== 'available' || !record.archivePath || !record.tombstoneRaw) {
-          throw new Error(record.summary.errorCode || 'ARCHIVE_TOMBSTONE_INVALID');
-        }
-        let tombstoneRemoved = false;
-        let archiveRemoved = false;
-        try {
-          await this.archiveFileOperations.unlink(tombstonePath); tombstoneRemoved = true;
-          await this.archiveFileOperations.syncDirectory(this.storageDir);
-          await this.archiveFileOperations.unlink(record.archivePath); archiveRemoved = true;
-          await this.archiveFileOperations.syncDirectory(this.trashDir);
-        } catch (error) {
-          let compensationFailed = false;
-          if (tombstoneRemoved) {
-            try {
-              await this.archiveFileOperations.writeExclusive(tombstonePath, record.tombstoneRaw!);
-              await this.archiveFileOperations.syncFile(tombstonePath);
-              await this.archiveFileOperations.syncDirectory(this.storageDir);
-            } catch { compensationFailed = true; }
-          }
-          if (archiveRemoved) {
-            // Archive JSONL bytes are gone; cannot restore. Mark inconsistent.
-            compensationFailed = true;
-          }
-          throw new Error(compensationFailed ? 'ARCHIVE_STATE_INCONSISTENT' : 'ARCHIVE_OPERATION_FAILED', { cause: error });
-        }
-      });
-      this.deletedSessions.add(id);
-      this.sessions.delete(id); this.sessionLoads.delete(id); this.sessionRefreshes.delete(id);
-    });
-    return { id };
+    const result = this.contextStore.deleteArchivedConversation(id);
+    this.sessions.delete(id);
+    return result;
   }
 
   async renameConversation(id: string, title: string): Promise<AgentConversation> {
@@ -479,19 +309,13 @@ export class HarborsAdapter implements AgentAdapter {
 
   async getConversationTrace(id: string, turnId?: string): Promise<AgentTraceEvent[]> {
     await this.ensureInitialized();
-    const events = (await this.refreshSession(id)).events;
+    const events = this.contextStore.getConversationTrace(id);
     return events.filter((event) => !turnId || event.turnId === turnId || event.data.turnId === turnId || String(event.data.turn) === turnId).map((event) => ({ ...event, data: { ...event.data } }));
   }
 
   async getConversationTraceSince(id: string, afterSeq = -1): Promise<AgentTraceBatch> {
     await this.ensureInitialized();
-    const session = await this.refreshSession(id);
-    const normalizedAfterSeq = normalizeTraceSeq(afterSeq);
-    return {
-      afterSeq: normalizedAfterSeq,
-      cursor: session.events.at(-1)?.seq ?? normalizedAfterSeq,
-      events: session.events.filter((event) => event.seq > normalizedAfterSeq).map((event) => ({ ...event, data: { ...event.data } })),
-    };
+    return this.contextStore.getConversationTraceSince(id, normalizeTraceSeq(afterSeq));
   }
 
   async getConversationTracePage(id: string, options?: AgentTracePageOptions): Promise<AgentTracePage> {
@@ -551,7 +375,10 @@ export class HarborsAdapter implements AgentAdapter {
       throwIfAborted(signal);
       return response;
     } catch (error) {
-      const envelope = toModelServiceErrorEnvelope(error);
+      const originalEnvelope = toModelServiceErrorEnvelope(error);
+      const envelope = signal.aborted && originalEnvelope.code === 'UNKNOWN'
+        ? { code: 'MODEL_SERVICE_CANCELLED', message: '模型请求已取消', retryable: false, requestId: originalEnvelope.requestId }
+        : originalEnvelope;
       const kind = signal.aborted || envelope.code === 'MODEL_SERVICE_CANCELLED' ? 'cancelled' : envelope.code.includes('TIMEOUT') ? 'timed_out' : envelope.code.includes('REJECT') ? 'rejected' : 'failed';
       await this.appendEvent(session, 'turn/end', { turn, loadedSkills: [...(this.loadedSkillsByTurn.get(`${session.id}:${turn}`) || [])].sort(), reason: { kind, error: envelope } });
       throw asModelServiceError(error, envelope);
@@ -672,24 +499,50 @@ export class HarborsAdapter implements AgentAdapter {
     // 与 DeepSeek Harness 一致：turn 不内置 step 预算，由完成、取消、超时或错误结束。
     let step = 1;
     let overflowRetries = 0;
+    let previousPlanId: string | undefined;
+    let previousOverflowReason: string | undefined;
     const failureGuard = createToolFailureGuard();
     while (true) {
       throwIfAborted(signal);
-      await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
+      const contextMode = configuredContextMode();
+      if (contextMode === 'surface-v1') {
+        await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, false);
+      }
       await this.appendEvent(session, 'step/start', { turn, step });
       let deltaPersistence: Promise<void> = Promise.resolve();
+      let attemptedPlanId: string | undefined;
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求模型服务…');
         const requestId = randomUUID();
         const generation = randomUUID();
         const assistantItemId = randomUUID();
+        const tools = hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema }));
+        const baseAvailableInputTokens = Math.max(0, contextWindow - estimateTextTokens(systemPrompt || '') - estimateTextTokens(JSON.stringify(tools)) - 16_384 - 2_048);
+        const availableInputTokens = Math.floor(baseAvailableInputTokens * (overflowRetries > 0 ? 0.75 : 1));
+        const contextInput = {
+          conversationId: session.id,
+          turnId: findCurrentTurnId(session.events, turn),
+          turn,
+          step,
+          availableInputTokens,
+          budgetBreakdown: { contextWindow, outputReserve: 16_384, safetyMargin: 2_048 },
+          anchors: extractContextAnchors(session.events, turn),
+        };
+        const contextPlan = this.contextStore.buildContext({ ...contextInput, mode: contextMode });
+        attemptedPlanId = contextPlan.planId;
+        let shadowPlan: ReturnType<ContextStoreClient['buildContext']> | undefined;
+        let shadowError: string | undefined;
+        if (contextMode === 'surface-v1') {
+          try { shadowPlan = this.contextStore.buildContext({ ...contextInput, mode: 'candidate-v1' }); }
+          catch (error) { shadowError = normalizeError(error); }
+        }
         let streamedText = '';
         let acceptedSequence = 0;
         await this.appendItemEvent(session, 'item/started', turn, step, assistantItemId, 'message', { role: 'assistant', content: '' }, 'started');
-        await this.appendEvent(session, 'request/context', { turn, step, requestId, generation, provider: 'model-service', model, promptVersion: composed.audit.promptVersion, promptDigest: composed.audit.promptDigest, instructionSources: { custom: composed.audit.custom, workspace: composed.audit.workspace, skills: composed.audit.skills }, loadedSkills: [...loadedSkills].sort(), ...turnSettings(session), ...permissionSettings(session) });
-        const messages = toModelServiceMessages(session.events, session.surface);
-        const response = await this.completeModel({ requestId, generation, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools: hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema })), maxOutputTokens: 16_384, retryMode: 'default', stream: true }, signal, (delta) => {
+        await this.appendEvent(session, 'request/context', { turn, step, requestId, generation, provider: 'model-service', model, promptVersion: composed.audit.promptVersion, promptDigest: composed.audit.promptDigest, instructionSources: { custom: composed.audit.custom, workspace: composed.audit.workspace, skills: composed.audit.skills }, loadedSkills: [...loadedSkills].sort(), ...(contextPlan ? { planId: contextPlan.planId, builderVersion: contextMode, historyDigest: contextPlan.historyDigest, contextTokens: contextPlan.tokenBreakdown, contextAttempt: overflowRetries + 1, ...(previousPlanId ? { previousPlanId } : {}), ...(previousOverflowReason ? { previousOverflowReason } : {}) } : {}), ...(shadowPlan ? { shadowPlanId: shadowPlan.planId, shadowBuilderVersion: 'candidate-v1', shadowHistoryDigest: shadowPlan.historyDigest, shadowContextTokens: shadowPlan.tokenBreakdown } : {}), ...(shadowError ? { shadowBuilderVersion: 'candidate-v1', shadowError } : {}), ...turnSettings(session), ...permissionSettings(session) });
+        const messages = contextPlan?.messages ?? toModelServiceMessages(session.events, session.surface);
+        const response = await this.completeModel({ requestId, generation, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools, maxOutputTokens: 16_384, retryMode: 'default', stream: true }, signal, (delta) => {
           if (delta.requestId !== requestId || delta.generation !== generation || delta.sequence !== acceptedSequence) return;
           acceptedSequence += 1;
           if (delta.delta.type !== 'text' || !delta.delta.text) return;
@@ -698,10 +551,12 @@ export class HarborsAdapter implements AgentAdapter {
           onDelta?.(delta.delta.text, { requestId, generation, sequence: delta.sequence });
         });
         // The model completion may resolve immediately after its last delta.
-        // Drain the append-only persistence chain before writing the canonical
+        // Drain the append-only persistence chain before writing the final
         // assistant message or any terminal item/step event.
         await deltaPersistence;
         overflowRetries = 0;
+        previousPlanId = undefined;
+        previousOverflowReason = undefined;
         throwIfAborted(signal);
         const message = response.message;
         const calls = (message.toolCalls || []).filter((call) => call.id && call.name).map((call) => ({ id: call.id, name: call.name, input: parseToolArguments(call.arguments), arguments: boundedText(call.arguments) }));
@@ -749,6 +604,9 @@ export class HarborsAdapter implements AgentAdapter {
         await this.appendEvent(session, 'step/end', { turn, step }).catch(() => undefined);
         if (isContextOverflowError(error) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
           overflowRetries += 1;
+          previousPlanId = attemptedPlanId;
+          previousOverflowReason = normalizeError(error);
+          if (contextMode === 'candidate-v1') continue;
           if (await this.compactIfNeeded(session, turn, step, model, contextWindow, onStatus, signal, true)) {
             continue;
           }
@@ -804,7 +662,9 @@ export class HarborsAdapter implements AgentAdapter {
   private async executeOneTool(call: ToolCall, workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number, _index: number, skillCatalog: SkillCatalog, loadedSkills: Set<string>): Promise<ToolResult> {
     onStatus?.(`正在执行 ${call.name}…`);
     try {
-      const result = await runHubBertToolContent(call.name, call.input, workspace, signal, {
+      const result = call.name === 'update_conversation_state' || call.name === 'recall_history'
+        ? { text: await this.executeContextTool(call, session) }
+        : await runHubBertToolContent(call.name, call.input, workspace, signal, {
         conversationId: session.id,
         turn,
         step,
@@ -813,7 +673,7 @@ export class HarborsAdapter implements AgentAdapter {
         webSearch: this.modelService.webSearch?.bind(this.modelService),
         skillCatalog,
         requestPermission: ({ toolName, currentMode, requestedMode, justification, signal: requestSignal }) => this.requestPermission(session, turn, step, call.id, toolName, currentMode, requestedMode, justification, requestSignal),
-      });
+        });
       if (call.name === 'load_skill' && typeof call.input.name === 'string') loadedSkills.add(call.input.name);
       const toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };
       const resultItemId = `${call.id}:result`;
@@ -832,6 +692,40 @@ export class HarborsAdapter implements AgentAdapter {
       await this.appendItemEvent(session, 'item/completed', turn, step, call.id, 'tool-call', { callId: call.id, name: call.name, result: toolResult.content, isError: true }, 'completed');
       return toolResult;
     }
+  }
+
+  private async executeContextTool(call: ToolCall, session: StoredSession): Promise<string> {
+    if (call.name === 'recall_history') {
+      const query = typeof call.input.query === 'string' ? call.input.query : undefined;
+      const anchors = Array.isArray(call.input.anchors) && call.input.anchors.every((value) => typeof value === 'string') ? call.input.anchors as string[] : undefined;
+      const limit = typeof call.input.limit === 'number' ? call.input.limit : undefined;
+      return JSON.stringify({ evidence: this.contextStore.recallHistory({ conversationId: session.id, ...(query ? { query } : {}), ...(anchors ? { anchors } : {}), ...(limit !== undefined ? { limit } : {}) }) });
+    }
+    const action = call.input.action;
+    const stateId = call.input.stateId;
+    const kind = call.input.kind;
+    const targetStateId = call.input.targetStateId;
+    const allowedActions = new Set(['set', 'clear', 'cancel', 'supersede']);
+    const allowedKinds = new Set(['goal', 'constraint', 'decision', 'blocker', 'action', 'checkpoint']);
+    if (typeof action !== 'string' || !allowedActions.has(action) || typeof stateId !== 'string' || !/^[a-z0-9][a-z0-9._:-]{0,127}$/iu.test(stateId)) {
+      throw new Error('STATE_MUTATION_INVALID');
+    }
+    const active = new Map((this.contextStore.loadConversation(session.id).currentState ?? []).map((entry) => [entry.stateId, entry]));
+    if (action === 'set') {
+      if (typeof kind !== 'string' || !allowedKinds.has(kind) || !call.input.value || typeof call.input.value !== 'object' || Array.isArray(call.input.value)) throw new Error('STATE_MUTATION_INVALID');
+      const event = await this.appendEvent(session, 'state/set', { stateId, kind, value: call.input.value, source: { kind: 'agent-validated-tool', callId: call.id } });
+      return JSON.stringify({ ok: true, stateId, sourceSeq: event.seq });
+    }
+    if (action === 'clear' || action === 'cancel') {
+      if (!active.has(stateId)) throw new Error('STATE_REFERENCE_NOT_FOUND');
+      const event = await this.appendEvent(session, action === 'clear' ? 'state/clear' : 'relation/cancel', { stateId, source: { kind: 'agent-validated-tool', callId: call.id } });
+      return JSON.stringify({ ok: true, stateId, sourceSeq: event.seq });
+    }
+    if (typeof targetStateId !== 'string' || !active.has(targetStateId) || typeof kind !== 'string' || !allowedKinds.has(kind) || !call.input.value || typeof call.input.value !== 'object' || Array.isArray(call.input.value)) {
+      throw new Error('STATE_REFERENCE_NOT_FOUND');
+    }
+    const event = await this.appendEvent(session, 'relation/supersede', { stateId, targetStateId, kind, value: call.input.value, source: { kind: 'agent-validated-tool', callId: call.id } });
+    return JSON.stringify({ ok: true, stateId, superseded: targetStateId, sourceSeq: event.seq });
   }
 
   private async requestPermission(session: StoredSession, turn: number, step: number, callId: string, toolName: string, currentMode: AgentSandboxMode, requestedMode: AgentSandboxMode, justification: string, signal?: AbortSignal): Promise<AgentPermissionOutcome> {
@@ -934,270 +828,113 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private ensureInitialized(): Promise<void> {
-    this.initialization ??= this.importLegacySessions();
-    return this.initialization;
+    return Promise.resolve().then(() => {
+      if (!this.contextStore.getStatus().ready) throw new Error('CONTEXT_STORE_NOT_READY');
+    });
   }
-
-  private async importLegacySessions(): Promise<void> {
-    const counters = { discovered: 0, imported: 0, skipped: 0, conflicted: 0, failed: 0 };
-    if (this.legacyDataRoots.length === 0) return;
-    await mkdir(this.storageDir, { recursive: true });
-    for (const legacyRoot of this.legacyDataRoots) {
-      const sourceDirectory = join(legacyRoot, 'sessions');
-      let entries: import('node:fs').Dirent[];
-      try {
-        const sourceStat = await lstat(sourceDirectory);
-        if (!sourceStat.isDirectory() || sourceStat.isSymbolicLink()) {
-          counters.failed += 1;
-          continue;
-        }
-        entries = await readdir(sourceDirectory, { withFileTypes: true });
-      } catch (error) {
-        if (isNodeError(error, 'ENOENT')) continue;
-        counters.failed += 1;
-        continue;
-      }
-      for (const entry of entries) {
-        if (!entry.name.endsWith('.jsonl')) continue;
-        counters.discovered += 1;
-        const id = entry.name.slice(0, -'.jsonl'.length);
-        if (!entry.isFile() || !SESSION_ID_PATTERN.test(id)) {
-          counters.failed += 1;
-          continue;
-        }
-        try {
-          const raw = await readStableLegacySession(join(sourceDirectory, entry.name));
-          const decoded = decodeJsonl(raw, { repairTrailingLine: false });
-          if (decoded.header.id !== id) throw new Error('LEGACY_SESSION_ID_MISMATCH');
-          const target = this.logPathFor(id);
-          await withSessionFileLock(target, async () => {
-            if (await fileExists(this.tombstonePathFor(id))) {
-              counters.skipped += 1;
-              return;
-            }
-            if (await fileExists(target)) {
-              counters.skipped += 1;
-              return;
-            }
-            const temporary = `${target}.${process.pid}.${randomUUID()}.import`;
-            try {
-              await writeSessionFile(temporary, raw, 'wx', true);
-              try {
-                await link(temporary, target);
-                await syncDirectoryPath(this.storageDir);
-                counters.imported += 1;
-              } catch (error) {
-                if (!isNodeError(error, 'EEXIST')) throw error;
-                counters.skipped += 1;
-              }
-            } finally {
-              await unlink(temporary).catch(() => undefined);
-            }
-          });
-        } catch (error) {
-          counters.failed += 1;
-          console.warn(`[agent] legacy session import failed: ${id} ${migrationErrorCode(error)}`);
-        }
-      }
-    }
-    console.info(`[agent] legacy session import ${JSON.stringify(counters)}`);
-  }
-
-  private logPathFor(id: string): string { if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID'); return join(this.storageDir, `${id}.jsonl`); }
-  private tombstonePathFor(id: string): string { if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID'); return join(this.storageDir, `${id}.deleted`); }
-  private headerFor(session: StoredSession): SessionHeader { return { type: 'session', version: SESSION_FORMAT_VERSION, id: session.id, createdAt: Date.parse(session.createdAt), ...(session.project ? { cwd: session.project } : {}), ...turnSettings(session), ...permissionSettings(session) }; }
 
   private async load(id: string): Promise<StoredSession> {
-    if (this.deletedSessions.has(id)) throw new Error('SESSION_DELETED');
     const cached = this.sessions.get(id);
     if (cached) return cached;
     const pending = this.sessionLoads.get(id);
     if (pending) return pending;
-    const load = this.loadByPath(this.logPathFor(id)).then((session) => {
+    const load = Promise.resolve().then(() => this.storedSessionFromContextStore(id)).then((session) => {
       this.sessions.set(id, session);
       return session;
-    }).finally(() => {
-      this.sessionLoads.delete(id);
-    });
+    }).finally(() => this.sessionLoads.delete(id));
     this.sessionLoads.set(id, load);
     return load;
   }
 
   private async refreshSession(id: string): Promise<StoredSession> {
-    if (this.deletedSessions.has(id)) throw new Error('SESSION_DELETED');
     const session = await this.load(id);
-    const pending = this.sessionRefreshes.get(id);
-    if (pending) return pending;
-    const refresh = withSessionFileLock(session.logPath || this.logPathFor(id), async () => {
-      await this.assertRegularSessionFile(session.logPath || this.logPathFor(id));
-      const persistedStat = await stat(session.logPath || this.logPathFor(id));
-      if (persistedStat.size !== session.persistedSize || persistedStat.mtimeMs !== session.persistedMtimeMs) {
-        reconcileStoredSession(session, await this.loadByPathUnlocked(session.logPath || this.logPathFor(id)));
-      }
-      return session;
-    }).finally(() => {
-      this.sessionRefreshes.delete(id);
-    });
-    this.sessionRefreshes.set(id, refresh);
-    return refresh;
-  }
-
-  private async loadByPath(path: string): Promise<StoredSession> {
-    await mkdir(this.storageDir, { recursive: true });
-    return withSessionFileLock(path, () => this.loadByPathUnlocked(path));
-  }
-
-  private async loadByPathUnlocked(path: string): Promise<StoredSession> {
-    const expectedId = path.slice(this.storageDir.length + 1, -'.jsonl'.length);
-    if (!SESSION_ID_PATTERN.test(expectedId)) throw new Error(`SESSION_ID_INVALID: ${path}`);
-    await this.assertNotDeletedOnDisk(expectedId);
-    await this.assertRegularSessionFile(path);
-    const raw = await readFile(path, 'utf8');
-    const parsed = parseSessionLog(raw, path);
-    const header = parsed.header;
-    if (header.type !== 'session' || header.version !== SESSION_FORMAT_VERSION || !header.id) throw new Error(`Invalid Harbors session header: ${path}`);
-    if (header.id !== expectedId) throw new Error(`SESSION_ID_MISMATCH: expected ${expectedId}, got ${header.id}`);
-    const normalized = parsed.format === 'legacy' ? normalizeStoredTrace(parsed.events, header.id) : { events: parsed.events, repaired: false };
-    const events = normalized.events;
-    if (parsed.repairTrailingLine || normalized.repaired) {
-      const repaired = parsed.format === 'canonical'
-        ? encodeJsonl(parsed.records || [])
-        : `${JSON.stringify(header)}\n${events.map((event) => JSON.stringify(event)).join('\n')}${events.length ? '\n' : ''}`;
-      const temporaryPath = `${path}.${process.pid}.${randomUUID()}.repair`;
-      await this.assertRegularSessionFile(path);
-      await writeSessionFile(temporaryPath, repaired, 'wx', true);
-      await rename(temporaryPath, path);
-    }
-    const persistedStat = await stat(path);
-    const lastEvent = events.at(-1);
-    const settings = settingsFromEvents(events, header);
-    return { id: header.id, title: titleFromEvents(events), ...(header.cwd ? { project: header.cwd } : {}), ...settings, createdAt: new Date(header.createdAt).toISOString(), updatedAt: new Date(lastEvent?.time || header.createdAt).toISOString(), events, surface: foldSurface(events), logPath: path, format: parsed.format, persistedSize: persistedStat.size, persistedMtimeMs: persistedStat.mtimeMs };
-  }
-
-  private async ensureLog(session: StoredSession): Promise<void> {
-    if (session.logPath) return;
-    const logPath = this.logPathFor(session.id);
-    await this.assertNotDeletedOnDisk(session.id);
-    await mkdir(this.storageDir, { recursive: true });
-    const body = encodeJsonl(canonicalRecordsFromTrace(this.headerFor(session), session.events));
-    await this.assertRegularSessionFile(logPath, true);
-    await writeSessionFile(logPath, body, 'wx', true);
-    session.logPath = logPath;
-    session.format = 'canonical';
-    const persistedStat = await stat(logPath);
-    session.persistedSize = persistedStat.size;
-    session.persistedMtimeMs = persistedStat.mtimeMs;
-  }
-
-  /** Upgrade a legacy log only when a write is requested; reads stay read-only. */
-  private async migrateLegacySessionUnlocked(session: StoredSession): Promise<void> {
-    const path = session.logPath || this.logPathFor(session.id);
-    await this.assertRegularSessionFile(path);
-    const temporaryPath = `${path}.${process.pid}.${randomUUID()}.upgrade`;
-    const contents = encodeJsonl(canonicalRecordsFromTrace(this.headerFor(session), session.events));
-    try {
-      await writeSessionFile(temporaryPath, contents, 'wx', true);
-      await rename(temporaryPath, path);
-    } catch (error) {
-      await unlink(temporaryPath).catch(() => undefined);
-      throw error;
-    }
-    const persistedStat = await stat(path);
-    session.format = 'canonical';
-    session.persistedSize = persistedStat.size;
-    session.persistedMtimeMs = persistedStat.mtimeMs;
+    reconcileStoredSession(session, this.storedSessionFromContextStore(id));
+    return session;
   }
 
   private async appendEvent(session: StoredSession, type: string, dataInput: Record<string, unknown> | ((current: StoredSession) => Record<string, unknown>), options: AppendEventOptions = {}): Promise<AgentTraceEvent> {
-    let result: AgentTraceEvent | undefined;
-    await this.enqueueSessionWrite(session.id, async () => {
-      if (this.deletedSessions.has(session.id)) throw new Error('SESSION_DELETED');
-      await withSessionFileLock(session.logPath || this.logPathFor(session.id), async () => {
-        await this.assertNotDeletedOnDisk(session.id);
-        await this.ensureLog(session);
-        await this.assertRegularSessionFile(session.logPath!);
-        const persistedStat = await stat(session.logPath!);
-        if (persistedStat.size !== session.persistedSize || persistedStat.mtimeMs !== session.persistedMtimeMs) {
-          const fresh = await this.loadByPathUnlocked(session.logPath!);
-          reconcileStoredSession(session, fresh);
-        }
-        if (session.format === 'legacy') await this.migrateLegacySessionUnlocked(session);
-        const rawData = typeof dataInput === 'function' ? dataInput(session) : dataInput;
-        const turn = typeof rawData.turn === 'number' && Number.isSafeInteger(rawData.turn) && rawData.turn > 0 ? rawData.turn : undefined;
-        const previousTurn = turn === undefined ? undefined : [...session.events].reverse().find((candidate) => candidate.type === 'turn/start' && candidate.data.turn === turn);
-        const turnId = typeof rawData.turnId === 'string' && rawData.turnId
-          ? rawData.turnId
-          : typeof previousTurn?.data.turnId === 'string' && previousTurn.data.turnId
-            ? previousTurn.data.turnId
-            : type === 'turn/start' && turn !== undefined ? randomUUID() : undefined;
-        const itemId = typeof rawData.itemId === 'string' && rawData.itemId ? rawData.itemId : undefined;
-        const requestId = typeof rawData.requestId === 'string' && rawData.requestId ? rawData.requestId : undefined;
-        const data = {
-          ...rawData,
-          conversationId: typeof rawData.conversationId === 'string' && rawData.conversationId ? rawData.conversationId : session.id,
-          ...(turnId ? { turnId } : {}),
-          ...(itemId ? { itemId } : {}),
-          ...(requestId ? { requestId } : {}),
-        };
-        const item = rawData.item && typeof rawData.item === 'object' && !Array.isArray(rawData.item) ? rawData.item as Record<string, unknown> : undefined;
-        const event: AgentTraceEvent = {
+    return this.enqueueContextStoreEvent(session, type, dataInput, options);
+  }
+
+  private storedSessionFromContextStore(id: string): StoredSession {
+    const loaded = this.contextStore.loadConversation(id);
+    const conversation = loaded.conversation;
+    const events = loaded.events.map((event) => ({ ...event, data: { ...event.data } }));
+    return {
+      id: conversation.id,
+      title: conversation.title,
+      ...(conversation.project ? { project: conversation.project } : {}),
+      ...(conversation.model ? { model: conversation.model } : {}),
+      ...(conversation.reasoningEffort ? { reasoningEffort: conversation.reasoningEffort } : {}),
+      ...(conversation.serviceTier ? { serviceTier: conversation.serviceTier } : {}),
+      ...(conversation.timeoutMs !== undefined ? { timeoutMs: conversation.timeoutMs } : {}),
+      sandboxMode: conversation.sandboxMode,
+      approvalPolicy: conversation.approvalPolicy,
+      createdAt: conversation.createdAt || new Date(0).toISOString(),
+      updatedAt: conversation.updatedAt || conversation.createdAt || new Date(0).toISOString(),
+      events,
+      surface: foldSurface(events),
+    };
+  }
+
+  private enqueueContextStoreEvent(
+    session: StoredSession,
+    type: string,
+    dataInput: Record<string, unknown> | ((current: StoredSession) => Record<string, unknown>),
+    options: AppendEventOptions,
+  ): Promise<AgentTraceEvent> {
+    return this.enqueueSessionWrite(session.id, async () => {
+      const beforeWrite = this.storedSessionFromContextStore(session.id);
+      if ((beforeWrite.events.at(-1)?.seq ?? -1) !== (session.events.at(-1)?.seq ?? -1)) {
+        reconcileStoredSession(session, beforeWrite);
+      }
+      const rawData = typeof dataInput === 'function' ? dataInput(session) : dataInput;
+      const previous = session.events.at(-1);
+      const turn = typeof rawData.turn === 'number' && Number.isSafeInteger(rawData.turn) && rawData.turn > 0 ? rawData.turn : undefined;
+      const previousTurn = turn === undefined ? undefined : [...session.events].reverse().find((candidate) => candidate.type === 'turn/start' && candidate.data.turn === turn);
+      const turnId = typeof rawData.turnId === 'string' && rawData.turnId
+        ? rawData.turnId
+        : typeof previousTurn?.data.turnId === 'string' && previousTurn.data.turnId
+          ? previousTurn.data.turnId
+          : type === 'turn/start' && turn !== undefined ? randomUUID() : undefined;
+      const itemId = typeof rawData.itemId === 'string' && rawData.itemId ? rawData.itemId : undefined;
+      const requestId = typeof rawData.requestId === 'string' && rawData.requestId ? rawData.requestId : undefined;
+      const data = {
+        ...rawData,
+        conversationId: typeof rawData.conversationId === 'string' && rawData.conversationId ? rawData.conversationId : session.id,
+        ...(turnId ? { turnId } : {}),
+        ...(itemId ? { itemId } : {}),
+        ...(requestId ? { requestId } : {}),
+      };
+      const item = rawData.item && typeof rawData.item === 'object' && !Array.isArray(rawData.item) ? rawData.item as Record<string, unknown> : undefined;
+      const event = this.contextStore.appendEvent({
+        conversationId: session.id,
+        idempotencyKey: randomUUID(),
+        event: {
           type,
-          seq: session.events.length,
           time: Date.now(),
-          conversationId: session.id,
+          data,
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
           ...(requestId ? { requestId } : {}),
           ...(typeof item?.kind === 'string' ? { itemKind: item.kind as AgentTraceEvent['itemKind'] } : {}),
           ...(typeof item?.phase === 'string' ? { itemPhase: item.phase as AgentTraceEvent['itemPhase'] } : {}),
-          data,
           ...options,
-        };
-        const line = encodeCanonicalRecord(canonicalRecordFromTraceEvent(event, { ordinal: event.seq + 1 }));
-        await this.assertRegularSessionFile(session.logPath!);
-        await appendCanonicalLineWithRecovery(
-          session.logPath!,
-          line,
-          event.seq + 1,
-          type === 'turn/end' || type === 'approval/resolved',
-        );
-        const nextStat = await stat(session.logPath!);
-        session.persistedSize = nextStat.size;
-        session.persistedMtimeMs = nextStat.mtimeMs;
+        },
+      });
+      if (event.seq === (previous?.seq ?? -1) + 1) {
         session.events.push(event);
         session.surface = applySurfaceEvent(session.surface, event);
         session.updatedAt = new Date(event.time).toISOString();
-        session.format = 'canonical';
         applySessionEventState(session, event);
-        try {
-          this.traceEventListener?.(session.id, { ...event, data: { ...event.data } });
-        } catch (error) {
-          console.warn('[agent] trace event listener failed after persistence:', error);
-        }
-        result = event;
-      });
+      } else {
+        reconcileStoredSession(session, this.storedSessionFromContextStore(session.id));
+        if (!session.events.some((candidate) => candidate.seq === event.seq && candidate.type === event.type)) throw new Error('EVENT_SEQUENCE_INVALID');
+      }
+      try { this.traceEventListener?.(session.id, { ...event, data: { ...event.data } }); }
+      catch (error) { console.warn('[agent] trace event listener failed after persistence:', error); }
+      return event;
     });
-    return result!;
-  }
-
-  private async assertNotDeletedOnDisk(id: string): Promise<void> {
-    try {
-      await stat(this.tombstonePathFor(id));
-    } catch (error) {
-      if (isNodeError(error, 'ENOENT')) return;
-      throw error;
-    }
-    throw new Error('SESSION_DELETED');
-  }
-
-  private async assertRegularSessionFile(path: string, allowMissing = false): Promise<void> {
-    try {
-      const file = await lstat(path);
-      if (!file.isFile()) throw new Error('SESSION_FILE_INVALID');
-    } catch (error) {
-      if (allowMissing && isNodeError(error, 'ENOENT')) return;
-      throw error;
-    }
   }
 
   private enqueueSessionWrite<T>(id: string, run: () => Promise<T>): Promise<T> {
@@ -1212,336 +949,8 @@ export class HarborsAdapter implements AgentAdapter {
   }
 }
 
-interface ArchiveRecord {
-  summary: AgentArchivedConversation;
-  archivePath?: string;
-  tombstoneRaw?: string;
-  conversation?: AgentConversation;
-}
-
-async function readArchivedConversations(storageDir: string, trashDir: string): Promise<AgentArchivedConversation[]> {
-  let entries: import('node:fs').Dirent[];
-  try { entries = await readdir(storageDir, { withFileTypes: true }); } catch (error) { if (isNodeError(error, 'ENOENT')) return []; throw error; }
-  const ids = entries.map((entry) => entry.name).filter((name) => name.endsWith('.deleted'))
-    .map((name) => name.slice(0, -'.deleted'.length)).filter((id) => SESSION_ID_PATTERN.test(id));
-  const records = await Promise.all(ids.map((id) => readArchiveRecord(storageDir, trashDir, id)));
-  return records.flatMap((record) => record ? [record.summary] : []).sort((left, right) => Date.parse(right.archivedAt) - Date.parse(left.archivedAt) || left.id.localeCompare(right.id));
-}
-
-async function readArchiveRecord(storageDir: string, trashDir: string, id: string): Promise<ArchiveRecord | null> {
-  const tombstonePath = join(storageDir, `${id}.deleted`);
-  let tombstoneStat: import('node:fs').Stats;
-  try { tombstoneStat = await lstat(tombstonePath); } catch (error) { if (isNodeError(error, 'ENOENT')) return null; throw error; }
-  const fallbackArchivedAt = canonicalIso(tombstoneStat.mtimeMs) || new Date(0).toISOString();
-  const unavailable = (errorCode: string): ArchiveRecord => ({ summary: { id, title: '无法读取的归档对话', archivedAt: fallbackArchivedAt, status: 'unavailable', errorCode } });
-  if (!tombstoneStat.isFile() || tombstoneStat.isSymbolicLink()) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-  let tombstoneRaw: string;
-  try { tombstoneRaw = await readStableLegacySession(tombstonePath); } catch { return unavailable('ARCHIVE_TOMBSTONE_INVALID'); }
-  let parsed: Record<string, unknown>;
-  try { parsed = JSON.parse(tombstoneRaw) as Record<string, unknown>; } catch { return unavailable('ARCHIVE_TOMBSTONE_INVALID'); }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-  const keys = Object.keys(parsed).sort();
-  let archivedAt = fallbackArchivedAt;
-  let archiveBasename: string | undefined;
-  if (keys.join(',') === 'archiveBasename,archivedAt,id,version' && parsed.version === 1 && parsed.id === id && typeof parsed.archivedAt === 'string' && typeof parsed.archiveBasename === 'string') {
-    const date = new Date(parsed.archivedAt);
-    if (Number.isNaN(date.valueOf()) || date.toISOString() !== parsed.archivedAt) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-    archivedAt = parsed.archivedAt;
-    const pattern = new RegExp(`^${id}-${Date.parse(archivedAt)}-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\\.jsonl$`, 'iu');
-    if (!pattern.test(parsed.archiveBasename)) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-    archiveBasename = parsed.archiveBasename;
-  } else if (keys.join(',') === 'deletedAt,id' && parsed.id === id && typeof parsed.deletedAt === 'number' && Number.isSafeInteger(parsed.deletedAt) && parsed.deletedAt >= 0) {
-    const legacyArchivedAt = canonicalIso(parsed.deletedAt);
-    if (!legacyArchivedAt) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-    archivedAt = legacyArchivedAt;
-  } else return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-
-  let trashEntries: import('node:fs').Dirent[];
-  try { trashEntries = await readdir(trashDir, { withFileTypes: true }); } catch (error) { if (isNodeError(error, 'ENOENT')) return unavailable('ARCHIVE_TOMBSTONE_INVALID'); throw error; }
-  const candidates = trashEntries.map((entry) => entry.name).filter((name) => name.startsWith(`${id}-`) && name.endsWith('.jsonl'));
-  if (candidates.length !== 1 || (archiveBasename && candidates[0] !== archiveBasename)) return unavailable('ARCHIVE_TOMBSTONE_INVALID');
-  archiveBasename ??= candidates[0];
-  const archivePath = join(trashDir, archiveBasename);
-  let archiveStat: import('node:fs').Stats;
-  try { archiveStat = await lstat(archivePath); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
-  if (!archiveStat.isFile() || archiveStat.isSymbolicLink()) return unavailable('ARCHIVE_FILE_INVALID');
-  let raw: string;
-  try { raw = await readStableLegacySession(archivePath); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
-  let decoded: ReturnType<typeof decodeJsonl>;
-  try { decoded = decodeJsonl(raw, { repairTrailingLine: false }); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
-  if (decoded.header.id !== id) return unavailable('ARCHIVE_FILE_INVALID');
-  const last = decoded.events.at(-1);
-  const createdAt = canonicalIso(decoded.header.createdAt);
-  const updatedAt = canonicalIso(last?.time ?? decoded.header.createdAt);
-  if (!createdAt || !updatedAt || decoded.events.some((event) => !canonicalIso(event.time))) return unavailable('ARCHIVE_FILE_INVALID');
-  if (decoded.format === 'canonical') {
-    const records = decoded.records as Array<{ timestamp: string; type: string; payload: Record<string, unknown> }>;
-    if (records.some((record) => canonicalIsoString(record.timestamp) !== record.timestamp)) return unavailable('ARCHIVE_FILE_INVALID');
-    const sessionMeta = records[0];
-    if (sessionMeta?.type !== 'session_meta' || canonicalIsoString(sessionMeta.payload.created_at) !== sessionMeta.payload.created_at) return unavailable('ARCHIVE_FILE_INVALID');
-  }
-  let settings: AgentTurnOptions & AgentPermissionState;
-  try { settings = settingsFromEvents(decoded.events, decoded.header); } catch { return unavailable('ARCHIVE_FILE_INVALID'); }
-  const title = titleFromEvents(decoded.events);
-  const preview = projectMessages(decoded.events).at(-1)?.content;
-  return {
-    summary: {
-      id, title, ...(decoded.header.cwd ? { project: decoded.header.cwd } : {}),
-      createdAt, updatedAt,
-      archivedAt, status: 'available',
-    },
-    archivePath, tombstoneRaw,
-    conversation: { id, title, ...(decoded.header.cwd ? { project: decoded.header.cwd } : {}), ...settings, ...(preview ? { preview: preview.slice(0, 120) } : {}), createdAt, updatedAt },
-  };
-}
-
-function canonicalIso(value: number): string | null {
-  if (!Number.isFinite(value)) return null;
-  try { return new Date(value).toISOString(); } catch { return null; }
-}
-
-function canonicalIsoString(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const time = Date.parse(value);
-  const canonical = canonicalIso(time);
-  return canonical === value ? canonical : null;
-}
-
-function assertArchiveSession(raw: string, id: string): void {
-  try {
-    const decoded = decodeJsonl(raw, { repairTrailingLine: false });
-    if (decoded.header.id !== id) throw new Error('ARCHIVE_FILE_INVALID');
-  } catch (error) { throw new Error('ARCHIVE_FILE_INVALID', { cause: error }); }
-}
-
 interface ToolCall { id: string; name: string; input: Record<string, unknown>; arguments: string; }
 interface ToolResult { content: string; isError: boolean; image?: HubBertToolImage; }
-
-interface ParsedSessionLog {
-  header: SessionHeader;
-  events: AgentTraceEvent[];
-  repairTrailingLine: boolean;
-  format: 'legacy' | 'canonical';
-  records?: CanonicalRecord[];
-}
-
-async function writeSessionFile(path: string, contents: string, flag: 'wx' | 'w' = 'w', sync = false): Promise<void> {
-  const handle = await open(path, flag);
-  try {
-    await handle.writeFile(contents, 'utf8');
-    if (sync) await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function readStableLegacySession(path: string): Promise<string> {
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const before = await handle.stat();
-    if (!before.isFile()) throw new Error('LEGACY_SESSION_NOT_REGULAR');
-    const raw = await handle.readFile('utf8');
-    const after = await handle.stat();
-    if (before.dev !== after.dev || before.ino !== after.ino || before.size !== after.size) {
-      throw new Error('LEGACY_SESSION_CHANGED');
-    }
-    return raw;
-  } finally {
-    await handle.close();
-  }
-}
-
-async function fileExists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if (isNodeError(error, 'ENOENT')) return false;
-    throw error;
-  }
-}
-
-async function syncDirectoryPath(directory: string): Promise<void> {
-  const handle = await open(directory, constants.O_RDONLY | constants.O_DIRECTORY);
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function syncFilePath(path: string): Promise<void> {
-  const handle = await open(path, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-  try {
-    const value = await handle.stat();
-    if (!value.isFile()) throw new Error('ARCHIVE_TOMBSTONE_INVALID');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-function migrationErrorCode(error: unknown): string {
-  if (error instanceof Error && 'code' in error && typeof (error as NodeJS.ErrnoException).code === 'string') {
-    return (error as NodeJS.ErrnoException).code!;
-  }
-  if (error instanceof Error && /^[A-Z0-9_:-]+$/u.test(error.message)) return error.message;
-  return 'LEGACY_SESSION_IMPORT_FAILED';
-}
-
-async function appendSessionLine(path: string, line: string, sync = false): Promise<void> {
-  const handle = await open(path, 'a');
-  try {
-    await handle.writeFile(line, 'utf8');
-    if (sync) await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-interface AppendRecoveryState {
-  kind: 'complete' | 'incomplete-tail' | 'unrecoverable';
-  prefixBytes?: number;
-}
-
-/**
- * Confirm or recover one failed append while the caller still owns the queue
- * and session lock. The record and ordinal are supplied by the caller and are
- * never regenerated during recovery.
- */
-async function appendCanonicalLineWithRecovery(path: string, line: string, ordinal: number, syncRequired: boolean): Promise<void> {
-  try {
-    await appendSessionLine(path, line, syncRequired);
-    return;
-  } catch (firstError) {
-    const state = await inspectFailedCanonicalAppend(path, line, ordinal);
-    if (state.kind === 'complete') {
-      if (syncRequired) await syncSessionFile(path);
-      return;
-    }
-    if (state.kind !== 'incomplete-tail' || state.prefixBytes === undefined) throw firstError;
-
-    await truncateSessionFile(path, state.prefixBytes);
-    // A second failure is deliberately not inspected: after one recovery
-    // attempt we fail closed and leave memory/listeners untouched.
-    await appendSessionLine(path, line, syncRequired);
-  }
-}
-
-async function inspectFailedCanonicalAppend(path: string, expectedLine: string, expectedOrdinal: number): Promise<AppendRecoveryState> {
-  await assertRegularRecoveryFile(path);
-  const raw = await readFile(path, 'utf8');
-  const hasFinalLf = raw.endsWith('\n');
-  const body = hasFinalLf ? raw.slice(0, -1) : raw;
-  if (!body) return { kind: 'unrecoverable' };
-  const parts = body.split('\n');
-  const completeParts = hasFinalLf ? parts : parts.slice(0, -1);
-  const tail = hasFinalLf ? '' : parts.at(-1) || '';
-  const prefix = completeParts.length ? `${completeParts.join('\n')}\n` : '';
-  let records: CanonicalRecord[];
-  try {
-    const decoded = decodeJsonl(prefix, { repairTrailingLine: false });
-    if (decoded.format !== 'canonical') return { kind: 'unrecoverable' };
-    records = decoded.records as CanonicalRecord[];
-  } catch {
-    return { kind: 'unrecoverable' };
-  }
-
-  const expectedBody = expectedLine.endsWith('\n') ? expectedLine.slice(0, -1) : expectedLine;
-  if (hasFinalLf) {
-    // A complete expected line is only confirmable when it is the sole next
-    // ordinal. Any occupied ordinal with different bytes, or any extra tail,
-    // is an interleaving/corruption and must fail closed.
-    if (records.length === expectedOrdinal + 1 && completeParts[expectedOrdinal] === expectedBody) return { kind: 'complete' };
-    return { kind: 'unrecoverable' };
-  }
-
-  // Only remove a non-empty suffix that is provably a prefix of this exact
-  // frozen line. An unrelated or complete-but-un-terminated line is not safe
-  // to guess about and therefore fails closed.
-  if (tail && records.length === expectedOrdinal && expectedBody.startsWith(tail)) {
-    return { kind: 'incomplete-tail', prefixBytes: Buffer.byteLength(prefix, 'utf8') };
-  }
-  return { kind: 'unrecoverable' };
-}
-
-async function truncateSessionFile(path: string, length: number): Promise<void> {
-  await assertRegularRecoveryFile(path);
-  const handle = await open(path, 'r+');
-  try {
-    await handle.truncate(length);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function syncSessionFile(path: string): Promise<void> {
-  await assertRegularRecoveryFile(path);
-  const handle = await open(path, 'r');
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
-async function assertRegularRecoveryFile(path: string): Promise<void> {
-  const file = await lstat(path);
-  if (!file.isFile()) throw new Error('SESSION_FILE_INVALID');
-}
-
-async function withSessionFileLock<T>(sessionPath: string, run: () => Promise<T>): Promise<T> {
-  const lockPath = `${sessionPath}.lock`;
-  const token = `${process.pid}:${randomUUID()}`;
-  const startedAt = Date.now();
-  let handle: Awaited<ReturnType<typeof open>> | undefined;
-  while (!handle) {
-    try {
-      const candidate = await open(lockPath, 'wx');
-      try {
-        await candidate.writeFile(JSON.stringify({ token, createdAt: Date.now() }), 'utf8');
-        await candidate.sync();
-        handle = candidate;
-      } catch (error) {
-        await candidate.close().catch(() => undefined);
-        await unlink(lockPath).catch(() => undefined);
-        throw error;
-      }
-    } catch (error) {
-      if (!isNodeError(error, 'EEXIST')) throw error;
-      try {
-        const lockStat = await stat(lockPath);
-        if (Date.now() - lockStat.mtimeMs > SESSION_LOCK_STALE_MS) await unlink(lockPath);
-      } catch (lockError) {
-        if (!isNodeError(lockError, 'ENOENT')) throw lockError;
-      }
-      if (Date.now() - startedAt >= SESSION_LOCK_TIMEOUT_MS) throw new Error(`Timed out waiting for Harbors session lock: ${sessionPath}`);
-      await new Promise<void>((resolveDelay) => setTimeout(resolveDelay, 10 + Math.floor(Math.random() * 20)));
-    }
-  }
-  const heartbeat = setInterval(() => {
-    const now = new Date();
-    void handle.utimes(now, now).catch(() => undefined);
-  }, Math.floor(SESSION_LOCK_STALE_MS / 4));
-  heartbeat.unref();
-  try {
-    return await run();
-  } finally {
-    clearInterval(heartbeat);
-    await handle.close().catch(() => undefined);
-    try {
-      const current = JSON.parse(await readFile(lockPath, 'utf8')) as { token?: unknown };
-      if (current.token === token) await unlink(lockPath);
-    } catch (error) {
-      if (!isNodeError(error, 'ENOENT')) console.warn('[agent] failed to release session lock:', error);
-    }
-  }
-}
-
-function isNodeError(error: unknown, code: string): boolean {
-  return error instanceof Error && 'code' in error && (error as NodeJS.ErrnoException).code === code;
-}
 
 function reconcileStoredSession(target: StoredSession, source: StoredSession): void {
   target.title = source.title;
@@ -1556,10 +965,6 @@ function reconcileStoredSession(target: StoredSession, source: StoredSession): v
   target.updatedAt = source.updatedAt;
   target.events = source.events;
   target.surface = source.surface;
-  target.logPath = source.logPath;
-  target.format = source.format;
-  target.persistedSize = source.persistedSize;
-  target.persistedMtimeMs = source.persistedMtimeMs;
 }
 
 function applySessionEventState(session: StoredSession, event: AgentTraceEvent): void {
@@ -1577,81 +982,19 @@ function applySessionEventState(session: StoredSession, event: AgentTraceEvent):
   }
 }
 
-function parseSessionLog(raw: string, path: string): ParsedSessionLog {
-  try {
-    const decoded = decodeJsonl(raw);
-    return {
-      header: decoded.header,
-      events: decoded.events,
-      repairTrailingLine: decoded.repairedTrailingLine,
-      format: decoded.format,
-      ...(decoded.format === 'canonical' ? { records: decoded.records as CanonicalRecord[] } : {}),
-    };
-  } catch (error) {
-    throw new Error(`Invalid Harbors session JSON: ${path}`, { cause: error });
-  }
-}
-
-/**
- * 旧版本可能让两个 StoredSession 快照各自用 events.length 分配 seq。
- * 兼容读取时按物理行保留全部事件并重编号，不能让 Map-by-seq 静默吞掉其中一条。
- */
-function normalizeStoredTrace(source: readonly AgentTraceEvent[], conversationId: string): { events: AgentTraceEvent[]; repaired: boolean } {
-  const canonicalSeqs = new Map<number, number[]>();
-  const surfaceCanonicalSeqs = new Map<number, number[]>();
-  let repaired = false;
-  const events = source.map((original, canonicalSeq) => {
-    const originalSeq = original.seq;
-    const resolveLatestSeq = (value: unknown, surfaceOnly = false): unknown => {
-      if (typeof value !== 'number' || !Number.isSafeInteger(value)) return value;
-      const candidates = (surfaceOnly ? surfaceCanonicalSeqs : canonicalSeqs).get(value);
-      return candidates?.at(-1) ?? value;
-    };
-    const resolveAllSeqs = (value: unknown, surfaceOnly = false): unknown => {
-      if (!Array.isArray(value)) return value;
-      return value.flatMap((entry) => {
-        if (typeof entry !== 'number' || !Number.isSafeInteger(entry)) return [entry];
-        return [...((surfaceOnly ? surfaceCanonicalSeqs : canonicalSeqs).get(entry) || [entry])];
-      });
-    };
-    const data = { ...original.data };
-    for (const key of ['messageSeqs', 'shadowedSeqs', 'nodes'] as const) {
-      if (key in data) data[key] = resolveAllSeqs(data[key], true);
-    }
-    if (data.shadowedRange && typeof data.shadowedRange === 'object' && !Array.isArray(data.shadowedRange)) {
-      const range = data.shadowedRange as { start?: unknown; end?: unknown };
-      data.shadowedRange = { ...range, start: resolveLatestSeq(range.start, true), end: resolveLatestSeq(range.end, true) };
-    }
-    const surfaceOp = original.surfaceOp && original.surfaceOp !== 'append'
-      ? { ...original.surfaceOp, start: Number(resolveLatestSeq(original.surfaceOp.start, true)), end: Number(resolveLatestSeq(original.surfaceOp.end, true)) }
-      : original.surfaceOp;
-    // sourceEventSeqs 遇到重复旧 seq 时展开为所有候选，明确保留来源而不是任意丢弃一条。
-    const sourceEventSeqs = original.sourceEventSeqs ? resolveAllSeqs(original.sourceEventSeqs) as number[] : undefined;
-    const event: AgentTraceEvent = normalizeLegacyTraceEvent({
-      ...original,
-      seq: canonicalSeq,
-      data,
-      ...(surfaceOp ? { surfaceOp } : {}),
-      ...(sourceEventSeqs ? { sourceEventSeqs } : {}),
-    }, conversationId);
-    if (originalSeq !== canonicalSeq || JSON.stringify(event) !== JSON.stringify(original)) repaired = true;
-    if (typeof originalSeq === 'number' && Number.isSafeInteger(originalSeq)) {
-      canonicalSeqs.set(originalSeq, [...(canonicalSeqs.get(originalSeq) || []), canonicalSeq]);
-      if (MODEL_SURFACE_TYPES.has(original.type)) surfaceCanonicalSeqs.set(originalSeq, [...(surfaceCanonicalSeqs.get(originalSeq) || []), canonicalSeq]);
-    }
-    return event;
-  });
-  return { events, repaired };
-}
-
 interface ToolFailureGuard {
   consecutive: number;
   repeated: Map<string, number>;
 }
 
 class ToolLoopGuardError extends Error {
+  readonly code = 'AGENT_TOOL_LOOP_GUARD';
+  readonly retryable = false;
+  readonly requestId = '';
+
   constructor(message: string) {
     super(message);
+    this.name = 'ToolLoopGuardError';
   }
 }
 
@@ -1746,29 +1089,6 @@ function turnSettings(value: Pick<StoredSession, 'model' | 'reasoningEffort' | '
 }
 function permissionSettings(value: Pick<StoredSession, 'sandboxMode' | 'approvalPolicy'>): AgentPermissionState {
   return { sandboxMode: value.sandboxMode, approvalPolicy: value.approvalPolicy };
-}
-function settingsFromEvents(events: AgentTraceEvent[], header: SessionHeader): AgentTurnOptions & AgentPermissionState {
-  const settings: AgentTurnOptions & AgentPermissionState = {
-    ...turnSettings(header),
-    sandboxMode: header.sandboxMode ? assertSandboxMode(header.sandboxMode) : DEFAULT_SANDBOX_MODE,
-    approvalPolicy: header.approvalPolicy ? assertApprovalPolicy(header.approvalPolicy) : DEFAULT_APPROVAL_POLICY,
-  };
-  for (const event of events) {
-    const data = event.data;
-    if (event.type === 'turn/start' || event.type === 'request/context') {
-      if (typeof data.model === 'string' && data.model) settings.model = data.model;
-      if (typeof data.reasoningEffort === 'string' && data.reasoningEffort) settings.reasoningEffort = data.reasoningEffort;
-      if (typeof data.serviceTier === 'string' && data.serviceTier) settings.serviceTier = data.serviceTier;
-      if (data.timeoutMs !== undefined) settings.timeoutMs = assertTimeoutMs(data.timeoutMs);
-      if (typeof data.sandboxMode === 'string') settings.sandboxMode = assertSandboxMode(data.sandboxMode);
-      if (typeof data.approvalPolicy === 'string') settings.approvalPolicy = assertApprovalPolicy(data.approvalPolicy);
-    } else if (event.type === 'sandbox/mode' && typeof data.mode === 'string') {
-      settings.sandboxMode = assertSandboxMode(data.mode);
-    } else if (event.type === 'approval/policy' && typeof data.policy === 'string') {
-      settings.approvalPolicy = assertApprovalPolicy(data.policy);
-    }
-  }
-  return settings;
 }
 function assertSandboxMode(value: string): AgentSandboxMode {
   if (value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access') return value;
@@ -1982,7 +1302,7 @@ function pruneToolResultEvent(event: AgentTraceEvent): { data: Record<string, un
   const nextContent = content.map((block, index) => index === textIndex ? { ...block, text: nextText } : block);
   const nextMessage = { ...message, content: blocks.map((block, index) => index === 0 ? { ...block, content: nextContent } : block) };
   // 裁剪只是对 surface 上已有 tool/result 的替换，不是新的 item 生命周期事件。
-  // 去掉 itemId/item，避免 canonical 校验把它当成已完成 item 的后续记录而报 ITEM_AFTER_COMPLETED。
+  // 去掉 itemId/item，使它保持为独立的 surface 替换事件。
   const { itemId, item, ...rest } = event.data;
   return { data: { ...rest, message: nextMessage }, charsBefore: text.length, charsAfter: nextText.length };
 }
@@ -1999,6 +1319,9 @@ function contextWindowFor(models: Array<{ id: string; contextWindow?: number }>,
   const configured = models.find((entry) => entry.id === model)?.contextWindow;
   return configured || DEFAULT_CONTEXT_WINDOW;
 }
+function configuredContextMode(): 'surface-v1' | 'candidate-v1' {
+  return process.env.HARBORS_AGENT_CONTEXT_MODE === 'surface-v1' ? 'surface-v1' : 'candidate-v1';
+}
 function isContextOverflowError(error: unknown): boolean {
   if (error && typeof error === 'object' && (error as { code?: unknown }).code === 'MODEL_SERVICE_CONTEXT_OVERFLOW') return true;
   const message = normalizeError(error).toLowerCase();
@@ -2008,4 +1331,15 @@ function normalizeTraceSeq(value: unknown): number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= -1 ? value : -1;
 }
 function nextTurnNumber(events: AgentTraceEvent[]): number { return events.filter((event) => event.type === 'turn/start').length + 1; }
+
+function findCurrentTurnId(events: readonly AgentTraceEvent[], turn: number): string | undefined {
+  const start = [...events].reverse().find((event) => event.type === 'turn/start' && event.data.turn === turn);
+  return typeof start?.turnId === 'string' ? start.turnId : typeof start?.data.turnId === 'string' ? start.data.turnId : undefined;
+}
+
+function extractContextAnchors(events: readonly AgentTraceEvent[], turn: number): string[] {
+  const text = events.filter((event) => event.data.turn === turn).map((event) => JSON.stringify(event.data)).join('\n');
+  const matches = text.match(/(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+|\b[A-Z][A-Z0-9_]{2,}\b|\b[0-9a-f]{8}-[0-9a-f-]{27,}\b/gu) ?? [];
+  return [...new Set(matches)].slice(0, 32);
+}
 function toConversation(session: StoredSession): AgentConversation { const last = projectMessages(session.events).at(-1)?.content; return { id: session.id, title: session.title, project: session.project || 'Harbors', ...turnSettings(session), ...permissionSettings(session), ...(last ? { preview: last.slice(0, 120) } : {}), createdAt: session.createdAt, updatedAt: session.updatedAt }; }

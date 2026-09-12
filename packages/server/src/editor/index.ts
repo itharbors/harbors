@@ -10,7 +10,7 @@ import { normalizeKitTheme } from '../framework/kit/theme';
 import { MenuModule } from '../framework/menu/index';
 import { MessageModule, type MessageObservation } from '../framework/message/index';
 import { PanelModule } from '../framework/panel/index';
-import { PluginModule } from '@itharbors/magnet';
+import { PluginModule, resolvePluginLoadOrder } from '@itharbors/magnet';
 import { WindowManager } from '../framework/window/index';
 import type { LayoutNode, WindowDescriptor } from '../framework/window/types';
 import type { AssemblyConfig } from '../assembly/config';
@@ -22,7 +22,6 @@ import fs from 'node:fs';
 import type { PluginConfigBindingHost, PluginPathRoots, PluginSourceIdentity } from '@itharbors/magnet';
 import {
   parseKitPackageManifest,
-  parseRepositoryKitPackage,
 } from '@itharbors/kit-core';
 import type { KitConfigDeclaration } from '@itharbors/kit-core';
 import type { PluginCredentialVault } from '@itharbors/plugin-types';
@@ -71,8 +70,8 @@ interface ActiveExternalPlugin {
   path: string;
   name: string;
   kitId: string;
-  legacyDataDirectories: readonly string[];
   credentials?: PluginCredentialVault;
+  requires?: Readonly<{ plugins: readonly string[] }>;
 }
 
 interface CreateEditorOptions {
@@ -152,7 +151,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   };
   function pluginLoadOptions(
     host: PluginRuntimeHost,
-    legacyDataDirectories: readonly string[],
     credentials?: PluginCredentialVault,
     kitId = kit.getCurrent()?.name ?? '__framework__',
   ): PluginLoadOptions {
@@ -161,7 +159,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       host,
       paths: {
         roots: runtimePluginPathRoots,
-        legacyDataDirectories,
       },
       config: configHost,
       kitId,
@@ -211,7 +208,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         name: info.name,
         path: info.path,
         kitId: info.source.kitId ?? '__framework__',
-        legacyDataDirectories: [],
       }] : [];
     });
 
@@ -267,14 +263,19 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       const { resolvePlugin } = await import('../plugin/resolver');
       const loaded: string[] = [];
       try {
+        const prepared = [];
         for (const name of BUILTIN_PLUGINS) {
           const pluginPath = await resolvePlugin(name, pluginResolveContext());
           await plugin.register(pluginPath, { kind: 'builtin' });
-          await plugin.load(pluginPath, pluginLoadOptions(sessionPluginHost(), []));
-          loaded.push(pluginPath);
+          const info = await plugin.inspect(pluginPath);
+          prepared.push({ path: pluginPath, name: info.name, requires: info.requires });
+        }
+        for (const builtin of resolvePluginLoadOrder(prepared)) {
+          await plugin.load(builtin.path, pluginLoadOptions(sessionPluginHost()));
+          loaded.push(builtin.path);
         }
       } catch (err) {
-        for (const p of loaded) {
+        for (const p of [...loaded].reverse()) {
           try { await plugin.unload(p); } catch { /* best effort */ }
         }
         corePluginsLoaded = undefined;
@@ -289,9 +290,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   async function resolveAndReadKit(kitNameOrPath: string): Promise<{
     descriptor: KitDescriptor;
     kitPath: string;
-    legacyDataDirectories: string[];
-    legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
-    legacyKitIds: readonly string[];
     config?: KitConfigDeclaration;
   }> {
     const { resolveKit } = await import('../plugin/resolver');
@@ -339,19 +337,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     if (publication && publication.version !== pkg.version) {
       throw new Error(`Invalid Kit at ${kitPath}: kit.json version must match package version`);
     }
-    const repositoryMetadata = pkg.harbors === undefined
-      ? undefined
-      : parseRepositoryKitPackage(pkg.harbors);
-    const legacyDataDirectories = [...(repositoryMetadata?.legacyDataDirectories ?? [])];
-    const legacyPluginDataDirectories = repositoryMetadata?.legacyPluginDataDirectories ?? {};
-    const declaredPluginOwners = new Set([
-      ...plugins,
-      ...(pkg['ce-editor'].kit.startup?.plugins ?? []),
-    ]);
-    const unknownLegacyOwner = Object.keys(legacyPluginDataDirectories).find((owner) => !declaredPluginOwners.has(owner));
-    if (unknownLegacyOwner) {
-      throw new Error(`Kit "${pkg.name}" grants legacy data to undeclared Plugin "${unknownLegacyOwner}"`);
-    }
     const assemblySource = assembly.kitSources.find((source) => (
       path.resolve(source.directory) === path.resolve(kitPath)
     ));
@@ -379,9 +364,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     return {
       descriptor,
       kitPath,
-      legacyDataDirectories,
-      legacyPluginDataDirectories,
-      legacyKitIds: publication?.legacyKitIds ?? [],
       config: publication?.config,
     };
   }
@@ -425,7 +407,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     try {
       await plugin.load(externalPlugin.path, pluginLoadOptions(
         sessionPluginHost(),
-        externalPlugin.legacyDataDirectories,
         externalPlugin.credentials,
         externalPlugin.kitId,
       ));
@@ -439,7 +420,13 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
           `Plugin "${externalPlugin.name}" load and owner cleanup failed`,
         );
       }
-      throw loadError;
+      const causeCode = loadError && typeof loadError === 'object' && typeof (loadError as { code?: unknown }).code === 'string'
+        ? (loadError as { code: string }).code
+        : undefined;
+      throw Object.assign(
+        new Error(`Plugin "${externalPlugin.name}" load failed: ${loadError instanceof Error ? loadError.message : String(loadError)}`, { cause: loadError }),
+        { code: 'PLUGIN_LOAD_FAILED', plugin: externalPlugin.name, ...(causeCode ? { causeCode } : {}) },
+      );
     }
   }
 
@@ -472,9 +459,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     const {
       descriptor,
       kitPath,
-      legacyDataDirectories,
-      legacyPluginDataDirectories,
-      legacyKitIds,
       config: configDeclaration,
     } = await resolveAndReadKit(kitNameOrPath);
     const preparedPlugins: ActiveExternalPlugin[] = [];
@@ -496,21 +480,19 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         && descriptor.permissions?.includes('credentials')
         && descriptor.permissionGrants?.credentials?.includes(info.name)
         && info.capabilities?.includes('credentials')
-        ? options.credentialVault.bind(descriptor.name, info.name, legacyKitIds)
+        ? options.credentialVault.bind(descriptor.name, info.name)
         : undefined;
       preparedPlugins.push({
         path: pluginPath,
         name: info.name,
         kitId: descriptor.name,
-        legacyDataDirectories: [...new Set([
-          ...legacyDataDirectories,
-          ...(Object.hasOwn(legacyPluginDataDirectories, info.name)
-            ? legacyPluginDataDirectories[info.name] ?? []
-            : []),
-        ])],
         credentials,
+        requires: info.requires,
       });
     }
+    const externalPluginNames = new Set(activeExternalPlugins.map((externalPlugin) => externalPlugin.name));
+    const availablePluginNames = plugin.listLoaded().filter((name) => !externalPluginNames.has(name));
+    const orderedPlugins = resolvePluginLoadOrder(preparedPlugins, availablePluginNames);
     const previousExternalPlugins = [...activeExternalPlugins];
     const loadedPlugins: ActiveExternalPlugin[] = [];
     const nextWindowManager = new WindowManager({
@@ -526,7 +508,6 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
           descriptor.name,
           configDeclaration,
           { roots: configStorageRoots },
-          legacyKitIds,
         );
         try {
           configTransaction = config.activate(activation);
@@ -537,7 +518,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       } else {
         configTransaction = config.deactivate();
       }
-      for (const preparedPlugin of preparedPlugins) {
+      for (const preparedPlugin of orderedPlugins) {
         loadedPlugins.push(await loadExternalPlugin(preparedPlugin));
       }
       configTransaction.commit();
@@ -662,12 +643,11 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         await ensureCorePluginsLoaded();
         const info = plugin.getInfo(pluginPath);
         try {
-        await plugin.load(pluginPath, pluginLoadOptions(
-          sessionPluginHost(),
-          [],
-          undefined,
-          kit.getCurrent()?.name ?? '__framework__',
-        ));
+          await plugin.load(pluginPath, pluginLoadOptions(
+            sessionPluginHost(),
+            undefined,
+            kit.getCurrent()?.name ?? '__framework__',
+          ));
         } catch (err) {
           if (info) {
             panel.clearOwner(info.name);

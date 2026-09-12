@@ -24,13 +24,7 @@ export class EditorTransport {
   ) {}
 
   async fetchSessionInfo(): Promise<SessionInfo> {
-    let resp = await fetch(`/api/session/${this.session.sessionId}`);
-
-    // Auto-create session on server if it doesn't exist yet
-    if (resp.status === 404) {
-      resp = await this.createSession();
-    }
-
+    const resp = await fetch(`/api/session/${this.session.sessionId}`);
     if (!resp.ok) {
       throw new Error(`Failed to fetch session: ${resp.status}`);
     }
@@ -57,17 +51,17 @@ export class EditorTransport {
   }
 
   private async initializeSessionForBootstrap(): Promise<void> {
-    let createResp = await this.createSession();
+    let createResp = await this.initializeSession();
     if (!createResp.ok && createResp.status >= 500) {
       await delay(100);
-      createResp = await this.createSession();
+      createResp = await this.initializeSession();
     }
     if (!createResp.ok) {
       throw new Error(`Failed to initialize session for bootstrap: ${createResp.status}`);
     }
   }
 
-  private createSession(): Promise<Response> {
+  private initializeSession(): Promise<Response> {
     return fetch('/api/session', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

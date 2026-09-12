@@ -173,7 +173,6 @@ export interface ApplicationPluginRuntimeHost {
 
 export interface PluginPathLoadConfiguration {
   readonly roots: PluginPathRoots;
-  readonly legacyDataDirectories: readonly string[];
 }
 
 export type PluginLoadOptions =

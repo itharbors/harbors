@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { WorkbenchContext } from '@itharbors/plugin-types';
-import { selectUrlSession, startClientApp, waitForAuthorization } from '../src/index';
+import { selectEditorSession, selectUrlSession, startClientApp, waitForAuthorization } from '../src/index';
 
 describe('client main entry', () => {
   afterEach(() => {
@@ -31,6 +31,22 @@ describe('client main entry', () => {
   it('does not restore from localStorage without a URL Session', () => {
     window.localStorage.setItem('harbors.sessionId', 's1');
     expect(selectUrlSession(context())).toBeNull();
+    expect(window.location.search).toBe('');
+    expect(window.localStorage.getItem('harbors.sessionId')).toBeNull();
+  });
+
+  it('opens an editor only for a visible URL or cached Session', () => {
+    window.localStorage.setItem('harbors.sessionId', 's1');
+    window.history.replaceState({}, '', '/?kit=default');
+    expect(selectEditorSession(context())).toBe('s1');
+    expect(window.location.search).toBe('?kit=default&session=s1');
+  });
+
+  it('clears an invalid editor route before returning to the picker', () => {
+    window.localStorage.setItem('harbors.sessionId', 'missing');
+    window.history.replaceState({}, '', '/kits/default?kit=default&page=main&sessionId=missing');
+    expect(selectEditorSession(context())).toBeNull();
+    expect(window.location.pathname).toBe('/');
     expect(window.location.search).toBe('');
     expect(window.localStorage.getItem('harbors.sessionId')).toBeNull();
   });
@@ -136,7 +152,6 @@ describe('client main entry', () => {
       if (url === '/api/workbench/context') return json({
         actor: 'user', currentUser: user, users: [user],
         sessions: [{ sessionId: 's1', ownerUserId: user.userId, createdAt: 1, lastAccessAt: 2 }],
-        ownerlessSessions: [],
       });
       throw new Error(`Unexpected request: ${url}`);
     }));
@@ -188,7 +203,6 @@ function context(): WorkbenchContext {
     actor: 'local-admin', currentUser: null,
     users: [{ userId: 'u1', displayName: '张三', createdAt: 1, updatedAt: 1 }],
     sessions: [{ sessionId: 's1', ownerUserId: 'u1', createdAt: 1, lastAccessAt: 2 }],
-    ownerlessSessions: [],
   };
 }
 

@@ -87,7 +87,6 @@ export interface PluginRuntimeHarnessOptions {
   readonly sessionId?: string;
   readonly source?: PluginSourceIdentity;
   readonly paths?: Partial<PluginPathRoots>;
-  readonly legacyDataDirectories?: readonly string[];
   readonly applicationRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   readonly credentials?: PluginCredentialVault;
   readonly externalRequests?: readonly MessageMockRequest[];
@@ -285,7 +284,7 @@ function createPluginHost(
     load: (pluginPath: string) => plugin.load(pluginPath, {
       scope: 'session' as const,
       host,
-      paths: { roots: paths, legacyDataDirectories: options.legacyDataDirectories ?? [] },
+      paths: { roots: paths },
       credentials: options.credentials,
     }),
     unload: (pluginPath: string) => plugin.unload(pluginPath),
@@ -371,7 +370,7 @@ export function createPluginRuntimeHarness(options: PluginRuntimeHarnessOptions)
     await plugin.load(options.pluginPath, {
       scope: 'session',
       host,
-      paths: { roots: roots.roots, legacyDataDirectories: options.legacyDataDirectories ?? [] },
+      paths: { roots: roots.roots },
       credentials: options.credentials,
     });
     loadedPluginName = (await plugin.inspect(options.pluginPath)).name;

@@ -698,7 +698,6 @@ function reconcileSteps(
   previous: DisplayTurn | undefined,
   sourceTurn: TraceTurn | undefined,
   localRequests: ToolProcessEntry[],
-  fallbackAssistant: TraceStep["assistant"] | undefined,
   turn: number,
 ): DisplayStep[] {
   const sourceSteps = sourceTurn?.steps || [];
@@ -720,12 +719,6 @@ function reconcileSteps(
     step.localRequest = localRequest;
   }
 
-  // 结构化 trace 存在时只信任其中的 assistant/turn 终态；surface fallback 仅兼容完全无 trace 的旧会话。
-  if (!sourceTurn && fallbackAssistant) {
-    const step = steps.at(-1) || { turn, step: 1, tools: [], completed: false };
-    if (!steps.includes(step)) steps.push(step);
-    step.assistant = { ...fallbackAssistant, step: step.step };
-  }
   if (sourceTurn?.error && steps.length === 0) steps.push({ turn, step: 1, tools: [], completed: false });
   steps.sort((left, right) => left.step - right.step);
 
@@ -747,18 +740,12 @@ function reconcileSteps(
 
 function projectTurn(
   previous: DisplayTurn | undefined,
-  user: MessageData,
   sourceTurn: TraceTurn | undefined,
   localRequests: ToolProcessEntry[],
-  assistantTexts: string[],
   turn: number,
   runningTurn: number | undefined,
 ): DisplayTurn {
-  const hasLegacyFinal = !sourceTurn && assistantTexts.length > 0;
-  const fallbackAssistant = hasLegacyFinal
-    ? { id: `live-assistant-${user.id}`, seq: Number.MAX_SAFE_INTEGER, turn, step: 1, text: assistantTexts.at(-1) || "", hasToolCalls: false }
-    : undefined;
-  const steps = reconcileSteps(previous, sourceTurn, localRequests, fallbackAssistant, turn);
+  const steps = reconcileSteps(previous, sourceTurn, localRequests, turn);
   const status: DisplayTurn["status"] = sourceTurn?.terminal?.status === "failed"
     ? "failed"
     : sourceTurn?.terminal?.status === "cancelled"
@@ -767,7 +754,7 @@ function projectTurn(
         ? "rejected"
         : sourceTurn?.terminal?.status === "timed_out"
           ? "timed_out"
-          : sourceTurn?.terminal?.status === "completed" || hasLegacyFinal
+          : sourceTurn?.terminal?.status === "completed"
       ? "completed"
       : runningTurn === turn
         ? "running"
@@ -798,7 +785,7 @@ export function createDisplayTurnProjector(): DisplayTurnProjector {
     project(messages, traceTurns, localProcessEntries, turnOffset, conversationActive = false) {
       const traceByTurn = indexTraceTurns(traceTurns);
       const localRequestsByTurn = indexLocalRequests(localProcessEntries);
-      const pending: Array<{ user: MessageData; sourceTurn?: TraceTurn; localRequests: ToolProcessEntry[]; assistantTexts: string[]; turn: number }> = [];
+      const pending: Array<{ user: MessageData; sourceTurn?: TraceTurn; localRequests: ToolProcessEntry[]; turn: number }> = [];
       let turnNumber = turnOffset;
       for (let index = 0; index < messages.length; index += 1) {
         const message = messages[index];
@@ -810,7 +797,6 @@ export function createDisplayTurnProjector(): DisplayTurnProjector {
           user: message,
           sourceTurn: traceByTurn.get(turnNumber),
           localRequests: localRequestsByTurn.get(turnNumber) || [],
-          assistantTexts: assistant.texts,
           turn: turnNumber,
         });
         index = assistant.nextIndex - 1;
@@ -820,9 +806,7 @@ export function createDisplayTurnProjector(): DisplayTurnProjector {
       if (conversationActive) {
         for (let index = pending.length - 1; index >= 0; index -= 1) {
           const item = pending[index]!;
-          const hasLegacyFinal = !item.sourceTurn && item.assistantTexts.length > 0;
-          const isInterrupted = !hasLegacyFinal
-            && item.sourceTurn?.terminal?.status !== "completed"
+          const isInterrupted = item.sourceTurn?.terminal?.status !== "completed"
             && item.sourceTurn?.terminal?.status !== "failed"
             && item.sourceTurn?.terminal?.status !== "cancelled"
             && item.sourceTurn?.terminal?.status !== "rejected"
@@ -840,10 +824,8 @@ export function createDisplayTurnProjector(): DisplayTurnProjector {
         const previous = previousRows.get(rowKey);
         const projectedTurn = projectTurn(
           previous?.turn,
-          item.user,
           item.sourceTurn,
           item.localRequests,
-          item.assistantTexts,
           item.turn,
           runningTurn,
         );

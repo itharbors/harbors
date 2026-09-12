@@ -44,7 +44,12 @@ export interface PluginInfo {
   entry: string;
   capabilities?: PluginCapability[];
   assets?: PluginAssetsManifest;
+  requires?: PluginRequirements;
   contribute?: ContributeData;
+}
+
+export interface PluginRequirements {
+  plugins: readonly string[];
 }
 
 /** Registration deliberately contains no manifest-derived fields. */
