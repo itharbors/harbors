@@ -17,6 +17,7 @@ import { isKitCatalogResponse, selectHostEntry } from './core/host-entry';
 import {
   clearStoredSessionId,
   getDeviceId,
+  getStoredSessionId,
   isLocalHostname,
   setStoredSessionId,
 } from './core/storage';
@@ -56,11 +57,13 @@ export async function startClientApp(
     const catalog: unknown = await response.json();
     if (!isKitCatalogResponse(catalog)) throw new Error('Kit catalog response is invalid');
 
-    if (entry === 'editor') {
-      host.innerHTML = '<editor-app></editor-app>';
-      return;
-    }
     const context = await fetchWorkbenchContext();
+    if (entry === 'editor') {
+      if (selectEditorSession(context)) {
+        host.innerHTML = '<editor-app></editor-app>';
+        return;
+      }
+    }
     const sessionId = selectUrlSession(context);
     renderKitPicker(host, catalog.kits, {
       context,
@@ -73,6 +76,22 @@ export async function startClientApp(
   } catch {
     renderKitPickerError(host, () => void startClientApp(resumeState, host, remoteAccess, authorizationPollDelayMs));
   }
+}
+
+export function selectEditorSession(context: WorkbenchContext): string | null {
+  const url = new URL(window.location.href);
+  const sessionId = url.searchParams.get('session')
+    || url.searchParams.get('sessionId')
+    || getStoredSessionId();
+  if (sessionId && context.sessions.some((session) => session.sessionId === sessionId)) {
+    persistSelectedSession(sessionId);
+    return sessionId;
+  }
+  clearStoredSessionId();
+  url.pathname = '/';
+  for (const parameter of ['kit', 'page', 'session', 'sessionId']) url.searchParams.delete(parameter);
+  window.history.replaceState({}, '', url.toString());
+  return null;
 }
 
 export function selectUrlSession(context: WorkbenchContext): string | null {

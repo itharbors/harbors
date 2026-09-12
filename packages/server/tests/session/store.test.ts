@@ -29,6 +29,7 @@ describe('SessionStore', () => {
       savedFileList: JSON.stringify(['/src/index.ts']),
       createdAt: 1000,
       lastAccessAt: 2000,
+      ownerUserId: 'user-a',
     });
 
     const row = store.get('abc123');
@@ -45,6 +46,7 @@ describe('SessionStore', () => {
       savedFileList: JSON.stringify(['/src/main.ts', '/src/lib.ts']),
       createdAt: 1000,
       lastAccessAt: 3000,
+      ownerUserId: 'user-a',
     });
 
     const row = store.get('abc123');

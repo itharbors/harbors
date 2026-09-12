@@ -75,19 +75,16 @@ export class SessionRuntimeRegistry {
     const existingPending = this.pending.get(runtimeId);
     if (existingPending) return existingPending;
 
-    const existedBefore = this.manager.get(sessionId) !== undefined;
     const pending = (async () => {
-      const session = this.manager.getOrCreate(sessionId, options.workspacePath ?? '');
+      const session = this.manager.get(sessionId);
+      if (!session) {
+        throw new Error(`Session "${sessionId}" does not exist`);
+      }
       try {
         const editor = await this.createRuntime(session, options);
         this.runtimes.set(runtimeId, editor);
         this.runtimeOwners.set(runtimeId, session.sessionId);
         return { session, editor };
-      } catch (error) {
-        if (!existedBefore) {
-          this.manager.destroy(sessionId);
-        }
-        throw error;
       } finally {
         this.pending.delete(runtimeId);
       }
@@ -117,8 +114,7 @@ export class SessionRuntimeRegistry {
       try {
         await pending;
       } catch {
-        // A failed runtime is already removed by its factory transaction;
-        // continue so other runtimes belonging to the client session are
+        // Continue so other runtimes belonging to the client session are
         // still disposed.
       }
     }

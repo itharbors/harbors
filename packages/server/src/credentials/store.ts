@@ -215,18 +215,6 @@ export class CredentialStore {
     return rows.map(toProfile);
   }
 
-  /** Internal migration view; unlike listActive it retains the secret pointer. */
-  listActiveRecords(scope: string): CredentialRecord[] {
-    const rows = this.database
-      .prepare(
-        `SELECT * FROM credential_profiles
-         WHERE scope = ? AND state = 'active'
-         ORDER BY created_at, id`
-      )
-      .all(scope) as StoredCredentialRow[];
-    return rows.map(toRecord);
-  }
-
   getActive(scope: string, id: string): CredentialProfile | undefined {
     const row = this.database
       .prepare(

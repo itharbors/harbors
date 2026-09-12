@@ -83,68 +83,13 @@ describe('EditorTransport', () => {
     fetchSpy.mockRestore();
   });
 
-  it('fetchSessionInfo auto-creates session when server returns 404', async () => {
-    fetchSpy
-      // First call: GET returns 404
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-      } as Response)
-      // Second call: POST creates session
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: async () => ({
-          sessionId: 'test-session-123',
-          workspacePath: '/home/user',
-          savedFileList: [],
-          createdAt: 1000,
-          lastAccessAt: 2000,
-        }),
-      } as Response);
+  it('fetchSessionInfo rejects a missing Session without creating it', async () => {
+    fetchSpy.mockResolvedValueOnce({ ok: false, status: 404 } as Response);
 
-    const info = await transport.fetchSessionInfo();
-
-    // Verify both calls were made
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-
-    // First call was GET
-    expect(fetchSpy.mock.calls[0][0]).toBe('/api/session/test-session-123');
-
-    // Second call was POST to create
-    expect(fetchSpy.mock.calls[1][0]).toBe('/api/session');
-    expect(fetchSpy.mock.calls[1][1]?.method).toBe('POST');
-
-    // Session state is updated
-    expect(session.connected).toBe(true);
-    expect(session.sessionInfo?.sessionId).toBe('test-session-123');
-    expect(session.sessionInfo?.workspacePath).toBe('/home/user');
-    expect(info.workspacePath).toBe('/home/user');
-  });
-
-  it('uses the window Kit when creating its stable Electron session', async () => {
-    transport = new EditorTransport(session, { kit: '/repo/kits/sqlite' });
-    fetchSpy
-      .mockResolvedValueOnce({ ok: false, status: 404 } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 201,
-        json: async () => ({
-          sessionId: 'test-session-123',
-          workspacePath: '',
-          savedFileList: [],
-          createdAt: 1000,
-          lastAccessAt: 1000,
-        }),
-      } as Response);
-
-    await transport.fetchSessionInfo();
-
-    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/session', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'test-session-123', kit: '/repo/kits/sqlite' }),
-    });
+    await expect(transport.fetchSessionInfo()).rejects.toThrow('Failed to fetch session: 404');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledWith('/api/session/test-session-123');
+    expect(session.connected).toBe(false);
   });
 
   it('fetchSessionInfo returns existing session without POST', async () => {
@@ -172,18 +117,11 @@ describe('EditorTransport', () => {
     expect(existingSession.connected).toBe(true);
   });
 
-  it('fetchSessionInfo throws when POST also fails', async () => {
-    fetchSpy
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      } as Response);
+  it('fetchSessionInfo throws when the read fails', async () => {
+    fetchSpy.mockResolvedValueOnce({ ok: false, status: 500 } as Response);
 
     await expect(transport.fetchSessionInfo()).rejects.toThrow('Failed to fetch session: 500');
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(session.connected).toBe(false);
   });
 

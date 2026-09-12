@@ -17,14 +17,6 @@ describe('Kit picker login flow', () => {
     vi.unstubAllGlobals();
   });
 
-  it('keeps the legacy overload on the Kit step', () => {
-    const host = mount();
-    renderKitPicker(host, kits, 'picker-session');
-    expect(host.querySelector('h1')?.textContent).toBe('选择工作台');
-    expect(host.querySelector('[data-kit-id="default"]')?.textContent).toContain('Default Kit');
-    expect(host.querySelector('.kit-user-grid')).toBeNull();
-  });
-
   it('shows only login-style user buttons on the first local step', () => {
     const host = mount();
     renderKitPicker(host, kits, opts());
@@ -206,7 +198,6 @@ describe('Kit picker login flow', () => {
     click(host, 'input[value="s1"]');
     click(host, '.kit-session-clear');
     click(host, '.kit-back-action');
-    click(host, '.kit-secondary-action');
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(host.querySelector('.kit-flow-section')?.getAttribute('aria-busy')).toBe('true');
     expect([...host.querySelectorAll<HTMLButtonElement | HTMLInputElement | HTMLSelectElement>('.kit-flow-section button, .kit-flow-section input, .kit-flow-section select')]
@@ -292,7 +283,7 @@ describe('Kit picker login flow', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/auth/approve/remote-device', expect.objectContaining({ body: '{}' })));
   });
 
-  it('resumes after creating a user and claiming an ownerless Session', async () => {
+  it('resumes after creating a user', async () => {
     const createHost = mount();
     const createChanged = vi.fn();
     const createFetch = vi.fn(async () => new Response(JSON.stringify({ userId: 'u3' }), { status: 200 }));
@@ -322,27 +313,6 @@ describe('Kit picker login flow', () => {
     expect(createHost.querySelector('h1')?.textContent).toBe('选择 Session');
     expectFeedback(createHost, 'success', '已创建用户“新用户”');
 
-    const claimHost = mount();
-    const claimCalls: string[] = [];
-    window.localStorage.setItem('harbors.sessionId', 's1');
-    window.history.replaceState({}, '', '/?session=s1');
-    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
-    vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('confirm', vi.fn(() => true));
-    renderKitPicker(claimHost, kits, opts({
-      onSessionSelected: (sessionId) => {
-        claimCalls.push(`persist:${sessionId}`);
-        window.localStorage.setItem('harbors.sessionId', sessionId);
-        window.history.replaceState({}, '', `/?session=${sessionId}`);
-      },
-      onContextChanged: (state) => claimCalls.push(`reload:${state?.selectedSessionId}`),
-    }));
-    click(claimHost, '.kit-user-card[data-user-id="u1"]');
-    claimHost.querySelector<HTMLSelectElement>('.workbench-ownerless-select')!.value = 'legacy-two';
-    click(claimHost, '.kit-secondary-action');
-    await vi.waitFor(() => expect(claimCalls).toEqual(['persist:s2', 'persist:legacy-two', 'reload:legacy-two']));
-    expect(window.location.search).toBe('?session=legacy-two');
-    expect(window.localStorage.getItem('harbors.sessionId')).toBe('legacy-two');
   });
 
   it('edits user names inline without relying on browser prompts', async () => {
@@ -420,7 +390,7 @@ describe('Kit picker login flow', () => {
     await vi.waitFor(() => expectFeedback(
       host,
       'error',
-      '无法删除“张三”：该用户仍有关联 Session、授权设备或待授权请求。请先删除 Session，并在“授权管理”撤销或拒绝关联设备。',
+      '无法删除“张三”：该用户仍有关联 Session。请先删除 Session。',
     ));
     expect(host.querySelectorAll('.kit-user-card[data-user-id]')).toHaveLength(2);
     expect(host.querySelector('.kit-user-rename')).not.toBeNull();
@@ -585,10 +555,6 @@ function baseContext(): WorkbenchContext {
       { sessionId: 's1', ownerUserId: 'u1', createdAt: 1, lastAccessAt: 3 },
       { sessionId: 's2', ownerUserId: 'u1', createdAt: 2, lastAccessAt: 4 },
       { sessionId: 's3', ownerUserId: 'u2', createdAt: 3, lastAccessAt: 5 },
-    ],
-    ownerlessSessions: [
-      { sessionId: 'legacy-one', ownerUserId: null, createdAt: 1, lastAccessAt: 1 },
-      { sessionId: 'legacy-two', ownerUserId: null, createdAt: 2, lastAccessAt: 2 },
     ],
   };
 }

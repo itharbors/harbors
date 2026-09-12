@@ -24,7 +24,7 @@ it('checks staged runtime plugins without requiring source files', async () => {
     version: '1.0.0',
     type: 'module',
     main: './main/dist/index.js',
-    'ce-editor': { contribute: {} },
+    'ce-editor': { schemaVersion: 1, contribute: {} },
   }));
   await writeFile(path.join(root, 'main', 'dist', 'index.js'), 'export default {};\n');
 

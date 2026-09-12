@@ -17,5 +17,4 @@ export interface WorkbenchContext {
   currentUser: PublicUserSummary | null;
   users: PublicUserSummary[];
   sessions: PublicSessionSummary[];
-  ownerlessSessions: PublicSessionSummary[];
 }

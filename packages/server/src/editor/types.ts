@@ -253,7 +253,6 @@ export type PluginLoadOptions =
 
 export interface PluginPathLoadConfiguration {
   readonly roots: PluginPathRoots;
-  readonly legacyDataDirectories: readonly string[];
 }
 
 export interface BrowserEditor {

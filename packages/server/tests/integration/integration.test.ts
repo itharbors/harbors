@@ -17,6 +17,7 @@ describe('Framework Integration', () => {
   let stop: () => Promise<void>;
   let baseURL: string;
   let editorMap: Map<string, ReturnType<typeof createServer>['editorMap'] extends Map<string, infer E> ? E : never>;
+  let manager: ReturnType<typeof createServer>['manager'];
   const tempDirs: string[] = [];
   const betaKit = createKitFixture({
     name: '@example/kit-beta',
@@ -49,6 +50,7 @@ describe('Framework Integration', () => {
     });
     stop = server.stop;
     editorMap = server.editorMap;
+    manager = server.manager;
     port = await server.start(0);
     baseURL = `http://localhost:${port}`;
   });
@@ -62,6 +64,7 @@ describe('Framework Integration', () => {
   });
 
   async function createSession(sessionId: string): Promise<void> {
+    manager.getOrCreate(sessionId, '', 'local-test-user');
     await fetch(`${baseURL}/api/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -79,6 +82,7 @@ describe('Framework Integration', () => {
       type: 'module',
       main: 'dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           menu: [
             { type: 'menu', id: topLabel, label: topLabel },
@@ -126,6 +130,7 @@ describe('Framework Integration', () => {
     ['legacy-agent-chat', 'agent-chat'],
     ['unknown-kit-path', path.join(tmpdir(), 'missing-kit')],
   ])('rejects an explicitly unknown kit identity (%s) without creating a runtime', async (sessionId, kit) => {
+    manager.getOrCreate(sessionId, '', 'local-test-user');
     const response = await fetch(`${baseURL}/api/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -141,18 +146,20 @@ describe('Framework Integration', () => {
 
   it('accepts a configured Kit directory supplied through the kit field', async () => {
     const sessionId = 'configured-kit-directory';
+    manager.getOrCreate(sessionId, '', 'local-test-user');
     const response = await fetch(`${baseURL}/api/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, kit: path.resolve(testKitFixture.directory) }),
     });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     expect(editorMap.has(`${sessionId}::${path.resolve(testKitFixture.directory)}`)).toBe(true);
   });
 
   it('rejects an explicitly unknown kitName without falling back to the default Kit', async () => {
     const sessionId = 'unknown-kit-name';
+    manager.getOrCreate(sessionId, '', 'local-test-user');
     const response = await fetch(`${baseURL}/api/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -168,13 +175,14 @@ describe('Framework Integration', () => {
 
   it('keeps explicit kitPath loading semantics', async () => {
     const sessionId = 'explicit-kit-path';
+    manager.getOrCreate(sessionId, '', 'local-test-user');
     const response = await fetch(`${baseURL}/api/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ sessionId, kitPath: testKitFixture.directory }),
     });
 
-    expect(response.status).toBe(201);
+    expect(response.status).toBe(200);
     expect(editorMap.has(`${sessionId}::${testKitFixture.directory}`)).toBe(true);
   });
 
@@ -220,6 +228,7 @@ describe('Framework Integration', () => {
       });
       expect(server.editorMap.size).toBe(0);
 
+      server.manager.getOrCreate('external-catalog-session', '', 'local-test-user');
       const createResponse = await fetch(`http://localhost:${customPort}/api/session`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -228,7 +237,7 @@ describe('Framework Integration', () => {
           kit: '@example/external-kit',
         }),
       });
-      expect(createResponse.status).toBe(201);
+      expect(createResponse.status).toBe(200);
       const bootstrapResponse = await fetch(
         `http://localhost:${customPort}/api/bootstrap/${encodeURIComponent(
           getRuntimeId('external-catalog-session', '@example/external-kit'),
@@ -270,12 +279,13 @@ describe('Framework Integration', () => {
     });
     const installedPort = await server.start(0);
     try {
+      server.manager.getOrCreate('installed-session', '', 'local-test-user');
       const response = await fetch(`http://localhost:${installedPort}/api/session`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sessionId: 'installed-session', kit: '@example/kit-installed' }),
       });
-      expect(response.status).toBe(201);
+      expect(response.status).toBe(200);
       const bootstrap = await fetch(
         `http://localhost:${installedPort}/api/bootstrap/${encodeURIComponent(
           getRuntimeId('installed-session', '@example/kit-installed'),
@@ -368,12 +378,13 @@ describe('Framework Integration', () => {
     const customBaseURL = `http://localhost:${customPort}`;
 
     try {
+      server.manager.getOrCreate('configured-default-kit-test', '', 'local-test-user');
       const sessionResp = await fetch(`${customBaseURL}/api/session`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ sessionId: 'configured-default-kit-test' }),
       });
-      expect(sessionResp.status).toBe(201);
+      expect(sessionResp.status).toBe(200);
 
       const resp = await fetch(`${customBaseURL}/api/bootstrap/configured-default-kit-test`);
       const data = await resp.json();
@@ -389,6 +400,8 @@ describe('Framework Integration', () => {
   });
 
   it('isolates built-in and external runtime pipelines across concurrent Kits', async () => {
+    manager.getOrCreate('multi-kit-default', '', 'local-test-user');
+    manager.getOrCreate('multi-kit-sqlite', '', 'local-test-user');
     const [defaultResponse, sqliteResponse] = await Promise.all([
       fetch(`${baseURL}/api/session`, {
         method: 'POST',
@@ -408,8 +421,8 @@ describe('Framework Integration', () => {
       }),
     ]);
 
-    expect(defaultResponse.status).toBe(201);
-    expect(sqliteResponse.status).toBe(201);
+    expect(defaultResponse.status).toBe(200);
+    expect(sqliteResponse.status).toBe(200);
 
     const defaultEditor = editorMap.get(getRuntimeId('multi-kit-default', testKitFixture.name))!;
     const sqliteEditor = editorMap.get(getRuntimeId('multi-kit-sqlite', betaKit.name))!;

@@ -2,7 +2,6 @@ import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import Database from 'better-sqlite3';
 import { KitModule, normalizeKitLayoutConfig } from '../../src/framework/kit/index';
 import type { KitDescriptor } from '../../src/framework/kit/types';
 import { createEditor } from '../../src/editor/index';
@@ -10,7 +9,6 @@ import { CredentialStore } from '../../src/credentials/store';
 import { CredentialVault } from '../../src/credentials/vault';
 import { testAssembly } from '../helpers/assembly';
 import type { PluginCredentialVault } from '@itharbors/plugin-types';
-import type { KitConfigDeclaration } from '@itharbors/kit-core';
 import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
 function writeJson(filePath: string, value: unknown): void {
@@ -26,9 +24,6 @@ function createCredentialKit(
     manifestId?: string;
     manifestVersion?: string;
     permissionGrants?: unknown;
-    legacyKitIds?: readonly string[];
-    legacyPluginDataDirectories?: Readonly<Record<string, readonly string[]>>;
-    config?: KitConfigDeclaration;
   } = {},
 ): string {
   const kitDir = path.join(root, directory);
@@ -48,19 +43,6 @@ function createCredentialKit(
         windowEntries: { main: 'main.html', secondary: 'secondary.html' },
       },
     },
-    ...(options.legacyPluginDataDirectories ? {
-      harbors: {
-        distribution: 'builtin',
-        ci: { runner: 'ubuntu-latest' },
-        docs: { summary: 'Credential fixture' },
-        resources: [],
-        storage: {
-          legacyDataDirectories: [],
-          legacyPluginDataDirectories: options.legacyPluginDataDirectories,
-        },
-        scripts: { build: 'build', test: 'test' },
-      },
-    } : {}),
   });
   writeJson(path.join(kitDir, 'kit.json'), {
     schemaVersion: 1,
@@ -74,8 +56,6 @@ function createCredentialKit(
     ...(options.permissionGrants === undefined
       ? (defaultPermissionGrants ? { permissionGrants: defaultPermissionGrants } : {})
       : { permissionGrants: options.permissionGrants }),
-    ...(options.legacyKitIds ? { legacyKitIds: options.legacyKitIds } : {}),
-    ...(options.config ? { config: options.config } : {}),
     entry: 'package.json',
   });
   writeJson(path.join(kitDir, 'layout.json'), { windows: [] });
@@ -93,16 +73,14 @@ function createCredentialKit(
       version: '1.0.0',
       type: 'module',
       main: './main/dist/index.js',
-      'ce-editor': capabilities ? { capabilities } : {},
+      'ce-editor': { schemaVersion: 1, ...(capabilities ? { capabilities } : {}) },
     });
     fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), `
       let credentials;
-      let paths;
       editor.plugin.define({
-        lifecycle: { load(runtime) { credentials = runtime.credentials; paths = runtime.paths; } },
+        lifecycle: { load(runtime) { credentials = runtime.credentials; } },
         methods: {
           hasCredentials() { return credentials !== undefined; },
-          legacyData() { return paths.legacyData; },
           put(input) { return credentials.put(input); },
           get(id) { return credentials.get(id); },
         },
@@ -385,142 +363,6 @@ describe('KitModule', () => {
 
     await Promise.all([owner.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose()]);
     await Promise.all([vault.close(), disabledVault.close()]);
-  });
-
-  it('passes manifest legacy Kit IDs only to credential bindings', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-credential-legacy-ids-'));
-    temporaryRoots.push(root);
-    const kitDir = createCredentialKit(root, 'legacy', '@scope/kit-harness', ['credentials'], {
-      legacyKitIds: ['legacy-kit'],
-    });
-    const credentials = {
-      capability: () => ({ mode: 'on' as const, status: 'available' as const }),
-      bind: vi.fn(() => ({
-        capability: async () => ({ mode: 'on' as const, status: 'available' as const }),
-        available: async () => true,
-        list: async () => [],
-        get: async () => ({
-          profile: {
-            id: '00000000-0000-4000-8000-000000000000',
-            label: '',
-            metadata: {},
-            createdAt: '',
-            updatedAt: '',
-          },
-          secret: '',
-        }),
-        put: async () => ({ id: '00000000-0000-4000-8000-000000000000', label: '', metadata: {}, createdAt: '', updatedAt: '' }),
-        delete: async () => undefined,
-      })),
-    };
-    const editor = createEditor('legacy-bind', {
-      assembly: assemblyFor(kitDir),
-      pluginPathRoots: createTestPluginPathRoots(),
-      credentialVault: credentials,
-    });
-
-    await editor.kit.load();
-
-    expect(credentials.bind).toHaveBeenCalledWith(
-      '@scope/kit-harness',
-      '@scope/mysql-core',
-      ['legacy-kit'],
-    );
-    await editor.dispose();
-  });
-
-  it('passes manifest legacy Kit IDs to config activation and migrates rows through the real Editor path', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-config-legacy-ids-'));
-    temporaryRoots.push(root);
-    const applicationData = path.join(root, 'application-data');
-    fs.mkdirSync(applicationData, { recursive: true });
-    const config: KitConfigDeclaration = {
-      schemaVersion: 1,
-      defaultsLayer: 'default',
-      writeLayer: 'global',
-      layers: [
-        { name: 'default', priority: 0, storage: null },
-        { name: 'global', priority: 10, storage: { driver: 'sqlite', root: 'application-data', path: 'config.sqlite' } },
-      ],
-    };
-    const kitId = 'harness';
-    const kitDir = createCredentialKit(root, 'config', kitId, [], {
-      legacyKitIds: ['legacy-kit'],
-      config,
-    });
-    const databasePath = path.join(applicationData, 'config.sqlite');
-    const database = new Database(databasePath);
-    database.exec(`
-      CREATE TABLE config_values (
-        kit_id TEXT NOT NULL,
-        plugin_name TEXT NOT NULL,
-        layer_name TEXT NOT NULL,
-        key TEXT NOT NULL,
-        value_json TEXT NOT NULL,
-        PRIMARY KEY (kit_id, plugin_name, layer_name, key)
-      )
-    `);
-    const insert = database.prepare(
-      'INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json) VALUES (?, ?, ?, ?, ?)',
-    );
-    insert.run('legacy-kit', '', 'global', 'theme', JSON.stringify('legacy'));
-    insert.run(kitId, '', 'global', 'theme', JSON.stringify('current'));
-    database.close();
-
-    const editor = createEditor('legacy-config', {
-      assembly: assemblyFor(kitDir),
-      pluginPathRoots: createTestPluginPathRoots(),
-      configStorageRoots: { 'application-data': applicationData },
-    });
-    await editor.kit.load();
-
-    expect(editor.config.get('theme')).toBe('current');
-    await editor.dispose();
-
-    const reopened = new Database(databasePath);
-    expect(reopened.prepare(
-      'SELECT value_json FROM config_values WHERE kit_id = ? AND key = ?',
-    ).get(kitId, 'theme')).toEqual({ value_json: JSON.stringify('current') });
-    expect(reopened.prepare(
-      'SELECT value_json FROM config_values WHERE kit_id = ? AND key = ?',
-    ).get('legacy-kit', 'theme')).toEqual({ value_json: JSON.stringify('legacy') });
-    reopened.close();
-  });
-
-  it('injects owner-scoped legacy data only into the granted Kit Plugin', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-owner-legacy-data-'));
-    temporaryRoots.push(root);
-    const applicationData = path.join(root, 'application-data');
-    fs.mkdirSync(path.join(applicationData, 'pi-agent'), { recursive: true });
-    const kitDir = createCredentialKit(root, 'owner-legacy', '@scope/owner-legacy', [], {
-      legacyPluginDataDirectories: { '@scope/mysql-core': ['pi-agent'] },
-    });
-    const editor = createEditor('owner-legacy', {
-      assembly: assemblyFor(kitDir),
-      pluginPathRoots: createTestPluginPathRoots(applicationData),
-    });
-
-    await editor.kit.load();
-
-    expect(editor.plugin.callPlugin('@scope/mysql-core', 'legacyData'))
-      .toEqual([path.join(applicationData, 'pi-agent')]);
-    expect(editor.plugin.callPlugin('@scope/mysql-explorer', 'legacyData')).toEqual([]);
-    await editor.dispose();
-  });
-
-  it('rejects owner-scoped legacy data grants for undeclared Plugins', async () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-unknown-legacy-owner-'));
-    temporaryRoots.push(root);
-    const kitDir = createCredentialKit(root, 'unknown-legacy-owner', '@scope/unknown-legacy-owner', [], {
-      legacyPluginDataDirectories: { '@scope/not-declared': ['pi-agent'] },
-    });
-    const editor = createEditor('unknown-legacy-owner', {
-      assembly: assemblyFor(kitDir),
-      pluginPathRoots: createTestPluginPathRoots(),
-    });
-
-    await expect(editor.kit.load()).rejects.toThrow(/undeclared Plugin/u);
-    await editor.dispose();
   });
 
   it('revokes the old credential lease and binds a new owner on successful Kit switch', async () => {

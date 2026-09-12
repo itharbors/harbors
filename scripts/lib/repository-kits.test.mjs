@@ -66,10 +66,6 @@ const basePackageJson = {
     ci: { runner: 'ubuntu-latest' },
     docs: { summary: 'Zeta fixture' },
     resources: [],
-    storage: {
-      legacyDataDirectories: [],
-      legacyPluginDataDirectories: { '@example/plugin': ['legacy-plugin'] },
-    },
     scripts: { build: 'build', test: 'test:kit', smoke: 'smoke' },
   },
 };
@@ -91,7 +87,6 @@ test('discovers a temporary Kit without a static slug list', async () => {
         ciRunner: kit.ciRunner,
         summary: kit.summary,
         menuRoot: kit.menuRoot,
-        legacyPluginDataDirectories: kit.legacyPluginDataDirectories,
       },
       {
         slug: 'zeta',
@@ -101,11 +96,8 @@ test('discovers a temporary Kit without a static slug list', async () => {
         ciRunner: 'ubuntu-latest',
         summary: 'Zeta fixture',
         menuRoot: { id: 'zeta', label: 'Zeta' },
-        legacyPluginDataDirectories: { '@example/plugin': ['legacy-plugin'] },
       },
     );
-    assert.ok(Object.isFrozen(kit.legacyPluginDataDirectories));
-    assert.ok(Object.isFrozen(kit.legacyPluginDataDirectories['@example/plugin']));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -439,7 +431,6 @@ test('freezes returned descriptor records', async () => {
     assert.equal(Object.isFrozen(kit), true);
     assert.equal(Object.isFrozen(kit.scripts), true);
     assert.equal(Object.isFrozen(kit.resources), true);
-    assert.equal(Object.isFrozen(kit.legacyDataDirectories), true);
     assert.equal(Object.isFrozen(kit.permissions), true);
     assert.equal(Object.isFrozen(kit.menuRoot), true);
   } finally {
@@ -468,11 +459,6 @@ test('deep-freezes nested manifest and packageJson records', async () => {
     assert.equal(Object.isFrozen(kit.packageJson.harbors.docs), true);
     assert.equal(Object.isFrozen(kit.packageJson.harbors.scripts), true);
     assert.equal(Object.isFrozen(kit.packageJson.harbors.resources), true);
-    assert.equal(Object.isFrozen(kit.packageJson.harbors.storage), true);
-    assert.equal(
-      Object.isFrozen(kit.packageJson.harbors.storage.legacyDataDirectories),
-      true,
-    );
 
     assert.throws(() => {
       kit.manifest.requires.harbors = '>=9.9.9';

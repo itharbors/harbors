@@ -22,16 +22,17 @@ describe('SessionManager', () => {
   });
 
   it('creates a new session when one does not exist', () => {
-    const session = manager.getOrCreate('new-session', '/home/user/project');
+    const session = manager.getOrCreate('new-session', '/home/user/project', 'user-a');
 
     expect(session.sessionId).toBe('new-session');
     expect(session.workspacePath).toBe('/home/user/project');
     expect(session.savedFileList).toEqual([]);
+    expect(session.ownerUserId).toBe('user-a');
   });
 
   it('returns existing session on subsequent calls', () => {
-    const s1 = manager.getOrCreate('same-session', '/path1');
-    const s2 = manager.getOrCreate('same-session', '/path2');
+    const s1 = manager.getOrCreate('same-session', '/path1', 'user-a');
+    const s2 = manager.getOrCreate('same-session', '/path2', 'user-a');
 
     expect(s2.workspacePath).toBe('/path1');
   });
@@ -41,16 +42,16 @@ describe('SessionManager', () => {
   });
 
   it('updates lastAccessAt on getOrCreate', () => {
-    const s1 = manager.getOrCreate('touch-test', '/tmp');
+    const s1 = manager.getOrCreate('touch-test', '/tmp', 'user-a');
     const before = s1.lastAccessAt;
 
-    const s2 = manager.getOrCreate('touch-test', '/tmp');
+    const s2 = manager.getOrCreate('touch-test', '/tmp', 'user-a');
 
     expect(s2.lastAccessAt).toBeGreaterThanOrEqual(before);
   });
 
   it('destroys a session', () => {
-    manager.getOrCreate('to-delete', '/tmp');
+    manager.getOrCreate('to-delete', '/tmp', 'user-a');
     manager.destroy('to-delete');
 
     expect(manager.get('to-delete')).toBeUndefined();

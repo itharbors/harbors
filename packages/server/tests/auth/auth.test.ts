@@ -1,52 +1,8 @@
-import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
+import { describe, expect, it } from 'vitest';
 import { AuthManager, isLocalRequest } from '../../src/auth';
-import { SessionStore } from '../../src/session/store';
 import type { IncomingMessage } from 'node:http';
 
-describe('User and Session schema migration', () => {
-  const files: string[] = [];
-  afterEach(() => {
-    for (const file of files.splice(0)) {
-      for (const suffix of ['', '-wal', '-shm']) fs.rmSync(`${file}${suffix}`, { force: true });
-    }
-  });
-
-  it('preserves old device and ownerless Session rows across repeated startup', () => {
-    const dbPath = path.join(os.tmpdir(), `harbors-legacy-${Date.now()}-${Math.random()}.db`);
-    files.push(dbPath);
-    const db = new Database(dbPath);
-    db.exec(`
-      CREATE TABLE authorized_devices (
-        deviceId TEXT PRIMARY KEY, createdAt INTEGER NOT NULL, expiresAt INTEGER NOT NULL, lastSeenAt INTEGER NOT NULL
-      );
-      INSERT INTO authorized_devices VALUES ('old-device', 10, 9999999999999, 20);
-      CREATE TABLE sessions (
-        sessionId TEXT PRIMARY KEY, workspacePath TEXT NOT NULL, savedFileList TEXT NOT NULL,
-        createdAt INTEGER NOT NULL, lastAccessAt INTEGER NOT NULL
-      );
-      INSERT INTO sessions VALUES ('old-session', '/kept', '["a.ts"]', 30, 40);
-    `);
-    db.close();
-
-    for (let run = 0; run < 2; run += 1) {
-      const auth = new AuthManager({ dbPath });
-      const sessions = new SessionStore(dbPath);
-      expect(auth.devices.get('old-device')).toMatchObject({
-        deviceId: 'old-device', userId: 'legacy-device-old-device', createdAt: 10, lastSeenAt: 20,
-      });
-      expect(auth.users.get('legacy-device-old-device')?.displayName).toBe('设备 old-devi');
-      expect(sessions.get('old-session')).toMatchObject({
-        sessionId: 'old-session', workspacePath: '/kept', savedFileList: '["a.ts"]', ownerUserId: null,
-      });
-      sessions.close();
-      auth.close();
-    }
-  });
-
+describe('Auth storage', () => {
   it('uses the real socket address and ignores a forged forwarded loopback header', () => {
     const req = {
       headers: { 'x-forwarded-for': '127.0.0.1' },

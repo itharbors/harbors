@@ -239,7 +239,7 @@ function stepKey(turn: number, step: number): string {
 }
 
 /**
- * 按 JSONL 的 turn + step 重建模型执行过程，供刷新后的历史消息和实时消息共用。
+ * 按 trace 的 turn + step 重建模型执行过程，供刷新后的历史消息和实时消息共用。
  * 不把同一 turn 的多个 step 压平，模型消息、工具调用和结果都留在原 step 内。
  */
 export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {

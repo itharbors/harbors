@@ -30,7 +30,7 @@ function mkPlugin(
     version: '1.0.0',
     type: 'module',
     main: './main/dist/index.js',
-    'ce-editor': capabilities === undefined ? {} : { capabilities },
+    'ce-editor': { schemaVersion: 1, ...(capabilities === undefined ? {} : { capabilities }) },
   }, null, 2));
   fs.writeFileSync(path.join(pluginDir, 'main', 'dist', 'index.js'), code);
   return pluginDir;
@@ -104,7 +104,7 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
   return {
     scope: 'session' as const,
     host,
-    paths: { roots: pluginPathRoots(root), legacyDataDirectories: [] },
+    paths: { roots: pluginPathRoots(root) },
   };
 }
 
@@ -289,7 +289,7 @@ describe('PluginModule', () => {
     await Promise.resolve();
 
     expect(unloaded).toBe(false);
-    expect(() => plugin.callPlugin('capable', 'ping')).toThrow(/not loaded/i);
+    expect(() => plugin.callPlugin('capable', 'ping')).toThrow(/not Running/i);
     releaseList();
     await unloading;
     expect(unloaded).toBe(true);
@@ -548,7 +548,7 @@ describe('PluginModule', () => {
     await plugin.load(pluginDir, {
       scope: 'application',
       host,
-      paths: { roots: pluginPathRoots(root), legacyDataDirectories: [] },
+      paths: { roots: pluginPathRoots(root) },
     });
 
     expect(plugin.callPlugin('background', 'runtimeKeys')).toEqual([
@@ -587,18 +587,17 @@ describe('PluginModule', () => {
     await application.load(applicationDir, {
       scope: 'application',
       host: applicationRuntimeHost(),
-      paths: { roots, legacyDataDirectories: ['legacy-application'] },
+      paths: { roots },
     });
     await session.load(sessionDir, {
       scope: 'session',
       host: withRuntimeMenu(createEditor('paths-session', { assembly })),
-      paths: { roots, legacyDataDirectories: [] },
+      paths: { roots },
     });
 
     const applicationPaths = application.callPlugin('@scope/application', 'paths') as Record<string, unknown>;
     const sessionPaths = session.callPlugin('@scope/session', 'paths') as Record<string, unknown>;
     expect(applicationPaths.data).not.toBe(sessionPaths.data);
-    expect(applicationPaths.legacyData).toEqual([path.join(root, 'legacy-application')]);
     expect(Object.isFrozen(applicationPaths)).toBe(true);
     expect(Object.isFrozen(sessionPaths)).toBe(true);
     expect(application.callPlugin('@scope/application', 'runtimeFrozen')).toBe(true);
@@ -623,7 +622,7 @@ describe('PluginModule', () => {
     await expect(plugin.load(pluginDir, {
       scope: 'application',
       host: applicationRuntimeHost(),
-      paths: { roots: pluginPathRoots(root), legacyDataDirectories: [] },
+      paths: { roots: pluginPathRoots(root) },
     })).rejects.toThrow(/application plugin.*server message/i);
     expect(plugin.listLoaded()).not.toContain('background');
   });

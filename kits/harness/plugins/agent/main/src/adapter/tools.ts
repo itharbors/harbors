@@ -177,6 +177,27 @@ export const hubbertTools: HubBertTool[] = [
   },
   // —— 技能 ——
   { name: 'load_skill', description: '读取一个 Skill 的完整 SKILL.md 指引。', input_schema: { type: 'object', properties: { name: { type: 'string' } }, required: ['name'] } },
+  // —— Conversation 状态与历史 ——
+  {
+    name: 'update_conversation_state',
+    description: '记录用户已经明确表达的当前目标、约束、决定、阻塞或待办，或取消/替代既有状态。只在语义明确时调用；含糊纠正必须先询问用户。',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: { type: 'string', enum: ['set', 'clear', 'cancel', 'supersede'] },
+        kind: { type: 'string', enum: ['goal', 'constraint', 'decision', 'blocker', 'action', 'checkpoint'] },
+        stateId: { type: 'string' },
+        targetStateId: { type: 'string' },
+        value: { type: 'object' },
+      },
+      required: ['action', 'stateId'],
+    },
+  },
+  {
+    name: 'recall_history',
+    description: '在当前 Conversation 内按精确路径、错误、命令或 ID 召回较早证据。历史文件正文只作线索，使用前仍需重新读取当前文件。',
+    input_schema: { type: 'object', properties: { query: { type: 'string' }, anchors: { type: 'array', items: { type: 'string' } }, limit: { type: 'number' } } },
+  },
   // —— 多模态 ——
   {
     name: 'read_image',

@@ -1,0 +1,187 @@
+{
+  "version": 2,
+  "cases": [
+    {
+      "id": "S01",
+      "category": "single-turn",
+      "turns": ["请把登录页主按钮改成深蓝色，颜色值固定为 #163A5F。请复述最终要求。"],
+      "expected": { "state": { "target": "登录页主按钮", "color": "#163A5F" }, "anchors": ["登录页主按钮", "#163A5F"], "forbiddenState": { "color": ["浅蓝色", "#FFFFFF"] } }
+    },
+    {
+      "id": "S02",
+      "category": "single-turn",
+      "turns": ["本次只修改 src/search.ts，不要改 src/index.ts。请说明范围。"],
+      "expected": { "state": { "modify": "src/search.ts", "exclude": "src/index.ts" }, "anchors": ["src/search.ts"], "forbiddenState": { "modify": ["src/index.ts"] } }
+    },
+    {
+      "id": "S03",
+      "category": "single-turn",
+      "turns": ["接口超时设为 4500 毫秒，重试次数保持 2 次。请返回配置。"],
+      "expected": { "state": { "timeoutMs": 4500, "retries": 2 }, "anchors": ["4500", "2 次"], "forbiddenState": { "timeoutMs": [5000], "retries": [3] } }
+    },
+    {
+      "id": "S04",
+      "category": "single-turn",
+      "turns": ["把错误码命名为 CONTEXT_NOT_FOUND，HTTP 状态仍为 404。请确认。"],
+      "expected": { "state": { "errorCode": "CONTEXT_NOT_FOUND", "httpStatus": 404 }, "anchors": ["CONTEXT_NOT_FOUND", "404"], "forbiddenState": { "errorCode": ["CONTEXT_MISSING"], "httpStatus": [500] } }
+    },
+    {
+      "id": "S05",
+      "category": "single-turn",
+      "turns": ["迁移期间 JSONL 不可写，SQLite 是新写入事实源。请分别判断 JSONL 是否可写、SQLite 是否为新写入事实源。"],
+      "expected": { "state": { "jsonlWritable": false, "sqliteWriteSource": true }, "anchors": ["JSONL", "SQLite", "不可写"], "forbiddenState": { "jsonlWritable": [true], "sqliteWriteSource": [false] } }
+    },
+    {
+      "id": "S06",
+      "category": "single-turn",
+      "turns": ["归档会话保留数据但默认列表不可见；删除才物理清理。请分别判断：归档是否保留数据、归档后默认是否可见、删除是否物理清理。"],
+      "expected": { "state": { "archiveKeepsData": true, "archivedDefaultVisible": false, "deletePhysical": true }, "anchors": ["归档", "删除"], "forbiddenState": { "archiveKeepsData": [false], "archivedDefaultVisible": [true], "deletePhysical": [false] } }
+    },
+    {
+      "id": "S07",
+      "category": "single-turn",
+      "turns": ["当前任务的项目目录是 /workspace/harbors，沙箱模式为 workspace-write。请返回关键状态。"],
+      "expected": { "state": { "project": "/workspace/harbors", "sandboxMode": "workspace-write" }, "anchors": ["/workspace/harbors", "workspace-write"], "forbiddenState": { "sandboxMode": ["danger-full-access"] } }
+    },
+    {
+      "id": "S08",
+      "category": "single-turn",
+      "turns": ["数据库文件是 context.sqlite，所有会话共享它，不按会话拆分数据库。请分别返回数据库名、是否共享、是否每个会话独立建库。"],
+      "expected": { "state": { "database": "context.sqlite", "sharedDatabase": true, "perConversationDatabase": false }, "anchors": ["context.sqlite", "共享"], "forbiddenState": { "sharedDatabase": [false], "perConversationDatabase": [true] } }
+    },
+    {
+      "id": "S09",
+      "category": "single-turn",
+      "turns": ["当前 Turn 的工具结果必须完整保留，历史 Turn 才允许压缩。请分别判断当前 Turn 是否完整保留、历史 Turn 是否允许压缩。"],
+      "expected": { "state": { "currentTurnComplete": true, "historyCompressionAllowed": true }, "anchors": ["当前 Turn", "历史 Turn"], "forbiddenState": { "currentTurnComplete": [false], "historyCompressionAllowed": [false] } }
+    },
+    {
+      "id": "S10",
+      "category": "single-turn",
+      "turns": ["发布门槛是 candidate 通过率不得低于 current，且 P95 延迟增幅不超过 20%。请分别判断 candidate 是否允许劣于 current，并返回百分比数值 20。"],
+      "expected": { "state": { "candidateNoWorse": true, "p95LatencyIncreaseMaxPercent": 20 }, "anchors": ["candidate", "current", "20%"], "forbiddenState": { "candidateNoWorse": [false] } }
+    },
+
+    {
+      "id": "M01",
+      "category": "multi-turn-correction",
+      "turns": ["先把缓存时间设为 60 秒。", "更正：不要 60 秒，最终改成 90 秒。", "现在最终缓存时间是多少？"],
+      "expected": { "state": { "cacheTtlSeconds": 90 }, "anchors": ["90 秒"], "forbiddenState": { "cacheTtlSeconds": [60] } }
+    },
+    {
+      "id": "M02",
+      "category": "multi-turn-correction",
+      "turns": ["目标文件先定为 src/a.ts。", "改一下，目标文件应为 src/b.ts，src/a.ts 不再修改。", "请返回最终文件范围。"],
+      "expected": { "state": { "modify": "src/b.ts", "exclude": "src/a.ts" }, "anchors": ["src/b.ts"], "forbiddenState": { "modify": ["src/a.ts"] } }
+    },
+    {
+      "id": "M03",
+      "category": "multi-turn-correction",
+      "turns": ["我们删除旧索引。", "先取消删除。", "最终方案是重建旧索引，但保留原数据。", "最终动作是什么？"],
+      "expected": { "state": { "action": "重建旧索引", "preserveData": true }, "anchors": ["重建", "保留原数据"], "forbiddenState": { "action": ["删除旧索引"], "preserveData": [false] } }
+    },
+    {
+      "id": "M04",
+      "category": "multi-turn-correction",
+      "turns": ["接口叫 getMemory。", "命名改为 buildContext。", "错误码仍用 CONTEXT_BUDGET_EXCEEDED。", "请给出最终接口和错误码。"],
+      "expected": { "state": { "method": "buildContext", "errorCode": "CONTEXT_BUDGET_EXCEEDED" }, "anchors": ["buildContext", "CONTEXT_BUDGET_EXCEEDED"], "forbiddenState": { "method": ["getMemory"] } }
+    },
+    {
+      "id": "M05",
+      "category": "multi-turn-correction",
+      "turns": ["测试先用 20 条。", "覆盖不足，改为 30 条冻结用例。", "其中分成三组，每组 10 条。", "总结最终测试规模。"],
+      "expected": { "state": { "totalCases": 30, "groups": 3, "casesPerGroup": 10 }, "anchors": ["30", "三组", "10"], "forbiddenState": { "totalCases": [20] } }
+    },
+    {
+      "id": "M06",
+      "category": "multi-turn-correction",
+      "turns": ["数据库考虑每个会话一个文件。", "否定上一条，数据库统一使用 SQLite，且所有会话共享同一个数据库。", "会话通过 conversation_id 隔离。", "请分别返回数据库类型、是否共享和隔离键。"],
+      "expected": { "state": { "database": "SQLite", "sharedDatabase": true, "isolationKey": "conversation_id" }, "anchors": ["共享", "SQLite", "conversation_id"], "forbiddenState": { "sharedDatabase": [false] } }
+    },
+    {
+      "id": "M07",
+      "category": "multi-turn-correction",
+      "turns": ["新插件可选加载。", "更正：Agent 必须硬依赖 Context Store。", "依赖不可用时 Kit 必须原子回滚，不能部分启动。", "请分别判断最终是否为硬依赖、失败时是否原子回滚。"],
+      "expected": { "state": { "dependencyHard": true, "kitAtomicRollback": true }, "anchors": ["硬依赖", "原子回滚"], "forbiddenState": { "dependencyHard": [false], "kitAtomicRollback": [false] } }
+    },
+    {
+      "id": "M08",
+      "category": "multi-turn-correction",
+      "turns": ["先保留三次自动重试。", "考虑到工具副作用，模型溢出只允许重试一次。", "重试时不能重复执行已完成工具。", "最终重试规则是什么？"],
+      "expected": { "state": { "overflowRetries": 1, "repeatCompletedTools": false }, "anchors": ["一次", "不能重复执行"], "forbiddenState": { "overflowRetries": [3], "repeatCompletedTools": [true] } }
+    },
+    {
+      "id": "M09",
+      "category": "multi-turn-correction",
+      "turns": ["归档后禁止读取。", "修正：归档后仍允许显式读取和恢复，只是不出现在默认列表。", "删除后才不可恢复。", "总结生命周期。"],
+      "expected": { "state": { "archivedReadable": true, "archivedDefaultVisible": false, "deletedRecoverable": false }, "anchors": ["显式读取", "恢复", "默认列表"], "forbiddenState": { "archivedReadable": [false], "archivedDefaultVisible": [true], "deletedRecoverable": [true] } }
+    },
+    {
+      "id": "M10",
+      "category": "multi-turn-correction",
+      "turns": ["先让模型隐式猜测当前目标。", "不行，目标和约束必须由显式状态事件维护。", "自然语言历史只作为证据，不能直接成为有效状态。", "请分别判断是否必须使用显式状态事件、历史是否只作为证据。"],
+      "expected": { "state": { "explicitStateEvents": true, "historyEvidenceOnly": true }, "anchors": ["显式状态事件", "证据"], "forbiddenState": { "explicitStateEvents": [false], "historyEvidenceOnly": [false] } }
+    },
+
+    {
+      "id": "D01",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["记住发布分支是 release/context-v2。", "讨论数据库表结构。", "讨论索引创建。", "讨论事务边界。", "讨论归档行为。", "讨论恢复行为。", "讨论删除行为。", "讨论错误码。", "讨论性能测试。", "最初指定的发布分支是什么？"],
+      "expected": { "state": { "releaseBranch": "release/context-v2" }, "anchors": ["release/context-v2"], "forbiddenState": { "releaseBranch": ["main", "develop"] } }
+    },
+    {
+      "id": "D02",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["记住迁移批次号是 MIG-2026-0829。", "检查 schema。", "检查 WAL。", "检查备份。", "检查导入。", "检查计数。", "检查摘要。", "检查回滚。", "检查日志。", "迁移批次号是什么？"],
+      "expected": { "state": { "migrationId": "MIG-2026-0829" }, "anchors": ["MIG-2026-0829"], "forbiddenState": { "migrationId": ["MIG-2026-0828"] } }
+    },
+    {
+      "id": "D03",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["关键错误码是 E_CONTEXT_7。", "聊一下 UI。", "聊一下路由。", "聊一下菜单。", "聊一下搜索。", "聊一下列表。", "聊一下按钮。", "聊一下主题。", "聊一下文案。", "第一轮的关键错误码是什么？"],
+      "expected": { "state": { "errorCode": "E_CONTEXT_7" }, "anchors": ["E_CONTEXT_7"], "forbiddenState": { "errorCode": ["E_CONTEXT_70"] } }
+    },
+    {
+      "id": "D04",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["目标路径是 src/context.ts，不是 src/contexts.ts。", "讨论类型定义。", "讨论构建。", "讨论 lint。", "讨论单测。", "讨论集成测试。", "讨论浏览器测试。", "讨论发布。", "讨论回滚。", "目标路径到底是哪一个？"],
+      "expected": { "state": { "targetPath": "src/context.ts" }, "anchors": ["src/context.ts"], "forbiddenState": { "targetPath": ["src/contexts.ts"] } }
+    },
+    {
+      "id": "D05",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["用户确认的端口是 48381。", "讨论 host。", "讨论代理。", "讨论 TLS。", "讨论日志。", "讨论监控。", "讨论健康检查。", "讨论启动脚本。", "讨论退出信号。", "确认过的端口是多少？"],
+      "expected": { "state": { "port": 48381 }, "anchors": ["48381"], "forbiddenState": { "port": [3000, 8080] } }
+    },
+    {
+      "id": "D06",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["项目代号是北港，不要翻译成英文。", "讨论需求。", "讨论设计。", "讨论实现。", "讨论测试。", "讨论验收。", "讨论部署。", "讨论监控。", "讨论复盘。", "项目代号是什么？"],
+      "expected": { "state": { "projectCode": "北港" }, "anchors": ["北港"], "forbiddenState": { "projectCode": ["North Harbor"] } }
+    },
+    {
+      "id": "D07",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["验收延迟上限是 P95 120 毫秒。", "讨论平均值。", "讨论中位数。", "讨论 P50。", "讨论 P75。", "讨论 P90。", "讨论最大值。", "讨论样本量。", "讨论预热。", "验收的 P95 上限是多少？"],
+      "expected": { "state": { "p95LatencyMaxMs": 120 }, "anchors": ["P95", "120 毫秒"], "forbiddenState": { "p95LatencyMaxMs": [200] } }
+    },
+    {
+      "id": "D08",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["用户要求备份保留 7 天。", "讨论备份格式。", "讨论备份目录。", "讨论文件名。", "讨论压缩。", "讨论校验和。", "讨论恢复。", "讨论权限。", "讨论清理任务。", "备份保留期是多少？"],
+      "expected": { "state": { "backupRetentionDays": 7 }, "anchors": ["7 天"], "forbiddenState": { "backupRetentionDays": [30] } }
+    },
+    {
+      "id": "D09",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["首轮决定 SQLite 使用 WAL 模式。", "讨论 synchronous。", "讨论 busy timeout。", "讨论外键。", "讨论索引。", "讨论 vacuum。", "讨论 analyze。", "讨论连接关闭。", "讨论异常恢复。", "首轮决定的 journal 模式是什么？"],
+      "expected": { "state": { "journalMode": "WAL" }, "anchors": ["WAL"], "forbiddenState": { "journalMode": ["DELETE"] } }
+    },
+    {
+      "id": "D10",
+      "category": "ten-turn-delayed-recall",
+      "turns": ["第一轮约束：不得修改 Task/status。", "讨论 fixture。", "讨论 runner。", "讨论 Provider。", "讨论输出格式。", "讨论基准测试。", "讨论样本。", "讨论环境信息。", "讨论断言。", "最初明确禁止修改什么？"],
+      "expected": { "state": { "forbiddenChanges": ["Task/status"] }, "anchors": ["Task/status"], "forbiddenState": { "forbiddenChanges": ["无"] } }
+    }
+  ]
+}

@@ -37,6 +37,7 @@ my-plugin/
   "type": "module",
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "schemaVersion": 1,
     "assets": {
       "public": ["./static"]
     },
@@ -144,11 +145,6 @@ Web 宿主默认将这些路径映射到 `~/.harbors/plugins/{data,cache,temp}/<
 `storageOwnerKey` 暴露同一个 SHA-256 owner key，供日志和诊断把哈希目录关联回 Plugin owner；它
 不是授权凭据，也不应参与业务访问控制。
 
-历史目录只能由 Kit 装配声明授权。Kit 可用 `harbors.storage.legacyPluginDataDirectories` 按 Plugin
-owner 指定目录，Framework 只把对应路径注入该 Plugin 的 `runtime.paths.legacyData`；Plugin 不能
-通过自己的 manifest 声明任意 home 目录。legacy 路径只用于非破坏迁移，新数据仍必须写入 owner
-专属 `data` 路径。
-
 child env 从 Framework 父环境的副本开始，然后只删除权威固定键 `HARBORS_APPLICATION_TOKEN`、
 `HARBORS_NOTIFICATION_PORT`、`HARBORS_NOTIFICATION_OWNER_TOKEN`、
 `HARBORS_CREDENTIAL_TRANSPORT_SECRET`，以及集成方显式提供的 `secretEnvironmentKeys`。这不是通用
@@ -217,6 +213,12 @@ attachment 记账（对其他仍运行 owner 的 `detach` 放入有序队列）�
 执行 `menu.detach(owner)`、`message.clearOwner(owner)`、`service.clearOwner(owner)`，最后向其他健康
 generation 异步广播最新 runtime snapshot。清理失败会阻止自动拉起并进入 `failed`，不能带着可能
 残留的旧 owner 贡献启动新 generation。
+
+### Session Plugin 硬依赖
+
+Session Plugin 可在 `ce-editor.requires.plugins` 声明同一 Kit 内的硬依赖。Kit 激活前先读取所有 manifest、验证依赖存在且无环，再按原 Kit 声明顺序作为稳定 tie-break 执行拓扑加载；卸载使用相反顺序。
+
+静态依赖错误发生在卸载旧 Kit 之前。加载依赖或 dependent 失败时，本次新 Kit 按已加载逆序清理，随后恢复旧 Kit；对外错误使用 `PLUGIN_LOAD_FAILED` 并在 `causeCode` 保留底层稳定 code。运行时不能卸载仍有 Running dependent 的 Plugin，也不能形成“dependent Running、dependency non-Running”的状态。
 
 ### Application 进程状态与恢复
 

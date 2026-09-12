@@ -1,13 +1,26 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { ContextStore } from '../../../agent-context-store/main/src/store.js';
 
 let loadedPlugin: any;
 
+function contextStorePlugin(store: ContextStore, overrides: Record<string, (...args: any[]) => unknown> = {}) {
+  return {
+    callPlugin(name: string, method: string, ...args: any[]) {
+      assert.equal(name, 'agent-context-store');
+      const implementation = overrides[method] || (store as any)[method];
+      if (typeof implementation !== 'function') throw new Error(`unexpected Context Store method: ${method}`);
+      return implementation.apply(store, args);
+    },
+  };
+}
+
 test('新建对话使用 config 默认权限，已有会话保持原权限', async () => {
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-'));
+  const contextStore = new ContextStore(join(storageDir, 'context-store'));
 
   let plugin: any;
   (globalThis as any).editor = { plugin: { define(value: any) { plugin = value; } } };
@@ -20,6 +33,7 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
   let lastCompleteSystem = '';
   const runtime = {
     paths: { data: storageDir },
+    plugin: contextStorePlugin(contextStore),
     config: {
       get(key: string) { return values[key]; },
       set(key: string, value: unknown, layer?: string) {
@@ -102,6 +116,23 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
     assert.doesNotMatch(lastCompleteSystem, /secret-/);
   } finally {
     await plugin.lifecycle.unload();
+    contextStore.close();
+    await rm(storageDir, { recursive: true, force: true });
+  }
+});
+
+test('Framework Runtime 缺少 Context Store 调用能力时拒绝启动', async () => {
+  assert.ok(loadedPlugin);
+  const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-no-context-store-'));
+  const runtime = {
+    paths: { data: storageDir },
+    config: { get() { return undefined; }, set() {}, delete() {} },
+    message: { broadcast() {}, request() { throw new Error('unexpected request'); } },
+  };
+  try {
+    await assert.rejects(loadedPlugin.lifecycle.load(runtime), /CONTEXT_STORE_NOT_READY/);
+  } finally {
+    await loadedPlugin.lifecycle.unload();
     await rm(storageDir, { recursive: true, force: true });
   }
 });
@@ -109,12 +140,14 @@ test('新建对话使用 config 默认权限，已有会话保持原权限', asy
 test('runtime webSearch 使用结构化 requestId，并在 abort 时取消且忽略晚到成功', async () => {
   assert.ok(loadedPlugin);
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-search-'));
+  const contextStore = new ContextStore(join(storageDir, 'context-store'));
   let completeCount = 0;
   let searchInput: any;
   let cancelledId = '';
   let resolveSearch: ((value: unknown) => void) | undefined;
   const runtime = {
     paths: { data: storageDir },
+    plugin: contextStorePlugin(contextStore),
     config: { get() { return undefined; }, set() {}, delete() {} },
     message: {
       broadcast() {},
@@ -154,6 +187,7 @@ test('runtime webSearch 使用结构化 requestId，并在 abort 时取消且忽
     await new Promise((resolve) => setTimeout(resolve, 10));
   } finally {
     await loadedPlugin.lifecycle.unload();
+    contextStore.close();
     await rm(storageDir, { recursive: true, force: true });
   }
 });
@@ -161,9 +195,10 @@ test('runtime webSearch 使用结构化 requestId，并在 abort 时取消且忽
 test('归档 Main request 返回显式 envelope、白名单摘要并仅成功广播', async () => {
   assert.ok(loadedPlugin);
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-archive-'));
+  const contextStore = new ContextStore(join(storageDir, 'context-store'));
   const broadcasts: Array<[string, any]> = [];
   const runtime = {
-    paths: { data: storageDir }, config: { get() { return undefined; }, set() {}, delete() {} },
+    paths: { data: storageDir }, plugin: contextStorePlugin(contextStore), config: { get() { return undefined; }, set() {}, delete() {} },
     message: {
       broadcast(topic: string, value: unknown) { broadcasts.push([topic, value]); },
       request(_target: string, method: string) {
@@ -193,46 +228,15 @@ test('归档 Main request 返回显式 envelope、白名单摘要并仅成功广
     assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'archive').length, 2);
     assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'restore').length, 1);
     assert.deepEqual(broadcasts.filter(([, value]) => value?.action === 'delete').length, 1);
-  } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
-});
-
-test('活动列表公开损坏会话的最小不可用摘要且保留健康会话', async () => {
-  assert.ok(loadedPlugin);
-  const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-corrupt-'));
-  const runtime = {
-    paths: { data: storageDir }, config: { get() { return undefined; }, set() {}, delete() {} },
-    message: { broadcast() {}, request(_target: string, method: string) {
-      if (method === 'getCatalog') return Promise.resolve({ models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' });
-      throw new Error(`unexpected ${method}`);
-    } },
-  };
-  try {
-    await loadedPlugin.lifecycle.load(runtime);
-    const healthy = await loadedPlugin.methods.createConversation('harbors', '/workspace');
-    const corruptId = '44444444-4444-4444-8444-444444444444';
-    const sessions = join(storageDir, 'storage-v1', 'sessions');
-    await mkdir(sessions, { recursive: true });
-    await writeFile(join(sessions, `${corruptId}.jsonl`), `${JSON.stringify({ type: 'session', version: 0, id: corruptId, createdAt: Date.now() })}\nnot-json\n`, 'utf8');
-
-    const listed = await loadedPlugin.methods.listConversations();
-    assert.equal(listed.some((item: any) => item.id === healthy.id && item.availability === 'available'), true);
-    const unavailable = listed.find((item: any) => item.id === `harbors:${corruptId}`);
-    assert.deepEqual(unavailable, {
-      id: `harbors:${corruptId}`,
-      source: 'harbors',
-      title: '无法读取的对话',
-      availability: 'unavailable',
-      errorCode: 'CONVERSATION_FILE_INVALID',
-    });
-    for (const forbidden of ['adapterId', 'project', 'preview', 'lastMessage', 'model', 'sandboxMode', 'approvalPolicy']) assert.equal(forbidden in unavailable, false);
-  } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
+  } finally { await loadedPlugin.lifecycle.unload(); contextStore.close(); await rm(storageDir, { recursive: true, force: true }); }
 });
 
 test('归档 Main 仅映射已知业务错误，adapter unavailable 与未知 IO 继续抛异常', async () => {
   assert.ok(loadedPlugin);
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-archive-unknown-'));
+  const contextStore = new ContextStore(join(storageDir, 'context-store'));
   const runtime = {
-    paths: { data: storageDir }, config: { get() { return undefined; }, set() {}, delete() {} },
+    paths: { data: storageDir }, plugin: contextStorePlugin(contextStore, { listConversations() { throw new Error('EIO'); } }), config: { get() { return undefined; }, set() {}, delete() {} },
     message: { broadcast() {}, request(_target: string, method: string) {
       if (method === 'getCatalog') return Promise.resolve({ models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' });
       throw new Error(`unexpected ${method}`);
@@ -240,10 +244,7 @@ test('归档 Main 仅映射已知业务错误，adapter unavailable 与未知 IO
   };
   try {
     await loadedPlugin.lifecycle.load(runtime);
-    const sessions = join(storageDir, 'storage-v1', 'sessions');
-    await rm(sessions, { recursive: true, force: true });
-    await writeFile(sessions, 'not a directory', 'utf8');
-    await assert.rejects(loadedPlugin.methods.listArchivedConversations(), /ENOTDIR/);
-  } finally { await loadedPlugin.lifecycle.unload(); await rm(storageDir, { recursive: true, force: true }); }
+    await assert.rejects(loadedPlugin.methods.listArchivedConversations(), /EIO/);
+  } finally { await loadedPlugin.lifecycle.unload(); contextStore.close(); await rm(storageDir, { recursive: true, force: true }); }
   await assert.rejects(loadedPlugin.methods.listArchivedConversations(), /adapters are not initialized/);
 });

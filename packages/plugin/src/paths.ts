@@ -15,13 +15,11 @@ export interface PluginPaths {
   readonly data: string;
   readonly cache: string;
   readonly temp: string;
-  readonly legacyData: readonly string[];
 }
 
 export interface CreatePluginPathsOptions {
   readonly roots: PluginPathRoots;
   readonly owner: string;
-  readonly legacyDataDirectories: readonly string[];
 }
 
 export interface PluginPathFileSystem {
@@ -70,37 +68,16 @@ export class PluginStorageUnavailableError extends Error {
 export async function createPluginPaths({
   roots,
   owner,
-  legacyDataDirectories,
 }: CreatePluginPathsOptions, fileSystem: PluginPathFileSystem = defaultFileSystem): Promise<PluginPaths> {
   try {
     const normalizedRoots = normalizeRoots(roots);
     const ownerKey = pluginStorageOwnerKey(owner);
-    if (new Set(legacyDataDirectories).size !== legacyDataDirectories.length) {
-      throw new PluginStorageUnavailableError();
-    }
-    const legacyData = legacyDataDirectories.map((directory) => (
-      resolveLegacyDirectory(normalizedRoots.applicationData, directory)
-    ));
 
     const applicationIdentity = await observeStableDirectory(
       normalizedRoots.applicationData,
       fileSystem,
     );
-    try {
-      for (const legacyDirectory of legacyData) {
-        const existing = await inspectPath(legacyDirectory, fileSystem);
-        if (existing) {
-          const legacyIdentity = await observeStableDirectory(
-            legacyDirectory,
-            fileSystem,
-            applicationIdentity.realPath,
-          );
-          await closeDirectory(legacyIdentity.handle);
-        }
-      }
-    } finally {
-      await closeDirectory(applicationIdentity.handle);
-    }
+    await closeDirectory(applicationIdentity.handle);
     const data = await createPrivateOwnerDirectory(
       normalizedRoots.applicationData, normalizedRoots.data, ownerKey, fileSystem, applicationIdentity.realPath,
     );
@@ -119,7 +96,6 @@ export async function createPluginPaths({
       data,
       cache,
       temp,
-      legacyData: Object.freeze(legacyData),
     });
   } catch (error) {
     if (error instanceof PluginStorageUnavailableError) throw error;
@@ -153,23 +129,6 @@ export function pluginStorageOwnerKey(owner: string): string {
     throw new PluginStorageUnavailableError();
   }
   return createHash('sha256').update(owner, 'utf8').digest('hex');
-}
-
-function resolveLegacyDirectory(applicationData: string, directory: string): string {
-  if (typeof directory !== 'string'
-    || directory.length === 0
-    || directory.includes('/')
-    || directory.includes('\\')
-    || directory.includes('\0')
-    || directory === '.'
-    || directory === '..'
-    || path.isAbsolute(directory)
-    || path.basename(directory) !== directory) {
-    throw new PluginStorageUnavailableError();
-  }
-  const resolved = path.resolve(applicationData, directory);
-  if (!isStrictDescendant(applicationData, resolved)) throw new PluginStorageUnavailableError();
-  return resolved;
 }
 
 async function createPrivateOwnerDirectory(

@@ -3,7 +3,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { HarborsAdapter, type ModelServiceClient } from './harbors.js';
+import { ContextStore } from '../../../../agent-context-store/main/src/store.js';
+import { HarborsAdapter, type ContextStoreClient, type ModelServiceClient } from './harbors.js';
+
+function createAdapter(client: ModelServiceClient, storage: string): { adapter: HarborsAdapter; store: ContextStore } {
+  const store = new ContextStore(storage);
+  return { adapter: new HarborsAdapter(client, store as unknown as ContextStoreClient), store };
+}
 
 test('停止 turn 会通过 model-service cancel 当前 requestId', async () => {
   const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-'));
@@ -22,16 +28,30 @@ test('停止 turn 会通过 model-service cancel 当前 requestId', async () => 
       return { requestId: id, state: 'cancelled' };
     },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/workspace');
     const sending = adapter.sendMessage(conversation.id, 'hello');
     while (!requestId) await new Promise((resolve) => setTimeout(resolve, 1));
     assert.equal(await adapter.stopConversation(conversation.id), true);
-    await assert.rejects(sending);
+    await assert.rejects(sending, (error: any) => {
+      assert.equal(error.code, 'MODEL_SERVICE_CANCELLED');
+      assert.equal(error.message, '模型请求已取消');
+      assert.equal(error.retryable, false);
+      assert.equal(error.requestId, requestId);
+      return true;
+    });
     assert.equal(cancelled, requestId);
+    const turnEnd = (await adapter.getConversationTrace(conversation.id)).find((event) => event.type === 'turn/end');
+    assert.deepEqual(turnEnd?.data.reason.error, {
+      code: 'MODEL_SERVICE_CANCELLED',
+      message: '模型请求已取消',
+      retryable: false,
+      requestId,
+    });
   } finally {
     adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });
@@ -52,19 +72,22 @@ test('工具调用结果会在下一次 model-service 请求中保留 assistant 
     },
     async cancel(requestId) { return { requestId, state: 'cancelled' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/tmp');
     assert.equal(await adapter.sendMessage(conversation.id, 'list files'), 'done');
     assert.equal(requests.length, 2);
   } finally {
     adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });
 
 test('compaction request never receives Turn system instructions', async () => {
   const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-model-service-compaction-system-'));
+  const previousMode = process.env.HARBORS_AGENT_CONTEXT_MODE;
+  process.env.HARBORS_AGENT_CONTEXT_MODE = 'surface-v1';
   const requests: any[] = [];
   const client: ModelServiceClient = {
     async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model', contextWindow: 1_000 }], defaultModel: 'test-model' }; },
@@ -76,7 +99,7 @@ test('compaction request never receives Turn system instructions', async () => {
     },
     async cancel(requestId) { return { requestId, state: 'completed' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/tmp');
     await adapter.sendMessage(conversation.id, 'first');
@@ -87,6 +110,9 @@ test('compaction request never receives Turn system instructions', async () => {
     assert.equal(requests.filter((request) => request.purpose === 'turn').every((request) => typeof request.system === 'string'), true);
   } finally {
     adapter.stop();
+    store.close();
+    if (previousMode === undefined) delete process.env.HARBORS_AGENT_CONTEXT_MODE;
+    else process.env.HARBORS_AGENT_CONTEXT_MODE = previousMode;
     await rm(storage, { recursive: true, force: true });
   }
 });
@@ -100,12 +126,13 @@ test('上下文窗口只使用 model-service catalog，缺失时回退默认值'
     async complete(request) { return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: 'ok' } }; },
     async cancel(requestId) { return { requestId, state: 'cancelled' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/workspace');
     assert.equal((await adapter.getConversationContext(conversation.id)).contextWindow, 200_000);
   } finally {
     adapter.stop();
+    store.close();
     if (previousContext === undefined) delete process.env.HARBORS_AGENT_CONTEXT_WINDOW;
     else process.env.HARBORS_AGENT_CONTEXT_WINDOW = previousContext;
     await rm(storage, { recursive: true, force: true });
@@ -128,7 +155,7 @@ test('turn complete 会传递会话选择的 reasoning effort 与 service tier',
     },
     async cancel(requestId) { return { requestId, state: 'completed' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/workspace', { model: 'test-model', reasoningEffort: 'high', serviceTier: 'priority', timeoutMs: 12_345 });
     assert.equal(await adapter.sendMessage(conversation.id, 'hello'), 'ok');
@@ -138,6 +165,7 @@ test('turn complete 会传递会话选择的 reasoning effort 与 service tier',
     assert.equal(request.timeoutMs, 12_345);
   } finally {
     adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });
@@ -151,7 +179,7 @@ test('Model Service 已知 envelope 会保留到 turn/end 和对外错误', asyn
     },
     async cancel(requestId) { return { requestId, state: 'timed_out' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/workspace');
     await assert.rejects(adapter.sendMessage(conversation.id, 'hello'), (error: any) => {
@@ -170,6 +198,7 @@ test('Model Service 已知 envelope 会保留到 turn/end 和对外错误', asyn
     });
   } finally {
     adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });
@@ -182,7 +211,7 @@ test('未知 Model Service 异常使用安全 UNKNOWN envelope 并保留 request
     async complete(input) { requestId = input.requestId; throw new Error('secret provider credential'); },
     async cancel(id) { return { requestId: id, state: 'failed' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/workspace');
     await assert.rejects(adapter.sendMessage(conversation.id, 'hello'), (error: any) => {
@@ -194,6 +223,48 @@ test('未知 Model Service 异常使用安全 UNKNOWN envelope 并保留 request
     });
   } finally {
     adapter.stop();
+    store.close();
+    await rm(storage, { recursive: true, force: true });
+  }
+});
+
+test('工具失败保护会保留真实终态错误', async () => {
+  const storage = await mkdtemp(join(tmpdir(), 'harbors-agent-tool-loop-guard-'));
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test Model' }], defaultModel: 'test-model' }; },
+    async complete(input) {
+      return {
+        requestId: input.requestId,
+        model: 'test-model',
+        message: {
+          role: 'assistant',
+          content: '',
+          toolCalls: [
+            { id: 'failed-bash-1', name: 'bash', arguments: '{"command":"false"}' },
+            { id: 'failed-bash-2', name: 'bash', arguments: '{"command":"false"}' },
+            { id: 'failed-bash-3', name: 'bash', arguments: '{"command":"false"}' },
+          ],
+        },
+      };
+    },
+    async cancel(requestId) { return { requestId, state: 'failed' }; },
+  };
+  const { adapter, store } = createAdapter(client, storage);
+  try {
+    const conversation = await adapter.createConversation('/workspace');
+    await assert.rejects(adapter.sendMessage(conversation.id, 'trigger failures'), (error: any) => {
+      assert.equal(error.code, 'AGENT_TOOL_LOOP_GUARD');
+      assert.match(error.message, /^工具 bash 连续或重复失败 3 次：/u);
+      assert.equal(error.retryable, false);
+      return true;
+    });
+    const trace = await adapter.getConversationTrace(conversation.id);
+    assert.match(String(trace.find((event) => event.type === 'turn/stop')?.data.reason?.message), /^工具 bash 连续或重复失败 3 次：/u);
+    assert.match(String(trace.find((event) => event.type === 'turn/end')?.data.reason?.error?.message), /^工具 bash 连续或重复失败 3 次：/u);
+    assert.equal(trace.find((event) => event.type === 'turn/end')?.data.reason?.error?.code, 'AGENT_TOOL_LOOP_GUARD');
+  } finally {
+    adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });
@@ -217,7 +288,7 @@ test('Agent 只转发匹配 generation 且连续 sequence 的文本 delta，并�
     async cancel(requestId) { return { requestId, state: 'completed' }; },
   };
   const deltas: string[] = [];
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   try {
     const conversation = await adapter.createConversation('/workspace');
     assert.equal(await adapter.sendMessage(conversation.id, 'hello', undefined, (delta) => deltas.push(delta)), '流式');
@@ -234,6 +305,7 @@ test('Agent 只转发匹配 generation 且连续 sequence 的文本 delta，并�
     assert.ok(lastDelta < firstCompleted, '所有流式 delta 必须先于 assistant item completed 持久化');
   } finally {
     adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });
@@ -248,7 +320,7 @@ test('停止 turn 会把 AbortSignal 传到权限审批等待并记录 cancelled
     },
     async cancel(requestId) { return { requestId, state: 'cancelled' }; },
   };
-  const adapter = new HarborsAdapter(client, storage);
+  const { adapter, store } = createAdapter(client, storage);
   adapter.setPermissionRequester(({ signal }) => {
     permissionSignal = signal!;
     return new Promise((resolve) => signal?.addEventListener('abort', () => resolve('cancelled'), { once: true }));
@@ -264,6 +336,7 @@ test('停止 turn 会把 AbortSignal 传到权限审批等待并记录 cancelled
     assert.equal(trace.some((event) => event.type === 'approval/resolved' && event.data.outcome === 'cancelled'), true);
   } finally {
     adapter.stop();
+    store.close();
     await rm(storage, { recursive: true, force: true });
   }
 });

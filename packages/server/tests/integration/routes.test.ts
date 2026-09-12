@@ -96,6 +96,7 @@ describe('framework routes', () => {
       version: '1.0.0',
       main: './main/dist/index.js',
       'ce-editor': {
+        schemaVersion: 1,
         contribute: {
           panel: {
             editor: { entry: './panel.editor/dist/index.html', width: 400 },

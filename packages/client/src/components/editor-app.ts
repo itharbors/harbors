@@ -1,7 +1,7 @@
 import { EditorTransport, getKitFromURL, getSessionIdFromURL } from '../core/transport';
 import type { BootstrapInfo, I18nChangeEvent, I18nVisibleSnapshot, LayoutNode } from '../core/session';
 import { ClientSession } from '../core/session';
-import { getStoredSessionId, setStoredSessionId, generateUUID } from '../core/storage';
+import { getStoredSessionId } from '../core/storage';
 import { I18nClient } from '../i18n/client';
 import { i18nStore } from '../i18n/store';
 import '../layout/split-pane';
@@ -82,17 +82,11 @@ export class EditorApp extends HTMLElement {
     this.style.overflow = 'hidden';
     this.style.position = 'relative';
 
-    const sessionId = getSessionIdFromURL() || getStoredSessionId() || generateUUID();
-
-    // If URL has no session param, redirect to include it.
-    const searchParams = new URLSearchParams(window.location.search);
-    if (!searchParams.has('session') && !searchParams.has('sessionId')) {
-      const url = new URL(window.location.href);
-      url.searchParams.set('session', sessionId);
-      window.history.replaceState({}, '', url.toString());
+    const sessionId = getSessionIdFromURL() || getStoredSessionId();
+    if (!sessionId) {
+      this.innerHTML = '<div role="alert">无法打开工作台：缺少已验证的 Session。</div>';
+      return;
     }
-
-    setStoredSessionId(sessionId);
 
     this.session = new ClientSession(sessionId);
     this.transport = new EditorTransport(this.session, { kit: getKitFromURL() || undefined });

@@ -6,6 +6,7 @@ import type { KitConfigDeclaration } from '@itharbors/kit-core';
 export interface TestKitPlugin {
   name: string;
   directory?: string;
+  requires?: readonly string[];
   contribute?: Record<string, unknown>;
   code?: string;
 }
@@ -40,7 +41,11 @@ export function createDistPlugin(pluginsDirectory: string, plugin: TestKitPlugin
     version: '1.0.0',
     type: 'module',
     main: './main/dist/index.js',
-    'ce-editor': { contribute: plugin.contribute ?? {} },
+    'ce-editor': {
+      schemaVersion: 1,
+      ...(plugin.requires ? { requires: { plugins: plugin.requires } } : {}),
+      contribute: plugin.contribute ?? {},
+    },
   });
   fs.writeFileSync(
     path.join(pluginDirectory, 'main', 'dist', 'index.js'),
@@ -144,14 +149,6 @@ export function createKitFixture(options: TestKitFixtureOptions = {}): TestKitFi
         windowEntries: { main: 'main.html', secondary: 'secondary.html' },
         plugin: plugins.map((plugin) => plugin.name),
       },
-    },
-    harbors: {
-      distribution: 'builtin',
-      ci: { runner: 'ubuntu-latest' },
-      docs: { summary: 'Framework-owned generic Kit fixture' },
-      resources: [],
-      storage: { legacyDataDirectories: [] },
-      scripts: { build: 'build', test: 'test' },
     },
   });
   if (options.config) {

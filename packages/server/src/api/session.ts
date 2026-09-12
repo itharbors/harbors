@@ -1,7 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { SessionManager } from '../session/manager';
 import type { Session } from '../session/manager';
-import { randomUUID } from 'node:crypto';
 import { HttpError } from '../http/errors';
 import { readJson, sendJson } from '../http/json';
 import type { RequestActor } from '../auth';
@@ -9,22 +8,20 @@ import type { SessionAccessPolicy } from '../session/access-policy';
 
 export { readBody } from '../http/json';
 
-export interface SessionCreateOptions {
+export interface SessionInitializeOptions {
   kit?: string;
   kitName?: string;
   kitPath?: string;
   locale?: string;
-  deferred?: boolean;
 }
 
-interface SessionCreateRequest extends SessionCreateOptions {
-  sessionId?: string;
-  workspacePath?: string;
+interface SessionInitializeRequest extends SessionInitializeOptions {
+  sessionId: string;
 }
 
 export function createSessionRouter(
   manager: SessionManager,
-  onSessionCreated?: (session: Session, options: SessionCreateOptions) => void | Promise<void>,
+  onSessionInitialized?: (session: Session, options: SessionInitializeOptions) => void | Promise<void>,
   onSessionDeleted?: (sessionId: string) => boolean | Promise<boolean>,
   access?: { resolveActor(req: IncomingMessage): RequestActor; policy: SessionAccessPolicy },
 ) {
@@ -68,28 +65,15 @@ export function createSessionRouter(
 
     // POST /api/session
     if (path === '/api/session' && method === 'POST') {
-      const options = await readJson(req, isSessionCreateRequest, { emptyValue: {} });
-      const { sessionId, workspacePath } = options;
+      const options = await readJson(req, isSessionInitializeRequest);
+      const { sessionId } = options;
       const actor = access?.resolveActor(req);
       if (actor?.kind === 'anonymous') throw new HttpError(403, 'DEVICE_NOT_AUTHORIZED', 'Device is not authorized');
-      if (actor?.kind === 'user' && sessionId) {
-        const existing = manager.get(sessionId);
-        if (!existing || existing.ownerUserId !== actor.userId) {
-          throw new HttpError(403, 'SESSION_FORBIDDEN', 'Remote clients cannot create or claim arbitrary Session IDs');
-        }
-      }
-      const id = sessionId || randomUUID();
-      const existedBefore = manager.get(id) !== undefined;
-      const session = manager.getOrCreate(id, workspacePath || '', actor?.kind === 'user' ? actor.userId : null);
-      try {
-        if (!options.deferred) await onSessionCreated?.(session, options);
-      } catch (error) {
-        if (!existedBefore) {
-          manager.destroy(id);
-        }
-        throw error;
-      }
-      sendJson(res, 201, manager.get(id) ?? session);
+      const session = manager.get(sessionId);
+      if (!session) throw new HttpError(404, 'SESSION_NOT_FOUND', 'Session not found');
+      if (access) access.policy.assertAccess(actor!, sessionId);
+      await onSessionInitialized?.(session, options);
+      sendJson(res, 200, manager.get(sessionId) ?? session);
       return;
     }
 
@@ -98,16 +82,14 @@ export function createSessionRouter(
   };
 }
 
-function isSessionCreateRequest(value: unknown): value is SessionCreateRequest {
+function isSessionInitializeRequest(value: unknown): value is SessionInitializeRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const input = value as Record<string, unknown>;
+  if (typeof input.sessionId !== 'string' || input.sessionId.length === 0) return false;
   return [
-    input.sessionId,
-    input.workspacePath,
     input.kit,
     input.kitName,
     input.kitPath,
     input.locale,
-    input.deferred,
-  ].every((field) => field === undefined || typeof field === 'string' || typeof field === 'boolean');
+  ].every((field) => field === undefined || typeof field === 'string');
 }

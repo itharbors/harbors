@@ -3,12 +3,11 @@ import path from 'node:path';
 import { createDefaultAssemblyConfig } from '../../packages/server/src/assembly/config.ts';
 import { createServer } from '../../packages/server/src/server.ts';
 import { ensureDataDir, resolveStartConfig } from '../../packages/server/src/start-config.ts';
-import { migrateApplicationData } from '../../packages/server/src/application-data-migration.ts';
 
 const rootDir = process.cwd();
 const sources = parseSources(process.env.HARBORS_KIT_SOURCES);
 const defaultKit = requireValue(process.env.CE_DEFAULT_KIT, 'CE_DEFAULT_KIT');
-const config = resolveStartConfig(rootDir, process.env);
+const config = resolveStartConfig(process.env);
 if (!process.env.HARBORS_DATA_ROOT) throw new Error('HARBORS_DATA_ROOT is required');
 
 const pluginPathRoots = config.pluginPathRoots;
@@ -18,14 +17,6 @@ await Promise.all([
   ensureDataDir(configStorageRoots['application-data']),
   ensureDataDir(path.dirname(config.dbPath)),
 ]);
-await migrateApplicationData({
-  applicationDataDir: config.applicationDataDir,
-  dbPath: config.dbPath,
-  legacyDbPaths: config.legacyDbPaths,
-  pluginDataRoot: config.pluginPathRoots.data,
-  legacyPluginDataRoots: config.legacyPluginDataRoots,
-});
-
 const server = createServer({
   assembly: createDefaultAssemblyConfig(rootDir, { kitSources: sources, defaultKit }),
   pluginPathRoots,

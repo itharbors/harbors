@@ -19,11 +19,11 @@ sequenceDiagram
 
 `pnpm dev` 启动 Gateway、Server 与 Client 三个开发进程；Gateway 和 Server 监听源码变化，Client 使用 Vite HMR。`pnpm start` 使用 `packages/server/src/start.ts` 直接启动单个稳定 Web Server，提供预先构建的 Client 资产，不启用开发代理、源码监听或 HMR；`HARBORS_SERVER_PORT` 和 `HARBORS_BIND_HOST` 可覆盖默认监听。两个入口默认数据根都为 `~/.harbors/`，并以相同的 `--data-root <absolute-path>` / `HARBORS_DATA_ROOT` 契约整体切换数据库、配置和 Plugin roots。
 
-Server 在 `createServer()` 打开 SQLite 前执行 application data migration：对旧数据库生成 WAL 一致性快照，按 `.data/harbors.db`、`packages/server/.editor.db` 的固定顺序只导入目标缺失主键，再迁移旧 Plugin persistent data。迁移有 application root lock、事务和 no-overwrite 原子发布；已有目标值、Agent tombstone 和所有源文件均保留。迁移只在默认正式根启用；非默认自定义根从空的 legacy source 集合启动。`DB_PATH` 只覆盖 Server DB，不隐式移动 Plugin 或 Kit config 根。
+Server 直接打开当前 data root 中的数据库与 Plugin 路径，不扫描或导入项目内旧数据源。`DB_PATH` 只覆盖 Server DB，不隐式移动 Plugin 或 Kit config 根。
 
 ## 会话创建与 bootstrap
 
-浏览器请求创建 session 后，`SessionRuntimeRegistry` 建立 Editor，装配 default Kit，加载插件并生成布局、菜单和国际化快照。Client 获取 bootstrap 后渲染工作台，并用 SSE 接收后续变化。
+浏览器先通过 Workbench API 为明确选择的 User 创建持久 Session，再请求初始化该已存在 Session 的 runtime。`SessionRuntimeRegistry` 只建立 Editor，不隐式写入 Session；随后装配 default Kit，加载插件并生成布局、菜单和国际化快照。URL 或缓存中的 Session 不存在或无权访问时，Client 清理相关参数并返回选择器。Client 获取 bootstrap 后渲染工作台，并用 SSE 接收后续变化。
 
 ## Panel 消息
 

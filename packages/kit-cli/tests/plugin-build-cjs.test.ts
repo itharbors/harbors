@@ -35,6 +35,7 @@ describe('compileMainScript with .cjs output', () => {
         type: 'module',
         main: './main/dist/index.cjs',
         'ce-editor': {
+          schemaVersion: 1,
           contribute: {
             panel: {
               main: { entry: './panel.main/dist/index.html' },

@@ -147,8 +147,6 @@ async function loadKitDescriptor(repositoryRoot, slug) {
     summary: metadata.summary,
     scripts: metadata.scripts,
     resources: metadata.resources,
-    legacyDataDirectories: metadata.legacyDataDirectories,
-    legacyPluginDataDirectories: metadata.legacyPluginDataDirectories,
     manifest: frozenManifest,
     packageJson: frozenPackageJson,
   });

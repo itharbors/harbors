@@ -293,19 +293,6 @@ test('failed structured turn stays expanded', () => {
   assert.equal(shouldCollapseTurn(turn), false);
 });
 
-test('legacy surface-only conversation retains final-response fallback', () => {
-  const messages: MessageData[] = [
-    { id: 'legacy-user', role: 'user', content: 'hello' },
-    { id: 'legacy-answer', role: 'assistant', content: 'world' },
-  ];
-  const turn = buildDisplayTurns(messages, [], [], 0)[0].turn;
-
-  assert.equal(turn.hasStructuredTrace, false);
-  assert.equal(turn.status, 'completed');
-  assert.equal(turn.steps[0].assistant?.text, 'world');
-  assert.equal(shouldCollapseTurn(turn), true);
-});
-
 test('projector reuses old rows and steps when only the latest assistant changes', () => {
   const projector = createDisplayTurnProjector();
   const messages = messagesForTurns([1, 2]);

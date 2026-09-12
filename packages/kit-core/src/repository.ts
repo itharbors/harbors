@@ -18,8 +18,6 @@ export interface RepositoryKitPackageMetadata {
   readonly summary: string;
   readonly scripts: RepositoryKitScripts;
   readonly resources: readonly string[];
-  readonly legacyDataDirectories: readonly string[];
-  readonly legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
 }
 
 export interface RepositoryKitDescriptor {
@@ -37,14 +35,11 @@ export interface RepositoryKitDescriptor {
   readonly summary: string;
   readonly scripts: RepositoryKitScripts;
   readonly resources: readonly string[];
-  readonly legacyDataDirectories: readonly string[];
-  readonly legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
   readonly manifest: KitPackageManifest;
   readonly packageJson: Readonly<Record<string, unknown>>;
 }
 
 type UnknownRecord = Record<string, unknown>;
-const PLUGIN_NAME_PATTERN = /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u;
 
 function record(value: unknown, context: string): UnknownRecord {
   if (value === null || typeof value !== 'object' || Array.isArray(value)) {
@@ -103,56 +98,6 @@ function parseResources(value: unknown): readonly string[] {
   return resources;
 }
 
-function parseLegacyDirectoryArray(value: unknown, context: string): readonly string[] {
-  if (!Array.isArray(value)) throw new Error(`${context} must be an array`);
-  const directories = value.map((directory, index) => {
-    const parsed = stringValue(directory, `${context}[${index}]`);
-    if (
-      parsed.includes('/')
-      || parsed.includes('\\')
-      || parsed.includes('\0')
-      || parsed === '.'
-      || parsed === '..'
-      || parsed.startsWith('/')
-    ) {
-      throw new Error(
-        `${context}[${index}] must be a single canonical directory name`,
-      );
-    }
-    return parsed;
-  });
-  if (new Set(directories).size !== directories.length) {
-    throw new Error(`${context} contains duplicate values`);
-  }
-  return directories;
-}
-
-function parseStorage(value: unknown): {
-  legacyDataDirectories: readonly string[];
-  legacyPluginDataDirectories: Readonly<Record<string, readonly string[]>>;
-} {
-  const input = record(value, 'harbors.storage');
-  exactKeys(input, ['legacyDataDirectories', 'legacyPluginDataDirectories'], 'harbors.storage');
-  const legacyDataDirectories = input.legacyDataDirectories === undefined
-    ? []
-    : parseLegacyDirectoryArray(input.legacyDataDirectories, 'harbors.storage.legacyDataDirectories');
-  const pluginInput = input.legacyPluginDataDirectories === undefined
-    ? {}
-    : record(input.legacyPluginDataDirectories, 'harbors.storage.legacyPluginDataDirectories');
-  const legacyPluginDataDirectories = Object.freeze(Object.fromEntries(
-    Object.entries(pluginInput).map(([pluginName, directories]) => {
-      if (!PLUGIN_NAME_PATTERN.test(pluginName)) {
-        throw new Error('harbors.storage.legacyPluginDataDirectories contains invalid Plugin owner');
-      }
-      return [pluginName, Object.freeze(parseLegacyDirectoryArray(
-        directories,
-        `harbors.storage.legacyPluginDataDirectories.${pluginName}`,
-      ))];
-    }),
-  ));
-  return { legacyDataDirectories, legacyPluginDataDirectories };
-}
-
 function parseScripts(value: unknown): RepositoryKitScripts {
   const input = record(value, 'harbors.scripts');
   exactKeys(input, ['build', 'test', 'smoke'], 'harbors.scripts');
@@ -168,7 +113,7 @@ function parseScripts(value: unknown): RepositoryKitScripts {
 
 export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageMetadata {
   const input = record(value, 'harbors');
-  exactKeys(input, ['distribution', 'default', 'ci', 'docs', 'resources', 'storage', 'scripts'], 'harbors');
+  exactKeys(input, ['distribution', 'default', 'ci', 'docs', 'resources', 'scripts'], 'harbors');
 
   const distribution = enumValue<KitDistribution>(
     input.distribution,
@@ -196,9 +141,6 @@ export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageM
   const summary = stringValue(docs.summary, 'harbors.docs.summary');
 
   const resources = input.resources === undefined ? [] : parseResources(input.resources);
-  const storage = input.storage === undefined
-    ? { legacyDataDirectories: [], legacyPluginDataDirectories: Object.freeze({}) }
-    : parseStorage(input.storage);
   const scripts = parseScripts(input.scripts);
 
   return Object.freeze({
@@ -208,7 +150,5 @@ export function parseRepositoryKitPackage(value: unknown): RepositoryKitPackageM
     summary,
     scripts: Object.freeze(scripts),
     resources: Object.freeze(resources),
-    legacyDataDirectories: Object.freeze(storage.legacyDataDirectories),
-    legacyPluginDataDirectories: storage.legacyPluginDataDirectories,
   });
 }

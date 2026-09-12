@@ -26,6 +26,19 @@ describe('Server Integration', () => {
     await stop();
   });
 
+  async function initializeSession(
+    sessionId: string,
+    options: Record<string, string> = {},
+    workspacePath = '',
+  ): Promise<Response> {
+    testServer.manager.getOrCreate(sessionId, workspacePath, 'local-test-user');
+    return fetch(`${baseURL}/api/session`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId, ...options }),
+    });
+  }
+
   it('GET / returns an empty app host so client bootstrap chooses picker or editor first', async () => {
     const resp = await fetch(`${baseURL}/`);
     const html = await resp.text();
@@ -39,12 +52,7 @@ describe('Server Integration', () => {
   });
 
   it('GET /api/session/:id returns session info as JSON', async () => {
-    // Create session first
-    await fetch(`${baseURL}/api/session`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'e2e-test', workspacePath: '/tmp/e2e' }),
-    });
+    await initializeSession('e2e-test', {}, '/tmp/e2e');
 
     const resp = await fetch(`${baseURL}/api/session/e2e-test`);
     const data = await resp.json();
@@ -65,18 +73,19 @@ describe('Server Integration', () => {
     });
   });
 
-  it('POST /api/session auto-generates sessionId', async () => {
+  it('POST /api/session initializes an existing Session', async () => {
+    testServer.manager.getOrCreate('initialize-existing', '/tmp/current', 'local-test-user');
     const resp = await fetch(`${baseURL}/api/session`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ workspacePath: '/tmp/auto' }),
+      body: JSON.stringify({ sessionId: 'initialize-existing' }),
     });
     const data = await resp.json();
 
-    expect(resp.status).toBe(201);
-    expect(data.sessionId).toBeDefined();
-    expect(data.sessionId).toHaveLength(36); // UUID
-    expect(data.workspacePath).toBe('/tmp/auto');
+    expect(resp.status).toBe(200);
+    expect(data.sessionId).toBe('initialize-existing');
+    expect(data.workspacePath).toBe('/tmp/current');
+    expect(testServer.editorMap.has('initialize-existing')).toBe(true);
   });
 
   it('creates a user, allocates an owned Session, and exposes only public workbench summaries', async () => {
@@ -99,12 +108,20 @@ describe('Server Integration', () => {
     expect(context).toMatchObject({ actor: 'local-admin' });
     expect((context.sessions as Array<{ sessionId: string }>).some((item) => item.sessionId === session.sessionId)).toBe(true);
 
+    testServer.auth.devices.authorize('session-owner-device', user.userId);
+    testServer.auth.pending.add('session-owner-pending', {
+      ip: '203.0.113.30', userAgent: 'test', requestedUserId: user.userId,
+    });
     const deleteInUse = await fetch(`${baseURL}/api/workbench/user/${user.userId}`, { method: 'DELETE' });
     expect(deleteInUse.status).toBe(409);
     await expect(deleteInUse.json()).resolves.toMatchObject({ error: { code: 'USER_IN_USE' } });
+    expect(testServer.auth.users.get(user.userId)).toBeDefined();
+    expect(testServer.auth.devices.get('session-owner-device')).toBeDefined();
+    expect(testServer.auth.pending.get('session-owner-pending')).toBeDefined();
+    expect(testServer.manager.get(session.sessionId)).toBeDefined();
   });
 
-  it('deletes only users without Sessions or authorized devices', async () => {
+  it('deletes users without Sessions and clears their devices and pending requests', async () => {
     const disposable = testServer.auth.users.create('可删除用户');
     const deleted = await fetch(`${baseURL}/api/workbench/user/${disposable.userId}`, { method: 'DELETE' });
     expect(deleted.status).toBe(204);
@@ -112,9 +129,18 @@ describe('Server Integration', () => {
 
     const bound = testServer.auth.users.create('已授权用户');
     testServer.auth.devices.authorize('bound-device', bound.userId);
+    testServer.auth.pending.add('pending-device', {
+      ip: '203.0.113.31', userAgent: 'test', requestedUserId: bound.userId,
+    });
     const deleteBound = await fetch(`${baseURL}/api/workbench/user/${bound.userId}`, { method: 'DELETE' });
-    expect(deleteBound.status).toBe(409);
-    expect(testServer.auth.users.get(bound.userId)).toBeDefined();
+    expect(deleteBound.status).toBe(204);
+    expect(testServer.auth.users.get(bound.userId)).toBeUndefined();
+    expect(testServer.auth.devices.get('bound-device')).toBeUndefined();
+    expect(testServer.auth.pending.get('pending-device')).toBeUndefined();
+
+    const remoteHeaders = { 'x-forwarded-for': '203.0.113.31', 'x-device-id': 'bound-device' };
+    const status = await fetch(`${baseURL}/api/auth/status?deviceId=bound-device`, { headers: remoteHeaders });
+    await expect(status.json()).resolves.toMatchObject({ status: 'unauthorized' });
   });
 
   it('rejects user deletion from remote and anonymous actors', async () => {
@@ -126,6 +152,7 @@ describe('Server Integration', () => {
     });
     expect(remoteDelete.status).toBe(403);
     await expect(remoteDelete.json()).resolves.toMatchObject({ error: { code: 'LOCAL_ONLY' } });
+    expect(testServer.auth.devices.get('remote-device')).toBeDefined();
 
     const anonymousDelete = await fetch(`${baseURL}/api/workbench/user/${remote.userId}`, {
       method: 'DELETE',
@@ -134,6 +161,7 @@ describe('Server Integration', () => {
     expect(anonymousDelete.status).toBe(403);
     await expect(anonymousDelete.json()).resolves.toMatchObject({ error: { code: 'DEVICE_NOT_AUTHORIZED' } });
     expect(testServer.auth.users.get(remote.userId)).toBeDefined();
+    expect(testServer.auth.devices.get('remote-device')).toBeDefined();
   });
 
   it('lets an anonymous remote device request one existing user without exposing workbench data', async () => {
@@ -192,9 +220,6 @@ describe('Server Integration', () => {
     });
     expect(nameOverride.status).toBe(409);
 
-    const deletePendingUser = await fetch(`${baseURL}/api/workbench/user/${requestedUser.userId}`, { method: 'DELETE' });
-    expect(deletePendingUser.status).toBe(409);
-
     const approve = await fetch(`${baseURL}/api/auth/approve/remote-login-device`, {
       method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
     });
@@ -250,12 +275,8 @@ describe('Server Integration', () => {
   });
 
   it('DELETE /api/session/:id disposes the runtime and deletes persistent state', async () => {
-    const createResponse = await fetch(`${baseURL}/api/session`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'delete-runtime' }),
-    });
-    expect(createResponse.status).toBe(201);
+    const createResponse = await initializeSession('delete-runtime');
+    expect(createResponse.status).toBe(200);
     expect(testServer.editorMap.has('delete-runtime')).toBe(true);
 
     const deleteResponse = await fetch(`${baseURL}/api/session/delete-runtime`, {
@@ -269,12 +290,8 @@ describe('Server Integration', () => {
 
   it('completes a browser-targeted request through SSE and the result API', async () => {
     const sessionId = 'browser-request-e2e';
-    const createResponse = await fetch(`${baseURL}/api/session`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId }),
-    });
-    expect(createResponse.status).toBe(201);
+    const createResponse = await initializeSession(sessionId);
+    expect(createResponse.status).toBe(200);
 
     testServer.editorMap.get(sessionId)!.message.registerRequest(
       'browser',
@@ -387,11 +404,7 @@ describe('Server Integration', () => {
 
   it('distinguishes a missing message route from a failing handler', async () => {
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await fetch(`${baseURL}/api/session`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'message-errors' }),
-    });
+    await initializeSession('message-errors');
     const editor = testServer.editorMap.get('message-errors')!;
     editor.message.registerRequest('explode', 'run', () => {
       throw new Error('handler exploded');

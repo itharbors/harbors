@@ -391,9 +391,9 @@ function assertInitializePayload(input: unknown): InitializeApplicationPluginPay
     || !hasExactKeys(input.runtime, [
       'paths', 'hostMode', 'pluginSnapshot', 'menuSnapshot', 'serviceSnapshot', 'notificationCapability',
     ]) || !isRecord(input.runtime.paths)
-    || !hasExactKeys(input.runtime.paths, ['data', 'cache', 'temp', 'legacyData'])
+    || !hasExactKeys(input.runtime.paths, ['data', 'cache', 'temp'])
     || !isNonEmptyString(input.runtime.paths.data) || !isNonEmptyString(input.runtime.paths.cache)
-    || !isNonEmptyString(input.runtime.paths.temp) || !isStringArray(input.runtime.paths.legacyData)
+    || !isNonEmptyString(input.runtime.paths.temp)
     || (input.runtime.hostMode !== 'desktop' && input.runtime.hostMode !== 'web')
     || !isPluginSnapshot(input.runtime.pluginSnapshot) || !isRecord(input.runtime.serviceSnapshot)
     || typeof input.runtime.notificationCapability !== 'boolean') {

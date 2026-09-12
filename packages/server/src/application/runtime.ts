@@ -339,7 +339,6 @@ export class ApplicationRuntime {
         const pluginPaths = await createPluginPaths({
           roots: this.pluginPathRoots,
           owner: spec.name,
-          legacyDataDirectories: spec.legacyDataDirectories ?? [],
         });
         this.prepared.set(spec.name, {
           spec,
@@ -435,7 +434,6 @@ export class ApplicationRuntime {
           data: prepared.paths.data,
           cache: prepared.paths.cache,
           temp: prepared.paths.temp,
-          legacyData: [...prepared.paths.legacyData],
         },
         hostMode: this.hostMode,
         pluginSnapshot: this.pluginSnapshot(),

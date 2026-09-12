@@ -37,6 +37,7 @@ my-plugin/
   "type": "module",
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "panel": {
         "main": {
@@ -62,6 +63,8 @@ my-plugin/
   }
 }
 ```
+
+每个 Plugin manifest 都必须在 `ce-editor.schemaVersion` 显式声明当前版本。解析器不会为缺失字段补默认值；缺少或不支持的版本会直接校验失败。
 
 完整 Panel 名为 `@example/my-plugin.main`。
 
@@ -124,6 +127,7 @@ runtime.message.broadcast(topic: string, ...args: unknown[]): void
 {
   "name": "@example/state-provider",
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "message": {
         "request": {
@@ -169,6 +173,7 @@ await runtime.message.request("@example/state-provider", "setValue", 42);
 {
   "name": "@example/state-consumer",
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "message": {
         "broadcast": {
@@ -370,6 +375,7 @@ pnpm run kits:check <slug>
 ```json
 {
   "ce-editor": {
+    "schemaVersion": 1,
     "assets": {
       "public": ["./static"]
     },
@@ -470,6 +476,7 @@ Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser me
   "type": "module",
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "message": {
         "request": {
@@ -525,33 +532,14 @@ owner，最后广播新 snapshot。`failed` 可由内部控制面调用
 canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒绝。
 
 该进程边界是 crash containment，不是权限 sandbox。插件仍是受信 Node.js 代码，以同一 OS 账号
-运行，使用 Framework cwd，并拥有该账号的文件系统权限。新插件应优先使用
-`ctx.paths.data/cache/temp/legacyData`；这些 owner 专属路径和环境过滤都不是文件访问隔离。
+运行，使用 Framework cwd，并拥有该账号的文件系统权限。新插件应使用
+`ctx.paths.data/cache/temp`；这些 owner 专属路径和环境过滤都不是文件访问隔离。
 
 Web 宿主默认把 owner 专属路径放在
 `~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。开发与正式启动共享数据根语义；宿主使用
 `--data-root` 时这些路径随数据库和 Kit 配置整体切换。Plugin 不应从
 `process.cwd()`、源码目录或 `homedir()` 自行推导持久数据位置。需要诊断磁盘目录归属时，可读取
 inspection 中的 `PluginInfo.storageOwnerKey`；该值只用于映射和日志，不是权限令牌。
-
-Kit 若要让某个 Plugin 导入改名前的用户数据，应在 Kit 的 `package.json` 按 owner 做最小授权：
-
-```json
-{
-  "harbors": {
-    "storage": {
-      "legacyDataDirectories": [],
-      "legacyPluginDataDirectories": {
-        "agent": ["pi-agent"]
-      }
-    }
-  }
-}
-```
-
-Framework 只会把 `pi-agent` 注入 `agent` 的 `ctx.paths.legacyData`，同一 Kit 的其他 Plugin 不会得到
-该路径。目录名必须是 canonical basename，映射键必须属于该 Kit 已声明的 Plugin；legacy source
-应只读、迁移应幂等且保留源数据，新数据继续写入 `ctx.paths.data`。
 
 child env 从 Framework 父环境的副本开始，然后删除权威固定 host secret 键和集成方显式提供的
 `secretEnvironmentKeys`。固定 Application token、Notification owner token 与 credential transport

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-09-11-user-delete-legacy-device",
+  "type": "bug",
+  "updatedAt": "2026-09-12T08:01:03.796Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": null
+}

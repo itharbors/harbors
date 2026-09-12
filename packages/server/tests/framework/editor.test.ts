@@ -664,7 +664,7 @@ describe('createEditor', () => {
       name,
       version: '1.0.0',
       main: './main/dist/index.js',
-      'ce-editor': { contribute },
+      'ce-editor': { schemaVersion: 1, contribute },
     }));
     fs.writeFileSync(path.join(dir, 'main', 'dist', 'index.js'), code);
     fs.writeFileSync(path.join(dir, 'panel', 'dist', 'index.html'), '<html></html>');

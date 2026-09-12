@@ -29,15 +29,44 @@ describe('parsePluginPackageManifest', () => {
       main: './main/dist/index.js',
       capabilities: ['credentials'],
       assets: { public: ['./resources'] },
+      requires: { plugins: [] },
     });
     expect(Object.isFrozen(parsed)).toBe(true);
     expect(Object.isFrozen(parsed.contribute.panel)).toBe(true);
   });
 
-  it('treats a missing schemaVersion as compatible v1', () => {
-    const legacy = structuredClone(manifest);
-    delete (legacy['ce-editor'] as { schemaVersion?: number }).schemaVersion;
-    expect(parsePluginPackageManifest(legacy).schemaVersion).toBe(1);
+  it('strictly parses Plugin hard dependencies', () => {
+    const input = structuredClone(manifest);
+    (input['ce-editor'] as Record<string, unknown>).requires = {
+      plugins: ['model-service', '@example/context-store'],
+    };
+    const parsed = parsePluginPackageManifest(input);
+    expect(parsed.requires.plugins).toEqual(['model-service', '@example/context-store']);
+    expect(Object.isFrozen(parsed.requires)).toBe(true);
+    expect(Object.isFrozen(parsed.requires.plugins)).toBe(true);
+  });
+
+  it.each([
+    { plugins: ['model-service', 'model-service'] },
+    { plugins: [] as string[], extra: true },
+    { plugins: ['Bad Name'] },
+    { plugins: 'model-service' },
+    {},
+  ])('rejects invalid Plugin hard dependencies %#', (requires) => {
+    const input = structuredClone(manifest);
+    (input['ce-editor'] as Record<string, unknown>).requires = requires;
+    try {
+      parsePluginPackageManifest(input);
+      throw new Error('Expected invalid requires to be rejected');
+    } catch (error) {
+      expect(error).toMatchObject({ code: 'PLUGIN_DEPENDENCY_INVALID', plugin: '@example/demo' });
+    }
+  });
+
+  it('requires an explicit schemaVersion', () => {
+    const input = structuredClone(manifest);
+    delete (input['ce-editor'] as { schemaVersion?: number }).schemaVersion;
+    expect(() => parsePluginPackageManifest(input)).toThrow(/schemaVersion/i);
   });
 
   it('accepts object message routes with a unique non-empty caller allowlist', () => {

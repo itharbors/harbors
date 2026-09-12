@@ -4,8 +4,7 @@ import type { AgentItemKind, AgentItemPhase, AgentTraceEvent, AgentTurnTerminalK
 /**
  * Agent/Chat 共享的事件协议辅助函数。
  *
- * 新事件将关联键放在事件顶层，同时复制到 data 以兼容旧的 JSONL 消费者；
- * 读取旧 trace 时只使用 data 中已有字段，不改变历史可见内容。
+ * 关联键放在事件顶层，并复制到 data 供当前消费者使用。
  */
 export interface EventCorrelation {
   conversationId: string;
@@ -46,7 +45,7 @@ function nonEmptyString(value: unknown): string | undefined {
   return typeof value === 'string' && value.trim() ? value : undefined;
 }
 
-/** 从新旧事件中解析关联键；旧事件只返回可安全推导的值。 */
+/** 从当前事件协议中解析关联键。 */
 export function eventCorrelation(event: Pick<AgentTraceEvent, 'conversationId' | 'turnId' | 'itemId' | 'requestId' | 'data'>, fallbackConversationId?: string): Partial<EventCorrelation> {
   const data = dataRecord(event.data);
   const conversationId = nonEmptyString(event.conversationId) || nonEmptyString(data.conversationId) || fallbackConversationId;
@@ -86,29 +85,6 @@ export function withEventCorrelation(
     ...(correlation.requestId ? { requestId: correlation.requestId } : {}),
     ...(item ? { itemKind: item.kind, itemPhase: item.phase } : {}),
     data,
-  };
-}
-
-/** 兼容旧 JSONL 的规范化：不改变 seq/time/type 或已有 payload。 */
-export function normalizeLegacyTraceEvent(event: AgentTraceEvent, conversationId: string): AgentTraceEvent {
-  const data = dataRecord(event.data);
-  const turn = typeof data.turn === 'number' && Number.isSafeInteger(data.turn) ? data.turn : undefined;
-  const turnId = nonEmptyString(event.turnId) || nonEmptyString(data.turnId) || (turn !== undefined && turn > 0 ? `legacy-turn-${turn}` : undefined);
-  const itemId = nonEmptyString(event.itemId) || nonEmptyString(data.itemId);
-  const requestId = nonEmptyString(event.requestId) || nonEmptyString(data.requestId);
-  return {
-    ...event,
-    conversationId: event.conversationId || conversationId,
-    ...(turnId ? { turnId } : {}),
-    ...(itemId ? { itemId } : {}),
-    ...(requestId ? { requestId } : {}),
-    data: {
-      ...data,
-      conversationId: data.conversationId || event.conversationId || conversationId,
-      ...(turnId ? { turnId: data.turnId || turnId } : {}),
-      ...(itemId ? { itemId: data.itemId || itemId } : {}),
-      ...(requestId ? { requestId: data.requestId || requestId } : {}),
-    },
   };
 }
 

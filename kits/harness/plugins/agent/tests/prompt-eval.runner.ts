@@ -5,7 +5,8 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { createKitAssemblyHarness } from '../../../../../packages/server/dist/testing.js';
-import { HarborsAdapter, type ModelServiceCatalog, type ModelServiceClient, type ModelServiceCompleteRequest, type TurnInstructionProvider } from '../main/src/adapter/harbors.ts';
+import { ContextStore } from '../../agent-context-store/main/src/store.ts';
+import { HarborsAdapter, type ContextStoreClient, type ModelServiceCatalog, type ModelServiceClient, type ModelServiceCompleteRequest, type TurnInstructionProvider } from '../main/src/adapter/harbors.ts';
 import { loadWorkspaceInstructions } from '../main/src/adapter/instructions.ts';
 import { discoverSkillCatalog } from '../main/src/adapter/skills.ts';
 import { validateCustomInstructions } from '../main/src/adapter/system-instructions.ts';
@@ -120,6 +121,8 @@ async function main(): Promise<void> {
   let credentialVault: Awaited<ReturnType<typeof openEvalCredentialVault>> | undefined;
   let baseline: HarborsAdapter | undefined;
   let candidate: HarborsAdapter | undefined;
+  let baselineStore: ContextStore | undefined;
+  let candidateStore: ContextStore | undefined;
   try {
     const workspace = await prepareEvalWorkspace(options.workspace, process.env.HARBORS_AGENT_WORKSPACE);
     credentialVault = await openEvalCredentialVault(path.resolve(evalRoot));
@@ -158,8 +161,10 @@ async function main(): Promise<void> {
         },
       };
     };
-    baseline = new HarborsAdapter(client, path.join(evalRoot, 'runner-baseline'), [], {}, () => validateCustomInstructions(undefined), baselineProvider);
-    candidate = new HarborsAdapter(client, path.join(evalRoot, 'runner-candidate'));
+    baselineStore = new ContextStore(path.join(evalRoot, 'runner-baseline'));
+    candidateStore = new ContextStore(path.join(evalRoot, 'runner-candidate'));
+    baseline = new HarborsAdapter(client, baselineStore as unknown as ContextStoreClient, () => validateCustomInstructions(undefined), baselineProvider);
+    candidate = new HarborsAdapter(client, candidateStore as unknown as ContextStoreClient);
     let evaluationFailed = false;
     for (const testCase of cases) {
       const baselineTrace = await runOne(baseline, workspace, testCase, model, reasoningEffort);
@@ -190,7 +195,9 @@ async function main(): Promise<void> {
     const code = ['EVAL_CONFIG_UNAVAILABLE', 'EVAL_MODEL_UNAVAILABLE'].includes(raw) ? raw : /credential|provider|configuration/iu.test(raw) ? 'EVAL_PROVIDER_UNAVAILABLE' : 'EVAL_RUN_FAILED';
     result.blocked = { code, message: safeMessage(code) };
   } finally {
-    const cleaned = await cleanupEvalResources({ baseline, candidate, harness, credentialVault });
+    let cleaned = await cleanupEvalResources({ baseline, candidate, harness, credentialVault });
+    try { baselineStore?.close(); } catch { cleaned = false; }
+    try { candidateStore?.close(); } catch { cleaned = false; }
     if (!cleaned) result.blocked = { code: 'EVAL_RUN_FAILED', message: safeMessage('EVAL_RUN_FAILED') };
     await writeEvalOutput(projectRoot, output, result);
   }

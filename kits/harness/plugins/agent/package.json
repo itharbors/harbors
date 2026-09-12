@@ -4,6 +4,10 @@
   "type": "module",
   "main": "./main/dist/index.cjs",
   "ce-editor": {
+    "schemaVersion": 1,
+    "requires": {
+      "plugins": ["agent-context-store"]
+    },
     "contribute": {
       "panel": {
         "settings": {

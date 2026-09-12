@@ -28,6 +28,7 @@ import { withPluginDefinitionLock } from './load-lock.js';
 import { createPluginPaths, pluginStorageOwnerKey, type PluginPaths } from './paths.js';
 import type { PluginCredentialVault } from './credentials.js';
 import { parsePluginPackageManifest } from './manifest.js';
+import { PluginDependencyError } from './dependencies.js';
 
 export { Plugin } from './plugin.js';
 export {
@@ -51,6 +52,7 @@ export type {
   PluginCredentialVault,
 } from './credentials.js';
 export * from './manifest.js';
+export * from './dependencies.js';
 export type {
   ContributeData,
   PanelContribution,
@@ -62,6 +64,7 @@ export type {
   PluginLifecycle,
   PluginMessageRoute,
   PluginMessageRouteDeclaration,
+  PluginRequirements,
   PluginSourceIdentity,
   PluginRegistration,
 } from './types.js';
@@ -113,6 +116,7 @@ interface PackageJson {
   'ce-editor'?: {
     assets?: PluginAssetsManifest;
     capabilities?: unknown;
+    requires?: unknown;
     contribute?: ContributeData;
   };
 }
@@ -331,6 +335,9 @@ export class PluginModule {
       source: registration.source,
       entry: manifest.main,
       capabilities: [...manifest.capabilities],
+      ...(manifest.requires.plugins.length > 0
+        ? { requires: { plugins: [...manifest.requires.plugins] } }
+        : {}),
       ...(assets ? { assets } : {}),
       ...(contribute ? { contribute } : {}),
     };
@@ -366,6 +373,24 @@ export class PluginModule {
     // Loading is the only implicit manifest read. Never reuse a registration snapshot.
     const loadedInfo = await this.readPluginInfo(absPath, registration);
 
+    for (const dependency of loadedInfo.requires?.plugins ?? []) {
+      if (dependency === loadedInfo.name) {
+        throw new PluginDependencyError(
+          'PLUGIN_DEPENDENCY_INVALID',
+          `Plugin "${loadedInfo.name}" must not depend on itself`,
+          { plugin: loadedInfo.name, dependency },
+        );
+      }
+      const dependencyPlugin = this.nameMap.get(dependency);
+      if (!dependencyPlugin || dependencyPlugin.status !== PluginStatus.Running) {
+        throw new PluginDependencyError(
+          'PLUGIN_NOT_RUNNING',
+          `Plugin "${loadedInfo.name}" requires Plugin "${dependency}" to be Running`,
+          { plugin: loadedInfo.name, dependency },
+        );
+      }
+    }
+
     const existing = this.nameMap.get(loadedInfo.name);
     if (existing?.path === absPath && existing.status === PluginStatus.Running) return;
     if (existing) {
@@ -394,7 +419,6 @@ export class PluginModule {
     const runtimePaths = await createPluginPaths({
       roots: runtimeOptions.paths.roots,
       owner: loadedInfo.name,
-      legacyDataDirectories: runtimeOptions.paths.legacyDataDirectories,
     });
     this.loadingPaths.add(absPath);
     let credentialLease: ReturnType<typeof createRevocableCredentialVault> | undefined;
@@ -475,7 +499,6 @@ export class PluginModule {
       definition,
       methods: definition.methods ?? {},
     };
-    plugin.status = PluginStatus.Running;
     this.nameMap.set(plugin.name, plugin);
     this.loadingPaths.delete(absPath);
     if (credentialLease) this.credentialRevokers.set(plugin.path, credentialLease.revokeAndDrain);
@@ -497,6 +520,7 @@ export class PluginModule {
           await definition.lifecycle.attach(otherPlugin.name, otherPlugin.contribute);
         }
       }
+      plugin.status = PluginStatus.Running;
     } catch (loadError) {
       try {
         await this.unloadInternal(absPath);
@@ -520,7 +544,20 @@ export class PluginModule {
   private async unloadInternal(pluginPath: string): Promise<void> {
     const absPath = path.resolve(pluginPath);
     const plugin = Array.from(this.nameMap.values()).find((candidate) => candidate.path === absPath);
-    if (!plugin || plugin.status !== PluginStatus.Running) return;
+    if (!plugin || (plugin.status !== PluginStatus.Running && plugin.status !== PluginStatus.Loading)) return;
+
+    const dependent = Array.from(this.nameMap.values()).find((candidate) => (
+      candidate.name !== plugin.name
+      && candidate.status === PluginStatus.Running
+      && candidate.info.requires?.plugins.includes(plugin.name)
+    ));
+    if (dependent) {
+      throw new PluginDependencyError(
+        'PLUGIN_DEPENDENTS_RUNNING',
+        `Plugin "${plugin.name}" cannot unload while dependent Plugin "${dependent.name}" is Running`,
+        { plugin: plugin.name, dependency: dependent.name },
+      );
+    }
 
     plugin.status = PluginStatus.Unloading;
     const errors: unknown[] = [];
@@ -619,13 +656,21 @@ export class PluginModule {
   callPlugin(name: string, method: string, ...args: unknown[]): unknown {
     const plugin = this.nameMap.get(name);
     if (!plugin?.instance || plugin.status !== PluginStatus.Running) {
-      throw new Error(`Plugin "${name}" is not loaded`);
+      throw new PluginDependencyError(
+        'PLUGIN_NOT_RUNNING',
+        `Plugin "${name}" is not Running`,
+        { plugin: name },
+      );
     }
 
     const fn = plugin.instance.methods?.[method];
     if (typeof fn !== 'function') {
       const available = Object.keys(plugin.instance.methods ?? {});
-      throw new Error(`Plugin "${name}" has no method "${method}". Available: ${available.join(', ')}`);
+      throw new PluginDependencyError(
+        'PLUGIN_METHOD_NOT_FOUND',
+        `Plugin "${name}" has no method "${method}". Available: ${available.join(', ')}`,
+        { plugin: name },
+      );
     }
 
     return fn(...args);

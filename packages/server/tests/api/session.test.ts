@@ -91,7 +91,7 @@ describe('Session API Routes', () => {
   });
 
   it('GET /api/session/:id returns session info', async () => {
-    manager.getOrCreate('test-session', '/home/user/test');
+    manager.getOrCreate('test-session', '/home/user/test', 'user-a');
 
     const req = mockReq('GET', '/api/session/test-session');
     const { res, body } = mockRes();
@@ -104,18 +104,18 @@ describe('Session API Routes', () => {
     expect(data.savedFileList).toEqual([]);
   });
 
-  it('POST /api/session creates a new session', async () => {
-    const req = mockReq('POST', '/api/session', { workspacePath: '/tmp/new' });
-    const { res, body } = mockRes();
+  it('POST /api/session returns 404 instead of creating a persistent Session', async () => {
+    const req = mockReq('POST', '/api/session', { sessionId: 'missing-session' });
+    const { res, body, statusCode } = mockRes();
 
     await invoke(router, req, res);
-    const data = JSON.parse(await body());
 
-    expect(data.sessionId).toBeDefined();
-    expect(data.workspacePath).toBe('/tmp/new');
+    expect(statusCode()).toBe(404);
+    expect(JSON.parse(await body())).toMatchObject({ error: { code: 'SESSION_NOT_FOUND' } });
+    expect(manager.get('missing-session')).toBeUndefined();
   });
 
-  it('remote legacy POST creates only an actor-owned Session and rejects arbitrary IDs', async () => {
+  it('remote POST initializes only an actor-owned Session', async () => {
     const policy = new SessionAccessPolicy(manager, {
       resolveBaseSessionId: () => undefined,
       get: () => undefined,
@@ -126,44 +126,31 @@ describe('Session API Routes', () => {
       resolveActor: () => actor,
       policy,
     });
+    manager.getOrCreate('owned-session', '', 'remote-user');
     const created = mockRes();
-    await invoke(guarded, mockReq('POST', '/api/session', { deferred: true }), created.res);
-    const session = JSON.parse(await created.body()) as { sessionId: string; ownerUserId: string | null };
-    expect(created.statusCode()).toBe(201);
+    await invoke(guarded, mockReq('POST', '/api/session', { sessionId: 'owned-session' }), created.res);
+    const session = JSON.parse(await created.body()) as { sessionId: string; ownerUserId: string };
+    expect(created.statusCode()).toBe(200);
     expect(session.ownerUserId).toBe('remote-user');
 
     const forged = mockRes();
-    await invoke(guarded, mockReq('POST', '/api/session', { sessionId: 'ownerless-forged', deferred: true }), forged.res);
-    expect(forged.statusCode()).toBe(403);
-    expect(manager.get('ownerless-forged')).toBeUndefined();
+    await invoke(guarded, mockReq('POST', '/api/session', { sessionId: 'missing-forged' }), forged.res);
+    expect(forged.statusCode()).toBe(404);
+    expect(manager.get('missing-forged')).toBeUndefined();
   });
 
-  it('POST /api/session sets a custom sessionId', async () => {
-    const req = mockReq('POST', '/api/session', {
-      sessionId: 'custom-id',
-      workspacePath: '/tmp/custom',
-    });
+  it('POST /api/session initializes an existing Session runtime', async () => {
+    const onSessionInitialized = vi.fn();
+    manager.getOrCreate('picker-session', '', 'user-a');
+    const initializeRouter = createSessionRouter(manager, onSessionInitialized);
     const { res, body } = mockRes();
 
-    await invoke(router, req, res);
-    const data = JSON.parse(await body());
-
-    expect(data.sessionId).toBe('custom-id');
-  });
-
-  it('POST /api/session reserves a session without initializing its runtime', async () => {
-    const onSessionCreated = vi.fn();
-    const deferredRouter = createSessionRouter(manager, onSessionCreated);
-    const { res, body } = mockRes();
-
-    await invoke(deferredRouter, mockReq('POST', '/api/session', {
+    await invoke(initializeRouter, mockReq('POST', '/api/session', {
       sessionId: 'picker-session',
-      deferred: true,
     }), res);
 
     expect(JSON.parse(await body()).sessionId).toBe('picker-session');
-    expect(manager.get('picker-session')).toBeDefined();
-    expect(onSessionCreated).not.toHaveBeenCalled();
+    expect(onSessionInitialized).toHaveBeenCalledOnce();
   });
 
   it('POST /api/session returns INVALID_JSON for malformed input', async () => {
@@ -179,7 +166,7 @@ describe('Session API Routes', () => {
   });
 
   it('DELETE /api/session/:id runs runtime cleanup and deletes the session', async () => {
-    manager.getOrCreate('delete-me');
+    manager.getOrCreate('delete-me', '', 'user-a');
     const cleanup = async (sessionId: string) => {
       manager.destroy(sessionId);
       return true;

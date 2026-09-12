@@ -4,6 +4,7 @@
   "type": "module",
   "main": "./main/dist/index.js",
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "panel": {
         "settings": {

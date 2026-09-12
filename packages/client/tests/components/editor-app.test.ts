@@ -199,6 +199,22 @@ describe('EditorApp default layout', () => {
     throw new Error('bootstrap was not fetched');
   }
 
+  it('does not initialize or create a Session when none was provided', async () => {
+    window.location.search = '';
+    window.location.href = 'http://localhost:8080/';
+    const replaceState = vi.mocked(history.replaceState);
+    replaceState.mockClear();
+
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await Promise.resolve();
+
+    expect(el.querySelector('[role="alert"]')?.textContent).toContain('缺少已验证的 Session');
+    expect(mockFetch).not.toHaveBeenCalled();
+    expect(window.localStorage.getItem('harbors.sessionId')).toBeNull();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
   function mockRect(element: Element, rect: Partial<DOMRect>) {
     (element as HTMLElement).getBoundingClientRect = () => ({
       x: rect.left ?? 0,
@@ -1024,156 +1040,6 @@ describe('EditorApp default layout', () => {
         Reflect.deleteProperty(globalThis, 'BroadcastChannel');
       }
     }
-  });
-
-  it('does not send menu state to a legacy Electron bridge after bootstrap', async () => {
-    const syncMenu = vi.fn();
-    (window as typeof window & {
-      electronMenu?: { syncMenu: typeof syncMenu; onMenuAction: ReturnType<typeof vi.fn> };
-    }).electronMenu = {
-      syncMenu,
-      onMenuAction: vi.fn(() => () => {}),
-    };
-    window.location.search = '?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault';
-    window.location.href = 'http://localhost:8080/?session=existing-id&menuMode=multi&kit=%2Frepo%2Fkits%2Fdefault';
-
-    el = document.createElement('editor-app') as EditorApp;
-    document.body.appendChild(el);
-    await waitForBootstrap();
-
-    expect(mockFetch.mock.calls.some(
-      (call) => call[0] === '/api/bootstrap/existing-id%3A%3A%2Frepo%2Fkits%2Fdefault',
-    )).toBe(true);
-    expect(syncMenu).not.toHaveBeenCalled();
-
-    delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
-  });
-
-  it('keeps translated menu state inside the Web client', async () => {
-    const syncMenu = vi.fn();
-    (window as typeof window & {
-      electronMenu?: { syncMenu: typeof syncMenu; onMenuAction: ReturnType<typeof vi.fn> };
-    }).electronMenu = {
-      syncMenu,
-      onMenuAction: vi.fn(() => () => {}),
-    };
-
-    el = document.createElement('editor-app') as EditorApp;
-    document.body.appendChild(el);
-    await waitForBootstrap();
-
-    const source = MockEventSource.instances.at(-1)!;
-    source.onmessage?.({
-      data: JSON.stringify({
-        protocolVersion: 1,
-        type: 'messages-changed',
-        version: 2,
-        changedKeys: ['menu.file'],
-        affectsFallback: false,
-        i18n: {
-          locale: 'en-US',
-          defaultLocale: 'zh-CN',
-          version: 2,
-          currentMessages: { 'menu.file': 'File' },
-          defaultMessages: { 'menu.file': '文件' },
-        },
-        menuTree: [
-          { type: 'menu', id: 'file', label: 'File', labelKey: 'menu.file', children: [] },
-        ],
-      }),
-    });
-
-    expect(syncMenu).not.toHaveBeenCalled();
-
-    delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
-  });
-
-  it('does not export menu-changed SSE state to a legacy Electron bridge', async () => {
-    const syncMenu = vi.fn();
-    (window as typeof window & {
-      electronMenu?: { syncMenu: typeof syncMenu; onMenuAction: ReturnType<typeof vi.fn> };
-    }).electronMenu = {
-      syncMenu,
-      onMenuAction: vi.fn(() => () => {}),
-    };
-
-    el = document.createElement('editor-app') as EditorApp;
-    document.body.appendChild(el);
-    await waitForBootstrap();
-
-    const source = MockEventSource.instances.at(-1)!;
-    source.onmessage?.({
-      data: JSON.stringify({
-        protocolVersion: 1,
-        type: 'menu-changed',
-        menuTree: [
-          {
-            type: 'menu',
-            id: 'view',
-            label: 'View',
-            children: [
-              {
-                type: 'menu',
-                id: 'view/panels',
-                label: 'Panels',
-                children: [
-                  { type: 'menu', id: 'view/panels/ce-log-log', label: 'Log', children: [] },
-                ],
-              },
-            ],
-          },
-        ],
-        applicationMenuTree: [
-          { type: 'menu', id: 'app', label: 'Translated APP', children: [] },
-        ],
-        kitMenuTree: [
-          { type: 'menu', id: 'kit/action', label: 'Translated Kit Action', children: [] },
-        ],
-      }),
-    });
-
-    expect(syncMenu).not.toHaveBeenCalled();
-
-    delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
-  });
-
-  it('does not subscribe to legacy Electron menu actions', async () => {
-    const syncMenu = vi.fn();
-    let handler: ((payload: { sessionId: string; menuId: string }) => void) | undefined;
-    (window as typeof window & {
-      electronMenu?: {
-        syncMenu: typeof syncMenu;
-        onMenuAction: (next: typeof handler) => () => void;
-      };
-    }).electronMenu = {
-      syncMenu,
-      onMenuAction(next) {
-        handler = next;
-        return vi.fn();
-      },
-    };
-    mockFetch.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.startsWith('/api/bootstrap/')) {
-        return bootstrapResponse();
-      }
-      if (url.startsWith('/api/menu/trigger')) {
-        expect(init?.method).toBe('POST');
-        expect(JSON.parse(String(init?.body))).toEqual({ sessionId: 'existing-id', menuId: 'file/new-session' });
-        return Promise.resolve(createJsonResponse({ result: { ok: true } }));
-      }
-      return Promise.resolve(createJsonResponse(sessionPayload));
-    });
-
-    el = document.createElement('editor-app') as EditorApp;
-    document.body.appendChild(el);
-    await waitForBootstrap();
-    expect(handler).toBeUndefined();
-    expect(mockFetch).not.toHaveBeenCalledWith(
-      '/api/menu/trigger',
-      expect.anything(),
-    );
-
-    delete (window as typeof window & { electronMenu?: unknown }).electronMenu;
   });
 
   it('renders status-bar panel from bootstrap', async () => {

@@ -1,7 +1,6 @@
 {
   "schemaVersion": 1,
   "id": "harness",
-  "legacyKitIds": ["agent-chat"],
   "version": "0.0.1",
   "channel": "stable",
   "publisher": "itharbors",

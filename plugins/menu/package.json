@@ -7,6 +7,7 @@
     "@types/node": "^22.0.0"
   },
   "ce-editor": {
+    "schemaVersion": 1,
     "contribute": {
       "message": {
         "request": {
