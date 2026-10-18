@@ -158,7 +158,33 @@ describe('KitModule', () => {
     expect(kitModule.get('default-kit')).toEqual(kit);
   });
 
-  it('list returns all registered kits', () => {
+  it('copies descriptor input and every nested query result', () => {
+    const descriptor: KitDescriptor = {
+      ...structuredClone(kit),
+      permissions: ['credentials'],
+      permissionGrants: { credentials: ['p'] },
+      layouts: { default: { windows: [{
+        id: 'main', kind: 'main', type: 'panel-area', entry: 'main.html', state: 'open',
+        layout: { type: 'leaf', panel: 'p.main' }, panelInstanceIds: [],
+      }] } },
+    };
+    const expected = structuredClone(descriptor);
+    const registered = kitModule.register(descriptor);
+    descriptor.plugins.push('forged');
+    descriptor.permissionGrants!.credentials!.push('forged');
+    registered.menuRoot.label = 'forged';
+    kitModule.switchKit(kit.name);
+    for (const snapshot of [kitModule.get(kit.name)!, kitModule.list()[0]!, kitModule.getCurrent()!]) {
+      snapshot.plugins.push('forged');
+      snapshot.permissionGrants!.credentials!.push('forged');
+      snapshot.layouts.default!.windows[0]!.layout = { type: 'leaf', panel: 'forged' };
+      snapshot.windowEntries.main = 'forged.html';
+    }
+    kitModule.getLayout('default')!.windows.splice(0);
+    expect(kitModule.getCurrent()).toEqual(expected);
+  });
+
+  it('list returns all registered kits' , () => {
     kitModule.register(kit);
     kitModule.register({ ...kit, name: 'second-kit' });
     expect(kitModule.list()).toHaveLength(2);
@@ -270,12 +296,15 @@ describe('KitModule', () => {
     });
 
     const validEditor = createEditor('valid-manifest', {
+      identity: { userId: 'test-user', sessionId: 'valid-manifest' },
       assembly: assemblyFor(validKit), pluginPathRoots: createTestPluginPathRoots(),
     });
     const idEditor = createEditor('id-mismatch', {
+      identity: { userId: 'test-user', sessionId: 'id-mismatch' },
       assembly: assemblyFor(idMismatch), pluginPathRoots: createTestPluginPathRoots(),
     });
     const versionEditor = createEditor('version-mismatch', {
+      identity: { userId: 'test-user', sessionId: 'version-mismatch' },
       assembly: assemblyFor(versionMismatch), pluginPathRoots: createTestPluginPathRoots(),
     });
 
@@ -297,6 +326,7 @@ describe('KitModule', () => {
     temporaryRoots.push(root);
     const kitDir = createCredentialKit(root, 'invalid', '@scope/kit-invalid', permissions);
     const editor = createEditor('invalid-permissions', {
+      identity: { userId: 'test-user', sessionId: 'invalid-permissions' },
       assembly: assemblyFor(kitDir), pluginPathRoots: createTestPluginPathRoots(),
     });
 
@@ -326,14 +356,17 @@ describe('KitModule', () => {
       },
     });
     const disabledVault = new CredentialVault({ mode: 'off' });
-    const createVaultEditor = (sessionId: string, kitDir: string, credentialVault: CredentialVault) => (
+    const createVaultEditor = (sessionId: string, kitDir: string, credentialVault: CredentialVault, userId = 'test-user') => (
       createEditor(sessionId, {
+        identity: { userId, sessionId },
         assembly: assemblyFor(kitDir),
         pluginPathRoots: createTestPluginPathRoots(),
         credentialVault,
       })
     );
     const owner = createVaultEditor('owner', ownerKit, vault);
+    const sameUserSession = createVaultEditor('owner-second-session', ownerKit, vault);
+    const otherUserSession = createVaultEditor('owner', ownerKit, vault, 'other-user');
     const noGrant = createVaultEditor('no-grant', noGrantKit, vault);
     const noPermission = createVaultEditor('no-permission', noPermissionKit, vault);
     const otherOwner = createVaultEditor('other-owner', otherKit, vault);
@@ -341,6 +374,8 @@ describe('KitModule', () => {
 
     await Promise.all([
       owner.kit.load(),
+      sameUserSession.kit.load(),
+      otherUserSession.kit.load(),
       noGrant.kit.load(),
       noPermission.kit.load(),
       otherOwner.kit.load(),
@@ -352,6 +387,10 @@ describe('KitModule', () => {
       secret: 'owner-secret',
     }) as { id: string };
 
+    await expect(sameUserSession.plugin.callPlugin('@scope/mysql-core', 'get', ownerProfile.id))
+      .resolves.toMatchObject({ secret: 'owner-secret' });
+    await expect(otherUserSession.plugin.callPlugin('@scope/mysql-core', 'get', ownerProfile.id))
+      .rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
     expect(owner.plugin.callPlugin('@scope/mysql-core', 'hasCredentials')).toBe(true);
     expect(owner.plugin.callPlugin('@scope/mysql-explorer', 'hasCredentials')).toBe(false);
     expect((owner as unknown as { credentials?: unknown }).credentials).toBeUndefined();
@@ -361,7 +400,7 @@ describe('KitModule', () => {
     await expect(otherOwner.plugin.callPlugin('@scope/mysql-core', 'get', ownerProfile.id))
       .rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
 
-    await Promise.all([owner.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose()]);
+    await Promise.all([owner.dispose(), sameUserSession.dispose(), otherUserSession.dispose(), noGrant.dispose(), noPermission.dispose(), otherOwner.dispose(), offMode.dispose()]);
     await Promise.all([vault.close(), disabledVault.close()]);
   });
 
@@ -385,6 +424,7 @@ describe('KitModule', () => {
     const events: Array<{ marker: string; credentials: PluginCredentialVault }> = [];
     (globalThis as typeof globalThis & { __credentialLeaseEvents: typeof events }).__credentialLeaseEvents = events;
     const editor = createEditor('credential-switch', {
+      identity: { userId: 'test-user', sessionId: 'credential-switch' },
       assembly: assemblyForKits(ownerKit, otherKit),
       pluginPathRoots: createTestPluginPathRoots(),
       credentialVault: vault,
@@ -428,6 +468,7 @@ describe('KitModule', () => {
     const events: Array<{ marker: string; credentials: PluginCredentialVault }> = [];
     (globalThis as typeof globalThis & { __credentialLeaseEvents: typeof events }).__credentialLeaseEvents = events;
     const editor = createEditor('credential-rollback', {
+      identity: { userId: 'test-user', sessionId: 'credential-rollback' },
       assembly: assemblyForKits(ownerKit, failingKit),
       pluginPathRoots: createTestPluginPathRoots(),
       credentialVault: vault,

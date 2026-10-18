@@ -18,6 +18,8 @@ importers:
 
   plugins/agent: {}
 
+  plugins/agent-context-store: {}
+
   plugins/chat:
     dependencies:
       '@ai-sdk/react':

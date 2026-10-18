@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import type { ConfigLayerDefinition, ConfigStorage } from '@itharbors/kit-core';
 import {
@@ -10,6 +11,7 @@ import {
   ConfigStorageCorruptError,
   ConfigStorageClosedError,
   resolveConfigLayerBackend,
+  resolveUserConfigStorageRoot,
 } from '../../src/config-storage';
 
 const temporaryDirectories: string[] = [];
@@ -35,6 +37,21 @@ afterEach(() => {
 });
 
 describe('config storage resolver', () => {
+  it('keeps User roots inside the Host root when a scope directory is a symlink', () => {
+    const outside = temporaryRoot();
+    const parentRoot = temporaryRoot();
+    fs.symlinkSync(outside, path.join(parentRoot, 'users'));
+    expect(() => resolveUserConfigStorageRoot(parentRoot, 'user-a')).toThrow(/inside/u);
+    expect(fs.readdirSync(outside)).toEqual([]);
+
+    const scopedRoot = temporaryRoot();
+    fs.mkdirSync(path.join(scopedRoot, 'users'));
+    const userKey = createHash('sha256').update('user-a', 'utf8').digest('hex');
+    fs.symlinkSync(outside, path.join(scopedRoot, 'users', userKey));
+    expect(() => resolveUserConfigStorageRoot(scopedRoot, 'user-a')).toThrow(/inside/u);
+    expect(fs.readdirSync(outside)).toEqual([]);
+  });
+
   it('creates isolated in-memory backends for null storage', () => {
     const root = temporaryRoot();
     const layer = sqliteLayer('defaults', null);

@@ -13,10 +13,11 @@ import { ConfigNotActivatedError } from '../../src/framework/config';
 
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'> & { identity?: Parameters<typeof createEditorWithOptions>[1]['identity'] },
 ) => {
   const pluginPathRoots = createTestPluginPathRoots();
   return createEditorWithOptions(sessionId, {
+    identity: { userId: 'test-user', sessionId },
     ...options,
     pluginPathRoots,
     configStorageRoots: options.configStorageRoots ?? {
@@ -143,7 +144,48 @@ describe('createEditor', () => {
     fs.rmSync(applicationData, { recursive: true, force: true });
   });
 
-  it('panel.register formats descriptors', () => {
+  it('requires trusted identity and isolates User config without reading the legacy database', async () => {
+    const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'editor-config-users-'));
+    const roots = createTestPluginPathRoots();
+    expect(() => createEditorWithOptions('runtime-without-identity', {
+      assembly: editorAssembly, pluginPathRoots: roots,
+    } as Parameters<typeof createEditorWithOptions>[1])).toThrow(/trusted userId and sessionId/u);
+    const { resolveConfigLayerBackend } = await import('../../src/config-storage');
+    const legacy = resolveConfigLayerBackend(configKitFixture.name, CONFIG_DECLARATION.layers[1]!, {
+      roots: { 'application-data': applicationData },
+    });
+    legacy.set('theme', 'legacy-shared');
+    legacy.destroy?.();
+    const editors = [
+      createEditor('runtime-a-one:kit', {
+        assembly: editorAssembly, identity: { userId: 'user-a', sessionId: 'session-one' },
+        configStorageRoots: { 'application-data': applicationData },
+      }),
+      createEditor('runtime-a-two:kit', {
+        assembly: editorAssembly, identity: { userId: 'user-a', sessionId: 'session-two' },
+        configStorageRoots: { 'application-data': applicationData },
+      }),
+      createEditor('runtime-b-one:kit', {
+        assembly: editorAssembly, identity: { userId: 'user-b', sessionId: 'session-one' },
+        configStorageRoots: { 'application-data': applicationData },
+      }),
+    ];
+    try {
+      await Promise.all(editors.map((instance) => instance.kit.load(configKitFixture.name)));
+      for (const instance of editors) expect(instance.config.get('theme')).toBeUndefined();
+      editors[0]!.config.set('theme', 'user-a');
+      expect(editors[1]!.config.get('theme')).toBe('user-a');
+      expect(editors[2]!.config.get('theme')).toBeUndefined();
+      editors[2]!.config.set('theme', 'user-b');
+      expect(editors[0]!.config.get('theme')).toBe('user-a');
+      expect(editors[2]!.config.get('theme')).toBe('user-b');
+    } finally {
+      await Promise.all(editors.map((instance) => instance.dispose()));
+      fs.rmSync(applicationData, { recursive: true, force: true });
+    }
+  });
+
+  it('panel.register formats descriptors' , () => {
     editor.panel.register('test.panel', '/path/to/module', { title: 'Test Panel', width: 300 });
     expect(editor.panel.getInfo('test.panel')).toMatchObject({ name: 'test.panel', title: 'Test Panel', width: 300 });
   });

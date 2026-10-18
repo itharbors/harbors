@@ -15,7 +15,14 @@ Agent 对 Context Store 声明 Plugin 硬依赖。依赖缺失、成环或加载
 
 ## 数据布局与所有权
 
-一个 Harbors data root 只使用一个 active Context Store SQLite 版本；所有业务表显式携带 `conversation_id`。Conversation 不拆成多个 SQLite 文件，因为共享 schema、备份和连接生命周期更简单，隔离由查询条件、事务和测试保证。
+每个 User 的 `agent-context-store` Plugin data 目录使用一个 active SQLite 版本；同 User 的
+不同基础 Session 读取同一 Plugin 历史，不同 User 使用不同目录。所有业务表显式携带
+`conversation_id`，Conversation 不拆成多个 SQLite 文件，共享 schema、备份和连接生命周期；
+同 User 内的业务隔离由查询条件、事务和测试保证。
+
+目录由 Framework 的可信 User + Plugin 绑定提供，Store 只使用 `runtime.paths.data`，不从
+消息参数选择 User，也不把 Conversation schema 下沉到 Framework。旧无 User 的 Plugin
+目录不会自动读取或迁移，升级后可能出现空历史，旧文件仍保留。
 
 - `events` 保存完整 canonical event，并在单个 Conversation 内分配连续 `seq`；
 - Conversation metadata 与 `current_state` 是确定性投影，可从 events 重建；
@@ -23,7 +30,10 @@ Agent 对 Context Store 声明 Plugin 硬依赖。依赖缺失、成环或加载
 - 版本目录中的 `current.json` 原子指向 active version；
 - 永久删除使用版本目录外的 tombstone guard，旧版本和 backup 不能复活已删除 Conversation。
 
-Agent、Conversation 和 Chat 都不直接打开该 SQLite。Agent 通过同进程 `callPlugin()` 调用 Store；对外业务仍使用 request/broadcast。
+Agent、Conversation 和 Chat 都不直接打开该 SQLite。Agent 通过同进程 `callPlugin()` 调用 Store；
+Store 将这些 server methods 显式声明为 request 且 `callers` 仅允许 `agent`，Framework 绑定
+真实 caller 并执行相同 ACL。同步客户端不因此变为异步；未公开方法仍不可直调。对外业务
+继续使用 request/broadcast。
 
 ## Context 装配
 
@@ -54,6 +64,9 @@ Store 按三层装配：
 5. 模型 delta、tool、approval 和 item event 先提交 Store，再 broadcast trace；
 6. Turn 以唯一 `turn/end` 持久终态结束。
 
+这些广播只在当前 Session runtime 内分发。同 User 的其他 Session 通过读取或刷新看到共享
+历史，本轮未增加跨 Session 的实时 UI 同步协议。
+
 ## 首次初始化与恢复
 
 首次启动直接在新版本目录创建空 SQLite，建立 schema 和 metadata，通过 integrity check 后原子发布 `current.json`。Context Store 不接收 legacy root，也不枚举、打开、解析或导入旧 JSONL、archive 和 `.deleted` marker。
@@ -70,4 +83,6 @@ pnpm --dir kits/harness run eval:q30
 
 P100 验证 1/10/50/100 Turn 的预算、候选上界和同机 P95。Q30 使用三类各 10 例、每例至少 3 次的真实模型对照；candidate 必须全部可评分、通过数不低于 current，且不能出现同 case/repeat 的新增回归。
 
-相关协议：[Agent Turn 事件协议](./agent-turn-event-protocol.md) · [Plugin 运行时模型](./plugin-runtime-model.md)
+相关协议：[Agent Turn 事件协议](./agent-turn-event-protocol.md) · [Plugin 运行时模型](./plugin-runtime-model.md) ·
+[Store manifest](../../kits/harness/plugins/agent-context-store/package.json) ·
+[来源 Task](../tasks/2026-10-18-plugin-default-boundaries/task.md)

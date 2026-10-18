@@ -15,7 +15,7 @@ import { WindowManager } from '../framework/window/index';
 import type { LayoutNode, WindowDescriptor } from '../framework/window/types';
 import type { AssemblyConfig } from '../assembly/config';
 import type { PluginResolveContext } from '../plugin/resolver';
-import { resolveConfigActivation } from '../config-storage';
+import { resolveConfigActivation, resolveUserConfigStorageRoot } from '../config-storage';
 import { normalizeMessageRouteDeclaration } from '../framework/message/types';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -75,7 +75,9 @@ interface ActiveExternalPlugin {
 }
 
 interface CreateEditorOptions {
+  identity: Readonly<{ userId: string; sessionId: string }>;
   assembly: AssemblyConfig;
+  applicationRequestFrom?: (callerPlugin: string, plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   applicationRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   dispatchBrowserRequest?: (panelKey: string, method: string, args: unknown[]) => Promise<unknown>;
   dispatchPanelBroadcast?: (panelKey: string, method: string, args: unknown[]) => void;
@@ -96,6 +98,11 @@ interface CreateEditorOptions {
 }
 
 export function createEditor(sessionId: string, options: CreateEditorOptions): Editor {
+  if (!options.identity || typeof options.identity.userId !== 'string' || options.identity.userId.length === 0
+    || typeof options.identity.sessionId !== 'string' || options.identity.sessionId.length === 0) {
+    throw new Error('Editor requires a trusted userId and sessionId');
+  }
+  const identity = Object.freeze({ userId: options.identity.userId, sessionId: options.identity.sessionId });
   const assembly = options.assembly;
   const runtimePluginPathRoots = options.pluginPathRoots;
   const configStorageRoots = options.configStorageRoots ?? {
@@ -156,6 +163,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
   ): PluginLoadOptions {
     return {
       scope: 'session',
+      identity,
       host,
       paths: {
         roots: runtimePluginPathRoots,
@@ -480,7 +488,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         && descriptor.permissions?.includes('credentials')
         && descriptor.permissionGrants?.credentials?.includes(info.name)
         && info.capabilities?.includes('credentials')
-        ? options.credentialVault.bind(descriptor.name, info.name)
+        ? options.credentialVault.bind(identity.userId, descriptor.name, info.name)
         : undefined;
       preparedPlugins.push({
         path: pluginPath,
@@ -507,7 +515,9 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
         const activation = resolveConfigActivation(
           descriptor.name,
           configDeclaration,
-          { roots: configStorageRoots },
+          { roots: {
+            'application-data': resolveUserConfigStorageRoot(configStorageRoots['application-data'], identity.userId),
+          } },
         );
         try {
           configTransaction = config.activate(activation);
@@ -617,6 +627,11 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     isUsable: () => usable,
     dispose,
     application: {
+      requestFrom: (callerPlugin, pluginName, name, ...args) => {
+        assertUsable();
+        if (!options.applicationRequestFrom) return Promise.reject(new Error('Application caller dispatch is unavailable'));
+        return options.applicationRequestFrom(callerPlugin, pluginName, name, ...args);
+      },
       request: (pluginName, name, ...args) => {
         assertUsable();
         if (!options.applicationRequest) {
@@ -671,6 +686,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       listLoaded: () => plugin.listLoaded(),
       listRegistered: () => plugin.listRegistered(),
       callPlugin: (name: string, method: string, ...args: unknown[]) => plugin.callPlugin(name, method, ...args),
+      callPluginFrom: (callerPlugin: string, name: string, method: string, ...args: unknown[]) => plugin.callPluginFrom(callerPlugin, name, method, ...args),
     },
     panel: {
       define: () => {

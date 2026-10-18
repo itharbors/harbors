@@ -76,6 +76,7 @@ describe('ApplicationRuntime', () => {
       editor.plugin.define({ methods: { ping(value) { return ['session', value]; } } });
     `);
     const editor = createEditor('session-plugin-module', {
+      identity: { userId: 'test-user', sessionId: 'session-plugin-module' },
       assembly: testAssembly,
       pluginPathRoots: pluginPathRoots(),
     });
@@ -95,6 +96,7 @@ describe('ApplicationRuntime', () => {
     await plugin.register(sessionSpec.path, { kind: 'external' });
     await plugin.load(sessionSpec.path, {
       scope: 'session',
+      identity: { userId: 'test-user', sessionId: 'session-plugin-module' },
       host,
       paths: { roots: pluginPathRoots() },
     });

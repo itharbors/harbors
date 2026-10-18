@@ -26,6 +26,17 @@ Provider 协议适配、HTTP transport 和请求终态管理从 `agent` 的会�
 两者之间只通过消息 request 交互。Plugin 不直接 import 另一 Plugin 的实现，也不使用
 `plugin.callPlugin` 作为业务通道。
 
+### User 范围的配置与凭据
+
+Host 从 Session owner 绑定 User。Model Service 的 Config 与 Credential Vault 默认范围均为
+User + Kit + Plugin；同 User 的基础 Session 可读取相同 Provider 设置和凭据，不同 User
+不会因 Provider ID 相同而共用。`global` 层指该 User 跨 Session，真实 secret 仍留在 Keychain。
+Host 使用 `bind(userId, kitId, pluginName)` 绑定 Vault，业务消息不能指定其他 User 或 scope。
+
+新的 User 配置根与凭据 scope 不回退旧无 User 存储，也不迁移或删除旧配置/secret。升级后
+可能需要在当前 User 下重新配置 Provider；缺少凭据保持既有配置提示与错误语义。配置路径
+详见 [Kit 配置模型](./kit-configuration-model.md)。
+
 ## 消息入口与 ACL
 
 `model-service/package.json` 声明的 request 入口如下：
@@ -48,6 +59,9 @@ Provider 协议适配、HTTP transport 和请求终态管理从 `agent` 的会�
 Model Service，也不会被包装成下文的 `ErrorEnvelope`。设置面板使用 `model-service` caller 访问
 `getSettings`、`saveProvider`、`deleteProvider` 和 `resetProviderCredential`。`getCatalog` 是无
 `callers` 限制的目录读取 request。
+
+普通 request 的 caller 由 Host 绑定。同步 `plugin.callPlugin` 同样检查 manifest 的 server
+request 声明和 callers，不能换入口调用 Model Service 的受限或未公开方法。
 
 ## 请求与错误协议
 
@@ -363,6 +377,8 @@ interface ModelCatalogChangedPayload {
 
 广播只携带安全目录和变化原因，不携带真实凭据、credential ID 或 legacy 配置引用。Chat Plugin 声明
 `model-service.catalog.changed` broadcast，并由其 panel 订阅；它不是 Agent 的模型请求 response。
+广播只到当前 Session runtime；同 User 的其他 Session 通过读取或刷新获取持久配置，当前没有
+跨 Session 的目录实时同步协议。
 
 ## HTTP、重试与错误语义
 

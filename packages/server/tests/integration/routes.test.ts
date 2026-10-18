@@ -25,8 +25,8 @@ import { MessageModule } from '../../src/framework/message';
 
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'>,
+) => createEditorWithOptions(sessionId, { ...options, identity: { userId: 'test-user', sessionId }, pluginPathRoots: createTestPluginPathRoots() });
 
 function mockReq(method: string, url: string, body?: object | string): IncomingMessage {
   const readable = new Readable({
@@ -590,7 +590,6 @@ describe('framework routes', () => {
 
   it('bootstrap returns darwin default menu baseline from builtin defaults', async () => {
     const editor = createEditor('s1', { assembly: testAssembly, platform: 'darwin' });
-    await editor.plugin.register(path.join(testAssembly.builtinPluginsDir, 'menu'));
     await editor.plugin.load(path.join(testAssembly.builtinPluginsDir, 'menu'));
 
     const router = createBootstrapRouter(new Map([['s1', editor]]));
@@ -604,7 +603,6 @@ describe('framework routes', () => {
 
   it('menu trigger returns builtin documentation action result', async () => {
     const editor = createEditor('s1', { assembly: testAssembly });
-    await editor.plugin.register(path.join(testAssembly.builtinPluginsDir, 'menu'));
     await editor.plugin.load(path.join(testAssembly.builtinPluginsDir, 'menu'));
     const router = createMenuTriggerRouter(new Map([['s1', editor]]));
 

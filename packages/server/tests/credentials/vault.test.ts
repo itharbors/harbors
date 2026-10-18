@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
+import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { credentialAccount, credentialScopeDigest } from '../../src/credentials/scope';
 import { CredentialStore } from '../../src/credentials/store';
@@ -19,7 +20,7 @@ import {
 
 const kitId = '@itharbors/kit-mysql';
 const pluginName = '@itharbors/mysql-core';
-const scope = credentialScopeDigest(kitId, pluginName);
+const scope = credentialScopeDigest('test-user', kitId, pluginName);
 const profileId = '00112233-4455-4677-8899-aabbccddeeff';
 const oldVersion = 'ffeeddcc-bbaa-4988-8776-554433221100';
 const newVersion = '11223344-5566-4788-99aa-bbccddeeff00';
@@ -88,7 +89,7 @@ describe('CredentialVault', () => {
   });
 
   it('reports a stable unavailable capability after close begins', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     vault.close();
 
@@ -101,7 +102,7 @@ describe('CredentialVault', () => {
   });
 
   it('rejects new work and waits for active keyring operations before close resolves', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '排空测试',
       metadata: { host: 'localhost' },
@@ -131,7 +132,7 @@ describe('CredentialVault', () => {
   });
 
   it('recovers a latched locked operation after the backend is unlocked', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -161,7 +162,7 @@ describe('CredentialVault', () => {
   });
 
   it('creates, reads, updates, and deletes a profile without persisting its secret', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     expect(vault.capability()).toEqual({ mode: 'on', status: 'available' });
     await expect(bound.available()).resolves.toBe(true);
@@ -202,8 +203,8 @@ describe('CredentialVault', () => {
   });
 
   it('isolates identical opaque IDs across host-derived scopes', async () => {
-    const mysql = vault.bind(kitId, pluginName);
-    const other = vault.bind('@itharbors/kit-other', '@itharbors/other-core');
+    const mysql = vault.bind('test-user', kitId, pluginName);
+    const other = vault.bind('test-user', '@itharbors/kit-other', '@itharbors/other-core');
     const profile = await mysql.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -217,9 +218,29 @@ describe('CredentialVault', () => {
     });
   });
 
+  it('shares within one User and isolates another User and legacy scopes', async () => {
+    const first = vault.bind('user-a', kitId, pluginName);
+    const sameUser = vault.bind('user-a', kitId, pluginName);
+    const otherUser = vault.bind('user-b', kitId, pluginName);
+    const legacyScope = createHash('sha256').update(`${kitId}\0${pluginName}\0local`, 'utf8').digest('hex');
+    store.createPending({ scope: legacyScope, id: thirdVersion, label: 'Legacy', metadata: {}, secretVersion: newVersion });
+    store.activatePending(legacyScope, thirdVersion, newVersion);
+    keyring.secrets.set(credentialAccount(legacyScope, thirdVersion, newVersion), 'legacy-secret');
+    for (const bound of [first, sameUser, otherUser]) {
+      await expect(bound.list()).resolves.toEqual([]);
+      await expect(bound.get(thirdVersion)).rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
+    }
+    const profile = await first.put({ label: 'Private', metadata: {}, secret: 'user-a-secret' });
+    await expect(sameUser.get(profile.id)).resolves.toMatchObject({ secret: 'user-a-secret' });
+    await expect(otherUser.get(profile.id)).rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
+    await expect(otherUser.delete(profile.id)).rejects.toMatchObject({ code: 'CREDENTIAL_PROFILE_NOT_FOUND' });
+    expect(store.getActiveRecord(legacyScope, thirdVersion)).toBeDefined();
+    expect(keyring.secrets.get(credentialAccount(legacyScope, thirdVersion, newVersion))).toBe('legacy-secret');
+  });
+
   it('compensates a keyring write that fails after creating the new secret', async () => {
     keyring.failSetAfterWrite = true;
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     const error = await bound
       .put({ label: '生产库', metadata: { host: 'db.internal' }, secret: 'transient-value' })
@@ -237,7 +258,7 @@ describe('CredentialVault', () => {
       createPending(input);
       throw new Error('SQLite insert response failed after commit');
     });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     await expect(
       bound.put({ label: '生产库', metadata: { host: 'db.internal' }, secret: 'unused-value' })
@@ -257,7 +278,7 @@ describe('CredentialVault', () => {
     vi.spyOn(store, 'activatePending').mockImplementationOnce(() => {
       throw new Error('SQLite activation at /private/path failed');
     });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     await expect(
       bound.put({ label: '生产库', metadata: { host: 'db.internal' }, secret: 'transient-value' })
@@ -272,7 +293,7 @@ describe('CredentialVault', () => {
       activate(...args);
       throw new Error('SQLite response failed after commit');
     });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     const profile = await bound.put({
       label: '生产库',
@@ -292,7 +313,7 @@ describe('CredentialVault', () => {
     vi.spyOn(store, 'getRecord').mockImplementationOnce(() => {
       throw new Error('SQLite confirmation read failed');
     });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     await expect(
       bound.put({
@@ -312,14 +333,14 @@ describe('CredentialVault', () => {
     vault = new CredentialVault({ mode: 'on', store, keyring });
     await vault.recover();
 
-    await expect(vault.bind(kitId, pluginName).get(profileId)).resolves.toMatchObject({
+    await expect(vault.bind('test-user', kitId, pluginName).get(profileId)).resolves.toMatchObject({
       profile: { id: profileId, label: '生产库' },
       secret: 'committed-value',
     });
   });
 
   it('keeps the old active secret when the version pointer swap conflicts', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -343,7 +364,7 @@ describe('CredentialVault', () => {
   });
 
   it('rejects an invalid update before writing a new keyring secret', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -368,7 +389,7 @@ describe('CredentialVault', () => {
   });
 
   it('does not write a new secret when durable staging confirmation fails', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '旧配置',
       metadata: { host: 'old.internal' },
@@ -403,7 +424,7 @@ describe('CredentialVault', () => {
   });
 
   it('never overwrites the active account when secret-version generation collides', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '旧配置',
       metadata: { host: 'old.internal' },
@@ -434,7 +455,7 @@ describe('CredentialVault', () => {
   });
 
   it('atomically queues an old account when post-swap keyring cleanup fails', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -461,7 +482,7 @@ describe('CredentialVault', () => {
   });
 
   it('recovers a committed update when its confirmation read also fails', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '旧配置',
       metadata: { host: 'old.internal' },
@@ -497,7 +518,7 @@ describe('CredentialVault', () => {
     await vault.recover();
     await vault.recover();
 
-    await expect(vault.bind(kitId, pluginName).get(profile.id)).resolves.toMatchObject({
+    await expect(vault.bind('test-user', kitId, pluginName).get(profile.id)).resolves.toMatchObject({
       profile: { id: profile.id, label: '新配置' },
       secret: 'new-value',
     });
@@ -506,7 +527,7 @@ describe('CredentialVault', () => {
   });
 
   it('leaves failed deletion hidden and lets recovery finish it idempotently', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -529,7 +550,7 @@ describe('CredentialVault', () => {
   });
 
   it('recovers when metadata removal fails after keyring deletion', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '生产库',
       metadata: { host: 'db.internal' },
@@ -583,7 +604,7 @@ describe('CredentialVault', () => {
   });
 
   it('serializes concurrent mutations of one scope and profile', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '初始',
       metadata: { host: 'db.internal' },
@@ -632,7 +653,7 @@ describe('CredentialVault', () => {
   });
 
   it('defers backend close until an entered update makes its new secret recoverable', async () => {
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const profile = await bound.put({
       label: '初始',
       metadata: { host: 'db.internal' },
@@ -741,7 +762,7 @@ describe('CredentialVault', () => {
     vi.spyOn(store, 'listActive').mockImplementationOnce(() => {
       throw new Error('SQLite failed at /Users/private/database.sqlite with secret details');
     });
-    const error = await vault.bind(kitId, pluginName).list().catch((reason: unknown) => reason);
+    const error = await vault.bind('test-user', kitId, pluginName).list().catch((reason: unknown) => reason);
 
     expect(error).toMatchObject({ code: 'CREDENTIAL_OPERATION_FAILED', message: '凭据操作失败' });
     expect(String(error)).not.toContain('/Users/private');
@@ -763,8 +784,8 @@ describe('CredentialVault', () => {
       status: 'unavailable',
       reason: 'CREDENTIALS_UNAVAILABLE',
     });
-    await expect(vault.bind(kitId, pluginName).available()).resolves.toBe(false);
-    await expect(vault.bind(kitId, pluginName).list()).rejects.toMatchObject({
+    await expect(vault.bind('test-user', kitId, pluginName).available()).resolves.toBe(false);
+    await expect(vault.bind('test-user', kitId, pluginName).list()).rejects.toMatchObject({
       code: 'CREDENTIALS_UNAVAILABLE',
       message: '系统凭据库不可用',
     });
@@ -828,7 +849,7 @@ describe('CredentialVault', () => {
       deletePassword(): boolean { return false; },
     }));
     vault = await createCredentialVault({ mode: 'on', store, loadKeyring: load });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     expect(vault.capability()).toEqual({
       mode: 'on',
@@ -856,7 +877,7 @@ describe('CredentialVault', () => {
       };
     });
     vault = await createCredentialVault({ mode: 'on', store, loadKeyring: load });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
 
     expect(vault.capability()).toEqual({
       mode: 'on',
@@ -889,7 +910,7 @@ describe('CredentialVault', () => {
       async delete() {},
     };
     vault = await createCredentialVault({ mode: 'on', store, keyring: retainedKeyring });
-    const bound = vault.bind(kitId, pluginName);
+    const bound = vault.bind('test-user', kitId, pluginName);
     const closeStore = vi.spyOn(store, 'close');
 
     const capability = bound.capability();

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import Database from 'better-sqlite3';
 import type {
   ConfigLayerDefinition as KitConfigLayerDefinition,
@@ -35,6 +36,21 @@ export class ConfigStorageCorruptError extends Error {
     super(message, options);
     this.name = 'ConfigStorageCorruptError';
   }
+}
+
+/** Bind the User directory while preserving the original Host root boundary. */
+export function resolveUserConfigStorageRoot(applicationDataRoot: string, userId: string): string {
+  if (typeof userId !== 'string' || userId.length === 0) throw new Error('Config requires a non-empty userId');
+  if (!path.isAbsolute(applicationDataRoot)) throw new Error('application-data root must be an absolute path');
+  fs.mkdirSync(applicationDataRoot, { recursive: true });
+  const root = fs.realpathSync.native(applicationDataRoot);
+  const users = path.join(root, 'users');
+  fs.mkdirSync(users, { recursive: true });
+  assertInsideRoot(root, fs.realpathSync.native(users), 'User config parent');
+  const userRoot = path.join(users, createHash('sha256').update(userId, 'utf8').digest('hex'));
+  fs.mkdirSync(userRoot, { recursive: true });
+  assertInsideRoot(root, fs.realpathSync.native(userRoot), 'User config directory');
+  return userRoot;
 }
 
 export interface ConfigStorageResolverOptions {

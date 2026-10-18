@@ -1,8 +1,12 @@
 # ADR 0001：插件优先、由 Kit 组合产品能力
 
-- 状态：已接受
+- 状态：部分取代
 - 日期：2026-07-18
 - 决策者：项目维护者
+
+第 5 项中一个基础 Session 对应一个 Editor 的简化表述由
+[ADR 0005](./0005-plugin-default-boundaries.md) 部分取代：基础 Session 可有多个 Kit runtime，
+各自持有独立 Editor。其余插件优先、Kit 组合和生命周期结论继续有效。
 
 ## 上下文
 
@@ -90,3 +94,4 @@ ITHARBORS 需要支撑不同形态的桌面开发工具。它们共享窗口、�
 - [Editor 装配源码](../../packages/server/src/editor/index.ts)
 - [PluginModule 源码](../../packages/plugin/src/index.ts)
 - [ADR 0002：单一 Web host](./0002-web-only-host.md)
+- [ADR 0005：Plugin 默认身份与所有权边界](./0005-plugin-default-boundaries.md)

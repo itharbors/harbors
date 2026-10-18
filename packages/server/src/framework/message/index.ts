@@ -28,6 +28,10 @@ function isWildcardRoute<T extends { name: string }>(route: T): boolean {
   return route.name === '*';
 }
 
+function snapshotRoute<T extends MessageRequestRoute | MessageBroadcastRoute>(route: T): T {
+  return { ...route, methods: [...route.methods], ...(route.callers ? { callers: [...route.callers] } : {}) };
+}
+
 export class MessageModule {
   private registry: MessageRegistry = {
     request: new Map(),
@@ -57,7 +61,7 @@ export class MessageModule {
       }
     }
 
-    this.registry.request.set(key, { plugin, name, methods, callers, handler, location });
+    this.registry.request.set(key, { plugin, name, methods: [...methods], callers: callers ? [...callers] : undefined, handler, location });
   }
 
   registerBroadcast(
@@ -67,7 +71,7 @@ export class MessageModule {
     location: MessageLocation = 'server',
     methods: string[] = [],
   ): void {
-    const route: MessageBroadcastRoute = { plugin, name: topic, methods, handler, location };
+    const route: MessageBroadcastRoute = { plugin, name: topic, methods: [...methods], handler, location };
     const handlers = this.registry.broadcast.get(topic) ?? [];
     handlers.push(route);
     this.registry.broadcast.set(topic, handlers);
@@ -107,11 +111,12 @@ export class MessageModule {
   }
 
   queryRequest(plugin: string, name: string): MessageRequestRoute | undefined {
-    return this.registry.request.get(requestKey(plugin, name));
+    const route = this.registry.request.get(requestKey(plugin, name));
+    return route ? snapshotRoute(route) : undefined;
   }
 
   queryBroadcast(topic: string): MessageBroadcastRoute[] {
-    return this.registry.broadcast.get(topic) ?? [];
+    return (this.registry.broadcast.get(topic) ?? []).map(snapshotRoute);
   }
 
   private queryWildcardRequests(): MessageRequestRoute[] {

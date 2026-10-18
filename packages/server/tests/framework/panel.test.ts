@@ -32,6 +32,25 @@ describe('PanelModule', () => {
     expect(panelModule.list()).toEqual([]);
   });
 
+  it('preserves existing ownership and copies registration constraints on both boundaries', () => {
+    const constraints = { title: 'Original', metadata: { tags: ['original'] } };
+    panelModule.register('shared.alias', '/victim', constraints, 'victim');
+    constraints.metadata.tags.push('input-mutation');
+    const registration = panelModule.getRegistration('shared.alias')!;
+    registration.owner = 'attacker';
+    registration.module = '/attacker';
+    (registration.constraints as typeof constraints).metadata.tags.push('query-mutation');
+
+    expect(() => panelModule.register('shared.alias', '/attacker', {}, 'attacker')).toThrow(/owned by "victim"/);
+    expect(panelModule.getRegistration('shared.alias')).toMatchObject({
+      owner: 'victim', module: '/victim', constraints: { metadata: { tags: ['original'] } },
+    });
+    panelModule.clearOwner('attacker');
+    expect(panelModule.list()).toHaveLength(1);
+    panelModule.clearOwner('victim');
+    expect(panelModule.list()).toEqual([]);
+  });
+
   it('emits availability events with monotonically increasing revisions', () => {
     const events: unknown[] = [];
     panelModule.subscribe((event) => events.push(event));

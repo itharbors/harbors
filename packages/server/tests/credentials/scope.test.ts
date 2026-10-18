@@ -6,9 +6,9 @@ import {
 } from '../../src/credentials/scope';
 
 describe('credential identities', () => {
-  it('derives the canonical local scope without exposing caller names', () => {
-    expect(credentialScopeDigest('@itharbors/kit-mysql', '@itharbors/mysql-core')).toBe(
-      'c9ae63325590735060748c1ce66911e4c0b1aaa7acbf610362d7d3e56d26c209'
+  it('derives the versioned User scope without exposing caller names', () => {
+    expect(credentialScopeDigest('test-user', '@itharbors/kit-mysql', '@itharbors/mysql-core')).toBe(
+      'c9bac68c9217c7689223b3ba03aeb083a9643169b6c959c25f0624742418e106'
     );
   });
 

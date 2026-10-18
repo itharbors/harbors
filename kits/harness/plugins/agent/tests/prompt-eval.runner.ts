@@ -111,7 +111,7 @@ async function main(): Promise<void> {
     summary: { completed: 0, total: 0 },
     blocked: null,
   };
-  if (!evalRoot || !path.isAbsolute(evalRoot) || !options.workspace || !path.isAbsolute(options.workspace)) {
+  if (!evalRoot || !path.isAbsolute(evalRoot) || !options.workspace || !path.isAbsolute(options.workspace) || !options['user-id']?.trim()) {
     result.blocked = { code: 'EVAL_CONFIG_UNAVAILABLE', message: safeMessage('EVAL_CONFIG_UNAVAILABLE') };
     await writeEvalOutput(projectRoot, output, result);
     process.exitCode = 2;
@@ -126,7 +126,7 @@ async function main(): Promise<void> {
   try {
     const workspace = await prepareEvalWorkspace(options.workspace, process.env.HARBORS_AGENT_WORKSPACE);
     credentialVault = await openEvalCredentialVault(path.resolve(evalRoot));
-    harness = createKitAssemblyHarness({ projectRoot, kitDirectory: path.join(projectRoot, 'kits/harness'), kitName: 'harness', paths: { applicationData: path.resolve(evalRoot) }, credentials: credentialVault });
+    harness = createKitAssemblyHarness({ projectRoot, kitDirectory: path.join(projectRoot, 'kits/harness'), kitName: 'harness', identity: { userId: options['user-id'], sessionId: 'agent-prompt-eval' }, paths: { applicationData: path.resolve(evalRoot) }, credentials: credentialVault });
     await harness.kit.load();
     const client: ModelServiceClient = {
       getCatalog: () => harness!.messages.requestFrom('agent', 'model-service', 'getCatalog') as Promise<ModelServiceCatalog>,

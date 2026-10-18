@@ -16,6 +16,7 @@ import type {
   PluginRuntimeHost,
   PluginConfig,
   PluginConfigBindingHost,
+  PluginSessionIdentity,
 } from './runtime.js';
 import { PluginStatus } from './types.js';
 import { Plugin } from './plugin.js';
@@ -25,7 +26,8 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { withPluginDefinitionLock } from './load-lock.js';
-import { createPluginPaths, pluginStorageOwnerKey, type PluginPaths } from './paths.js';
+import { createPluginPaths, createSessionPluginPaths, pluginStorageOwnerKey, type PluginPaths, type SessionPluginPaths } from './paths.js';
+import { assertPluginMethodAccess } from './method-access.js';
 import type { PluginCredentialVault } from './credentials.js';
 import { parsePluginPackageManifest } from './manifest.js';
 import { PluginDependencyError } from './dependencies.js';
@@ -33,6 +35,7 @@ import { PluginDependencyError } from './dependencies.js';
 export { Plugin } from './plugin.js';
 export {
   createPluginPaths,
+  createSessionPluginPaths,
   pluginStorageOwnerKey,
   PLUGIN_STORAGE_UNAVAILABLE,
   PluginStorageUnavailableError,
@@ -43,6 +46,7 @@ export type {
   PluginPathFileSystem,
   PluginPathRoots,
   PluginPaths,
+  SessionPluginPaths,
 } from './paths.js';
 export { PluginStatus } from './types.js';
 export type {
@@ -53,6 +57,7 @@ export type {
 } from './credentials.js';
 export * from './manifest.js';
 export * from './dependencies.js';
+export { assertPluginMethodAccess } from './method-access.js';
 export type {
   ContributeData,
   PanelContribution,
@@ -89,6 +94,7 @@ export type {
   PluginRuntimeMessageHost,
   PluginRuntimePanelHost,
   PluginRuntimePluginHost,
+  PluginSessionIdentity,
 } from './runtime.js';
 
 function unavailablePluginConfig(): PluginConfig {
@@ -332,7 +338,7 @@ export class PluginModule {
       version: manifest.version,
       path: absPath,
       kind: registration.kind,
-      source: registration.source,
+      source: { ...registration.source },
       entry: manifest.main,
       capabilities: [...manifest.capabilities],
       ...(manifest.requires.plugins.length > 0
@@ -355,8 +361,15 @@ export class PluginModule {
     runtimeInput: PluginLoadOptions,
   ): Promise<void> {
     const absPath = path.resolve(pluginPath);
+    const options = runtimeInput.scope === 'session'
+      ? { ...runtimeInput, identity: Object.freeze({ ...runtimeInput.identity }) }
+      : runtimeInput;
+    if (options.scope === 'session') {
+      pluginStorageOwnerKey(options.identity.userId);
+      pluginStorageOwnerKey(options.identity.sessionId);
+    }
     this.pendingLifecyclePaths.set(absPath, (this.pendingLifecyclePaths.get(absPath) ?? 0) + 1);
-    return this.enqueueLifecycle(() => this.loadInternal(absPath, runtimeInput))
+    return this.enqueueLifecycle(() => this.loadInternal(absPath, options))
       .finally(() => this.releasePendingLifecycle(absPath));
   }
 
@@ -416,7 +429,11 @@ export class PluginModule {
 
     let definition: LoadedPluginModule['definition'];
     const runtimeOptions = runtimeInput;
-    const runtimePaths = await createPluginPaths({
+    const runtimePaths = runtimeOptions.scope === 'session' ? await createSessionPluginPaths({
+      roots: runtimeOptions.paths.roots,
+      owner: loadedInfo.name,
+      identity: runtimeOptions.identity,
+    }) : await createPluginPaths({
       roots: runtimeOptions.paths.roots,
       owner: loadedInfo.name,
     });
@@ -440,11 +457,12 @@ export class PluginModule {
           ? createRevocableCredentialVault(runtimeOptions.credentials)
           : undefined;
         lifecycleRuntime = runtimeOptions.scope === 'application'
-          ? createApplicationPluginRuntime(runtimeOptions.host, loadedInfo.name, runtimePaths)
+          ? createApplicationPluginRuntime(runtimeOptions.host, loadedInfo, runtimePaths)
           : createPluginRuntime(
               runtimeOptions.host,
-              loadedInfo.name,
-              runtimePaths,
+              loadedInfo,
+              runtimePaths as SessionPluginPaths,
+              runtimeOptions.identity,
               runtimeOptions.config,
               runtimeOptions.kitId,
               credentialLease?.facade,
@@ -514,10 +532,10 @@ export class PluginModule {
       for (const otherPlugin of this.nameMap.values()) {
         if (otherPlugin.name === plugin.name) continue;
         if (otherPlugin.instance?.definition?.lifecycle?.attach && plugin.contribute) {
-          await otherPlugin.instance.definition.lifecycle.attach(plugin.name, plugin.contribute);
+          await otherPlugin.instance.definition.lifecycle.attach(plugin.name, structuredClone(plugin.contribute));
         }
         if (definition.lifecycle?.attach && otherPlugin.contribute) {
-          await definition.lifecycle.attach(otherPlugin.name, otherPlugin.contribute);
+          await definition.lifecycle.attach(otherPlugin.name, structuredClone(otherPlugin.contribute));
         }
       }
       plugin.status = PluginStatus.Running;
@@ -630,7 +648,7 @@ export class PluginModule {
 
   getInfo(name: string): PluginInfo | undefined {
     const loaded = this.nameMap.get(name);
-    if (loaded) return loaded.info;
+    if (loaded) return structuredClone(loaded.info);
     return undefined;
   }
 
@@ -675,6 +693,16 @@ export class PluginModule {
 
     return fn(...args);
   }
+
+  /** Host-only entry point: the facade supplies the caller from its load binding. */
+  callPluginFrom(callerPlugin: string, name: string, method: string, ...args: unknown[]): unknown {
+    const target = this.nameMap.get(name);
+    if (!target || target.status !== PluginStatus.Running) {
+      throw new PluginDependencyError('PLUGIN_NOT_RUNNING', `Plugin "${name}" is not Running`, { plugin: name });
+    }
+    assertPluginMethodAccess(callerPlugin, target.info, method);
+    return this.callPlugin(name, method, ...args);
+  }
 }
 
 function assertPluginLifecycleCapability(ownerName: string, editor: PluginRuntimeHost): void {
@@ -701,12 +729,15 @@ function assertCurrentKitPlugin(editor: PluginRuntimeHost, pluginPath: string): 
 
 function createPluginRuntime(
   editor: PluginRuntimeHost,
-  ownerName: string,
-  paths: PluginPaths,
+  owner: PluginInfo,
+  paths: SessionPluginPaths,
+  identity: PluginSessionIdentity,
   configHost?: PluginConfigBindingHost,
   kitId?: string,
   credentials?: PluginCredentialVault,
 ): PluginRuntime {
+  const ownerName = owner.name;
+  const isController = (name: string) => owner.kind === 'builtin' && ownerName === name;
   const menu = editor.menu;
   const managedPluginPaths = new Set<string>();
   let managedKitName: string | null = null;
@@ -726,12 +757,18 @@ function createPluginRuntime(
 
   syncManagedPluginPaths();
   const runtime: Omit<PluginRuntime, 'paths'> = {
-    ...editor,
+    sessionId: editor.sessionId,
+    identity: Object.freeze({ userId: identity.userId, sessionId: identity.sessionId }),
+    ...(editor.i18n ? { i18n: pickCapabilities(editor.i18n, ['getLocale', 'getDefaultLocale', 'setLocale', 't', 'registerMessages', 'subscribe', 'getVisibleSnapshot']) } : {}),
+    ...(editor.window ? { window: pickCapabilities(editor.window, ['getSnapshot', 'openPanel', 'markPanelInstanceFloating', 'markWindowGroupOpened', 'closeWindowGroup', 'setPanelInstanceState', 'closePanelInstance']) } : {}),
+    kit: Object.assign(pickCapabilities(editor.kit, ['list', 'get', 'switchKit', 'applyLayout', 'layouts']), {
+      getCurrent: () => structuredClone(editor.kit.getCurrent()),
+    }),
     config: configHost?.bind(kitId ?? editor.kit.getCurrent()?.name ?? '', ownerName)
       ?? unavailablePluginConfig(),
     application: {
       request: (pluginName, name, ...args) =>
-        editor.application.request(pluginName, name, ...args),
+        requestFrom(editor.application, ownerName, pluginName, name, args),
     },
     plugin: {
       define: editor.plugin.define,
@@ -740,7 +777,9 @@ function createPluginRuntime(
       getRegistration: editor.plugin.getRegistration,
       listLoaded: editor.plugin.listLoaded,
       listRegistered: editor.plugin.listRegistered,
-      callPlugin: editor.plugin.callPlugin,
+      callPlugin: (name, method, ...args) => isController(MESSAGE_OWNER)
+        ? editor.plugin.callPlugin(name, method, ...args)
+        : callPluginFrom(editor.plugin, ownerName, name, method, args),
       register: async (pluginPath) => {
         assertPluginLifecycleCapability(ownerName, editor);
         const currentKit = syncManagedPluginPaths();
@@ -788,46 +827,50 @@ function createPluginRuntime(
           name,
           modulePath,
           constraints,
-          resolveOwner(inferPanelOwner(name) ?? ownerName, ownerName, PANEL_OWNER),
+          resolveOwner(inferPanelOwner(name) ?? ownerName, ownerName, isController(PANEL_OWNER)),
         ),
-      unregister: editor.panel.unregister,
+      unregister: (name) => {
+        const registration = editor.panel.getRegistration(name);
+        if (registration && registration.owner !== ownerName && !isController(PANEL_OWNER)) {
+          throw new Error(`Plugin "${ownerName}" cannot unregister panel "${name}" owned by "${registration.owner}"`);
+        }
+        editor.panel.unregister(name);
+      },
       getInfo: editor.panel.getInfo,
       getRegistration: editor.panel.getRegistration,
       list: editor.panel.list,
     },
     menu: {
       attach: (pluginName, contribute) =>
-        menu.attach(resolveOwner(pluginName, ownerName, MENU_OWNER), contribute),
+        menu.attach(resolveOwner(pluginName, ownerName, isController(MENU_OWNER)), contribute),
       detach: (pluginName) =>
-        menu.detach(resolveOwner(pluginName, ownerName, MENU_OWNER)),
+        menu.detach(resolveOwner(pluginName, ownerName, isController(MENU_OWNER))),
       setDefaults: (items) => {
-        if (ownerName !== MENU_OWNER) {
+        if (!isController(MENU_OWNER)) {
           throw new Error(`Plugin "${ownerName}" cannot set default menu`);
         }
         return editor.menu.setDefaults(items);
       },
       clearDefaults: () => {
-        if (ownerName !== MENU_OWNER) {
+        if (!isController(MENU_OWNER)) {
           throw new Error(`Plugin "${ownerName}" cannot clear default menu`);
         }
         return editor.menu.clearDefaults();
       },
-      reset: () => menu.reset(),
+      reset: () => isController(MENU_OWNER) ? menu.reset() : menu.detach(ownerName),
       getState: () => menu.getState(),
     },
     message: {
       registerRequest: (pluginName, name, handler, location, methods) =>
-        editor.message.registerRequest(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), name, handler, location, methods),
+        editor.message.registerRequest(resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)), name, handler, location, methods),
       registerBroadcast: (pluginName, topic, handler, location, methods) =>
-        editor.message.registerBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic, handler, location, methods),
+        editor.message.registerBroadcast(resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)), topic, handler, location, methods),
       unregisterRequest: (pluginName, name) =>
-        editor.message.unregisterRequest(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), name),
+        editor.message.unregisterRequest(resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)), name),
       unregisterBroadcast: (pluginName, topic) =>
-        editor.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic),
+        editor.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)), topic),
       request: (pluginName, name, ...args) =>
-        editor.message.requestFrom
-          ? editor.message.requestFrom(ownerName, pluginName, name, ...args)
-          : editor.message.request(pluginName, name, ...args),
+        requestFrom(editor.message, ownerName, pluginName, name, args),
       broadcast: (topic, ...args) => {
         assertBroadcastTopic(ownerName, topic);
         editor.message.broadcast(topic, ...args);
@@ -890,9 +933,11 @@ function createRevocableCredentialVault(credentials: PluginCredentialVault): {
 
 function createApplicationPluginRuntime(
   application: ApplicationPluginRuntimeHost,
-  ownerName: string,
+  owner: PluginInfo,
   paths: PluginPaths,
 ): ApplicationPluginRuntime {
+  const ownerName = owner.name;
+  const isController = (name: string) => owner.kind === 'builtin' && ownerName === name;
   const runtime: Omit<ApplicationPluginRuntime, 'paths'> = {
     plugin: {
       define: application.plugin.define,
@@ -901,20 +946,22 @@ function createApplicationPluginRuntime(
       getRegistration: application.plugin.getRegistration,
       listLoaded: application.plugin.listLoaded,
       listRegistered: application.plugin.listRegistered,
-      callPlugin: application.plugin.callPlugin,
+      callPlugin: (name, method, ...args) => isController(MESSAGE_OWNER)
+        ? application.plugin.callPlugin(name, method, ...args)
+        : callPluginFrom(application.plugin, ownerName, name, method, args),
     },
     menu: {
       attach: (pluginName, contribute) =>
-        application.menu.attach(resolveOwner(pluginName, ownerName, MENU_OWNER), contribute),
+        application.menu.attach(resolveOwner(pluginName, ownerName, isController(MENU_OWNER)), contribute),
       detach: (pluginName) =>
-        application.menu.detach(resolveOwner(pluginName, ownerName, MENU_OWNER)),
+        application.menu.detach(resolveOwner(pluginName, ownerName, isController(MENU_OWNER))),
       getState: () => application.menu.getState(),
     },
     message: {
       registerRequest: (pluginName, name, handler, location, methods) => {
         assertApplicationMessageRoute(ownerName, location, methods);
         application.message.registerRequest(
-          resolveOwner(pluginName, ownerName, MESSAGE_OWNER),
+          resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)),
           name,
           handler,
           'server',
@@ -924,7 +971,7 @@ function createApplicationPluginRuntime(
       registerBroadcast: (pluginName, topic, handler, location, methods) => {
         assertApplicationMessageRoute(ownerName, location, methods);
         application.message.registerBroadcast(
-          resolveOwner(pluginName, ownerName, MESSAGE_OWNER),
+          resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)),
           topic,
           handler,
           'server',
@@ -932,10 +979,10 @@ function createApplicationPluginRuntime(
         );
       },
       unregisterRequest: (pluginName, name) =>
-        application.message.unregisterRequest(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), name),
+        application.message.unregisterRequest(resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)), name),
       unregisterBroadcast: (pluginName, topic) =>
-        application.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, MESSAGE_OWNER), topic),
-      request: (pluginName, name, ...args) => application.message.request(pluginName, name, ...args),
+        application.message.unregisterBroadcast(resolveOwner(pluginName, ownerName, isController(MESSAGE_OWNER)), topic),
+      request: (pluginName, name, ...args) => requestFrom(application.message, ownerName, pluginName, name, args),
       broadcast: (topic, ...args) => {
         assertBroadcastTopic(ownerName, topic);
         application.message.broadcast(topic, ...args);
@@ -961,14 +1008,47 @@ function assertApplicationMessageRoute(
   }
 }
 
-function resolveOwner(requestedOwner: string, runtimeOwner: string, delegateOwner: string): string {
+function resolveOwner(requestedOwner: string, runtimeOwner: string, canDelegate: boolean): string {
   if (!requestedOwner || requestedOwner === runtimeOwner) {
     return runtimeOwner;
   }
-  if (runtimeOwner === delegateOwner) {
+  if (canDelegate) {
     return requestedOwner;
   }
   throw new Error(`Plugin "${runtimeOwner}" cannot register as "${requestedOwner}"`);
+}
+
+function requestFrom(
+  host: Pick<PluginRuntimeHost['message'], 'requestFrom'>,
+  caller: string,
+  plugin: string,
+  name: string,
+  args: unknown[],
+): Promise<unknown> {
+  if (!host.requestFrom) return Promise.reject(new Error('Trusted request caller binding is unavailable'));
+  return host.requestFrom(caller, plugin, name, ...args);
+}
+
+function callPluginFrom(
+  host: PluginRuntimeHost['plugin'], caller: string, plugin: string, method: string, args: unknown[],
+): unknown {
+  if (!host.callPluginFrom) throw new Error('Trusted Plugin caller binding is unavailable');
+  return host.callPluginFrom(caller, plugin, method, ...args);
+}
+
+function pickCapabilities(host: object, names: readonly string[]): Record<string, unknown> {
+  const facade: Record<string, unknown> = {};
+  for (const name of names) {
+    if (!(name in host)) continue;
+    Object.defineProperty(facade, name, {
+      enumerable: true,
+      get: () => {
+        const value: unknown = Reflect.get(host, name);
+        return typeof value === 'function' ? value.bind(host) : value;
+      },
+    });
+  }
+  return facade;
 }
 
 function assertBroadcastTopic(ownerName: string, topic: unknown): asserts topic is string {

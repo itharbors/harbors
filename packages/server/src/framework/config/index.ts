@@ -35,7 +35,8 @@ export class MemoryConfigLayerBackend implements ConfigLayerBackend {
   private readonly values = new Map<string, Map<string, JsonValue>>();
 
   get(key: string, namespace = ''): JsonValue | undefined {
-    return this.values.get(namespace)?.get(key);
+    const value = this.values.get(namespace)?.get(key);
+    return value === undefined ? undefined : structuredClone(value);
   }
 
   set(key: string, value: JsonValue, namespace = ''): void {
@@ -44,7 +45,7 @@ export class MemoryConfigLayerBackend implements ConfigLayerBackend {
       values = new Map();
       this.values.set(namespace, values);
     }
-    values.set(key, value);
+    values.set(key, structuredClone(value));
   }
 
   delete(key: string, namespace = ''): void {
@@ -175,12 +176,12 @@ export class ConfigModule implements EditorConfig {
   }
 
   get(key: string, type?: string): JsonValue | undefined {
-    if (type !== undefined) return this.requireLayer(type).backend.get(key);
+    if (type !== undefined) return structuredClone(this.requireLayer(type).backend.get(key));
 
     this.requireActivated();
     for (const layer of this.orderedLayers) {
       const value = layer.backend.get(key);
-      if (value !== undefined) return value;
+      if (value !== undefined) return structuredClone(value);
     }
     return undefined;
   }
@@ -188,7 +189,7 @@ export class ConfigModule implements EditorConfig {
   set(key: string, value: JsonValue, type?: string): void {
     this.assertJsonValue(value);
     const layer = this.requireLayer(type ?? this.writeLayer);
-    layer.backend.set(key, value);
+    layer.backend.set(key, structuredClone(value));
     this.emit({ key, type: layer.name, action: 'set' });
   }
 
@@ -257,11 +258,11 @@ export class ConfigModule implements EditorConfig {
 
   private getScoped(kitId: string, pluginName: string, key: string, type?: string): JsonValue | undefined {
     this.requireOwnerKit(kitId);
-    if (type !== undefined) return this.requireLayer(type).backend.get(key, pluginName);
+    if (type !== undefined) return structuredClone(this.requireLayer(type).backend.get(key, pluginName));
     this.requireActivated();
     for (const layer of this.orderedLayers) {
       const value = layer.backend.get(key, pluginName);
-      if (value !== undefined) return value;
+      if (value !== undefined) return structuredClone(value);
     }
     return undefined;
   }
@@ -270,7 +271,7 @@ export class ConfigModule implements EditorConfig {
     this.requireOwnerKit(kitId);
     this.assertJsonValue(value);
     const layer = this.requireLayer(type ?? this.writeLayer);
-    layer.backend.set(key, value, pluginName);
+    layer.backend.set(key, structuredClone(value), pluginName);
     this.emit({ key, type: layer.name, action: 'set', pluginName });
   }
 

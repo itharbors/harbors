@@ -162,6 +162,51 @@ describe('ApplicationRuntime process integration', () => {
     await runtime.dispose();
   });
 
+  it('enforces the same manifest caller ACL for child direct calls and requests', async () => {
+    const allowed = createPlugin('acl-allowed', '@scope/acl-allowed');
+    const denied = createPlugin('acl-denied', '@scope/acl-denied');
+    const target = createPlugin('acl-target', '@scope/acl-target', {
+      message: { request: {
+        protected: { methods: ['read'], callers: [allowed.name, '@scope/session-client'] },
+        public: ['ping'],
+      } },
+    });
+    const harness = new SupervisorHarness();
+    const runtime = createRuntime([allowed, denied, target], harness);
+    await runtime.start();
+    try {
+      const caller = harness.supervisors.get(allowed.name)!;
+      const attacker = harness.supervisors.get(denied.name)!;
+      const receiver = harness.supervisors.get(target.name)!;
+      await expect(caller.command({
+        target: 'plugin', operation: 'call', plugin: target.name, method: 'read', args: ['value'],
+      })).resolves.toEqual({ plugin: target.name, method: 'read', args: ['value'] });
+      const invocations = receiver.methodInvocations.length;
+      await expect(attacker.commandAs(allowed.name, {
+        target: 'plugin', operation: 'call', plugin: target.name, method: 'read', args: [{ caller: allowed.name }],
+      })).rejects.toThrow();
+      await expect(caller.command({
+        target: 'plugin', operation: 'call', plugin: target.name, method: 'privateMethod', args: [],
+      })).rejects.toThrow();
+      expect(receiver.methodInvocations).toHaveLength(invocations);
+      await expect(attacker.command({
+        target: 'message', operation: 'request', plugin: target.name, name: 'protected', args: [],
+      })).rejects.toThrow();
+      await expect(caller.command({
+        target: 'message', operation: 'request', plugin: target.name, name: 'protected', args: ['message'],
+      })).resolves.toEqual({ plugin: target.name, method: 'read', args: ['message'] });
+      await expect(runtime.request(target.name, 'protected')).rejects.toThrow();
+      await expect(runtime.requestFrom('@scope/session-client', target.name, 'protected', 'session')).resolves
+        .toEqual({ plugin: target.name, method: 'read', args: ['session'] });
+      await expect(runtime.requestFrom(denied.name, target.name, 'protected')).rejects.toThrow();
+      await expect(attacker.command({
+        target: 'plugin', operation: 'call', plugin: target.name, method: 'ping', args: [],
+      })).resolves.toEqual({ plugin: target.name, method: 'ping', args: [] });
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it('projects every runtime command with the child owner forced and refreshes snapshots', async () => {
     const notificationHost = await createNotificationHost();
     try {
@@ -169,7 +214,7 @@ describe('ApplicationRuntime process integration', () => {
       source.permissions = ['notifications'];
       const target = createPlugin('target', '@scope/target', {
         message: {
-          request: { status: ['status'] },
+          request: { status: ['status'], ping: { methods: ['ping'], callers: ['@scope/source'] } },
           broadcast: { '@scope/source.static-refresh': ['refreshOne', 'refreshTwo'] },
         },
       });

@@ -13,8 +13,8 @@ import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'>,
+) => createEditorWithOptions(sessionId, { ...options, identity: { userId: 'test-user', sessionId }, pluginPathRoots: createTestPluginPathRoots() });
 
 function writePlugin(root: string, name: string, code = 'editor.plugin.define({ methods: { greet: (name) => `Hello ${name}` } });'): string {
   const dir = path.join(root, name);
@@ -58,6 +58,7 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-test-paths-'));
   return {
     scope: 'session' as const,
+    identity: { userId: 'test-user', sessionId: host.sessionId },
     host,
     paths: {
       roots: {
