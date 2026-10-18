@@ -12,10 +12,14 @@ export class PanelModule {
   private readonly listeners = new Set<(event: PanelAvailabilityChangedEvent) => void>();
 
   register(name: string, modulePath: string, constraints: PanelConstraints = {}, owner = inferPanelOwner(name)): void {
+    const existing = this.panelMap.get(name);
+    if (existing && existing.owner !== owner) {
+      throw new Error(`Panel "${name}" is owned by "${existing.owner}"`);
+    }
     const registration = {
       name,
       module: modulePath,
-      constraints,
+      constraints: structuredClone(constraints),
       owner,
     } satisfies PanelRegistration;
     this.panelMap.set(name, registration);
@@ -48,7 +52,8 @@ export class PanelModule {
   }
 
   getRegistration(name: string): PanelRegistration | undefined {
-    return this.panelMap.get(name);
+    const registration = this.panelMap.get(name);
+    return registration ? structuredClone(registration) : undefined;
   }
 
   subscribe(listener: (event: PanelAvailabilityChangedEvent) => void): () => void {

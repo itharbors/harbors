@@ -6,19 +6,28 @@ Kit 决定 Web 工作台具有哪些产品能力，session 负责隔离这些能
 
 Session 的持久元数据存在 SQLite，运行时对象由 `SessionRuntimeRegistry` 在 Server 内存中管理。每个 Editor 独立持有 PluginModule、PanelModule、MessageModule、MenuModule、KitModule、WindowManager、config store 与 i18n 状态。路由可读取注册表的只读视图，但不得维护第二份运行时 map。
 
-Session SQLite 默认位于 `~/.harbors/harbors.db`。`--data-root` / `HARBORS_DATA_ROOT` 会同时切换 Session 数据库、Kit 配置和 Plugin 持久数据，因此同一根在 Dev 与稳定入口间可见相同工作状态；它不会新增 Project 或文件系统隔离，也不隔离 OS Keychain secret。
+Session SQLite 默认位于 `~/.harbors/harbors.db`。`--data-root` / `HARBORS_DATA_ROOT` 会同时切换 Session 数据库、User 范围的 Kit 配置和 Plugin 持久数据，因此同一根在 Dev 与稳定入口间可见相同工作状态；它不会新增 Project 或文件系统隔离。Keychain 不随文件根切换，但 Credential scope 包含 User、Kit 和 Plugin。
 
-Framework Session 数据库只保存 Session 元数据。Harness Conversation 内容由 `agent-context-store` 在 Plugin owner data 目录中使用一个共享、版本化 SQLite 保存，并以 `conversation_id` 隔离；不会为每个 Conversation 建立独立 SQLite。详见 [Agent Context Store](./agent-context-store.md)。
+Framework Session 数据库只保存 Session 元数据。Harness Conversation 内容由 `agent-context-store` 在绑定 User + Plugin 的 data 目录中使用版本化 SQLite 保存；同 User 的基础 Session 共享该 Plugin 历史，业务表以 `conversation_id` 隔离，不为每个 Conversation 建立独立 SQLite。详见 [Agent Context Store](./agent-context-store.md)。
 
 Web Host 的最小身份关系为 `User 1:N AuthorizedDevice` 与 `User 1:N Session`。`userId` 是 Server 生成的稳定 opaque ID，显示名只用于展示且允许重名；设备授权把远程设备绑定到一个 User，撤销设备不会删除 User 或 Session。Session 的 `ownerUserId` 是 HTTP、SSE、Panel asset 与消息路由的统一访问依据，Kit 复合 runtime ID 通过 `SessionRuntimeRegistry` 保存的 `runtimeId -> baseSessionId` 索引回到基础 Session，不允许把字符串拆分结果当作安全事实。
 
-Session owner 只约束 Framework 的 Session/runtime HTTP 与 SSE 访问，不构成 Project、workspacePath 或文件系统级隔离，也不授予多人协作、目录沙箱或跨 Session 文件权限。需要工作区或文件系统安全边界时必须另行设计，不能从 `ownerUserId` 推导。
+Session owner 同时用于 Framework 的 HTTP/SSE 访问检查和 Session Plugin 的可信身份装配。
+Server 向 Editor 注入 `identity: { userId: ownerUserId, sessionId: baseSessionId }`，Plugin
+无需从业务消息获取 User。它不构成 Project、workspacePath 或 OS 文件权限隔离，也不授予
+多人协作或目录沙箱。需要这些边界时必须另行设计，不能从 `ownerUserId` 推导。
 
 请求身份只有本地主机管理员、已授权设备对应的 User 与匿名三类。Gateway 会删除客户端提供的 `X-Forwarded-For`，再用真实入站 socket 地址覆盖；Server 仅在立即上游 socket 为 loopback 时接受这个单值合法 IP。远程直连 Server 时请求头不能覆盖真实 socket，也不能提升权限；本地经 Gateway 访问仍保持管理员身份。匿名远程设备仅可读取精简用户目录，并提交一次“当前设备申请绑定指定 `userId`”的待审批请求；这不会赋予 Session 权限。批准后设备身份固定，已授权远程请求不能再提交 `userId` 改变身份，只能访问 owner 与设备 User 匹配的 Session。
 
 新的 Device、Session 与 Config Storage 数据库直接创建当前 schema，不执行历史列回填或旧表复制。`AuthorizedDevice.userId` 与 `Session.ownerUserId` 均为必填；不符合当前 schema 的旧数据库应在启动时明确失败，而不是隐式迁移。工作台通过 `/api/workbench/context` 获取不含本地路径的公开投影，并通过 `/api/workbench/session` 为明确选择的 User 创建新的 opaque Session ID。
 
 session 下的每个 Kit runtime 都拥有独立 Editor；同一基础 Session 可以同时具有多个 Kit runtime，但它们共享同一个 Session owner。URL 中后续出现其他 Kit 参数不会触发已存在 runtime 的隐式切换。空闲 session 由注册表统一回收，应用停止时先停止接受新请求，再逆序卸载插件。
+
+运行时隔离与持久数据范围不同：data/cache 属于 User + Plugin，sessionData/temp 再包含基础
+Session；Config global 与 Credentials 属于 User + Kit + Plugin。同一 User 的跨 Session
+持久共享不自动广播到其他 Editor，本轮仅保证读取或刷新可见。目录范围不决定保留周期，
+Session 退出不等于删除 sessionData/temp。完整路径、无旧数据回退与快照规则见
+[Plugin 运行时模型](./plugin-runtime-model.md)和[配置模型](./kit-configuration-model.md)。
 
 ## Kit descriptor 与 manifest
 
@@ -53,7 +62,11 @@ Kit 的 `plugin` 列表按顺序解析，内置贡献点保证 Panel、Message�
 
 - [`packages/server/src/session/`](../../packages/server/src/session/)
 - [`packages/server/src/application/`](../../packages/server/src/application/)
-- [`packages/server/src/kit/`](../../packages/server/src/kit/)
+- [Kit Catalog 装配](../../packages/server/src/assembly/kit-catalog.ts)
+- [Kit runtime 模块](../../packages/server/src/framework/kit/)
 - [`packages/kit-core/src/`](../../packages/kit-core/src/)
 - [`kits/default/`](../../kits/default/)
 - [`kits/harness/`](../../kits/harness/)
+
+关联决策：[ADR 0005：Plugin 默认身份与所有权边界](../decisions/0005-plugin-default-boundaries.md) ·
+[来源 Task](../tasks/2026-10-18-plugin-default-boundaries/task.md)

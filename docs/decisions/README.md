@@ -10,10 +10,11 @@
 
 | 编号 | 标题 | 状态 |
 | --- | --- | --- |
-| [0001](./0001-plugin-first-architecture.md) | 插件优先、由 Kit 组合产品能力 | 已接受 |
+| [0001](./0001-plugin-first-architecture.md) | 插件优先、由 Kit 组合产品能力 | 部分取代 |
 | [0002](./0002-web-only-host.md) | 主程序收敛为单一 Web host | 已接受 |
 | [0003](./0003-decision-feedback-loop.md) | 决策反馈闭环嵌入现有 Task 生命周期 | 已接受 |
 | [0004](./0004-automated-development-workflow.md) | 自动化开发主流程与阶段通信契约 | 已接受 |
+| [0005](./0005-plugin-default-boundaries.md) | Plugin 默认接口绑定可信身份与所有权 | 已接受 |
 
 ## 编号与状态
 

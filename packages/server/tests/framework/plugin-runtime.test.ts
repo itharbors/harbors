@@ -13,8 +13,8 @@ import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 const assembly = testAssembly;
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'>,
+) => createEditorWithOptions(sessionId, { ...options, identity: { userId: 'test-user', sessionId }, pluginPathRoots: createTestPluginPathRoots() });
 
 function mkPlugin(
   root: string,
@@ -103,6 +103,7 @@ function sessionLoadOptions(host: PluginRuntimeHost) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'plugin-runtime-paths-'));
   return {
     scope: 'session' as const,
+    identity: { userId: 'test-user', sessionId: host.sessionId },
     host,
     paths: { roots: pluginPathRoots(root) },
   };
@@ -364,15 +365,15 @@ describe('PluginModule', () => {
         },
       });
     `);
-    const applicationRequest = vi.fn(async () => ({ status: 'ready' }));
-    const editor = createEditor('application-bridge-editor', { assembly, applicationRequest });
+    const applicationRequestFrom = vi.fn(async () => ({ status: 'ready' }));
+    const editor = createEditor('application-bridge-editor', { assembly, applicationRequestFrom });
 
     await editor.plugin.register(pluginDir);
     await editor.plugin.load(pluginDir);
 
     await expect(editor.plugin.callPlugin('guard-center', 'snapshot'))
       .resolves.toEqual({ status: 'ready' });
-    expect(applicationRequest).toHaveBeenCalledWith('background', 'snapshot');
+    expect(applicationRequestFrom).toHaveBeenCalledWith('guard-center', 'background', 'snapshot');
   });
 
   it('uses a globally unique import nonce across plugin module instances', async () => {
@@ -591,6 +592,7 @@ describe('PluginModule', () => {
     });
     await session.load(sessionDir, {
       scope: 'session',
+      identity: { userId: 'test-user', sessionId: 'paths-session' },
       host: withRuntimeMenu(createEditor('paths-session', { assembly })),
       paths: { roots },
     });

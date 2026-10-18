@@ -96,10 +96,11 @@ export class CredentialVault {
   }
 
   bind(
+    userId: string,
     kitId: string,
     pluginName: string,
   ): PluginCredentialVault {
-    const scope = credentialScopeDigest(kitId, pluginName);
+    const scope = credentialScopeDigest(userId, kitId, pluginName);
     return {
       capability: () => this.refreshCapability(),
       available: async () => (await this.refreshCapability()).status === 'available',

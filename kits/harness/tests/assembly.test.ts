@@ -69,12 +69,13 @@ function pendingStream(text: string): { response: Response; close: () => void } 
   return { response, close: () => { try { controller?.close(); } catch { /* Stop cancels the reader first. */ } } };
 }
 
-function createAssembly(sessionId: string, applicationData?: string): KitAssemblyHarness {
+function createAssembly(sessionId: string, applicationData?: string, userId = 'assembly-user'): KitAssemblyHarness {
   return createKitAssemblyHarness({
     projectRoot,
     kitDirectory,
     kitName: 'harness',
     sessionId,
+    identity: { userId, sessionId },
     ...(applicationData ? { paths: { applicationData } } : {}),
     credentials: createCredentialVault(),
   });
@@ -120,6 +121,48 @@ describe('Harbors Harness Kit real assembly', () => {
     harnesses.push(value);
     return value;
   }
+
+  it('shares persisted history and settings across one user sessions while isolating another user', async () => {
+    const applicationData = fs.mkdtempSync(path.join(os.tmpdir(), 'harness-user-scope-'));
+    temporaryDirectories.push(applicationData);
+    const first = createAssembly('user-a-first', applicationData, 'user-a');
+    harnesses.push(first);
+    await first.kit.load();
+    await first.messages.requestFrom('model-service', 'model-service', 'saveProvider', {
+      id: 'private-provider', name: 'User A Provider', baseUrl: 'https://user-a.invalid',
+      secret: 'fixture-user-a', models: [{ id: 'private-model' }], defaultModel: 'private-model',
+    });
+    await first.messages.requestFrom('agent', 'agent', 'saveSettings', {
+      sandboxMode: 'read-only', approvalPolicy: 'ask', customInstructions: 'User A private instructions',
+    });
+    const conversation = await first.messages.request('agent', 'createConversation', 'harbors', projectRoot, {
+      model: 'private-model',
+    }) as { id: string };
+
+    const otherUser = createAssembly('user-b-first', applicationData, 'user-b');
+    harnesses.push(otherUser);
+    await otherUser.kit.load();
+    expect(await otherUser.messages.request('agent', 'listConversations')).toEqual([]);
+    const otherSettings = await otherUser.messages.requestFrom('agent', 'agent', 'getSettings') as { customInstructions: string };
+    expect(otherSettings.customInstructions).toBe('');
+    const otherProviders = await otherUser.messages.requestFrom('model-service', 'model-service', 'getSettings') as { providers: unknown[] };
+    expect(otherProviders.providers).toEqual([]);
+    await expect(otherUser.messages.request('agent', 'getConversationTrace', conversation.id)).rejects.toThrow();
+
+    const sameUser = createAssembly('user-a-second', applicationData, 'user-a');
+    harnesses.push(sameUser);
+    await sameUser.kit.load();
+    expect(await sameUser.messages.request('agent', 'listConversations')).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: conversation.id }),
+    ]));
+    const sameSettings = await sameUser.messages.requestFrom('agent', 'agent', 'getSettings') as { customInstructions: string };
+    expect(sameSettings.customInstructions).toBe('User A private instructions');
+    const sameProviders = await sameUser.messages.requestFrom('model-service', 'model-service', 'getSettings') as { providers: Array<{ id: string }> };
+    expect(sameProviders.providers).toEqual(expect.arrayContaining([expect.objectContaining({ id: 'private-provider' })]));
+    expect(await sameUser.messages.request('agent', 'getConversationTrace', conversation.id)).toEqual(
+      await first.messages.request('agent', 'getConversationTrace', conversation.id),
+    );
+  });
 
   it('loads every declared plugin and preserves the request/broadcast chain for a streamed turn', async () => {
     const runtime = harness('assembly-normal');

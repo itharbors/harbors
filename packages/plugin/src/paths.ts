@@ -3,6 +3,7 @@ import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import type { Stats } from 'node:fs';
 import { constants } from 'node:fs';
 import path from 'node:path';
+import type { PluginSessionIdentity } from './runtime.js';
 
 export interface PluginPathRoots {
   readonly applicationData: string;
@@ -15,6 +16,10 @@ export interface PluginPaths {
   readonly data: string;
   readonly cache: string;
   readonly temp: string;
+}
+
+export interface SessionPluginPaths extends PluginPaths {
+  readonly sessionData: string;
 }
 
 export interface CreatePluginPathsOptions {
@@ -97,6 +102,31 @@ export async function createPluginPaths({
       cache,
       temp,
     });
+  } catch (error) {
+    if (error instanceof PluginStorageUnavailableError) throw error;
+    throw new PluginStorageUnavailableError();
+  }
+}
+
+export async function createSessionPluginPaths({ roots, owner, identity }: CreatePluginPathsOptions & {
+  readonly identity: PluginSessionIdentity;
+}, fileSystem: PluginPathFileSystem = defaultFileSystem): Promise<SessionPluginPaths> {
+  try {
+    const normalizedRoots = normalizeRoots(roots);
+    const userKey = pluginStorageOwnerKey(identity?.userId);
+    const sessionKey = pluginStorageOwnerKey(identity?.sessionId);
+    const userRoots = {
+      applicationData: normalizedRoots.applicationData,
+      data: path.join(normalizedRoots.data, 'users', userKey),
+      cache: path.join(normalizedRoots.cache, 'users', userKey),
+      temp: path.join(normalizedRoots.temp, 'users', userKey, 'sessions', sessionKey),
+    };
+    const paths = await createPluginPaths({ roots: userRoots, owner }, fileSystem);
+    const sessionPaths = await createPluginPaths({ roots: {
+      ...userRoots,
+      data: path.join(userRoots.data, 'sessions', sessionKey),
+    }, owner }, fileSystem);
+    return Object.freeze({ ...paths, sessionData: sessionPaths.data });
   } catch (error) {
     if (error instanceof PluginStorageUnavailableError) throw error;
     throw new PluginStorageUnavailableError();

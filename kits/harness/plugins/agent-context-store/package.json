@@ -5,6 +5,107 @@
   "main": "./main/dist/index.cjs",
   "ce-editor": {
     "schemaVersion": 1,
-    "contribute": {}
+    "contribute": {
+      "message": {
+        "request": {
+          "getStatus": {
+            "methods": [
+              "getStatus"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "createConversation": {
+            "methods": [
+              "createConversation"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "listConversations": {
+            "methods": [
+              "listConversations"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "loadConversation": {
+            "methods": [
+              "loadConversation"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "appendEvent": {
+            "methods": [
+              "appendEvent"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "getConversationTrace": {
+            "methods": [
+              "getConversationTrace"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "getConversationTraceSince": {
+            "methods": [
+              "getConversationTraceSince"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "buildContext": {
+            "methods": [
+              "buildContext"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "recallHistory": {
+            "methods": [
+              "recallHistory"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "archiveConversation": {
+            "methods": [
+              "archiveConversation"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "restoreConversation": {
+            "methods": [
+              "restoreConversation"
+            ],
+            "callers": [
+              "agent"
+            ]
+          },
+          "deleteArchivedConversation": {
+            "methods": [
+              "deleteArchivedConversation"
+            ],
+            "callers": [
+              "agent"
+            ]
+          }
+        }
+      }
+    }
   }
 }

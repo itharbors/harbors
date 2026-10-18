@@ -21,6 +21,11 @@
 
 2026-08-25 第二次修订第 6 项：运行模式不再决定数据是否隔离。`pnpm dev` 与 `pnpm start` 默认同用 `~/.harbors`，也都接受 `--data-root`；非默认根不自动导入 legacy 数据。Web Host runner 仍默认临时隔离，且不会删除调用方提供的外部根。
 
+[ADR 0005](./0005-plugin-default-boundaries.md) 进一步明确统一根下的 User/Plugin 默认范围，
+并要求新 User 绑定不回退旧无 User 的 Plugin、Config 或 Credential scope；本 ADR 的统一
+数据根和 Web-only 结论不变。上文启动合并 legacy 数据是历史实现记录，非当前启动行为；
+当前事实见[系统架构](../architecture/system-overview.md)，不据此推导本轮迁移授权。
+
 ## 替代方案
 
 ### 继续维护双宿主
@@ -46,3 +51,4 @@
 - [核心运行流程](../architecture/runtime-flows.md)
 - [Web Server 入口](../../packages/server/src/start.ts)
 - [ADR 0001：插件优先架构](./0001-plugin-first-architecture.md)
+- [ADR 0005：Plugin 默认身份与所有权边界](./0005-plugin-default-boundaries.md)

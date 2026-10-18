@@ -9,8 +9,8 @@ import { createKitFixture, type TestKitPlugin } from '../../src/framework/__test
 
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'>,
+) => createEditorWithOptions(sessionId, { ...options, identity: { userId: 'test-user', sessionId }, pluginPathRoots: createTestPluginPathRoots() });
 
 function writeJson(filePath: string, value: unknown) {
   fs.writeFileSync(filePath, JSON.stringify(value, null, 2));

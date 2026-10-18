@@ -10,6 +10,29 @@
 - 只属于某个产品 Kit 的插件放在 `kits/<kit>/plugins/<name>`。
 - 不要仅为了复用而把产品功能提升为内置插件；先提取协议或通用基础能力。
 
+## 使用默认身份与所有权边界
+
+Session Plugin 直接使用 Host 提供的只读 `runtime.identity`、`runtime.paths`、`runtime.config`
+和 `runtime.credentials`，不从消息参数、cwd、源码目录或 homedir 推导自己的存储范围。
+
+| 用途 | 使用接口 | 默认范围 |
+| --- | --- | --- |
+| 跨 Session 的持久数据、缓存 | `paths.data`、`paths.cache` | User + Plugin |
+| 基础 Session 专属数据、临时文件 | `paths.sessionData`、`paths.temp` | User + 基础 Session + Plugin |
+| 配置、凭据 | `config`、`credentials` | User + Kit + Plugin |
+
+`identity.sessionId` 是基础 Session ID；`runtime.sessionId` 是 runtime 寻址 ID，不能拆分它
+来判断数据归属。`global` 配置层只跨同 User 的 Session。Application 插件保留应用级
+Plugin 路径，没有 Session identity、sessionData、config 或 credentials。
+
+普通 Plugin 对贡献资源的注销、重置仅作用于自身 owner；不要依赖 Host-only 的全局清理或 caller 绑定
+钩子。Plugin/Panel/Menu/Message/Kit 的查询结果和 attach 贡献是独立快照，修改返回对象
+不会更新内部状态；Config 的 JSON 输入与输出也会复制。更新必须调用对应写接口。
+
+路径范围不等于自动清理周期，Session 结束不会由路径 API 自动删除文件。扩大到跨 User、
+跨 Plugin 或应用级共享时先定义明确契约与授权；默认接口不回退旧无 User 目录、配置和
+凭据，也不自动迁移或删除旧数据。完整边界见 [Plugin 运行时模型](../architecture/plugin-runtime-model.md)。
+
 ## 创建插件
 
 ### 目录
@@ -162,6 +185,17 @@ await runtime.message.request("@example/state-provider", "setValue", 42);
 ```
 
 `request` 是唯一目标的调用：route 名称在目标插件内必须唯一，且只有声明该 route 的插件会响应。
+受限方法用对象形式声明 ACL，例如：
+
+```json
+{ "setValue": { "methods": ["setValue"], "callers": ["@example/state-consumer"] } }
+```
+
+caller 由 Host 绑定，调用方不传入或覆盖。没有受信 caller 转发能力时请求失败，不以匿名
+身份重试。现有同进程同步客户端使用 `runtime.plugin.callPlugin(target, method, ...args)` 时，
+目标仍须出现在 manifest 的非 `*` request alias 中，且整条 route 不含 `panel.*`、满足同一 callers 约束；仅在 methods
+中定义、仅作 broadcast handler 或 `panel.*` 的方法不可直调。多个 request alias 指向同一
+方法时，任一 server alias 授权该 caller 即可；同步结果类型保持目标方法原有行为。
 
 #### broadcast：发布方与订阅方
 
@@ -202,6 +236,8 @@ runtime.message.broadcast("state.changed", state);
 ```
 
 同一 topic 可以有多个订阅者；broadcast 不保证顺序，也不会把订阅者的返回值回传给发布方。
+当前广播只到当前 Session runtime。同 User 的持久数据可跨 Session 读取，但没有跨 Session
+的实时通知；需要这种能力时单独设计同步协议。
 
 #### attach / detach 与自定义贡献类型
 
@@ -216,6 +252,10 @@ runtime.message.broadcast("state.changed", state);
 者处理的未知贡献会被忽略，不会导致 manifest 被拒绝。JSON 安全数据应只包含 `null`、布尔
 值、数字、字符串、数组和对象，不包含函数、`BigInt`、循环引用等值。开放贡献数据本身不
 会赋予插件新的宿主权限。
+
+每次 attach 交付独立贡献副本，消费者不得通过修改它改变来源 manifest 或其他消费者的
+控制元数据。内置贡献控制器使用 Host 明确委托的注册能力，普通 Plugin 不获得代任意
+owner 清理或调度的权限。
 
 “顶层键开放扩展”不表示任意功能名都可以占据 `contribute` 顶层。除
 `panel`、`menu` 和 `message` 这些 Framework 保留贡献点外，自定义 contribution 的
@@ -496,7 +536,7 @@ Server message，不能贡献 Panel、Window、Layout 或 `panel.*` / browser me
 }
 ```
 
-其 `lifecycle.load(ctx)` 只收到 `plugin`、`menu`、`message`、`service` 和 `host`。`host.mode`
+其 `lifecycle.load(ctx)` 只收到 `paths`、`plugin`、`menu`、`message`、`service` 和 `host`。`host.mode`
 由仓库入口固定为 `web`。启动失败会在
 `GET /api/application/bootstrap` 中显示为 `degraded`，但不阻止其他插件或 Kit 启动。
 `menu` 只允许启动插件 attach/detach 自己的贡献和读取当前状态，不提供清空全局菜单的能力。
@@ -535,7 +575,7 @@ canonical `{ "plugin": "@scope/name" }`，带浏览器 Origin 的请求会被拒
 运行，使用 Framework cwd，并拥有该账号的文件系统权限。新插件应使用
 `ctx.paths.data/cache/temp`；这些 owner 专属路径和环境过滤都不是文件访问隔离。
 
-Web 宿主默认把 owner 专属路径放在
+Application 插件中，Web 宿主默认把 owner 专属路径放在
 `~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。开发与正式启动共享数据根语义；宿主使用
 `--data-root` 时这些路径随数据库和 Kit 配置整体切换。Plugin 不应从
 `process.cwd()`、源码目录或 `homedir()` 自行推导持久数据位置。需要诊断磁盘目录归属时，可读取

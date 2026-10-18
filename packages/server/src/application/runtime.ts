@@ -3,7 +3,7 @@ import type { ApplicationHostMode, NotificationInput } from '../editor/types';
 import { MenuModule } from '../framework/menu';
 import { MessageModule } from '../framework/message';
 import { normalizeMessageRouteDeclaration } from '../framework/message/types';
-import { PluginModule, createPluginPaths, type PluginPathRoots, type PluginPaths } from '@itharbors/magnet';
+import { PluginModule, assertPluginMethodAccess, createPluginPaths, type PluginPathRoots, type PluginPaths } from '@itharbors/magnet';
 import type { ContributeData, PluginInfo } from '@itharbors/magnet';
 import type {
   CredentialCapabilitySnapshot,
@@ -181,6 +181,11 @@ export class ApplicationRuntime {
   request(pluginName: string, method: string, ...args: unknown[]): Promise<unknown> {
     this.assertAvailable();
     return this.message.request(pluginName, method, ...args);
+  }
+
+  requestFrom(callerPlugin: string, pluginName: string, method: string, ...args: unknown[]): Promise<unknown> {
+    this.assertAvailable();
+    return this.message.requestFrom(callerPlugin, pluginName, method, ...args);
   }
 
   triggerMenu(menuId: string): Promise<unknown> {
@@ -450,6 +455,9 @@ export class ApplicationRuntime {
     switch (command.target) {
       case 'plugin':
         if (command.operation === 'call') {
+          const target = this.prepared.get(command.plugin);
+          if (!target) throw createStableUnavailableError(command.plugin);
+          assertPluginMethodAccess(pluginName, target.info, command.method);
           return this.requireSupervisor(command.plugin).invoke(command.method, command.args);
         }
         break;

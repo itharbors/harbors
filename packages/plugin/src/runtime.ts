@@ -1,5 +1,5 @@
 import type { PluginCredentialVault } from './credentials.js';
-import type { PluginPaths, PluginPathRoots } from './paths.js';
+import type { PluginPaths, PluginPathRoots, SessionPluginPaths } from './paths.js';
 import type { ContributeData, PluginDefinition, PluginInfo, PluginRegistration, PluginSourceIdentity } from './types.js';
 
 export type MessageLocation = 'server' | 'browser';
@@ -42,6 +42,8 @@ export interface PluginRuntimePluginHost {
   listLoaded(): string[];
   listRegistered(): string[];
   callPlugin(name: string, method: string, ...args: unknown[]): unknown;
+  /** Host-internal caller binding; never exposed on a Plugin facade. */
+  callPluginFrom?(callerPlugin: string, name: string, method: string, ...args: unknown[]): unknown;
 }
 
 export interface PluginRuntimeMessageHost {
@@ -88,6 +90,8 @@ export interface PluginRuntimeHost {
   readonly sessionId: string;
   application: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
+    /** Host-internal caller binding; never exposed on a Plugin facade. */
+    requestFrom?(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
   };
   plugin: PluginRuntimePluginHost;
   /** Host-side owner cleanup hook; lifecycle implementations may omit it. */
@@ -98,10 +102,16 @@ export interface PluginRuntimeHost {
   kit: {
     getCurrent(): { readonly name: string; readonly plugins?: readonly string[] } | undefined;
   };
+  i18n?: object;
+  window?: object;
 }
 
-export interface PluginRuntime extends PluginRuntimeHost {
-  readonly paths: PluginPaths;
+export interface PluginRuntime extends Omit<PluginRuntimeHost, 'clearOwner' | 'plugin' | 'message' | 'application'> {
+  plugin: Omit<PluginRuntimePluginHost, 'callPluginFrom'>;
+  message: Omit<PluginRuntimeMessageHost, 'requestFrom'>;
+  application: Pick<PluginRuntimeHost['application'], 'request'>;
+  readonly identity: PluginSessionIdentity;
+  readonly paths: SessionPluginPaths;
   readonly config: PluginConfig;
   readonly credentials?: PluginCredentialVault;
 }
@@ -145,9 +155,9 @@ export interface NotificationHostCapability {
 
 export interface ApplicationPluginRuntime {
   readonly paths: PluginPaths;
-  plugin: PluginRuntimePluginHost;
+  plugin: Omit<PluginRuntimePluginHost, 'callPluginFrom'>;
   menu: Pick<PluginRuntimeMenuHost, 'attach' | 'detach' | 'getState'>;
-  message: PluginRuntimeMessageHost;
+  message: Omit<PluginRuntimeMessageHost, 'requestFrom'>;
   service: {
     register(name: string, value: unknown): void;
     unregister(name: string): void;
@@ -175,9 +185,16 @@ export interface PluginPathLoadConfiguration {
   readonly roots: PluginPathRoots;
 }
 
+/** Trusted Host identity. sessionId is the base Session ID, not a runtime address. */
+export interface PluginSessionIdentity {
+  readonly userId: string;
+  readonly sessionId: string;
+}
+
 export type PluginLoadOptions =
   | {
       scope: 'session';
+      identity: PluginSessionIdentity;
       host: PluginRuntimeHost;
       paths: PluginPathLoadConfiguration;
       config?: PluginConfigBindingHost;

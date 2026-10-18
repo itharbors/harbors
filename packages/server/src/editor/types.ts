@@ -10,13 +10,14 @@ import type {
   PanelDescriptor,
   PanelRegistration,
 } from '../framework/panel/types';
-import type { ContributeData, PluginConfigBindingHost, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, PluginRegistration, PluginSourceIdentity } from '@itharbors/magnet';
+import type { ContributeData, PluginConfigBindingHost, PluginDefinition, PluginInfo, PluginPathRoots, PluginPaths, SessionPluginPaths, PluginRegistration, PluginSourceIdentity } from '@itharbors/magnet';
 import type { LayoutNode, OpenPanelResult as WindowOpenPanelResult, WindowSnapshot } from '../framework/window/types';
 import type { PanelFileRuntime, PluginCredentialVault } from '@itharbors/plugin-types';
 
 export interface PluginRuntime {
   readonly sessionId: string;
-  readonly paths: PluginPaths;
+  readonly identity: Readonly<{ userId: string; sessionId: string }>;
+  readonly paths: SessionPluginPaths;
   readonly credentials?: PluginCredentialVault;
   application: {
     request(plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
@@ -130,7 +131,9 @@ export interface ApplicationPluginRuntime {
 }
 
 export interface ApplicationPluginRuntimeHost {
-  plugin: PluginRuntime['plugin'];
+  plugin: PluginRuntime['plugin'] & {
+    callPluginFrom?(callerPlugin: string, name: string, method: string, ...args: unknown[]): unknown;
+  };
   menu: ApplicationPluginRuntime['menu'];
   message: PluginRuntime['message'];
   service: {
@@ -169,7 +172,9 @@ export interface Editor {
   readonly sessionId: string;
   isUsable(): boolean;
   dispose(): Promise<void>;
-  application: PluginRuntime['application'];
+  application: PluginRuntime['application'] & {
+    requestFrom?(callerPlugin: string, plugin: string, name: string, ...args: unknown[]): Promise<unknown>;
+  };
   config: EditorConfig;
   i18n: EditorI18n;
   plugin: {
@@ -184,6 +189,7 @@ export interface Editor {
     listLoaded(): string[];
     listRegistered(): string[];
     callPlugin(name: string, method: string, ...args: unknown[]): unknown;
+    callPluginFrom?(callerPlugin: string, name: string, method: string, ...args: unknown[]): unknown;
   };
   panel: {
     define(definition: PanelDefinition): void;
@@ -243,6 +249,7 @@ export type PluginRuntimeHost = Omit<Editor, 'menu'> & {
 export type PluginLoadOptions =
   | {
       scope: 'session';
+      identity: Readonly<{ userId: string; sessionId: string }>;
       host: PluginRuntimeHost;
       paths: PluginPathLoadConfiguration;
       config?: PluginConfigBindingHost;

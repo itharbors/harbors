@@ -29,7 +29,7 @@ test('eval Vault binds the normal Kit and Model Service scope without exposing s
   const vault = await openEvalCredentialVault(root, keyring);
   try {
     assert.equal(values.has(pending.secretReference), false);
-    const scoped = vault.bind('harness', 'model-service');
+    const scoped = vault.bind('eval-user', 'harness', 'model-service');
     await scoped.put({ label: 'eval fixture', metadata: { protocol: 'openai' }, secret: 'fixture-only' });
     assert.equal((await scoped.list()).length, 1);
     assert.deepEqual(await scoped.capability(), { mode: 'on', status: 'available' });

@@ -79,14 +79,16 @@ export interface CredentialTestDouble {
     status: 'unavailable';
     reason: 'CREDENTIALS_DISABLED' | 'CREDENTIALS_UNAVAILABLE' | 'CREDENTIALS_LOCKED';
   };
-  bind(kitId: string, pluginName: string): PluginCredentialVault;
+  bind(userId: string, kitId: string, pluginName: string): PluginCredentialVault;
 }
 
 export interface PluginRuntimeHarnessOptions {
   readonly pluginPath: string;
   readonly sessionId?: string;
+  readonly identity?: Readonly<{ userId: string; sessionId: string }>;
   readonly source?: PluginSourceIdentity;
   readonly paths?: Partial<PluginPathRoots>;
+  readonly applicationRequestFrom?: (caller: string, plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   readonly applicationRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   readonly credentials?: PluginCredentialVault;
   readonly externalRequests?: readonly MessageMockRequest[];
@@ -111,7 +113,9 @@ export interface KitAssemblyHarnessOptions {
   readonly projectRoot?: string;
   readonly kitName?: string;
   readonly sessionId?: string;
+  readonly identity?: Readonly<{ userId: string; sessionId: string }>;
   readonly paths?: Partial<PluginPathRoots>;
+  readonly applicationRequestFrom?: (caller: string, plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   readonly applicationRequest?: (plugin: string, name: string, ...args: unknown[]) => Promise<unknown>;
   readonly credentials?: CredentialTestDouble;
   readonly externalRequests?: readonly MessageMockRequest[];
@@ -283,6 +287,7 @@ function createPluginHost(
     }),
     load: (pluginPath: string) => plugin.load(pluginPath, {
       scope: 'session' as const,
+      identity: options.identity ?? { userId: 'test-user', sessionId: options.sessionId ?? 'plugin-runtime-test' },
       host,
       paths: { roots: paths },
       credentials: options.credentials,
@@ -295,6 +300,7 @@ function createPluginHost(
     listLoaded: () => plugin.listLoaded(),
     listRegistered: () => plugin.listRegistered(),
     callPlugin: (name: string, method: string, ...args: unknown[]) => plugin.callPlugin(name, method, ...args),
+    callPluginFrom: (caller: string, name: string, method: string, ...args: unknown[]) => plugin.callPluginFrom(caller, name, method, ...args),
   };
   const runtimeMessage = {
     registerRequest: (
@@ -319,7 +325,10 @@ function createPluginHost(
   };
   host = {
     sessionId: options.sessionId ?? 'plugin-runtime-test',
-    application: { request: options.applicationRequest ?? rejectApplicationRequest },
+    application: {
+      request: options.applicationRequest ?? rejectApplicationRequest,
+      requestFrom: options.applicationRequestFrom ?? ((_caller: string, plugin: string, name: string, ...args: unknown[]) => (options.applicationRequest ?? rejectApplicationRequest)(plugin, name, ...args)),
+    },
     plugin: pluginHost,
     clearOwner: (owner: string) => {
       message.clearOwner(owner);
@@ -369,6 +378,7 @@ export function createPluginRuntimeHarness(options: PluginRuntimeHarnessOptions)
     }
     await plugin.load(options.pluginPath, {
       scope: 'session',
+      identity: options.identity ?? { userId: 'test-user', sessionId: options.sessionId ?? 'plugin-runtime-test' },
       host,
       paths: { roots: roots.roots },
       credentials: options.credentials,
@@ -432,6 +442,7 @@ export function createKitAssemblyHarness(options: KitAssemblyHarnessOptions): Ki
   const roots = rootsFor(options.paths);
   const trace = new Trace();
   const editor = createEditor(options.sessionId ?? 'kit-assembly-test', {
+    identity: options.identity ?? { userId: 'test-user', sessionId: options.sessionId ?? 'kit-assembly-test' },
     assembly: createDefaultAssemblyConfig(projectRoot, {
       kitSources: [{ directory: kitDirectory, source: 'explicit' }],
       defaultKit: options.kitName ?? kitName(kitDirectory),
@@ -439,6 +450,7 @@ export function createKitAssemblyHarness(options: KitAssemblyHarnessOptions): Ki
     pluginPathRoots: roots.roots,
     configStorageRoots: { 'application-data': roots.roots.applicationData },
     applicationRequest: options.applicationRequest,
+    applicationRequestFrom: options.applicationRequestFrom ?? ((_caller, plugin, name, ...args) => (options.applicationRequest ?? rejectApplicationRequest)(plugin, name, ...args)),
     credentialVault: options.credentials,
     messageObserver: (event) => trace.push(event),
   });

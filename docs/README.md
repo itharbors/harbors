@@ -22,9 +22,10 @@
 
 1. [Kit 与会话模型](./architecture/kit-and-session-model.md)
 2. [插件运行时模型](./architecture/plugin-runtime-model.md)
-3. [布局模型](./architecture/layout-model.md)
-4. [UI 系统](./architecture/ui-system.md)
-5. [架构决策记录](./decisions/README.md)
+3. [Kit 配置持久化模型](./architecture/kit-configuration-model.md)
+4. [布局模型](./architecture/layout-model.md)
+5. [UI 系统](./architecture/ui-system.md)
+6. [架构决策记录](./decisions/README.md)
 
 ### 开发插件或 Kit
 
@@ -35,7 +36,7 @@
 5. [自动化开发主流程](./architecture/automated-development-workflow.md)
 6. [决策反馈闭环](./guides/decision-feedback-loop.md)
 7. [测试指南](./guides/testing.md)
-8. [Kit 制品与本地安装](./guides/kit-artifacts.md)
+8. [Kit 制品打包](./guides/kit-artifacts.md)
 9. 各 `kits/<name>/README.md`：对应功能单元自己的安装、构建、权限与平台契约。
 
 ## 文档地图
@@ -47,6 +48,9 @@
 | [核心运行流程](./architecture/runtime-flows.md) | 启动、会话、消息、Kit 切换和打开面板时发生什么？ |
 | [Kit 与会话模型](./architecture/kit-and-session-model.md) | 能力如何按 Kit 组合、按 session 隔离？ |
 | [插件运行时模型](./architecture/plugin-runtime-model.md) | 插件如何发现、注册、装载、贡献能力和卸载？ |
+| [Kit 配置持久化模型](./architecture/kit-configuration-model.md) | User、Kit、Plugin 的配置范围与 global 层如何绑定？ |
+| [Agent Context Store](./architecture/agent-context-store.md) | Harness 如何在 User + Plugin 范围保存 Conversation 并装配 Context？ |
+| [Model Service Plugin](./architecture/model-service-plugin.md) | 模型配置、凭据与请求 ACL 如何约束？ |
 | [布局模型](./architecture/layout-model.md) | Window、Panel、Tab、Split 和实例状态如何表达？ |
 | [UI 系统](./architecture/ui-system.md) | Web Components、主题与 iframe 如何协作？ |
 | [Task 档案与生命周期](./tasks/README.md) | 可交付变更如何建档、推进、收口、确认完成与恢复？ |
@@ -55,7 +59,7 @@
 | [开发工作流](./guides/development-workflow.md) | 如何启动、构建、测试和定位常见问题？ |
 | [测试指南](./guides/testing.md) | 如何按功能单元选择测试范围并完成验收？ |
 | [插件与 Kit 开发指南](./guides/developing-plugins-and-kits.md) | 如何创建符合当前约定的插件与 Kit？ |
-| [Kit 制品、Registry 与本地安装](./guides/kit-artifacts.md) | 如何校验、发现、下载和事务安装 Kit 制品？ |
+| [Kit 制品打包](./guides/kit-artifacts.md) | 如何校验、打包和检查本地 Kit 制品？ |
 | `kits/<name>/README.md` | 某个 Kit 的能力、生命周期和所有权边界是什么？ |
 | [文档维护指南](./guides/maintaining-docs.md) | 代码变化后应更新哪些文档，如何验证？ |
 | [架构决策记录](./decisions/README.md) | 重要设计为何被采用，替代方案是什么？ |
@@ -85,7 +89,7 @@
 ```text
 packages/   Gateway、Server、Client 与共享插件类型
 plugins/    框架内置插件
-kits/       内置 default Kit
+kits/       default、Harness 等 Kit 的独立目录
 scripts/    Web 开发栈、Kit 发布与插件构建工具
 ```
 

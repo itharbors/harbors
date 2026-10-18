@@ -27,8 +27,8 @@ function createTestPluginPathRoots(): PluginPathRoots {
 }
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'>,
+) => createEditorWithOptions(sessionId, { ...options, identity: { userId: 'test-user', sessionId }, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('panel plugin contributions', () => {
   afterEach(async () => {

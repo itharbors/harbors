@@ -55,7 +55,7 @@ export interface AppOptions {
   applicationRuntime: Pick<
     ApplicationRuntime,
     'getBootstrap' | 'request' | 'retryPlugin' | 'triggerMenu' | 'subscribe'
-  >;
+  > & Partial<Pick<ApplicationRuntime, 'requestFrom'>>;
   applicationControlToken?: string;
   clientAssetsRoot?: string;
   pluginPathRoots: PluginPathRoots;
@@ -83,12 +83,17 @@ export function createApp(
     const runtimeSessionId = getRuntimeId(session.sessionId, options.runtimeKit);
     const credentialVault = appOptions.credentialVault?.();
     const editor = createEditor(runtimeSessionId, {
+        identity: { userId: session.ownerUserId, sessionId: session.sessionId },
         assembly,
         pluginPathRoots: appOptions.pluginPathRoots,
         configStorageRoots: appOptions.configStorageRoots ?? {
           'application-data': appOptions.pluginPathRoots.applicationData,
         },
         credentialVault,
+        applicationRequestFrom: (callerPlugin, plugin, name, ...args) => {
+          if (!appOptions.applicationRuntime.requestFrom) return Promise.reject(new Error('Application caller dispatch is unavailable'));
+          return appOptions.applicationRuntime.requestFrom(callerPlugin, plugin, name, ...args);
+        },
         applicationRequest: (plugin, name, ...args) => (
           appOptions.applicationRuntime.request(plugin, name, ...args)
         ),

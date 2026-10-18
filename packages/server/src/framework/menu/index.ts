@@ -95,15 +95,15 @@ export class MenuModule {
   }
 
   getState(): NormalizedMenuResult {
-    return this.state;
+    return structuredClone(this.state);
   }
 
   getApplicationState(): NormalizedMenuResult {
-    return this.applicationState;
+    return structuredClone(this.applicationState);
   }
 
   getKitState(): NormalizedMenuResult {
-    return this.kitState;
+    return structuredClone(this.kitState);
   }
 
   trigger(

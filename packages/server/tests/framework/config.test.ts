@@ -51,7 +51,30 @@ function activate(
 }
 
 describe('ConfigModule', () => {
-  it('fails closed before host activation', () => {
+  it('copies nested JSON on input and output for host and plugin configuration', () => {
+    const config = new ConfigModule();
+    activate(config).commit();
+    const plugin = config.bind({ kitId: 'kit-a', pluginName: 'plugin-a' });
+    for (const surface of [config, plugin]) {
+      const input = { nested: { items: ['original'] } };
+      surface.set('snapshot', input);
+      input.nested.items[0] = 'input mutation';
+      const returned = surface.get('snapshot') as typeof input;
+      expect(returned.nested.items).toEqual(['original']);
+      returned.nested.items.push('output mutation');
+      expect(surface.get('snapshot')).toEqual({ nested: { items: ['original'] } });
+    }
+    const memory = new MemoryConfigLayerBackend();
+    const input = { nested: ['original'] };
+    memory.set('snapshot', input);
+    input.nested.push('changed');
+    const returned = memory.get('snapshot') as typeof input;
+    returned.nested.push('changed again');
+    expect(memory.get('snapshot')).toEqual({ nested: ['original'] });
+    config.destroy();
+  });
+
+  it('fails closed before host activation' , () => {
     const config = new ConfigModule();
 
     expect(() => config.get('theme')).toThrow(ConfigNotActivatedError);

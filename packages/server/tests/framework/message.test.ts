@@ -6,8 +6,8 @@ import { createTestPluginPathRoots } from '../helpers/plugin-paths';
 
 const createEditor = (
   sessionId: string,
-  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots'>,
-) => createEditorWithOptions(sessionId, { ...options, pluginPathRoots: createTestPluginPathRoots() });
+  options: Omit<Parameters<typeof createEditorWithOptions>[1], 'pluginPathRoots' | 'identity'>,
+) => createEditorWithOptions(sessionId, { ...options, identity: { userId: 'test-user', sessionId }, pluginPathRoots: createTestPluginPathRoots() });
 
 describe('MessageModule', () => {
   let messageModule: MessageModule;
@@ -20,6 +20,34 @@ describe('MessageModule', () => {
   it('registerRequest adds a request handler', () => {
     messageModule.registerRequest('plugin', 'echo', (...args) => args, 'server');
     expect(messageModule.queryRequest('plugin', 'echo')?.location).toBe('server');
+  });
+
+  it('copies route metadata on registration and query while preserving handlers and caller ACLs', async () => {
+    const methods = ['read'];
+    const callers = ['allowed'];
+    const handler = vi.fn(() => 'ok');
+    messageModule.registerRequest('owner', 'read', handler, 'server', methods, callers);
+    messageModule.registerBroadcast('owner', 'changed', vi.fn(), 'server', methods);
+    methods.push('panel.stolen');
+    callers.push('attacker');
+    const request = messageModule.queryRequest('owner', 'read')!;
+    request.plugin = 'attacker';
+    request.methods.push('panel.corrupt');
+    request.callers!.push('attacker');
+    const broadcasts = messageModule.queryBroadcast('changed');
+    broadcasts[0].methods.push('panel.corrupt');
+    broadcasts.splice(0);
+
+    expect(messageModule.queryRequest('owner', 'read')).toMatchObject({ plugin: 'owner', methods: ['read'], callers: ['allowed'], handler });
+    expect(messageModule.queryBroadcast('changed')).toHaveLength(1);
+    expect(messageModule.queryBroadcast('changed')[0].methods).toEqual(['read']);
+    await expect(messageModule.requestFrom('attacker', 'owner', 'read')).rejects.toThrow(/not permitted/);
+    await expect(messageModule.requestFrom('allowed', 'owner', 'read')).resolves.toBe('ok');
+    messageModule.clearOwner('attacker');
+    expect(messageModule.queryRequest('owner', 'read')).toBeDefined();
+    messageModule.clearOwner('owner');
+    expect(messageModule.queryRequest('owner', 'read')).toBeUndefined();
+    expect(messageModule.queryBroadcast('changed')).toEqual([]);
   });
 
   it('registerRequest throws for duplicate plugin handler', () => {

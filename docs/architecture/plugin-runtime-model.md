@@ -4,7 +4,7 @@
 `editor.plugin.define()` 声明“装载时做什么”以及可调用方法。
 
 核心实现由 workspace 包 `@itharbors/magnet` 提供。该包拥有 Manifest schema、插件身份与
-状态、入口校验和动态导入、生命周期编排、受限 runtime 构造及 owner 私有存储路径；它不依赖
+状态、入口校验和动态导入、生命周期编排、受限 runtime 构造及身份绑定的存储路径；它不依赖
 Session、Kit、Panel、Menu 或 Message 的具体实现。`@itharbors/server` 是当前宿主，通过结构化
 host 接口向核心包注入这些能力，并继续负责 Application 子进程、消息传输和浏览器路由。
 
@@ -87,14 +87,15 @@ manifest、entry 与静态贡献校验，不再用它导入 Application 插件�
 ## 两种运行时作用域
 
 普通 Kit 插件在 Session scope 中加载，仍由 Framework 进程内的 Editor 动态导入，可以访问
-`sessionId`、Kit、Panel、Window、菜单和消息。Kit 的 `startup.plugins` 在 application scope
+只读 `identity`、`sessionId`、Kit、Panel、Window、菜单和消息。Kit 的 `startup.plugins` 在 application scope
 中加载；每个唯一 package name 由一个 Supervisor 管理，并在自己的 OS 子进程中执行，只能访问：
 
 - `plugin`：定义和调用应用级插件方法；
 - `menu`：注册全局菜单贡献；
 - `message`：注册或调用仅在 Server 执行的消息；
 - `service`：按 owner 注册和查询进程级服务；
-- `host`：读取当前运行模式；仓库入口始终使用 `web`。
+- `host`：读取当前运行模式；仓库入口始终使用 `web`；
+- `paths`：应用级 Plugin 的 data/cache/temp 目录。
 
 application runtime 由白名单直接构造，不先创建完整 Editor 再删字段，因此不会泄漏
 `sessionId`、Kit、Panel、Window、Layout 或 Session config。Panel 贡献、`panel.*` 方法和
@@ -104,6 +105,29 @@ Session scope 的 server-side main 另有窄化的 `application.request(plugin, 
 调用已经运行的应用启动插件。该桥不进入 Panel runtime；会话插件可以据此转发结构化结果和
 经过校验的命令，而浏览器面板本身不能访问进程、文件系统或 ApplicationRuntime。声明宿主级
 能力的 Kit 只获得契约允许的信息，敏感操作仍由应用级后台逐次鉴权和复验。
+
+### 可信身份与默认数据范围
+
+Session 的 `PluginLoadOptions` 必须由 Host 提供
+`identity: { userId, sessionId }`。其中 `sessionId` 是 Session owner 对应的基础 Session ID；
+runtime 的只读 `identity` 是该身份的副本。既有 `runtime.sessionId` 仍用于 runtime 寻址，
+可能包含 Kit 复合地址，不能拆分它来推导可信身份。客户端或业务消息参数不能覆盖绑定。
+
+Session Plugin 使用 `SessionPluginPaths`，Application Plugin 使用不含 User 的 `PluginPaths`：
+
+| 能力 | Session Plugin 默认范围 | Application Plugin |
+| --- | --- | --- |
+| `paths.data`、`paths.cache` | User + Plugin，同 User 跨基础 Session 共享 | 应用 + Plugin |
+| `paths.sessionData`、`paths.temp` | User + 基础 Session + Plugin | 无 sessionData；temp 为应用 + Plugin |
+| `config` | User + Kit + Plugin；global 层跨 Session | 不提供 Session config |
+| `credentials` | User + Kit + Plugin | 不提供 Session Credential Vault |
+
+同一基础 Session 的不同 Kit runtime 使用同一个基础 Session 身份；路径本身不再增加 Kit 层，
+Config 和 Credentials 则保留 Kit namespace。需要 Session 专属持久数据时使用 sessionData；
+选择 temp 只表达用途，当前路径 API 不承诺按 Session 退出自动删除。
+
+Host 缺少必要身份时加载失败，不回退共享根。扩大为跨 User、跨 Plugin 或应用级共享必须另有
+显式契约；不能通过传入其他 User 或自行绑定凭据实现。
 
 ### Application 插件进程拓扑
 
@@ -140,10 +164,20 @@ OS 权限沙箱，也不把受信插件变成不受信代码。子进程仍以�
 并拥有该账号可访问的文件系统权限；`runtime.paths` 提供 owner 专属 data/cache/temp 路径，但不能
 替代操作系统访问控制。
 
-Web 宿主默认将这些路径映射到 `~/.harbors/plugins/{data,cache,temp}/<owner-key>/`；开发与正式
-启动使用同一数据根语义，并可通过统一的绝对 data root 一起切换，不以当前 checkout、worktree 或 `process.cwd()` 决定位置。`PluginInfo` 的
-`storageOwnerKey` 暴露同一个 SHA-256 owner key，供日志和诊断把哈希目录关联回 Plugin owner；它
-不是授权凭据，也不应参与业务访问控制。
+默认 data root 为 `~/.harbors`。Session data/cache 路径为
+`plugins/{data,cache}/users/<user-key>/<owner-key>/`，temp 路径为
+`plugins/temp/users/<user-key>/sessions/<session-key>/<owner-key>/`，sessionData 路径为
+`plugins/data/users/<user-key>/sessions/<session-key>/<owner-key>/`。Application 路径仍为
+`plugins/{data,cache,temp}/<owner-key>/`。三个 key 分别是 User ID、基础 Session ID、Plugin name
+的 SHA-256 hex；Plugin 使用 Host 给出的路径，不自行拼接这些目录。
+
+开发与正式启动使用同一数据根语义，可通过统一的绝对 data root 一起切换，不以 checkout、
+worktree 或 `process.cwd()` 决定位置。`PluginInfo.storageOwnerKey` 只暴露 Plugin name 的
+owner key，不能单独定位某个 User 的目录，也不是授权凭据。
+
+旧无 User 的 Session Plugin 目录、旧根下的 Config 与旧 Credential scope 原样保留，新的
+Session 绑定不读取、不迁移、不回退这些位置。升级后可能显示空历史、默认配置或缺少凭据；
+不能猜测旧数据属于哪个 User。Application 的原有应用级路径不受此规则改成 User 路径。
 
 child env 从 Framework 父环境的副本开始，然后只删除权威固定键 `HARBORS_APPLICATION_TOKEN`、
 `HARBORS_NOTIFICATION_PORT`、`HARBORS_NOTIFICATION_OWNER_TOKEN`、
@@ -262,14 +296,17 @@ Supervisor 给 initialize/load 30 秒。正常 stop 先请求 unload（启动未
 
 | 控制器 | 接收的贡献 | 运行时结果 |
 | --- | --- | --- |
-| `@itharbors/panel` | `contribute.panel` | 注册完整名 `pluginName.panelName` 和资源入口 |
-| `@itharbors/message` | `contribute.message` | 注册 request/broadcast route |
-| `@itharbors/menu` | `contribute.menu` | 归一化菜单树并触发变更 |
-| `@itharbors/config` | 配置相关贡献/能力 | 提供分层配置运行时 |
+| `panel` | `contribute.panel` | 注册完整名 `pluginName.panelName` 和资源入口 |
+| `message` | `contribute.message` | 注册 request/broadcast route |
+| `menu` | `contribute.menu` | 归一化菜单树并触发变更 |
+| `config` | 配置相关贡献/能力 | 提供分层配置运行时 |
 
-受限 runtime 默认只允许插件以自己的名字注册。只有对应的委托控制器可以代其他插件
-持有贡献，例如 `@itharbors/message` 为贡献者注册消息路由。这样 `clearOwner(pluginName)`
-才能可靠清理。
+普通 runtime 按白名单构造，注册与变更自动绑定当前 Plugin owner。`panel.unregister` 核对
+实际注册 owner；`menu.reset()` 只清理调用者自己的菜单。`clearOwner`、`requestFrom` 和
+其他 Host 控制钩子不进入普通 facade。
+
+只有 builtin 身份且名称匹配的内置贡献控制器得到处理声明贡献所需的窄化委托，例如 message 为来源
+Plugin 注册消息路由。Host 仍可按 owner 完整清理，但控制器委托不是普通 Plugin 的全局权限。
 
 除上表列出的内置贡献点外，自定义 contribution 的顶层 key 必须使用消费者插件
 `package.json` 中的 `name`，结构固定为抽象路径
@@ -296,8 +333,14 @@ detach 时清理该 owner 的全部状态和资源。上表中的内置 `panel`�
 
 ## 插件方法与消息
 
-`definition.methods` 可由 Server 中其他插件通过 `callPlugin(name, method, ...args)`
-调用。方法不存在时运行时会列出可用方法并失败。
+业务交互优先使用 request/broadcast。现有同进程同步消费者可使用
+`plugin.callPlugin(name, method, ...args)`，保留目标方法的同步返回值或其原有 Promise；
+这不是绕过消息声明的私有方法入口。
+
+Host 为普通 facade 固定 caller。目标方法必须出现在目标 manifest 的非 `*` request alias
+中，该整条 route 不含 `panel.*`，并通过该声明的 `callers` 校验。未声明的方法、只在 broadcast 中声明的方法和
+`panel.*` 方法均不可直调；同一方法有多个 request alias 时，任一 server alias 授权该 caller
+即可调用。Application 子进程的 `plugin.callPlugin` 使用相同规则。
 
 跨 Panel、跨浏览器边界的交互应使用 MessageModule：
 
@@ -306,7 +349,19 @@ detach 时清理该 owner 的全部状态和资源。上表中的内置 `panel`�
 - `location` 为 `server` 或 `browser`；
 - `panel.method` 将调用转发到具体 Panel definition 的 methods。
 
-不要把 `callPlugin` 暴露为 Panel 之间的隐式耦合。
+普通 `message.request` 也必须具备 Host 绑定 caller 的转发能力，缺少时失败，不匿名回退。
+内置 message 控制器在路由已完成 caller 校验后使用 Host dispatch 执行目标方法；该能力不
+传播给业务 Plugin。不要把 `callPlugin` 暴露为 Panel 之间的隐式耦合。
+
+## 查询快照与输入边界
+
+Plugin 的 inspect/getInfo/getRegistration、Panel 的注册与列表、Menu state、Message 路由及
+Kit 的查询结果均是独立快照；嵌套 manifest、约束、数组和权限声明也不共享内部可写引用。
+`lifecycle.attach` 给每个消费者独立的 contribution 副本。修改它们不能更改后续路由、owner
+或装配状态，合法变更仍须经过写接口。
+
+Message 注册时复制 methods/callers 数组；Config JSON 值在输入和输出时复制。业务方法返回值
+仍由其 Plugin 契约负责，不能把控制面快照保证推广为任意业务对象的自动复制。
 
 ## Application service 与异步快照
 
@@ -375,4 +430,7 @@ Server 编译产物则使用相邻的 `runner.js`。两种情况都以 `process.
 - [manifest/产物校验](../../scripts/lib/plugin-build/validate.mjs)
 
 关联阅读：[插件与 Kit 开发指南](../guides/developing-plugins-and-kits.md) ·
-[Kit 与会话模型](./kit-and-session-model.md)
+[Kit 与会话模型](./kit-and-session-model.md) ·
+[Kit 配置持久化模型](./kit-configuration-model.md) ·
+[ADR 0005](../decisions/0005-plugin-default-boundaries.md) ·
+[来源 Task](../tasks/2026-10-18-plugin-default-boundaries/task.md)

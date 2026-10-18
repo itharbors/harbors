@@ -394,8 +394,12 @@ pnpm run clean
 - `plugins/*` 和 `kits/*/plugins/*` 的 main/panel `dist/`；
 - coverage、Vite/Vitest cache 和 `*.tsbuildinfo`。
 
-Server 开发与正式入口默认共用 `~/.harbors` 完整数据根，其中包含 `harbors.db`、`config.sqlite` 和
-`plugins/{data,cache,temp}`，不再在 Server workspace 生成运行数据，也不扫描或导入项目内旧数据源。
+Server 开发与正式入口默认共用 `~/.harbors` 完整数据根，其中包含 `harbors.db`、
+`users/<user-key>/config.sqlite` 和 `plugins/{data,cache,temp}`。Session Plugin 的 data/cache
+绑定 User + Plugin，sessionData/temp 再包含基础 Session；Application Plugin 保留应用级
+owner 目录。完整布局见 [Plugin 运行时模型](../architecture/plugin-runtime-model.md)。
+新的 User 绑定不回退旧无 User 存储，也不迁移或删除旧数据；运行数据不进入 Server workspace，
+启动不扫描或导入项目内旧数据源。
 `--data-root` 优先于 `HARBORS_DATA_ROOT`；`DB_PATH` 与 Plugin 细分绝对路径变量仅作更高优先级底层覆盖。
 一个 data root 同时只应由一个 Host 使用，当前不以生命周期锁强制。
 Credential profile 元数据随数据库切换，但真实 secret 仍位于 OS Keychain。

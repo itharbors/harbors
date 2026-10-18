@@ -7,18 +7,19 @@
 ## 目标与范围
 
 Kit 可以通过 manifest 声明自己的配置层。Framework 只消费已经装配好的配置 backend，
-不直接解释宿主文件系统路径；Web 宿主负责把 manifest 的抽象 storage root 解析为受控的
-绝对路径。
+不直接解释宿主文件系统路径；Web 宿主从可信 Session owner 绑定 User，再把 manifest 的
+抽象 storage root 解析为该 User 范围内的受控绝对路径。
 
 当前模型包含：
 
 - `config` 可选声明，schema 版本为 `1`；
 - 内存 default 层和 SQLite global 层；
-- 同一个 SQLite 文件内按 Kit、层和配置键隔离；
+- 不同 User 使用不同 SQLite 文件，同一文件内按 Kit、Plugin、层和配置键隔离；
 - Kit 切换时对配置层进行 activate/deactivate 事务处理；
 - Settings 通过显式层参数写入 default 值，用户修改写入 global 层。
 
 当前模型不包含 project 配置层，也不提供旧 Kit namespace 的自动迁移或入口 alias。
+`global` 表示同一 User、Kit、Plugin 跨 Session 的配置，不表示所有 User 共享。
 
 ## Manifest 声明
 
@@ -51,7 +52,7 @@ storage 当前支持两种形式：
 ```
 
 `path` 只能是相对路径，不能包含绝对路径、反斜杠、空路径、`.`、`..` 或空路径段。
-运行时还会校验解析后的真实目录、父目录和已有文件仍位于 application-data root 内。
+运行时还会校验解析后的真实目录、父目录和已有文件仍位于绑定后的 application-data root 内。
 
 ### 当前内置声明
 
@@ -85,28 +86,35 @@ storage 当前支持两种形式：
 ## Web 宿主与存储路径
 
 `application-data` 是 manifest 使用的抽象 root，不是由 Kit 或 Plugin 自己解析的路径。
-Web 宿主默认将它解析为用户主目录下的 `~/.harbors`，也可由统一启动参数解析为自定义绝对 data root，并通过
-`configStorageRoots` 传入 Editor。宿主启动时确保该目录存在。
+Web 宿主默认的 application data root 为 `~/.harbors`，也可由统一启动参数指定绝对根。
+`configStorageRoots` 提供 Host 控制的根；Editor 根据可信 `identity.userId` 将配置根绑定为
+`<root>/users/<user-key>/`，其中 user-key 是 User ID 的 SHA-256 hex。Kit 的相对 path 在此
+根下解析，Plugin 不能通过 key 或业务参数选择其他 User。
 
 Framework 只接收抽象的 `ConfigLayerBackend`，由 config-storage 根据 Kit 声明选择内存
 backend 或 SQLite backend。这样 Framework 不感知 `~/.harbors`、当前工作目录或其他宿主
 路径约定。
 
-直接嵌入或测试调用 `createServer` 时，如果没有显式提供 `configStorageRoots`，服务端会
-回退到 `pluginPathRoots.applicationData`；显式提供的 root 必须是绝对路径。正式与开发 Web 入口都从
-`HARBORS_DATA_ROOT` 派生并显式传入相同 root，Kit 模型自身不读取启动环境。
+直接嵌入或测试调用 `createServer` 时，如果没有显式提供 `configStorageRoots`，服务端使用
+`pluginPathRoots.applicationData` 作为 Host 根，再进行相同的 User 绑定；显式提供的根必须是
+绝对路径。正式与开发 Web 入口都从 `HARBORS_DATA_ROOT` 派生根，Kit 模型自身不读取启动环境。
 
 ## SQLite 数据隔离
 
-持久化层默认使用 `~/.harbors/config.sqlite`；自定义 data root 时使用 `<root>/config.sqlite`。多个 Kit 可以共享同一个 SQLite 文件；表中
-每条配置记录由以下组合键唯一确定：
+持久化层默认使用 `~/.harbors/users/<user-key>/config.sqlite`；自定义 data root 时使用
+`<root>/users/<user-key>/config.sqlite`。同一 User 的多个 Session 与 Kit 可以打开该文件；
+表中每条配置记录由以下组合键唯一确定：
 
 ```text
-(kit_id, layer_name, key)
+(kit_id, plugin_name, layer_name, key)
 ```
 
-配置值以 JSON 文本存储。相同 Kit、相同层和相同 key 的写入执行 upsert；删除只影响该
-三元组。因而不同 Kit 或不同层之间不会互相覆盖，SQLite 文件共享不会取消 Kit 边界。
+这是既有 schema，本轮 User 绑定不修改 SQL 主键。Plugin 的 namespace 由绑定 facade
+提供，不属于 Plugin 可填写的业务参数。配置值以 JSON 文本存储；upsert 和删除只影响该
+四元组，不同 User、Kit、Plugin 或层之间不会因使用相同 key 而覆盖。
+
+旧 `<root>/config.sqlite` 不作为新 User 根的回退来源，也不自动复制到任何 User。旧文件保留，
+升级后用户可能读取到默认值；数据归属与迁移必须另行明确，不能由 Framework 猜测。
 
 SQLite backend 使用 WAL 模式，并在 backend 销毁后拒绝继续读写。数据库无法打开、路径
 越界、存储值不是合法 JSON 或 backend 已关闭时，操作失败并返回对应配置存储错误；装配
@@ -121,11 +129,18 @@ Framework 的配置模块只管理层排序、读写路由、变更事件和 bac
 - 未指定层的 `set`/`delete` 路由到 manifest 的 `writeLayer`；
 - `get`、`set`、`delete` 暂保留显式层参数，以支持 Settings 向 default 层注入默认值；
 - 不提供 Plugin 的 `registerTypes` 配置注册流程。
+- 普通 Plugin 只获得已绑定 Kit/Plugin 的 config facade，不能指定其他 namespace；
+- 内存 JSON 值在写入和读出时深复制，修改输入或返回对象不能绕过 `set` 更改配置。
 
 Settings 的默认值来自 Plugin contribution 的 `defaultValue`。它使用显式的
 `'default'` 层写入内存 backend；用户修改写入 `'global'` 层并持久化到 SQLite。重置时
 删除 global 值，读取因此回退到 default 值。当前 Settings UI 只暴露 global 选择，不暴露
 project 层。
+
+同 User 的跨 Session 配置共享不等于实时 UI 同步；本轮没有增加跨 Session 广播，其他 Session
+通过读取或刷新获取持久化变化。Config 的 `global` 与 Credential Vault 的默认范围均为
+User + Kit + Plugin；凭据由 Host 的 `bind(userId, kitId, pluginName)` 绑定，不使用旧无 User scope。
+真实 secret 仍由 Keychain 保管，配置只保存必要引用。详见 [Model Service](./model-service-plugin.md)。
 
 ## Kit 切换与事务
 
@@ -157,8 +172,8 @@ activate 会立即使新层成为当前层，并返回一次性的事务句柄�
 | --- | --- | --- |
 | `config` schemaVersion/defaultsLayer/writeLayer/layers | Manifest 声明 | 已覆盖 |
 | null 内存层与 SQLite application-data 相对路径 | Manifest 声明、Web 宿主与存储路径 | 已覆盖 |
-| Web 使用 `~/.harbors`，Framework 不解析宿主路径 | Web 宿主与存储路径 | 已覆盖 |
-| SQLite 按 Kit、层、key 隔离 | SQLite 数据隔离 | 已覆盖 |
+| Web 在统一 data root 下绑定 User 根，配置模块不解析宿主路径 | Web 宿主与存储路径 | 已覆盖 |
+| SQLite 文件按 User 隔离，记录按 Kit、Plugin、层、key 隔离 | SQLite 数据隔离 | 已覆盖 |
 | 无 project 层、Settings 默认值注入 | Framework 配置边界 | 已覆盖 |
 | Kit 切换 activate/deactivate 事务 | Kit 切换与事务 | 已覆盖 |
 
@@ -167,3 +182,6 @@ activate 会立即使新层成为当前层，并返回一次性的事务句柄�
 `git diff --check`；实现行为的测试位于 `packages/kit-core/tests/schema.test.ts`、
 `packages/server/tests/framework/config.test.ts` 和
 `packages/server/tests/config-storage/config-storage.test.ts`。
+
+关联决策：[ADR 0005](../decisions/0005-plugin-default-boundaries.md) ·
+[来源 Task](../tasks/2026-10-18-plugin-default-boundaries/task.md)

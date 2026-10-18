@@ -6,8 +6,8 @@ export class KitModule {
   private activeKitName: string | null = null;
 
   register(descriptor: KitDescriptor): KitDescriptor {
-    this.kits.set(descriptor.name, descriptor);
-    return descriptor;
+    this.kits.set(descriptor.name, structuredClone(descriptor));
+    return structuredClone(descriptor);
   }
 
   unregister(name: string): void {
@@ -18,15 +18,16 @@ export class KitModule {
   }
 
   list(): KitDescriptor[] {
-    return Array.from(this.kits.values());
+    return Array.from(this.kits.values(), (descriptor) => structuredClone(descriptor));
   }
 
   get(name: string): KitDescriptor | undefined {
-    return this.kits.get(name);
+    const descriptor = this.kits.get(name);
+    return descriptor ? structuredClone(descriptor) : undefined;
   }
 
   getCurrent(): KitDescriptor | undefined {
-    return this.activeKitName ? this.kits.get(this.activeKitName) : undefined;
+    return this.activeKitName ? this.get(this.activeKitName) : undefined;
   }
 
   switchKit(kitName: string): void {

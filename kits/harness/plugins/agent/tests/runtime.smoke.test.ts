@@ -1,6 +1,7 @@
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -26,7 +27,7 @@ describe('Agent Plugin runtime smoke', () => {
     await writeFile(path.join(workspace, '.agents/skills/oversized/SKILL.md'), `---\nname: oversized\ndescription: Oversized runtime skill\n---\n${'x'.repeat(12_100)}\n`);
     await writeFile(path.join(workspace, 'ordinary.txt'), 'ordinary workspace content\n');
     const completeRequests: any[] = [];
-    const harness = createKitAssemblyHarness({ projectRoot, kitDirectory: path.join(projectRoot, 'kits/harness'), kitName: 'harness', paths: { applicationData } });
+    const harness = createKitAssemblyHarness({ projectRoot, kitDirectory: path.join(projectRoot, 'kits/harness'), kitName: 'harness', identity: { userId: 'agent-runtime-user', sessionId: 'agent-runtime-session' }, paths: { applicationData } });
     harnesses.push(harness);
     await harness.kit.load();
     for (const name of ['getCatalog', 'complete', 'cancel']) harness.messages.unregisterRequest('model-service', name);
@@ -87,7 +88,7 @@ describe('Agent Plugin runtime smoke', () => {
     expect(toolResultsByCallId.get('read-ordinary')?.result).toContain('ordinary workspace content');
     expect(trace.find((event) => event.type === 'turn/end')?.data.loadedSkills).toEqual(['demo']);
 
-    const database = new Database(path.join(applicationData, 'config.sqlite'));
+    const database = new Database(path.join(applicationData, 'users', createHash('sha256').update('agent-runtime-user').digest('hex'), 'config.sqlite'));
     const seedCustom = (value: unknown) => database.prepare(`
       INSERT INTO config_values (kit_id, plugin_name, layer_name, key, value_json)
       VALUES ('harness', 'agent', 'global', 'agent.instructions.custom', ?)

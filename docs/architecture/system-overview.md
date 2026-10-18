@@ -22,7 +22,12 @@ flowchart LR
 
 三进程 Web Host 的网络边界是“Gateway 对外、上游回环”：Gateway 使用 IPv4 wildcard `0.0.0.0` 接受本机及局域网浏览器连接，Server 与 Vite Client 只监听 `127.0.0.1`。远程请求必须经过 Gateway 写入可信的单值 `X-Forwarded-For`，再由 Server 执行设备授权与 Session owner 检查；不得直接公开上游端口。IPv6 wildcard 不属于当前保证范围。
 
-默认布局为：Server 状态使用 `~/.harbors/harbors.db`，Kit 配置使用 `~/.harbors/config.sqlite`，Plugin owner 私有数据使用 `~/.harbors/plugins/{data,cache,temp}/<owner-sha256>/`。启动只读取当前 data root，不扫描或导入项目内旧数据库和旧 Plugin data。
+默认布局为：Server 元数据使用 `~/.harbors/harbors.db`；Kit 配置使用
+`~/.harbors/users/<user-key>/config.sqlite`，记录继续按 Kit、Plugin、层和 key 划分。
+Session Plugin 的 data/cache 使用 `plugins/{data,cache}/users/<user-key>/<owner-key>/`；
+sessionData/temp 再绑定基础 Session。Application Plugin 保留应用级 owner 目录。
+完整路径见 [Plugin 运行时模型](./plugin-runtime-model.md)。启动只读取当前 data root，
+不扫描或导入项目内旧数据库；新的 User 绑定不回退旧无 User 的 Plugin、Config 或凭据 scope。
 
 `HARBORS_DATA_ROOT` 是统一环境入口，CLI 参数优先；`DB_PATH` 与三个 `HARBORS_PLUGIN_*_ROOT` 只作为更高优先级的底层覆盖。数据根只控制文件数据：Credential profile 元数据随 SQLite 切换，真实 secret 仍在 OS Keychain；同一根同时只应由一个 Host 使用，当前是运维约束而非运行期文件锁。
 
@@ -44,7 +49,7 @@ flowchart LR
 ```mermaid
 flowchart TD
     Routes["HTTP App / Routes"] --> Registry["SessionRuntimeRegistry"]
-    Registry --> Editor["Editor(sessionId)"]
+    Registry --> Editor["Editor(基础 Session + Kit runtime)"]
     Editor --> Kit["KitModule"]
     Editor --> Plugin["PluginModule"]
     Editor --> Message["MessageModule"]
@@ -56,9 +61,16 @@ flowchart TD
     Kit --> Plugin
 ```
 
-每个 session 拥有独立 Editor。Kit、插件、布局、菜单与消息路由的权威状态在 Server；Client 只保存渲染所需快照和短暂交互状态。
+同一基础 Session 可同时有多个 Kit runtime，每个 runtime 拥有独立 Editor。Kit、插件、布局、
+菜单与消息路由的权威状态在 Server；Client 只保存渲染所需快照和短暂交互状态。
 
 Server 同时持有 User、授权设备和 Session owner 的权威关系。每个授权设备和 Session 都必须属于一个 User。所有携带基础或复合 runtime ID 的 HTTP/SSE 入口在访问 Editor 前经过同一 owner 策略；远程设备只获得绑定用户的公开摘要。Client 的裸入口按“用户 → Session → Kit”选择，持久 Session 只由 Workbench 的显式用户入口创建。
+
+Server 依据 owner 给 Session Plugin 绑定只读 User/基础 Session 身份与存储范围，业务参数
+不能替换身份。Framework 只管理这些通用边界，Conversation 等业务对象仍由 Plugin 管理。
+普通写接口限制当前 owner，控制面读取返回独立快照；request 与同步直调遵守同一声明 ACL。
+这些规则面向受信 Plugin 的正常接口使用，不是 OS 沙箱。设计依据见
+[核心原则](./core-principles.md)和[ADR 0005](../decisions/0005-plugin-default-boundaries.md)。
 
 未授权远程设备先通过匿名授权入口读取仅含 `userId` 与 `displayName` 的精简用户目录；选择用户后，Client 显式提交“当前设备申请绑定该用户”的待审批请求。状态查询是纯读取，不会因刷新自动创建申请。审批前远程端不能读取 Kit、Session 或工作台上下文；本机批准后，Server 只能把设备绑定到申请中的用户，已授权设备不能再通过申请接口切换身份。
 
