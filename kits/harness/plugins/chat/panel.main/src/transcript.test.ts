@@ -410,3 +410,24 @@ test('projector preserves both rows when consecutive users share a turn', () => 
   assert.strictEqual(second[0], first[0]);
   assert.strictEqual(second[1], first[1]);
 });
+
+test('preview growth invalidates the latest row while preserving historical rows', () => {
+  const projector = createDisplayTurnProjector();
+  const messages = messagesForTurns([1, 2]);
+  const first = traceTurn(1);
+  const second = traceTurn(2);
+  second.steps[0].preview = { id: 'preview', seq: 10, turn: 2, step: 1, text: 'A', hasToolCalls: false };
+  const before = projector.project(messages, [first, second], [], 0, true);
+  const after = projector.project(messages, [first, { ...second, steps: [{ ...second.steps[0], preview: { ...second.steps[0].preview, text: 'AB' } }] }], [], 0, true);
+  assert.equal(before[0], after[0]);
+  assert.notEqual(before[1], after[1]);
+  assert.equal(after[1].turn.steps[0].preview?.text, 'AB');
+  assert.equal(shouldCollapseTurn(after[1].turn), false);
+});
+
+test('local step zero joins the first real step instead of duplicating it', () => {
+  const local = { ...tool(1, 0, 0), name: '请求模型', result: undefined };
+  const turn = buildDisplayTurns(messagesForTurns([1]), [traceTurn(1)], [local], 0, true)[0].turn;
+  assert.deepEqual(turn.steps.map((step) => step.step), [1]);
+  assert.equal(turn.steps[0].localRequest, local);
+});

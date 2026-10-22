@@ -350,6 +350,7 @@ const MarkdownMessage = memo(function MarkdownMessage({ content, messageRequest 
 
   useEffect(() => {
     let cancelled = false;
+    setHtml(markdownHtmlCache.get(content));
 
     (async () => {
       // 先获取渲染器列表，填充 registeredRendererLanguages
@@ -647,6 +648,7 @@ function sameTraceStep(left: TraceStep | undefined, right: TraceStep | undefined
     || left.requestSeq !== right.requestSeq
     || left.model !== right.model
     || left.completed !== right.completed
+    || !sameAssistant(left.preview, right.preview)
     || !sameAssistant(left.assistant, right.assistant)
     || left.tools.length !== right.tools.length) return false;
   for (let index = 0; index < left.tools.length; index += 1) {
@@ -708,10 +710,11 @@ function reconcileSteps(
   }
 
   for (const localRequest of localRequests) {
-    const sourceIndex = sourceStepIndexes.get(localRequest.step);
+    const requestStep = localRequest.step || sourceSteps[0]?.step || 1;
+    const sourceIndex = sourceStepIndexes.get(requestStep);
     let step = sourceIndex === undefined ? undefined : steps[sourceIndex];
     if (!step) {
-      step = { turn, step: localRequest.step || 1, tools: [], completed: false };
+      step = { turn, step: requestStep, tools: [], completed: false };
       steps.push(step);
       // Keep the first matching step indexed so later local requests preserve Array.find semantics.
       sourceStepIndexes.set(step.step, steps.length - 1);
@@ -880,15 +883,18 @@ const AssistantStep = memo(function AssistantStep({
 }) {
   const request = step.localRequest;
   const isFinalResponse = turnStatus === "completed" && step.assistant && !step.assistant.hasToolCalls;
-  const thinkingText = [step.assistant?.thinking, step.assistant && !isFinalResponse ? step.assistant.text : ""].filter(Boolean).join("\n\n");
-  const finalText = isFinalResponse ? step.assistant?.text || "" : "";
+  const response = step.assistant && !step.assistant.hasToolCalls ? step.assistant : step.preview;
+  const thinkingText = [step.assistant?.thinking, step.assistant?.hasToolCalls ? step.assistant.text : ""].filter(Boolean).join("\n\n");
+  const responseLabel = step.preview
+    ? turnStatus === "running" ? "Agent · 生成中" : "Agent · 未完成"
+    : turnStatus === "running" || turnStatus === "completed" ? "Agent" : "Agent · 未完成";
   const stepPermissions = permissionRequests.filter((requestItem) => requestItem.turn === turn && requestItem.step === step.step);
 
   // 折叠时只保留最终回复，隐藏过程信息（错误、思考、工具）
   const hideProcess = collapsed;
 
   // 折叠且该 step 既无最终回复也无待处理权限请求时，不渲染以避免空白间距
-  if (hideProcess && !finalText && stepPermissions.length === 0) return null;
+  if (hideProcess && !response?.text && stepPermissions.length === 0) return null;
 
   return (
     <div className="agent-cycle">
@@ -906,11 +912,11 @@ const AssistantStep = memo(function AssistantStep({
         </div>
       )}
 
-      {finalText && (
-        <div className="agent-step-intent agent-final-response">
+      {response?.text && (
+        <div className={`agent-step-intent ${isFinalResponse ? "agent-final-response" : "agent-preview-response"}`}>
           <div className="chat-message assistant">
-            <div className="chat-message-label assistant-label">Agent</div>
-            <div className="chat-message-content"><MarkdownMessage content={finalText} messageRequest={messageRequest} /></div>
+            <div className="chat-message-label assistant-label">{responseLabel}</div>
+            <div className="chat-message-content"><MarkdownMessage content={response.text} messageRequest={messageRequest} /></div>
           </div>
         </div>
       )}

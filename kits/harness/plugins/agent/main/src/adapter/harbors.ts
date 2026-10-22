@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentChatMessage, AgentContextUsage, AgentConversation, AgentModelOption, AgentOption, AgentOptions, AgentPermissionOutcome, AgentPermissionRequester, AgentPermissionState, AgentSandboxMode, AgentTokenUsage, AgentTraceBatch, AgentTraceEvent, AgentTraceEventListener, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions, AgentTurnTerminalKind } from './base.js';
 import { normalizeTurnOptions } from './base.js';
 import { hubbertTools, runHubBertToolContent, type HubBertToolImage } from './tools.js';
 import { loadWorkspaceInstructionResult } from './instructions.js';
@@ -141,6 +141,23 @@ export type TurnInstructionProvider = (workspace: string, custom: CustomInstruct
 interface AppendEventOptions {
   surfaceOp?: AgentTraceEvent['surfaceOp'];
   sourceEventSeqs?: number[];
+  /** 已接受的 delta、工具结果和审批需要在取消后完成审计。 */
+  drain?: boolean;
+  terminal?: boolean;
+}
+
+interface TurnOutcome { terminal?: AgentTurnTerminalKind; error?: Error; }
+interface TurnExecution {
+  controller: AbortController;
+  signal: AbortSignal;
+  turn?: number;
+  requestId?: string;
+  persistenceError?: AgentModelServiceError;
+  terminalChoice?: AgentTurnTerminalKind;
+  completion: Promise<TurnOutcome>;
+  settle: (outcome: TurnOutcome) => void;
+  finalization?: Promise<TurnOutcome>;
+  stop?: Promise<boolean>;
 }
 
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
@@ -205,8 +222,7 @@ export class HarborsAdapter implements AgentAdapter {
   private readonly sessionLoads = new Map<string, Promise<StoredSession>>();
   private permissionRequester?: AgentPermissionRequester;
   private traceEventListener?: AgentTraceEventListener;
-  private readonly activeTurnControllers = new Map<string, AbortController>();
-  private readonly activeTurnCompletions = new Map<string, Promise<void>>();
+  private readonly activeTurns = new Map<string, TurnExecution>();
   private readonly loadedSkillsByTurn = new Map<string, Set<string>>();
 
   setTraceEventListener(listener?: AgentTraceEventListener): void {
@@ -273,7 +289,7 @@ export class HarborsAdapter implements AgentAdapter {
     await this.ensureInitialized();
     throwIfAborted(this.abortController.signal);
     if (!SESSION_ID_PATTERN.test(id)) throw new Error('SESSION_ID_INVALID');
-    if (this.activeTurnControllers.has(id)) throw new Error('CONVERSATION_ACTIVE');
+    if (this.activeTurns.has(id)) throw new Error('CONVERSATION_ACTIVE');
     const conversation = this.contextStore.archiveConversation(id);
     this.sessions.delete(id);
     const archivedAt = conversation.updatedAt || new Date().toISOString();
@@ -331,83 +347,126 @@ export class HarborsAdapter implements AgentAdapter {
   async sendMessage(id: string, content: string, input?: AgentTurnInput, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void, onStatus?: (status: string) => void): Promise<string> {
     await this.ensureInitialized();
     if (this.stopped) throw new Error('Harbors adapter has been stopped');
-    if (this.activeTurnControllers.has(id)) throw new Error('该会话已有正在执行的 turn');
-    const session = await this.load(id);
-    const options = normalizeTurnOptions(input);
-    if (options.sandboxMode && options.sandboxMode !== session.sandboxMode) {
-      await this.appendEvent(session, 'sandbox/mode', { mode: assertSandboxMode(options.sandboxMode) });
-    }
-    if (options.approvalPolicy && options.approvalPolicy !== session.approvalPolicy) {
-      await this.appendEvent(session, 'approval/policy', { policy: assertApprovalPolicy(options.approvalPolicy) });
-    }
-    const userMessageId = randomUUID();
-    if (session.title === '未命名对话') session.title = content.trim().slice(0, 48) || session.title;
-    const turnStart = await this.appendEvent(session, 'turn/start', (current) => {
-      const model = options.model || current.model;
-      const reasoningEffort = options.reasoningEffort || current.reasoningEffort;
-      const serviceTier = options.serviceTier || current.serviceTier;
-      const timeoutMs = options.timeoutMs ?? current.timeoutMs;
-      return {
-        turn: nextTurnNumber(current.events),
-        ...(model ? { model } : {}),
-        ...(reasoningEffort ? { reasoningEffort } : {}),
-        ...(serviceTier ? { serviceTier } : {}),
-        ...(timeoutMs !== undefined ? { timeoutMs: assertTimeoutMs(timeoutMs) } : {}),
-        ...permissionSettings(current),
-      };
-    });
-    const turn = Number(turnStart.data.turn);
-    await this.appendItemEvent(session, 'item/started', turn, 0, userMessageId, 'message', { role: 'user', content }, 'started');
-    await this.appendEvent(session, 'user/message', { turn, itemId: userMessageId, content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId, item: { kind: 'message', itemId: userMessageId, phase: 'started' } }, { surfaceOp: 'append' });
-    await this.appendItemEvent(session, 'item/delta', turn, 0, userMessageId, 'message', { content }, 'delta');
-    await this.appendItemEvent(session, 'item/completed', turn, 0, userMessageId, 'message', { role: 'user', content }, 'completed');
-    if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
-    const turnController = new AbortController();
-    const signal = AbortSignal.any([this.abortController.signal, turnController.signal]);
-    let completeTurn!: () => void;
-    const completion = new Promise<void>((resolve) => { completeTurn = resolve; });
-    this.activeTurnControllers.set(id, turnController);
-    this.activeTurnCompletions.set(id, completion);
+    if (this.activeTurns.has(id)) throw new Error('该会话已有正在执行的 turn');
+    const controller = new AbortController();
+    let settle!: TurnExecution['settle'];
+    const completion = new Promise<TurnOutcome>((resolve) => { settle = resolve; });
+    const execution: TurnExecution = { controller, signal: AbortSignal.any([this.abortController.signal, controller.signal]), completion, settle };
+    this.activeTurns.set(id, execution);
+    let session: StoredSession | undefined;
+    let response = '';
+    let failure: Error | undefined;
     try {
-      const response = await this.runTurn(session, turn, signal, onStatus, onDelta);
-      throwIfAborted(signal);
-      await this.appendEvent(session, 'turn/end', { turn, loadedSkills: [...(this.loadedSkillsByTurn.get(`${session.id}:${turn}`) || [])].sort(), reason: { kind: 'completed' } });
-      throwIfAborted(signal);
-      return response;
+      session = await this.load(id);
+      this.checkTurn(execution);
+      const options = normalizeTurnOptions(input);
+      if (options.sandboxMode && options.sandboxMode !== session.sandboxMode) {
+        await this.appendEvent(session, 'sandbox/mode', { mode: assertSandboxMode(options.sandboxMode) });
+      }
+      if (options.approvalPolicy && options.approvalPolicy !== session.approvalPolicy) {
+        await this.appendEvent(session, 'approval/policy', { policy: assertApprovalPolicy(options.approvalPolicy) });
+      }
+      const userMessageId = randomUUID();
+      if (session.title === '未命名对话') session.title = content.trim().slice(0, 48) || session.title;
+      const turnStart = await this.appendEvent(session, 'turn/start', (current) => {
+        const model = options.model || current.model;
+        const reasoningEffort = options.reasoningEffort || current.reasoningEffort;
+        const serviceTier = options.serviceTier || current.serviceTier;
+        const timeoutMs = options.timeoutMs ?? current.timeoutMs;
+        return {
+          turn: nextTurnNumber(current.events),
+          ...(model ? { model } : {}),
+          ...(reasoningEffort ? { reasoningEffort } : {}),
+          ...(serviceTier ? { serviceTier } : {}),
+          ...(timeoutMs !== undefined ? { timeoutMs: assertTimeoutMs(timeoutMs) } : {}),
+          ...permissionSettings(current),
+        };
+      });
+      const turn = Number(turnStart.data.turn);
+      execution.turn = turn;
+      await this.appendItemEvent(session, 'item/started', turn, 0, userMessageId, 'message', { role: 'user', content }, 'started');
+      await this.appendEvent(session, 'user/message', { turn, itemId: userMessageId, content: [{ type: 'text', text: content }], source: { kind: 'user' }, role: 'user', id: userMessageId, item: { kind: 'message', itemId: userMessageId, phase: 'started' } }, { surfaceOp: 'append' });
+      await this.appendItemEvent(session, 'item/delta', turn, 0, userMessageId, 'message', { content }, 'delta');
+      await this.appendItemEvent(session, 'item/completed', turn, 0, userMessageId, 'message', { role: 'user', content }, 'completed');
+      if (session.events.filter((event) => event.type === 'user/message').length === 1) await this.appendEvent(session, 'session/title', { title: session.title, messageSeqs: [session.events.at(-1)?.seq] });
+      response = await this.runTurn(session, turn, execution.signal, onStatus, onDelta);
     } catch (error) {
-      const originalEnvelope = toModelServiceErrorEnvelope(error);
-      const envelope = signal.aborted && originalEnvelope.code === 'UNKNOWN'
-        ? { code: 'MODEL_SERVICE_CANCELLED', message: '模型请求已取消', retryable: false, requestId: originalEnvelope.requestId }
-        : originalEnvelope;
-      const kind = signal.aborted || envelope.code === 'MODEL_SERVICE_CANCELLED' ? 'cancelled' : envelope.code.includes('TIMEOUT') ? 'timed_out' : envelope.code.includes('REJECT') ? 'rejected' : 'failed';
-      await this.appendEvent(session, 'turn/end', { turn, loadedSkills: [...(this.loadedSkillsByTurn.get(`${session.id}:${turn}`) || [])].sort(), reason: { kind, error: envelope } });
-      throw asModelServiceError(error, envelope);
+      failure = error instanceof Error ? error : asModelServiceError(error, toModelServiceErrorEnvelope(error, execution.requestId));
+    }
+    try {
+      const outcome = await this.finalizeTurn(execution, session, failure);
+      if (outcome.error) throw outcome.error;
+      return response;
     } finally {
-      if (this.activeTurnControllers.get(id) === turnController) this.activeTurnControllers.delete(id);
-      if (this.activeTurnCompletions.get(id) === completion) this.activeTurnCompletions.delete(id);
-      this.loadedSkillsByTurn.delete(`${session.id}:${turn}`);
-      completeTurn();
+      if (this.activeTurns.get(id) === execution) this.activeTurns.delete(id);
+      this.loadedSkillsByTurn.delete(`${id}:${execution.turn}`);
     }
   }
 
-  async stopConversation(id: string): Promise<boolean> {
-    const controller = this.activeTurnControllers.get(id);
-    if (!controller) return false;
-    controller.abort(new Error('用户已停止当前对话'));
-    const completion = this.activeTurnCompletions.get(id);
-    if (completion) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      await Promise.race([completion, new Promise<void>((resolve) => { timer = setTimeout(resolve, STOP_SETTLE_TIMEOUT_MS); })]);
-      if (timer) clearTimeout(timer);
+  stopConversation(id: string): Promise<boolean> {
+    const execution = this.activeTurns.get(id);
+    if (!execution) return Promise.resolve(false);
+    if (execution.stop) return execution.stop;
+    if (!execution.terminalChoice) execution.controller.abort(new Error('用户已停止当前对话'));
+    execution.stop = new Promise<boolean>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new AgentModelServiceError({ code: 'AGENT_STOP_TIMEOUT', message: '停止等待超时，当前对话尚未完成持久化收口', retryable: false, requestId: execution.requestId || '' })), STOP_SETTLE_TIMEOUT_MS);
+      void execution.completion.then((outcome) => {
+        clearTimeout(timer);
+        if (outcome.error && (!outcome.terminal || execution.persistenceError)) reject(outcome.error);
+        else resolve(outcome.terminal === 'cancelled');
+      });
+    });
+    // Unload/abort may initiate a stop without an external waiter.
+    void execution.stop.catch(() => undefined);
+    return execution.stop;
+  }
+
+  private checkTurn(execution: TurnExecution): void {
+    if (execution.persistenceError) throw execution.persistenceError;
+    throwIfAborted(execution.signal);
+  }
+
+  private persistenceFailure(execution: TurnExecution, error: unknown): AgentModelServiceError {
+    if (!execution.persistenceError) {
+      const original = toModelServiceErrorEnvelope(error, execution.requestId);
+      execution.persistenceError = new AgentModelServiceError({ ...original, code: original.code === 'UNKNOWN' ? 'AGENT_PERSISTENCE_FAILED' : original.code, message: error instanceof Error ? error.message : original.message, retryable: false }, error);
+      execution.controller.abort(execution.persistenceError);
     }
-    return true;
+    return execution.persistenceError;
+  }
+
+  private finalizeTurn(execution: TurnExecution, session: StoredSession | undefined, failure: Error | undefined): Promise<TurnOutcome> {
+    if (execution.finalization) return execution.finalization;
+    execution.finalization = (async (): Promise<TurnOutcome> => {
+      let outcome: TurnOutcome;
+      try {
+        if (!session || execution.turn === undefined) throw execution.persistenceError || failure || new Error('Turn 尚未提交');
+        const queued = this.eventWriteQueues.get(session.id);
+        if (queued) await queued;
+        let terminalError: Error | undefined;
+        await this.appendEvent(session, 'turn/end', () => {
+          const error = execution.persistenceError || failure;
+          let envelope = error ? toModelServiceErrorEnvelope(error, execution.requestId) : undefined;
+          if (!execution.persistenceError && execution.signal.aborted) envelope = { code: 'MODEL_SERVICE_CANCELLED', message: '模型请求已取消', retryable: false, requestId: execution.requestId || envelope?.requestId || '' };
+          const kind: AgentTurnTerminalKind = execution.persistenceError ? 'failed' : execution.signal.aborted || envelope?.code === 'MODEL_SERVICE_CANCELLED' ? 'cancelled' : envelope ? envelope.code.includes('TIMEOUT') ? 'timed_out' : envelope.code.includes('REJECT') ? 'rejected' : 'failed' : 'completed';
+          execution.terminalChoice = kind;
+          terminalError = envelope ? asModelServiceError(error, envelope) : undefined;
+          return { turn: execution.turn, loadedSkills: [...(this.loadedSkillsByTurn.get(`${session!.id}:${execution.turn}`) || [])].sort(), reason: { kind, ...(envelope ? { error: envelope } : {}) } };
+        }, { terminal: true });
+        outcome = { terminal: execution.terminalChoice, ...(terminalError ? { error: terminalError } : {}) };
+      } catch (error) {
+        const primary = execution.persistenceError;
+        outcome = { error: primary && error !== primary ? new AgentModelServiceError(primary.envelope, error) : primary || (error instanceof Error ? error : new Error(String(error))) };
+      }
+      execution.settle(outcome);
+      return outcome;
+    })();
+    return execution.finalization;
   }
 
   stop(): void {
     this.stopped = true;
-    for (const controller of this.activeTurnControllers.values()) controller.abort(new Error('Harbors adapter has been stopped'));
-    this.activeTurnControllers.clear();
-    this.activeTurnCompletions.clear();
+    for (const execution of this.activeTurns.values()) execution.controller.abort(new Error('Harbors adapter has been stopped'));
     this.abortController.abort();
   }
 
@@ -485,12 +544,14 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async runModelToolLoop(session: StoredSession, turn: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, onDelta?: (delta: string, meta?: { requestId: string; generation: string; sequence: number }) => void): Promise<string> {
+    const execution = this.activeTurns.get(session.id)!;
     const workspace = process.env.HARBORS_AGENT_WORKSPACE || session.project || process.cwd();
     let custom: CustomInstructionValidation;
     try { custom = this.instructionSettingsProvider(); } catch { custom = validateCustomInstructions(undefined, true); }
     const bundle = this.turnInstructionProvider
       ? await this.turnInstructionProvider(workspace, custom)
       : await defaultTurnInstructions(workspace, custom);
+    this.checkTurn(execution);
     const { skillCatalog } = bundle;
     const composed = bundle;
     const systemPrompt = bundle.system;
@@ -510,11 +571,13 @@ export class HarborsAdapter implements AgentAdapter {
       }
       await this.appendEvent(session, 'step/start', { turn, step });
       let deltaPersistence: Promise<void> = Promise.resolve();
+      let acceptingDeltas = true;
       let attemptedPlanId: string | undefined;
       try {
         throwIfAborted(signal);
         onStatus?.(step > 1 ? '正在根据工具结果继续推理…' : '正在请求模型服务…');
         const requestId = randomUUID();
+        execution.requestId = requestId;
         const generation = randomUUID();
         const assistantItemId = randomUUID();
         const tools = hubbertTools.map((tool) => ({ name: tool.name, description: tool.description, inputSchema: tool.input_schema }));
@@ -529,7 +592,9 @@ export class HarborsAdapter implements AgentAdapter {
           budgetBreakdown: { contextWindow, outputReserve: 16_384, safetyMargin: 2_048 },
           anchors: extractContextAnchors(session.events, turn),
         };
+        this.checkTurn(execution);
         const contextPlan = this.contextStore.buildContext({ ...contextInput, mode: contextMode });
+        this.checkTurn(execution);
         attemptedPlanId = contextPlan.planId;
         let shadowPlan: ReturnType<ContextStoreClient['buildContext']> | undefined;
         let shadowError: string | undefined;
@@ -543,17 +608,24 @@ export class HarborsAdapter implements AgentAdapter {
         await this.appendEvent(session, 'request/context', { turn, step, requestId, generation, provider: 'model-service', model, promptVersion: composed.audit.promptVersion, promptDigest: composed.audit.promptDigest, instructionSources: { custom: composed.audit.custom, workspace: composed.audit.workspace, skills: composed.audit.skills }, loadedSkills: [...loadedSkills].sort(), ...(contextPlan ? { planId: contextPlan.planId, builderVersion: contextMode, historyDigest: contextPlan.historyDigest, contextTokens: contextPlan.tokenBreakdown, contextAttempt: overflowRetries + 1, ...(previousPlanId ? { previousPlanId } : {}), ...(previousOverflowReason ? { previousOverflowReason } : {}) } : {}), ...(shadowPlan ? { shadowPlanId: shadowPlan.planId, shadowBuilderVersion: 'candidate-v1', shadowHistoryDigest: shadowPlan.historyDigest, shadowContextTokens: shadowPlan.tokenBreakdown } : {}), ...(shadowError ? { shadowBuilderVersion: 'candidate-v1', shadowError } : {}), ...turnSettings(session), ...permissionSettings(session) });
         const messages = contextPlan?.messages ?? toModelServiceMessages(session.events, session.surface);
         const response = await this.completeModel({ requestId, generation, purpose: 'turn', model, ...turnModelSettings(session), system: systemPrompt || undefined, messages, tools, maxOutputTokens: 16_384, retryMode: 'default', stream: true }, signal, (delta) => {
-          if (delta.requestId !== requestId || delta.generation !== generation || delta.sequence !== acceptedSequence) return;
+          if (!acceptingDeltas || signal.aborted || execution.persistenceError || delta.requestId !== requestId || delta.generation !== generation || delta.sequence !== acceptedSequence) return;
           acceptedSequence += 1;
           if (delta.delta.type !== 'text' || !delta.delta.text) return;
-          streamedText += delta.delta.text;
-          deltaPersistence = deltaPersistence.then(() => this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: delta.delta.text, requestId, generation, sequence: delta.sequence }, 'delta'));
-          onDelta?.(delta.delta.text, { requestId, generation, sequence: delta.sequence });
-        });
+          const text = delta.delta.text;
+          deltaPersistence = deltaPersistence.then(async () => {
+            if (execution.persistenceError) return;
+            await this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: text, requestId, generation, sequence: delta.sequence }, 'delta', true);
+            streamedText += text;
+            if (!signal.aborted) onDelta?.(text, { requestId, generation, sequence: delta.sequence });
+          }).catch((error) => { if (!execution.persistenceError) throw error; });
+          // Observe immediately, including while the Provider ignores cancellation.
+          void deltaPersistence.catch(() => undefined);
+        }).finally(() => { acceptingDeltas = false; });
         // The model completion may resolve immediately after its last delta.
         // Drain the append-only persistence chain before writing the final
         // assistant message or any terminal item/step event.
         await deltaPersistence;
+        this.checkTurn(execution);
         overflowRetries = 0;
         previousPlanId = undefined;
         previousOverflowReason = undefined;
@@ -570,9 +642,13 @@ export class HarborsAdapter implements AgentAdapter {
           await this.appendItemEvent(session, 'item/completed', turn, step, reasoningItemId, 'reasoning', { text: reasoningText }, 'completed');
         }
         await this.appendEvent(session, 'assistant/message', { turn, step, itemId: assistantItemId, ...(usage ? { usage } : {}), message: { role: 'assistant', content: message.content, ...(traceToolCalls ? { tool_calls: traceToolCalls } : {}), source: { kind: 'model', provider: 'model-service', model: response.model }, id: assistantItemId } }, { surfaceOp: 'append' });
-        if (!acceptedSequence) {
+        if (!streamedText) {
           const finalText = textContent(message.content);
-          if (finalText) { streamedText = finalText; await this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: finalText, requestId, generation, sequence: 0 }, 'delta'); onDelta?.(finalText, { requestId, generation, sequence: 0 }); }
+          if (finalText) {
+            streamedText = finalText;
+            await this.appendItemEvent(session, 'item/delta', turn, step, assistantItemId, 'message', { content: finalText, requestId, generation, sequence: 0 }, 'delta');
+            if (!signal.aborted) onDelta?.(finalText, { requestId, generation, sequence: 0 });
+          }
         }
         if (!calls.length) {
           const text = streamedText || textContent(message.content);
@@ -600,9 +676,14 @@ export class HarborsAdapter implements AgentAdapter {
         // A provider cancellation/error can race with the last append. Await
         // the chain so a rejected append is observed and never becomes an
         // unhandled rejection, and so step/end cannot overtake item/delta.
-        await deltaPersistence.catch(() => undefined);
-        await this.appendEvent(session, 'step/end', { turn, step }).catch(() => undefined);
-        if (isContextOverflowError(error) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
+        acceptingDeltas = false;
+        let failure = error;
+        try { await deltaPersistence; } catch (queueError) { failure = queueError; }
+        if (!execution.persistenceError) {
+          try { await this.appendEvent(session, 'step/end', { turn, step }, { drain: true }); }
+          catch (writeError) { failure = writeError; }
+        }
+        if (!execution.persistenceError && !signal.aborted && isContextOverflowError(failure) && overflowRetries < DEFAULT_COMPACTION_POLICY.maxOverflowRetries) {
           overflowRetries += 1;
           previousPlanId = attemptedPlanId;
           previousOverflowReason = normalizeError(error);
@@ -611,7 +692,7 @@ export class HarborsAdapter implements AgentAdapter {
             continue;
           }
         }
-        throw error;
+        throw execution.persistenceError || failure;
       }
     }
   }
@@ -624,7 +705,7 @@ export class HarborsAdapter implements AgentAdapter {
       void this.modelService.cancel(request.requestId).catch(() => undefined);
     };
     signal.addEventListener('abort', onAbort, { once: true });
-    const unsubscribe = this.modelService.onDelta?.(request.requestId, (delta) => onDelta?.(delta));
+    const unsubscribe = this.modelService.onDelta?.(request.requestId, (delta) => { if (!signal.aborted) onDelta?.(delta); });
     try {
       const response = await this.modelService.complete(request);
       if (cancelled) {
@@ -645,12 +726,15 @@ export class HarborsAdapter implements AgentAdapter {
     const results = new Array<ToolResult>(calls.length);
     let index = 0;
     while (index < calls.length) {
+      throwIfAborted(signal);
       if (isParallelTool(calls[index].name)) {
         const start = index;
         while (index < calls.length && isParallelTool(calls[index].name)) index += 1;
         const group = calls.slice(start, index).map((call, offset) => this.executeOneTool(call, workspace, signal, onStatus, session, turn, step, start + offset, skillCatalog, loadedSkills));
-        const groupResults = await Promise.all(group);
-        groupResults.forEach((result, offset) => { results[start + offset] = result; });
+        const groupResults = await Promise.allSettled(group);
+        const failure = groupResults.find((result) => result.status === 'rejected');
+        if (failure?.status === 'rejected') throw this.activeTurns.get(session.id)?.persistenceError || failure.reason;
+        groupResults.forEach((result, offset) => { if (result.status === 'fulfilled') results[start + offset] = result.value; });
       } else {
         results[index] = await this.executeOneTool(calls[index], workspace, signal, onStatus, session, turn, step, index, skillCatalog, loadedSkills);
         index += 1;
@@ -660,7 +744,10 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async executeOneTool(call: ToolCall, workspace: string, signal: AbortSignal, onStatus: ((status: string) => void) | undefined, session: StoredSession, turn: number, step: number, _index: number, skillCatalog: SkillCatalog, loadedSkills: Set<string>): Promise<ToolResult> {
+    const execution = this.activeTurns.get(session.id)!;
+    this.checkTurn(execution);
     onStatus?.(`正在执行 ${call.name}…`);
+    let toolResult: ToolResult;
     try {
       const result = call.name === 'update_conversation_state' || call.name === 'recall_history'
         ? { text: await this.executeContextTool(call, session) }
@@ -675,23 +762,25 @@ export class HarborsAdapter implements AgentAdapter {
         requestPermission: ({ toolName, currentMode, requestedMode, justification, signal: requestSignal }) => this.requestPermission(session, turn, step, call.id, toolName, currentMode, requestedMode, justification, requestSignal),
         });
       if (call.name === 'load_skill' && typeof call.input.name === 'string') loadedSkills.add(call.input.name);
-      const toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };
-      const resultItemId = `${call.id}:result`;
-      await this.appendItemEvent(session, 'item/started', turn, step, resultItemId, 'tool-result', { callId: call.id }, 'started');
-      await this.appendToolResult(session, turn, step, call, toolResult, resultItemId);
-      await this.appendItemEvent(session, 'item/completed', turn, step, resultItemId, 'tool-result', { callId: call.id, result: toolResult.content, isError: false }, 'completed');
-      await this.appendItemEvent(session, 'item/completed', turn, step, call.id, 'tool-call', { callId: call.id, name: call.name, result: toolResult.content, isError: false }, 'completed');
-      return toolResult;
+      toolResult = { content: boundedText(result.text), ...(result.image ? { image: result.image } : {}), isError: false };
     } catch (error) {
-      if (signal.aborted) throw error;
-      const toolResult = { content: normalizeError(error), isError: true };
-      const resultItemId = `${call.id}:result`;
-      await this.appendItemEvent(session, 'item/started', turn, step, resultItemId, 'tool-result', { callId: call.id }, 'started');
-      await this.appendToolResult(session, turn, step, call, toolResult, resultItemId);
-      await this.appendItemEvent(session, 'item/completed', turn, step, resultItemId, 'tool-result', { callId: call.id, result: toolResult.content, isError: true }, 'completed');
-      await this.appendItemEvent(session, 'item/completed', turn, step, call.id, 'tool-call', { callId: call.id, name: call.name, result: toolResult.content, isError: true }, 'completed');
-      return toolResult;
+      if (execution.persistenceError || signal.aborted) throw execution.persistenceError || error;
+      toolResult = { content: normalizeError(error), isError: true };
     }
+    try {
+      const resultItemId = `${call.id}:result`;
+      await this.appendItemEvent(session, 'item/started', turn, step, resultItemId, 'tool-result', { callId: call.id }, 'started', true);
+      await this.appendToolResult(session, turn, step, call, toolResult, resultItemId);
+      await this.appendItemEvent(session, 'item/completed', turn, step, resultItemId, 'tool-result', { callId: call.id, result: toolResult.content, isError: toolResult.isError }, 'completed', true);
+      await this.appendItemEvent(session, 'item/completed', turn, step, call.id, 'tool-call', { callId: call.id, name: call.name, result: toolResult.content, isError: toolResult.isError }, 'completed', true);
+    } catch (error) {
+      const persisted = this.persistenceFailure(execution, error);
+      persisted.message = `工具 ${call.id} 的结果未能确认：${persisted.message}`;
+      persisted.envelope.message = persisted.message;
+      throw persisted;
+    }
+    this.checkTurn(execution);
+    return toolResult;
   }
 
   private async executeContextTool(call: ToolCall, session: StoredSession): Promise<string> {
@@ -729,33 +818,46 @@ export class HarborsAdapter implements AgentAdapter {
   }
 
   private async requestPermission(session: StoredSession, turn: number, step: number, callId: string, toolName: string, currentMode: AgentSandboxMode, requestedMode: AgentSandboxMode, justification: string, signal?: AbortSignal): Promise<AgentPermissionOutcome> {
+    const execution = this.activeTurns.get(session.id)!;
     const requestId = randomUUID();
     await this.appendItemEvent(session, 'item/started', turn, step, requestId, 'approval', { requestId, callId, toolName, requestedMode }, 'started');
     await this.appendEvent(session, 'approval/asked', { requestId, turn, step, itemId: requestId, callId, toolName, currentMode, requestedMode, justification, item: { kind: 'approval', itemId: requestId, phase: 'started' } });
     const turnId = [...session.events].reverse().find((event) => event.type === 'turn/start' && event.data.turn === turn)?.data.turnId;
+    let committed: Promise<AgentPermissionOutcome> | undefined;
+    const commitOutcome = (choice: AgentPermissionOutcome): Promise<AgentPermissionOutcome> => {
+      if (committed) return committed;
+      committed = (async () => {
+        if (execution.persistenceError) throw execution.persistenceError;
+        const outcome = signal?.aborted || execution.signal.aborted ? 'cancelled' : choice;
+        await this.appendEvent(session, 'approval/resolved', { requestId, turn, step, itemId: requestId, callId, toolName, requestedMode, outcome, item: { kind: 'approval', itemId: requestId, phase: 'completed', snapshot: { outcome } } }, { drain: true });
+        await this.appendItemEvent(session, 'item/completed', turn, step, requestId, 'approval', { requestId, callId, toolName, outcome }, 'completed', true);
+        return outcome;
+      })();
+      void committed.catch(() => undefined);
+      return committed;
+    };
     let outcome: AgentPermissionOutcome;
     if (signal?.aborted || this.abortController.signal.aborted) outcome = 'cancelled';
     else if (session.approvalPolicy === 'always') outcome = 'allowed-once';
     else if (!this.permissionRequester) outcome = 'unavailable';
     else {
       try {
-        outcome = await this.permissionRequester({ requestId, conversationId: session.id, ...(typeof turnId === 'string' ? { turnId } : {}), itemId: requestId, turn, step, toolName, currentMode, requestedMode, justification, signal });
-      } catch {
+        outcome = await this.permissionRequester({ requestId, conversationId: session.id, ...(typeof turnId === 'string' ? { turnId } : {}), itemId: requestId, turn, step, toolName, currentMode, requestedMode, justification, signal }, commitOutcome);
+      } catch (error) {
+        if (execution.persistenceError) throw execution.persistenceError;
         outcome = signal?.aborted || this.abortController.signal.aborted ? 'cancelled' : 'unavailable';
       }
     }
     if (!['allowed-once', 'rejected', 'cancelled', 'unavailable', 'timed_out'].includes(outcome)) outcome = 'unavailable';
-    await this.appendEvent(session, 'approval/resolved', { requestId, turn, step, itemId: requestId, callId, toolName, requestedMode, outcome, item: { kind: 'approval', itemId: requestId, phase: 'completed', snapshot: { outcome } } });
-    await this.appendItemEvent(session, 'item/completed', turn, step, requestId, 'approval', { requestId, callId, toolName, outcome }, 'completed');
-    return outcome;
+    return commitOutcome(outcome);
   }
 
-  private async appendItemEvent(session: StoredSession, type: 'item/started' | 'item/delta' | 'item/completed', turn: number, step: number, itemId: string, kind: 'message' | 'reasoning' | 'tool-call' | 'tool-result' | 'approval', payload: unknown, phase: 'started' | 'delta' | 'completed'): Promise<void> {
-    await this.appendEvent(session, type, { turn, step, itemId, item: { kind, itemId, phase, ...(phase === 'delta' ? { delta: payload } : { snapshot: payload }) } });
+  private async appendItemEvent(session: StoredSession, type: 'item/started' | 'item/delta' | 'item/completed', turn: number, step: number, itemId: string, kind: 'message' | 'reasoning' | 'tool-call' | 'tool-result' | 'approval', payload: unknown, phase: 'started' | 'delta' | 'completed', drain = false): Promise<void> {
+    await this.appendEvent(session, type, { turn, step, itemId, item: { kind, itemId, phase, ...(phase === 'delta' ? { delta: payload } : { snapshot: payload }) } }, { drain });
   }
 
   private async appendToolResult(session: StoredSession, turn: number, step: number, call: ToolCall, result: ToolResult, resultItemId: string): Promise<void> {
-    await this.appendEvent(session, 'tool/result', { turn, step, itemId: resultItemId, item: { kind: 'tool-result', itemId: resultItemId, phase: 'completed', snapshot: { callId: call.id, result: result.content, isError: result.isError } }, message: { source: { kind: 'tool', callId: call.id }, content: [{ type: 'tool-result', toolCallId: call.id, content: [{ type: 'text', text: result.content }], ...(result.isError ? { isError: true } : {}) }], role: 'user', id: randomUUID() }, ...(result.image ? { image: result.image } : {}), ...(result.isError ? { error: { name: 'ToolError', code: 'TOOL_FAILED' } } : {}) }, { surfaceOp: 'append' });
+    await this.appendEvent(session, 'tool/result', { turn, step, itemId: resultItemId, item: { kind: 'tool-result', itemId: resultItemId, phase: 'completed', snapshot: { callId: call.id, result: result.content, isError: result.isError } }, message: { source: { kind: 'tool', callId: call.id }, content: [{ type: 'tool-result', toolCallId: call.id, content: [{ type: 'text', text: result.content }], ...(result.isError ? { isError: true } : {}) }], role: 'user', id: randomUUID() }, ...(result.image ? { image: result.image } : {}), ...(result.isError ? { error: { name: 'ToolError', code: 'TOOL_FAILED' } } : {}) }, { surfaceOp: 'append', drain: true });
   }
 
   private async compactIfNeeded(session: StoredSession, turn: number | null, step: number, model: string, contextWindow: number, onStatus: ((status: string) => void) | undefined, signal: AbortSignal, force: boolean): Promise<boolean> {
@@ -884,56 +986,68 @@ export class HarborsAdapter implements AgentAdapter {
     options: AppendEventOptions,
   ): Promise<AgentTraceEvent> {
     return this.enqueueSessionWrite(session.id, async () => {
-      const beforeWrite = this.storedSessionFromContextStore(session.id);
-      if ((beforeWrite.events.at(-1)?.seq ?? -1) !== (session.events.at(-1)?.seq ?? -1)) {
-        reconcileStoredSession(session, beforeWrite);
+      const execution = this.activeTurns.get(session.id);
+      const { drain, terminal, ...eventOptions } = options;
+      if (execution && !terminal) {
+        if (execution.persistenceError) throw execution.persistenceError;
+        if (!drain) this.checkTurn(execution);
       }
-      const rawData = typeof dataInput === 'function' ? dataInput(session) : dataInput;
-      const previous = session.events.at(-1);
-      const turn = typeof rawData.turn === 'number' && Number.isSafeInteger(rawData.turn) && rawData.turn > 0 ? rawData.turn : undefined;
-      const previousTurn = turn === undefined ? undefined : [...session.events].reverse().find((candidate) => candidate.type === 'turn/start' && candidate.data.turn === turn);
-      const turnId = typeof rawData.turnId === 'string' && rawData.turnId
-        ? rawData.turnId
-        : typeof previousTurn?.data.turnId === 'string' && previousTurn.data.turnId
-          ? previousTurn.data.turnId
-          : type === 'turn/start' && turn !== undefined ? randomUUID() : undefined;
-      const itemId = typeof rawData.itemId === 'string' && rawData.itemId ? rawData.itemId : undefined;
-      const requestId = typeof rawData.requestId === 'string' && rawData.requestId ? rawData.requestId : undefined;
-      const data = {
-        ...rawData,
-        conversationId: typeof rawData.conversationId === 'string' && rawData.conversationId ? rawData.conversationId : session.id,
-        ...(turnId ? { turnId } : {}),
-        ...(itemId ? { itemId } : {}),
-        ...(requestId ? { requestId } : {}),
-      };
-      const item = rawData.item && typeof rawData.item === 'object' && !Array.isArray(rawData.item) ? rawData.item as Record<string, unknown> : undefined;
-      const event = this.contextStore.appendEvent({
-        conversationId: session.id,
-        idempotencyKey: randomUUID(),
-        event: {
-          type,
-          time: Date.now(),
-          data,
+      try {
+        const beforeWrite = this.storedSessionFromContextStore(session.id);
+        if ((beforeWrite.events.at(-1)?.seq ?? -1) !== (session.events.at(-1)?.seq ?? -1)) {
+          reconcileStoredSession(session, beforeWrite);
+        }
+        const rawData = typeof dataInput === 'function' ? dataInput(session) : dataInput;
+        const previous = session.events.at(-1);
+        const turn = typeof rawData.turn === 'number' && Number.isSafeInteger(rawData.turn) && rawData.turn > 0 ? rawData.turn : undefined;
+        const previousTurn = turn === undefined ? undefined : [...session.events].reverse().find((candidate) => candidate.type === 'turn/start' && candidate.data.turn === turn);
+        const turnId = typeof rawData.turnId === 'string' && rawData.turnId
+          ? rawData.turnId
+          : typeof previousTurn?.data.turnId === 'string' && previousTurn.data.turnId
+            ? previousTurn.data.turnId
+            : type === 'turn/start' && turn !== undefined ? randomUUID() : undefined;
+        const itemId = typeof rawData.itemId === 'string' && rawData.itemId ? rawData.itemId : undefined;
+        const requestId = typeof rawData.requestId === 'string' && rawData.requestId ? rawData.requestId : undefined;
+        const data = {
+          ...rawData,
+          conversationId: typeof rawData.conversationId === 'string' && rawData.conversationId ? rawData.conversationId : session.id,
           ...(turnId ? { turnId } : {}),
           ...(itemId ? { itemId } : {}),
           ...(requestId ? { requestId } : {}),
-          ...(typeof item?.kind === 'string' ? { itemKind: item.kind as AgentTraceEvent['itemKind'] } : {}),
-          ...(typeof item?.phase === 'string' ? { itemPhase: item.phase as AgentTraceEvent['itemPhase'] } : {}),
-          ...options,
-        },
-      });
-      if (event.seq === (previous?.seq ?? -1) + 1) {
-        session.events.push(event);
-        session.surface = applySurfaceEvent(session.surface, event);
-        session.updatedAt = new Date(event.time).toISOString();
-        applySessionEventState(session, event);
-      } else {
-        reconcileStoredSession(session, this.storedSessionFromContextStore(session.id));
-        if (!session.events.some((candidate) => candidate.seq === event.seq && candidate.type === event.type)) throw new Error('EVENT_SEQUENCE_INVALID');
+        };
+        const item = rawData.item && typeof rawData.item === 'object' && !Array.isArray(rawData.item) ? rawData.item as Record<string, unknown> : undefined;
+        const event = this.contextStore.appendEvent({
+          conversationId: session.id,
+          idempotencyKey: randomUUID(),
+          event: {
+            type,
+            time: Date.now(),
+            data,
+            ...(turnId ? { turnId } : {}),
+            ...(itemId ? { itemId } : {}),
+            ...(requestId ? { requestId } : {}),
+            ...(typeof item?.kind === 'string' ? { itemKind: item.kind as AgentTraceEvent['itemKind'] } : {}),
+            ...(typeof item?.phase === 'string' ? { itemPhase: item.phase as AgentTraceEvent['itemPhase'] } : {}),
+            ...eventOptions,
+          },
+        });
+        if (event.seq === (previous?.seq ?? -1) + 1) {
+          session.events.push(event);
+          session.surface = applySurfaceEvent(session.surface, event);
+          session.updatedAt = new Date(event.time).toISOString();
+          applySessionEventState(session, event);
+        } else {
+          reconcileStoredSession(session, this.storedSessionFromContextStore(session.id));
+          if (!session.events.some((candidate) => candidate.seq === event.seq && candidate.type === event.type)) throw new Error('EVENT_SEQUENCE_INVALID');
+        }
+        try { this.traceEventListener?.(session.id, { ...event, data: { ...event.data } }); }
+        catch (error) { console.warn('[agent] trace event listener failed after persistence:', error); }
+        return event;
+      } catch (error) {
+        if (terminal && execution?.persistenceError) throw error;
+        if (execution) throw this.persistenceFailure(execution, error);
+        throw error;
       }
-      try { this.traceEventListener?.(session.id, { ...event, data: { ...event.data } }); }
-      catch (error) { console.warn('[agent] trace event listener failed after persistence:', error); }
-      return event;
     });
   }
 

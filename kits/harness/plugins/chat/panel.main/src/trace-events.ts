@@ -2,6 +2,7 @@
  * 将 Harbors 轨迹事件解析为可读的过程消息。
  * 纯函数模块，便于单元测试。
  */
+import { applyProtocolEvents, createProtocolState } from './event-protocol.js';
 
 export interface TraceEvent {
   type: string;
@@ -60,6 +61,8 @@ export interface TraceStep {
   requestSeq?: number;
   model?: string;
   assistant?: ModelProcessEntry;
+  /** 已提交增量形成的非最终正文，不能作为完成快照。 */
+  preview?: ModelProcessEntry;
   tools: ToolProcessEntry[];
   completed: boolean;
 }
@@ -165,7 +168,8 @@ function assistantMessageDetails(value: unknown): { text: string; thinking: stri
   const content = message.content;
   let text = '';
   let thinking = '';
-  let hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  let hasToolCalls = (Array.isArray(message.tool_calls) && message.tool_calls.length > 0)
+    || (Array.isArray(message.toolCalls) && message.toolCalls.length > 0);
   if (typeof content === 'string') text = content;
   else if (Array.isArray(content)) {
     for (const block of content) {
@@ -242,10 +246,26 @@ function stepKey(turn: number, step: number): string {
  * 按 trace 的 turn + step 重建模型执行过程，供刷新后的历史消息和实时消息共用。
  * 不把同一 turn 的多个 step 压平，模型消息、工具调用和结果都留在原 step 内。
  */
-export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
+export function parseTraceTurns(events: TraceEvent[], expectedConversationId?: string): TraceTurn[] {
   const turns = new Map<number, TraceTurn>();
   const steps = new Map<string, TraceStep>();
-  const orderedEvents = [...events].sort((left, right) => left.seq - right.seq);
+  const orderedEvents = events.filter((event) => !expectedConversationId
+    || ((!event.conversationId || event.conversationId === expectedConversationId)
+      && (!event.data.conversationId || event.data.conversationId === expectedConversationId)))
+    .sort((left, right) => left.seq - right.seq);
+  const conversationId = expectedConversationId || orderedEvents.find((event) => event.type.startsWith('item/'))?.conversationId
+    || String(orderedEvents.find((event) => event.type.startsWith('item/'))?.data.conversationId || '');
+  // 新 Item 的旧 surface 事件不能越过 completed 快照成为最终正文。
+  const canonicalIds = new Set(orderedEvents.filter((event) => event.type.startsWith('item/'))
+    .flatMap((event) => [event.itemId, event.data.itemId]).filter((id): id is string => typeof id === 'string' && id.length > 0));
+  const terminalSeqs = new Map<number, number>();
+  for (const event of orderedEvents) {
+    const turn = Number(event.data.turn) || 0;
+    if (event.type === 'turn/end' && !terminalSeqs.has(turn)) terminalSeqs.set(turn, event.seq);
+  }
+  const visibleEvents = orderedEvents.filter((event) => event.seq <= (terminalSeqs.get(Number(event.data.turn) || 0) ?? Infinity));
+  const protocol = applyProtocolEvents(createProtocolState(conversationId), visibleEvents);
+  const bySeq = new Map(protocol.events.map((event) => [event.seq, event]));
   const ensureStep = (turn: number, step: number): TraceStep => {
     const key = stepKey(turn, step);
     const existing = steps.get(key);
@@ -258,7 +278,7 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
     return created;
   };
 
-  for (const event of orderedEvents) {
+  for (const event of visibleEvents) {
     const turn = Number(event.data.turn) || 0;
     if (event.type === 'turn/start' || event.type === 'turn/end') {
       const turnEntry = turns.get(turn) || { turn, steps: [] };
@@ -272,7 +292,7 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
             ? 'rejected'
             : reason?.kind === 'timed_out' || reason?.kind === 'timeout'
               ? 'timed_out'
-              : failure ? 'failed' : 'completed';
+              : reason?.kind === 'failed' || failure ? 'failed' : 'completed';
         turnEntry.terminal = {
           status,
           seq: event.seq,
@@ -289,6 +309,8 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
         current.requestSeq = event.seq;
         if (typeof event.data.model === 'string' && event.data.model) current.model = event.data.model;
       } else if (event.type === 'assistant/message') {
+        const message = event.data.message as Record<string, unknown> | undefined;
+        if ([event.itemId, event.data.itemId, message?.id].some((id) => typeof id === 'string' && canonicalIds.has(id))) continue;
         const details = assistantMessageDetails(event.data.message);
         current.assistant = {
           id: `assistant-${event.seq}`,
@@ -305,7 +327,32 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
     }
   }
 
-  for (const entry of parseTraceEvents(orderedEvents)) {
+  for (const item of protocol.items.values()) {
+    if (item.kind !== 'message') continue;
+    const started = bySeq.get(item.startedSeq);
+    const startedSnapshot = (started?.data.item as { snapshot?: { role?: string } } | undefined)?.snapshot;
+    if (startedSnapshot?.role !== 'assistant') continue;
+    const turn = Number(started?.data.turn);
+    const step = Number(started?.data.step);
+    if (!Number.isSafeInteger(turn) || turn <= 0 || !Number.isSafeInteger(step) || step <= 0) continue;
+    const current = ensureStep(turn, step);
+    // 同一步骤重试模型请求时，使用最后 started 的 Item，不能留下前一次的预览。
+    current.assistant = undefined;
+    current.preview = undefined;
+    if (item.completedSeq !== undefined) {
+      if (item.completedSeq > (terminalSeqs.get(turn) ?? Infinity)) continue;
+      const snapshot = item.snapshot as Record<string, unknown> | undefined;
+      if (snapshot?.role !== 'assistant') continue;
+      const details = assistantMessageDetails(snapshot);
+      current.assistant = { id: item.itemId, seq: item.completedSeq, turn, step, text: details.text,
+        ...(details.thinking ? { thinking: details.thinking } : {}), hasToolCalls: details.hasToolCalls };
+    } else {
+      const text = item.deltas.map((delta) => typeof delta === 'string' ? delta : contentText((delta as { content?: unknown } | null)?.content)).join('');
+      if (text) current.preview = { id: item.itemId, seq: item.startedSeq, turn, step, text, hasToolCalls: false };
+    }
+  }
+
+  for (const entry of parseTraceEvents(visibleEvents)) {
     if (entry.name === 'Agent 回合') {
       const turnEntry = turns.get(entry.turn) || { turn: entry.turn, steps: [] };
       if (!turns.has(entry.turn)) turns.set(entry.turn, turnEntry);
@@ -324,7 +371,7 @@ export function parseTraceTurns(events: TraceEvent[]): TraceTurn[] {
       if (trailing && !trailing.completed) {
         const phase: TraceIncompletePhase = trailing.tools.some((tool) => tool.result === undefined)
           ? 'tool_execution'
-          : trailing.assistant
+          : trailing.assistant || trailing.preview
             ? 'model_response'
             : trailing.requestSeq !== undefined
               ? 'model_request'

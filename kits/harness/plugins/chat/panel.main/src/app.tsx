@@ -4,7 +4,7 @@ import { createTraceSyncRunGate, createTraceSyncState, mergeTraceEvents, mergeTr
 import { parseTraceTurns, parseSurfaceMessages, type ToolProcessEntry, type TraceEvent, type TraceTurn } from './trace-events.js';
 import Transcript, { nextDisplayTurn } from './transcript.js';
 import { captureLinkClick, createLinkClickedPayload, createLinkClickSequenceGate } from './link-click.js';
-import { applyMessageDeltaUpdates, createMessageDeltaScheduler, shouldIgnorePendingBottomScroll, type MessageDeltaUpdate } from './update-scheduler.js';
+import { shouldIgnorePendingBottomScroll } from './update-scheduler.js';
 import { readModelCatalogPayload, selectModelForCatalog, type ModelCatalogOption } from './model-catalog.js';
 import { validateKnownProject } from './directory-picker.js';
 import './index.css';
@@ -415,7 +415,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
   const tracePageRequestSeqRef = useRef(0);
   const traceOlderLoadingRef = useRef(false);
   const olderScrollAnchorRef = useRef<{ top: number; height: number } | null>(null);
-  const messageDeltaSchedulerRef = useRef<ReturnType<typeof createMessageDeltaScheduler> | null>(null);
   const bottomScrollFrameRef = useRef<number | null>(null);
   const bottomScrollGenerationRef = useRef(0);
   const permissionRequestSeqRef = useRef(0);
@@ -442,18 +441,17 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   const publishTraceState = (id: string, state: TraceSyncState): void => {
     if (conversationIdRef.current !== id) return;
-    setTraceTurns(parseTraceTurns(state.events));
+    // 外层路由使用 harbors:adapterId，持久化事件保留 adapterId。
+    const traceConversationId = id.startsWith('harbors:') ? id.slice('harbors:'.length) : id;
+    setTraceTurns(parseTraceTurns(state.events, traceConversationId));
     const derived = parseSurfaceMessages(state.events) as MessageData[];
     setMessages((current) => {
       const confirmed = new Set(derived.map((message) => `${message.role}\u0000${message.content}`));
-      // 保留仍在流式输出、轨迹尚未落盘的临时消息：给该会话发送时的乐观 user 消息（opt-）、以及 delta 推送的 assistant 消息（msg-）。
+      // 只保留尚未被轨迹确认的本次 user 消息；正文预览由已提交的 Item delta 重建。
       const keepOptimistic = sendingRef.current && sendingConversationRef.current === id
         ? current.filter((message) => message.id.startsWith('opt-') && !confirmed.has(`${message.role}\u0000${message.content}`))
         : [];
-      const keepStreaming = sendingRef.current && sendingConversationRef.current === id
-        ? current.filter((message) => message.id.startsWith('msg-') && message.role === 'assistant' && message.content && !confirmed.has(`${message.role}\u0000${message.content}`))
-        : [];
-      return [...derived, ...keepOptimistic, ...keepStreaming];
+      return [...derived, ...keepOptimistic];
     });
   };
 
@@ -709,13 +707,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
 
   useEffect(() => {
     let disposed = false;
-    const messageDeltaScheduler = createMessageDeltaScheduler((updates: MessageDeltaUpdate[]) => {
-      if (disposed) return;
-      setMessages((current) => applyMessageDeltaUpdates(current, updates) as MessageData[]);
-    });
-    messageDeltaSchedulerRef.current = messageDeltaScheduler;
-    const cancelPendingMessageDeltas = (): void => { messageDeltaScheduler.cancel(); };
-    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; cancelPendingMessageDeltas(); cancelBottomScroll(); olderScrollAnchorRef.current = null; shouldFollowLatestRef.current = true; conversationIdRef.current = null; projectRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
+    const clearConversation = () => { loadSeqRef.current += 1; permissionRequestSeqRef.current += 1; cancelBottomScroll(); olderScrollAnchorRef.current = null; shouldFollowLatestRef.current = true; conversationIdRef.current = null; projectRef.current = null; resetTraceState(null); traceSyncErrorRef.current = null; stopRequestedRef.current = false; setConversationId(null); setDraft(false); setProject(null); setMessages([]); setPendingMessages([]); setLoading(false); setSending(false); setStopping(false); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setError(null); setConfigurationError(null); setTraceTurns([]); setLocalProcessEntries([]); setPermissionRequests([]); setResolvingPermissionId(null); };
     const enterDraft = (value: unknown) => {
       const draftData = value as DraftData | null;
       const nextProject = draftData?.project || null;
@@ -728,17 +720,16 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
         setProject(selectedProject);
         return;
       }
-      cancelPendingMessageDeltas();
       cancelBottomScroll();
       olderScrollAnchorRef.current = null;
       const seq = ++loadSeqRef.current;
       if (traceStateRef.current.conversationId !== id) resetTraceState(id);
       // 该会话是否正在执行中：后端 active 集合 或 本地正在给它发送
       const targetActive = activeConversationsRef.current.has(id) || sendingConversationRef.current === id;
-      const preserveSending = (sendingRef.current && sendingConversationRef.current === id) || targetActive;
+      const preserveLocalRequest = sendingRef.current && sendingConversationRef.current === id && pendingConversationIdRef.current === id;
       shouldFollowLatestRef.current = true;
       conversationIdRef.current = id;
-      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); projectRef.current = selectedProject; setProject(selectedProject); setLoading(true); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); if (!preserveSending) { setMessages([]); setTraceTurns([]); setLocalProcessEntries([]); }
+      setConversationId(id); setSource(sourceFromId(id)); setDraft(false); projectRef.current = selectedProject; setProject(selectedProject); setLoading(true); setPermissionOptions(null); setSandboxMode(''); setApprovalPolicy(''); setContextUsage(null); setPermissionRequests([]); setResolvingPermissionId(null); setSending(targetActive); if (!targetActive) setStopping(false); setError(null); setConfigurationError(null); setMessages([]); setTraceTurns([]); if (!preserveLocalRequest) setLocalProcessEntries([]);
       // 首次只拉最近完整 turn；更早 turn 由顶部滚动分页补入
       void loadTrace(id, seq).finally(() => { if (!disposed && seq === loadSeqRef.current) setLoading(false); });
       loadPermissionRequests(id);
@@ -795,17 +786,10 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
           setSending(true);
         } else if (sendingConversationRef.current !== current) {
           // 后端已结束，且本地也不是正在给该会话发送 → 解锁
-          messageDeltaScheduler.flush();
           void syncTraceSince(current);
           setSending(false);
           setStopping(false);
         }
-      }
-    });
-    registerSetter('agent.message.delta', (value: unknown) => {
-      const delta = value as { conversationId?: string; messageId?: string; content?: string; delta?: string; requestId?: string; generation?: string; sequence?: number } | null;
-      if (!disposed && delta?.conversationId === conversationIdRef.current && delta.messageId) {
-        messageDeltaScheduler.enqueue({ messageId: delta.messageId, content: typeof delta.content === 'string' ? delta.content : '', ...(typeof delta.delta === 'string' ? { delta: delta.delta } : {}), ...(typeof delta.requestId === 'string' ? { requestId: delta.requestId } : {}), ...(typeof delta.generation === 'string' ? { generation: delta.generation } : {}), ...(Number.isSafeInteger(delta.sequence) ? { sequence: delta.sequence } : {}) });
       }
     });
     registerSetter('agent.message.status', (value: unknown) => {
@@ -819,8 +803,7 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
       // 面板可能在会话已经开始后才收到 conversation.changed；progress 是当前回合运行态的直接信号。
       if (progress.phase === 'running' || progress.phase === 'waiting_permission') setSending(true);
       if (progress.phase === 'completed' || progress.phase === 'error') {
-        // completed/error 可能紧跟最后一个 delta 到达，先提交当前帧队列再补拉轨迹。
-        messageDeltaScheduler.flush();
+        // 终态可能紧跟最后一个已提交 delta 到达，补拉同一轨迹序列。
         void syncTraceSince(statusConversationId);
       }
       if (progress.phase === 'waiting_permission') {
@@ -834,8 +817,6 @@ export default function App({ ctx, registerSetter }: { ctx: any; registerSetter:
     });
     return () => {
       disposed = true;
-      messageDeltaScheduler.cancel();
-      if (messageDeltaSchedulerRef.current === messageDeltaScheduler) messageDeltaSchedulerRef.current = null;
       cancelBottomScroll();
     };
   }, [ctx, registerSetter]);

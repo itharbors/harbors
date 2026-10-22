@@ -288,6 +288,7 @@ export async function runHubBertToolContent(name: string, input: Record<string, 
   } catch (error) {
     if (!(error instanceof SandboxPermissionRequiredError)) throw error;
     const mode = await requestSandboxMode(name, input, permission, error.requestedMode, signal, error.message);
+    throwIfToolAborted(signal);
     const retryInput = { ...input };
     delete retryInput.sandbox_permissions;
     delete retryInput.justification;
@@ -379,6 +380,7 @@ function matchesImageSignature(data: Buffer, mediaType: HubBertToolImage['mediaT
 
 async function runWrite(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
   const mode = await resolveToolMode('write', input, permission, signal);
+  throwIfToolAborted(signal);
   const filePath = required(input.file_path, 'file_path');
   const content = typeof input.content === 'string' ? input.content : '';
   const target = resolveToolPath(root, filePath, mode);
@@ -410,6 +412,7 @@ function parseEditItems(input: Record<string, unknown>): EditItem[] {
 
 async function runEdit(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
   const mode = await resolveToolMode('edit', input, permission, signal);
+  throwIfToolAborted(signal);
   const filePath = required(input.file_path, 'file_path');
   const edits = parseEditItems(input);
   const target = resolveToolPath(root, filePath, mode);
@@ -429,6 +432,7 @@ async function runEdit(root: string, input: Record<string, unknown>, permission?
 
 async function runMove(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
   const mode = await resolveToolMode('move', input, permission, signal);
+  throwIfToolAborted(signal);
   const source = required(input.source, 'source');
   const destination = required(input.destination, 'destination');
   const overwrite = Boolean(input.overwrite);
@@ -444,6 +448,7 @@ async function runMove(root: string, input: Record<string, unknown>, permission?
 
 async function runDelete(root: string, input: Record<string, unknown>, permission?: HubBertToolPermissionContext, signal?: AbortSignal): Promise<string> {
   const mode = await resolveToolMode('delete', input, permission, signal);
+  throwIfToolAborted(signal);
   const path = required(input.path, 'path');
   const recursive = Boolean(input.recursive);
   const target = resolveToolPath(root, path, mode);
@@ -526,6 +531,7 @@ async function runGrep(root: string, input: Record<string, unknown>, signal?: Ab
 
 async function runBash(root: string, input: Record<string, unknown>, signal?: AbortSignal, permission?: HubBertToolPermissionContext): Promise<string> {
   const mode = await resolveToolMode('bash', input, permission, signal);
+  throwIfToolAborted(signal);
   const command = required(input.command, 'command');
   const timeoutMs = Math.min(BASH_TIMEOUT_MS, Math.max(1, Math.floor(Number(input.timeoutMs) || BASH_TIMEOUT_MS)));
   const workdirArg = string(input.workdir);
@@ -547,43 +553,72 @@ class ToolExecutionError extends Error {
 
 function executeBash(command: string, cwd: string, timeoutMs: number, signal?: AbortSignal): Promise<BashResult> {
   return new Promise((resolveResult, rejectResult) => {
-    const child = spawn('bash', ['-c', command], { cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    let child: ReturnType<typeof spawn>;
+    try { child = spawn('bash', ['-c', command], { cwd, detached: process.platform !== 'win32', stdio: ['ignore', 'pipe', 'pipe'] }); }
+    catch (error) {
+      rejectResult(new ToolExecutionError('BASH_SPAWN_FAILED', `bash 启动失败：${error instanceof Error ? error.message : String(error)}`, { cause: error }));
+      return;
+    }
     let stdout = '';
     let stderr = '';
     let settled = false;
+    let spawned = false;
+    let terminationError: Error | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const finish = (error?: Error, result?: BashResult) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
       signal?.removeEventListener('abort', onAbort);
+      child.stdout?.off('data', onStdout);
+      child.stderr?.off('data', onStderr);
+      child.off('spawn', onSpawn);
+      child.off('error', onError);
+      child.off('close', onClose);
       if (error) rejectResult(error); else resolveResult(result || { stdout, stderr });
     };
-    const kill = () => {
+    const terminate = (error: Error) => {
+      if (terminationError || settled) return;
+      terminationError = error;
       try {
-        if (process.platform !== 'win32' && child.pid) process.kill(-child.pid, 'SIGKILL');
-        else child.kill('SIGKILL');
-      } catch { /* the process may have exited between close and kill */ }
+        const sent = process.platform !== 'win32' && child.pid ? process.kill(-child.pid, 'SIGKILL') : child.kill('SIGKILL');
+        if (!sent) throw new Error('bash 终止请求未送达，继续等待进程退出');
+      } catch (killError) {
+        // A failed kill is diagnostic only; close remains the execution barrier.
+        if (terminationError.cause === undefined) {
+          try { terminationError.cause = killError; } catch { /* abort reasons may be immutable */ }
+        }
+      }
     };
-    const onAbort = () => { kill(); finish(signal?.reason instanceof Error ? signal.reason : new Error('Tool execution aborted')); };
+    const onAbort = () => terminate(signal?.reason instanceof Error ? signal.reason : new Error('Tool execution aborted'));
     const append = (kind: 'stdout' | 'stderr', chunk: Buffer) => {
+      if (terminationError || settled) return;
       const value = chunk.toString('utf8');
       if (kind === 'stdout') stdout += value; else stderr += value;
       if (Buffer.byteLength(stdout) > MAX_OUTPUT * 8 || Buffer.byteLength(stderr) > MAX_OUTPUT * 8) {
-        kill();
-        finish(new ToolExecutionError('BASH_OUTPUT_LIMIT', `bash 输出超过 ${MAX_OUTPUT * 8} 字节限制`));
+        terminate(new ToolExecutionError('BASH_OUTPUT_LIMIT', `bash 输出超过 ${MAX_OUTPUT * 8} 字节限制`));
       }
     };
-    child.stdout.on('data', (chunk: Buffer) => append('stdout', chunk));
-    child.stderr.on('data', (chunk: Buffer) => append('stderr', chunk));
-    child.once('error', (error) => finish(new ToolExecutionError('BASH_SPAWN_FAILED', `bash 启动失败：${error.message}`, { cause: error })));
-    child.once('close', (code, terminationSignal) => {
+    const onStdout = (chunk: Buffer) => append('stdout', chunk);
+    const onStderr = (chunk: Buffer) => append('stderr', chunk);
+    const onSpawn = () => { spawned = true; };
+    const onError = (error: Error) => {
+      if (!spawned) return finish(new ToolExecutionError('BASH_SPAWN_FAILED', `bash 启动失败：${error.message}`, { cause: error }));
+      terminate(new ToolExecutionError('BASH_PROCESS_ERROR', `bash 进程错误：${error.message}`, { cause: error }));
+    };
+    const onClose = (code: number | null, terminationSignal: NodeJS.Signals | null) => {
       if (settled) return;
+      if (terminationError) return finish(terminationError);
       if (code === 0 && !terminationSignal) return finish(undefined, { stdout, stderr });
       const detail = terminationSignal ? `被信号 ${terminationSignal} 终止` : `退出码 ${code ?? 'unknown'}`;
       finish(new ToolExecutionError(terminationSignal ? 'BASH_SIGNAL' : 'BASH_NONZERO_EXIT', `bash 执行失败：${detail}${stderr ? `：${cap(stderr)}` : ''}`));
-    });
-    timer = setTimeout(() => { kill(); finish(new ToolExecutionError('BASH_TIMEOUT', `bash 执行超时（${timeoutMs}ms）`)); }, timeoutMs);
+    };
+    child.stdout?.on('data', onStdout);
+    child.stderr?.on('data', onStderr);
+    child.once('spawn', onSpawn);
+    child.on('error', onError);
+    child.once('close', onClose);
+    timer = setTimeout(() => terminate(new ToolExecutionError('BASH_TIMEOUT', `bash 执行超时（${timeoutMs}ms）`)), timeoutMs);
     if (signal?.aborted) onAbort(); else signal?.addEventListener('abort', onAbort, { once: true });
   });
 }
@@ -636,6 +671,7 @@ async function requestSandboxMode(toolName: string, input: Record<string, unknow
   const currentMode = permission?.sandboxMode || 'workspace-write';
   if (!permission?.requestPermission) throw new Error(`sandbox escalation to "${requestedMode}" requires approval, but no approval channel is available`);
   const outcome = await permission.requestPermission({ toolName, currentMode, requestedMode, justification: justification || string(input.description), signal });
+  throwIfToolAborted(signal);
   switch (outcome) {
     case 'allowed-once': return requestedMode;
     case 'rejected': throw new Error(`用户拒绝将 ${toolName} 提升到 "${requestedMode}" 权限`);

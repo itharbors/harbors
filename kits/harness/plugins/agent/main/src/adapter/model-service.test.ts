@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { ChildProcess } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -9,6 +10,59 @@ import { HarborsAdapter, type ContextStoreClient, type ModelServiceClient } from
 function createAdapter(client: ModelServiceClient, storage: string): { adapter: HarborsAdapter; store: ContextStore } {
   const store = new ContextStore(storage);
   return { adapter: new HarborsAdapter(client, store as unknown as ContextStoreClient), store };
+}
+
+function deferred<T = any>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; });
+  return { promise, resolve, reject };
+}
+
+async function waitFor(check: () => unknown) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail('test fixture did not reach the expected boundary');
+}
+
+async function durabilityFixture(t: any) {
+  const storage = await mkdtemp(join(tmpdir(), 'agent-durability-'));
+  const pending = deferred();
+  const listeners = new Map<string, (delta: any) => void>();
+  const requests: any[] = [];
+  const cancellations: string[] = [];
+  const client: ModelServiceClient = {
+    async getCatalog() { return { models: [{ id: 'test-model', name: 'Test' }], defaultModel: 'test-model' }; },
+    complete(request) { requests.push(request); return pending.promise; },
+    async cancel(id) { cancellations.push(id); return { requestId: id, state: 'cancelled' }; },
+    onDelta(id, listener) { listeners.set(id, listener); return () => listeners.delete(id); },
+  };
+  const { adapter, store } = createAdapter(client, storage);
+  const conversation = await adapter.createConversation(storage, { sandboxMode: 'danger-full-access', approvalPolicy: 'always' });
+  const sends: Promise<unknown>[] = [];
+  t.after(async () => {
+    adapter.stop();
+    pending.resolve({ requestId: requests[0]?.requestId || '', model: 'test-model', message: { role: 'assistant', content: 'late' } });
+    await Promise.allSettled(sends);
+    store.close();
+    await rm(storage, { recursive: true, force: true });
+  });
+  return {
+    adapter, store, storage, client, conversation, pending, requests, cancellations, listeners,
+    send(onDelta?: (text: string) => void) {
+      const sending = adapter.sendMessage(conversation.id, 'hello', undefined, onDelta);
+      sends.push(sending);
+      void sending.catch(() => undefined);
+      return sending;
+    },
+    respond() { pending.resolve({ requestId: requests[0].requestId, model: 'test-model', message: { role: 'assistant', content: 'done' } }); },
+    delta(sequence: number, text: string) {
+      const request = requests[0];
+      listeners.get(request.requestId)?.({ requestId: request.requestId, generation: request.generation, sequence, delta: { type: 'text', text } });
+    },
+  };
 }
 
 test('停止 turn 会通过 model-service cancel 当前 requestId', async () => {
@@ -298,7 +352,7 @@ test('Agent 只转发匹配 generation 且连续 sequence 的文本 delta，并�
     assert.equal(itemEvents.filter((event) => event.itemPhase === 'started' && event.itemKind === 'message').length, 2);
     assert.equal(itemEvents.filter((event) => event.itemPhase === 'delta' && event.itemKind === 'message').length, 3);
     assert.equal(itemEvents.filter((event) => event.itemPhase === 'completed' && event.itemKind === 'message').length, 2);
-    const assistantItemId = itemEvents.find((event) => event.itemKind === 'message' && event.itemPhase === 'started' && event.data.turn === 1)?.itemId;
+    const assistantItemId = itemEvents.find((event) => event.itemKind === 'message' && event.itemPhase === 'started' && event.data.item.snapshot.role === 'assistant')?.itemId;
     const assistantItemEvents = itemEvents.filter((event) => event.itemId === assistantItemId);
     const lastDelta = Math.max(...assistantItemEvents.filter((event) => event.itemPhase === 'delta').map((event) => event.seq));
     const firstCompleted = Math.min(...assistantItemEvents.filter((event) => event.itemPhase === 'completed').map((event) => event.seq));
@@ -339,4 +393,494 @@ test('停止 turn 会把 AbortSignal 传到权限审批等待并记录 cancelled
     store.close();
     await rm(storage, { recursive: true, force: true });
   }
+});
+
+test('stream delta commit/trace/通知串行，completed不能越过延迟队列', async (t) => {
+  const f = await durabilityFixture(t);
+  const order: string[] = [];
+  const originalAppend = f.store.appendEvent.bind(f.store);
+  f.store.appendEvent = ((input: any) => {
+    const event = originalAppend(input);
+    if (event.type === 'item/delta' && event.data.item.delta?.requestId) order.push(`commit:${event.data.item.delta.sequence}`);
+    return event;
+  }) as any;
+  f.adapter.setTraceEventListener((_id, event) => {
+    if (event.type === 'item/delta' && event.data.item.delta?.requestId) order.push(`trace:${event.data.item.delta.sequence}`);
+  });
+  const sending = f.send((text) => order.push(`delta:${text}`));
+  await waitFor(() => f.requests.length);
+  const gate = deferred<void>();
+  (f.adapter as any).eventWriteQueues.set(f.conversation.id, gate.promise);
+  f.delta(0, 'a');
+  f.delta(1, 'b');
+  f.respond();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(order, []);
+  const blockedTrace = await f.adapter.getConversationTrace(f.conversation.id);
+  assert.equal(blockedTrace.some((event) => event.type === 'step/end' || event.type === 'turn/end'), false);
+  gate.resolve();
+  assert.equal(await sending, 'ab');
+  assert.deepEqual(order, ['commit:0', 'trace:0', 'delta:a', 'commit:1', 'trace:1', 'delta:b']);
+});
+
+test('Stop排空已接受delta队列，只提交审计事实而不广播delta或提前terminal', async (t) => {
+  const f = await durabilityFixture(t);
+  const deltas: string[] = [];
+  const sending = f.send((text) => deltas.push(text));
+  await waitFor(() => f.requests.length);
+  const gate = deferred<void>();
+  (f.adapter as any).eventWriteQueues.set(f.conversation.id, gate.promise);
+  f.delta(0, 'accepted-a');
+  f.delta(1, 'accepted-b');
+  const stopping = f.adapter.stopConversation(f.conversation.id);
+  f.respond();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+  gate.resolve();
+  assert.equal(await stopping, true);
+  await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.deepEqual(deltas, []);
+  const trace = await f.adapter.getConversationTrace(f.conversation.id);
+  assert.deepEqual(trace.filter((event) => event.type === 'item/delta' && event.data.item.delta?.requestId).map((event) => event.data.item.delta.content), ['accepted-a', 'accepted-b']);
+  assert.equal(trace.filter((event) => event.type === 'turn/end').length, 1);
+});
+
+test('fallback delta提交后的trace触发Stop，不再广播delta', async (t) => {
+  const f = await durabilityFixture(t);
+  const deltas: string[] = [];
+  let stopping!: Promise<boolean>;
+  f.adapter.setTraceEventListener((_id, event) => {
+    if (event.type === 'item/delta' && event.data.item.delta?.requestId) stopping = f.adapter.stopConversation(f.conversation.id);
+  });
+  const sending = f.send((text) => deltas.push(text));
+  await waitFor(() => f.requests.length);
+  f.respond();
+  await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.equal(await stopping, true);
+  assert.deepEqual(deltas, []);
+  const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].data.reason.kind, 'cancelled');
+});
+
+test('delta首个写错关闭generation并优先于Provider错误，晚到chunk不广播', async (t) => {
+  const f = await durabilityFixture(t);
+  const originalAppend = f.store.appendEvent.bind(f.store);
+  let deltaWrites = 0;
+  f.store.appendEvent = ((input: any) => {
+    if (input.event.type === 'item/delta' && input.event.data.item.delta?.requestId) {
+      deltaWrites += 1;
+      throw Object.assign(new Error('delta disk failed'), { code: 'STORE_TEST_FAILED' });
+    }
+    return originalAppend(input);
+  }) as any;
+  const deltas: string[] = [];
+  const sending = f.send((text) => deltas.push(text));
+  await waitFor(() => f.requests.length);
+  const late = f.listeners.get(f.requests[0].requestId)!;
+  f.delta(0, 'uncommitted');
+  f.delta(1, 'queued');
+  await waitFor(() => f.cancellations.length);
+  late({ requestId: f.requests[0].requestId, generation: f.requests[0].generation, sequence: 2, delta: { type: 'text', text: 'late' } });
+  f.pending.reject(Object.assign(new Error('provider failed'), { code: 'PROVIDER_ERROR', requestId: f.requests[0].requestId }));
+  await assert.rejects(sending, (error: any) => error.code === 'STORE_TEST_FAILED' && error.requestId === f.requests[0].requestId && /disk failed/.test(error.message));
+  assert.deepEqual(deltas, []);
+  assert.equal(deltaWrites, 1);
+  assert.deepEqual(f.cancellations, [f.requests[0].requestId]);
+  const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].data.reason.kind, 'failed');
+  assert.equal(ends[0].data.reason.error.code, 'STORE_TEST_FAILED');
+});
+
+test('Provider失败后的step清理写失败保留为持久化首错', async (t) => {
+  const f = await durabilityFixture(t);
+  const append = f.store.appendEvent.bind(f.store);
+  f.store.appendEvent = ((input: any) => {
+    if (input.event.type === 'step/end') throw Object.assign(new Error('step cleanup disk failed'), { code: 'STEP_WRITE_FAILED' });
+    return append(input);
+  }) as any;
+  const sending = f.send();
+  await waitFor(() => f.requests.length);
+  f.pending.reject(Object.assign(new Error('provider failed'), { code: 'PROVIDER_FAILED' }));
+  await assert.rejects(sending, (error: any) => error.code === 'STEP_WRITE_FAILED' && error.requestId === f.requests[0].requestId);
+  const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+  assert.equal(ends.length, 1);
+  assert.equal(ends[0].data.reason.error.code, 'STEP_WRITE_FAILED');
+});
+
+test('Stop终态写失败使send/重复Stop都reject且只尝试一次terminal', async (t) => {
+  const f = await durabilityFixture(t);
+  const originalAppend = f.store.appendEvent.bind(f.store);
+  let terminalWrites = 0;
+  f.store.appendEvent = ((input: any) => {
+    if (input.event.type === 'turn/end') {
+      terminalWrites += 1;
+      throw Object.assign(new Error('terminal failed'), { code: 'TERMINAL_WRITE_FAILED' });
+    }
+    return originalAppend(input);
+  }) as any;
+  const sending = f.send();
+  await waitFor(() => f.requests.length);
+  const stopping = f.adapter.stopConversation(f.conversation.id);
+  assert.equal(f.adapter.stopConversation(f.conversation.id), stopping);
+  f.respond();
+  await assert.rejects(stopping, (error: any) => error.code === 'TERMINAL_WRITE_FAILED');
+  await assert.rejects(sending, (error: any) => error.code === 'TERMINAL_WRITE_FAILED');
+  assert.equal(terminalWrites, 1);
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+});
+
+test('completed提交锁点前Stop选cancelled，锁点后Stop不改写completed', async (t) => {
+  for (const at of ['before', 'append-entry', 'after'] as const) {
+    await t.test(at, async (t) => {
+      const f = await durabilityFixture(t);
+      let stopping: Promise<boolean> | undefined;
+      if (at === 'before') f.adapter.setTraceEventListener((_id, event) => {
+        if (event.type === 'step/end') stopping = f.adapter.stopConversation(f.conversation.id);
+      });
+      else {
+        const original = f.store.appendEvent.bind(f.store);
+        f.store.appendEvent = ((input: any) => {
+          if (at === 'append-entry' && input.event.type === 'turn/end') stopping = f.adapter.stopConversation(f.conversation.id);
+          const event = original(input);
+          if (at === 'after' && event.type === 'turn/end') stopping = f.adapter.stopConversation(f.conversation.id);
+          return event;
+        }) as any;
+      }
+      const sending = f.send();
+      await waitFor(() => f.requests.length);
+      f.respond();
+      if (at === 'before') await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+      else assert.equal(await sending, 'done');
+      assert.equal(await stopping, at === 'before');
+      const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+      assert.equal(ends.length, 1);
+      assert.equal(ends[0].data.reason.kind, at === 'before' ? 'cancelled' : 'completed');
+    });
+  }
+});
+
+test('completed已锁定但terminal提交失败时Stop和send共享失败，不补写cancelled', async (t) => {
+  const f = await durabilityFixture(t);
+  const append = f.store.appendEvent.bind(f.store);
+  let stopping!: Promise<boolean>;
+  let terminalWrites = 0;
+  f.store.appendEvent = ((input: any) => {
+    if (input.event.type === 'turn/end') {
+      terminalWrites += 1;
+      stopping = f.adapter.stopConversation(f.conversation.id);
+      throw Object.assign(new Error('completed terminal failed'), { code: 'COMPLETED_WRITE_FAILED' });
+    }
+    return append(input);
+  }) as any;
+  const sending = f.send();
+  await waitFor(() => f.requests.length);
+  f.respond();
+  await assert.rejects(sending, (error: any) => error.code === 'COMPLETED_WRITE_FAILED');
+  await assert.rejects(stopping, (error: any) => error.code === 'COMPLETED_WRITE_FAILED');
+  assert.equal(terminalWrites, 1);
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+});
+
+test('已提交delta前缀保留，后续delta和terminal都写失败时仍返回首个Store错误', async (t) => {
+  const f = await durabilityFixture(t);
+  const append = f.store.appendEvent.bind(f.store);
+  const deltas: string[] = [];
+  let terminalWrites = 0;
+  f.store.appendEvent = ((input: any) => {
+    if (input.event.type === 'item/delta' && input.event.data.item.delta?.sequence === 1) {
+      throw Object.assign(new Error('middle delta failed'), { code: 'FIRST_STORE_FAILURE' });
+    }
+    if (input.event.type === 'turn/end') {
+      terminalWrites += 1;
+      throw Object.assign(new Error('terminal also failed'), { code: 'SECOND_STORE_FAILURE' });
+    }
+    return append(input);
+  }) as any;
+  const sending = f.send((text) => deltas.push(text));
+  await waitFor(() => f.requests.length);
+  f.delta(0, 'committed');
+  await waitFor(() => deltas.length === 1);
+  f.delta(1, 'failed');
+  f.delta(2, 'queued');
+  await waitFor(() => f.cancellations.length);
+  const stopping = f.adapter.stopConversation(f.conversation.id);
+  f.pending.reject(Object.assign(new Error('provider failed later'), { code: 'PROVIDER_FAILED' }));
+  const isFirstFailure = (error: any) => error.code === 'FIRST_STORE_FAILURE' && error.requestId === f.requests[0].requestId && error.cause?.code === 'SECOND_STORE_FAILURE';
+  await assert.rejects(sending, isFirstFailure);
+  await assert.rejects(stopping, isFirstFailure);
+  assert.deepEqual(deltas, ['committed']);
+  assert.equal(terminalWrites, 1);
+  const trace = await f.adapter.getConversationTrace(f.conversation.id);
+  assert.deepEqual(trace.filter((event) => event.type === 'item/delta' && event.data.item.delta?.requestId).map((event) => event.data.item.delta.content), ['committed']);
+  assert.equal(trace.some((event) => event.type === 'turn/end'), false);
+});
+
+test('不响应cancel的Provider令Stop超时reject，保持busy直到真实返回再唯一收口', async (t) => {
+  const f = await durabilityFixture(t);
+  const deltas: string[] = [];
+  assert.equal(await f.adapter.stopConversation(f.conversation.id), false);
+  const sending = f.send((text) => deltas.push(text));
+  await waitFor(() => f.requests.length);
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const stopping = f.adapter.stopConversation(f.conversation.id);
+  assert.equal(f.adapter.stopConversation(f.conversation.id), stopping);
+  const timeout = assert.rejects(stopping, (error: any) => error.code === 'AGENT_STOP_TIMEOUT' && error.requestId === f.requests[0].requestId);
+  t.mock.timers.tick(10_000);
+  await timeout;
+  t.mock.timers.reset();
+  assert.equal(f.adapter.stopConversation(f.conversation.id), stopping);
+  await assert.rejects(f.adapter.sendMessage(f.conversation.id, 'second'), /已有正在执行/);
+  f.delta(0, 'late');
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+  f.respond();
+  await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.deepEqual(deltas, []);
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end').length, 1);
+});
+
+test('真实bash未close时Stop超时且保持busy，退出后才提交唯一cancelled', { skip: process.platform === 'win32', timeout: 10_000 }, async (t) => {
+  const f = await durabilityFixture(t);
+  const script = join(f.storage, 'waiting-child.cjs');
+  const ready = join(f.storage, 'child-ready');
+  const exit = join(f.storage, 'child-exit');
+  await writeFile(script, `const fs = require('node:fs'); fs.writeFileSync(process.argv[2], String(process.pid)); setInterval(() => { if (fs.existsSync(process.argv[3])) process.exit(0); }, 10);`);
+  const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+  const command = `exec ${[process.execPath, script, ready, exit].map(quote).join(' ')}`;
+  const originalKill = process.kill;
+  const originalEmit = ChildProcess.prototype.emit;
+  let child: ChildProcess | undefined;
+  let closed = false;
+  let killRequests = 0;
+  let modelCalls = 0;
+  let sending: Promise<unknown> | undefined;
+  ChildProcess.prototype.emit = function (event, ...args) {
+    if (event === 'spawn' && this.spawnargs.includes(command)) {
+      child = this;
+      this.once('close', () => { closed = true; });
+    }
+    return originalEmit.call(this, event, ...args);
+  };
+  process.kill = ((pid: number, signal?: string | number) => {
+    if (child?.pid && pid === -child.pid && signal === 'SIGKILL') { killRequests += 1; return false; }
+    return originalKill(pid, signal);
+  }) as typeof process.kill;
+  f.client.complete = async (request) => {
+    modelCalls += 1;
+    return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: [{ id: 'waiting-bash', name: 'bash', arguments: JSON.stringify({ command, timeoutMs: 60_000 }) }] } };
+  };
+  try {
+    sending = f.send();
+    await waitFor(() => child?.pid);
+    const pid = child!.pid!;
+    await waitFor(() => { try { return originalKill(pid, 0); } catch { return false; } });
+    // The marker proves the real process entered its gate before Stop.
+    let readyPid = '';
+    for (let i = 0; i < 500 && !readyPid; i += 1) {
+      try { readyPid = await readFile(ready, 'utf8'); } catch { await new Promise((resolve) => setTimeout(resolve, 2)); }
+    }
+    assert.equal(Number(readyPid), pid);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const stopping = f.adapter.stopConversation(f.conversation.id);
+    assert.equal(f.adapter.stopConversation(f.conversation.id), stopping);
+    const timeout = assert.rejects(stopping, (error: any) => error.code === 'AGENT_STOP_TIMEOUT');
+    t.mock.timers.tick(10_000);
+    await timeout;
+    t.mock.timers.reset();
+    assert.equal(killRequests, 1);
+    assert.equal(closed, false);
+    assert.equal(originalKill(pid, 0), true);
+    assert.equal(f.adapter.stopConversation(f.conversation.id), stopping);
+    await assert.rejects(f.adapter.sendMessage(f.conversation.id, 'next'), /已有正在执行/);
+    assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+    await writeFile(exit, '');
+    await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+    assert.equal(closed, true);
+    assert.equal(modelCalls, 1);
+    const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+    assert.equal(ends.length, 1);
+    assert.equal(ends[0].data.reason.kind, 'cancelled');
+  } finally {
+    t.mock.timers.reset();
+    process.kill = originalKill;
+    ChildProcess.prototype.emit = originalEmit;
+    if (child?.pid && !closed) { try { originalKill(-child.pid, 'SIGKILL'); } catch (error: any) { if (error.code !== 'ESRCH') throw error; } }
+    if (sending) await Promise.allSettled([sending]);
+  }
+});
+
+test('Provider失败终态已锁定提交时Stop返回false，send保留原错误', async (t) => {
+  for (const [code, kind] of [['PROVIDER_FAILED', 'failed'], ['MODEL_TIMEOUT', 'timed_out'], ['MODEL_REJECTED', 'rejected']]) {
+    await t.test(kind, async (t) => {
+      const f = await durabilityFixture(t);
+      let stopping!: Promise<boolean>;
+      const append = f.store.appendEvent.bind(f.store);
+      f.store.appendEvent = ((input: any) => {
+        const event = append(input);
+        if (event.type === 'turn/end') stopping = f.adapter.stopConversation(f.conversation.id);
+        return event;
+      }) as any;
+      const sending = f.send();
+      await waitFor(() => f.requests.length);
+      f.pending.reject(Object.assign(new Error('upstream failed'), { code, requestId: f.requests[0].requestId }));
+      await assert.rejects(sending, (error: any) => error.code === code);
+      assert.equal(await stopping, false);
+      const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+      assert.equal(ends.length, 1);
+      assert.equal(ends[0].data.reason.kind, kind);
+    });
+  }
+});
+
+test('catalog 的 falsy 拒绝或抛出会失败收口并允许下一个 Turn', async (t) => {
+  for (const [label, reason] of [['undefined', undefined], ['null', null], ['false', false], ['0', 0], ['empty string', '']] as const) {
+    for (const mode of ['reject', 'throw'] as const) {
+      await t.test(`${mode} ${label}`, async (t) => {
+        const f = await durabilityFixture(t);
+        const getCatalog = f.client.getCatalog;
+        f.client.getCatalog = mode === 'reject' ? () => Promise.reject(reason) : () => { throw reason; };
+        await assert.rejects(f.send(), (error: any) => {
+          assert.equal(error.code, 'UNKNOWN');
+          assert.equal(error.message, '模型服务请求失败');
+          assert.equal(error.retryable, false);
+          assert.equal(error.requestId, '');
+          return true;
+        });
+        assert.equal(f.requests.length, 0);
+        const ends = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+        assert.equal(ends.length, 1);
+        assert.deepEqual(ends[0].data.reason, { kind: 'failed', error: { code: 'UNKNOWN', message: '模型服务请求失败', retryable: false, requestId: '' } });
+
+        f.client.getCatalog = getCatalog;
+        const next = f.send();
+        await waitFor(() => f.requests.length);
+        f.respond();
+        assert.equal(await next, 'done');
+        assert.equal(f.requests.length, 1);
+        const nextEnds = (await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end');
+        assert.deepEqual(nextEnds.map((event) => event.data.reason.kind), ['failed', 'completed']);
+        assert.notEqual(nextEnds[0].data.turn, nextEnds[1].data.turn);
+      });
+    }
+  }
+});
+
+test('catalog和同步buildContext边界的Stop不继续请求模型', async (t) => {
+  for (const at of ['catalog', 'context'] as const) {
+    await t.test(at, async (t) => {
+      const f = await durabilityFixture(t);
+      let stopping: Promise<boolean> | undefined;
+      if (at === 'catalog') {
+        const catalog = f.client.getCatalog;
+        f.client.getCatalog = () => { stopping = f.adapter.stopConversation(f.conversation.id); return catalog(); };
+      } else {
+        const build = f.store.buildContext.bind(f.store);
+        f.store.buildContext = ((input: any) => { stopping = f.adapter.stopConversation(f.conversation.id); return build(input); }) as any;
+      }
+      await assert.rejects(f.send(), (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+      assert.equal(await stopping, true);
+      assert.equal(f.requests.length, 0);
+    });
+  }
+});
+
+test('instruction provider忽略取消时保持busy，真实返回后不再请求模型', async (t) => {
+  const f = await durabilityFixture(t);
+  const gate = deferred<any>();
+  let entered = false;
+  (f.adapter as any).turnInstructionProvider = () => { entered = true; return gate.promise; };
+  const sending = f.send();
+  await waitFor(() => entered);
+  const stopping = f.adapter.stopConversation(f.conversation.id);
+  await new Promise((resolve) => setImmediate(resolve));
+  await assert.rejects(f.adapter.sendMessage(f.conversation.id, 'next'), /已有正在执行/);
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+  gate.resolve({});
+  await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.equal(await stopping, true);
+  assert.equal(f.requests.length, 0);
+});
+
+test('Turn准备期间已占位，取消未提交turn不会伪造durable terminal', async (t) => {
+  const f = await durabilityFixture(t);
+  const gate = deferred<void>();
+  const load = (f.adapter as any).load.bind(f.adapter);
+  (f.adapter as any).load = async (id: string) => { await gate.promise; return load(id); };
+  const sending = f.send();
+  await waitFor(() => (f.adapter as any).activeTurns.has(f.conversation.id));
+  await assert.rejects(f.adapter.sendMessage(f.conversation.id, 'concurrent'), /已有正在执行/);
+  const stopping = f.adapter.stopConversation(f.conversation.id);
+  gate.resolve();
+  await assert.rejects(sending, /停止/);
+  await assert.rejects(stopping, /停止/);
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/start' || event.type === 'turn/end'), false);
+});
+
+test('mutation结果各持久化边界失败均终止，不补写普通错误或重跑工具', async (t) => {
+  for (const boundary of ['started', 'result', 'completed', 'call-completed']) {
+    await t.test(boundary, async (t) => {
+      const f = await durabilityFixture(t);
+      let requests = 0;
+      f.client.complete = async (request) => {
+        requests += 1;
+        return { requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: [{ id: 'mutation', name: 'bash', arguments: JSON.stringify({ command: 'printf x >> mutation-count' }) }] } };
+      };
+      const append = f.store.appendEvent.bind(f.store);
+      let failures = 0;
+      f.store.appendEvent = ((input: any) => {
+        const event = input.event;
+        if (failures === 0 && ((boundary === 'result' && event.type === 'tool/result') || (boundary === 'started' && event.type === 'item/started' && event.itemKind === 'tool-result') || (boundary === 'completed' && event.type === 'item/completed' && event.itemKind === 'tool-result') || (boundary === 'call-completed' && event.type === 'item/completed' && event.itemKind === 'tool-call'))) {
+          failures += 1;
+          throw Object.assign(new Error('result disk failed'), { code: 'RESULT_WRITE_FAILED' });
+        }
+        return append(input);
+      }) as any;
+      await assert.rejects(f.send(), (error: any) => error.code === 'RESULT_WRITE_FAILED' && /结果未能确认/.test(error.message));
+      assert.equal(await readFile(join(f.storage, 'mutation-count'), 'utf8'), 'x');
+      assert.equal(requests, 1);
+      assert.equal(failures, 1);
+      const trace = await f.adapter.getConversationTrace(f.conversation.id);
+      assert.equal(trace.filter((event) => event.type === 'tool/result' && event.data.item.snapshot.isError).length, 0);
+      assert.equal(trace.filter((event) => event.type === 'turn/end').length, 1);
+    });
+  }
+});
+
+test('tool/call和call started未提交不执行mutation', async (t) => {
+  for (const boundary of ['started', 'call']) {
+    await t.test(boundary, async (t) => {
+      const f = await durabilityFixture(t);
+      f.client.complete = async (request) => ({ requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: [{ id: 'mutation', name: 'bash', arguments: '{"command":"printf x > must-not-exist"}' }] } });
+      const append = f.store.appendEvent.bind(f.store);
+      f.store.appendEvent = ((input: any) => {
+        if (boundary === 'call' ? input.event.type === 'tool/call' : input.event.type === 'item/started' && input.event.itemKind === 'tool-call') throw Object.assign(new Error('call disk failed'), { code: 'CALL_WRITE_FAILED' });
+        return append(input);
+      }) as any;
+      await assert.rejects(f.send(), (error: any) => error.code === 'CALL_WRITE_FAILED');
+      await assert.rejects(readFile(join(f.storage, 'must-not-exist')), (error: any) => error.code === 'ENOENT');
+    });
+  }
+});
+
+test('只读工具组首个结果写失败也等待所有已启动成员返回', async (t) => {
+  const f = await durabilityFixture(t);
+  const first = deferred<string>();
+  const second = deferred<string>();
+  let calls = 0;
+  f.client.webSearch = async () => { calls += 1; return calls === 1 ? first.promise : second.promise; };
+  f.client.complete = async (request) => ({ requestId: request.requestId, model: 'test-model', message: { role: 'assistant', content: '', toolCalls: ['first', 'second'].map((id) => ({ id, name: 'web_search', arguments: '{"query":"fixture"}' })) } });
+  const append = f.store.appendEvent.bind(f.store);
+  f.store.appendEvent = ((input: any) => {
+    if (input.event.type === 'tool/result') throw Object.assign(new Error('read result failed'), { code: 'RESULT_WRITE_FAILED' });
+    return append(input);
+  }) as any;
+  const sending = f.send();
+  await waitFor(() => calls === 2);
+  first.resolve('first');
+  await waitFor(() => (f.adapter as any).activeTurns.get(f.conversation.id).persistenceError);
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).some((event) => event.type === 'turn/end'), false);
+  second.resolve('second');
+  await assert.rejects(sending, (error: any) => error.code === 'RESULT_WRITE_FAILED');
+  assert.equal((await f.adapter.getConversationTrace(f.conversation.id)).filter((event) => event.type === 'turn/end').length, 1);
 });

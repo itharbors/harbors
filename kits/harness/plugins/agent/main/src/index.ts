@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
+import type { AgentAdapter, AgentApprovalPolicy, AgentArchivedConversation, AgentContextUsage, AgentConversation, AgentOptions, AgentPermissionCommit, AgentPermissionOutcome, AgentPermissionRequest, AgentPermissionState, AgentProgressStatus, AgentSandboxMode, AgentSource, AgentTraceBatch, AgentTraceEvent, AgentTracePage, AgentTracePageOptions, AgentTurnInput, AgentTurnOptions } from './adapter/base.js';
 import { normalizeTurnOptions } from './adapter/base.js';
 import { HarborsAdapter, type ContextStoreClient, type ModelServiceClient, type ModelServiceCompleteRequest, type ModelServiceDelta } from './adapter/harbors.js';
 import { paginateTraceEvents } from './adapter/trace-pagination.js';
@@ -54,7 +54,8 @@ interface PendingPermissionRequest {
 
 interface PendingPermissionState {
   request: PendingPermissionRequest;
-  resolve: (outcome: AgentPermissionOutcome) => void;
+  phase: 'pending' | 'resolving' | 'failed';
+  resolve: (outcome: AgentPermissionOutcome) => Promise<boolean>;
   timer: ReturnType<typeof setTimeout>;
   signal?: AbortSignal;
   onAbort?: () => void;
@@ -75,7 +76,7 @@ function createAdapters(
     harbors: new HarborsAdapter(modelService, contextStore, readCustomInstructionSetting),
   };
   (Object.keys(result) as AgentSource[]).forEach((source) => {
-    result[source].setPermissionRequester?.((request) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }));
+    result[source].setPermissionRequester?.((request, commitOutcome) => requestPermission({ ...request, conversationId: conversationId(source, request.conversationId) }, commitOutcome));
     result[source].setTraceEventListener?.((adapterConversationId, event) => {
       runtime?.message.broadcast('agent.conversation.trace.append', {
         conversationId: conversationId(source, adapterConversationId),
@@ -173,28 +174,38 @@ async function broadcastMessageStatusWithContext(conversationId: string, message
   runtime?.message.broadcast('agent.message.status', { conversationId, ...(messageId ? { messageId } : {}), status: { ...status, ...(contextUsage ? { contextUsage } : {}) } });
 }
 
-function requestPermission(request: AgentPermissionRequest): Promise<AgentPermissionOutcome> {
+function requestPermission(request: AgentPermissionRequest, commitOutcome?: AgentPermissionCommit): Promise<AgentPermissionOutcome> {
   if (!runtime) return Promise.resolve('unavailable');
   const { signal, ...payload } = request;
-  return new Promise<AgentPermissionOutcome>((resolve) => {
-    const finish = (outcome: AgentPermissionOutcome) => {
+  return new Promise<AgentPermissionOutcome>((resolve, reject) => {
+    const finish = async (choice: AgentPermissionOutcome): Promise<boolean> => {
       const pending = pendingPermissionRequests.get(request.requestId);
-      if (!pending) return;
+      if (!pending || pending.phase !== 'pending') return false;
+      pending.phase = 'resolving';
       clearTimeout(pending.timer);
       if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
-      pendingPermissionRequests.delete(request.requestId);
-      void broadcastMessageStatusWithContext(request.conversationId, activeMessageIds.get(request.conversationId), {
-        phase: outcome === 'cancelled' || outcome === 'unavailable' || outcome === 'timed_out' ? 'error' : 'running',
-        message: outcome === 'allowed-once' ? '权限已确认，继续执行…' : outcome === 'timed_out' ? '权限请求已超时' : '权限请求已结束',
-        turn: request.turn,
-        step: request.step,
-      });
-      resolve(outcome);
+      try {
+        const outcome = commitOutcome ? await commitOutcome(choice) : choice;
+        pendingPermissionRequests.delete(request.requestId);
+        void broadcastMessageStatusWithContext(request.conversationId, activeMessageIds.get(request.conversationId), {
+          phase: signal?.aborted || outcome === 'cancelled' || outcome === 'unavailable' || outcome === 'timed_out' ? 'error' : 'running',
+          message: signal?.aborted ? '权限请求已结束' : outcome === 'allowed-once' ? '权限已确认，继续执行…' : outcome === 'timed_out' ? '权限请求已超时' : '权限请求已结束',
+          turn: request.turn,
+          step: request.step,
+        });
+        resolve(outcome);
+        return true;
+      } catch (error) {
+        pending.phase = 'failed';
+        reject(error);
+        throw error;
+      }
     };
-    const timer = setTimeout(() => finish('timed_out'), PERMISSION_REQUEST_TIMEOUT_MS);
-    const onAbort = () => finish('cancelled');
+    const timer = setTimeout(() => { void finish('timed_out').catch(() => undefined); }, PERMISSION_REQUEST_TIMEOUT_MS);
+    const onAbort = () => { void finish('cancelled').catch(() => undefined); };
     pendingPermissionRequests.set(request.requestId, {
       request: { ...payload, ...(request.turnId ? { turnId: request.turnId } : {}), ...(request.itemId ? { itemId: request.itemId } : {}) },
+      phase: 'pending',
       resolve: finish,
       timer,
       signal,
@@ -207,13 +218,13 @@ function requestPermission(request: AgentPermissionRequest): Promise<AgentPermis
       step: request.step,
     });
     if (signal) {
-      if (signal.aborted) { finish('cancelled'); return; }
+      if (signal.aborted) { onAbort(); return; }
       signal.addEventListener('abort', onAbort, { once: true });
     }
   });
 }
 
-function resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome; conversationId?: string; turnId?: string; itemId?: string }): boolean {
+async function resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome; conversationId?: string; turnId?: string; itemId?: string }): Promise<boolean> {
   const { requestId, outcome } = input;
   if (!['allowed-once', 'rejected', 'cancelled', 'unavailable', 'timed_out'].includes(outcome)) return false;
   const pending = pendingPermissionRequests.get(requestId);
@@ -221,12 +232,11 @@ function resolvePermissionRequest(input: { requestId: string; outcome: AgentPerm
   if (input.conversationId && input.conversationId !== pending.request.conversationId) return false;
   if (input.turnId && input.turnId !== pending.request.turnId) return false;
   if (input.itemId && input.itemId !== pending.request.itemId) return false;
-  pending.resolve(outcome);
-  return true;
+  return pending.resolve(outcome);
 }
 
-function clearPermissionRequests(outcome: AgentPermissionOutcome): void {
-  for (const pending of Array.from(pendingPermissionRequests.values())) pending.resolve(outcome);
+async function clearPermissionRequests(outcome: AgentPermissionOutcome): Promise<void> {
+  await Promise.allSettled(Array.from(pendingPermissionRequests.values()).map((pending) => pending.resolve(outcome)));
   pendingPermissionRequests.clear();
 }
 
@@ -436,8 +446,7 @@ editor.plugin.define({
         console.error('[agent] failed to load conversations:', err);
       }
     },
-    unload() {
-      clearPermissionRequests('cancelled');
+    async unload() {
       try {
         Object.values(adapters || {}).forEach((adapter) => {
           adapter.setTraceEventListener?.(undefined);
@@ -446,6 +455,7 @@ editor.plugin.define({
       } catch (err) {
         console.error('[agent] failed to stop adapter:', err);
       }
+      await clearPermissionRequests('cancelled');
       runtime = null;
       adapters = null;
       conversations = [];
@@ -531,7 +541,7 @@ editor.plugin.define({
         throw new Error('[agent] conversation does not exist');
       }
       return Array.from(pendingPermissionRequests.values())
-        .filter(({ request }) => request.conversationId === conversationId)
+        .filter(({ request, phase }) => phase === 'pending' && request.conversationId === conversationId)
         .map(({ request }) => ({ ...request }));
     },
     async resolvePermissionRequest(input: { requestId: string; outcome: AgentPermissionOutcome }): Promise<boolean> {
@@ -657,6 +667,7 @@ editor.plugin.define({
       if (!conversations.some((conversation) => conversation.id === conversationId)) {
         throw new Error('[agent] conversation does not exist');
       }
+      if (activeMessageIds.has(conversationId)) throw new Error('该会话已有正在执行的 turn');
       const aiMessageId = `msg-${randomUUID()}`;
       let streamedContent = '';
       let aiContent: string;
@@ -676,6 +687,12 @@ editor.plugin.define({
         void broadcastMessageStatusWithContext(conversationId, aiMessageId, { phase: 'error', message: err instanceof Error ? err.message : String(err) });
         throw err;
       } finally {
+        for (const [requestId, pending] of pendingPermissionRequests) {
+          if (pending.request.conversationId !== conversationId) continue;
+          clearTimeout(pending.timer);
+          if (pending.signal && pending.onAbort) pending.signal.removeEventListener('abort', pending.onAbort);
+          pendingPermissionRequests.delete(requestId);
+        }
         activeMessageIds.delete(conversationId);
         const finishedConv = conversations.find((conversation) => conversation.id === conversationId);
         if (finishedConv) { finishedConv.active = false; broadcastConversationChanged('update', conversationId, finishedConv); }

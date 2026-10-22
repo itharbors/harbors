@@ -49,7 +49,9 @@ export interface AgentPermissionRequest {
   signal?: AbortSignal;
 }
 
-export type AgentPermissionRequester = (request: AgentPermissionRequest) => Promise<AgentPermissionOutcome>;
+/** 内部提交屏障；不属于对外审批消息 payload。 */
+export type AgentPermissionCommit = (outcome: AgentPermissionOutcome) => Promise<AgentPermissionOutcome>;
+export type AgentPermissionRequester = (request: AgentPermissionRequest, commitOutcome?: AgentPermissionCommit) => Promise<AgentPermissionOutcome>;
 
 export interface AgentOption {
   id: string;

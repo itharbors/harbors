@@ -120,13 +120,23 @@ Harbors Harness 的已落地 assembly 链路按以下顺序运行和记录；HTT
 2. Agent request `model-service.getCatalog` 或 `model-service.complete`；请求携带 request identity，流式请求还
    携带 generation。
 3. Model Service 将 Provider 增量 broadcast 为 `model-service.complete.delta`；Agent 按 request identity、
-   generation 和 sequence 接收，再 broadcast `agent.message.delta` 给 Chat。
-4. Agent 持久化 trace 后 broadcast `agent.conversation.trace.append`；Chat 按 conversation、turn、item 和
-   sequence 重建可见 transcript。
+   generation 和 sequence 接收，先提交 Context Store，再 broadcast `agent.conversation.trace.append`。
+4. Chat 按 conversation、turn、item 和 sequence 从已提交 canonical Item 投影正文 preview，并由 completed
+   snapshot 接管最终正文；兼容的 `agent.message.delta` 在 commit 与 trace 之后发送。
 5. Agent broadcast `agent.message.status`，并以 `turn/end` 记录 completed、failed、cancelled、timed_out
    或 rejected 终态。
 6. 审批回环为 Agent broadcast `approval/asked`，Chat request `agent.resolvePermissionRequest`，Agent 再
    broadcast `approval/resolved`；拒绝结果必须回到真实 turn 链路，而不是由测试 mock 伪造终态。
+
+Harbors Harness 用户可见流式必须另过真实浏览器门禁：可控上游先放行 chunk A 并暂停，再单独放行 B 并暂停；
+同一模型请求仍未完成、第三段及终态未放行时，主聊天正文 DOM 必须先后可见 A、AB，并保持运行状态。
+最后放行 completed，确认权威 snapshot 接管且回答只有一份；取消或失败前缀不能标成成功最终回答。
+收到 delta、后端持久化成功、组件测试或最终全文截图均不能代替这一门禁。
+
+Chat 流式 fixture 必须保留真实的双 ID 契约：选择态、trace page 和 append envelope 使用 public ID
+`harbors:<adapterId>`，canonical 事件顶层与 `data.conversationId` 使用 native `adapterId`。断言外层归属
+校验和投影边界转换均有效；不能为了让 fixture 通过而把两层 ID 简化成同一个值。浏览器门禁还须覆盖
+新会话、继续旧会话、切入进行中的会话与刷新恢复，确认内容不串会话、最终回答不重复且不丢失。
 
 ## 当前命令语义
 

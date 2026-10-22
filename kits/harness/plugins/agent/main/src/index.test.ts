@@ -1,11 +1,80 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ContextStore } from '../../../agent-context-store/main/src/store.js';
 
 let loadedPlugin: any;
+
+async function waitFor(check: () => unknown) {
+  for (let attempt = 0; attempt < 500; attempt += 1) {
+    if (check()) return;
+    await new Promise((resolve) => setTimeout(resolve, 2));
+  }
+  assert.fail('fixture did not reach the expected boundary');
+}
+
+async function permissionFixture(t: any, fails?: (event: any) => boolean) {
+  const storage = await mkdtemp(join(tmpdir(), 'agent-permission-durable-'));
+  const store = new ContextStore(join(storage, 'store'));
+  const order: string[] = [];
+  const broadcasts: Array<[string, any]> = [];
+  const sends: Promise<unknown>[] = [];
+  let modelCalls = 0;
+  const runtime = {
+    plugin: contextStorePlugin(store, {
+      appendEvent(input: any) {
+        if (fails?.(input.event)) throw Object.assign(new Error('approval disk failed'), { code: 'APPROVAL_WRITE_FAILED' });
+        const event = store.appendEvent(input);
+        order.push(`commit:${event.type}:${event.itemKind || ''}`);
+        return event;
+      },
+    }),
+    config: { get() { return undefined; }, set() {}, delete() {} },
+    message: {
+      broadcast(topic: string, value: any) {
+        broadcasts.push([topic, value]);
+        if (topic === 'agent.message.status' && value.status.message?.includes('权限已确认')) order.push('confirmed');
+      },
+      async request(_target: string, method: string, input?: any): Promise<any> {
+        if (method === 'getCatalog') return { models: [{ id: 'test-model', name: 'Test' }], defaultModel: 'test-model' };
+        if (method === 'cancel') return { requestId: input.requestId, state: 'cancelled' };
+        if (method === 'complete') {
+          modelCalls += 1;
+          return { requestId: input.requestId, model: 'test-model', message: modelCalls === 1 ? { role: 'assistant', content: '', toolCalls: [{ id: 'approval-write', name: 'write', arguments: '{"file_path":"approved.txt","content":"once"}' }] } : { role: 'assistant', content: 'done' } };
+        }
+        throw new Error(`unexpected ${method}`);
+      },
+    },
+  };
+  await loadedPlugin.lifecycle.load(runtime);
+  const conversation = await loadedPlugin.methods.createConversation('harbors', storage, { sandboxMode: 'read-only', approvalPolicy: 'ask' });
+  t.after(async () => {
+    await loadedPlugin.lifecycle.unload();
+    await Promise.allSettled(sends);
+    store.close();
+    await rm(storage, { recursive: true, force: true });
+  });
+  return {
+    storage, store, runtime, conversation, order, broadcasts,
+    modelCalls: () => modelCalls,
+    send() {
+      const sending = loadedPlugin.methods.sendMessage(conversation.id, 'write');
+      sends.push(sending);
+      void sending.catch(() => undefined);
+      return sending;
+    },
+    async pending() {
+      let requests: any[] = [];
+      await waitFor(() => {
+        void loadedPlugin.methods.getPendingPermissionRequests(conversation.id).then((value: any[]) => { requests = value; });
+        return requests.length;
+      });
+      return requests[0];
+    },
+  };
+}
 
 function contextStorePlugin(store: ContextStore, overrides: Record<string, (...args: any[]) => unknown> = {}) {
   return {
@@ -18,11 +87,156 @@ function contextStorePlugin(store: ContextStore, overrides: Record<string, (...a
   };
 }
 
+test('审批asked已提交才开放，requestId-only兼容且resolved/completed后才确认执行', async (t) => {
+  // Module registration is shared with the existing facade tests below.
+  if (!loadedPlugin) {
+    (globalThis as any).editor = { plugin: { define(value: any) { loadedPlugin = value; } } };
+    await import('./index.js');
+  }
+  const f = await permissionFixture(t);
+  const sending = f.send();
+  const request = await f.pending();
+  assert.ok(f.order.includes('commit:approval/asked:approval'));
+  for (const key of ['conversationId', 'turnId', 'itemId']) {
+    assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once', [key]: 'wrong' }), false);
+  }
+  const resolving = loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' });
+  assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), false);
+  assert.equal(await resolving, true);
+  assert.equal((await sending).content, 'done');
+  await waitFor(() => f.order.includes('confirmed'));
+  assert.ok(f.order.indexOf('commit:approval/resolved:approval') < f.order.indexOf('commit:item/completed:approval'));
+  assert.ok(f.order.indexOf('commit:item/completed:approval') < f.order.indexOf('confirmed'));
+  assert.equal(await readFile(join(f.storage, 'approved.txt'), 'utf8'), 'once');
+  assert.equal(f.modelCalls(), 2);
+  assert.deepEqual(await loadedPlugin.methods.getPendingPermissionRequests(f.conversation.id), []);
+  assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), false);
+});
+
+test('审批asked/resolved/completed写失败均不放行或广播已确认', async (t) => {
+  for (const boundary of ['asked', 'resolved', 'completed']) {
+    await t.test(boundary, async (t) => {
+      const f = await permissionFixture(t, (event) => boundary === 'asked' ? event.type === 'approval/asked' : boundary === 'resolved' ? event.type === 'approval/resolved' : event.type === 'item/completed' && event.itemKind === 'approval');
+      const sending = f.send();
+      if (boundary !== 'asked') {
+        const request = await f.pending();
+        await assert.rejects(loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), (error: any) => error.code === 'APPROVAL_WRITE_FAILED');
+        assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), false);
+      }
+      await assert.rejects(sending, (error: any) => error.code === 'APPROVAL_WRITE_FAILED');
+      await assert.rejects(readFile(join(f.storage, 'approved.txt')), (error: any) => error.code === 'ENOENT');
+      assert.equal(f.order.includes('confirmed'), false);
+      assert.equal(f.modelCalls(), 1);
+      assert.deepEqual(await loadedPlugin.methods.getPendingPermissionRequests(f.conversation.id), []);
+    });
+  }
+});
+
+test('审批等待中并发send拒绝，不清理原pending或覆盖活动Turn', async (t) => {
+  for (const action of ['allow', 'stop']) {
+    await t.test(action, async (t) => {
+      const f = await permissionFixture(t);
+      const sending = f.send();
+      const request = await f.pending();
+      await assert.rejects(f.send(), /已有正在执行/);
+      assert.deepEqual(await loadedPlugin.methods.getPendingPermissionRequests(f.conversation.id), [request]);
+      assert.equal((await loadedPlugin.methods.listConversations()).find((conversation: any) => conversation.id === f.conversation.id)?.active, true);
+      if (action === 'allow') {
+        assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), true);
+        assert.equal((await sending).content, 'done');
+        assert.equal(await readFile(join(f.storage, 'approved.txt'), 'utf8'), 'once');
+        assert.equal(f.modelCalls(), 2);
+      } else {
+        assert.equal(await loadedPlugin.methods.stopConversation(f.conversation.id), true);
+        await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+        await assert.rejects(readFile(join(f.storage, 'approved.txt')), (error: any) => error.code === 'ENOENT');
+        assert.equal(f.modelCalls(), 1);
+      }
+      const trace = f.store.getConversationTrace(f.conversation.id.slice('harbors:'.length));
+      assert.equal(trace.filter((event) => event.type === 'turn/start').length, 1);
+      assert.equal(trace.filter((event) => event.type === 'turn/end').length, 1);
+      assert.equal(trace.find((event) => event.type === 'turn/end')?.data.reason.kind, action === 'allow' ? 'completed' : 'cancelled');
+      assert.deepEqual(await loadedPlugin.methods.getPendingPermissionRequests(f.conversation.id), []);
+    });
+  }
+});
+
+test('审批等待Stop只提交一次cancelled，过期响应不执行工具', async (t) => {
+  const f = await permissionFixture(t);
+  const sending = f.send();
+  const request = await f.pending();
+  assert.equal(await loadedPlugin.methods.stopConversation(f.conversation.id), true);
+  await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), false);
+  assert.equal(f.order.filter((entry) => entry === 'commit:approval/resolved:approval').length, 1);
+  assert.equal(f.order.filter((entry) => entry.startsWith('commit:turn/end:')).length, 1);
+  assert.equal(f.order.includes('confirmed'), false);
+  await assert.rejects(readFile(join(f.storage, 'approved.txt')), (error: any) => error.code === 'ENOENT');
+});
+
+test('allowed审批提交与Stop竞争，不确认继续或执行mutation', async (t) => {
+  const f = await permissionFixture(t);
+  const append = f.store.appendEvent.bind(f.store);
+  let stopping!: Promise<boolean>;
+  f.store.appendEvent = ((input: any) => {
+    const event = append(input);
+    if (event.type === 'approval/resolved') stopping = loadedPlugin.methods.stopConversation(f.conversation.id);
+    return event;
+  }) as any;
+  const sending = f.send();
+  const request = await f.pending();
+  assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: request.requestId, outcome: 'allowed-once' }), true);
+  assert.equal(await stopping, true);
+  await assert.rejects(sending, (error: any) => error.code === 'MODEL_SERVICE_CANCELLED');
+  assert.equal(f.order.includes('confirmed'), false);
+  assert.equal(f.order.filter((entry) => entry === 'commit:approval/resolved:approval').length, 1);
+  assert.equal(f.order.filter((entry) => entry.startsWith('commit:turn/end:')).length, 1);
+  assert.equal(f.modelCalls(), 1);
+  await assert.rejects(readFile(join(f.storage, 'approved.txt')), (error: any) => error.code === 'ENOENT');
+});
+
+test('审批timeout先提交timed_out，过期允许响应不执行mutation', async (t) => {
+  const f = await permissionFixture(t);
+  let ready!: () => void;
+  const waiting = new Promise<void>((resolve) => { ready = resolve; });
+  const broadcast = f.runtime.message.broadcast;
+  f.runtime.message.broadcast = (topic, value) => {
+    broadcast(topic, value);
+    if (topic === 'agent.message.status' && value.status.phase === 'waiting_permission') ready();
+  };
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const sending = f.send();
+  await waiting;
+  const requests = await loadedPlugin.methods.getPendingPermissionRequests(f.conversation.id);
+  assert.equal(requests.length, 1);
+  await assert.rejects(f.send(), /已有正在执行/);
+  assert.deepEqual(await loadedPlugin.methods.getPendingPermissionRequests(f.conversation.id), requests);
+  t.mock.timers.tick(60_000);
+  t.mock.timers.reset();
+  await sending;
+  assert.equal(await loadedPlugin.methods.resolvePermissionRequest({ requestId: requests[0].requestId, outcome: 'allowed-once' }), false);
+  const trace = f.store.getConversationTrace(f.conversation.id.slice('harbors:'.length));
+  assert.equal(trace.filter((event) => event.type === 'approval/resolved' && event.data.outcome === 'timed_out').length, 1);
+  assert.equal(trace.filter((event) => event.type === 'turn/end').length, 1);
+  assert.equal(f.order.includes('confirmed'), false);
+  await assert.rejects(readFile(join(f.storage, 'approved.txt')), (error: any) => error.code === 'ENOENT');
+});
+
+test('Stop终态写失败沿rejection传播，facade不显示稳定已停止', async (t) => {
+  const f = await permissionFixture(t, (event) => event.type === 'turn/end');
+  const sending = f.send();
+  await f.pending();
+  await assert.rejects(loadedPlugin.methods.stopConversation(f.conversation.id), (error: any) => error.code === 'APPROVAL_WRITE_FAILED');
+  await assert.rejects(sending, (error: any) => error.code === 'APPROVAL_WRITE_FAILED');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.broadcasts.some(([topic, value]) => topic === 'agent.message.status' && value.status.message === '已停止当前对话'), false);
+});
+
 test('新建对话使用 config 默认权限，已有会话保持原权限', async () => {
   const storageDir = await mkdtemp(join(tmpdir(), 'harbors-agent-index-'));
   const contextStore = new ContextStore(join(storageDir, 'context-store'));
 
-  let plugin: any;
+  let plugin: any = loadedPlugin;
   (globalThis as any).editor = { plugin: { define(value: any) { plugin = value; } } };
   await import('./index.js');
   loadedPlugin = plugin;

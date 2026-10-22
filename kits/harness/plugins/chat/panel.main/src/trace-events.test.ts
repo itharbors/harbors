@@ -264,3 +264,69 @@ test('parseSurfaceMessages 忽略空内容的 assistant 消息', () => {
   const messages = parseSurfaceMessages(events);
   assert.deepEqual(messages.map((message) => message.id), ['u1']);
 });
+
+function canonical(seq: number, type: string, data: Record<string, unknown> = {}, conversationId = 'harbors:stream'): TraceEvent {
+  return { seq, time: seq, type, conversationId, turnId: 'turn-stream', data: { conversationId, turnId: 'turn-stream', turn: 1, step: 1, ...data } };
+}
+
+function messageItem(seq: number, phase: 'started' | 'delta' | 'completed', payload: unknown): TraceEvent {
+  return canonical(seq, `item/${phase}`, { itemId: 'assistant-stream', item: { kind: 'message', phase, ...(phase === 'delta' ? { delta: payload } : { snapshot: payload }) } });
+}
+
+test('committed item deltas form a preview and completed snapshot takes over once', () => {
+  const events = [canonical(0, 'turn/start'), messageItem(1, 'started', { role: 'assistant', content: '' }), messageItem(2, 'delta', { content: 'A' })];
+  const first = parseTraceTurns(events, 'harbors:stream')[0].steps[0];
+  assert.equal(first.preview?.text, 'A');
+  assert.equal(first.assistant, undefined);
+  events.push(messageItem(3, 'delta', { content: 'B' }));
+  const second = parseTraceTurns(events, 'harbors:stream')[0].steps[0];
+  assert.equal(second.preview?.text, 'AB');
+  assert.equal(second.preview?.id, first.preview?.id);
+  events.push(canonical(4, 'assistant/message', { itemId: 'assistant-stream', message: { id: 'assistant-stream', content: 'legacy full' } }));
+  assert.equal(parseTraceTurns(events)[0].steps[0].assistant, undefined, 'legacy event cannot bypass canonical completion');
+  events.push(messageItem(5, 'completed', { role: 'assistant', content: 'snapshot ABC' }));
+  const completed = parseTraceTurns(events)[0].steps[0];
+  assert.equal(completed.preview, undefined);
+  assert.equal(completed.assistant?.text, 'snapshot ABC');
+  assert.equal(parseTraceTurns([...events, events[3]])[0].steps[0].assistant?.text, 'snapshot ABC');
+});
+
+test('cancelled and failed previews remain incomplete and ignore late lifecycle events', () => {
+  for (const kind of ['cancelled', 'failed', 'rejected', 'timed_out'] as const) {
+    const events = [canonical(0, 'turn/start'), messageItem(1, 'started', { role: 'assistant', content: '' }), messageItem(2, 'delta', { content: 'prefix' }), canonical(3, 'turn/end', { reason: { kind } }), messageItem(4, 'delta', { content: 'late' }), messageItem(5, 'completed', { role: 'assistant', content: 'late final' })];
+    const turn = parseTraceTurns(events)[0];
+    assert.equal(turn.terminal?.status, kind);
+    assert.equal(turn.steps[0].preview?.text, 'prefix');
+    assert.equal(turn.steps[0].assistant, undefined);
+  }
+});
+
+test('canonical-only completed messages preserve content and tool-call semantics', () => {
+  const turns = parseTraceTurns([messageItem(0, 'started', { role: 'assistant', content: '' }), messageItem(1, 'completed', { role: 'assistant', content: [{ type: 'text', text: 'calling' }], toolCalls: [{ id: 'c1' }] })]);
+  assert.equal(turns[0].steps[0].assistant?.text, 'calling');
+  assert.equal(turns[0].steps[0].assistant?.hasToolCalls, true);
+});
+
+test('user items, wrong conversations and invalid completion do not become assistant responses', () => {
+  const user = canonical(0, 'item/started', { step: 0, itemId: 'user-item', item: { kind: 'message', phase: 'started', snapshot: { role: 'user', content: 'question' } } });
+  assert.deepEqual(parseTraceTurns([user], 'harbors:stream'), []);
+  assert.deepEqual(parseTraceTurns([messageItem(1, 'started', { role: 'assistant' })], 'other'), []);
+  const turns = parseTraceTurns([messageItem(1, 'completed', { role: 'assistant', content: 'invalid' }), canonical(2, 'assistant/message', { itemId: 'assistant-stream', message: { id: 'assistant-stream', content: 'invalid fallback' } })]);
+  assert.equal(turns[0]?.steps[0]?.assistant, undefined);
+});
+
+test('an invalid item without identity does not suppress unrelated legacy history', () => {
+  const turns = parseTraceTurns([
+    canonical(0, 'item/started', { item: { kind: 'message', phase: 'started', snapshot: { role: 'assistant' } } }),
+    canonical(1, 'assistant/message', { message: { content: 'legacy history' } }),
+  ]);
+  assert.equal(turns[0].steps[0].assistant?.text, 'legacy history');
+});
+
+test('a model retry in one step replaces the earlier incomplete item preview', () => {
+  const retryStarted = canonical(3, 'item/started', { itemId: 'retry', item: { kind: 'message', phase: 'started', snapshot: { role: 'assistant', content: '' } } });
+  const retryDelta = canonical(4, 'item/delta', { itemId: 'retry', item: { kind: 'message', phase: 'delta', delta: { content: 'retry prefix' } } });
+  const turns = parseTraceTurns([messageItem(0, 'started', { role: 'assistant', content: '' }), messageItem(1, 'delta', { content: 'earlier prefix' }), retryStarted, retryDelta]);
+  assert.equal(turns[0].steps[0].preview?.text, 'retry prefix');
+  assert.equal(turns[0].steps[0].assistant, undefined);
+});
