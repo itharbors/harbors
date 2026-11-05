@@ -619,6 +619,96 @@ test('Anthropic SSE fixture 遵循 event framing，忽略 event/id/retry 并合�
   assert.deepEqual(deltas, ['你', '好']);
 });
 
+test('OpenAI 流式收到 [DONE] 后即使连接不关闭也立即收口并取消 reader', async () => {
+  const chunks = [
+    'data: {"choices":[{"delta":{"content":"你"}}]}\n\n',
+    'data: {"choices":[{"delta":{"content":"好"}}]}\n\n',
+    'data: [DONE]\n\n',
+  ];
+  let readerCancelled = false;
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(),
+    fetch: async () => new Response(new ReadableStream({
+      // 故意不调用 controller.close()：模拟发完终态但保持半关闭的 Provider/网关。
+      start(controller) { controller.enqueue(new TextEncoder().encode(chunks.join(''))); },
+      cancel() { readerCancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const result = await service.complete({ ...input, requestId: 'stream-openai-held', stream: true });
+  assert.equal(result.message.content, '你好');
+  assert.equal(readerCancelled, true, '终态后应主动取消/释放未关闭的响应体');
+});
+
+test('OpenAI 流式忽略结束标记后同一分片中的内容', async () => {
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(),
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\ndata: {bad')); },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const result = await service.complete({ ...input, requestId: 'stream-after-done', stream: true });
+  assert.equal(result.message.content, 'ok');
+});
+
+test('OpenAI 流式仅有 finish_reason 且连接不关闭时等待请求超时', async () => {
+  const chunks = [
+    'data: {"choices":[{"delta":{"content":"ok"}}]}\n\n',
+    'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n',
+  ];
+  let readerCancelled = false;
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(),
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(chunks.join(''))); },
+      cancel() { readerCancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  await assert.rejects(service.complete({ ...input, requestId: 'stream-finish-held', stream: true, timeoutMs: 50 }), (error: any) => error.code === 'MODEL_SERVICE_TIMEOUT');
+  assert.equal(readerCancelled, true);
+});
+
+test('OpenAI 流式在 finish_reason 后接收独立分片中的 usage', async () => {
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(),
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) {
+        const encode = (value: string) => new TextEncoder().encode(value);
+        controller.enqueue(encode('data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n\n'));
+        setTimeout(() => controller.enqueue(encode('data: {"choices":[],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}}\n\ndata: [DONE]\n\n')), 300);
+      },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const result = await service.complete({ ...input, requestId: 'stream-usage-after-finish', stream: true });
+  assert.deepEqual(result.usage, { inputTokens: 3, outputTokens: 2, totalTokens: 5 });
+});
+
+test('Anthropic 流式收到 message_stop 后即使连接不关闭也立即收口并取消 reader', async () => {
+  const chunks = [
+    'event: message_start\ndata: {"type":"message_start","message":{"usage":{"input_tokens":3}}}\n\n',
+    'event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"text":"好"}}\n\n',
+    'event: message_delta\ndata: {"type":"message_delta","usage":{"output_tokens":1}}\n\n',
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
+  ];
+  let readerCancelled = false;
+  const recorder = makeBroadcastRecorder();
+  const service = new ModelService({
+    config: makeConfig(makeProvider({ protocol: 'anthropic-messages', models: [{ id: 'test-model', name: 'Test Model', streaming: true }] })),
+    credentials: makeCredentials(), message: recorder.message,
+    fetch: async () => new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(chunks.join(''))); },
+      cancel() { readerCancelled = true; },
+    }), { headers: { 'content-type': 'text/event-stream' } }),
+  });
+  const result = await service.complete({ ...input, requestId: 'stream-anthropic-held', stream: true });
+  assert.equal(result.message.content, '好');
+  assert.equal(readerCancelled, true);
+  assert.equal((recorder.events.at(-1)?.payload as { state: string }).state, 'completed');
+});
+
 test('流式 SSE 单事件超过有限帧缓存时返回稳定错误并取消 reader', async () => {
   let readerCancelled = false;
   const oversized = `data: ${JSON.stringify({ choices: [{ delta: { content: 'x'.repeat(300_000) } }] })}\n\n`;

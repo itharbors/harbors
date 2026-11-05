@@ -343,7 +343,7 @@ export class ModelService {
     let text = '';
     let usage: NormalizedUsage | undefined;
     const calls = new Map<number, { id: string; name: string; arguments: string }>();
-    const consumeFrame = (raw: string) => {
+    const consumeFrame = (raw: string): boolean => {
       const dataLines: string[] = [];
       for (const field of raw.split(/\r?\n/gu)) {
         if (!field || field.startsWith(':')) continue;
@@ -351,12 +351,14 @@ export class ModelService {
         const name = separator < 0 ? field : field.slice(0, separator);
         const value = separator < 0 ? '' : field.slice(separator + 1).replace(/^ /u, '');
         // event/id/retry are valid SSE fields. Provider payload semantics are
-        // carried by data; event names are advisory and may be omitted.
+        // advisory; data carries the protocol payload.
         if (name === 'data') dataLines.push(value);
       }
-      if (!dataLines.length) return;
+      if (!dataLines.length) return false;
       const value = dataLines.join('\n').trim();
-      if (!value || value === '[DONE]') return;
+      if (!value) return false;
+      // 逻辑终态：收到后无需再等待底层连接关闭，否则半关闭的 SSE 响应会让 turn 一直挂起。
+      if (value === '[DONE]') return true;
       let payload: any;
       try { payload = JSON.parse(value); } catch { throw new ModelServiceError('MODEL_SERVICE_INVALID_RESPONSE', '模型服务返回了无效流式数据', { requestId: entry.requestId }); }
       if (api === 'openai-completions') {
@@ -377,8 +379,10 @@ export class ModelService {
         }
         const normalizedUsage = normalizeUsage('openai', payload.usage);
         if (normalizedUsage) usage = mergeNormalizedUsage(usage, normalizedUsage);
-        return;
+        // finish_reason 后仍可能有单独的 usage 帧，等待 [DONE] 或连接结束。
+        return false;
       }
+      if (payload.type === 'message_stop') return true;
       if (payload.type === 'content_block_start' && payload.content_block?.type === 'tool_use') {
         const index = Number.isSafeInteger(payload.index) ? payload.index : calls.size;
         const block = payload.content_block;
@@ -399,9 +403,11 @@ export class ModelService {
       }
       const normalizedUsage = normalizeUsage('anthropic', payload.usage || payload.message?.usage);
       if (normalizedUsage) usage = mergeNormalizedUsage(usage, normalizedUsage);
+      return false;
     };
     try {
-      while (true) {
+      let streamComplete = false;
+      while (!streamComplete) {
         this.throwIfAborted(entry);
         const chunk = await reader.read();
         if (chunk.done) break;
@@ -414,17 +420,17 @@ export class ModelService {
         let frame = '';
         for (const line of lines) {
           if (line === '') {
-            if (frame) consumeFrame(frame);
+            if (frame && consumeFrame(frame)) { streamComplete = true; break; }
             frame = '';
           } else {
             frame += `${line}\n`;
             if (new TextEncoder().encode(frame).byteLength > MAX_STREAM_FRAME_BYTES) throw this.streamLimitError(entry, '模型流式响应事件超出大小上限');
           }
         }
-        buffer = `${frame}${buffer}`;
+        buffer = streamComplete ? '' : `${frame}${buffer}`;
       }
       buffer += decoder.decode();
-      if (buffer.trim()) consumeFrame(buffer);
+      if (!streamComplete && buffer.trim()) consumeFrame(buffer);
       const toolCalls = [...calls.values()].filter((call) => call.id && call.name);
       if (!text && !toolCalls.length) throw new ModelServiceError('MODEL_SERVICE_INVALID_RESPONSE', `模型 ${model} 返回了空流式响应`, { requestId: entry.requestId });
       return { content: text || null, ...(toolCalls.length ? { toolCalls } : {}), ...(usage ? { usage } : {}) };
