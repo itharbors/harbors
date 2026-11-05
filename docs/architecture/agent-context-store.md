@@ -11,13 +11,13 @@ Harbors Harness 使用 `agent-context-store` Session Plugin 保存 Conversation�
 | Conversation | 工作台选择态、draft、running 和 generation/revision | Conversation 内容持久化 |
 | Chat | 用户输入和 trace 展示 | 数据库和 Agent 私有 Context |
 
-Agent 对 Context Store 声明 Plugin 硬依赖。依赖缺失、成环或加载失败时，包含 Agent 的新 Kit 不得激活。
+Agent 对 Context Store 声明 Plugin 硬依赖。依赖缺失、成环或加载失败时，包含 Agent 的新 Kit 不得激活。静态预检不触碰旧 Kit；加载失败后尝试恢复旧 Kit，只有恢复成功才可继续。恢复也失败时 Editor 不可用并 fail closed，保留激活及恢复错误，需重建 runtime，不能保证无条件完整恢复。
 
 ## 数据布局与所有权
 
 每个 User 的 `agent-context-store` Plugin data 目录使用一个 active SQLite 版本；同 User 的
 不同基础 Session 读取同一 Plugin 历史，不同 User 使用不同目录。所有业务表显式携带
-`conversation_id`，Conversation 不拆成多个 SQLite 文件，共享 schema、备份和连接生命周期；
+`conversation_id`，Conversation 不拆成多个 SQLite 文件；各 Session runtime 可分别打开同一 active 库，
 同 User 内的业务隔离由查询条件、事务和测试保证。
 
 目录由 Framework 的可信 User + Plugin 绑定提供，Store 只使用 `runtime.paths.data`，不从
@@ -27,8 +27,8 @@ Agent 对 Context Store 声明 Plugin 硬依赖。依赖缺失、成环或加载
 - `events` 保存完整 canonical event，并在单个 Conversation 内分配连续 `seq`；
 - Conversation metadata 与 `current_state` 是确定性投影，可从 events 重建；
 - Context Plan 是可清理诊断，不是 Conversation 事实；
-- 版本目录中的 `current.json` 原子指向 active version；
-- 永久删除使用版本目录外的 tombstone guard，旧版本和 backup 不能复活已删除 Conversation。
+- `storage-v2` 根目录中的 `current.json` 原子指向 `versions/<version-id>` 下的 active version；
+- 永久删除在 SQLite 事务内检查 archived，原子写入版本目录外 tombstone 后 DELETE/COMMIT；已写 guard 不随数据库回滚撤销，启动会应用 guard，restoreConversation 也检查 guard。当前没有通用 operation journal 或旧版本恢复入口，不把这些机制视为 backup 恢复已验证。
 
 Agent、Conversation 和 Chat 都不直接打开该 SQLite。Agent 通过同进程 `callPlugin()` 调用 Store；
 Store 将这些 server methods 显式声明为 request 且 `callers` 仅允许 `agent`，Framework 绑定
@@ -49,29 +49,37 @@ Store 按三层装配：
 
 `cancelled`、`superseded` 和 `expired` 状态在历史选择前过滤。tool call/result、approval 和 item 生命周期按闭包选择，不能拆散。mandatory 内容超过预算时返回 `CONTEXT_BUDGET_EXCEEDED`，不能静默丢弃。
 
-`candidate-v1` 是通过门禁后的默认装配模式。诊断或紧急回退可显式设置 `HARBORS_AGENT_CONTEXT_MODE=surface-v1`；未设置或其他值都不能静默退回旧模式。
+当前代码默认装配模式是 candidate-v1。诊断或紧急回退可显式设置 HARBORS_AGENT_CONTEXT_MODE=surface-v1；这只切换 Context 装配，不回退存储。默认值是代码事实，不代表严格质量门禁已经通过；2026-10-22 的复核缺口见下文。
 
 ## 状态与消息链
 
 模型私有工具 `update_conversation_state` 只产生候选。Agent 校验 action、state ID、kind 和 value 后，才写入 `state/set`、`state/clear` 或 relation event；含糊或引用不存在的候选被拒绝。
 
-正常顺序是：
+当前调用链是：
 
 1. Chat request Agent；
-2. Agent 先把用户和 Turn event 提交 Store；
-3. Agent 调用 `buildContext` 并持久化 Context Plan；
+2. Agent 同步 callPlugin 把用户和 Turn event 提交 Store；
+3. Agent 同步调用 buildContext 并持久化 Context Plan；
 4. Agent request Model Service；
-5. 模型 delta、tool、approval 和 item event 先提交 Store，再 broadcast trace；
-6. Turn 以唯一 `turn/end` 持久终态结束。
+5. Agent 在 Store commit 后 broadcast trace/delta 给 Chat；
+6. sendMessage 等待已接收事件收口并持久化唯一 turn/end；Stop 在 cancelled 终态持久化后返回 true，超时或持久化失败拒绝。
 
 这些广播只在当前 Session runtime 内分发。同 User 的其他 Session 通过读取或刷新看到共享
 历史，本轮未增加跨 Session 的实时 UI 同步协议。
+
+### 可靠性与验收状态
+
+本地提交 `1d0dec9` 修复流式写前广播与 Stop 超时仍返回 true：沿用同步 Store、delta 回调、broadcast 和 `stopConversation(): Promise<boolean>`，写入成功后通知，失败关闭 generation；终态等待队列并由唯一写入点持久化。
+
+Stop 无 active Turn 返回 false；只有 cancelled turn/end 持久化成功才 true，其他非存储故障终态返回 false；收口超时或写失败走 rejection 通道。自动测试及先前 Web 验收记录见 [修复任务](../tasks/2026-10-22-agent-turn-durability/summary.md)；追加的七组真实 Web 复验未执行，不能宣称该任务验收完成。
 
 ## 首次初始化与恢复
 
 首次启动直接在新版本目录创建空 SQLite，建立 schema 和 metadata，通过 integrity check 后原子发布 `current.json`。Context Store 不接收 legacy root，也不枚举、打开、解析或导入旧 JSONL、archive 和 `.deleted` marker。
 
 已有 `current.json` 时只打开其指向的 SQLite。当前运行时不提供 JSONL codec、导入或导出接口；磁盘上的历史 JSONL 不属于当前数据模型，也不会参与启动和恢复。
+
+版本内 migration-journal.json 仅处理空库初始化发布及其崩溃恢复。当前没有一致快照备份、新版本恢复发布或对象引用校验平台；历史一次性迁移记录不能作为这些产品能力的验证。相关未来需求须另定范围，本轮不补建基础设施。
 
 ## 验证入口
 
@@ -81,7 +89,11 @@ pnpm --dir kits/harness run benchmark:p100
 pnpm --dir kits/harness run eval:q30
 ```
 
-P100 验证 1/10/50/100 Turn 的预算、候选上界和同机 P95。Q30 使用三类各 10 例、每例至少 3 次的真实模型对照；candidate 必须全部可评分、通过数不低于 current，且不能出现同 case/repeat 的新增回归。
+P100 验证 1/10/50/100 Turn 的预算、候选上界和同机 P95。Q30 使用三类各 10 例、每例 3 次，共各 90 次真实模型对照；严格要求 candidate 全部 90 次可评分、通过数不低于 current，且无同 case/repeat 新增回归。
+
+2026-08-29 原始报告为 current 90/90 可评分且 90/90 通过，candidate 89/90 可评分且 89/89 通过，M09 repeat 1 为 Provider 空响应；报告 regressions 保留该项，status=completed 仅表示 runner 结束。严格门禁未通过，不能减少分母或将未评分项改写为通过。
+
+Q30 注入期望最终有效 state（oracle state），只隔离比较 Context 装配，不证明真实模型状态抽取或完整工具链；独立确定性 Agent 集成测试只证明其覆盖范围。以上历史结果未在 2026-10-22 重跑；流式/Stop 与严格 Q30 仍是 [原 Task](../tasks/2026-08-26-conversation-knowledge-base/task.md) 的未完成项，文档核对由 [独立 docs Task](../tasks/2026-10-22-context-store-design-reconciliation/task.md) 验收。
 
 相关协议：[Agent Turn 事件协议](./agent-turn-event-protocol.md) · [Plugin 运行时模型](./plugin-runtime-model.md) ·
 [Store manifest](../../kits/harness/plugins/agent-context-store/package.json) ·

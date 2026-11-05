@@ -1,436 +1,230 @@
-# Conversation Knowledge Base 设计
+# Agent Context Store
+
+> **2026-11-05 状态说明：** 本文保留 2026-10-22 的历史核对与设计记录。其后本地提交 `1d0dec9` 已修复流式持久化顺序及 Stop 收口；追加的七组真实 Web 复验未执行。严格 Q30 和工具错误场景的浏览器验收仍未闭环。当前实现与验证边界见 [Turn 持久化修复总结](../2026-10-22-agent-turn-durability/summary.md)。
 
 Task ID: `2026-08-26-conversation-knowledge-base`
 Type: `feature`
 
-- 状态：需求已定义，设计待评审，尚未进入实现
+- 当前复核状态（2026-10-22）：implementation blocked，verification / consolidation pending；机器状态由主 Agent 通过 Task CLI 管理
+
+## 结论
+
+Harness Kit 已使用 `agent-context-store` Session Plugin 保存 Conversation event，并在每个模型 step 按当前目标、有效状态、近期轨迹和新发现的路径、错误或 ID 装配 Context。每 User + Plugin 一个 active SQLite Store，同 User 跨基础 Session 共享，不同 User 独立；Conversation schema 和生命周期属于 Plugin。
+
+Agent 不再读写 JSONL 或数据库，只通过同进程同步 `callPlugin()` 调用 Context Store，复用现有 request/callers 授权。Framework 只管理 User、基础 Session、Plugin 通用身份与能力边界，不接管 Conversation；旧无 User 路径不回退。Chat、Conversation 和 Model Service 保持原有职责。
+
+2026-10-22 复核发现：流式写入排队后立即广播、Stop 超时仍返回 true 两项 P1 实现缺口，以及 Q30 candidate 仅 89/90 可评分的严格门禁缺口。因此本 Task 不能维持“全部完成”。以下分别记录当前事实、目标设计、实现缺口与历史证据；[本轮文档核对 Task](../2026-10-22-context-store-design-reconciliation/task.md) 不授权修复代码或重新评测。
 
 ## 背景与问题
 
-Agent 当前以每个 Conversation 一份 JSONL 保存完整事件，并从中折叠出供模型使用的对话表面。随着对话增长，把全部历史持续提交给模型会增加 Token、延迟和噪声；只依赖向量召回又可能漏掉当前意图、约束、撤销关系和精确标识符。
+本 Task 启动前，每个 Conversation 使用一份 JSONL 保存完整事件，并在进程内折叠为模型可见 surface。该历史方案随着历史增长，会遇到：
 
-本 Task 设计一个 Conversation 级小型知识库。它负责识别知识、维护知识生命周期、组合模型上下文，并清理可重建的过期投影；JSONL 仍是唯一事实源，SQLite、FTS 和向量索引均为可重建投影。
+- 恢复和查询成本持续上升；
+- 难以按目标、文件、错误、工具结果、取消和替代关系检索；
+- 全量提交浪费 Token，只在初始阶段检索又无法预知执行中才出现的依赖；
+- 向量相似度不能可靠处理精确 ID、强约束和显式失效；
+- JSONL 与数据库长期双写会产生两个运行时事实源。
 
-这里所说的 Session 对应 Agent 的 `conversation_id`，不是 Framework Session Runtime。后文统一称为 Conversation。
+因此需要把“保存历史”和“给模型装配本次 Context”统一到一个可查询、可审计的存储组件中。
 
 ## 目标
 
-1. 每个 Conversation 独立管理 JSONL、知识投影、附件和产物，并可整体归档或删除。
-2. 区分“当前仍有效”“被撤销/替代”“长期未使用”“允许物理清理”，避免仅凭时间错误删除知识。
-3. 高频且确实有用的知识逐步增强；长期不用的知识降低召回权重，但不自动等同于失效。
-4. 在减少上下文 Token 的同时，保证当前意图、强约束、未完成事项和工具状态不依赖 RAG 的偶然命中。
-5. 所有知识均可追溯到 JSONL 事件，SQLite 损坏或删除后能够完整重建。
-6. 为“前面的事情算了”“我说错了”等修正建立显式关系，确保旧意图不会被再次召回并执行。
+1. 用 SQLite events 替换 JSONL，成为 Conversation 内容的唯一运行时事实源。
+2. 用独立 Session Plugin 隔离 Agent 与持久化、检索和历史 Context 选择。
+3. 在每个模型 step 按单次输入上限动态构造 Context，并支持执行中新锚点触发历史召回。
+4. 用结构化 event 和确定性 reducer 维护当前目标、约束、取消和替代关系。
+5. 无损保留现有 event、surface、tool、approval、归档和审计语义。
+6. 新安装直接创建空 SQLite；无论磁盘上是否存在旧 JSONL，都不扫描、不导入、不回退。
 
 ## 范围
 
-本 Task 覆盖 Harness Kit 的 Agent Plugin 内部 Conversation 知识投影、上下文装配、检索、生命周期维护、独立存储目录及 v1 到 v2 迁移设计；涉及共享可见行为时，覆盖既有 Chat → Agent → Model Service 消息链路和 Web 验收，但不改变其他 Plugin 的事实所有权。
+- Framework Plugin Runtime：通用硬依赖、拓扑加载和反向卸载；
+- agent-context-store Plugin：共享 SQLite、canonical API、事件与投影、检索和 Context Plan；
+- Agent Plugin：存储调用切换、每 step buildContext、trace 和错误呈现；
+- SQLite 空库初始化、版本指针和完整性检查；备份/恢复设想的实现边界另列，不视为已交付能力；
+- Conversation 创建、读取、重命名、归档、恢复和删除；
+- Context 装配差分测试和不劣化门禁；
+- 针对性单元、集成和 Web 验收；
+- 最终实现对应的 architecture 与 guide 文档同步。
 
 ## 非目标
 
-- 不把 Conversation 知识直接晋升为跨 Conversation 的用户长期记忆。
-- 不在第一阶段自动物理改写或裁剪 JSONL。
-- 不把 Token 压缩等同于知识生命周期管理。
-- 不在未明确平台约束前引入带原生二进制的向量扩展。
-- 不改变 Chat 对 Agent 存储的所有权边界。
+- 不做跨 Conversation 或跨用户长期记忆。
+- 不在 MVP 中引入外置向量库、图库、sqlite-vec、HNSW 或远端 embedding。
+- 不在 MVP 中提供 recordFeedback、feedback_events 或在线权重学习。
+- 不让模型分类结果直接成为有效状态；模型只能产生候选。
+- 不允许 Chat、UI Plugin 或 Model Service 直接访问数据库。
+- 不为 Context Store 内部状态增加广播。
+- 不读取或导入任何旧 JSONL，不提供 JSONL 运行时回退或长期双写。
+- 不承诺通过首次启动恢复旧 JSONL 会话；需要保留的历史数据必须在部署前另行处理。
+- 不扩展“活动 Turn 接收第二条纠正消息”的输入协议。
+- 不改变 Web-only 宿主边界。
 
-## 核心判断
+## 当前架构与目标设计
 
-### 1. JSONL 与 SQLite 的职责
+### 组件与职责
 
-| 数据 | 职责 | 何时使用 |
+| 模块 | 负责 | 不负责 |
 | --- | --- | --- |
-| JSONL | 唯一事实源、事件顺序、原始消息、工具调用与结果、撤销和替代关系 | 写入、审计、精确回退、重建、导出、迁移 |
-| SQLite 结构化表 | 当前知识状态、关系、权重、TTL、来源位置、维护队列 | 每轮上下文装配、过滤、排序、维护 |
-| FTS/向量索引 | 候选召回 | 相关历史无法由近期窗口和强制状态覆盖时 |
-| Checkpoint/Surface | 最近一次可验证的对话折叠结果 | 快速恢复、近期窗口、Token 压缩 |
+| Framework Plugin Runtime | 通用身份与归属、Plugin 硬依赖、拓扑加载与反向卸载，切换失败时尝试恢复旧 Kit | Conversation、SQLite 和 Context 业务 |
+| `agent-context-store` | Conversation 持久化、确定性状态、检索、历史 Context 选择和生命周期 | Model Service、tool loop 和 Chat trace |
+| Agent | Turn/tool loop、单次输入预算、Context Store 调用、最终 Provider request、Model Service 和 trace | 数据库、历史检索和历史裁剪算法 |
+| Conversation Plugin | 工作台选择态、draft、running、generation/revision 和最近项目 facade | Conversation 持久化事实和最近项目投影 |
+| Chat | 用户输入和 trace 展示 | Agent 私有历史和数据库 |
 
-SQLite 不能成为第二事实源。任何会改变知识有效性的操作都必须先形成 JSONL 事件，再由投影器更新 SQLite；否则重建索引时已删除的知识会“复活”。
+Context Store 是 Agent 的硬依赖。静态预检失败不卸载旧 Kit；加载失败时新 Kit 不激活，并尝试恢复旧 Kit。只有恢复成功才可继续；恢复本身失败则 Editor 不可用并 fail closed，保留激活与恢复错误，需重建 runtime。不能保证无条件完整恢复，MVP 不新增“部分 Plugin 激活”状态。
 
-### 2. 三个正交维度
+### Context Store 的职责
 
-知识不能只用一个 `weight` 表达全部状态：
+`agent-context-store` 当前承担以下职责：
 
-- `validity`：`active | cancelled | superseded | expired`
-- `retention`：`normal | pinned`
-- `temperature`：`hot | warm | cold`
+1. 原子保存完整 canonical event，并分配连续 Conversation seq；
+2. 从结构化 state/relation event 确定性重建目标、约束、决策、阻塞、取消和替代关系；
+3. 从 event 文本中按精确 path、error 和 ID 锚点召回当前 Conversation 的旧证据；
+4. 按 Agent 提供的单次输入预算选择 mandatory state、当前 Turn、近期历史和相关证据；
+5. 记录可清理的 Context Plan，说明本次选择、来源和排除结果；
+6. 提供 Conversation 基础 metadata、trace、归档、恢复和删除；重命名、设置、权限等 facade 由 Agent 通过基础 API 组合；当前无通用备份恢复平台。
 
-`pinned` 只表示保留和优先展示，不覆盖有效性。`cancelled`、`superseded`、`expired` 在召回排序前硬过滤。
+它不向 Chat 广播内部状态，也不允许 Chat、UI Plugin 或 Model Service 直接访问数据库。
 
-### 3. 降权不等于删除
+### Canonical API
 
-- 长期未使用：降低温度和召回分数。
-- 明确取消：立即变为 `cancelled`。
-- 新版本取代旧版本：旧知识变为 `superseded`，并记录替代关系。
-- 到达明确 TTL、来源失效或复核失败：变为 `expired`。
-- 只有派生索引经过宽限期后允许物理清理；原始 JSONL 默认保留到整个 Conversation 被归档或删除。
+Store 当前公开以下 12 个方法，与 methods/manifest 一致；不要将 Agent 同名或派生 facade 当作 Store API：
 
-## 需求
+| 接口组 | Methods | 用途 |
+| --- | --- | --- |
+| 状态 | `getStatus` | 检查 Store、schema 和数据版本是否可用 |
+| Conversation | `createConversation`、`listConversations`、`loadConversation` | 管理 Conversation metadata 和列表；list 接受 active/archived 状态 |
+| Trace | `appendEvent`、`getConversationTrace`、`getConversationTraceSince` | 写入和读取完整 AgentTraceEvent |
+| Context | `buildContext`、`recallHistory` | 构造本 step 历史 Context，或显式召回当前 Conversation 证据 |
+| 生命周期 | `archiveConversation`、`restoreConversation`、`deleteArchivedConversation` | 管理归档、恢复和永久删除 |
 
-### R1. Conversation 独立存储
+`listArchivedConversations`、`renameConversation`、`getConversationTracePage`、options/context/permissions 和 recent projects 等由 Agent 组合、分页或派生。Store 方法同步返回；Host 绑定真实 `agent` caller，复用 manifest request 声明与 callers 限制，不新增独立 ACL。append 使用 `idempotencyKey` 去重。完整范围见 [Agent Context Store Plugin 设计](design/agent-context-store-plugin.md)。当前没有 JSONL 导入或导出 API。
 
-采用“一 Conversation 一目录”的目标布局，使数据库、JSONL、附件和产物能够一起迁移、归档和删除：
+### 数据与状态
 
-```text
-<agent-data>/storage-v2/
-├── conversations/<conversation-id>/
-│   ├── events.jsonl
-│   ├── context.sqlite
-│   ├── attachments/
-│   ├── artifacts/
-│   └── manifest.json
-├── tombstones/<conversation-id>.json
-└── .harbors-trash/<conversation-id>-<time>-<random>/
-```
+- 每 User + Plugin 一个 active SQLite，所有业务表显式携带 `conversation_id`，默认禁止跨 Conversation 内容查询；Framework 从可信身份绑定 `runtime.paths.data`，同 User 的不同基础 Session 共享，不同 User 独立；
+- `events` 保存完整 canonical envelope，是 Conversation 内容的事实源；
+- `current_state` 和 Conversation metadata 都可从 events 重建；Context Plan 是可清理诊断；
+- 数据放在版本目录中，`current.json` 指向唯一 active version；
+- 永久删除在 SQLite 事务内检查 archived、原子写入版本目录外 tombstone、DELETE 并提交；已写 guard 不随数据库回滚撤销，当前启动与 restoreConversation 检查 guard。当前没有 operation journal 或旧版本恢复入口，不宣称 backup 恢复已验证。
 
-`manifest.json` 只记录格式版本和重建检查点，不保存不可恢复的业务事实。
+只有结构化 state/relation event 能改变当前有效状态。模型或分类规则可以提出 candidate，但不能直接写入 active state；目标不明确时由 Agent 向用户确认。
 
-### R2. 知识与意图生命周期
+Agent 为模型提供私有工具 `update_conversation_state`。模型调用只产生 candidate；Agent 校验目标类型、引用的既有 state ID、动作与字段后，才转换为 `state/set`、`state/clear`、`relation/cancel`、`relation/supersede` 或 `relation/confirm` event。引用不存在、动作含糊或字段不合法时拒绝写入并要求模型向用户确认。
 
-投影器至少识别以下对象：
+### 每个模型 step 的 Context 装配
 
-- 当前目标与子目标
-- 用户约束和偏好
-- 已确认决策
-- 实体、文件、路径、ID 和错误信息
-- 未完成动作、工具状态和阻塞项
-- 可复用事实及其证据
-- 意图之间的取消、替代、细化和恢复关系
+上下文按“当前状态、当前 Turn、历史 Turn”三层处理：
 
-建议事件：
+- **当前状态**：当前目标、有效约束、已确认决定和未完成事项，每个 step 都必须提供给模型，不依赖检索命中；
+- **当前 Turn**：从本轮用户消息开始，到本轮结束前产生的 assistant message、tool call/result 和已成功加载的 Skill，按发生顺序累积到下一 step，不作为旧历史压缩；
+- **历史 Turn**：`surface-v1` 继续保留现有 compaction 语义；候选模式只选择近期内容和与当前锚点相关的证据，原始 event 仍保存在 SQLite 中并可显式召回。
 
-```text
-intent/created
-intent/relation
-knowledge/created
-knowledge/updated
-knowledge/cancelled
-knowledge/superseded
-knowledge/expired
-knowledge/reactivated
-knowledge/used
-knowledge/compacted
-knowledge/index-purged
-```
+因此，多轮机制改变的是“后续轮次如何使用以前的内容”，不会改变同一轮内工具循环的闭包：例如本轮先后读取两个文件，第二次模型调用必须同时看到两次 tool call/result；到了第 10 轮，系统可以不携带第 1 轮文件全文，但在路径、错误码或决定重新出现时，应召回相应证据，并重新读取可能已经变化的当前文件。
 
-事件载荷必须包含 `knowledgeId`、`sourceEventSeqs`、时间、原因和版本；关系事件还应包含 `fromId`、`toId`、`relation`。现有开放字符串 payload 类型允许先在 Agent Plugin 内扩展，无需把知识状态塞进封闭的 Record 类型。
+1. Agent 从模型 context window 中扣除 System、tools、权限定义、输出预留和安全余量；
+2. Agent 将 `availableInputTokens`、预算明细和本 step 新锚点传给 `buildContext`；
+3. Context Store 依次选择 mandatory state、当前 Turn、最近 8 条 surface event 和精确 anchor 证据；
+4. cancelled、superseded、expired 内容在排序前过滤；
+5. tool、approval 和 item 生命周期按完整关系选择，不拆散协议；
+6. 当前 Turn 未消费的 canonical tool result 和已成功加载的 Skill body 不做历史裁剪；这里的“完整”以工具层已返回并持久化的边界为准，不绕过工具与 Skill 自身的大小限制；
+7. Agent 将返回的历史 messages 原样加入最终 Provider request，不再二次裁剪。
 
-### R3. 修正和取消
+tool result 出现新的文件、命令、错误或 Task ID 后，下一 step 会用这些锚点重新召回历史，因此第一个 step 不需要预知执行过程中的全部依赖。
 
-当用户说“前面的事情算了”时，系统不能靠语义相似度猜测要跳过什么：
+### 消息链与未完成的可靠性目标
 
-1. 根据当前活动意图栈、最近 Turn 和显式指代解析目标意图。
-2. 产生 `intent/relation(relation=cancel)` 事件。
-3. 将关联知识投影为 `cancelled`。
-4. 在所有 FTS/向量排序之前硬过滤该知识。
-5. 如果取消目标不唯一，先停止相关动作并向用户确认，不静默选择。
+1. Chat 通过 request 调用 Agent。
+2. Agent 同步 callPlugin 调用 Context Store，持久化用户和 Turn 事件。
+3. 每个模型 step 前，Agent 计算预算并同步调用 Store `buildContext`。
+4. Agent 组装 System、tools 和 Store 返回的 messages，通过 request 调用 Model Service。
+5. Agent 通过 broadcast 向 Chat 发送 trace/delta；这些通知限于当前 Session runtime，同 User 其他 Session 通过读取或刷新看到共享历史，未增加跨 Session 实时同步。
 
-当前实现只支持取消正在执行的 Turn，并且执行中拒绝第二条用户消息。因此，“运行中立刻纠正上一条消息”需要单独扩展输入与取消协议，不能只靠知识库实现。
+目标要求第 5 步先完成 Store 持久化，再广播；终态必须等待已接收队列收口并保存唯一 `turn/end`。当前普通 append 的 trace listener 在提交后执行，但流式回调写入排队后即 onDelta/broadcast，尚不满足该目标；Stop 也可能等待超时后返回 true，不能证明 cancelled terminal 已落盘。
 
-### R4. 权重衰减与增强
+最小目标机制保持既有同步 Store、delta 回调、broadcast 及 `stopConversation(): Promise<boolean>`：将 onDelta 放入串行写队列中，append 成功后才通知；首个写失败关闭 generation 并取消上游，晚到 delta/result 被拒绝。终态等待队列收口，由当前 Turn 的唯一写入点产生。Stop 无 active Turn 返回 false，只有 cancelled `turn/end` 持久化成功才 true；超时或持久化失败走既有 rejection 通道，不广播“已停止”。完整机制与延迟/失败/终态竞态/重复 Stop 故障门禁见 [Agent 集成设计](design/agent-plugin-integration.md)。本次仅完善目标，不宣称代码已修复。
 
-召回分数建议由以下因素组成，而不是直接修改 embedding：
+### 首次初始化与 Context 切换
 
-```text
-score = validity_gate × (
-  semantic_similarity
-  + lexical_match
-  + entity_match
-  + recency_score
-  + importance_score
-  + usefulness_score
-  + relation_score
-)
-```
+首次启动只创建一个空的版本化 SQLite，完成 schema、metadata 和完整性检查后，通过一次原子 `current.json` 写入激活。初始化过程不得枚举 `runtime.paths.legacyData`、`storage-v1`、`.jsonl`、旧 archive 或旧 `.deleted` marker；这些文件即使存在也不影响新 Store。
 
-衰减使用可配置半衰期：
+已有 `current.json` 时只打开其指向的 SQLite，不重复初始化，也不读取 JSONL。版本目录、初始化锁和 journal 只负责 SQLite 自身的原子发布与崩溃恢复，不承担旧数据导入。
 
-```text
-recency_score = exp(-ln(2) × age / half_life)
-```
+Context Builder 的 `surface-v1` 与 `candidate-v1` 用于模型输入差分和紧急诊断，不代表存储回退。当前代码默认使用 candidate-v1，但 Q30 严格门禁尚未闭环，不能把默认值解释为 P100/Q30/全部故障验收已通过；本次不改变代码默认值。
 
-只有确认产生价值时才增强 `usefulness_score`，例如：
+## 核心对话测试用例
 
-- 用户明确确认该知识有用；
-- 最终回答实际引用了它；
-- 它影响了已确认决策；
-- 它支撑了成功的工具结果。
+| 用例 | 场景 | 必须证明 |
+| --- | --- | --- |
+| S1 单轮状态 | 用户给出一个目标和明确约束 | goal/constraint 正确进入 mandatory state，不引入无关历史 |
+| S2 单 Turn 文件累积 | 同一 Turn 依次读取两个文件并执行工具 | 下一 step 保留用户消息、两个 tool call/result 和顺序，不把当前 Turn 当旧历史压缩 |
+| M3 多轮纠正 | 第 1 Turn 提出动作，第 2 Turn 明确取消并替换，第 3 Turn 继续 | 旧动作被 cancelled/superseded，后续只执行新目标 |
+| M10 十轮延迟召回 | 第 1 Turn 读取文件并形成决定，第 2～9 Turn 处理其他内容，第 10 Turn 通过路径、错误或工具结果重新关联 | 下一 step 召回第 1 Turn 的相关证据，同时重新读取当前文件，不使用过期文件正文 |
+| N10 错误召回 | 历史中存在名称相似但无关的文件、错误和已取消目标 | 无关或失效内容不进入最终 Context |
+| L20 长对话 | 20 个以上 Turn，包含 checkpoint、大 tool result 和多次继续 | 当前状态和当前 Turn 完整；候选模式可排除旧正文，但 source seq 可追溯并能显式召回原文 |
+| O1 超预算 | 当前 Turn、Skill 和历史证据共同接近模型窗口 | 优先移除低优先级旧历史；当前 Turn 不被静默裁剪；最多一次有界重建且不重复工具副作用 |
+| P100 性能增长 | 使用 1、10、50、100 Turn 的固定 fixture 执行同类查询 | 独立 benchmark 记录机器、Node、SQLite 配置和原始样本；输入 Token 受预算约束，固定 fixture 的候选来源不超过 9；同机 100 Turn 候选 P95 不超过当前 surface-v1 的 2 倍，且不超过 10 Turn 候选 P95 的 4 倍 |
+| Q30 真实模型质量 | 10 个单轮目标/约束、10 个多轮纠正、10 个延迟召回用例 | 独立 eval runner 固定模型配置并逐例对比当前基线；缺少 Provider 凭据时明确跳过而不伪造通过；不得出现新增高严重度错误动作 |
 
-仅被搜索出来不算使用，避免热门知识自我强化。增强值要设上限，并保留少量探索配额，防止新知识永远没有曝光机会。原始检索曝光只记指标；确认有用才写 `knowledge/used` 事件。
+确定性测试必须断言最终 `BuildContextOutput`、source seq、Context Plan、状态 digest 和 Model Service input；真实模型只用于小规模检查继续任务成功率、约束遵循、重复工作和错误工具调用。
 
-### R5. 维护与清理
+### 历史验证记录（2026-08，非本轮重验）
 
-维护分五级，风险逐级提高：
+- 确定性用例已覆盖单轮状态 candidate 的校验与持久化、同 Turn tool call/result 闭包、三轮纠正、十轮精确锚点召回、相似负例排除、长对话显式召回和预算溢出。
+- P100 在 Apple M3 Pro、Node 22.19.0 上按 1/10/50/100 Turn、每种 build 30 个样本执行，三项门禁全部通过；100 Turn 的候选来源为 9，没有随 100 条历史全文增长。原始样本见 [P100 结果](artifacts/p100-result.json)。
+- Q30 使用 Harness 正式 `model-service.complete` 消息链和 `alwaysday1`，三类各 10 例、每例 3 次。v2 保持原有业务意图，只明确最终状态字段和值类型，并将失效旧值限定到对应状态字段；等价表达、标量/单元素数组和否定句不再误判。2026-08-29 原始结果为 current 90/90 可评分且 90/90 通过，candidate 89/90 可评分且 89/89 通过；candidate M09 repeat 1 在有限补跑后仍为 Provider 空响应，报告 `regressions` 保留该次记录。已评分答案没有语义失败，但严格门禁要求 candidate 全部 90 次可评分、通过数不低于 current、无同 case/repeat 新增回归，当前未通过。原始数据不改写，`status: completed` 仅表示 runner 结束，见 [Q30 结果](artifacts/q30-result.json)。
+- Q30 注入期望最终有效 state（oracle state），只隔离比较 Context 装配。模型产生和 Agent 接受 state candidate 的协议由独立确定性 Agent 集成测试覆盖其范围；不能把 Q30 外推为真实模型状态抽取准确率或完整工具链路通过。
+- Harness 单元测试 325/325、assembly 10/10、Plugin smoke 3/3、Framework Plugin 47/47、Kit Core 113/113、Server 797/797 均通过；隔离 data root 的 Web 宿主加载 14/14 Plugin，并创建共享 SQLite 与 current pointer。2026-08-29 已在完整备份后迁移真实 data root：journal 为 `accepted`，SQLite `integrity_check=ok`，共 11 个 Conversation、49,725 个 event，连续 seq 异常为 0；6 个 active/available、1 个 active/unavailable 和 4 个 archived Conversation 均被保留，旧 `storage-v1` 与迁移前备份逐文件哈希一致。
+- 仓库全局 `check:preflight` 仍被 4 个本 Task 未修改的既有边界问题阻断：3 个 `prompt-eval` 测试跨 Kit import，以及 `kit-picker.test.ts` 的静态 Kit identity 列表；除该静态架构检查外，其余 preflight 用例通过。
 
-1. **隐藏**：失效知识立即退出可召回集合。
-2. **降温**：长期未使用但仍有效的知识从 hot 降为 warm/cold。
-3. **压实**：合并重复知识，但保留全部 `sourceEventSeqs` 和旧到新的关系。
-4. **清理投影**：宽限期后删除无效知识的 FTS、向量和派生行，可由 JSONL 重建。
-5. **Conversation 归档/删除**：关闭写入和数据库后，整体移动目录并写外部 tombstone。
+## 模块详细设计
 
-自动过期只能依据明确 TTL、`validUntil`、来源版本失效或复核失败。单纯“很久没用”只能降温，不能变为 expired。
+1. [Framework Plugin Runtime](design/framework-plugin-runtime.md)：依赖声明、加载、卸载、回滚和 Framework 错误。
+2. [Agent Context Store Plugin](design/agent-context-store-plugin.md)：完整 API、数据模型、事务、reducer、检索、Budget 和 Context Plan。
+3. [Agent Plugin 集成](design/agent-plugin-integration.md)：调用时机、Turn/tool loop、trace 和错误呈现。
+4. [初始化与运行保障](design/migration-and-operations.md)：空库初始化、发布、生命周期、故障边界与未实现的备份恢复需求。
+5. [兼容性与不劣化门禁](design/compatibility-and-regression.md)：现有行为基线、分阶段切换、差分测试和 Web 验收。
 
-归档顺序：拒绝或取消活动 Turn → 阻止新写入 → 排空写队列 → SQLite WAL checkpoint 并关闭 → 原子移动整个目录 → 写入并 `fsync` 外部 tombstone。中途失败必须可补偿或恢复。
+这些文件共同属于本 Task。实现完成后，稳定架构事实必须同步到 docs/architecture。
 
-### R6. 上下文完整性
+## 可靠性与取舍
 
-每轮模型上下文按以下优先级组装：
-
-1. System 与工具定义
-2. 强制状态：当前目标、约束、已确认决策、阻塞项、待执行动作
-3. 当前 Turn 的用户输入和工具上下文
-4. 最近 JSONL Turn 窗口
-5. 最新 Checkpoint/Summary
-6. 混合召回的历史证据
-
-强制状态不能依赖向量召回。近期窗口必须按完整 Turn 截取，不能截断 tool call/result 配对。
-
-短 Conversation 在 Token 安全时可以提交完整 surface，但仍要应用权威的取消和替代关系；不能因为“全量提交”把已撤销指令重新解释为有效指令。
-
-## 检索设计
-
-### 查询构造
-
-查询由最新用户消息、聚焦后的当前意图、实体/路径/ID/错误文本、未解决问题组成。不得只 embedding 最新一句话。
-
-### 多路召回
-
-- FTS：精确词、路径、ID、错误文本
-- 向量：语义相似历史
-- 实体索引：同一对象和别名
-- 时间通道：近期相关 Turn
-- 关系通道：目标的前置、替代和证据节点
-
-候选可使用 Reciprocal Rank Fusion 合并，再应用 validity gate、权限过滤和业务排序。
-
-### 来源扩展
-
-候选知识命中后，必须扩展到：
-
-- 精确 `sourceEventSeqs`
-- 所在完整 Turn
-- 配对的工具调用和结果
-- 取消、替代、证明等关系事件
-
-传给模型的片段带来源位置和状态，不只提供脱离语境的摘要。
-
-### 低置信度兜底
-
-当强制状态缺失、分数接近、精确标识符未命中或来源无法展开时，依次：
-
-1. 扩大候选 K；
-2. 使用精确实体、路径、ID 和 FTS；
-3. 展开相关完整 Turn；
-4. 根据 JSONL 序号定点读取；
-5. 必要时扫描限定范围 JSONL；
-6. 仍有歧义则向用户确认。
-
-因此，RAG 是优化路径，不是唯一正确性路径。
-
-## SQLite 与向量方案
-
-第一阶段候选方案：Node.js `node:sqlite` + FTS5 + embedding BLOB + JavaScript 精确 KNN，封装为存储适配器。理由：保持 Kit 当前 `any/any` 的可移植边界，不引入原生 `.node`、平台/架构和 Node ABI 约束。
-
-`better-sqlite3`、`sqlite-vec` 等原生扩展只有在明确接受 native-code 权限、发布矩阵和 ABI 运维成本后再采用。Prompt Builder 不直接依赖具体向量库，以便后续替换为 sqlite-vec、HNSW 或远端服务。
-
-建议表：
-
-- `knowledge_items`
-- `knowledge_sources`
-- `knowledge_relations`
-- `intent_nodes`
-- `intent_relations`
-- `knowledge_fts`
-- `knowledge_embeddings`
-- `maintenance_jobs`
-- `projection_checkpoint`
-
-embedding 来源、模型版本、维度和内容哈希必须入库。远端 embedding 是否允许发送 Conversation 内容，需要单独的隐私决策；默认优先本地或已批准的 Model Service 能力。
-
-## Plugin 边界与消息链路
-
-实现范围原则上限制在 `kits/harness/plugins/agent/main`：
-
-```text
-src/context/
-├── types
-├── projector
-├── classifier
-├── store-adapter
-├── retrieval
-├── maintenance
-├── prompt-builder
-└── conversation-storage
-```
-
-主要链路：
-
-1. Chat 向 Agent 发定向 `sendMessage` 请求。
-2. Agent 先把输入写入 Conversation JSONL。
-3. Agent 内部投影器同步或有界异步更新 SQLite，并推进 checkpoint。
-4. Prompt Builder 读取强制状态、近期 Turn 和检索证据。
-5. Agent 向 Model Service 发定向生成请求。
-6. 模型与工具事件继续先落 JSONL，再更新投影。
-7. Agent 通过现有 trace 广播对外通知，不允许 Chat 直接读取文件或 SQLite。
-
-知识维护默认采用确定性规则。若未来需要 LLM 分类器，应扩展 Model Service 的 purpose/协议；不能私自在 Agent 中建立第二套模型调用路径。
-
-## 一致性与恢复
-
-- 写入顺序保持：JSONL 落盘 → 内存 fold → 投影更新 → trace 广播。
-- SQLite 更新失败不能回滚已经成功的 JSONL；标记投影落后并从 checkpoint 重放。
-- 每条知识保存来源序号和内容哈希，防止投影漂移。
-- 启动时校验 `projection_checkpoint <= JSONL tail seq`，落后则增量重放，超前则废弃并重建。
-- 删除 `context.sqlite` 后，必须仅凭 JSONL 得到语义等价的有效知识集合。
-- 并发维护与 Turn 写入共用 Conversation 级串行写边界，避免清理和新增交错。
-
-## 存储迁移
-
-从当前“一 Conversation 一 JSONL”迁移到 storage-v2，采用双读、v2 单写：
-
-1. 新 Conversation 直接写 v2。
-2. 旧 Conversation 仍可读取 v1，但不得在读取时偷偷迁移。
-3. 显式迁移先写临时目录，复制并校验 JSONL，再构建 SQLite。
-4. `fsync` 后原子发布 v2 目录并写迁移标记。
-5. v2 优先读取；旧 v1 文件保留到验证期结束并获得清理授权。
-
-回滚时停止 v2 新写入，保留 JSONL，删除可重建投影；不得把 SQLite 反向当作恢复事实源。
-
-## 可观测性
-
-至少记录以下指标：
-
-- 强制上下文遗漏率：目标为 0
-- 无效知识泄漏率：目标为 0
-- 来源可追溯率与重建成功率：目标为 100%
-- Recall@K、精确 ID/路径召回率
-- 召回片段实际采用率
-- 错误过期率和错误取消率
-- 投影延迟与重建耗时
-- 上下文 Token 降幅、组装延迟
-- 每 Conversation SQLite/向量体积增长
-- 归档、恢复和迁移成功率
-
-维护决策要输出可审计原因，例如 `explicit_cancel`、`superseded_by`、`ttl_elapsed`、`source_invalidated`、`cooled_by_inactivity`，不能只记录新权重。
-
-## 测试与验收
-
-### 单元测试
-
-- 状态转换矩阵以及 pinned 不覆盖 invalidity。
-- 半衰期、增强上限、探索配额和仅检索不增强。
-- 取消、替代、恢复关系投影。
-- validity 硬过滤发生在排序之前。
-- FTS、向量、实体和关系候选融合。
-- 完整 Turn 与 tool call/result 扩展。
-
-### 集成测试
-
-- 输入“删除 xx”，随后“我说错了/前面的算了”，旧意图不会进入可执行强制状态或召回结果。
-- SQLite 被删除或损坏后从 JSONL 重建，结果一致。
-- 投影落后时能够从 checkpoint 追平。
-- 归档活动 Conversation 时正确阻止新写入，并可从 trash 恢复。
-- v1 到 v2 迁移中断后，不丢原始 JSONL，也不出现双写分叉。
-- 短对话全量 surface 与长对话分层检索均遵守取消关系。
-
-### Web 验收
-
-这是 Kit 装配和共享可见行为变更，除针对性服务端测试外，必须在 Web 宿主验收：
-
-- 连续发送、取消、纠正后的可见回答和工具行为；
-- Conversation 重载后状态一致；
-- 归档、恢复和删除交互；
-- 长对话下 Token 和延迟指标。
+- **SQLite 成为关键事实源**：当前有完整性检查；一致快照备份、新版本恢复与对象校验仍未实现，若成为需求需单独明确，不用历史一次性迁移代替当前能力。
+- **硬依赖扩大 Kit 切换故障面**：Context Store 故障阻止新 Kit 激活；旧 Kit 仅在恢复成功时可继续，恢复失败须 fail closed 并重建 runtime。
+- **共享数据库存在并发竞争**：必须验证多个 Editor Runtime 的 WAL、transaction 和 lease。
+- **首次 step 可能没有全部历史**：依靠 mandatory state、近期 surface、新锚点和 `recall_history` 补足。
+- **旧 JSONL 不会自动出现**：这是明确的产品取舍；部署方若仍需要旧会话，必须在启用新版前另行处理。
 
 ## 验收标准
 
-- JSONL 仍是唯一事实源，SQLite 可删除重建。
-- cancelled/superseded/expired 不进入模型有效上下文。
-- 当前目标、约束、决策、阻塞和待执行动作不依赖 RAG 命中。
-- 每个召回片段可定位到原始事件和完整 Turn。
-- 降温、失效、投影清理和 Conversation 删除具有不同操作与审计记录。
-- 存储迁移可中断恢复，且不会无授权清理 v1 数据。
-- 所有新增行为通过针对性测试和 Web 浏览器验收。
-
-## 分阶段落地
-
-### Phase 1：正确性基线
-
-- 知识/意图事件与确定性投影
-- 强制状态 + 近期 Turn + FTS
-- 取消、替代、TTL 和来源追踪
-- SQLite 可重建与指标
-
-### Phase 2：语义召回
-
-- embedding 生成与版本管理
-- 向量候选、混合融合、来源扩展
-- 低置信度兜底和离线召回评测
-
-### Phase 3：生命周期维护
-
-- 降温、确认使用增强、重复压实
-- 投影清理、维护预算和审计
-- storage-v2 迁移、整目录归档和恢复
-
-### Phase 4：可选能力
-
-- 经审批的 LLM 分类器
-- 跨 Conversation 知识晋升
-- 更高性能的原生或外部向量后端
-
-## 风险与取舍
-
-- **误取消**：关系解析错误会隐藏有效知识；歧义时必须确认。
-- **漏召回**：只用向量会丢精确标识；采用强制状态、FTS 和 JSONL 回退。
-- **投影漂移**：SQLite 写成功与 JSONL 不一致；坚持 JSONL 先写和 checkpoint 重放。
-- **自我强化**：检索即加权会形成热门偏差；只有确认有用才增强并设置上限。
-- **错误过期**：时间衰减被误作失效；温度与 validity 分离。
-- **原生依赖**：sqlite-vec 影响 Kit 可移植性；先走适配器和纯 Node 基线。
-- **磁盘增长**：每 Conversation 独立 SQLite 有固定成本；短 Conversation 可延迟建库或共享模板初始化，但生命周期仍保持独立。
-- **隐私**：远端 embedding 可能外发内容；默认禁用，需明确能力与数据边界。
-
-## 待评审决策
-
-1. 第一阶段向量后端是否接受“`node:sqlite` + FTS5 + JS 精确 KNN”的可移植基线。
-2. 哪些知识类型必须进入强制状态，以及近期窗口保留多少完整 Turn。
-3. 不同知识类型的 TTL、半衰期、增强上限和投影清理宽限期。
-4. 哪些信号足以写入持久化的 `knowledge/used`。
-5. storage-v2、trash、tombstone 和旧 v1 文件分别保留多久。
-6. 是否在本 Task 内扩展“活动 Turn 中接收纠正消息”的协议，还是拆分独立 Task。
-7. embedding 使用本地能力、Model Service，还是批准的远端服务。
-8. 短 Conversation 何时延迟创建 SQLite，以控制大量小数据库的固定开销。
-9. 跨 Conversation 晋升是否永久排除在本 Task 外。
-10. 是否存在必须物理擦除单条 JSONL 内容的合规场景；若有，需要另行设计不可恢复删除协议。
+- SQLite events 是唯一运行时事实源；首次启动、重启和正常运行都不访问 JSONL。
+- Agent 只通过 Context Store canonical API 操作 Conversation。
+- 硬依赖缺失、成环或加载失败时新 Kit 不激活；旧 Kit 恢复成功才可继续，恢复失败则 fail closed，保留激活/恢复错误并重建 runtime。
+- current_state 可由结构化 state/relation events 确定性重建。
+- 每个 Model Service step 前重新 buildContext，新锚点可影响下一 step。
+- Agent 只计算 availableInputTokens，不二次裁剪 Context Store 结果。
+- assistant tool call 与 tool result 不被拆散，排除的旧正文仍可按 source seq 追溯。
+- cancelled、superseded、expired 历史内容在排序前过滤。
+- 每次模型请求有 Context Plan ID 和可解释选择记录。
+- 空库初始化使用版本目录和单一原子 current 指针，崩溃后可判定恢复。
+- 当前启动与 restoreConversation 应用外部 tombstone guard；不宣称已具备通用旧版本恢复能力。
+- 多 Runtime 并发、数据库损坏和初始化崩溃恢复有自动化测试。
+- Context Builder 必须通过完整差分门禁才可判定受控切换完成；当前代码已默认 candidate-v1 与门禁未闭环的差距不得隐去。
+- S1、S2、M3、M10、N10、L20、O1 和 P100 的历史测试只证明各自覆盖范围；Q30 必须 candidate 全部 90 次可评分、通过数不低于 current 且无同 case/repeat 新增回归，目前缺 1 次 Provider 空响应。
+- 流式必须持久化成功后才广播，写失败停止 generation；终态等待队列收口；Stop 仅在 durable cancelled terminal 后成功。上述故障验收当前未完成。
+- Harness Kit 针对性测试与 Web 浏览器验收通过。
 
 ## 约束
 
-- `docs/architecture/agent-jsonl-format.md`：Conversation JSONL 的事实源与所有权。
-- `docs/architecture/agent-turn-event-protocol.md`：Turn 生命周期、取消和 trace 协议。
-- `docs/architecture/model-service-plugin.md`：模型调用目的与 Plugin 边界。
-- `docs/architecture/plugin-runtime-model.md`：Plugin 消息交互和运行时隔离。
-- `docs/architecture/kit-and-session-model.md`：Framework Session 与 Kit 装配边界。
-- `docs/guides/testing.md`：服务端针对性测试及 Web 验收要求。
-- 决策记忆查询未命中相关既有决策；查询结果完整度为 partial，且有 1 个文件读取失败，因此本 Task 不把“无命中”解释为仓库从未讨论过该方向。
-
-## 需求覆盖矩阵
-
-| 用户关注点 | 设计响应 |
-| --- | --- |
-| 每个 Session 一个小知识库 | 映射为每个 Conversation 独立目录和 SQLite |
-| 数据方便一起删除 | 整目录归档/删除，外部 tombstone 防复活 |
-| 不用的知识慢慢降权 | temperature 与半衰期衰减 |
-| 频繁有用的知识提升 | 仅确认有用后增强，设置上限和探索配额 |
-| 撤销早先意图 | 显式 cancel/supersede 关系，召回前硬过滤 |
-| RAG 片段可能漏数据 | 强制状态、近期完整 Turn、混合检索和 JSONL 回退 |
-| 过期无用知识清理 | 隐藏、降温、压实、投影清理、整会话删除五级机制 |
-| JSONL 与 SQLite 何时用 | JSONL 负责事实与恢复，SQLite 负责在线投影与召回 |
-
-## 变更记录
-
-- 2026-08-26：汇总三个独立 Agent 对知识生命周期、检索完整性和 Harbors 仓库边界的评审，形成初版设计。
+- Harbors 只支持 Web 宿主。
+- Plugin 是独立业务单元；Framework 不承载 Context Store 业务。
+- 对外业务继续使用现有 request/broadcast；内部高频调用使用现有 callPlugin。
+- 共享可见行为必须执行 Web 浏览器验收。
+- 当前实现依据：[agent-turn-event-protocol](../../architecture/agent-turn-event-protocol.md)、[plugin-runtime-model](../../architecture/plugin-runtime-model.md)、[kit-and-session-model](../../architecture/kit-and-session-model.md)；[旧 JSONL Task](../2026-08-23-agent-jsonl-v1/task.md) 仅作历史格式背景。
+- 开发与测试依据：[developing-plugins-and-kits](../../guides/developing-plugins-and-kits.md)、[testing](../../guides/testing.md)。
 
 ## 需求变更
 
-- 初始需求：为每个 Conversation 建立可独立维护和清理的小型知识库，并解决知识降权、增强、过期、撤销和 RAG 漏召回问题。
-- 当前没有已确认的范围变更；“活动 Turn 中即时纠正”和“跨 Conversation 晋升”保留为待评审边界，不默认纳入实现。
+- 2026-08-29：取消首次 JSONL 迁移。新安装直接创建空 SQLite，旧 JSONL 不扫描、不导入，也不作为运行时回退。
+- 2026-10-22：按当前代码、ADR 0005 和原始评测复核文档；撤下 JSONL 导出承诺，校正 User+Plugin 与 callers、运维和回滚边界，将流式、Stop 及严格 Q30 重新列为未完成。此次为文档核对，不新增代码实现或模型评测授权。
