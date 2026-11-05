@@ -4,7 +4,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { createKitAssemblyHarness } from '../../../../../packages/server/dist/testing.js';
+import { createKitAssemblyHarness } from '@itharbors/server/testing';
 import { ContextStore } from '../../agent-context-store/main/src/store.ts';
 import { HarborsAdapter, type ContextStoreClient, type ModelServiceCatalog, type ModelServiceClient, type ModelServiceCompleteRequest, type TurnInstructionProvider } from '../main/src/adapter/harbors.ts';
 import { loadWorkspaceInstructions } from '../main/src/adapter/instructions.ts';

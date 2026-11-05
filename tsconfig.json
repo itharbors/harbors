@@ -3,6 +3,9 @@
     "target": "ES2022",
     "module": "ES2022",
     "moduleResolution": "bundler",
+    "paths": {
+      "@itharbors/server/testing": ["./packages/server/dist/testing.js"]
+    },
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,

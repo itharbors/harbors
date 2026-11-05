@@ -5,8 +5,8 @@ import type { WorkbenchContext } from '@itharbors/plugin-types';
 import { renderKitPicker, renderKitPickerError, type KitPickerOptions } from '../../src/components/kit-picker';
 
 const kits = [
-  { id: 'default', name: '@itharbors/kit-default', label: 'Default Kit' },
-  { id: 'harness', name: '@itharbors/kit-harness', label: 'Harbors Harness' },
+  { id: 'alpha', name: '@example/kit-alpha', label: 'Alpha Kit' },
+  { id: 'beta', name: '@example/kit-beta', label: 'Beta Kit' },
 ];
 
 describe('Kit picker login flow', () => {
@@ -72,8 +72,8 @@ describe('Kit picker login flow', () => {
     expectFeedback(host, 'success', '已创建 Session new-session');
     expect(host.querySelector('.kit-flow-live')?.textContent).toBe('请选择工作台');
     expect(host.querySelector('.kit-picker-eyebrow')?.textContent).toContain('new-session');
-    click(host, '[data-kit-id="default"]');
-    expect(calls).toEqual(['post', 'persist:new-session', 'navigate:/kits/default?session=new-session']);
+    click(host, '[data-kit-id="alpha"]');
+    expect(calls).toEqual(['post', 'persist:new-session', 'navigate:/kits/alpha?session=new-session']);
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toEqual({ userId: 'u1' });
     click(host, '.kit-back-action');
@@ -90,10 +90,10 @@ describe('Kit picker login flow', () => {
     click(host, '.kit-user-card[data-user-id="u1"]');
     click(host, 'input[value="s1"]');
     click(host, '.kit-primary-action');
-    click(host, '[data-kit-id="harness"]');
+    click(host, '[data-kit-id="beta"]');
     expect(selected).toHaveBeenCalledWith('s1');
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(navigate).toHaveBeenCalledWith('/kits/harness?session=s1');
+    expect(navigate).toHaveBeenCalledWith('/kits/beta?session=s1');
     click(host, '.kit-back-action');
     click(host, '.kit-session-clear');
     expect(host.querySelector('input:checked')).toBeNull();

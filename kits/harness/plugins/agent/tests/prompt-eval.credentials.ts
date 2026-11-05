@@ -5,7 +5,7 @@ import {
   CredentialVault,
   createNativeKeyringAdapter,
   type KeyringAdapter,
-} from '../../../../../packages/server/dist/testing.js';
+} from '@itharbors/server/testing';
 
 export async function openEvalCredentialVault(
   evalRoot: string,

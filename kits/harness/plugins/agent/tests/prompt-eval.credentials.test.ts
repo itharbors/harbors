@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { CredentialStore, type KeyringAdapter } from '../../../../../packages/server/dist/testing.js';
+import { CredentialStore, type KeyringAdapter } from '@itharbors/server/testing';
 import { cleanupEvalResources, openEvalCredentialVault } from './prompt-eval.credentials.ts';
 
 test('eval Vault binds the normal Kit and Model Service scope without exposing stored values', async () => {
