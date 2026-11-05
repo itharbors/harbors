@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-08-31-harness-tool-error-reporting",
+  "type": "bug",
+  "updatedAt": "2026-10-22T03:39:35.349Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "blocked",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}
