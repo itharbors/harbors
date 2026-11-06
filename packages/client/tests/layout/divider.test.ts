@@ -19,6 +19,7 @@ describe('ce-divider', () => {
     const styles = el.shadowRoot!.querySelector('style')!.textContent || '';
     expect(el.shadowRoot!.querySelector('.bar')).not.toBeNull();
     expect(getComputedStyle(el).cursor).toBe('col-resize');
+    expect(styles).toMatch(/^\s*\.bar\s*\{[^}]*\n\s*touch-action:\s*none;/m);
     expect(styles).toContain('var(--ce-divider-hit-area, var(--divider-hit-area, 6px))');
     expect(styles).toContain('var(--ce-divider-size, var(--divider-size, 2px))');
     expect(styles).toContain('var(--ce-divider-color, var(--ce-border, #444))');

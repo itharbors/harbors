@@ -48,6 +48,7 @@ export class Divider extends HTMLElement {
           outline: 0;
         }
         .bar {
+          touch-action: none;
           width: ${width};
           height: ${height};
           padding: ${padding};
