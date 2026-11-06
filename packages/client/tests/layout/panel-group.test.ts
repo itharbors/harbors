@@ -410,6 +410,7 @@ describe('ce-panel-group', () => {
     expect(styles).toContain('border: var(--ce-panel-group-border-width, 1px) solid var(--ce-panel-group-border-color, var(--ce-border, #444))');
     expect(styles).toContain('border-bottom: var(--ce-tabbar-border-width, 1px) solid var(--ce-tabbar-border-color, var(--ce-border, #444))');
     expect(styles).toContain('touch-action: pan-x');
+    expect(styles).toMatch(/^\s*\.tab-item\s*\{[^}]*\n\s*touch-action:\s*none;/m);
     expect(contentBlock).toContain('.content {');
     expect(contentBlock).not.toContain('background:');
     expect(styles).toContain('.content slot');

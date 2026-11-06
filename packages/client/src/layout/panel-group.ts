@@ -131,6 +131,7 @@ export class PanelGroup extends HTMLElement {
         .tab-item {
           display: inline-flex;
           align-items: center;
+          touch-action: none;
           padding: 0 var(--ce-space-3, 12px);
           border: 0;
           border-right: 1px solid var(--ce-tab-separator, var(--ce-border, #444));
