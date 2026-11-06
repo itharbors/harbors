@@ -45,7 +45,7 @@ export function bindResizableSplitPanes(root: ParentNode) {
     divider.addEventListener('ce-divider-drag-end', (event) => {
       resizeStates.delete(divider);
       if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
-        normalizeLayoutFlex(root);
+        normalizeLayoutFlex(root, divider.parentElement);
       }
     });
   });
@@ -244,7 +244,8 @@ type NestedSplitSnapshot = {
 };
 
 function snapshotNestedSplit(element: HTMLElement, direction: Direction): NestedSplitSnapshot {
-  if (element.tagName.toLowerCase() !== 'ce-split-pane' || getDirection(element) !== direction) {
+  if (element.tagName.toLowerCase() !== 'ce-split-pane' || getDirection(element) !== direction
+    || element.hasAttribute('data-collapsed-row-grower')) {
     return { items: [], outerGap: 0 };
   }
 
@@ -364,8 +365,9 @@ function getNextResizableSibling(element: Element): HTMLElement | null {
 }
 
 function getResizableChildren(splitPane: HTMLElement): HTMLElement[] {
-  return Array.from(splitPane.children)
-    .filter((child) => child.tagName.toLowerCase() !== 'ce-divider') as HTMLElement[];
+  return Array.from(splitPane.children).filter((child): child is HTMLElement => (
+    child instanceof HTMLElement && !child.hidden && child.tagName !== 'CE-DIVIDER'
+  ));
 }
 
 function getDirection(splitPane: HTMLElement): Direction {
@@ -384,9 +386,12 @@ function getElementSize(element: HTMLElement, direction: Direction): number {
   return 0;
 }
 
-function normalizeLayoutFlex(root: ParentNode) {
-  root.querySelectorAll('ce-split-pane').forEach((splitPane) => {
-    normalizeSplitPaneFlex(splitPane as HTMLElement);
+function normalizeLayoutFlex(root: ParentNode, resizedSplit: HTMLElement | null) {
+  root.querySelectorAll<HTMLElement>('ce-split-pane').forEach((splitPane) => {
+    if (splitPane.closest('[hidden]') || splitPane.querySelector(':scope > [hidden]')) return;
+    const grower = splitPane.closest('[data-collapsed-row-grower]');
+    if (grower && !grower.contains(resizedSplit)) return;
+    normalizeSplitPaneFlex(splitPane);
   });
 }
 
@@ -436,6 +441,8 @@ type Minimum = {
 };
 
 function computeMinimum(element: HTMLElement): Minimum {
+  if (element.hidden) return { width: 0, height: 0 };
+
   const tagName = element.tagName.toLowerCase();
   if (tagName === 'ce-split-pane') {
     return recordMinimum(element, computeSplitPaneMinimum(element));

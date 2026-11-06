@@ -1,6 +1,7 @@
 import './panel';
 
 const DRAG_THRESHOLD = 12;
+const DOUBLE_TAP_MS = 350;
 
 export class PanelGroup extends HTMLElement {
   static observedAttributes = ['data-drop-edge', 'data-drop-target-tab-id', 'data-drop-placement'];
@@ -10,6 +11,7 @@ export class PanelGroup extends HTMLElement {
   private pointerState: {
     pointerId: number;
     tabIndex: number;
+    tapPointerType?: string;
     startX: number;
     startY: number;
     moved: boolean;
@@ -17,12 +19,12 @@ export class PanelGroup extends HTMLElement {
   private touchState: {
     identifier: number;
     tabIndex: number;
+    tapEligible: boolean;
     startX: number;
     startY: number;
     moved: boolean;
   } | null = null;
-  private lastPointerActivation: { tabIndex: number; at: number } | null = null;
-  private lastTouchActivation: { tabIndex: number; at: number } | null = null;
+  private lastTap: { panel: HTMLElement; pointerType: string; at: number } | null = null;
 
   connectedCallback() {
     if (!this.shadowRoot) {
@@ -41,6 +43,7 @@ export class PanelGroup extends HTMLElement {
 
   disconnectedCallback() {
     this.observer?.disconnect();
+    this.lastTap = null;
   }
 
   refresh(): void {
@@ -270,6 +273,7 @@ export class PanelGroup extends HTMLElement {
         // dropped the previous pointerup/pointercancel (notably Safari).
         if (event.isPrimary !== true) return;
         this.pointerState = null;
+        this.lastTap = null;
       }
 
       const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
@@ -278,6 +282,7 @@ export class PanelGroup extends HTMLElement {
       this.pointerState = {
         pointerId: event.pointerId,
         tabIndex: Number(tab.dataset.index || '0'),
+        tapPointerType: event.isPrimary && event.button === 0 ? event.pointerType : undefined,
         startX: event.clientX,
         startY: event.clientY,
         moved: false,
@@ -290,6 +295,7 @@ export class PanelGroup extends HTMLElement {
 
       if (Math.hypot(event.clientX - state.startX, event.clientY - state.startY) >= DRAG_THRESHOLD) {
         state.moved = true;
+        this.interruptTap();
       }
     });
 
@@ -303,24 +309,14 @@ export class PanelGroup extends HTMLElement {
         return;
       }
 
-      const now = performance.now();
-      if (
-        event.pointerType === 'touch'
-        && this.lastTouchActivation
-        && this.lastTouchActivation.tabIndex === state.tabIndex
-        && now - this.lastTouchActivation.at < 500
-      ) {
-        return;
-      }
-
-      this.activate(state.tabIndex);
-      this.lastPointerActivation = { tabIndex: state.tabIndex, at: now };
-      this.suppressClickUntil = now + 500;
+      this.suppressClickUntil = performance.now() + 500;
+      this.activate(state.tabIndex, state.tapPointerType);
     });
 
     tabBar.addEventListener('pointercancel', (event) => {
       if (this.pointerState?.pointerId === event.pointerId) {
         this.pointerState = null;
+        this.interruptTap();
       }
     });
 
@@ -331,6 +327,7 @@ export class PanelGroup extends HTMLElement {
         // contact. Keep it only while the tracked identifier is still down.
         if (event.touches && findTouch(event.touches, this.touchState.identifier)) return;
         this.touchState = null;
+        this.lastTap = null;
       }
       const touch = event.changedTouches[0];
       const tab = (event.target as HTMLElement).closest('.tab-item') as HTMLElement | null;
@@ -339,6 +336,7 @@ export class PanelGroup extends HTMLElement {
       this.touchState = {
         identifier: touch.identifier,
         tabIndex: Number(tab.dataset.index || '0'),
+        tapEligible: event.touches.length === 1,
         startX: touch.clientX,
         startY: touch.clientY,
         moved: false,
@@ -352,6 +350,7 @@ export class PanelGroup extends HTMLElement {
       if (!touch) return;
       if (Math.hypot(touch.clientX - state.startX, touch.clientY - state.startY) >= DRAG_THRESHOLD) {
         state.moved = true;
+        this.interruptTap();
       }
     }, { passive: true });
 
@@ -367,24 +366,15 @@ export class PanelGroup extends HTMLElement {
         return;
       }
 
-      const now = performance.now();
-      if (
-        this.lastPointerActivation
-        && this.lastPointerActivation.tabIndex === state.tabIndex
-        && now - this.lastPointerActivation.at < 500
-      ) {
-        return;
-      }
-
-      this.activate(state.tabIndex);
-      this.lastTouchActivation = { tabIndex: state.tabIndex, at: now };
-      this.suppressClickUntil = now + 500;
+      this.suppressClickUntil = performance.now() + 500;
+      this.activate(state.tabIndex, state.tapEligible ? 'touch' : undefined);
     }, { passive: true });
 
     tabBar.addEventListener('touchcancel', (event) => {
       const state = this.touchState;
       if (state && (event.changedTouches.length === 0 || findTouch(event.changedTouches, state.identifier))) {
         this.touchState = null;
+        this.interruptTap();
       }
     }, { passive: true });
 
@@ -399,7 +389,14 @@ export class PanelGroup extends HTMLElement {
     });
   }
 
-  private activate(index: number) {
+  private interruptTap() {
+    this.lastTap = null;
+    if (this.pointerState) this.pointerState.tapPointerType = undefined;
+    if (this.touchState) this.touchState.tapEligible = false;
+  }
+
+  private activate(index: number, pointerType?: string) {
+    // The first ending event consumes both states for a physical touch.
     this.pointerState = null;
     this.touchState = null;
     this.panels.forEach((panel, panelIndex) => {
@@ -411,12 +408,20 @@ export class PanelGroup extends HTMLElement {
     });
 
     const panel = this.panels[index];
+    const lastTap = this.lastTap;
+    const now = performance.now();
+    const collapse = panel && pointerType && lastTap?.panel === panel
+      && lastTap.pointerType === pointerType && now - lastTap.at <= DOUBLE_TAP_MS;
+    this.lastTap = panel && pointerType && !collapse ? { panel, pointerType, at: now } : null;
     this.dispatchEvent(new CustomEvent('ce-panel-change', {
       detail: { title: panel?.getAttribute('title') || '', index },
       bubbles: true,
       composed: true,
     }));
     this.render();
+    if (collapse) {
+      this.dispatchEvent(new CustomEvent('ce-panel-column-collapse', { bubbles: true, composed: true }));
+    }
   }
 
   private observePanels() {

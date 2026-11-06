@@ -1712,6 +1712,72 @@ describe('EditorApp default layout', () => {
     expect(groups.every((group) => group.dataset.windowId === 'default-main')).toBe(true);
   });
 
+  it('folds an outer column and restores its existing panel without saving hidden widths', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const row = el.querySelector('ce-split-pane[direction="row"]')!;
+    const [left, right] = row.querySelectorAll<HTMLElement>(':scope > ce-panel-group');
+    const divider = row.querySelector<HTMLElement>('ce-divider')!;
+    const iframe = left.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe');
+    const originalFlex = left.style.flex;
+    const savedLayout = { ...localStorage };
+    const collapse = (group: HTMLElement) => group.dispatchEvent(new CustomEvent('ce-panel-column-collapse', { bubbles: true }));
+
+    collapse(left);
+    collapse(right);
+    expect(left.hidden).toBe(true);
+    expect(right.hidden).toBe(false);
+    expect(divider.hidden).toBe(true);
+
+    el.querySelector<HTMLButtonElement>('button[data-restore-column="left"]')!.click();
+    expect(left.hidden).toBe(false);
+    expect(divider.hidden).toBe(false);
+    expect(left.style.flex).toBe(originalFlex);
+    expect(left.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')).toBe(iframe);
+    expect({ ...localStorage }).toEqual(savedLayout);
+  });
+
+  it('keeps the stored width of a fixed column temporarily filling a collapsed row', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      windows: [{ ...bootstrapPayload.windows[0], layout: {
+        type: 'hsplit',
+        sizes: [200, 200, 200],
+        children: [
+          { type: 'leaf', panel: '@itharbors/plugin-list.list' },
+          { type: 'leaf', panel: '@itharbors/log.log' },
+          { type: 'hsplit', sizes: [100, 100], children: [
+            { type: 'leaf', panel: '@itharbors/message-debug.debug' },
+            { type: 'leaf', panel: '@itharbors/status-bar.status' },
+          ] },
+        ],
+      } }],
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const row = el.querySelector('ce-split-pane[direction="row"]')!;
+    const [left, middle, right] = row.querySelectorAll<HTMLElement>(':scope > :not(ce-divider)');
+    left.dispatchEvent(new CustomEvent('ce-panel-column-collapse', { bubbles: true }));
+    expect(right.style.flexGrow).toBe('1');
+    mockRect(middle, { right: 220 });
+    mockRect(right, { right: 746 });
+    right.querySelectorAll(':scope > ce-panel-group').forEach((column) => mockRect(column, { right: 370 }));
+    row.querySelector('ce-divider:not([hidden])')!.dispatchEvent(new CustomEvent('ce-divider-drag-end', {
+      bubbles: true, detail: { moved: true },
+    }));
+
+    const key = Object.keys(localStorage).find((name) => name.startsWith('itharbors:layout:'))!;
+    const saved = JSON.parse(localStorage.getItem(key)!).layout;
+    expect(saved.sizes).toEqual([200, 220, 200]);
+    expect(saved.children[2].sizes).toEqual([100, 100]);
+    el.querySelector<HTMLButtonElement>('button[data-restore-column="left"]')!.click();
+    expect([left, middle, right].map((column) => column.style.flexBasis)).toEqual(['200px', '220px', '200px']);
+  });
+
   it('moves a tab into another group and activates it after drop', async () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);

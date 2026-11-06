@@ -18,6 +18,7 @@ import {
   type EditorGroupNode,
   type EditorLayoutNode,
   type EditorPanelNode,
+  type EditorSplitNode,
   type EditorSplitFlexUnit,
   inferSplitFlexUnits,
   mapLayoutTitles,
@@ -52,12 +53,19 @@ export class EditorApp extends HTMLElement {
     sessionStorage: window.sessionStorage,
   });
   private defaultLayoutSignature: string | null = null;
+  private readonly collapsedColumnGroups = new Set<string>();
+  private readonly expandedRowFlex = new WeakMap<HTMLElement, string[]>();
   private handlePanelChange = (event: Event) => this.handlePanelGroupChange(event);
+  private handleColumnCollapse = (event: Event) => {
+    if (event.target instanceof HTMLElement && this.collapsePanelColumn(event.target, true)) {
+      bindResizableSplitPanes(this);
+    }
+  };
   private handleDividerDragStart = () => this.broadcastLayoutResizeState(true);
   private handleDividerDragEnd = (event: Event) => {
     this.broadcastLayoutResizeState(false);
     if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
-      this.persistRenderedLayoutSize();
+      this.persistRenderedLayoutSize((event.target as HTMLElement | null)?.parentElement ?? null);
     }
   };
   private handleWindowMessage = (event: MessageEvent) => this.handlePanelWindowMessage(event);
@@ -112,6 +120,7 @@ export class EditorApp extends HTMLElement {
     });
     this.dragController.bind();
     this.addEventListener('ce-panel-change', this.handlePanelChange);
+    this.addEventListener('ce-panel-column-collapse', this.handleColumnCollapse);
     this.addEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.addEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.addEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
@@ -141,6 +150,7 @@ export class EditorApp extends HTMLElement {
     this.menuRuntimeDispose = null;
     this.i18nClient = null;
     this.removeEventListener('ce-panel-change', this.handlePanelChange);
+    this.removeEventListener('ce-panel-column-collapse', this.handleColumnCollapse);
     this.removeEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.removeEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.removeEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
@@ -276,6 +286,11 @@ export class EditorApp extends HTMLElement {
     if (outer instanceof HTMLElement) {
       applyThemeTokensToElement(outer, this.hostThemeTokens);
     }
+    for (const groupId of this.collapsedColumnGroups) {
+      const group = Array.from(this.querySelectorAll<HTMLElement>('ce-panel-group[data-group-id]'))
+        .find((candidate) => candidate.dataset.groupId === groupId && !candidate.closest('ce-panel'));
+      if (!group || !this.collapsePanelColumn(group)) this.collapsedColumnGroups.delete(groupId);
+    }
     bindResizableSplitPanes(this);
     queueMicrotask(() => {
       if (this.isConnected) {
@@ -311,6 +326,7 @@ export class EditorApp extends HTMLElement {
     if (!this.session || !this.bootstrap) return;
 
     this.renderedWindow = windowDescriptor;
+    this.collapsedColumnGroups.clear();
     this.defaultLayoutSignature = createDefaultLayoutSignature(windowDescriptor.layout, this.panelMap);
     this.layout = createEditorLayout(
       windowDescriptor.layout,
@@ -351,14 +367,100 @@ export class EditorApp extends HTMLElement {
     this.saveCachedLayout();
   }
 
-  private persistRenderedLayoutSize(): void {
+  private collapsePanelColumn(group: HTMLElement, focus = false): boolean {
+    const groupId = group.dataset.groupId;
+    if (group.tagName !== 'CE-PANEL-GROUP' || !groupId) return false;
+
+    // Use the outermost horizontal split so stacked groups fold as one column.
+    let branch = group;
+    let column: HTMLElement | null = null;
+    while (branch.parentElement?.tagName === 'CE-SPLIT-PANE') {
+      const split = branch.parentElement;
+      if (split.getAttribute('direction') === 'row') column = branch;
+      branch = split;
+    }
+    if (branch.parentElement !== this || !column || column.hidden) return false;
+
+    const row = column.parentElement!;
+    const columns = layoutChildren(row);
+    if (columns.filter((child) => !child.hidden).length < 2) return false;
+
+    const side = column === columns[0] ? 'left' : column === columns.at(-1) ? 'right' : null;
+    if (!side) return false;
+
+    if (columns.every((child) => !child.hidden)) {
+      this.expandedRowFlex.set(row, columns.map((child) => child.style.flex));
+    }
+    const sibling = side === 'left' ? column.nextElementSibling : column.previousElementSibling;
+    const divider = sibling instanceof HTMLElement && sibling.tagName === 'CE-DIVIDER' ? sibling : null;
+    column.hidden = true;
+    column.style.display = 'none';
+    if (divider) {
+      divider.hidden = true;
+      divider.style.display = 'none';
+    }
+    this.collapsedColumnGroups.add(groupId);
+    this.applyColumnFlex(row, columns);
+
+    const button = this.ownerDocument.createElement('button');
+    button.type = 'button';
+    button.dataset.restoreColumn = side;
+    const title = group.querySelector(':scope > ce-panel[active]')?.getAttribute('title') || (side === 'left' ? '左栏' : '右栏');
+    button.textContent = title;
+    button.setAttribute('aria-label', `展开 ${title}`);
+    button.title = `展开 ${title}`;
+    button.style.cssText = `
+      order:${side === 'left' ? -1 : 1};flex:0 0 28px;min-width:0;
+      writing-mode:vertical-rl;padding:10px 4px;overflow:hidden;
+      border:1px solid var(--ce-border,#444);cursor:pointer;
+      color:var(--ce-tab-fg-active,#fff);background:var(--ce-tabbar-bg,#2d2d2d);
+      font:inherit;text-align:start;`;
+    button.addEventListener('click', () => {
+      this.collapsedColumnGroups.delete(groupId);
+      column.hidden = false;
+      column.style.removeProperty('display');
+      if (divider) {
+        divider.hidden = false;
+        divider.style.removeProperty('display');
+      }
+      button.remove();
+      this.applyColumnFlex(row, columns);
+      bindResizableSplitPanes(this);
+      group.shadowRoot?.querySelector<HTMLElement>('.tab-item.active')?.focus({ preventScroll: true });
+    });
+    this.append(button);
+    if (focus) button.focus();
+    return true;
+  }
+
+  private applyColumnFlex(row: HTMLElement, columns: HTMLElement[]): void {
+    if (columns.every((column) => !column.hidden)) {
+      const expanded = this.expandedRowFlex.get(row);
+      this.expandedRowFlex.delete(row);
+      if (expanded) {
+        columns.forEach((column, index) => {
+          column.removeAttribute('data-collapsed-row-grower');
+          column.style.flex = expanded[index];
+        });
+        return;
+      }
+    }
+
+    const root = this.querySelector<HTMLElement>(':scope > ce-split-pane > :not(ce-divider)');
+    if (!this.layout || !root) return;
+    const split = findRenderedSplit(this.layout, root, row);
+    if (!split) return;
+    const units = split.flexUnits ?? inferSplitFlexUnits(split.children.length, split.sizes);
+    applyRowFlex(columns, split.sizes, units);
+  }
+
+  private persistRenderedLayoutSize(resizedSplit: HTMLElement | null): void {
     if (!this.layout) return;
-    const outer = this.querySelector(':scope > ce-split-pane');
-    const renderedRoot = Array.from(outer?.children ?? [])
-      .find((child) => child.tagName.toLowerCase() !== 'ce-divider') as HTMLElement | undefined;
+    const renderedRoot = this.querySelector<HTMLElement>(':scope > ce-split-pane > :not(ce-divider)');
     if (!renderedRoot) return;
 
-    this.layout = syncLayoutSizesFromDom(this.layout, renderedRoot);
+    if (resizedSplit?.querySelector(':scope > [hidden]')) this.expandedRowFlex.delete(resizedSplit);
+    this.layout = syncLayoutSizesFromDom(this.layout, renderedRoot, resizedSplit);
     this.saveCachedLayout();
   }
 
@@ -898,9 +1000,8 @@ export class EditorApp extends HTMLElement {
   }
 
   private renderSizeStyle(size?: number, unit: EditorSplitFlexUnit = 'fr'): string {
-    if (size === undefined) return 'flex:1 1 0;min-height:0;min-width:0;background:transparent;';
-    if (unit === 'px') return `flex:0 0 ${size}px;min-height:0;min-width:0;background:transparent;`;
-    return `flex:${size} 1 0;min-height:0;min-width:0;background:transparent;`;
+    const flex = size !== undefined && unit === 'px' ? `0 0 ${size}px` : `${size ?? 1} 1 0`;
+    return `flex:${flex};min-height:0;min-width:0;background:transparent;`;
   }
 
   private isFixedEditorNode(node: EditorLayoutNode, size: number | undefined, unit: EditorSplitFlexUnit): boolean {
@@ -1028,19 +1129,61 @@ function setActiveTab(node: EditorLayoutNode, groupId: string, tabId: string): E
   return node;
 }
 
-function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement): EditorLayoutNode {
+function layoutFlex(size: number | undefined, unit: EditorSplitFlexUnit): string {
+  if (size === undefined) return '1 1 0px';
+  return unit === 'px' ? `0 0 ${size}px` : `${size} 1 0px`;
+}
+
+function layoutChildren(element: HTMLElement): HTMLElement[] {
+  return Array.from(element.children).filter((child): child is HTMLElement => (
+    child instanceof HTMLElement && child.tagName !== 'CE-DIVIDER'
+  ));
+}
+
+function findRenderedSplit(node: EditorLayoutNode, element: HTMLElement, target: HTMLElement): EditorSplitNode | undefined {
+  if (node.kind !== 'split') return;
+  if (element === target) return node;
+  const children = layoutChildren(element);
+  const index = children.findIndex((child) => child.contains(target));
+  if (index !== -1 && node.children[index]) return findRenderedSplit(node.children[index], children[index], target);
+}
+
+function collapsedRowGrower(columns: HTMLElement[], units: EditorSplitFlexUnit[]): HTMLElement | undefined {
+  if (columns.some((column) => column.hidden) && !columns.some((column, index) => !column.hidden && units[index] !== 'px')) {
+    return columns.filter((column) => !column.hidden).at(-1);
+  }
+}
+
+function applyRowFlex(columns: HTMLElement[], sizes: number[] | undefined, units: EditorSplitFlexUnit[]): void {
+  const grower = collapsedRowGrower(columns, units);
+  columns.forEach((column, index) => {
+    column.toggleAttribute('data-collapsed-row-grower', column === grower);
+    column.style.flex = column === grower ? '1 1 0px' : layoutFlex(sizes?.[index], units[index] ?? 'fr');
+  });
+}
+
+function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement, resizedSplit: HTMLElement | null): EditorLayoutNode {
   if (node.kind !== 'split') {
     return node;
   }
 
-  const children = Array.from(element.children)
-    .filter((child) => child.tagName.toLowerCase() !== 'ce-divider') as HTMLElement[];
-  const nextChildren = node.children.map((child, index) => (
-    children[index] ? syncLayoutSizesFromDom(child, children[index]) : child
-  ));
-  const axis = node.direction === 'column' ? 'height' : 'width';
+  const children = layoutChildren(element);
   const flexUnits = node.flexUnits ?? inferSplitFlexUnits(node.children.length, node.sizes);
-  const measured = children.map((child) => readRenderedSize(child, axis));
+  const grower = collapsedRowGrower(children, flexUnits);
+  const nextChildren = node.children.map((child, index) => {
+    const childElement = children[index];
+    if (!childElement || childElement.hidden || (childElement === grower && !grower.contains(resizedSplit))) return child;
+    return syncLayoutSizesFromDom(child, childElement, resizedSplit);
+  });
+  const hasCollapsedColumn = children.some((child) => child.hidden);
+  if (hasCollapsedColumn && element !== resizedSplit) return { ...node, children: nextChildren };
+
+  const axis = node.direction === 'column' ? 'height' : 'width';
+  const measured = children.map((child) => child.hidden ? null : readRenderedSize(child, axis));
+  const hasHiddenFlexibleChild = children.some((child, index) => child.hidden && flexUnits[index] === 'fr');
+  const flexibleShare = hasHiddenFlexibleChild ? children.reduce((total, child, index) => (
+    total + (!child.hidden && flexUnits[index] === 'fr' ? node.sizes?.[index] ?? 1 : 0)
+  ), 0) : 1;
 
   // 计算所有 fr 子节点占据的总像素，用来反推每个 fr 子节点的相对份额
   let flexibleTotalPx = 0;
@@ -1053,18 +1196,23 @@ function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement): E
   const sizes = node.children.map((_, index) => {
     const unit = flexUnits[index];
     const size = measured[index];
+    const child = children[index];
+    if (child && (child.hidden || child === grower)) return node.sizes?.[index] ?? 1;
     if (unit === 'px') {
       // 固定子节点：保留实际像素值
       return typeof size === 'number' && size > 0 ? Number(size.toFixed(2)) : node.sizes?.[index];
     }
     // 弹性子节点：归一化为 <=1 的份额
     if (typeof size === 'number' && size > 0 && flexibleTotalPx > 0) {
-      return Number((size / flexibleTotalPx).toFixed(6));
+      return Number((size / flexibleTotalPx * flexibleShare).toFixed(6));
     }
     return node.sizes?.[index];
   });
 
   const allValid = sizes.every((size): size is number => typeof size === 'number' && size > 0);
+  if (hasCollapsedColumn && allValid) {
+    applyRowFlex(children, sizes, flexUnits);
+  }
 
   return {
     ...node,

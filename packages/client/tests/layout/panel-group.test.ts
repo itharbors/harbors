@@ -337,6 +337,85 @@ describe('ce-panel-group', () => {
     expect(secondEvents).toHaveLength(1);
   });
 
+  it('requests collapse after two physical touches on the same tab with mixed completion order', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+    const collapse = vi.fn();
+    const activate = vi.fn();
+    group.addEventListener('ce-panel-column-collapse', collapse);
+    group.addEventListener('ce-panel-change', activate);
+    const getTab = () => group.shadowRoot!.querySelectorAll<HTMLButtonElement>('.tab-item')[1];
+    const touchPointer = { pointerType: 'touch', clientX: 40, clientY: 10, isPrimary: true, button: 0 };
+
+    const first = { ...touchPointer, pointerId: 41 };
+    getTab().dispatchEvent(pointerEvent('pointerdown', first));
+    getTab().dispatchEvent(touchEvent('touchstart', 51, 40, 10));
+    getTab().dispatchEvent(pointerEvent('pointerup', first));
+    getTab().dispatchEvent(touchEvent('touchend', 51, 40, 10));
+    getTab().click();
+    expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
+    expect(activate).toHaveBeenCalledTimes(1);
+    expect(collapse).not.toHaveBeenCalled();
+
+    const second = { ...touchPointer, pointerId: 42 };
+    getTab().dispatchEvent(pointerEvent('pointerdown', second));
+    getTab().dispatchEvent(touchEvent('touchstart', 52, 40, 10));
+    getTab().dispatchEvent(touchEvent('touchend', 52, 40, 10));
+    getTab().dispatchEvent(pointerEvent('pointerup', second));
+    getTab().click();
+    expect(activate).toHaveBeenCalledTimes(2);
+    expect(collapse).toHaveBeenCalledTimes(1);
+    expect(collapse).toHaveBeenCalledWith(expect.objectContaining({ bubbles: true, composed: true }));
+  });
+
+  it.each(['pointermove', 'pointercancel'])('breaks a double click after %s on a tracked pointer', (interruption) => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+    const collapse = vi.fn();
+    group.addEventListener('ce-panel-column-collapse', collapse);
+    const getTab = () => group.shadowRoot!.querySelectorAll('.tab-item')[1];
+    const primary = { pointerId: 1, pointerType: 'mouse', clientX: 40, clientY: 10, isPrimary: true, button: 0 };
+    const click = (pointer = primary) => {
+      getTab().dispatchEvent(pointerEvent('pointerdown', pointer));
+      getTab().dispatchEvent(pointerEvent('pointerup', pointer));
+    };
+
+    click({ ...primary, button: 2 });
+    click();
+    expect(collapse).not.toHaveBeenCalled();
+
+    getTab().dispatchEvent(pointerEvent('pointerdown', primary));
+    getTab().dispatchEvent(pointerEvent(interruption, { ...primary, clientX: 52 }));
+    getTab().dispatchEvent(pointerEvent('pointerup', primary));
+    click();
+    expect(collapse).not.toHaveBeenCalled();
+
+    click();
+    expect(collapse).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not count a touch fallback as a tap after its pointer is cancelled', () => {
+    const group = document.createElement('ce-panel-group');
+    group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
+    document.body.appendChild(group);
+    const collapse = vi.fn();
+    group.addEventListener('ce-panel-column-collapse', collapse);
+    const getTab = () => group.shadowRoot!.querySelectorAll('.tab-item')[1];
+    const pointer = { pointerId: 43, pointerType: 'touch', clientX: 40, clientY: 10, isPrimary: true, button: 0 };
+
+    getTab().dispatchEvent(pointerEvent('pointerdown', pointer));
+    getTab().dispatchEvent(touchEvent('touchstart', 53, 40, 10));
+    getTab().dispatchEvent(pointerEvent('pointercancel', pointer));
+    getTab().dispatchEvent(touchEvent('touchend', 53, 40, 10));
+    expect(group.querySelectorAll('ce-panel')[1].hasAttribute('active')).toBe(true);
+
+    getTab().dispatchEvent(touchEvent('touchstart', 54, 40, 10));
+    getTab().dispatchEvent(touchEvent('touchend', 54, 40, 10));
+    expect(collapse).not.toHaveBeenCalled();
+  });
+
   it('recovers a new touch after cancelled or stale touch and pointer state', () => {
     const group = document.createElement('ce-panel-group');
     group.innerHTML = '<ce-panel title="Files" active></ce-panel><ce-panel title="Outline"></ce-panel>';
@@ -562,6 +641,7 @@ function pointerEvent(type: string, properties: {
   clientX: number;
   clientY: number;
   isPrimary?: boolean;
+  button?: number;
 }): PointerEvent {
   const event = new Event(type, { bubbles: true, composed: true }) as PointerEvent;
   for (const [key, value] of Object.entries(properties)) {
