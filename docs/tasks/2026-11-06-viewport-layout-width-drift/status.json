@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-11-06-viewport-layout-width-drift",
+  "type": "bug",
+  "updatedAt": "2026-11-06T03:38:52.167Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "completed",
+    "consolidation": "completed"
+  },
+  "pullRequest": null
+}

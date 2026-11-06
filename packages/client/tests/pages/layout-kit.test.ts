@@ -482,6 +482,7 @@ describe('layout-kit-page', () => {
     inspector.getBoundingClientRect = () => makeRect(220, 400);
 
     divider.dispatchEvent(new CustomEvent('ce-divider-drag-end', {
+      detail: { moved: true },
       bubbles: true,
       composed: true,
     }));

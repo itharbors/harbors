@@ -1,5 +1,6 @@
 export class Divider extends HTMLElement {
   private dragging = false;
+  private moved = false;
   private startCoord = 0;
   private dragShield: HTMLElement | null = null;
   private moveHandler = (event: PointerEvent) => this.handlePointerMove(event);
@@ -73,6 +74,7 @@ export class Divider extends HTMLElement {
       const pointerEvent = event as PointerEvent;
       pointerEvent.preventDefault();
       this.dragging = true;
+      this.moved = false;
       this.startCoord = this.getDirection() === 'row' ? pointerEvent.clientX : pointerEvent.clientY;
       (event.currentTarget as HTMLElement).classList.add('dragging');
       this.addDragShield();
@@ -143,7 +145,10 @@ export class Divider extends HTMLElement {
 
     const currentCoord = this.getDirection() === 'row' ? event.clientX : event.clientY;
     const delta = currentCoord - this.startCoord;
+    if (delta === 0) return;
+
     this.startCoord = currentCoord;
+    this.moved = true;
 
     const prevPanel = this.findResizablePanel(this.previousElementSibling, -1);
     const nextPanel = this.findResizablePanel(this.nextElementSibling, 1);
@@ -165,6 +170,7 @@ export class Divider extends HTMLElement {
     this.removeDocumentListeners();
     this.removeDragShield();
     this.dispatchEvent(new CustomEvent('ce-divider-drag-end', {
+      detail: { moved: this.moved },
       bubbles: true,
       composed: true,
     }));

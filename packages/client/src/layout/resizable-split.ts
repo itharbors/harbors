@@ -42,9 +42,11 @@ export function bindResizableSplitPanes(root: ParentNode) {
       });
     }) as EventListener);
 
-    divider.addEventListener('ce-divider-drag-end', () => {
+    divider.addEventListener('ce-divider-drag-end', (event) => {
       resizeStates.delete(divider);
-      normalizeLayoutFlex(root);
+      if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
+        normalizeLayoutFlex(root);
+      }
     });
   });
 }

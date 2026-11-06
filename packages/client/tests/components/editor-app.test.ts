@@ -1654,6 +1654,45 @@ describe('EditorApp default layout', () => {
     expect(next.style.flex).toBe('0 1 70px');
   });
 
+  it('keeps rendered and cached split sizes when a divider does not move along its resize axis', async () => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const divider = el.querySelector('ce-split-pane[direction="row"] > ce-divider')!;
+    const bar = divider.shadowRoot!.querySelector('.bar')!;
+    const previous = divider.previousElementSibling as HTMLElement;
+    const next = divider.nextElementSibling as HTMLElement;
+    const cacheKey = 'itharbors:layout:v1:mock-uuid-1234:%40itharbors%2Fkit-default:default-main';
+    previous.getBoundingClientRect = () => makeRect(260, 400);
+    next.getBoundingClientRect = () => makeRect(360, 400);
+
+    bar.dispatchEvent(new PointerEventCtor('pointerdown', { clientX: 260, clientY: 100, bubbles: true }));
+    document.dispatchEvent(new PointerEventCtor('pointermove', { clientX: 310, clientY: 100, bubbles: true }));
+    previous.getBoundingClientRect = () => makeRect(310, 400);
+    next.getBoundingClientRect = () => makeRect(310, 400);
+    document.dispatchEvent(new PointerEventCtor('pointerup', { clientX: 310, clientY: 100, bubbles: true }));
+
+    const cachedLayout = window.localStorage.getItem(cacheKey);
+    expect(cachedLayout).toContain('"sizes":[310,1]');
+    expect([previous.style.flex, next.style.flex]).toEqual(['0 1 50%', '0 1 50%']);
+
+    previous.getBoundingClientRect = () => makeRect(100, 600);
+    next.getBoundingClientRect = () => makeRect(180, 600);
+    const resize = vi.fn();
+    divider.addEventListener('ce-divider-resize', resize);
+
+    bar.dispatchEvent(new PointerEventCtor('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
+    document.dispatchEvent(new PointerEventCtor('pointerup', { clientX: 100, clientY: 100, bubbles: true }));
+    bar.dispatchEvent(new PointerEventCtor('pointerdown', { clientX: 100, clientY: 100, bubbles: true }));
+    document.dispatchEvent(new PointerEventCtor('pointermove', { clientX: 100, clientY: 150, bubbles: true }));
+    document.dispatchEvent(new PointerEventCtor('pointerup', { clientX: 100, clientY: 150, bubbles: true }));
+
+    expect(resize).not.toHaveBeenCalled();
+    expect([previous.style.flex, next.style.flex]).toEqual(['0 1 50%', '0 1 50%']);
+    expect(window.localStorage.getItem(cacheKey)).toBe(cachedLayout);
+  });
+
   it('does not render url-bar', () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);

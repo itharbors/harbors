@@ -400,9 +400,11 @@ class LayoutKitPage extends HTMLElement {
         );
       }) as EventListener);
 
-      divider.addEventListener('ce-divider-drag-end', () => {
+      divider.addEventListener('ce-divider-drag-end', (event) => {
         resizeStates.delete(divider);
-        this.normalizeLayoutFlex();
+        if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
+          this.normalizeLayoutFlex();
+        }
       });
     });
   }

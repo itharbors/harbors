@@ -54,9 +54,11 @@ export class EditorApp extends HTMLElement {
   private defaultLayoutSignature: string | null = null;
   private handlePanelChange = (event: Event) => this.handlePanelGroupChange(event);
   private handleDividerDragStart = () => this.broadcastLayoutResizeState(true);
-  private handleDividerDragEnd = () => {
+  private handleDividerDragEnd = (event: Event) => {
     this.broadcastLayoutResizeState(false);
-    this.persistRenderedLayoutSize();
+    if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
+      this.persistRenderedLayoutSize();
+    }
   };
   private handleWindowMessage = (event: MessageEvent) => this.handlePanelWindowMessage(event);
   private handleChannelMessageEvent = (event: MessageEvent) => this.handleChannelMessage(event.data);
