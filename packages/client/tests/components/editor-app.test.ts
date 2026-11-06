@@ -1573,6 +1573,38 @@ describe('EditorApp default layout', () => {
     await waitForBootstrap();
   });
 
+  it('retries a failed bootstrap for the same Session and connects SSE once', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      bootstrapResponse = () => Promise.resolve(new Response(null, { status: 403 }));
+      el = document.createElement('editor-app') as EditorApp;
+      document.body.appendChild(el);
+
+      await vi.waitFor(() => expect(el.querySelector('[role="alert"]')).not.toBeNull());
+      const retry = el.querySelector<HTMLButtonElement>('button[data-retry-initialization]');
+      expect(retry).not.toBeNull();
+      expect(MockEventSource.instances).toHaveLength(0);
+
+      const retryBootstrap = deferred<Response>();
+      bootstrapResponse = () => retryBootstrap.promise;
+      retry!.click();
+
+      expect(el.querySelector('[role="alert"]')).toBeNull();
+      expect(el.textContent).toContain('Loading kit layout...');
+      expect(MockEventSource.instances).toHaveLength(0);
+
+      retryBootstrap.resolve(createJsonResponse(bootstrapPayload));
+      await waitForBootstrap();
+
+      expect(el.querySelector('ce-panel-group')?.getAttribute('data-session-id')).toBe('existing-id');
+      expect(mockFetch.mock.calls.map(([url]) => url).filter((url) => url.startsWith('/api/bootstrap/')))
+        .toEqual(['/api/bootstrap/existing-id', '/api/bootstrap/existing-id']);
+      expect(MockEventSource.instances.map(({ url }) => url)).toEqual([expect.stringMatching(/^\/sse\/existing-id\?/)]);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it('does not sync Electron menu or connect SSE after disconnect before bootstrap resolves', async () => {
     const bootstrapDeferred = deferred<Response>();
     const syncMenu = vi.fn();
@@ -1804,6 +1836,49 @@ describe('EditorApp default layout', () => {
     expect(saved.children[2].sizes).toEqual([100, 100]);
     el.querySelector<HTMLButtonElement>('button[data-restore-column="left"]')!.click();
     expect([left, middle, right].map((column) => column.style.flexBasis)).toEqual(['200px', '220px', '200px']);
+  });
+
+  it('keeps preferred widths of columns outside the active divider resize', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      windows: [{ ...bootstrapPayload.windows[0], layout: {
+        type: 'hsplit',
+        sizes: [280, 1, 300],
+        children: [
+          { type: 'leaf', panel: '@itharbors/plugin-list.list' },
+          { type: 'leaf', panel: '@itharbors/log.log' },
+          { type: 'vsplit', sizes: [1, 220], children: [
+            { type: 'leaf', panel: '@itharbors/message-debug.debug' },
+            { type: 'leaf', panel: '@itharbors/status-bar.status' },
+          ] },
+        ],
+      } }],
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const row = el.querySelector('ce-split-pane[direction="row"]')!;
+    const [left, middle, right] = row.querySelectorAll<HTMLElement>(':scope > :not(ce-divider)');
+    mockRect(left, { right: 102 });
+    mockRect(middle, { right: 96 });
+    mockRect(right, { right: 110 });
+    const finishResize = (divider: Element) => divider.dispatchEvent(new CustomEvent('ce-divider-drag-end', {
+      bubbles: true, detail: { moved: true },
+    }));
+    const savedSizes = () => {
+      const key = Object.keys(localStorage).find((name) => name.startsWith('itharbors:layout:'))!;
+      return JSON.parse(localStorage.getItem(key)!).layout.sizes;
+    };
+
+    finishResize(right.querySelector('ce-divider')!);
+    expect(savedSizes()).toEqual([280, 1, 300]);
+    expect(left.style.flexBasis).toBe('280px');
+
+    mockRect(left, { right: 82 });
+    mockRect(middle, { right: 116 });
+    finishResize(row.querySelector(':scope > ce-divider')!);
+    expect(savedSizes()).toEqual([82, 1, 300]);
   });
 
   it('moves a tab into another group and activates it after drop', async () => {

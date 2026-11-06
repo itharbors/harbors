@@ -9,7 +9,7 @@ import '../layout/divider';
 import '../layout/panel';
 import '../layout/panel-group';
 import './floating-panel-layer';
-import { bindResizableSplitPanes } from '../layout/resizable-split';
+import { bindResizableSplitPanes, isSplitInResizePath } from '../layout/resizable-split';
 import { TabDragController } from '../layout/tab-drag-controller';
 import {
   createEditorLayout,
@@ -42,6 +42,7 @@ export class EditorApp extends HTMLElement {
   private dragController: TabDragController | null = null;
   private hostThemeTokens: ThemeTokens = DEFAULT_THEME_TOKENS;
   private initToken = 0;
+  private initializationFailed = false;
   private i18nClient: I18nClient | null = null;
   private menuRuntimeDispose: (() => void) | null = null;
   private renderedWindow: BootstrapInfo['windows'][number] | null = null;
@@ -78,7 +79,7 @@ export class EditorApp extends HTMLElement {
   private handleDividerDragEnd = (event: Event) => {
     this.broadcastLayoutResizeState(false);
     if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
-      this.persistRenderedLayoutSize((event.target as HTMLElement | null)?.parentElement ?? null);
+      this.persistRenderedLayoutSize(event.target instanceof HTMLElement ? event.target : null);
     }
   };
   private handleWindowMessage = (event: MessageEvent) => this.handlePanelWindowMessage(event);
@@ -149,6 +150,7 @@ export class EditorApp extends HTMLElement {
       window.addEventListener('beforeunload', this.handleSecondaryBeforeUnload);
     }
 
+    this.initializationFailed = false;
     this.render();
     this.initToken += 1;
     void this.init(this.initToken);
@@ -247,6 +249,7 @@ export class EditorApp extends HTMLElement {
       this.render();
     } catch (err) {
       if (token !== this.initToken || !this.isConnected) return;
+      this.initializationFailed = true;
       this.render();
       console.error('Failed to fetch session:', err);
       return;
@@ -278,11 +281,13 @@ export class EditorApp extends HTMLElement {
 
   private render() {
     this.clearPanelModalState();
-    const content = this.layout
-      ? this.renderEditorLayoutNode(this.layout)
-      : this.bootstrap
-        ? this.renderBootstrapLayout(this.bootstrap)
-        : this.renderLoadingLayout();
+    const content = this.initializationFailed
+      ? this.renderLoadingLayout('工作台加载失败。', true)
+      : this.layout
+        ? this.renderEditorLayoutNode(this.layout)
+        : this.bootstrap
+          ? this.renderBootstrapLayout(this.bootstrap)
+          : this.renderLoadingLayout();
     const floatingLayer = this.windowGroupKind === 'main'
       ? `<floating-panel-layer data-state="${escapeAttr(JSON.stringify(this.floatingPanels))}"></floating-panel-layer>`
       : '';
@@ -306,6 +311,13 @@ export class EditorApp extends HTMLElement {
     if (outer instanceof HTMLElement) {
       applyThemeTokensToElement(outer, this.hostThemeTokens);
     }
+    this.querySelector<HTMLButtonElement>('button[data-retry-initialization]')?.addEventListener('click', () => {
+      this.initializationFailed = false;
+      this.bootstrap = null;
+      this.layout = null;
+      this.render();
+      void this.init(++this.initToken);
+    }, { once: true });
     for (const groupId of this.collapsedColumnGroups) {
       const group = Array.from(this.querySelectorAll<HTMLElement>('ce-panel-group[data-group-id]'))
         .find((candidate) => candidate.dataset.groupId === groupId && !candidate.closest('ce-panel'));
@@ -474,13 +486,14 @@ export class EditorApp extends HTMLElement {
     applyRowFlex(columns, split.sizes, units);
   }
 
-  private persistRenderedLayoutSize(resizedSplit: HTMLElement | null): void {
+  private persistRenderedLayoutSize(resizedDivider: HTMLElement | null): void {
     if (!this.layout) return;
     const renderedRoot = this.querySelector<HTMLElement>(':scope > ce-split-pane > :not(ce-divider)');
     if (!renderedRoot) return;
 
+    const resizedSplit = resizedDivider?.parentElement;
     if (resizedSplit?.querySelector(':scope > [hidden]')) this.expandedRowFlex.delete(resizedSplit);
-    this.layout = syncLayoutSizesFromDom(this.layout, renderedRoot, resizedSplit);
+    this.layout = syncLayoutSizesFromDom(this.layout, renderedRoot, resizedDivider);
     this.saveCachedLayout();
   }
 
@@ -926,20 +939,34 @@ export class EditorApp extends HTMLElement {
     }
   }
 
-  private renderEditorLayoutNode(node: EditorLayoutNode, size?: number, unit: EditorSplitFlexUnit = 'fr'): string {
+  private renderEditorLayoutNode(
+    node: EditorLayoutNode,
+    size?: number,
+    unit: EditorSplitFlexUnit = 'fr',
+    parentDirection?: EditorSplitNode['direction'],
+    reserveFlexibleWidth = false,
+  ): string {
+    const shrinkPixels = parentDirection === 'row' && !this.isFixedEditorNode(node, size, unit);
+    const style = this.renderSizeStyle(size, unit, shrinkPixels);
     if (node.kind === 'panel') {
-      return this.renderStaticPanel(node, this.renderSizeStyle(size, unit), size, unit);
+      return this.renderStaticPanel(node, style, size, unit);
     }
     if (node.kind === 'group') {
-      return this.renderGroup(node, this.renderSizeStyle(size, unit));
+      const minimum = parentDirection === 'row'
+        ? unit === 'fr' && reserveFlexibleWidth
+          ? 'min-width:max(var(--layout-min-width, 0px), min(120px, 30%));'
+          : 'min-width:var(--layout-min-width, 0px);'
+        : '';
+      return this.renderGroup(node, style + minimum);
     }
 
     const flexUnits = node.flexUnits ?? inferSplitFlexUnits(node.children.length, node.sizes);
+    const reserveChildWidth = flexUnits.filter((childUnit) => childUnit === 'fr').length === 1;
     return `
-      <ce-split-pane direction="${node.direction}" style="${this.renderSizeStyle(size, unit)}min-height:0;min-width:0;">
+      <ce-split-pane direction="${node.direction}" style="${style}">
         ${node.children.map((child, index) => {
           const childUnit = flexUnits[index] ?? 'fr';
-          const childHtml = this.renderEditorLayoutNode(child, node.sizes?.[index], childUnit);
+          const childHtml = this.renderEditorLayoutNode(child, node.sizes?.[index], childUnit, node.direction, reserveChildWidth);
           if (index === 0) {
             return childHtml;
           }
@@ -1019,8 +1046,8 @@ export class EditorApp extends HTMLElement {
     `;
   }
 
-  private renderSizeStyle(size?: number, unit: EditorSplitFlexUnit = 'fr'): string {
-    const flex = size !== undefined && unit === 'px' ? `0 0 ${size}px` : `${size ?? 1} 1 0`;
+  private renderSizeStyle(size: number | undefined, unit: EditorSplitFlexUnit, shrinkPixels: boolean): string {
+    const flex = size !== undefined && unit === 'px' ? `0 ${shrinkPixels ? 1 : 0} ${size}px` : `${size ?? 1} 1 0`;
     return `flex:${flex};min-height:0;min-width:0;background:transparent;`;
   }
 
@@ -1031,17 +1058,22 @@ export class EditorApp extends HTMLElement {
       && unit === 'px';
   }
 
-  private renderLoadingLayout(message = 'Loading kit layout...'): string {
+  private renderLoadingLayout(message = 'Loading kit layout...', retry = false): string {
     return `
       <ce-panel type="simple" chromeless style="flex:1;display:flex;">
         <div style="
           display:flex;
           flex:1;
+          flex-direction:column;
+          gap:8px;
           align-items:center;
           justify-content:center;
           color:var(--ce-text-secondary,#888);
           font-size:13px;
-        ">${escapeHtml(message)}</div>
+        ">
+          <span${retry ? ' role="alert"' : ''}>${escapeHtml(message)}</span>
+          ${retry ? '<button type="button" data-retry-initialization>重试</button>' : ''}
+        </div>
       </ce-panel>
     `;
   }
@@ -1149,9 +1181,12 @@ function setActiveTab(node: EditorLayoutNode, groupId: string, tabId: string): E
   return node;
 }
 
-function layoutFlex(size: number | undefined, unit: EditorSplitFlexUnit): string {
+function layoutFlex(size: number | undefined, unit: EditorSplitFlexUnit, shrinkPixels: boolean, folded: boolean): string {
   if (size === undefined) return '1 1 0px';
-  return unit === 'px' ? `0 0 ${size}px` : `${size} 1 0px`;
+  if (unit === 'fr') return `${size} 1 0px`;
+  if (!shrinkPixels) return `0 0 ${size}px`;
+  // In a folded row, keep a visible sidebar from taking the space freed for the workspace.
+  return folded ? `0 1 min(${size}px, 50%)` : `0 1 ${size}px`;
 }
 
 function layoutChildren(element: HTMLElement): HTMLElement[] {
@@ -1174,28 +1209,36 @@ function collapsedRowGrower(columns: HTMLElement[], units: EditorSplitFlexUnit[]
   }
 }
 
-function applyRowFlex(columns: HTMLElement[], sizes: number[] | undefined, units: EditorSplitFlexUnit[]): void {
+function applyRowFlex(
+  columns: HTMLElement[], sizes: number[] | undefined, units: EditorSplitFlexUnit[], resizedDivider?: HTMLElement | null,
+): void {
   const grower = collapsedRowGrower(columns, units);
+  const folded = columns.some((column) => column.hidden);
   columns.forEach((column, index) => {
+    const cap = folded && column !== resizedDivider?.previousElementSibling && column !== resizedDivider?.nextElementSibling;
     column.toggleAttribute('data-collapsed-row-grower', column === grower);
-    column.style.flex = column === grower ? '1 1 0px' : layoutFlex(sizes?.[index], units[index] ?? 'fr');
+    column.style.flex = column === grower
+      ? '1 1 0px'
+      : layoutFlex(sizes?.[index], units[index] ?? 'fr', column.dataset.layoutFixed !== 'true', cap);
   });
 }
 
-function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement, resizedSplit: HTMLElement | null): EditorLayoutNode {
+function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement, resizedDivider: HTMLElement | null): EditorLayoutNode {
   if (node.kind !== 'split') {
     return node;
   }
 
   const children = layoutChildren(element);
+  const resizedSplit = resizedDivider?.parentElement ?? null;
   const flexUnits = node.flexUnits ?? inferSplitFlexUnits(node.children.length, node.sizes);
   const grower = collapsedRowGrower(children, flexUnits);
   const nextChildren = node.children.map((child, index) => {
     const childElement = children[index];
     if (!childElement || childElement.hidden || (childElement === grower && !grower.contains(resizedSplit))) return child;
-    return syncLayoutSizesFromDom(child, childElement, resizedSplit);
+    return syncLayoutSizesFromDom(child, childElement, resizedDivider);
   });
   const hasCollapsedColumn = children.some((child) => child.hidden);
+  if (resizedSplit && !isSplitInResizePath(element, resizedSplit)) return { ...node, children: nextChildren };
   if (hasCollapsedColumn && element !== resizedSplit) return { ...node, children: nextChildren };
 
   const axis = node.direction === 'column' ? 'height' : 'width';
@@ -1219,6 +1262,10 @@ function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement, re
     const child = children[index];
     if (child && (child.hidden || child === grower)) return node.sizes?.[index] ?? 1;
     if (unit === 'px') {
+      if (node.direction === 'row' && element === resizedSplit && child !== resizedDivider?.previousElementSibling
+        && child !== resizedDivider?.nextElementSibling && node.sizes?.[index] !== undefined) {
+        return node.sizes[index];
+      }
       // 固定子节点：保留实际像素值
       return typeof size === 'number' && size > 0 ? Number(size.toFixed(2)) : node.sizes?.[index];
     }
@@ -1231,7 +1278,7 @@ function syncLayoutSizesFromDom(node: EditorLayoutNode, element: HTMLElement, re
 
   const allValid = sizes.every((size): size is number => typeof size === 'number' && size > 0);
   if (hasCollapsedColumn && allValid) {
-    applyRowFlex(children, sizes, flexUnits);
+    applyRowFlex(children, sizes, flexUnits, resizedDivider);
   }
 
   return {

@@ -43,10 +43,19 @@ export function bindResizableSplitPanes(root: ParentNode) {
     }) as EventListener);
 
     divider.addEventListener('ce-divider-drag-end', (event) => {
+      const state = resizeStates.get(divider);
       resizeStates.delete(divider);
-      if ((event as CustomEvent<{ moved: boolean }>).detail?.moved) {
-        normalizeLayoutFlex(root, divider.parentElement);
+      const detail = (event as CustomEvent<{ moved: boolean }>).detail;
+      if (!detail?.moved) return;
+
+      const snapshot = state?.compressedRow;
+      if (snapshot && snapshot.every(({ child, width }) => Math.abs(child.getBoundingClientRect().width - width) < 0.1)) {
+        // CSS may clamp a gesture even when the pointer moved. Keep the authored widths in that case.
+        for (const { child, flex } of snapshot) child.style.flex = flex;
+        detail.moved = false;
+        return;
       }
+      normalizeLayoutFlex(root, divider.parentElement);
     });
   });
 }
@@ -224,7 +233,10 @@ type ResizeState = {
   delta: number;
   nestedSnapshot: NestedSplitSnapshot;
   ancestorSnapshot: AncestorSnapshot;
+  compressedRow?: RowColumnSnapshot[];
 };
+
+type RowColumnSnapshot = { child: HTMLElement; width: number; flex: string; basis: number | null };
 
 type AncestorSnapshot = Array<{
   current: HTMLElement;
@@ -279,6 +291,13 @@ function getResizeState(
     return existing;
   }
 
+  const columns = direction === 'row' ? getResizableChildren(splitPane).map((child) => ({
+    child,
+    width: child.getBoundingClientRect().width,
+    flex: child.style.flex,
+    basis: child.style.flexShrink === '1' ? parseFlexPixelBasis(child.style.flexBasis) : null,
+  })) : [];
+  const compressed = columns.filter(({ width, basis }) => basis !== null && width > 0 && width + 0.1 < basis);
   const state: ResizeState = {
     direction,
     targetSide,
@@ -290,6 +309,13 @@ function getResizeState(
     nestedSnapshot: snapshotNestedSplit(pairedPanel, direction),
     ancestorSnapshot: snapshotPreviousAncestors(splitPane, direction),
   };
+  if (compressed.length && !state.nestedSnapshot.items.length && !state.ancestorSnapshot.length) {
+    state.compressedRow = columns;
+  }
+  // The dragged pair uses measured pixels. Keep other compressed columns on that same basis.
+  for (const { child, width } of compressed) {
+    if (child !== targetPanel && child !== pairedPanel) child.style.flex = `0 0 ${width}px`;
+  }
   resizeStates.set(divider, state);
   return state;
 }
@@ -374,6 +400,11 @@ function getDirection(splitPane: HTMLElement): Direction {
   return splitPane.getAttribute('direction') === 'column' ? 'column' : 'row';
 }
 
+export function isSplitInResizePath(splitPane: HTMLElement, resizedSplit: HTMLElement): boolean {
+  return getDirection(splitPane) === getDirection(resizedSplit)
+    && (splitPane.contains(resizedSplit) || resizedSplit.contains(splitPane));
+}
+
 function getElementSize(element: HTMLElement, direction: Direction): number {
   const rect = element.getBoundingClientRect();
   const measured = direction === 'column' ? rect.height : rect.width;
@@ -388,6 +419,7 @@ function getElementSize(element: HTMLElement, direction: Direction): number {
 
 function normalizeLayoutFlex(root: ParentNode, resizedSplit: HTMLElement | null) {
   root.querySelectorAll<HTMLElement>('ce-split-pane').forEach((splitPane) => {
+    if (resizedSplit && !isSplitInResizePath(splitPane, resizedSplit)) return;
     if (splitPane.closest('[hidden]') || splitPane.querySelector(':scope > [hidden]')) return;
     const grower = splitPane.closest('[data-collapsed-row-grower]');
     if (grower && !grower.contains(resizedSplit)) return;
