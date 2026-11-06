@@ -55,11 +55,24 @@ export class EditorApp extends HTMLElement {
   private defaultLayoutSignature: string | null = null;
   private readonly collapsedColumnGroups = new Set<string>();
   private readonly expandedRowFlex = new WeakMap<HTMLElement, string[]>();
+  private suppressCollapseClick = false;
   private handlePanelChange = (event: Event) => this.handlePanelGroupChange(event);
   private handleColumnCollapse = (event: Event) => {
     if (event.target instanceof HTMLElement && this.collapsePanelColumn(event.target, true)) {
+      this.suppressCollapseClick = true;
       bindResizableSplitPanes(this);
     }
+  };
+  private clearCollapseClickSuppression = () => {
+    this.suppressCollapseClick = false;
+  };
+  // 点按结束时收起列，浏览器随后可能把 click 派发给刚露出的控件。
+  private handleClickAfterCollapse = (event: MouseEvent) => {
+    if (!this.suppressCollapseClick || event.detail === 0) return;
+
+    this.clearCollapseClickSuppression();
+    event.preventDefault();
+    event.stopImmediatePropagation();
   };
   private handleDividerDragStart = () => this.broadcastLayoutResizeState(true);
   private handleDividerDragEnd = (event: Event) => {
@@ -121,6 +134,9 @@ export class EditorApp extends HTMLElement {
     this.dragController.bind();
     this.addEventListener('ce-panel-change', this.handlePanelChange);
     this.addEventListener('ce-panel-column-collapse', this.handleColumnCollapse);
+    this.addEventListener('click', this.handleClickAfterCollapse, true);
+    this.ownerDocument.addEventListener('pointerdown', this.clearCollapseClickSuppression, true);
+    this.ownerDocument.addEventListener('touchstart', this.clearCollapseClickSuppression, { capture: true, passive: true });
     this.addEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.addEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.addEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
@@ -151,6 +167,10 @@ export class EditorApp extends HTMLElement {
     this.i18nClient = null;
     this.removeEventListener('ce-panel-change', this.handlePanelChange);
     this.removeEventListener('ce-panel-column-collapse', this.handleColumnCollapse);
+    this.removeEventListener('click', this.handleClickAfterCollapse, true);
+    this.ownerDocument.removeEventListener('pointerdown', this.clearCollapseClickSuppression, true);
+    this.ownerDocument.removeEventListener('touchstart', this.clearCollapseClickSuppression, true);
+    this.clearCollapseClickSuppression();
     this.removeEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.removeEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.removeEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);

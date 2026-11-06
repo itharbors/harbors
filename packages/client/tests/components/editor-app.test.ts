@@ -1739,6 +1739,34 @@ describe('EditorApp default layout', () => {
     expect({ ...localStorage }).toEqual(savedLayout);
   });
 
+  it.each(['pointerdown', 'touchstart'])('ignores a click retargeted by collapse but allows a new %s to restore', async (inputStart) => {
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const left = el.querySelector<HTMLElement>('ce-split-pane[direction="row"] > ce-panel-group')!;
+    const collapse = () => {
+      left.dispatchEvent(new CustomEvent('ce-panel-column-collapse', { bubbles: true }));
+      return el.querySelector<HTMLButtonElement>('button[data-restore-column="left"]')!;
+    };
+    const click = (button: HTMLButtonElement) => button.dispatchEvent(new MouseEvent('click', {
+      bubbles: true,
+      cancelable: true,
+      detail: 1,
+    }));
+
+    const firstRestore = collapse();
+    expect(click(firstRestore)).toBe(false);
+    expect(left.hidden).toBe(true);
+    expect(click(firstRestore)).toBe(true);
+    expect(left.hidden).toBe(false);
+
+    const secondRestore = collapse();
+    secondRestore.dispatchEvent(new Event(inputStart, { bubbles: true }));
+    expect(click(secondRestore)).toBe(true);
+    expect(left.hidden).toBe(false);
+  });
+
   it('keeps the stored width of a fixed column temporarily filling a collapsed row', async () => {
     bootstrapResponse = () => Promise.resolve(createJsonResponse({
       ...bootstrapPayload,
