@@ -181,3 +181,34 @@ test('installs shared styles on every accessible child document without breaking
     dom.window.close();
   }
 });
+
+test('propagates theme changes and removed tokens to the current settings page', async () => {
+  const dom = new JSDOM('<div id="panel-root"></div>', { url: 'https://host.test/panel' });
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document });
+  try {
+    dom.window.document.documentElement.style.setProperty('--ce-surface', '#123456');
+    dom.window.document.documentElement.style.setProperty('--ce-old', 'red');
+    await definition.mount({ sessionId: 'host', message: { async request() { return [{ owner: 'a', panel: 'a.settings', title: 'A', order: 0, entry: '/a.html' }]; } } });
+    const frame = dom.window.document.querySelector('iframe')!;
+    const child = dom.window.document.implementation.createHTMLDocument('child');
+    Object.defineProperty(frame, 'contentDocument', { configurable: true, get: () => child });
+    frame.dispatchEvent(new dom.window.Event('load'));
+    const theme = child.head.querySelector('style[data-settings-theme]')!;
+    assert.match(theme.textContent!, /--ce-surface: #123456/);
+    dom.window.document.documentElement.style.setProperty('--ce-surface', '#abcdef');
+    dom.window.document.documentElement.style.removeProperty('--ce-old');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.match(theme.textContent!, /--ce-surface: #abcdef/);
+    assert.doesNotMatch(theme.textContent!, /--ce-old/);
+    definition.unmount();
+    dom.window.document.documentElement.style.setProperty('--ce-surface', '#000000');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.match(theme.textContent!, /--ce-surface: #abcdef/);
+  } finally {
+    definition.unmount();
+    Object.assign(globalThis, { window: previousWindow, document: previousDocument });
+    dom.window.close();
+  }
+});

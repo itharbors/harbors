@@ -24,4 +24,4 @@ button:focus-visible { outline: 2px solid var(--ce-focus-ring, #3b82f6); outline
 :where(button).danger:hover:not(:disabled) { background: #a63b49; }
 .archive-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .empty { padding: 30px 12px; border: 1px dashed var(--ce-border-strong, #475568); border-radius: 8px; color: var(--ce-text-muted, #94a3b8); text-align: center; }
-@media (max-width: 360px) { .archive-settings { padding: 16px; } .feedback { align-items: stretch; flex-direction: column; padding-bottom: 10px; } .archive-meta { grid-template-columns: 1fr; gap: 2px; } .archive-meta dd { margin-bottom: 7px; } button { width: 100%; } }
+@media (max-width: 360px) { .archive-settings { padding: 12px; } .archive-card { padding: 10px; } .archive-meta { grid-template-columns: minmax(60px, auto) minmax(0, 1fr); gap: 5px 8px; } }

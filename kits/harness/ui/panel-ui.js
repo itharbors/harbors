@@ -59,7 +59,7 @@ const harnessStyles = `
 .h-switch:has(> input:disabled) { cursor: not-allowed; opacity: .65; }
 .h-button:focus-visible, .h-input:focus-visible, .h-textarea:focus-visible, .h-select:focus-visible, .h-check:focus-visible, .h-radio:focus-visible { outline: 2px solid var(--ce-focus-ring, #3b82f6); outline-offset: 2px; }
 .h-button:disabled, .h-input:disabled, .h-textarea:disabled, .h-select:disabled, .h-check:disabled, .h-radio:disabled { opacity: .5; cursor: not-allowed; }
-.h-list-item { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 36px; padding: 6px 12px 6px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--ce-text-primary, #edf1f7); font: 650 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; cursor: pointer; }
+.h-list-item { box-sizing: border-box; display: flex; align-items: center; gap: 8px; width: 100%; min-width: 0; min-height: 36px; padding: 6px 12px 6px 8px; border: 1px solid transparent; border-radius: 7px; background: transparent; box-shadow: none; color: var(--ce-text-primary, #edf1f7); font: 650 13px/1.35 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; text-align: left; cursor: pointer; }
 .h-list-item:hover:not(:disabled):not([aria-disabled="true"]) { border-color: transparent; background: var(--ce-surface-hover, #26303d); }
 .h-list-item:is([aria-pressed="true"], [aria-current="true"]) { background: var(--ce-selection-bg, #203957); }
 .h-list-item:is([aria-pressed="true"], [aria-current="true"]):hover:not(:disabled):not([aria-disabled="true"]) { background: var(--ce-selection-bg, #203957); }

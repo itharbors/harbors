@@ -26,6 +26,7 @@ export function appendSessionId(entry: string, sessionId: string, base = typeof 
 }
 
 let reloadPanel: (() => void) | null = null;
+let stopThemeSync: (() => void) | null = null;
 
 const definition = {
   async mount(ctx: PanelContext) {
@@ -36,6 +37,31 @@ const definition = {
     const content = root.querySelector('#settings-content') as HTMLElement;
     let currentPages: SettingsPage[] = [];
     let selectedPanel: string | null = null;
+
+    const syncPageTheme = () => {
+      try {
+        const child = content.querySelector('iframe')?.contentDocument;
+        if (!child?.head) return;
+        let style = child.head.querySelector<HTMLStyleElement>('style[data-settings-theme]');
+        if (!style) {
+          style = child.createElement('style');
+          style.setAttribute('data-settings-theme', '');
+          child.head.append(style);
+        }
+        const source = document.documentElement.style;
+        const tokens = document.createElement('div').style;
+        for (let i = 0; i < source.length; i += 1) {
+          const name = source.item(i);
+          if (name.startsWith('--ce-')) tokens.setProperty(name, source.getPropertyValue(name), source.getPropertyPriority(name));
+        }
+        style.textContent = `:root { ${tokens.cssText} }`;
+      } catch {
+        // Cross-origin settings pages retain their own theme.
+      }
+    };
+    const observer = new window.MutationObserver(syncPageTheme);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['style'] });
+    stopThemeSync = () => observer.disconnect();
 
     const showMessage = (message: string, kind: 'loading' | 'empty' | 'error') => {
       const element = document.createElement('p');
@@ -55,6 +81,7 @@ const definition = {
       frame.className = 'settings-page-frame';
       frame.title = page.title;
       frame.addEventListener('load', () => {
+        syncPageTheme();
         try {
           const ui = (window as Window & { HarnessUI?: { install(root: Document): void } }).HarnessUI;
           const childDocument = frame.contentDocument;
@@ -112,6 +139,8 @@ const definition = {
 
   unmount() {
     reloadPanel = null;
+    stopThemeSync?.();
+    stopThemeSync = null;
   },
 
   methods: {
