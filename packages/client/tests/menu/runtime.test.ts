@@ -48,7 +48,7 @@ describe('mountMenuRuntime', () => {
     expect([...shadow.querySelectorAll('button')].some((node) => node.textContent?.includes('默认操作'))).toBe(false);
     button(shadow, '界面规范').click(); await settle();
     expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({
-      method: 'POST', body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/ui' }),
+      method: 'POST', body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/ui', presentation: 'local' }),
     }));
     button(shadow, '应用菜单').click(); button(shadow, '应用文件›').click();
     expect(button(shadow, '重启服务').disabled).toBe(true);
@@ -78,7 +78,7 @@ describe('mountMenuRuntime', () => {
     button(shadow, '视图').click(); button(shadow, '面板›').click();
     expect(button(shadow, '界面规范')).toBeTruthy();
     button(shadow, '另一个插件').click(); await settle();
-    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/other' }) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/other', presentation: 'local' }) }));
     runtime.update(input);
     expect([...shadow.querySelectorAll('button')].some((node) => node.textContent === '另一个插件')).toBe(false);
   });
@@ -116,7 +116,7 @@ describe('mountMenuRuntime', () => {
     top.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
     expect(shadow.activeElement).toBe(button(shadow, '快捷操作'));
     button(shadow, '快捷操作').click(); await settle();
-    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'quick' }) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'quick', presentation: 'local' }) }));
     top.click(); button(shadow, '面板›').click(); button(shadow, '界面规范').focus();
     runtime.update(input);
     expect(shadow.activeElement?.textContent).toBe('视图');
@@ -130,7 +130,7 @@ describe('mountMenuRuntime', () => {
     const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
     runtime.update({ ...input, sessionId: 'base::new-kit' });
     button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click(); await settle();
-    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::new-kit', menuId: 'view/panels/ui' }) }));
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::new-kit', menuId: 'view/panels/ui', presentation: 'local' }) }));
     MockEventSource.instances[0].onmessage?.({ data: JSON.stringify({ type: 'application-bootstrap', bootstrap: { menu: { tree: [{ type: 'menu', id: 'app/new', label: '新应用功能', children: [] }] } } }) });
     button(shadow, '应用菜单').click();
     expect(button(shadow, '新应用功能').disabled).toBe(true);
@@ -161,6 +161,47 @@ describe('mountMenuRuntime', () => {
     button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click(); await settle();
     expect(fetchMock).toHaveBeenCalledWith('/api/panel-instance/fallback', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', panelInstanceId: 'p1' }) }));
     expect(post).toHaveBeenCalledWith({ type: 'ce-open-panel-floating', payload: { id: 'p1', panelName: 'ui-guide.main', state: 'open' } }, '*');
+  });
+
+  it.each([true, false])('requests local presentation regardless of viewport (narrow=%s)', async (narrow) => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: narrow })));
+    const opened = vi.fn(); host.addEventListener('ce-local-panel-open', opened);
+    fetchMock.mockImplementation(async (url: string) => url === '/api/menu/trigger'
+      ? { ok: true, json: async () => ({ result: { type: 'local-panel', panelName: 'preview.preview' } }) }
+      : { ok: true, json: async () => ({ menu: { tree: [] } }) });
+    const popup = vi.spyOn(window, 'open');
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click(); await settle();
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/ui', presentation: 'local' }) }));
+    expect(opened).toHaveBeenCalledOnce();
+    expect(opened.mock.calls[0][0].detail).toEqual({ panelName: 'preview.preview' });
+    expect(popup).not.toHaveBeenCalled();
+  });
+
+  it('shows a user-visible error when the local panel is unavailable', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    host.addEventListener('ce-local-panel-open', (event) => event.preventDefault());
+    fetchMock.mockImplementation(async () => ({ ok: true, json: async () => ({ result: { type: 'local-panel', panelName: 'missing.panel' } }) }));
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click(); await settle();
+    const error = shadow.querySelector<HTMLElement>('.error')!;
+    expect(error.hidden).toBe(false);
+    expect(error.textContent).toContain('面板不可用或未注册');
+  });
+
+  it.each(['update', 'dispose'] as const)('ignores a pending local result after %s', async (action) => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
+    let resolveResponse!: (value: unknown) => void;
+    fetchMock.mockImplementation((url: string) => url === '/api/menu/trigger'
+      ? new Promise((resolve) => { resolveResponse = resolve; })
+      : Promise.resolve({ ok: true, json: async () => ({ menu: { tree: [] } }) }));
+    const opened = vi.fn(); host.addEventListener('ce-local-panel-open', opened);
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click();
+    if (action === 'update') runtime.update({ ...input }); else runtime.dispose();
+    resolveResponse({ ok: true, json: async () => ({ result: { type: 'local-panel', panelName: 'preview.preview' } }) });
+    await settle();
+    expect(opened).not.toHaveBeenCalled();
   });
 
   it('parses the optional Web menu mode from the current URL', () => {

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-11-08-harness-default-panels",
+  "type": "feature",
+  "updatedAt": "2026-11-08T07:44:27.954Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "blocked",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}

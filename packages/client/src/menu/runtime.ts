@@ -91,12 +91,15 @@ export function mountMenuRuntime(initialInput: MenuRuntimeInput): MenuRuntime {
     try {
       const response = await fetch('/api/menu/trigger', {
         method: 'POST', headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId, menuId: id }),
+        body: JSON.stringify({ sessionId, menuId: id, presentation: 'local' }),
       });
       const payload = await response.json();
       if (!response.ok) throw new Error(typeof payload?.message === 'string' ? payload.message : '菜单操作失败');
       if (disposed || inputGeneration !== generation) return;
-      if (isMenuOpenPanelResult(payload?.result)) await handleMenuOpenPanelResult(sessionId, payload.result);
+      if (isLocalPanelResult(payload?.result)) {
+        const accepted = root.dispatchEvent(new CustomEvent('ce-local-panel-open', { bubbles: true, composed: true, cancelable: true, detail: { panelName: payload.result.panelName } }));
+        if (!accepted) throw new Error('面板不可用或未注册');
+      } else if (isMenuOpenPanelResult(payload?.result)) await handleMenuOpenPanelResult(sessionId, payload.result);
       else if (isMenuOpenCurrentUrlResult(payload?.result)) handleMenuOpenCurrentUrl();
     } catch (cause) {
       if (disposed || inputGeneration !== generation) return;
@@ -289,6 +292,10 @@ function isMenuOpenPanelResult(value: unknown): value is MenuOpenPanelResult {
     && (typeof candidate.windowGroupId === 'string' || candidate.windowGroupId === null)
     && (candidate.carrier === 'window-group' || candidate.carrier === 'floating')
     && (typeof candidate.url === 'string' || candidate.url === null);
+}
+function isLocalPanelResult(value: unknown): value is { type: 'local-panel'; panelName: string } {
+  return Boolean(value) && typeof value === 'object' && (value as Record<string, unknown>).type === 'local-panel'
+    && typeof (value as Record<string, unknown>).panelName === 'string';
 }
 function isMenuOpenCurrentUrlResult(value: unknown): boolean {
   return Boolean(value) && typeof value === 'object' && (value as Record<string, unknown>).type === 'open-current-url';

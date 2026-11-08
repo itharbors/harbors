@@ -49,6 +49,7 @@ export class EditorApp extends HTMLElement {
   private floatingPanels: FloatingPanelState[] = [];
   private channel: BroadcastChannel | null = null;
   private readonly iframeThemeBindings = new Map<HTMLIFrameElement, () => void>();
+  private readonly pendingPanelRequests = new Map<string, { source: Window; timer: number }>();
   private readonly layoutStorage = createWindowLayoutStorage({
     localStorage: window.localStorage,
     sessionStorage: window.sessionStorage,
@@ -88,6 +89,19 @@ export class EditorApp extends HTMLElement {
   private handleSecondaryBeforeUnload = () => this.cleanupSecondaryWindowGroup(true);
   private handleFloatingPanelClose = (event: Event) => this.handleFloatingPanelCloseAction(event);
   private handleFloatingPanelGeometry = (event: Event) => this.updateFloatingPanelGeometry(event);
+  private handleLocalPanelOpen = (event: Event) => {
+    const panelName = (event as CustomEvent<{ panelName?: unknown }>).detail?.panelName;
+    if (this.windowGroupKind !== 'main' || typeof panelName !== 'string' || !this.panelMap.has(panelName)
+      || this.panelAvailability.get(panelName) === 'unavailable') { event.preventDefault(); return; }
+    const id = `local:${panelName}`;
+    const existing = this.floatingPanels.find((panel) => panel.id === id && panel.localOnly);
+    if (existing) return;
+    const panel = this.createFloatingPanelState({ id, panelName, state: 'open', index: this.floatingPanels.length });
+    if (!panel) { event.preventDefault(); return; }
+    panel.localOnly = true;
+    this.floatingPanels = [...this.floatingPanels, panel];
+    this.syncFloatingPanelLayer();
+  };
   private secondaryWindowCleanupSent = false;
   // 窗口缩放期间频繁触发 panel iframe 的重新布局，会让 WebGL/Canvas 面板反复 setSize 导致闪烁。
   // 我们用 debounce：第一次 resize 广播 layout-resize-start，停止 resize 一段时间后再广播 layout-resize-end。
@@ -145,6 +159,7 @@ export class EditorApp extends HTMLElement {
     this.addEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.addEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
     this.addEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
+    this.addEventListener('ce-local-panel-open', this.handleLocalPanelOpen);
     window.addEventListener('resize', this.handleWindowResize);
     window.addEventListener('message', this.handleWindowMessage);
     if (this.windowGroupKind === 'secondary') {
@@ -160,6 +175,7 @@ export class EditorApp extends HTMLElement {
 
   disconnectedCallback() {
     this.initToken += 1;
+    this.clearPendingPanelRequests();
     this.clearIframeThemeBindings();
     this.clearPanelModalState();
     this.transport?.disconnectSSE();
@@ -179,6 +195,8 @@ export class EditorApp extends HTMLElement {
     this.removeEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.removeEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
     this.removeEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
+    this.removeEventListener('ce-local-panel-open', this.handleLocalPanelOpen);
+    this.floatingPanels = this.floatingPanels.filter((panel) => !panel.localOnly);
     window.removeEventListener('resize', this.handleWindowResize);
     window.removeEventListener('message', this.handleWindowMessage);
     window.removeEventListener('pagehide', this.handleSecondaryPageHide);
@@ -219,6 +237,7 @@ export class EditorApp extends HTMLElement {
   }
 
   private async init(token: number) {
+    this.clearPendingPanelRequests();
     try {
       const info = await this.transport!.fetchSessionInfo();
       if (token !== this.initToken || !this.isConnected) return;
@@ -506,13 +525,17 @@ export class EditorApp extends HTMLElement {
   }
 
   private handlePanelWindowMessage(event: MessageEvent): void {
-    const dispatchResult = parseTrustedDispatchResult(event, this.querySelectorAll('ce-panel'));
+    const panels = this.getRenderedPanels();
+    const dispatchResult = parseTrustedDispatchResult(event, panels, this.pendingPanelRequests);
     if (dispatchResult && this.transport) {
+      const pending = this.pendingPanelRequests.get(dispatchResult.requestId)!;
+      window.clearTimeout(pending.timer);
+      this.pendingPanelRequests.delete(dispatchResult.requestId);
       void this.transport.sendMessageResult(dispatchResult.requestId, dispatchResult.result)
         .catch((error) => console.error('Failed to relay panel dispatch result:', error));
       return;
     }
-    const modalState = parseTrustedPanelModalState(event, this.querySelectorAll('ce-panel'));
+    const modalState = parseTrustedPanelModalState(event, panels);
     if (modalState) {
       modalState.panel.toggleAttribute('modal-open', modalState.open);
       return;
@@ -578,11 +601,19 @@ export class EditorApp extends HTMLElement {
     const current = index >= 0 ? this.floatingPanels[index] : undefined;
     const state = 'open';
     if (current?.panelName === panelPayload.panelName && current.state === state) return;
-    const nextPanel = this.createFloatingPanelState({ id: panelPayload.id, panelName: panelPayload.panelName, state, index: index >= 0 ? index : this.floatingPanels.length });
+    const nextPanel = this.createFloatingPanelState({
+      id: panelPayload.id,
+      panelName: panelPayload.panelName,
+      state,
+      index: index >= 0 ? index : this.floatingPanels.length,
+    });
     if (!nextPanel) return;
     if (current?.panelName === nextPanel.panelName && current.position) nextPanel.position = current.position;
     if (current?.panelName === nextPanel.panelName && current.size) nextPanel.size = current.size;
-    this.floatingPanels = index < 0 ? [...this.floatingPanels, nextPanel] : this.floatingPanels.map((item, i) => i === index ? nextPanel : item);
+
+    this.floatingPanels = index < 0
+      ? [...this.floatingPanels, nextPanel]
+      : this.floatingPanels.map((item, itemIndex) => itemIndex === index ? nextPanel : item);
     this.syncFloatingPanelLayer();
   }
 
@@ -614,7 +645,7 @@ export class EditorApp extends HTMLElement {
     if (!this.layout) return;
 
     const floating = this.floatingPanels.find((item) => item.id === panelInstanceId);
-    if (!floating) return;
+    if (!floating || floating.localOnly) return;
 
     this.layout = dockFloatingPanelIntoLayout(this.layout, {
       panelName: floating.panelName,
@@ -646,8 +677,10 @@ export class EditorApp extends HTMLElement {
     if (!panel) return;
 
     this.removeFloatingPanel(panelInstanceId);
-    void this.transport?.closePanelInstance(panelInstanceId);
-    this.broadcastFloatingPanelState(panel, 'closed');
+    if (!panel.localOnly) {
+      void this.transport?.closePanelInstance(panelInstanceId);
+      this.broadcastFloatingPanelState(panel, 'closed');
+    }
   }
 
   private syncFloatingPanelLayer(): void {
@@ -744,15 +777,24 @@ export class EditorApp extends HTMLElement {
     }
   }
 
-  private syncIframeThemes(): void {
-    const liveIframes = new Set<HTMLIFrameElement>();
-    const panels = Array.from(this.querySelectorAll('ce-panel[src]'));
+  private getRenderedPanels(): Element[] {
+    const panels = Array.from(this.querySelectorAll('ce-panel'));
     const floatingLayer = this.querySelector('floating-panel-layer');
     if (floatingLayer?.shadowRoot) {
-      panels.push(...floatingLayer.shadowRoot.querySelectorAll('ce-panel[src]'));
+      panels.push(...floatingLayer.shadowRoot.querySelectorAll('ce-panel'));
     }
+    return panels;
+  }
 
-    for (const panel of panels) {
+  private clearPendingPanelRequests(): void {
+    for (const pending of this.pendingPanelRequests.values()) window.clearTimeout(pending.timer);
+    this.pendingPanelRequests.clear();
+  }
+
+  private syncIframeThemes(): void {
+    const liveIframes = new Set<HTMLIFrameElement>();
+    for (const panel of this.getRenderedPanels()) {
+      if (!panel.hasAttribute('src')) continue;
       const iframe = panel.shadowRoot?.querySelector('iframe');
       if (!iframe) {
         continue;
@@ -825,7 +867,9 @@ export class EditorApp extends HTMLElement {
         revision: record.revision,
       }
       : panel);
-    queueMicrotask(() => { if (this.isConnected) this.syncIframeThemes(); });
+    queueMicrotask(() => {
+      if (this.isConnected) this.syncIframeThemes();
+    });
   }
 
   private applyPanelAvailabilityToElement(
@@ -859,17 +903,22 @@ export class EditorApp extends HTMLElement {
     const requestId = typeof record.requestId === 'string' ? record.requestId : undefined;
     if (!panel || !method) return;
 
-    const panelElement = Array.from(this.querySelectorAll('ce-panel[src]')).find((candidate) => {
-      return candidate.getAttribute('data-panel-name') === panel;
-    });
-    const iframe = panelElement?.shadowRoot?.querySelector('iframe');
-    iframe?.contentWindow?.postMessage({
-      type: 'panel-dispatch',
-      panel,
-      method,
-      args,
-      requestId,
-    }, '*');
+    const targets = this.getRenderedPanels().filter((candidate) => (
+      candidate.hasAttribute('src') && candidate.getAttribute('data-panel-name') === panel
+      && candidate.shadowRoot?.querySelector('iframe')?.contentWindow
+    ));
+    if (requestId && this.pendingPanelRequests.has(requestId)) return;
+    for (const target of requestId ? targets.slice(0, 1) : targets) {
+      const targetWindow = target.shadowRoot?.querySelector('iframe')?.contentWindow;
+      if (!targetWindow) continue;
+      if (requestId) {
+        const timer = window.setTimeout(() => this.pendingPanelRequests.delete(requestId), 12_000);
+        this.pendingPanelRequests.set(requestId, { source: targetWindow, timer });
+      }
+      targetWindow.postMessage({
+        type: 'panel-dispatch', panel, method, args, requestId,
+      }, '*');
+    }
   }
 
   private handleI18nEvent(event: object): void {
@@ -927,7 +976,8 @@ export class EditorApp extends HTMLElement {
   }
 
   private postI18nEventToPanels(event: object): void {
-    for (const panel of this.querySelectorAll('ce-panel[src]')) {
+    for (const panel of this.getRenderedPanels()) {
+      if (!panel.hasAttribute('src')) continue;
       panel.shadowRoot?.querySelector('iframe')?.contentWindow?.postMessage(event, '*');
     }
   }
@@ -1431,13 +1481,16 @@ function getPanelInstanceIdFromEvent(event: Event): string {
 
 function parseTrustedDispatchResult(
   event: MessageEvent,
-  panels: NodeListOf<Element>,
+  panels: Element[],
+  pendingRequests: Map<string, { source: Window; timer: number }>,
 ): { requestId: string; result: { ok: true; value: unknown } | { ok: false; error: string } } | null {
   if (!event.data || typeof event.data !== 'object' || event.data.type !== 'dispatch-result') return null;
+  if (typeof event.data.requestId !== 'string' || event.data.requestId.length === 0
+    || pendingRequests.get(event.data.requestId)?.source !== event.source) return null;
   const trusted = Array.from(panels).some((panel) => (
     panel.shadowRoot?.querySelector('iframe')?.contentWindow === event.source
   ));
-  if (!trusted || typeof event.data.requestId !== 'string' || event.data.requestId.length === 0) return null;
+  if (!trusted) return null;
   if (typeof event.data.error === 'string') {
     return { requestId: event.data.requestId, result: { ok: false, error: event.data.error } };
   }
@@ -1449,7 +1502,7 @@ function parseTrustedDispatchResult(
 
 function parseTrustedPanelModalState(
   event: MessageEvent,
-  panels: NodeListOf<Element>,
+  panels: Element[],
 ): { panel: HTMLElement; open: boolean } | null {
   if (!event.data || typeof event.data !== 'object' || event.data.type !== 'ce-panel-modal-state') return null;
   if (typeof event.data.open !== 'boolean') return null;

@@ -1307,7 +1307,7 @@ describe('EditorApp default layout', () => {
     buttons.find((button) => button.textContent === '界面规范')!.click();
     await Promise.resolve();
     expect(mockFetch).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({
-      method: 'POST', body: JSON.stringify({ sessionId: 'existing-id::harness', menuId: 'view/guide' }),
+      method: 'POST', body: JSON.stringify({ sessionId: 'existing-id::harness', menuId: 'view/guide', presentation: 'local' }),
     }));
     expect(panel.shadowRoot!.querySelector('iframe')).toBe(iframe);
   });
@@ -1352,6 +1352,110 @@ describe('EditorApp default layout', () => {
       args: ['hello'],
       requestId: 'req-1',
     }, '*');
+  });
+
+  it('dispatches broadcasts to matching floating and main panels, while requests use one target', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      panelInstances: [{ id: 'floating-log', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null }],
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+    const main = Array.from(el.querySelectorAll('ce-panel')).find((panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log')!;
+    const floating = el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')!;
+    const mainPost = vi.fn();
+    const floatingPost = vi.fn();
+    Object.defineProperty(main.shadowRoot!.querySelector('iframe')!, 'contentWindow', { configurable: true, value: { postMessage: mainPost } });
+    Object.defineProperty(floating.shadowRoot!.querySelector('iframe')!, 'contentWindow', { configurable: true, value: { postMessage: floatingPost } });
+    const source = MockEventSource.instances.at(-1)!;
+    const dispatch = (requestId?: string) => source.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'panel-dispatch', panel: '@itharbors/log.log', method: 'append', args: ['hello'], ...(requestId ? { requestId } : {}) }) });
+
+    dispatch();
+    expect(mainPost).toHaveBeenCalledTimes(1);
+    expect(floatingPost).toHaveBeenCalledTimes(1);
+    mainPost.mockClear(); floatingPost.mockClear();
+    dispatch('request-1');
+    expect(mainPost).toHaveBeenCalledTimes(1);
+    expect(floatingPost).not.toHaveBeenCalled();
+
+    source.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'locale-changed', i18n: { locale: 'en', defaultLocale: 'zh-CN', version: 2, currentMessages: {}, defaultMessages: {} } }) });
+    expect(floatingPost).toHaveBeenCalledWith(expect.objectContaining({ type: 'locale-changed' }), '*');
+  });
+
+  it('dispatches requests to floating-only panels and trusts only their actual iframe source', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      panels: [...bootstrapPayload.panels, { name: 'preview.preview', entry: '/preview/index.html' }],
+      panelInstances: [{ id: 'floating-preview', panelName: 'preview.preview', carrier: 'floating', state: 'open', windowGroupId: null }],
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+    const floating = el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')!;
+    const postMessage = vi.fn();
+    const trustedSource = { postMessage } as unknown as Window;
+    Object.defineProperty(floating.shadowRoot!.querySelector('iframe')!, 'contentWindow', { configurable: true, value: trustedSource });
+    MockEventSource.instances.at(-1)!.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'panel-dispatch', panel: 'preview.preview', method: 'onLinkClicked', args: ['/file'], requestId: 'preview-request' }) });
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ requestId: 'preview-request', args: ['/file'] }), '*');
+    mockFetch.mockClear();
+    window.dispatchEvent(new MessageEvent('message', { source: window, data: { type: 'dispatch-result', requestId: 'preview-request', result: 'forged' } }));
+    expect(mockFetch).not.toHaveBeenCalled();
+    window.dispatchEvent(new MessageEvent('message', { source: trustedSource, data: { type: 'dispatch-result', requestId: 'preview-request', result: 'ok' } }));
+    expect(mockFetch).toHaveBeenCalledWith('/api/message/result', expect.objectContaining({ body: JSON.stringify({ sessionId: 'existing-id', requestId: 'preview-request', result: { ok: true, value: 'ok' } }) }));
+    window.dispatchEvent(new MessageEvent('message', { source: trustedSource, data: { type: 'ce-panel-modal-state', open: true } }));
+    expect(floating.hasAttribute('modal-open')).toBe(true);
+  });
+
+  it('keeps local panels separate from server instances and preserves other iframes', async () => {
+    const previousBroadcastChannel = globalThis.BroadcastChannel;
+    const posted = vi.fn();
+    class Channel {
+      addEventListener() {} removeEventListener() {} close() {}
+      postMessage = posted;
+    }
+    vi.stubGlobal('BroadcastChannel', Channel);
+    try {
+      bootstrapResponse = () => Promise.resolve(createJsonResponse({
+        ...bootstrapPayload,
+        panelInstances: [{ id: 'existing-server-instance', panelName: '@itharbors/log.log', carrier: 'window-group', state: 'open', windowGroupId: 'desktop-window' }],
+      }));
+      el = document.createElement('editor-app') as EditorApp;
+      document.body.appendChild(el);
+      await waitForBootstrap();
+      const original = el.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe');
+      const open = (name: string) => el.dispatchEvent(new CustomEvent('ce-local-panel-open', { detail: { panelName: name } }));
+      mockFetch.mockClear(); posted.mockClear();
+      open('@itharbors/log.log');
+      const layer = el.querySelector('floating-panel-layer')!;
+      const first = layer.shadowRoot!.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe');
+      expect(first?.getAttribute('src')).toContain('panelUi=1');
+      expect(layer.shadowRoot!.querySelector('ce-panel-group')).toBeNull();
+      open('@itharbors/log.log');
+      expect(layer.shadowRoot!.querySelectorAll('ce-panel')).toHaveLength(1);
+      expect(layer.shadowRoot!.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')).toBe(first);
+      layer.shadowRoot!.querySelector<HTMLButtonElement>('[data-floating-action="close"]')!.click();
+      expect(layer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      expect(el.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')).toBe(original);
+      expect(mockFetch.mock.calls.some(([url]) => String(url).startsWith('/api/panel-instance/'))).toBe(false);
+      expect(posted).not.toHaveBeenCalled();
+      const unknown = new CustomEvent('ce-local-panel-open', { cancelable: true, detail: { panelName: 'unknown.panel' } });
+      expect(el.dispatchEvent(unknown)).toBe(false);
+      expect(layer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      MockEventSource.instances.at(-1)!.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'panel-availability-changed', panel: { name: '@itharbors/log.log', entry: '/log/index.html' }, state: 'unavailable', revision: 1 }) });
+      const unavailable = new CustomEvent('ce-local-panel-open', { cancelable: true, detail: { panelName: '@itharbors/log.log' } });
+      expect(el.dispatchEvent(unavailable)).toBe(false);
+      expect(layer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      open('@itharbors/plugin-list.list');
+      expect(layer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      el.remove();
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      expect(posted).not.toHaveBeenCalled();
+    } finally {
+      if (previousBroadcastChannel) vi.stubGlobal('BroadcastChannel', previousBroadcastChannel);
+      else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
+    }
   });
 
   it('replaces only the affected iframe across panel unavailable and available events', async () => {
@@ -1463,8 +1567,14 @@ describe('EditorApp default layout', () => {
     const iframe = Array.from(el.querySelectorAll('ce-panel'))
       .find((panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log')
       ?.shadowRoot?.querySelector('iframe');
-    const trustedSource = {} as Window;
+    const trustedSource = { postMessage: vi.fn() } as unknown as Window;
     Object.defineProperty(iframe!, 'contentWindow', { configurable: true, value: trustedSource });
+    MockEventSource.instances.at(-1)!.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'panel-dispatch', panel: '@itharbors/log.log', method: 'append', args: [], requestId: 'req-1' }) });
+    const wrongIframe = Array.from(el.querySelectorAll('ce-panel')).find((panel) => panel.getAttribute('data-panel-name') === '@itharbors/plugin-list.list')!.shadowRoot!.querySelector('iframe')!;
+    const wrongSource = { postMessage: vi.fn() } as unknown as Window;
+    Object.defineProperty(wrongIframe, 'contentWindow', { configurable: true, value: wrongSource });
+    window.dispatchEvent(new MessageEvent('message', { source: wrongSource, data: { type: 'dispatch-result', requestId: 'req-1', result: 'forged' } }));
+    expect(mockFetch).not.toHaveBeenCalled();
     window.dispatchEvent(new MessageEvent('message', {
       source: trustedSource,
       data: { type: 'dispatch-result', requestId: 'req-1', result: 'done' },
@@ -1481,6 +1591,8 @@ describe('EditorApp default layout', () => {
     }));
 
     mockFetch.mockClear();
+    window.dispatchEvent(new MessageEvent('message', { source: trustedSource, data: { type: 'dispatch-result', requestId: 'req-1', result: 'duplicate' } }));
+    expect(mockFetch).not.toHaveBeenCalled();
     window.dispatchEvent(new MessageEvent('message', {
       source: window,
       data: { type: 'dispatch-result', requestId: 'req-2', result: 'forged' },
@@ -1498,8 +1610,9 @@ describe('EditorApp default layout', () => {
     const iframe = Array.from(el.querySelectorAll('ce-panel'))
       .find((panel) => panel.getAttribute('data-panel-name') === '@itharbors/log.log')
       ?.shadowRoot?.querySelector('iframe');
-    const trustedSource = {} as Window;
+    const trustedSource = { postMessage: vi.fn() } as unknown as Window;
     Object.defineProperty(iframe!, 'contentWindow', { configurable: true, value: trustedSource });
+    MockEventSource.instances.at(-1)!.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'panel-dispatch', panel: '@itharbors/log.log', method: 'append', args: [], requestId: 'req-error' }) });
     window.dispatchEvent(new MessageEvent('message', {
       source: trustedSource,
       data: { type: 'dispatch-result', requestId: 'req-error', error: 'panel failed' },

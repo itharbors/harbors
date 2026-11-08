@@ -12,6 +12,7 @@ export interface FloatingPanelState {
   state: 'open';
   position?: { x: number; y: number };
   size?: { width: number; height: number };
+  localOnly?: boolean;
 }
 
 type Geometry = { x: number; y: number; width: number; height: number };
@@ -201,7 +202,7 @@ export class FloatingPanelLayer extends HTMLElement {
         .floating-resize.left::after { left: 4px; border-left: 2px solid var(--ce-text-muted, #94a3b8); }
         .floating-resize.right::after { right: 4px; border-right: 2px solid var(--ce-text-muted, #94a3b8); }
         .gesture-shield { position: absolute; inset: 0; z-index: 50; pointer-events: auto; touch-action: none; }
-        ce-panel-group {
+        ce-panel-group, .floating-window > ce-panel {
           flex: 1 1 auto;
           min-height: 0;
         }
@@ -257,9 +258,9 @@ export class FloatingPanelLayer extends HTMLElement {
         <span class="floating-title"></span>
         <button class="floating-action" type="button" data-floating-action="close" data-panel-instance-id="${escapeAttr(item.id)}" title="Close">x</button>
       </div>
-      <ce-panel-group data-group-id="floating-${escapeAttr(item.id)}" data-session-id="" data-window-id="main-window">
-        <ce-panel active data-tab-id="floating-tab-${escapeAttr(item.id)}" data-panel-name="${escapeAttr(item.panelName)}"></ce-panel>
-      </ce-panel-group>
+      ${item.localOnly
+        ? `<ce-panel active data-panel-name="${escapeAttr(item.panelName)}"></ce-panel>`
+        : `<ce-panel-group data-group-id="floating-${escapeAttr(item.id)}" data-session-id="" data-window-id="main-window"><ce-panel active data-tab-id="floating-tab-${escapeAttr(item.id)}" data-panel-name="${escapeAttr(item.panelName)}"></ce-panel></ce-panel-group>`}
       <div class="floating-resize left" data-resize="left" aria-hidden="true"></div>
       <div class="floating-resize right" data-resize="right" aria-hidden="true"></div>`;
     return element;
