@@ -800,6 +800,11 @@ html, body, #panel-root {
 .composer-shell textarea::placeholder {
   color: #7e8998;
 }
+@media (any-pointer: coarse) {
+  .composer-shell textarea, .composer-shell textarea:focus, .composer-shell textarea:focus-visible {
+    font-size: 16px;
+  }
+}
 .composer-toolbar {
   display: flex;
   min-height: 48px;

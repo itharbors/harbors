@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-11-08-mobile-keyboard-viewport",
+  "type": "bug",
+  "updatedAt": "2026-11-08T10:54:29.471Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "blocked",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}

@@ -110,6 +110,44 @@ describe('client main entry', () => {
     expect(html).not.toContain('max(20px, env(safe-area-inset-top');
   });
 
+  it('tracks the visual viewport while an iframe is focused and restores it after blur', async () => {
+    const html = fs.readFileSync(path.resolve('index.html'), 'utf-8');
+    const script = html.match(/<script>\s*([\s\S]*?)<\/script>/)?.[1];
+    expect(script).toBeDefined();
+    const viewport = new EventTarget() as EventTarget & { height: number; offsetTop: number; scale: number };
+    Object.assign(viewport, { height: 800, offsetTop: 0, scale: 1 });
+    const props = new Map<string, string>();
+    const mockDocument = new EventTarget() as EventTarget & { activeElement: any; documentElement: any };
+    mockDocument.activeElement = { matches: () => false, isContentEditable: false };
+    mockDocument.documentElement = { style: { setProperty: (key: string, value: string) => props.set(key, value) } };
+    const mockWindow = new EventTarget() as EventTarget & { visualViewport: typeof viewport; innerHeight: number };
+    mockWindow.visualViewport = viewport;
+    mockWindow.innerHeight = 800;
+    new Function('window', 'document', script!)(mockWindow, mockDocument);
+    expect(props.get('--app-viewport-height')).toBe('800px');
+    mockDocument.activeElement = { shadowRoot: { activeElement: { shadowRoot: { activeElement: { matches: () => true } } } } };
+    Object.assign(viewport, { height: 420, offsetTop: 64 });
+    mockDocument.dispatchEvent(new Event('focusin'));
+    expect(props.get('--app-viewport-height')).toBe('420px');
+    expect(props.get('--app-viewport-top')).toBe('64px');
+    viewport.offsetTop = 30;
+    viewport.dispatchEvent(new Event('scroll'));
+    expect(props.get('--app-viewport-top')).toBe('30px');
+    viewport.scale = 2;
+    viewport.dispatchEvent(new Event('resize'));
+    expect(props.get('--app-viewport-top')).toBe('0px');
+    viewport.scale = 1;
+    viewport.dispatchEvent(new Event('resize'));
+    mockDocument.activeElement = { matches: () => false };
+    mockDocument.dispatchEvent(new Event('focusout'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(props.get('--app-viewport-top')).toBe('0px');
+    Object.assign(viewport, { height: 800, offsetTop: 0 });
+    viewport.dispatchEvent(new Event('resize'));
+    expect(props.get('--app-viewport-height')).toBe('800px');
+    expect(props.get('--app-viewport-top')).toBe('0px');
+  });
+
   it('selects a remote user before requesting access and waits without reading workbench data', async () => {
     const host = mount();
     const user = { userId: 'u1', displayName: '张三' };

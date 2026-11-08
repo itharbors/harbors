@@ -26,6 +26,9 @@
       color: #d4d4d4;
     }
     #app {
+      position: fixed;
+      top: var(--app-viewport-top, 0px);
+      left: 0;
       width: 100vw;
       height: var(--app-viewport-height);
       box-sizing: border-box;
@@ -39,12 +42,21 @@
   <script>
     (() => {
       const syncViewportHeight = () => {
-        const height = window.visualViewport?.height ?? window.innerHeight;
+        const viewport = window.visualViewport;
+        const height = viewport?.height ?? window.innerHeight;
+        let active = document.activeElement;
+        while (active?.shadowRoot?.activeElement) active = active.shadowRoot.activeElement;
+        const editing = active && (active.matches('input, textarea, select, iframe') || active.isContentEditable);
+        const top = editing && viewport && viewport.scale === 1 ? viewport.offsetTop : 0;
         document.documentElement.style.setProperty('--app-viewport-height', `${Math.round(height)}px`);
+        document.documentElement.style.setProperty('--app-viewport-top', `${Math.round(top)}px`);
       };
       syncViewportHeight();
       window.visualViewport?.addEventListener('resize', syncViewportHeight);
+      window.visualViewport?.addEventListener('scroll', syncViewportHeight);
       window.addEventListener('resize', syncViewportHeight);
+      document.addEventListener('focusin', syncViewportHeight);
+      document.addEventListener('focusout', () => setTimeout(syncViewportHeight, 0));
     })();
   </script>
   <script type="module" src="/src/index.ts"></script>
