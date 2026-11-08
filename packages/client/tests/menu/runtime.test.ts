@@ -163,8 +163,8 @@ describe('mountMenuRuntime', () => {
     expect(post).toHaveBeenCalledWith({ type: 'ce-open-panel-floating', payload: { id: 'p1', panelName: 'ui-guide.main', state: 'open' } }, '*');
   });
 
-  it.each([true, false])('requests local presentation regardless of viewport (narrow=%s)', async (narrow) => {
-    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: narrow })));
+  it('requests local presentation in a narrow viewport and emits the returned panel locally', async () => {
+    vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })));
     const opened = vi.fn(); host.addEventListener('ce-local-panel-open', opened);
     fetchMock.mockImplementation(async (url: string) => url === '/api/menu/trigger'
       ? { ok: true, json: async () => ({ result: { type: 'local-panel', panelName: 'preview.preview' } }) }

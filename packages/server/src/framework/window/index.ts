@@ -25,9 +25,15 @@ interface NormalizeWindowDescriptorOptions {
   createId?: () => string;
 }
 
+const WINDOW_COPY_OPENING_LEASE_MS = 30_000;
+
 export class WindowManager {
   private readonly windows = new Map<string, StoredWindowDescriptor>();
   private readonly panelInstances = new Map<string, PanelInstanceDescriptor>();
+  // Explicit window copies are presentation-specific and must never become
+  // the reusable singleton for subsequent ordinary openPanel calls.
+  private readonly windowCopies = new Set<string>();
+  private readonly windowCopyOpeningLeases = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly secondaryEntry: string;
 
   constructor(options?: WindowManagerOptions) {
@@ -64,9 +70,11 @@ export class WindowManager {
   }
 
   destroy(windowId: string): void {
+    this.cancelWindowCopyOpeningLease(windowId);
     const windowGroup = this.windows.get(windowId);
     for (const panelInstanceId of windowGroup?.panelInstanceIds ?? []) {
       this.panelInstances.delete(panelInstanceId);
+      this.windowCopies.delete(panelInstanceId);
     }
     this.windows.delete(windowId);
   }
@@ -91,14 +99,16 @@ export class WindowManager {
   }
 
   clear(): void {
+    for (const windowGroupId of this.windowCopyOpeningLeases.keys()) this.cancelWindowCopyOpeningLease(windowGroupId);
     this.windows.clear();
     this.panelInstances.clear();
+    this.windowCopies.clear();
   }
 
-  openPanel(request: OpenPanelRequest): OpenPanelResult {
-    if (!request.multiInstance) {
+  openPanel(request: OpenPanelRequest, options: { forceNew?: boolean } = {}): OpenPanelResult {
+    if (!options.forceNew && !request.multiInstance) {
       const existing = Array.from(this.panelInstances.values()).find((instance) => {
-        return instance.panelName === request.panelName && instance.state !== 'closed';
+        return instance.panelName === request.panelName && instance.state !== 'closed' && !this.windowCopies.has(instance.id);
       });
 
       if (existing) {
@@ -114,6 +124,8 @@ export class WindowManager {
 
     const panelInstanceId = randomUUID();
     const windowGroupId = randomUUID();
+
+    if (options.forceNew) this.windowCopies.add(panelInstanceId);
 
     this.panelInstances.set(panelInstanceId, {
       id: panelInstanceId,
@@ -133,6 +145,8 @@ export class WindowManager {
       panelInstanceIds: [panelInstanceId],
     });
 
+    if (options.forceNew) this.startWindowCopyOpeningLease(windowGroupId, panelInstanceId);
+
     return {
       disposition: 'open-window-group',
       panelInstanceId,
@@ -147,6 +161,7 @@ export class WindowManager {
     if (!instance) throw new Error(`Panel instance "${panelInstanceId}" not found`);
 
     if (instance.windowGroupId) {
+      this.cancelWindowCopyOpeningLease(instance.windowGroupId);
       this.windows.delete(instance.windowGroupId);
     }
 
@@ -164,6 +179,8 @@ export class WindowManager {
     const windowGroup = this.windows.get(windowGroupId);
     if (!windowGroup) throw new Error(`Window group "${windowGroupId}" not found`);
 
+    this.cancelWindowCopyOpeningLease(windowGroupId);
+
     this.windows.set(windowGroupId, { ...windowGroup, state: 'open' });
     for (const panelInstanceId of windowGroup.panelInstanceIds) {
       const instance = this.panelInstances.get(panelInstanceId);
@@ -178,7 +195,10 @@ export class WindowManager {
     if (!instance) return;
 
     this.panelInstances.delete(panelInstanceId);
+    this.windowCopies.delete(panelInstanceId);
     if (!instance.windowGroupId) return;
+
+    this.cancelWindowCopyOpeningLease(instance.windowGroupId);
 
     const windowGroup = this.windows.get(instance.windowGroupId);
     if (!windowGroup) return;
@@ -199,6 +219,27 @@ export class WindowManager {
     const next = { ...instance, state };
     this.panelInstances.set(panelInstanceId, next);
     return next;
+  }
+
+  private startWindowCopyOpeningLease(windowGroupId: string, panelInstanceId: string): void {
+    const timer = setTimeout(() => {
+      this.windowCopyOpeningLeases.delete(windowGroupId);
+      const windowGroup = this.windows.get(windowGroupId);
+      const instance = this.panelInstances.get(panelInstanceId);
+      if (windowGroup?.kind === 'secondary' && windowGroup.state === 'opening'
+        && instance?.windowGroupId === windowGroupId && this.windowCopies.has(panelInstanceId)) {
+        this.closeWindowGroup(windowGroupId);
+      }
+    }, WINDOW_COPY_OPENING_LEASE_MS);
+    timer.unref?.();
+    this.windowCopyOpeningLeases.set(windowGroupId, timer);
+  }
+
+  private cancelWindowCopyOpeningLease(windowGroupId: string): void {
+    const timer = this.windowCopyOpeningLeases.get(windowGroupId);
+    if (!timer) return;
+    clearTimeout(timer);
+    this.windowCopyOpeningLeases.delete(windowGroupId);
   }
 
   rearrange(windowId: string, targetLayout: WindowDescriptor['layout']): WindowDescriptor {

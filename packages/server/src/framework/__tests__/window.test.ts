@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { WindowManager } from '../window/index';
 
 const MAIN_LAYOUT = {
@@ -81,6 +81,101 @@ describe('WindowManager', () => {
       panelName: 'log.log',
     });
     expect(wm.getSnapshot().windows).toHaveLength(2);
+  });
+
+  it('creates an independent window copy without changing another same-name instance', () => {
+    const request = {
+      panelName: 'log.log',
+      layout: { type: 'leaf' as const, panel: 'log.log' },
+      entry: 'secondary.html',
+      multiInstance: false,
+    };
+    const existing = wm.openPanel(request);
+    const before = wm.getSnapshot();
+    const copy = wm.openPanel(request, { forceNew: true });
+    const anotherCopy = wm.openPanel(request, { forceNew: true });
+    expect(copy.disposition).toBe('open-window-group');
+    expect(new Set([existing.panelInstanceId, copy.panelInstanceId, anotherCopy.panelInstanceId]).size).toBe(3);
+    expect(new Set([existing.windowGroupId, copy.windowGroupId, anotherCopy.windowGroupId]).size).toBe(3);
+    expect(wm.getSnapshot().panelInstances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: copy.panelInstanceId, multiInstance: false }),
+    ]));
+    wm.closeWindowGroup(copy.windowGroupId!);
+    wm.closeWindowGroup(anotherCopy.windowGroupId!);
+    expect(wm.getSnapshot()).toEqual(before);
+  });
+
+  it('never reuses explicit copies for ordinary singleton opens, including after the original closes', () => {
+    const request = {
+      panelName: 'log.log',
+      layout: { type: 'leaf' as const, panel: 'log.log' },
+      entry: 'secondary.html',
+      multiInstance: false,
+    };
+    const copyA = wm.openPanel(request, { forceNew: true });
+    const copyB = wm.openPanel(request, { forceNew: true });
+    const first = wm.openPanel(request);
+    expect(first.disposition).toBe('open-window-group');
+    expect([copyA.panelInstanceId, copyB.panelInstanceId]).not.toContain(first.panelInstanceId);
+    expect(wm.openPanel(request)).toMatchObject({ disposition: 'reuse', panelInstanceId: first.panelInstanceId });
+
+    wm.closeWindowGroup(first.windowGroupId!);
+    const second = wm.openPanel(request);
+    expect(second.disposition).toBe('open-window-group');
+    expect([copyA.panelInstanceId, copyB.panelInstanceId, first.panelInstanceId]).not.toContain(second.panelInstanceId);
+    wm.closeWindowGroup(copyA.windowGroupId!);
+    expect(wm.openPanel(request)).toMatchObject({ disposition: 'reuse', panelInstanceId: second.panelInstanceId });
+    expect(wm.getSnapshot().panelInstances).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: copyB.panelInstanceId }),
+      expect.objectContaining({ id: second.panelInstanceId }),
+    ]));
+  });
+
+  it('expires only unacknowledged window copies and keeps opened and ordinary instances', () => {
+    vi.useFakeTimers();
+    try {
+      const request = { panelName: 'log.log', layout: { type: 'leaf' as const, panel: 'log.log' }, entry: 'secondary.html', multiInstance: false };
+      const ordinary = wm.openPanel(request);
+      const lostResponse = wm.openPanel(request, { forceNew: true });
+      const opened = wm.openPanel(request, { forceNew: true });
+      expect(vi.getTimerCount()).toBe(2);
+      vi.advanceTimersByTime(29_999);
+      expect(wm.getSnapshot().panelInstances).toHaveLength(3);
+      wm.markWindowGroupOpened(opened.windowGroupId!);
+      expect(vi.getTimerCount()).toBe(1);
+      vi.advanceTimersByTime(1);
+      const snapshot = wm.getSnapshot();
+      expect(snapshot.panelInstances.map((instance) => instance.id)).toEqual([ordinary.panelInstanceId, opened.panelInstanceId]);
+      expect(snapshot.windows.some((window) => window.id === lostResponse.windowGroupId)).toBe(false);
+      expect(snapshot.windows).toEqual(expect.arrayContaining([expect.objectContaining({ id: opened.windowGroupId, state: 'open' })]));
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('cancels window-copy leases on close, destroy, floating fallback and manager clear', () => {
+    vi.useFakeTimers();
+    try {
+      const request = { panelName: 'log.log', layout: { type: 'leaf' as const, panel: 'log.log' }, entry: 'secondary.html', multiInstance: false };
+      const closed = wm.openPanel(request, { forceNew: true });
+      const groupClosed = wm.openPanel(request, { forceNew: true });
+      const destroyed = wm.openPanel(request, { forceNew: true });
+      const floating = wm.openPanel(request, { forceNew: true });
+      wm.openPanel(request, { forceNew: true });
+      expect(vi.getTimerCount()).toBe(5);
+      wm.closePanelInstance(closed.panelInstanceId);
+      wm.closeWindowGroup(groupClosed.windowGroupId!);
+      wm.destroy(destroyed.windowGroupId!);
+      wm.markFloating(floating.panelInstanceId);
+      expect(vi.getTimerCount()).toBe(1);
+      wm.clear();
+      expect(vi.getTimerCount()).toBe(0);
+      vi.advanceTimersByTime(30_000);
+      expect(wm.getSnapshot()).toEqual({ windows: [], panelInstances: [] });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('opens a fresh non-multi-instance panel after its window-group is destroyed', () => {

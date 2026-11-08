@@ -233,6 +233,7 @@ export interface Editor {
   window: {
     getSnapshot(): WindowSnapshot;
     openPanel(panelName: string): WindowOpenPanelResult;
+    openPanelWindowCopy(panelName: string): WindowOpenPanelResult;
     markPanelInstanceFloating(panelInstanceId: string): void;
     markWindowGroupOpened(windowGroupId: string): void;
     closeWindowGroup(windowGroupId: string): void;

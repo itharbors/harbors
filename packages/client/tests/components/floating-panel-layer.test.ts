@@ -176,7 +176,7 @@ describe('floating-panel-layer', () => {
     layer.remove();
   });
 
-  it('emits close actions', async () => {
+  it('emits open-window and close actions', async () => {
     const layer = document.createElement('floating-panel-layer');
     layer.setAttribute('data-state', JSON.stringify([
       {
@@ -194,13 +194,17 @@ describe('floating-panel-layer', () => {
         state: 'open',
       },
     ]));
+    const openWindow = vi.fn();
     const close = vi.fn();
+    layer.addEventListener('ce-floating-panel-open-window', openWindow);
     layer.addEventListener('ce-floating-panel-close', close);
     document.body.appendChild(layer);
     await Promise.resolve();
 
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="open-window"]')?.click();
     layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="close"]')?.click();
 
+    expect(openWindow).toHaveBeenCalledWith(expect.objectContaining({ detail: { panelInstanceId: 'p-1' } }));
     expect(close).toHaveBeenCalledWith(expect.objectContaining({
       detail: { panelInstanceId: 'p-1' },
     }));

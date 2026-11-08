@@ -1,7 +1,7 @@
 import { EditorTransport, getKitFromURL, getSessionIdFromURL, splitRuntimeSessionId } from '../core/transport';
 import type { BootstrapInfo, I18nChangeEvent, I18nVisibleSnapshot, LayoutNode } from '../core/session';
 import { ClientSession } from '../core/session';
-import { getStoredSessionId } from '../core/storage';
+import { generateUUID, getStoredSessionId } from '../core/storage';
 import { I18nClient } from '../i18n/client';
 import { i18nStore } from '../i18n/store';
 import '../layout/split-pane';
@@ -29,6 +29,11 @@ import { bindThemeToIframe } from '../styles/iframe-theme';
 import { getMenuModeFromURL, mountMenuRuntime, type MenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
 import type { FloatingPanelState } from './floating-panel-layer';
 
+type PendingWindowOpen = {
+  panelId: string; panelName: string; sessionId: string; token: number; nonce: string;
+  popup: Window; timer: number; poll: number; windowGroupId?: string; cancelled: boolean; cleaned: boolean;
+};
+
 export class EditorApp extends HTMLElement {
   private session: ClientSession | null = null;
   private transport: EditorTransport | null = null;
@@ -47,9 +52,11 @@ export class EditorApp extends HTMLElement {
   private menuRuntime: MenuRuntime | null = null;
   private renderedWindow: BootstrapInfo['windows'][number] | null = null;
   private floatingPanels: FloatingPanelState[] = [];
+  private hiddenFloatingIds = new Set<string>();
   private channel: BroadcastChannel | null = null;
   private readonly iframeThemeBindings = new Map<HTMLIFrameElement, () => void>();
   private readonly pendingPanelRequests = new Map<string, { source: Window; timer: number }>();
+  private readonly pendingWindowOpens = new Map<string, PendingWindowOpen>();
   private readonly layoutStorage = createWindowLayoutStorage({
     localStorage: window.localStorage,
     sessionStorage: window.sessionStorage,
@@ -88,6 +95,7 @@ export class EditorApp extends HTMLElement {
   private handleSecondaryPageHide = () => this.cleanupSecondaryWindowGroup(true);
   private handleSecondaryBeforeUnload = () => this.cleanupSecondaryWindowGroup(true);
   private handleFloatingPanelClose = (event: Event) => this.handleFloatingPanelCloseAction(event);
+  private handleFloatingPanelOpenWindow = (event: Event) => { void this.openFloatingPanelWindow(getPanelInstanceIdFromEvent(event)); };
   private handleFloatingPanelGeometry = (event: Event) => this.updateFloatingPanelGeometry(event);
   private handleLocalPanelOpen = (event: Event) => {
     const panelName = (event as CustomEvent<{ panelName?: unknown }>).detail?.panelName;
@@ -158,6 +166,7 @@ export class EditorApp extends HTMLElement {
     this.addEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.addEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.addEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
+    this.addEventListener('ce-floating-panel-open-window', this.handleFloatingPanelOpenWindow);
     this.addEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
     this.addEventListener('ce-local-panel-open', this.handleLocalPanelOpen);
     window.addEventListener('resize', this.handleWindowResize);
@@ -175,6 +184,7 @@ export class EditorApp extends HTMLElement {
 
   disconnectedCallback() {
     this.initToken += 1;
+    this.cancelPendingWindowOpens();
     this.clearPendingPanelRequests();
     this.clearIframeThemeBindings();
     this.clearPanelModalState();
@@ -194,6 +204,7 @@ export class EditorApp extends HTMLElement {
     this.removeEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.removeEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
     this.removeEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
+    this.removeEventListener('ce-floating-panel-open-window', this.handleFloatingPanelOpenWindow);
     this.removeEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
     this.removeEventListener('ce-local-panel-open', this.handleLocalPanelOpen);
     this.floatingPanels = this.floatingPanels.filter((panel) => !panel.localOnly);
@@ -237,6 +248,7 @@ export class EditorApp extends HTMLElement {
   }
 
   private async init(token: number) {
+    this.cancelPendingWindowOpens();
     this.clearPendingPanelRequests();
     try {
       const info = await this.transport!.fetchSessionInfo();
@@ -263,6 +275,7 @@ export class EditorApp extends HTMLElement {
       this.panelRevisions.clear();
       this.panelAvailability.clear();
       bootstrap.panels.forEach((panel) => this.panelAvailability.set(panel.name, 'available'));
+      this.hiddenFloatingIds = readHiddenFloatingIds(bootstrap);
       this.floatingPanels = this.createBootstrapFloatingPanels(bootstrap);
       this.layout = null;
       this.defaultLayoutSignature = null;
@@ -525,6 +538,8 @@ export class EditorApp extends HTMLElement {
   }
 
   private handlePanelWindowMessage(event: MessageEvent): void {
+    this.handleWindowOpenReady(event);
+    this.notifyOpenerPanelMounted(event);
     const panels = this.getRenderedPanels();
     const dispatchResult = parseTrustedDispatchResult(event, panels, this.pendingPanelRequests);
     if (dispatchResult && this.transport) {
@@ -543,10 +558,13 @@ export class EditorApp extends HTMLElement {
     if (event.data?.type === 'panel-focus' && typeof event.data.panel === 'string') {
       this.focusPanelInActiveWindow(event.data.panel);
     }
-    this.handleChannelMessage(event.data);
+    const trustedLocalPanel = event.source !== null && event.origin === new URL(window.location.href).origin && panels.some((panel) => (
+      panel.shadowRoot?.querySelector('iframe')?.contentWindow === event.source
+    ));
+    this.handleChannelMessage(event.data, trustedLocalPanel);
   }
 
-  private handleChannelMessage(payload: unknown): void {
+  private handleChannelMessage(payload: unknown, trustedLocalPanel = false): void {
     if (!payload || typeof payload !== 'object') return;
     const data = payload as { type?: unknown; payload?: unknown };
     if (data.type === 'ce-tab-drag-close-source' && isCloseSourceTabPayload(data.payload)) {
@@ -561,6 +579,9 @@ export class EditorApp extends HTMLElement {
     if (data.type === 'ce-open-panel-result' && isOpenPanelResultPayload(data.payload)) {
       const result = data.payload;
       if (result.disposition === 'reuse' && result.carrier === 'floating') {
+        if (trustedLocalPanel && this.hiddenFloatingIds.delete(result.panelInstanceId) && this.bootstrap) {
+          writeHiddenFloatingIds(this.bootstrap, this.hiddenFloatingIds);
+        }
         this.upsertFloatingPanel({
           id: result.panelInstanceId,
           panelName: result.panelName,
@@ -585,7 +606,8 @@ export class EditorApp extends HTMLElement {
   private createBootstrapFloatingPanels(bootstrap: BootstrapInfo): FloatingPanelState[] {
     return bootstrap.panelInstances
       .filter((instance): instance is BootstrapInfo['panelInstances'][number] & { state: 'open' | 'minimized' } => (
-        instance.carrier === 'floating' && (instance.state === 'open' || instance.state === 'minimized')
+        instance.carrier === 'floating' && !this.hiddenFloatingIds.has(instance.id)
+        && (instance.state === 'open' || instance.state === 'minimized')
       ))
       .map((instance, index) => this.createFloatingPanelState({
         id: instance.id,
@@ -597,6 +619,7 @@ export class EditorApp extends HTMLElement {
   }
 
   private upsertFloatingPanel(panelPayload: { id: string; panelName: string; state?: 'opening' | 'open' | 'minimized' }): void {
+    if (this.hiddenFloatingIds.has(panelPayload.id)) return;
     const index = this.floatingPanels.findIndex((item) => item.id === panelPayload.id);
     const current = index >= 0 ? this.floatingPanels[index] : undefined;
     const state = 'open';
@@ -675,12 +698,124 @@ export class EditorApp extends HTMLElement {
     if (!panelInstanceId) return;
     const panel = this.floatingPanels.find((item) => item.id === panelInstanceId);
     if (!panel) return;
+    const pending = this.pendingWindowOpens.get(panelInstanceId);
+    if (pending) this.cancelWindowOpen(pending);
 
     this.removeFloatingPanel(panelInstanceId);
     if (!panel.localOnly) {
       void this.transport?.closePanelInstance(panelInstanceId);
       this.broadcastFloatingPanelState(panel, 'closed');
     }
+  }
+
+  private floatingLayer(): (HTMLElement & { setOpeningWindow(id: string, opening: boolean): void; showWindowError(id: string, message: string): void }) | null {
+    return this.querySelector('floating-panel-layer');
+  }
+
+  private async openFloatingPanelWindow(panelId: string): Promise<void> {
+    const panel = this.floatingPanels.find((item) => item.id === panelId);
+    const sessionId = this.bootstrap?.sessionId;
+    if (!panel || !sessionId || this.pendingWindowOpens.has(panelId)) return;
+    const layer = this.floatingLayer();
+    layer?.showWindowError(panelId, '');
+    const popup = window.open('about:blank', '_blank');
+    if (!popup) { layer?.showWindowError(panelId, '浏览器阻止了新窗口，请允许弹窗后重试。'); return; }
+    const pending: PendingWindowOpen = {
+      panelId, panelName: panel.panelName, sessionId, token: this.initToken, nonce: generateUUID(), popup,
+      timer: 0, poll: 0, cancelled: false, cleaned: false,
+    };
+    this.pendingWindowOpens.set(panelId, pending);
+    layer?.setOpeningWindow(panelId, true);
+    pending.timer = window.setTimeout(() => this.cancelWindowOpen(pending, '新窗口加载超时，请重试。'), 20_000);
+    pending.poll = window.setInterval(() => {
+      if (popup.closed) this.cancelWindowOpen(pending, '新窗口已关闭，请重试。');
+    }, 300);
+    try {
+      const response = await fetch('/api/panel/open-window', {
+        method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId, panelName: panel.panelName }),
+      });
+      const result: unknown = await response.json();
+      if (!response.ok || !isNewPanelWindowResult(result, panel.panelName)) throw new Error('无法创建新窗口。');
+      pending.windowGroupId = result.windowGroupId;
+      if (pending.cancelled || this.initToken !== pending.token || this.bootstrap?.sessionId !== sessionId || popup.closed) {
+        this.cancelWindowOpen(pending);
+        return;
+      }
+      const url = new URL(result.url, window.location.href);
+      if (url.origin !== new URL(window.location.href).origin || url.pathname !== '/api/window-entry/secondary'
+        || url.searchParams.get('sessionId') !== sessionId || url.searchParams.get('windowGroupId') !== result.windowGroupId) throw new Error('新窗口地址无效。');
+      url.searchParams.set('openNonce', pending.nonce);
+      url.searchParams.set('openPanel', panel.panelName);
+      popup.location.href = url.toString();
+    } catch {
+      if (!pending.cancelled) this.cancelWindowOpen(pending, '无法打开新窗口，请重试。');
+      else this.cleanupCreatedWindow(pending);
+    }
+  }
+
+  private cleanupCreatedWindow(pending: PendingWindowOpen): void {
+    if (!pending.windowGroupId || pending.cleaned) return;
+    pending.cleaned = true;
+    void fetch('/api/window-group/close', {
+      method: 'POST', headers: { 'content-type': 'application/json' }, keepalive: true,
+      body: JSON.stringify({ sessionId: pending.sessionId, windowGroupId: pending.windowGroupId }),
+    }).then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    }).catch((error) => console.error('清理新窗口失败', error));
+  }
+
+  private cancelWindowOpen(pending: PendingWindowOpen, error?: string): void {
+    pending.cancelled = true;
+    window.clearTimeout(pending.timer);
+    window.clearInterval(pending.poll);
+    const current = this.pendingWindowOpens.get(pending.panelId);
+    if (current === pending) this.pendingWindowOpens.delete(pending.panelId);
+    try { if (!pending.popup.closed) pending.popup.close(); } catch { /* The window may already be gone. */ }
+    this.cleanupCreatedWindow(pending);
+    if (!current || current === pending) {
+      this.floatingLayer()?.setOpeningWindow(pending.panelId, false);
+      if (error && this.isConnected) this.floatingLayer()?.showWindowError(pending.panelId, error);
+    }
+  }
+
+  private cancelPendingWindowOpens(): void {
+    for (const pending of this.pendingWindowOpens.values()) this.cancelWindowOpen(pending);
+  }
+
+  private handleWindowOpenReady(event: MessageEvent): void {
+    if (event.origin !== new URL(window.location.href).origin || !event.data || event.data.type !== 'ce-window-panel-mounted') return;
+    for (const pending of this.pendingWindowOpens.values()) {
+      if (pending.popup !== event.source || pending.cancelled || pending.popup.closed || pending.token !== this.initToken
+        || pending.sessionId !== this.bootstrap?.sessionId || !pending.windowGroupId
+        || event.data.nonce !== pending.nonce || event.data.sessionId !== pending.sessionId
+        || event.data.windowGroupId !== pending.windowGroupId || event.data.panelName !== pending.panelName) continue;
+      window.clearTimeout(pending.timer);
+      window.clearInterval(pending.poll);
+      this.pendingWindowOpens.delete(pending.panelId);
+      // The old server-floating instance may be shared with another device; only remove this page's view.
+      const panel = this.floatingPanels.find((item) => item.id === pending.panelId);
+      if (panel && !panel.localOnly && this.bootstrap) {
+        this.hiddenFloatingIds.add(panel.id);
+        writeHiddenFloatingIds(this.bootstrap, this.hiddenFloatingIds);
+      }
+      this.removeFloatingPanel(pending.panelId);
+      return;
+    }
+  }
+
+  private notifyOpenerPanelMounted(event: MessageEvent): void {
+    if (this.windowGroupKind !== 'secondary' || !window.opener || event.origin !== new URL(window.location.href).origin
+      || !event.data || event.data.type !== 'panel-mounted' || !this.bootstrap) return;
+    const params = new URLSearchParams(window.location.search);
+    const nonce = params.get('openNonce');
+    const panelName = params.get('openPanel');
+    const windowGroupId = params.get('windowGroupId');
+    if (!nonce || !panelName || !windowGroupId || this.renderedWindow?.id !== windowGroupId
+      || event.data.panel !== panelName || !this.getRenderedPanels().some((panel) => (
+        panel.getAttribute('data-panel-name') === panelName && panel.shadowRoot?.querySelector('iframe')?.contentWindow === event.source
+      ))) return;
+    window.opener.postMessage({ type: 'ce-window-panel-mounted', nonce, panelName, windowGroupId, sessionId: this.bootstrap.sessionId }, event.origin);
   }
 
   private syncFloatingPanelLayer(): void {
@@ -1477,6 +1612,30 @@ function isCloseSourceTabPayload(value: unknown): value is {
 function getPanelInstanceIdFromEvent(event: Event): string {
   const detail = (event as CustomEvent<{ panelInstanceId?: unknown }>).detail;
   return typeof detail?.panelInstanceId === 'string' ? detail.panelInstanceId : '';
+}
+
+function hiddenFloatingKey(bootstrap: BootstrapInfo): string {
+  return `itharbors:hidden-floating:v1:${encodeURIComponent(JSON.stringify([bootstrap.sessionId, bootstrap.kitName ?? '']))}`;
+}
+
+function readHiddenFloatingIds(bootstrap: BootstrapInfo): Set<string> {
+  try {
+    const value: unknown = JSON.parse(window.sessionStorage.getItem(hiddenFloatingKey(bootstrap)) ?? '[]');
+    return new Set(Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : []);
+  } catch { return new Set(); }
+}
+
+function writeHiddenFloatingIds(bootstrap: BootstrapInfo, ids: Set<string>): void {
+  try { window.sessionStorage.setItem(hiddenFloatingKey(bootstrap), JSON.stringify([...ids])); }
+  catch { /* The view remains hidden until this page is reloaded. */ }
+}
+
+function isNewPanelWindowResult(value: unknown, panelName: string): value is { windowGroupId: string; url: string } {
+  if (!value || typeof value !== 'object') return false;
+  const result = value as Record<string, unknown>;
+  return result.disposition === 'open-window-group' && result.carrier === 'window-group'
+    && result.panelName === panelName && typeof result.panelInstanceId === 'string' && result.panelInstanceId.length > 0
+    && typeof result.windowGroupId === 'string' && result.windowGroupId.length > 0 && typeof result.url === 'string';
 }
 
 function parseTrustedDispatchResult(

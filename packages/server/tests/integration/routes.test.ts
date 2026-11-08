@@ -395,6 +395,38 @@ describe('framework routes', () => {
     });
   });
 
+  it('opens an authorized independent panel window without reusing an existing instance', async () => {
+    const editor = createEditor('s1', { assembly: testAssembly });
+    await editor.kit.load(testKitFixture.name);
+    const existing = editor.window.openPanel(testKitFixture.primaryPanel);
+    const before = editor.window.getSnapshot();
+    const access: string[] = [];
+    const router = createPanelOpenRouter(new Map([['s1', editor]]), (_req, sessionId) => {
+      access.push(sessionId);
+      if (sessionId !== 's1') throw new HttpError(403, 'FORBIDDEN', 'denied');
+    });
+    const response = mockRes();
+    await router(mockReq('POST', '/api/panel/open-window', {
+      sessionId: 's1', panelName: testKitFixture.primaryPanel,
+    }), response.res);
+    const copy = JSON.parse(await response.body());
+    expect(copy).toMatchObject({ disposition: 'open-window-group', carrier: 'window-group', panelName: testKitFixture.primaryPanel });
+    expect(copy.panelInstanceId).not.toBe(existing.panelInstanceId);
+    expect(copy.windowGroupId).not.toBe(existing.windowGroupId);
+    expect(copy.url).toContain(`windowGroupId=${encodeURIComponent(copy.windowGroupId)}`);
+    expect(access).toEqual(['s1']);
+    editor.window.closeWindowGroup(copy.windowGroupId);
+    expect(editor.window.getSnapshot()).toEqual(before);
+
+    await expect(router(mockReq('POST', '/api/panel/open-window', {
+      sessionId: 'other', panelName: testKitFixture.primaryPanel,
+    }), mockRes().res)).rejects.toMatchObject({ status: 403 });
+    await expect(router(mockReq('POST', '/api/panel/open-window', {
+      sessionId: 's1', panelName: 'missing.panel',
+    }), mockRes().res)).rejects.toMatchObject({ status: 404 });
+    expect(editor.window.getSnapshot()).toEqual(before);
+  });
+
   it('panel instance fallback marks an opening instance as floating', async () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load(testKitFixture.name);

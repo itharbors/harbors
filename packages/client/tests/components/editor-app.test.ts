@@ -343,6 +343,7 @@ describe('EditorApp default layout', () => {
     const group = el.querySelector('ce-panel-group') as HTMLElement | null;
     expect(group?.dataset.windowId).toBe('secondary-window');
     expect(group?.querySelector('ce-panel')?.getAttribute('data-panel-name')).toBe('@itharbors/log.log');
+    expect(group?.querySelector('ce-panel')?.getAttribute('src')).toBe('/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelUi=1');
   });
 
   it('renders floating fallback instances from BroadcastChannel messages in main mode', async () => {
@@ -388,6 +389,7 @@ describe('EditorApp default layout', () => {
       expect(layer).not.toBeNull();
       expect(layer?.getAttribute('data-count')).toBe('1');
       expect(layer?.shadowRoot?.querySelector('.floating-window')).not.toBeNull();
+      expect(layer?.shadowRoot?.querySelector('ce-panel')?.getAttribute('src')).toBe('/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelUi=1');
     } finally {
       if (previousBroadcastChannel) {
         vi.stubGlobal('BroadcastChannel', previousBroadcastChannel);
@@ -532,8 +534,9 @@ describe('EditorApp default layout', () => {
   it('removes the source tab for a secondary window close-source message', async () => {
     const previousBroadcastChannel = globalThis.BroadcastChannel;
     const listeners: Array<(event: MessageEvent) => void> = [];
+    const channelNames: string[] = [];
     class MockChannel {
-      constructor(public name: string) {}
+      constructor(public name: string) { channelNames.push(name); }
       addEventListener(_type: string, listener: (event: MessageEvent) => void) {
         listeners.push(listener);
       }
@@ -542,10 +545,11 @@ describe('EditorApp default layout', () => {
       postMessage() {}
     }
     vi.stubGlobal('BroadcastChannel', MockChannel);
-    window.location.search = '?sessionId=existing-id&windowGroupId=secondary-window';
-    window.location.href = 'http://localhost:8080/?sessionId=existing-id&windowGroupId=secondary-window';
+    window.location.search = '?sessionId=existing-id%3A%3Aharness&windowGroupId=secondary-window';
+    window.location.href = 'http://localhost:8080/?sessionId=existing-id%3A%3Aharness&windowGroupId=secondary-window';
     bootstrapResponse = () => Promise.resolve(createJsonResponse({
       ...bootstrapPayload,
+      sessionId: 'existing-id::harness',
       windows: [
         bootstrapPayload.windows[0],
         {
@@ -572,6 +576,8 @@ describe('EditorApp default layout', () => {
       el.setAttribute('window-group-kind', 'secondary');
       document.body.appendChild(el);
       await waitForBootstrap();
+      expect(channelNames).toContain('ce-session:existing-id');
+      expect(el.querySelector<HTMLElement>('[data-window-id="secondary-window"]')?.dataset.sessionId).toBe('existing-id');
 
       listeners[0](new MessageEvent('message', {
         data: {
@@ -603,10 +609,11 @@ describe('EditorApp default layout', () => {
       configurable: true,
       value: undefined,
     });
-    window.location.search = '?sessionId=existing-id&windowGroupId=secondary-window';
-    window.location.href = 'http://localhost:8080/?sessionId=existing-id&windowGroupId=secondary-window';
+    window.location.search = '?sessionId=existing-id%3A%3Aharness&windowGroupId=secondary-window';
+    window.location.href = 'http://localhost:8080/?sessionId=existing-id%3A%3Aharness&windowGroupId=secondary-window';
     bootstrapResponse = () => Promise.resolve(createJsonResponse({
       ...bootstrapPayload,
+      sessionId: 'existing-id::harness',
       windows: [
         bootstrapPayload.windows[0],
         {
@@ -635,7 +642,7 @@ describe('EditorApp default layout', () => {
       expect(mockFetch).toHaveBeenCalledWith('/api/window-group/close', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ sessionId: 'existing-id', windowGroupId: 'secondary-window' }),
+        body: JSON.stringify({ sessionId: 'existing-id::harness', windowGroupId: 'secondary-window' }),
         keepalive: true,
       });
     } finally {
@@ -694,6 +701,7 @@ describe('EditorApp default layout', () => {
     expect(layer.shadowRoot?.querySelectorAll('.floating-window')).toHaveLength(2);
     expect(layer.shadowRoot?.querySelectorAll('.edge-chip')).toHaveLength(0);
     expect(layer.shadowRoot?.querySelector('ce-panel')?.getAttribute('title-i18n')).toBe('panel.log.title');
+    expect(layer.shadowRoot?.querySelector('ce-panel')?.getAttribute('src')).toBe('/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelUi=1');
   });
 
   it('keeps main and other floating panel iframes across open, duplicate and close', async () => {
@@ -1206,12 +1214,20 @@ describe('EditorApp default layout', () => {
     expect(iframeDocument.getElementById('ce-base-ui-theme')?.textContent)
       .toContain('color-scheme: var(--ce-color-scheme, dark);');
 
-    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="close"]')?.click();
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="minimize"]')?.click();
     await Promise.resolve();
     iframeDocument.documentElement.style.removeProperty('--ce-accent');
     iframeDocument.getElementById('ce-base-ui-theme')?.remove();
     floatingIframe.dispatchEvent(new Event('load'));
 
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#abcdef');
+    expect(iframeDocument.getElementById('ce-base-ui-theme')).not.toBeNull();
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="restore"]')?.click();
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="close"]')?.click();
+    await Promise.resolve();
+    iframeDocument.documentElement.style.removeProperty('--ce-accent');
+    iframeDocument.getElementById('ce-base-ui-theme')?.remove();
+    floatingIframe.dispatchEvent(new Event('load'));
     expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('');
     expect(iframeDocument.getElementById('ce-base-ui-theme')).toBeNull();
   });
@@ -1310,6 +1326,24 @@ describe('EditorApp default layout', () => {
       method: 'POST', body: JSON.stringify({ sessionId: 'existing-id::harness', menuId: 'view/guide', presentation: 'local' }),
     }));
     expect(panel.shadowRoot!.querySelector('iframe')).toBe(iframe);
+  });
+
+  it('marks direct panel URLs while preserving their existing query parameters', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      panels: bootstrapPayload.panels.map((panel) => panel.name === '@itharbors/log.log'
+        ? { ...panel, entry: `${panel.entry}?view=compact&panelUi=0` }
+        : panel),
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+
+    const panel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@itharbors/log.log"]');
+    const url = new URL(panel!.getAttribute('src')!, 'http://localhost');
+    expect(url.searchParams.get('view')).toBe('compact');
+    expect(url.searchParams.get('sessionId')).toBe('existing-id');
+    expect(url.searchParams.getAll('panelUi')).toEqual(['1']);
   });
 
   it('routes panel-dispatch events to the iframe with the matching panel name', async () => {
@@ -1446,15 +1480,203 @@ describe('EditorApp default layout', () => {
       const unavailable = new CustomEvent('ce-local-panel-open', { cancelable: true, detail: { panelName: '@itharbors/log.log' } });
       expect(el.dispatchEvent(unavailable)).toBe(false);
       expect(layer.shadowRoot!.querySelector('ce-panel')).toBeNull();
-      open('@itharbors/plugin-list.list');
-      expect(layer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
-      el.remove();
-      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
-      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).toBeNull();
-      expect(posted).not.toHaveBeenCalled();
     } finally {
       if (previousBroadcastChannel) vi.stubGlobal('BroadcastChannel', previousBroadcastChannel);
       else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
+    }
+  });
+
+  it('opens a fresh window only after its mounted acknowledgement and preserves legacy server instances', async () => {
+    const previousFetch = mockFetch.getMockImplementation()!;
+    const popup = { closed: false, location: { href: '' }, close: vi.fn() } as unknown as Window;
+    const windowOpen = vi.spyOn(window, 'open').mockReturnValue(popup);
+    try {
+      bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, panelInstances: [{ id: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null }] }));
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      mockFetch.mockImplementation((url: string) => url === '/api/panel/open-window'
+        ? Promise.resolve(createJsonResponse({ disposition: 'open-window-group', carrier: 'window-group', panelInstanceId: 'new-instance', panelName: '@itharbors/log.log', windowGroupId: 'new-group', url: '/api/window-entry/secondary?sessionId=existing-id&windowGroupId=new-group' }))
+        : Promise.resolve(createJsonResponse({ ok: true })));
+      const layer = el.querySelector('floating-panel-layer')!;
+      const button = layer.shadowRoot!.querySelector<HTMLButtonElement>('[data-floating-action="open-window"]')!;
+      const main = el.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe');
+      mockFetch.mockClear(); button.click(); button.click();
+      expect(windowOpen).toHaveBeenCalledTimes(1);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      const destination = new URL(popup.location.href);
+      expect(destination.searchParams.get('sessionId')).toBe('existing-id');
+      expect(destination.searchParams.get('windowGroupId')).toBe('new-group');
+      expect(layer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      const ready = { type: 'ce-window-panel-mounted', sessionId: 'existing-id', windowGroupId: 'new-group', panelName: '@itharbors/log.log', nonce: destination.searchParams.get('openNonce') };
+      window.dispatchEvent(new MessageEvent('message', { origin: 'http://localhost:8080', source: window, data: ready }));
+      window.dispatchEvent(new MessageEvent('message', { origin: 'http://localhost:8080', source: popup, data: { ...ready, nonce: 'wrong' } }));
+      expect(layer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      window.dispatchEvent(new MessageEvent('message', { origin: 'http://localhost:8080', source: popup, data: ready }));
+      expect(layer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      expect(el.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')).toBe(main);
+      expect(mockFetch.mock.calls.some(([url]) => url === '/api/panel-instance/close' || url === '/api/window-group/close')).toBe(false);
+      window.dispatchEvent(new MessageEvent('message', { data: { type: 'ce-open-panel-floating', payload: { id: 'legacy', panelName: '@itharbors/log.log', state: 'open' } } }));
+      expect(layer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      el.remove(); mockFetch.mockImplementation(previousFetch);
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      const refreshed = el.querySelector('floating-panel-layer')!;
+      expect(refreshed.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      el.dispatchEvent(new CustomEvent('ce-local-panel-open', { detail: { panelName: '@itharbors/log.log' } }));
+      expect(refreshed.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      refreshed.shadowRoot!.querySelector<HTMLButtonElement>('[data-floating-action="close"]')!.click();
+      el.dispatchEvent(new CustomEvent('ce-local-panel-open', { detail: { panelName: '@itharbors/log.log' } }));
+      expect(refreshed.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      el.remove();
+      bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, kitName: 'other-kit', panelInstances: [{ id: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null }] }));
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      el.remove();
+      bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, sessionId: 'different-session', panelInstances: [{ id: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null }] }));
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      el.remove();
+      bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, panelInstances: [{ id: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null }] }));
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      const localSource = {} as Window;
+      Object.defineProperty(el.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')!, 'contentWindow', { configurable: true, value: localSource });
+      window.dispatchEvent(new MessageEvent('message', { source: localSource, origin: 'http://localhost:8080', data: { type: 'ce-open-panel-result', payload: { disposition: 'reuse', panelInstanceId: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', windowGroupId: null } } }));
+      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      el.remove();
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      expect(el.querySelector('floating-panel-layer')!.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+    } finally { mockFetch.mockImplementation(previousFetch); windowOpen.mockRestore(); }
+  });
+
+  it('only an explicit request from this workbench iframe unhides a legacy instance', async () => {
+    const previousBroadcastChannel = globalThis.BroadcastChannel;
+    class Channel {
+      static instances: Channel[] = [];
+      listener?: (event: MessageEvent) => void;
+      constructor() { Channel.instances.push(this); }
+      addEventListener(_type: string, listener: (event: MessageEvent) => void) { this.listener = listener; }
+      removeEventListener() {} close() {} postMessage() {}
+    }
+    vi.stubGlobal('BroadcastChannel', Channel);
+    let first: EditorApp | undefined;
+    try {
+      const key = `itharbors:hidden-floating:v1:${encodeURIComponent(JSON.stringify(['existing-id', '@itharbors/kit-default']))}`;
+      window.sessionStorage.setItem(key, JSON.stringify(['legacy']));
+      bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, panelInstances: [{ id: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null }] }));
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap(); first = el;
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      const firstLayer = first.querySelector('floating-panel-layer')!;
+      const secondLayer = el.querySelector('floating-panel-layer')!;
+      expect(firstLayer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      expect(secondLayer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      const payload = { type: 'ce-open-panel-result', payload: { disposition: 'reuse', panelInstanceId: 'legacy', panelName: '@itharbors/log.log', carrier: 'floating', windowGroupId: null } };
+      const source = {} as Window;
+      Object.defineProperty(el.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')!, 'contentWindow', { configurable: true, value: source });
+      window.dispatchEvent(new MessageEvent('message', { source, origin: 'http://localhost:8080', data: payload }));
+      Channel.instances[0].listener?.(new MessageEvent('message', { data: payload }));
+      expect(secondLayer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      expect(firstLayer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      window.dispatchEvent(new MessageEvent('message', { source: window, origin: 'http://localhost:8080', data: payload }));
+      expect(firstLayer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      const localSource = {} as Window;
+      Object.defineProperty(first.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')!, 'contentWindow', { configurable: true, value: localSource });
+      window.dispatchEvent(new MessageEvent('message', { source: localSource, origin: 'http://evil.test', data: payload }));
+      expect(firstLayer.shadowRoot!.querySelector('ce-panel')).toBeNull();
+      window.dispatchEvent(new MessageEvent('message', { source: localSource, origin: 'http://localhost:8080', data: payload }));
+      expect(firstLayer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+    } finally {
+      first?.remove();
+      if (previousBroadcastChannel) vi.stubGlobal('BroadcastChannel', previousBroadcastChannel);
+      else Reflect.deleteProperty(globalThis, 'BroadcastChannel');
+    }
+  });
+
+  it('keeps the local panel when the popup is blocked or its new window times out', async () => {
+    const previousFetch = mockFetch.getMockImplementation()!;
+    const popup = { closed: false, location: { href: '' }, close: vi.fn() } as unknown as Window;
+    const windowOpen = vi.spyOn(window, 'open').mockReturnValueOnce(null).mockReturnValue(popup);
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      el.dispatchEvent(new CustomEvent('ce-local-panel-open', { detail: { panelName: '@itharbors/log.log' } }));
+      const layer = el.querySelector('floating-panel-layer')!;
+      const button = layer.shadowRoot!.querySelector<HTMLButtonElement>('[data-floating-action="open-window"]')!;
+      mockFetch.mockClear(); button.click();
+      expect(layer.shadowRoot!.querySelector('.floating-error')?.textContent).toContain('阻止');
+      expect(mockFetch).not.toHaveBeenCalled();
+      mockFetch.mockImplementation((url: string) => url === '/api/panel/open-window'
+        ? Promise.resolve(createJsonResponse({ disposition: 'open-window-group', carrier: 'window-group', panelInstanceId: 'new-instance', panelName: '@itharbors/log.log', windowGroupId: 'new-group', url: '/api/window-entry/secondary?sessionId=existing-id&windowGroupId=new-group' }))
+        : Promise.resolve({ ok: false, status: 503 } as Response));
+      vi.useFakeTimers(); button.click(); await Promise.resolve(); await Promise.resolve();
+      await vi.advanceTimersByTimeAsync(20_001);
+      expect(layer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      expect(layer.shadowRoot!.querySelector('.floating-error')?.textContent).toContain('超时');
+      expect(mockFetch).toHaveBeenCalledWith('/api/window-group/close', expect.objectContaining({ body: JSON.stringify({ sessionId: 'existing-id', windowGroupId: 'new-group' }) }));
+      expect(errorLog).toHaveBeenCalledWith('清理新窗口失败', expect.objectContaining({ message: 'HTTP 503' }));
+      expect(popup.close).toHaveBeenCalled();
+    } finally { vi.useRealTimers(); mockFetch.mockImplementation(previousFetch); windowOpen.mockRestore(); errorLog.mockRestore(); }
+  });
+
+  it('cleans only the newly created group if the popup closes before the create response', async () => {
+    const previousFetch = mockFetch.getMockImplementation()!;
+    const popup = { closed: false, location: { href: '' }, close: vi.fn() } as unknown as Window;
+    const windowOpen = vi.spyOn(window, 'open').mockReturnValue(popup);
+    const response = deferred<Response>();
+    try {
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      el.dispatchEvent(new CustomEvent('ce-local-panel-open', { detail: { panelName: '@itharbors/log.log' } }));
+      const layer = el.querySelector('floating-panel-layer')!;
+      mockFetch.mockImplementation((url: string) => url === '/api/panel/open-window' ? response.promise : Promise.resolve(createJsonResponse({ ok: true })));
+      mockFetch.mockClear(); vi.useFakeTimers();
+      layer.shadowRoot!.querySelector<HTMLButtonElement>('[data-floating-action="open-window"]')!.click();
+      Object.defineProperty(popup, 'closed', { configurable: true, value: true });
+      await vi.advanceTimersByTimeAsync(301);
+      response.resolve(createJsonResponse({ disposition: 'open-window-group', carrier: 'window-group', panelInstanceId: 'new-instance', panelName: '@itharbors/log.log', windowGroupId: 'new-group', url: '/api/window-entry/secondary?sessionId=existing-id&windowGroupId=new-group' }));
+      await Promise.resolve(); await Promise.resolve();
+      expect(layer.shadowRoot!.querySelector('ce-panel')).not.toBeNull();
+      expect(mockFetch).toHaveBeenCalledWith('/api/window-group/close', expect.objectContaining({ body: JSON.stringify({ sessionId: 'existing-id', windowGroupId: 'new-group' }) }));
+      expect(mockFetch.mock.calls.filter(([url]) => url === '/api/window-group/close')).toHaveLength(1);
+      expect(popup.location.href).toBe('');
+    } finally { vi.useRealTimers(); mockFetch.mockImplementation(previousFetch); windowOpen.mockRestore(); }
+  });
+
+  it('retains the original panel if creating the new window fails', async () => {
+    const previousFetch = mockFetch.getMockImplementation()!;
+    const popup = { closed: false, location: { href: '' }, close: vi.fn() } as unknown as Window;
+    const windowOpen = vi.spyOn(window, 'open').mockReturnValue(popup);
+    try {
+      el = document.createElement('editor-app') as EditorApp; document.body.appendChild(el); await waitForBootstrap();
+      el.dispatchEvent(new CustomEvent('ce-local-panel-open', { detail: { panelName: '@itharbors/log.log' } }));
+      const layer = el.querySelector('floating-panel-layer')!;
+      const original = layer.shadowRoot!.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe');
+      mockFetch.mockImplementation(() => Promise.resolve({ ok: false, json: async () => ({ error: 'failed' }) } as Response));
+      mockFetch.mockClear();
+      layer.shadowRoot!.querySelector<HTMLButtonElement>('[data-floating-action="open-window"]')!.click();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(layer.shadowRoot!.querySelector('ce-panel')!.shadowRoot!.querySelector('iframe')).toBe(original);
+      expect(layer.shadowRoot!.querySelector('.floating-error')?.textContent).toContain('无法打开');
+      expect(popup.close).toHaveBeenCalled();
+      expect(mockFetch.mock.calls.some(([url]) => url === '/api/window-group/close')).toBe(false);
+    } finally { mockFetch.mockImplementation(previousFetch); windowOpen.mockRestore(); }
+  });
+
+  it('acknowledges only the mounted target iframe in the matching secondary group', async () => {
+    const openerDescriptor = Object.getOwnPropertyDescriptor(window, 'opener');
+    const postMessage = vi.fn();
+    Object.defineProperty(window, 'opener', { configurable: true, value: { postMessage } });
+    window.location.search = '?sessionId=existing-id&windowGroupId=secondary-window&openNonce=nonce&openPanel=%40itharbors%2Flog.log';
+    window.location.href = `http://localhost:8080/${window.location.search}`;
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, windows: [bootstrapPayload.windows[0], { id: 'secondary-window', kind: 'secondary', type: 'panel-area', entry: 'secondary.html', state: 'open', panelInstanceIds: ['p'], layout: { type: 'leaf', panel: '@itharbors/log.log' } }] }));
+    try {
+      el = document.createElement('editor-app') as EditorApp; el.setAttribute('window-group-kind', 'secondary'); document.body.appendChild(el); await waitForBootstrap();
+      const panel = el.querySelector('ce-panel[data-panel-name="@itharbors/log.log"]')!;
+      const frameWindow = panel.shadowRoot!.querySelector('iframe')!.contentWindow!;
+      window.dispatchEvent(new MessageEvent('message', { origin: 'http://localhost:8080', source: window, data: { type: 'panel-mounted', panel: '@itharbors/log.log' } }));
+      expect(postMessage).not.toHaveBeenCalled();
+      window.dispatchEvent(new MessageEvent('message', { origin: 'http://localhost:8080', source: frameWindow, data: { type: 'panel-mounted', panel: '@itharbors/log.log' } }));
+      expect(postMessage).toHaveBeenCalledWith({ type: 'ce-window-panel-mounted', nonce: 'nonce', panelName: '@itharbors/log.log', windowGroupId: 'secondary-window', sessionId: 'existing-id' }, 'http://localhost:8080');
+    } finally {
+      if (openerDescriptor) Object.defineProperty(window, 'opener', openerDescriptor);
+      else Reflect.deleteProperty(window, 'opener');
     }
   });
 

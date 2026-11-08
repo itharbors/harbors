@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-11-08-floating-window-interaction",
+  "type": "bug",
+  "updatedAt": "2026-11-08T09:24:33.278Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "blocked",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}

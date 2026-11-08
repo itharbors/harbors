@@ -8,7 +8,7 @@ import { isNonEmptyString, isOptionalString, isRecord } from '../http/validation
 export function createPanelOpenRouter(editorMap: Map<string, Editor>, assertAccess?: (req: IncomingMessage, sessionId: string) => void) {
   return async function panelOpenRouter(req: IncomingMessage, res: ServerResponse): Promise<void> {
     const url = new URL(req.url || '/', 'http://localhost');
-    if (req.method !== 'POST' || url.pathname !== '/api/panel/open') {
+    if (req.method !== 'POST' || (url.pathname !== '/api/panel/open' && url.pathname !== '/api/panel/open-window')) {
       throw new HttpError(404, 'NOT_FOUND', 'Not found');
     }
 
@@ -26,7 +26,9 @@ export function createPanelOpenRouter(editorMap: Map<string, Editor>, assertAcce
     }
 
     try {
-      const opened = editor.window.openPanel(body.panelName);
+      const opened = url.pathname === '/api/panel/open-window'
+        ? editor.window.openPanelWindowCopy(body.panelName)
+        : editor.window.openPanel(body.panelName);
       const panelUrl = opened.windowGroupId
         ? `/api/window-entry/secondary?sessionId=${encodeURIComponent(editor.sessionId)}&windowGroupId=${encodeURIComponent(opened.windowGroupId)}`
         : null;

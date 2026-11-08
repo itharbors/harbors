@@ -594,6 +594,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     activeExternalPlugins = loadedPlugins;
     kit.register(descriptor);
     kit.switchKit(descriptor.name);
+    windowManager?.clear();
     windowManager = nextWindowManager;
     activeKitDirectory = kitPath;
     return descriptor;
@@ -760,6 +761,15 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
           entry: kit.getCurrent()?.windowEntries.secondary ?? 'secondary.html',
           multiInstance: descriptor.multiInstance === true,
         });
+      },
+      openPanelWindowCopy: (panelName: string) => {
+        const descriptor = panel.getInfo(panelName);
+        return requireWindowManager().openPanel({
+          panelName,
+          layout: { type: 'leaf', panel: panelName },
+          entry: kit.getCurrent()?.windowEntries.secondary ?? 'secondary.html',
+          multiInstance: descriptor.multiInstance === true,
+        }, { forceNew: true });
       },
       markPanelInstanceFloating: (panelInstanceId: string) => {
         requireWindowManager().markFloating(panelInstanceId);

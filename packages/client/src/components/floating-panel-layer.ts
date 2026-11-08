@@ -38,6 +38,16 @@ export class FloatingPanelLayer extends HTMLElement {
   private resizeObserver: ResizeObserver | null = null;
   private readonly records = new Map<string, { window?: HTMLElement; panelName: string }>();
 
+  setOpeningWindow(id: string, opening: boolean): void {
+    const button = this.records.get(id)?.window?.querySelector<HTMLButtonElement>('[data-floating-action="open-window"]');
+    if (button) button.disabled = opening;
+  }
+
+  showWindowError(id: string, message: string): void {
+    const error = this.records.get(id)?.window?.querySelector<HTMLElement>('.floating-error');
+    if (error) { error.textContent = message; error.hidden = !message; }
+  }
+
   private get items(): FloatingPanelState[] {
     const raw = this.getAttribute('data-state');
     if (!raw) return [];
@@ -180,6 +190,9 @@ export class FloatingPanelLayer extends HTMLElement {
         .floating-action:hover {
           background: var(--ce-hover-bg, rgba(255, 255, 255, 0.08));
         }
+        .floating-action:disabled { opacity: .5; cursor: wait; }
+        .floating-error { padding: 6px 10px; color: #ffc0c6; background: #48262c; font-size: 12px; }
+        .floating-error[hidden] { display: none; }
         .floating-resize {
           position: absolute;
           bottom: 0;
@@ -256,8 +269,10 @@ export class FloatingPanelLayer extends HTMLElement {
     element.innerHTML = `
       <div class="floating-toolbar">
         <span class="floating-title"></span>
+        <button class="floating-action" type="button" data-floating-action="open-window" data-panel-instance-id="${escapeAttr(item.id)}" title="在新窗口打开（未保存状态不会转移）">↗</button>
         <button class="floating-action" type="button" data-floating-action="close" data-panel-instance-id="${escapeAttr(item.id)}" title="Close">x</button>
       </div>
+      <div class="floating-error" role="alert" hidden></div>
       ${item.localOnly
         ? `<ce-panel active data-panel-name="${escapeAttr(item.panelName)}"></ce-panel>`
         : `<ce-panel-group data-group-id="floating-${escapeAttr(item.id)}" data-session-id="" data-window-id="main-window"><ce-panel active data-tab-id="floating-tab-${escapeAttr(item.id)}" data-panel-name="${escapeAttr(item.panelName)}"></ce-panel></ce-panel-group>`}
@@ -269,6 +284,7 @@ export class FloatingPanelLayer extends HTMLElement {
   private syncWindow(element: HTMLElement, item: FloatingPanelState): void {
     const title = getDisplayTitle(item);
     element.querySelector('.floating-title')!.textContent = title;
+    element.querySelector('[data-floating-action="open-window"]')!.setAttribute('aria-label', `在新窗口打开 ${title}`);
     element.querySelector('[data-floating-action="close"]')!.setAttribute('aria-label', `Close ${title}`);
     const panel = element.querySelector('ce-panel')!;
     setOptionalAttribute(panel, 'title-i18n', item.titleKey);
