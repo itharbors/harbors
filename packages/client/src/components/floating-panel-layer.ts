@@ -9,10 +9,9 @@ export interface FloatingPanelState {
   src: string;
   availability?: 'available' | 'unavailable';
   revision?: number;
-  state: 'open' | 'minimized';
+  state: 'open';
   position?: { x: number; y: number };
   size?: { width: number; height: number };
-  edge?: 'left' | 'right' | 'bottom';
 }
 
 type Geometry = { x: number; y: number; width: number; height: number };
@@ -36,7 +35,7 @@ export class FloatingPanelLayer extends HTMLElement {
   private handleWindowBlur = () => this.cancelGesture();
   private gesture: ActiveGesture | null = null;
   private resizeObserver: ResizeObserver | null = null;
-  private readonly records = new Map<string, { window?: HTMLElement; chip?: HTMLButtonElement; panelName: string }>();
+  private readonly records = new Map<string, { window?: HTMLElement; panelName: string }>();
 
   private get items(): FloatingPanelState[] {
     const raw = this.getAttribute('data-state');
@@ -147,7 +146,6 @@ export class FloatingPanelLayer extends HTMLElement {
           border-radius: 8px;
           overflow: hidden;
         }
-        .floating-window[hidden] { display: none; }
         .floating-toolbar {
           display: flex;
           align-items: center;
@@ -207,18 +205,6 @@ export class FloatingPanelLayer extends HTMLElement {
           flex: 1 1 auto;
           min-height: 0;
         }
-        .edge-chip {
-          position: absolute;
-          pointer-events: auto;
-          border: 1px solid var(--ce-border, #444);
-          border-radius: 999px;
-          padding: 6px 10px;
-          background: var(--ce-surface-raised, #2d2d2d);
-          color: var(--ce-text-primary, #fff);
-          font: inherit;
-          font-size: 12px;
-          cursor: pointer;
-        }
       </style>
     `;
     const activeIds = new Set(items.map((item) => item.id));
@@ -226,17 +212,14 @@ export class FloatingPanelLayer extends HTMLElement {
       if (activeIds.has(id)) continue;
       if (this.gesture?.id === id) this.cancelGesture();
       record.window?.remove();
-      record.chip?.remove();
       this.records.delete(id);
     }
 
-    let minimizedIndex = 0;
     for (const item of items) {
       let record = this.records.get(item.id);
       if (record && record.panelName !== item.panelName) {
         if (this.gesture?.id === item.id) this.cancelGesture();
         record.window?.remove();
-        record.chip?.remove();
         this.records.delete(item.id);
         record = undefined;
       }
@@ -244,13 +227,11 @@ export class FloatingPanelLayer extends HTMLElement {
         record = { panelName: item.panelName };
         this.records.set(item.id, record);
       }
-      if (item.state === 'open' && !record.window) {
+      if (!record.window) {
         record.window = this.createWindow(item);
         this.shadowRoot!.append(record.window);
       }
       if (record.window) {
-        record.window.hidden = item.state === 'minimized';
-        if (item.state === 'minimized' && this.gesture?.id === item.id) this.cancelGesture();
         if (item.position && this.gesture?.id !== item.id) {
           record.window.style.left = `${item.position.x}px`;
           record.window.style.top = `${item.position.y}px`;
@@ -260,22 +241,6 @@ export class FloatingPanelLayer extends HTMLElement {
           record.window.style.height = `${item.size.height}px`;
         }
         this.syncWindow(record.window, item);
-      }
-      if (item.state === 'minimized') {
-        if (!record.chip) {
-          record.chip = document.createElement('button');
-          record.chip.className = 'edge-chip';
-          record.chip.type = 'button';
-          record.chip.dataset.panelInstanceId = item.id;
-          record.chip.dataset.floatingAction = 'restore';
-          this.shadowRoot!.append(record.chip);
-        }
-        record.chip.style.cssText = renderChipPosition(item.edge ?? 'bottom', minimizedIndex++);
-        record.chip.textContent = getDisplayTitle(item);
-        record.chip.setAttribute('aria-label', `Restore ${getDisplayTitle(item)}`);
-      } else if (record.chip) {
-        record.chip.remove();
-        record.chip = undefined;
       }
     }
     queueMicrotask(() => { if (this.isConnected) this.constrainWindows(); });
@@ -290,7 +255,6 @@ export class FloatingPanelLayer extends HTMLElement {
     element.innerHTML = `
       <div class="floating-toolbar">
         <span class="floating-title"></span>
-        <button class="floating-action" type="button" data-floating-action="minimize" data-panel-instance-id="${escapeAttr(item.id)}" title="Minimize">_</button>
         <button class="floating-action" type="button" data-floating-action="close" data-panel-instance-id="${escapeAttr(item.id)}" title="Close">x</button>
       </div>
       <ce-panel-group data-group-id="floating-${escapeAttr(item.id)}" data-session-id="" data-window-id="main-window">
@@ -304,7 +268,6 @@ export class FloatingPanelLayer extends HTMLElement {
   private syncWindow(element: HTMLElement, item: FloatingPanelState): void {
     const title = getDisplayTitle(item);
     element.querySelector('.floating-title')!.textContent = title;
-    element.querySelector('[data-floating-action="minimize"]')!.setAttribute('aria-label', `Minimize ${title}`);
     element.querySelector('[data-floating-action="close"]')!.setAttribute('aria-label', `Close ${title}`);
     const panel = element.querySelector('ce-panel')!;
     setOptionalAttribute(panel, 'title-i18n', item.titleKey);
@@ -323,11 +286,6 @@ export class FloatingPanelLayer extends HTMLElement {
     for (const item of this.items) {
       const record = this.records.get(item.id);
       if (record?.window) this.syncWindow(record.window, item);
-      if (record?.chip) {
-        const title = getDisplayTitle(item);
-        record.chip.textContent = title;
-        record.chip.setAttribute('aria-label', `Restore ${title}`);
-      }
     }
   }
 
@@ -459,7 +417,7 @@ function isFloatingPanelState(value: unknown): value is FloatingPanelState {
     && typeof item.panelName === 'string'
     && typeof item.title === 'string'
     && typeof item.src === 'string'
-    && (item.state === 'open' || item.state === 'minimized');
+    && item.state === 'open';
 }
 
 function setOptionalAttribute(element: Element, name: string, value: string | undefined): void {
@@ -504,12 +462,6 @@ export function updateFloatingGeometry(initial: Geometry, mode: GestureMode, dx:
 function escapeSelector(value: string): string {
   if (typeof CSS !== 'undefined' && typeof CSS.escape === 'function') return CSS.escape(value);
   return value.replace(/([\\"\[\]#.])/g, '\\$1');
-}
-
-function renderChipPosition(edge: 'left' | 'right' | 'bottom', index: number): string {
-  if (edge === 'left') return `left:8px;bottom:${8 + index * 36}px;`;
-  if (edge === 'right') return `right:8px;bottom:${8 + index * 36}px;`;
-  return `left:${8 + index * 120}px;bottom:8px;`;
 }
 
 function getDisplayTitle(item: FloatingPanelState): string {

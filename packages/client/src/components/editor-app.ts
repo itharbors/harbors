@@ -86,8 +86,6 @@ export class EditorApp extends HTMLElement {
   private handleChannelMessageEvent = (event: MessageEvent) => this.handleChannelMessage(event.data);
   private handleSecondaryPageHide = () => this.cleanupSecondaryWindowGroup(true);
   private handleSecondaryBeforeUnload = () => this.cleanupSecondaryWindowGroup(true);
-  private handleFloatingPanelMinimize = (event: Event) => this.handleFloatingPanelAction(event, 'minimized');
-  private handleFloatingPanelRestore = (event: Event) => this.handleFloatingPanelAction(event, 'open');
   private handleFloatingPanelClose = (event: Event) => this.handleFloatingPanelCloseAction(event);
   private handleFloatingPanelGeometry = (event: Event) => this.updateFloatingPanelGeometry(event);
   private secondaryWindowCleanupSent = false;
@@ -145,8 +143,6 @@ export class EditorApp extends HTMLElement {
     this.ownerDocument.addEventListener('touchstart', this.clearCollapseClickSuppression, { capture: true, passive: true });
     this.addEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.addEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
-    this.addEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
-    this.addEventListener('ce-floating-panel-restore', this.handleFloatingPanelRestore);
     this.addEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
     this.addEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
     window.addEventListener('resize', this.handleWindowResize);
@@ -181,8 +177,6 @@ export class EditorApp extends HTMLElement {
     this.clearCollapseClickSuppression();
     this.removeEventListener('ce-divider-drag-start', this.handleDividerDragStart);
     this.removeEventListener('ce-divider-drag-end', this.handleDividerDragEnd);
-    this.removeEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
-    this.removeEventListener('ce-floating-panel-restore', this.handleFloatingPanelRestore);
     this.removeEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
     this.removeEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
     window.removeEventListener('resize', this.handleWindowResize);
@@ -573,7 +567,7 @@ export class EditorApp extends HTMLElement {
       .map((instance, index) => this.createFloatingPanelState({
         id: instance.id,
         panelName: instance.panelName,
-        state: instance.state,
+        state: 'open',
         index,
       }))
       .filter((panel): panel is FloatingPanelState => Boolean(panel));
@@ -582,7 +576,7 @@ export class EditorApp extends HTMLElement {
   private upsertFloatingPanel(panelPayload: { id: string; panelName: string; state?: 'opening' | 'open' | 'minimized' }): void {
     const index = this.floatingPanels.findIndex((item) => item.id === panelPayload.id);
     const current = index >= 0 ? this.floatingPanels[index] : undefined;
-    const state = panelPayload.state === 'minimized' ? 'minimized' : 'open';
+    const state = 'open';
     if (current?.panelName === panelPayload.panelName && current.state === state) return;
     const nextPanel = this.createFloatingPanelState({ id: panelPayload.id, panelName: panelPayload.panelName, state, index: index >= 0 ? index : this.floatingPanels.length });
     if (!nextPanel) return;
@@ -595,7 +589,7 @@ export class EditorApp extends HTMLElement {
   private createFloatingPanelState(input: {
     id: string;
     panelName: string;
-    state: 'open' | 'minimized';
+    state: 'open';
     index: number;
   }): FloatingPanelState | null {
     const panel = this.panelMap.get(input.panelName);
@@ -612,10 +606,7 @@ export class EditorApp extends HTMLElement {
       availability,
       revision,
       state: input.state,
-      position: input.state === 'open'
-        ? { x: 80 + input.index * 24, y: 64 + input.index * 24 }
-        : undefined,
-      edge: input.state === 'minimized' ? 'bottom' : undefined,
+      position: { x: 80 + input.index * 24, y: 64 + input.index * 24 },
     };
   }
 
@@ -648,16 +639,6 @@ export class EditorApp extends HTMLElement {
     this.syncFloatingPanelLayer();
   }
 
-  private handleFloatingPanelAction(event: Event, state: 'open' | 'minimized'): void {
-    const panelInstanceId = getPanelInstanceIdFromEvent(event);
-    if (!panelInstanceId) return;
-    const panel = this.setFloatingPanelState(panelInstanceId, state);
-    if (!panel) return;
-
-    void this.transport?.setPanelInstanceState(panelInstanceId, state);
-    this.broadcastFloatingPanelState(panel, state);
-  }
-
   private handleFloatingPanelCloseAction(event: Event): void {
     const panelInstanceId = getPanelInstanceIdFromEvent(event);
     if (!panelInstanceId) return;
@@ -667,17 +648,6 @@ export class EditorApp extends HTMLElement {
     this.removeFloatingPanel(panelInstanceId);
     void this.transport?.closePanelInstance(panelInstanceId);
     this.broadcastFloatingPanelState(panel, 'closed');
-  }
-
-  private setFloatingPanelState(panelInstanceId: string, state: 'open' | 'minimized'): FloatingPanelState | null {
-    const index = this.floatingPanels.findIndex((item) => item.id === panelInstanceId);
-    const current = index >= 0 ? this.floatingPanels[index] : undefined;
-    if (!current) return null;
-
-    const next: FloatingPanelState = { ...current, state, edge: state === 'minimized' ? 'bottom' : undefined };
-    this.floatingPanels = this.floatingPanels.map((item) => item.id === panelInstanceId ? next : item);
-    this.syncFloatingPanelLayer();
-    return next;
   }
 
   private syncFloatingPanelLayer(): void {
@@ -705,7 +675,7 @@ export class EditorApp extends HTMLElement {
     this.syncFloatingPanelLayer();
   }
 
-  private broadcastFloatingPanelState(panel: FloatingPanelState, state: 'open' | 'minimized' | 'closed'): void {
+  private broadcastFloatingPanelState(panel: FloatingPanelState, state: 'closed'): void {
     this.channel?.postMessage({
       type: 'ce-open-panel-floating',
       payload: {

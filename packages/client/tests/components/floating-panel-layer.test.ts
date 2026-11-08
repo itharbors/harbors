@@ -89,11 +89,6 @@ describe('floating-panel-layer', () => {
     setItems([first, second, third]);
     expect(getIframe('first')).toBe(firstFrame);
     expect(getIframe('second')).toBe(secondFrame);
-    setItems([{ ...first, state: 'minimized' }, second, third]);
-    expect(getIframe('first')).toBe(firstFrame);
-    expect(layer.shadowRoot!.querySelector<HTMLElement>('.floating-window[data-panel-instance-id="first"]')!.hidden).toBe(true);
-    setItems([first, second, third]);
-    expect(getIframe('first')).toBe(firstFrame);
     expect(firstFrame.contentDocument!.querySelector('input')!.value).toBe('未保存草稿');
     expect(firstFrame.contentDocument!.documentElement.scrollTop).toBe(25);
     setItems([first, second]);
@@ -102,7 +97,7 @@ describe('floating-panel-layer', () => {
     layer.remove();
   });
 
-  it('renders one floating panel and one minimized chip', () => {
+  it('renders two floating panels', () => {
     const layer = document.createElement('floating-panel-layer');
     layer.setAttribute('data-state', JSON.stringify([
       {
@@ -118,20 +113,19 @@ describe('floating-panel-layer', () => {
         panelName: '@itharbors/plugin-detail.detail',
         title: 'Detail',
         src: '/api/assets/panel/%40itharbors%2Fplugin-detail.detail.html?sessionId=s1',
-        state: 'minimized',
-        edge: 'left',
+        state: 'open',
       },
     ]));
     document.body.appendChild(layer);
 
     expect(layer.getAttribute('data-count')).toBe('2');
-    expect(layer.shadowRoot?.querySelectorAll('.floating-window')).toHaveLength(1);
-    expect(layer.shadowRoot?.querySelectorAll('.edge-chip')).toHaveLength(1);
+    expect(layer.shadowRoot?.querySelectorAll('.floating-window')).toHaveLength(2);
+    expect(layer.shadowRoot?.querySelectorAll('.edge-chip')).toHaveLength(0);
 
     layer.remove();
   });
 
-  it('renders ce-panel title-i18n and refreshes minimized chip titles from i18n', async () => {
+  it('renders ce-panel title-i18n and refreshes floating titles from i18n', async () => {
     i18nStore.hydrate({
       locale: 'zh-CN',
       defaultLocale: 'zh-CN',
@@ -155,14 +149,14 @@ describe('floating-panel-layer', () => {
         title: 'Log',
         titleKey: 'panel.log.title',
         src: '/api/assets/panel/%40itharbors%2Flog.log.html?sessionId=s1',
-        state: 'minimized',
+        state: 'open',
       },
     ]));
     document.body.appendChild(layer);
     await Promise.resolve();
 
     expect(layer.shadowRoot?.querySelector('ce-panel')?.getAttribute('title-i18n')).toBe('panel.log.title');
-    expect(layer.shadowRoot?.querySelector('.edge-chip')?.textContent?.trim()).toBe('日志');
+    expect(layer.shadowRoot?.querySelector('.floating-title')?.textContent?.trim()).toBe('日志');
 
     i18nStore.replaceVisibleSnapshot({
       locale: 'en-US',
@@ -177,12 +171,12 @@ describe('floating-panel-layer', () => {
       affectsFallback: false,
     });
 
-    expect(layer.shadowRoot?.querySelector('.edge-chip')?.textContent?.trim()).toBe('Log');
+    expect(layer.shadowRoot?.querySelector('.floating-title')?.textContent?.trim()).toBe('Log');
 
     layer.remove();
   });
 
-  it('emits minimize, restore, and close actions', async () => {
+  it('emits close actions', async () => {
     const layer = document.createElement('floating-panel-layer');
     layer.setAttribute('data-state', JSON.stringify([
       {
@@ -197,28 +191,16 @@ describe('floating-panel-layer', () => {
         panelName: '@itharbors/plugin-detail.detail',
         title: 'Detail',
         src: '/api/assets/panel/%40itharbors%2Fplugin-detail.detail.html?sessionId=s1',
-        state: 'minimized',
+        state: 'open',
       },
     ]));
-    const minimize = vi.fn();
-    const restore = vi.fn();
     const close = vi.fn();
-    layer.addEventListener('ce-floating-panel-minimize', minimize);
-    layer.addEventListener('ce-floating-panel-restore', restore);
     layer.addEventListener('ce-floating-panel-close', close);
     document.body.appendChild(layer);
     await Promise.resolve();
 
-    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="minimize"]')?.click();
-    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="restore"]')?.click();
     layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="close"]')?.click();
 
-    expect(minimize).toHaveBeenCalledWith(expect.objectContaining({
-      detail: { panelInstanceId: 'p-1' },
-    }));
-    expect(restore).toHaveBeenCalledWith(expect.objectContaining({
-      detail: { panelInstanceId: 'p-2' },
-    }));
     expect(close).toHaveBeenCalledWith(expect.objectContaining({
       detail: { panelInstanceId: 'p-1' },
     }));
@@ -258,6 +240,16 @@ describe('floating-panel-layer', () => {
 
     expect(panels[0].shadowRoot!.querySelector('iframe')).toBeNull();
     expect(panels[0].shadowRoot!.querySelector('.unavailable')?.textContent).toBe('插件未加载');
+    expect(panels[1].shadowRoot!.querySelector('iframe')).toBe(otherIframe);
+
+    (layer as HTMLElement & { updatePanelAvailability: (input: unknown) => void }).updatePanelAvailability({
+      panelName: '@itharbors/log.log',
+      src: '/log?sessionId=s1&panelRevision=3',
+      state: 'available',
+      revision: 3,
+    });
+    expect(panels[0].shadowRoot!.querySelector('iframe')?.getAttribute('src')).toBe('/log?sessionId=s1&panelRevision=3');
+    expect(panels[0].getAttribute('data-panel-revision')).toBe('3');
     expect(panels[1].shadowRoot!.querySelector('iframe')).toBe(otherIframe);
 
     layer.remove();
