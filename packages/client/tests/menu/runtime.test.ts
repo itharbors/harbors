@@ -1,25 +1,170 @@
-import { describe, expect, it } from 'vitest';
-import { getMenuModeFromURL, mountMenuRuntime } from '../../src/menu/runtime';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { getMenuModeFromURL, mountMenuRuntime, type MenuRuntime } from '../../src/menu/runtime';
+
+const kitTree = [{ type: 'menu' as const, id: 'view', label: '视图', children: [
+  { type: 'menu' as const, id: 'view/panels', label: '面板', children: [
+    { type: 'menu' as const, id: 'view/panels/ui', label: '界面规范', children: [] },
+  ] },
+] }];
+const menuTree = [{ ...kitTree[0], children: [
+  ...kitTree[0].children,
+  { type: 'menu' as const, id: 'view/default', label: '默认操作', role: 'reload', children: [] },
+] }];
+const input = { sessionId: 'base::harness', menuTree, kitMenuTree: kitTree, applicationMenuTree: [], kitMenuRoot: null };
+class MockEventSource {
+  static instances: MockEventSource[] = [];
+  onmessage: ((event: { data: string }) => void) | null = null;
+  close = vi.fn();
+  constructor(public url: string) { MockEventSource.instances.push(this); }
+}
+
+function button(root: ShadowRoot, label: string): HTMLButtonElement {
+  const found = [...root.querySelectorAll('button')].find((node) => node.textContent?.trim() === label);
+  if (!found) throw new Error(`missing button: ${label}`);
+  return found;
+}
+async function settle() { await new Promise((resolve) => setTimeout(resolve, 0)); }
 
 describe('mountMenuRuntime', () => {
-  it('has no host-side effects in the Web-only client', () => {
-    const runtime = mountMenuRuntime({
-      sessionId: 'session-1',
-      menuMode: 'multi',
-      menuTree: [{ type: 'menu', id: 'file', label: 'File', children: [] }],
-      applicationMenuTree: [],
-      kitMenuTree: [],
-      kitMenuRoot: null,
-    });
+  let runtime: MenuRuntime;
+  let host: HTMLElement;
+  let fetchMock: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    MockEventSource.instances = [];
+    vi.stubGlobal('EventSource', MockEventSource);
+    fetchMock = vi.fn(async (url: string) => url === '/api/application/bootstrap'
+      ? { ok: true, json: async () => ({ menu: { tree: [{ type: 'menu', id: 'app/file', label: '应用文件', children: [{ type: 'menu', id: 'app/private', label: '重启服务', children: [] }] }] } }) }
+      : { ok: true, json: async () => ({ result: null }) });
+    vi.stubGlobal('fetch', fetchMock);
+    host = document.createElement('div'); document.body.append(host);
+    runtime = mountMenuRuntime(input); runtime.attach(host);
+  });
+  afterEach(() => { runtime.dispose(); host.remove(); vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
-    expect(runtime).toEqual({ dispose: expect.any(Function) });
-    expect(runtime.dispose()).toBeUndefined();
+  it('triggers only Kit leaves with the composite session and keeps application actions read-only', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    button(shadow, '视图').click(); button(shadow, '面板›').click();
+    expect([...shadow.querySelectorAll('button')].some((node) => node.textContent?.includes('默认操作'))).toBe(false);
+    button(shadow, '界面规范').click(); await settle();
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/ui' }),
+    }));
+    button(shadow, '应用菜单').click(); button(shadow, '应用文件›').click();
+    expect(button(shadow, '重启服务').disabled).toBe(true);
+    button(shadow, '重启服务').click(); await settle();
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/api/application/menu/trigger'))).toBe(false);
+  });
+
+  it('updates and removes menu contributions without replacing the attached host and closes on outside click', async () => {
+    await settle();
+    const root = host.querySelector('.web-menu-root')!;
+    const shadow = root.shadowRoot!;
+    button(shadow, '视图').click();
+    expect(button(shadow, '视图').getAttribute('aria-expanded')).toBe('true');
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    expect(button(shadow, '视图').getAttribute('aria-expanded')).toBe('false');
+    runtime.update({ ...input, sessionId: 'base::other', menuTree: [], kitMenuTree: [] });
+    expect(host.querySelector('.web-menu-root')).toBe(root);
+    expect([...shadow.querySelectorAll('button')].some((node) => node.textContent?.includes('界面规范'))).toBe(false);
+  });
+
+  it('renders shared menu paths from multiple plugin contributions and removes them dynamically', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    const second = { type: 'menu' as const, id: 'view/panels/other', label: '另一个插件', children: [] };
+    const shared = [{ ...kitTree[0], children: [{ ...kitTree[0].children[0], children: [...kitTree[0].children[0].children, second] }] }];
+    runtime.update({ ...input, kitMenuTree: shared });
+    button(shadow, '视图').click(); button(shadow, '面板›').click();
+    expect(button(shadow, '界面规范')).toBeTruthy();
+    button(shadow, '另一个插件').click(); await settle();
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'view/panels/other' }) }));
+    runtime.update(input);
+    expect([...shadow.querySelectorAll('button')].some((node) => node.textContent === '另一个插件')).toBe(false);
+  });
+
+  it('shows no placeholder for empty Kit and application trees, including after updates', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    runtime.update({ ...input, kitMenuTree: [] });
+    MockEventSource.instances[0].onmessage?.({ data: JSON.stringify({ type: 'application-bootstrap', bootstrap: { menu: { tree: [] } } }) });
+    expect(shadow.querySelectorAll('.top')).toHaveLength(0);
+    runtime.update(input);
+    expect(button(shadow, '视图')).toBeTruthy();
+    expect([...shadow.querySelectorAll('.top')].some((node) => node.textContent === '应用菜单')).toBe(false);
+  });
+
+  it('closes when focus moves to an iframe or browser window loses focus', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    const top = button(shadow, '视图');
+    top.click();
+    const iframe = document.createElement('iframe'); document.body.append(iframe);
+    iframe.dispatchEvent(new FocusEvent('focusin', { bubbles: true, composed: true }));
+    expect(top.getAttribute('aria-expanded')).toBe('false');
+    top.click(); window.dispatchEvent(new Event('blur'));
+    expect(top.getAttribute('aria-expanded')).toBe('false');
+    iframe.remove();
+  });
+
+  it('supports top-level Kit actions, horizontal navigation and retains a useful focus after update', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    const direct = { type: 'menu' as const, id: 'quick', label: '快捷操作', children: [] };
+    runtime.update({ ...input, menuTree: [...input.menuTree, direct], kitMenuTree: [...input.kitMenuTree, direct] });
+    const top = button(shadow, '视图'); top.focus();
+    top.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(shadow.activeElement).toBe(button(shadow, '快捷操作'));
+    button(shadow, '快捷操作').click(); await settle();
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', menuId: 'quick' }) }));
+    top.click(); button(shadow, '面板›').click(); button(shadow, '界面规范').focus();
+    runtime.update(input);
+    expect(shadow.activeElement?.textContent).toBe('视图');
+    const refreshedTop = button(shadow, '视图'); refreshedTop.click();
+    refreshedTop.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(refreshedTop.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('uses the updated composite session and renders Application Runtime updates as read-only', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    runtime.update({ ...input, sessionId: 'base::new-kit' });
+    button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click(); await settle();
+    expect(fetchMock).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::new-kit', menuId: 'view/panels/ui' }) }));
+    MockEventSource.instances[0].onmessage?.({ data: JSON.stringify({ type: 'application-bootstrap', bootstrap: { menu: { tree: [{ type: 'menu', id: 'app/new', label: '新应用功能', children: [] }] } } }) });
+    button(shadow, '应用菜单').click();
+    expect(button(shadow, '新应用功能').disabled).toBe(true);
+  });
+
+  it('supports keyboard opening, nested navigation, Escape and closes the application event stream', async () => {
+    await settle();
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    const top = button(shadow, '视图'); top.focus(); top.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    const panels = button(shadow, '面板›'); expect(shadow.activeElement).toBe(panels);
+    panels.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    expect(shadow.activeElement).toBe(button(shadow, '界面规范'));
+    button(shadow, '界面规范').dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(shadow.activeElement).toBe(top); expect(top.getAttribute('aria-expanded')).toBe('false');
+    runtime.dispose(); expect(MockEventSource.instances[0].close).toHaveBeenCalled();
+  });
+
+  it('handles a blocked popup using the existing Session panel fallback', async () => {
+    await settle();
+    vi.spyOn(window, 'open').mockReturnValue(null);
+    const post = vi.spyOn(window, 'postMessage').mockImplementation(() => {});
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url === '/api/menu/trigger') return { ok: true, json: async () => ({ result: { disposition: 'open-window-group', panelInstanceId: 'p1', panelName: 'ui-guide.main', windowGroupId: 'w1', carrier: 'window-group', url: '/window' } }) };
+      if (url === '/api/panel-instance/fallback') return { ok: true, json: async () => ({ id: 'p1', panelName: 'ui-guide.main', state: 'open' }) };
+      return { ok: true, json: async () => ({ menu: { tree: [] } }) };
+    });
+    const shadow = host.querySelector('.web-menu-root')!.shadowRoot!;
+    button(shadow, '视图').click(); button(shadow, '面板›').click(); button(shadow, '界面规范').click(); await settle();
+    expect(fetchMock).toHaveBeenCalledWith('/api/panel-instance/fallback', expect.objectContaining({ body: JSON.stringify({ sessionId: 'base::harness', panelInstanceId: 'p1' }) }));
+    expect(post).toHaveBeenCalledWith({ type: 'ce-open-panel-floating', payload: { id: 'p1', panelName: 'ui-guide.main', state: 'open' } }, '*');
   });
 
   it('parses the optional Web menu mode from the current URL', () => {
-    window.history.replaceState({}, '', '/?menuMode=multi');
-    expect(getMenuModeFromURL()).toBe('multi');
-    window.history.replaceState({}, '', '/');
-    expect(getMenuModeFromURL()).toBe('single');
+    window.history.replaceState({}, '', '/?menuMode=multi'); expect(getMenuModeFromURL()).toBe('multi');
+    window.history.replaceState({}, '', '/'); expect(getMenuModeFromURL()).toBe('single');
   });
 });

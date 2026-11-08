@@ -1264,6 +1264,30 @@ describe('EditorApp default layout', () => {
     expect(logPanel).not.toBeNull();
   });
 
+  it('updates the menu without remounting panels and triggers with the bootstrap Kit session', async () => {
+    window.location.search = '?session=existing-id&kit=harness';
+    window.location.href = 'http://localhost:8080/?session=existing-id&kit=harness';
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({ ...bootstrapPayload, sessionId: 'existing-id::harness' }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+    const panel = el.querySelector<HTMLElement>('ce-panel[data-panel-name="@itharbors/log.log"]')!;
+    const iframe = panel.shadowRoot!.querySelector('iframe');
+    const source = MockEventSource.instances.find((item) => item.url.startsWith('/sse/existing-id::harness?'))!;
+    const tree = [{ type: 'menu', id: 'view', label: '视图', children: [{ type: 'menu', id: 'view/guide', label: '界面规范', children: [] }] }];
+    source.onmessage?.({ data: JSON.stringify({ protocolVersion: 1, type: 'menu-changed', menuTree: tree, kitMenuTree: tree, applicationMenuTree: [] }) });
+    expect(panel.shadowRoot!.querySelector('iframe')).toBe(iframe);
+    const shadow = el.querySelector('[data-web-menu] .web-menu-root')!.shadowRoot!;
+    const buttons = Array.from(shadow.querySelectorAll('button'));
+    buttons.find((button) => button.textContent === '视图')!.click();
+    buttons.find((button) => button.textContent === '界面规范')!.click();
+    await Promise.resolve();
+    expect(mockFetch).toHaveBeenCalledWith('/api/menu/trigger', expect.objectContaining({
+      method: 'POST', body: JSON.stringify({ sessionId: 'existing-id::harness', menuId: 'view/guide' }),
+    }));
+    expect(panel.shadowRoot!.querySelector('iframe')).toBe(iframe);
+  });
+
   it('routes panel-dispatch events to the iframe with the matching panel name', async () => {
     el = document.createElement('editor-app') as EditorApp;
     document.body.appendChild(el);
@@ -1599,7 +1623,10 @@ describe('EditorApp default layout', () => {
       expect(el.querySelector('ce-panel-group')?.getAttribute('data-session-id')).toBe('existing-id');
       expect(mockFetch.mock.calls.map(([url]) => url).filter((url) => url.startsWith('/api/bootstrap/')))
         .toEqual(['/api/bootstrap/existing-id', '/api/bootstrap/existing-id']);
-      expect(MockEventSource.instances.map(({ url }) => url)).toEqual([expect.stringMatching(/^\/sse\/existing-id\?/)]);
+      expect(MockEventSource.instances.map(({ url }) => url)).toEqual([
+        expect.stringMatching(/^\/sse\/application\?/),
+        expect.stringMatching(/^\/sse\/existing-id\?/),
+      ]);
     } finally {
       consoleError.mockRestore();
     }

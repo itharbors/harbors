@@ -26,7 +26,7 @@ import {
 import { createWindowLayoutStorage } from '../layout/storage';
 import { applyThemeTokensToElement, DEFAULT_THEME_TOKENS, type ThemeTokens } from '../styles/theme';
 import { bindThemeToIframe } from '../styles/iframe-theme';
-import { getMenuModeFromURL, mountMenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
+import { getMenuModeFromURL, mountMenuRuntime, type MenuRuntime, type MenuRuntimeInput } from '../menu/runtime';
 import type { FloatingPanelState } from './floating-panel-layer';
 
 export class EditorApp extends HTMLElement {
@@ -44,7 +44,7 @@ export class EditorApp extends HTMLElement {
   private initToken = 0;
   private initializationFailed = false;
   private i18nClient: I18nClient | null = null;
-  private menuRuntimeDispose: (() => void) | null = null;
+  private menuRuntime: MenuRuntime | null = null;
   private renderedWindow: BootstrapInfo['windows'][number] | null = null;
   private floatingPanels: FloatingPanelState[] = [];
   private channel: BroadcastChannel | null = null;
@@ -99,6 +99,7 @@ export class EditorApp extends HTMLElement {
 
   connectedCallback() {
     this.style.display = 'flex';
+    this.style.flexDirection = 'column';
     this.style.width = '100%';
     this.style.height = '100%';
     this.style.minWidth = '0';
@@ -167,8 +168,8 @@ export class EditorApp extends HTMLElement {
     this.channel?.removeEventListener('message', this.handleChannelMessageEvent);
     this.channel?.close();
     this.channel = null;
-    this.menuRuntimeDispose?.();
-    this.menuRuntimeDispose = null;
+    this.menuRuntime?.dispose();
+    this.menuRuntime = null;
     this.i18nClient = null;
     this.removeEventListener('ce-panel-change', this.handlePanelChange);
     this.removeEventListener('ce-panel-column-collapse', this.handleColumnCollapse);
@@ -293,9 +294,10 @@ export class EditorApp extends HTMLElement {
           ? this.renderBootstrapLayout(this.bootstrap)
           : this.renderLoadingLayout();
     const floatingLayer = this.windowGroupKind === 'main'
-      ? `<floating-panel-layer data-state="${escapeAttr(JSON.stringify(this.floatingPanels))}"></floating-panel-layer>`
+      ? `<floating-panel-layer ${this.bootstrap ? 'style="top:32px"' : ''} data-state="${escapeAttr(JSON.stringify(this.floatingPanels))}"></floating-panel-layer>`
       : '';
     this.innerHTML = `
+      ${this.bootstrap ? '<div data-web-menu></div>' : ''}
       <ce-split-pane direction="column" style="
         width:100%;
         height:100%;
@@ -314,6 +316,11 @@ export class EditorApp extends HTMLElement {
     const outer = this.querySelector('ce-split-pane');
     if (outer instanceof HTMLElement) {
       applyThemeTokensToElement(outer, this.hostThemeTokens);
+    }
+    const menuContainer = this.querySelector<HTMLElement>('[data-web-menu]');
+    if (menuContainer) {
+      applyThemeTokensToElement(menuContainer, this.hostThemeTokens);
+      this.menuRuntime?.attach(menuContainer);
     }
     this.querySelector<HTMLButtonElement>('button[data-retry-initialization]')?.addEventListener('click', () => {
       this.initializationFailed = false;
@@ -906,7 +913,7 @@ export class EditorApp extends HTMLElement {
       ? { ...this.bootstrap, menuTree, applicationMenuTree, kitMenuTree }
       : this.bootstrap;
     this.mountMenuRuntime({
-      sessionId: this.session.sessionId,
+      sessionId: this.bootstrap?.sessionId ?? this.session.sessionId,
       menuMode: getMenuModeFromURL(),
       menuTree,
       applicationMenuTree,
@@ -916,9 +923,10 @@ export class EditorApp extends HTMLElement {
   }
 
   private mountMenuRuntime(input: MenuRuntimeInput): void {
-    this.menuRuntimeDispose?.();
-    const runtime = mountMenuRuntime(input);
-    this.menuRuntimeDispose = runtime.dispose;
+    if (this.menuRuntime) this.menuRuntime.update(input);
+    else this.menuRuntime = mountMenuRuntime(input);
+    const container = this.querySelector<HTMLElement>('[data-web-menu]');
+    if (container) this.menuRuntime.attach(container);
   }
 
   private refreshLayoutTitles(): void {
