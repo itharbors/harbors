@@ -1049,7 +1049,7 @@ describe('EditorApp default layout', () => {
 
     const panels = el.querySelectorAll('ce-panel');
     const statusBar = Array.from(panels).find(
-      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fstatus-bar.status/index.html?sessionId=existing-id'
+      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fstatus-bar.status/index.html?sessionId=existing-id&panelUi=1'
     ) as HTMLElement | undefined;
     expect(statusBar).not.toBeNull();
     expect(statusBar!.getAttribute('type')).toBe('simple');
@@ -1064,7 +1064,7 @@ describe('EditorApp default layout', () => {
 
     const panels = el.querySelectorAll('ce-panel');
     const pluginList = Array.from(panels).find(
-      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html?sessionId=existing-id'
+      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html?sessionId=existing-id&panelUi=1'
     );
     expect(pluginList).not.toBeNull();
   });
@@ -1123,7 +1123,7 @@ describe('EditorApp default layout', () => {
     await waitForBootstrap();
 
     const pluginListPanel = Array.from(el.querySelectorAll('ce-panel')).find(
-      (panel) => panel.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html?sessionId=existing-id'
+      (panel) => panel.getAttribute('src') === '/api/assets/panel/%40itharbors%2Fplugin-list.list/index.html?sessionId=existing-id&panelUi=1'
     ) as HTMLElement | undefined;
     expect(pluginListPanel).toBeDefined();
 
@@ -1259,7 +1259,7 @@ describe('EditorApp default layout', () => {
 
     const panels = el.querySelectorAll('ce-panel');
     const logPanel = Array.from(panels).find(
-      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id'
+      (p) => p.getAttribute('src') === '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelUi=1'
     );
     expect(logPanel).not.toBeNull();
   });
@@ -1362,7 +1362,7 @@ describe('EditorApp default layout', () => {
     expect(restoredIframe).not.toBeNull();
     expect(restoredIframe).not.toBe(targetIframe);
     expect(restoredIframe?.getAttribute('src')).toBe(
-      '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelRevision=2',
+      '/api/assets/panel/%40itharbors%2Flog.log/index.html?sessionId=existing-id&panelRevision=2&panelUi=1',
     );
     expect(unrelatedPanel!.shadowRoot!.querySelector('iframe')).toBe(unrelatedIframe);
   });
