@@ -20,7 +20,7 @@ export function createMenuTriggerRouter(editorMap: Map<string, Editor>, assertAc
     }
 
     try {
-      const result = await editor.menu.trigger(body.menuId);
+      const result = await editor.menu.trigger(body.menuId, body.presentation);
       sendJson(res, 200, { result: withOpenPanelUrl(editor, result) });
     } catch (err) {
       if (err instanceof Error && /^Menu item ".+" not found$/.test(err.message)) {
@@ -57,8 +57,9 @@ function isOpenPanelResult(value: unknown): value is {
     && (candidate.carrier === 'window-group' || candidate.carrier === 'floating');
 }
 
-function isMenuTriggerInput(value: unknown): value is { sessionId: string; menuId: string } {
+function isMenuTriggerInput(value: unknown): value is { sessionId: string; menuId: string; presentation?: 'local' } {
   return isRecord(value)
     && isNonEmptyString(value.sessionId)
-    && isNonEmptyString(value.menuId);
+    && isNonEmptyString(value.menuId)
+    && (value.presentation === undefined || value.presentation === 'local');
 }

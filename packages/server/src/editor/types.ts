@@ -228,7 +228,7 @@ export interface Editor {
     getState(): NormalizedMenuResult;
     getApplicationState(): NormalizedMenuResult;
     getKitState(): NormalizedMenuResult;
-    trigger(menuId: string): Promise<unknown>;
+    trigger(menuId: string, presentation?: 'local'): Promise<unknown>;
   };
   window: {
     getSnapshot(): WindowSnapshot;

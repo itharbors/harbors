@@ -699,6 +699,23 @@ describe('framework routes', () => {
     expect(data.result.url).toContain('/api/window-entry/secondary?sessionId=s1&windowGroupId=');
   });
 
+  it('menu trigger passes only an explicitly requested local presentation to the editor', async () => {
+    const editor = createEditor('s1', { assembly: testAssembly });
+    const trigger = vi.spyOn(editor.menu, 'trigger').mockResolvedValue({ type: 'local-panel', panelName: 'preview.preview' });
+    const router = createMenuTriggerRouter(new Map([['s1', editor]]));
+    const local = mockRes();
+    await router(mockReq('POST', '/api/menu/trigger', { sessionId: 's1', menuId: 'view/preview', presentation: 'local' }), local.res);
+    expect(JSON.parse(await local.body())).toEqual({ result: { type: 'local-panel', panelName: 'preview.preview' } });
+    expect(trigger).toHaveBeenCalledWith('view/preview', 'local');
+    const desktop = mockRes();
+    await router(mockReq('POST', '/api/menu/trigger', { sessionId: 's1', menuId: 'view/preview' }), desktop.res);
+    expect(trigger).toHaveBeenLastCalledWith('view/preview', undefined);
+    const invalid = mockRes();
+    await invokeRoute(router, mockReq('POST', '/api/menu/trigger', { sessionId: 's1', menuId: 'view/preview', presentation: 'anything-else' }), invalid.res);
+    expect(invalid.statusCode()).toBe(400);
+    await editor.dispose();
+  });
+
   it('menu trigger rejects invalid request bodies with 400', async () => {
     const router = createMenuTriggerRouter(new Map());
 

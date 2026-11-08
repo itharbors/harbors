@@ -106,18 +106,32 @@ export class MenuModule {
     return structuredClone(this.kitState);
   }
 
-  trigger(
+  async trigger(
     menuId: string,
     runtime: {
       request: (pluginName: string, message: string) => Promise<unknown>;
       triggerRole: (role: string) => Promise<unknown>;
+      resolveLocalPanel?: (pluginName: string, value: unknown) => unknown;
     },
+    presentation?: 'local',
   ): Promise<unknown> {
     const action = this.actions.get(menuId);
     if (!action) throw new Error(`Menu item "${menuId}" not found`);
-    if (action.message) return runtime.request(action.pluginName, action.message);
-    if (action.role) return runtime.triggerRole(action.role);
-    return Promise.resolve(undefined);
+    if (presentation === 'local' && action.localMessage !== undefined) {
+      if (typeof action.localMessage !== 'string' || !action.localMessage.trim() || !runtime.resolveLocalPanel) {
+        throw new Error('Invalid local menu action');
+      }
+      const value = await runtime.request(action.pluginName, action.localMessage);
+      if (this.actions.get(menuId) !== action) throw new Error('Menu action changed while resolving local presentation');
+      return runtime.resolveLocalPanel(action.pluginName, value);
+    }
+    const result = action.message
+      ? await runtime.request(action.pluginName, action.message)
+      : action.role ? await runtime.triggerRole(action.role) : undefined;
+    if (result && typeof result === 'object' && (result as { type?: unknown }).type === 'local-panel') {
+      throw new Error('Local panel result requires a declared local menu action');
+    }
+    return result;
   }
 
   destroy(): void {

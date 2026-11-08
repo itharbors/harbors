@@ -151,11 +151,23 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
     getState() {
       return menu.getState();
     },
-    trigger(menuId: string) {
+    trigger(menuId: string, presentation?: 'local') {
       return menu.trigger(menuId, {
         request: (pluginName, messageName) => editor.message.request(pluginName, messageName),
         triggerRole: async () => undefined,
-      });
+        resolveLocalPanel: (pluginName, value) => {
+          if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Invalid local panel result');
+          const result = value as Record<string, unknown>;
+          if (result.type !== 'local-panel' || typeof result.panelName !== 'string' || !result.panelName.trim()) {
+            throw new Error('Invalid local panel result');
+          }
+          const registration = panel.getRegistration(result.panelName);
+          if (!registration || registration.owner !== pluginName || !plugin.listLoaded().includes(pluginName)) {
+            throw new Error('Local panel is unavailable or not owned by the action plugin');
+          }
+          return { type: 'local-panel', panelName: registration.name };
+        },
+      }, presentation);
     },
   };
   function pluginLoadOptions(
@@ -736,7 +748,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       getState: () => runtimeMenu.getState(),
       getApplicationState: () => menu.getApplicationState(),
       getKitState: () => menu.getKitState(),
-      trigger: (menuId: string) => runtimeMenu.trigger(menuId),
+      trigger: (menuId: string, presentation?: 'local') => runtimeMenu.trigger(menuId, presentation),
     },
     window: {
       getSnapshot: () => requireWindowManager().getSnapshot(),

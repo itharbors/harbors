@@ -7,6 +7,8 @@ export interface MenuContributionMenuNode {
   labelKey?: string;
   order?: number;
   message?: string;
+  /** Optional owner-scoped request for a client-local panel presentation. */
+  localMessage?: string;
   accelerator?: string;
   role?: string;
   platforms?: MenuPlatform[];

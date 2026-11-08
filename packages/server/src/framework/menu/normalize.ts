@@ -39,6 +39,7 @@ interface InternalMenuNode extends MenuTreeMenuNode {
   sortMeta: SortMeta;
   pluginName?: string;
   message?: string;
+  localMessage?: unknown;
 }
 
 interface InternalSeparatorNode extends Extract<MenuTreeNode, { type: 'separator' }> {
@@ -51,6 +52,7 @@ export interface InternalMenuAction {
   id: string;
   pluginName: string;
   message?: string;
+  localMessage?: unknown;
   role?: string;
 }
 
@@ -205,6 +207,7 @@ export function buildMenuTreeWithActions(
 
         if (parent.message !== undefined) {
           parent.message = undefined;
+          parent.localMessage = undefined;
           parent.pluginName = undefined;
           warnings.push({ code: 'menu-node-became-container', id: parent.id, pluginName: source.pluginName });
         }
@@ -216,6 +219,7 @@ export function buildMenuTreeWithActions(
         label: node.labelKey ? translate(node.labelKey) : (node.label ?? node.id.split('/').pop() ?? node.id),
         ...(node.labelKey === undefined ? {} : { labelKey: node.labelKey }),
         ...(node.message === undefined ? {} : { message: node.message }),
+        ...(node.localMessage === undefined ? {} : { localMessage: node.localMessage }),
         ...(node.message === undefined && node.role === undefined ? {} : { pluginName: source.pluginName }),
         ...(node.role === undefined ? {} : { role: node.role }),
         ...(node.accelerator === undefined ? {} : { accelerator: node.accelerator }),
@@ -249,6 +253,7 @@ export function buildMenuTreeWithActions(
         id: node.id,
         pluginName: node.pluginName ?? '',
         ...(node.message === undefined ? {} : { message: node.message }),
+        ...(node.localMessage === undefined ? {} : { localMessage: node.localMessage }),
         ...(node.role === undefined ? {} : { role: node.role }),
       })),
   };
