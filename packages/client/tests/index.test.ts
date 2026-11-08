@@ -91,12 +91,12 @@ describe('client main entry', () => {
     expect(window.localStorage.getItem('harbors.sessionId')).toBeNull();
   });
 
-  it('declares the host browser chrome and coarse-landscape safe area', () => {
+  it('uses the browser-reported safe area without a forced landscape inset', () => {
     const html = fs.readFileSync(path.resolve('index.html'), 'utf-8');
     expect(html).toContain('<meta name="theme-color" content="#111722">');
-    expect(html).toContain('--app-viewport-safe-top: 0px;');
-    expect(html).toContain('@media (orientation: landscape) and (any-pointer: coarse)');
-    expect(html).toContain('max(20px, env(safe-area-inset-top, 0px))');
+    expect(html).toContain('--app-viewport-safe-top: env(safe-area-inset-top, 0px);');
+    expect(html).toContain('padding-top: var(--app-viewport-safe-top);');
+    expect(html).not.toContain('max(20px, env(safe-area-inset-top');
   });
 
   it('selects a remote user before requesting access and waits without reading workbench data', async () => {

@@ -11,10 +11,7 @@
         --kit-viewport-height: 100svh;
         --kit-viewport-offset-top: 0px;
         --kit-viewport-offset-left: 0px;
-        --kit-viewport-safe-top: 0px;
-      }
-      @media (orientation: landscape) and (any-pointer: coarse) {
-        :root { --kit-viewport-safe-top: max(20px, env(safe-area-inset-top, 0px)); }
+        --kit-viewport-safe-top: env(safe-area-inset-top, 0px);
       }
       html, body { width: 100%; height: 100%; min-height: 0; margin: 0; overflow: hidden; background: #171a21; }
       #app {
