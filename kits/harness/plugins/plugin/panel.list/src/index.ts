@@ -60,7 +60,7 @@ export default {
 
       const renderPluginItem = (plugin: PluginItem): HTMLElement => {
         const item = document.createElement('article');
-        item.innerHTML = '<strong></strong><div class="meta"><div class="details"><span class="type"></span><span class="stats"></span></div><div class="actions"><button class="btn-restart" type="button">重启</button></div></div><div class="feedback" hidden></div>';
+        item.innerHTML = '<strong></strong><div class="meta"><div class="details"><span class="type"></span><span class="stats"></span></div><div class="actions"><button class="btn-restart h-button h-button--secondary" type="button">重启</button></div></div><div class="feedback" hidden></div>';
 
         const titleEl = item.querySelector('strong') as HTMLElement;
         const badge = document.createElement('span');

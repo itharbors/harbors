@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
+import { createElement, useEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import './index.css';
 
 interface ConversationData {
@@ -327,12 +327,15 @@ export default function App({
     groups.set(project, group);
   }
 
+  const buttonTag = typeof window !== 'undefined' && window.customElements?.get('harness-button')
+    ? 'harness-button' : 'button';
+
   return (
     <div className="conversation-list-panel">
       <div className="conversation-list-header">
         <div className="conversation-list-eyebrow">项目与会话</div>
         <div className="new-conversation-actions">
-          <button type="button" className="new-conversation-btn" onClick={handleNew} aria-label="新建对话">＋ 新对话</button>
+          {createElement(buttonTag, { onClick: handleNew, 'aria-label': '新建对话', ...(buttonTag === 'button' ? { type: 'button', className: 'new-conversation-btn' } : { class: 'new-conversation-btn' }) }, '＋ 新对话')}
         </div>
       </div>
       {error && <div className="conversation-list-error" role="alert">{error}</div>}
@@ -344,12 +347,12 @@ export default function App({
               const isRenaming = renamingId === conversation.id;
               const unavailable = conversation.availability === 'unavailable';
               return (
-                <article key={conversation.id} className={`conversation-card ${uiState.selectedConversationId === conversation.id ? 'active' : ''} ${unavailable ? 'unavailable' : ''}`} role="button" aria-disabled={unavailable || undefined} tabIndex={unavailable ? -1 : 0} onClick={() => { if (!unavailable && !isRenaming) handleSelect(conversation.id); }} onKeyDown={(event) => { if (unavailable || event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
+                <article key={conversation.id} className={`conversation-card${document.head.querySelector('style[data-harness-ui]') ? ' h-list-item' : ''} ${uiState.selectedConversationId === conversation.id ? 'active' : ''} ${unavailable ? 'unavailable' : ''}`} role="button" aria-pressed={uiState.selectedConversationId === conversation.id} aria-disabled={unavailable || undefined} tabIndex={unavailable ? -1 : 0} onClick={() => { if (!unavailable && !isRenaming) handleSelect(conversation.id); }} onKeyDown={(event) => { if (unavailable || event.target !== event.currentTarget) return; if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); handleSelect(conversation.id); } }}>
                   <div className="conversation-card-content">
                     <div className="conversation-card-title-row">
                       {isRenaming ? (
                         <input
-                          className="conversation-rename-input"
+                          className={`conversation-rename-input${document.head.querySelector('style[data-harness-ui]') ? ' h-input' : ''}`}
                           value={renameValue}
                           autoFocus
                           onClick={(event) => event.stopPropagation()}

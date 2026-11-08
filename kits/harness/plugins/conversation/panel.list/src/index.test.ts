@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import definition from '../dist/index.js';
 
 test('点击新对话通过 Panel SDK 请求 select(null)，并把草稿广播交给 Chat 订阅方', async () => {
-  const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
+  const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel', runScripts: 'outside-only' });
+  dom.window.eval(readFileSync(new URL('../../../../ui/panel-ui.js', import.meta.url), 'utf8'));
   const globalKeys = ['window', 'document', 'HTMLElement'] as const;
   const previousGlobals = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   Object.assign(globalThis, {
@@ -51,8 +53,11 @@ test('点击新对话通过 Panel SDK 请求 select(null)，并把草稿广播�
   try {
     await definition.mount(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    const button = dom.window.document.querySelector<HTMLButtonElement>('button[aria-label="新建对话"]');
+    const component = dom.window.document.querySelector<HTMLElement>('harness-button[aria-label="新建对话"]');
+    const button = component?.shadowRoot?.querySelector<HTMLButtonElement>('button');
     assert.ok(button, '新建对话按钮应在 Panel 中渲染');
+    assert.equal(button.type, 'button');
+    assert.equal(button.getAttribute('aria-label'), '新建对话');
 
     button.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -70,12 +75,43 @@ test('点击新对话通过 Panel SDK 请求 select(null)，并把草稿广播�
 
     await definition.mount(context);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    assert.ok(dom.window.document.querySelector('button[aria-label="新建对话"]'), '卸载后应可重新挂载');
+    assert.ok(dom.window.document.querySelector('harness-button[aria-label="新建对话"]')?.shadowRoot?.querySelector('button'), '卸载后应可重新挂载');
   } finally {
     definition.unmount();
     dom.window.close();
     for (const key of globalKeys) {
       const descriptor = previousGlobals.get(key);
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+});
+
+test('没有 Kit UI 注入时新对话回退到原生按钮', async () => {
+  const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
+  const keys = ['window', 'document', 'HTMLElement'] as const;
+  const previous = new Map(keys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement });
+  const calls: string[] = [];
+  try {
+    await definition.mount({ message: { async request(plugin: string, name: string) {
+      calls.push(`${plugin}.${name}`);
+      if (name === 'listConversations') return [];
+      if (name === 'getState') return { selectedConversationId: null, draft: null, running: false, generation: 'fallback', revision: 0 };
+      if (name === 'select') return { selectedConversationId: null, draft: { source: 'harbors' }, running: false, generation: 'fallback', revision: 1 };
+      throw new Error('unexpected request');
+    } } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const button = dom.window.document.querySelector<HTMLButtonElement>('button[aria-label="新建对话"]');
+    assert.ok(button);
+    button.click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(calls.includes('conversation.select'));
+  } finally {
+    definition.unmount();
+    dom.window.close();
+    for (const key of keys) {
+      const descriptor = previous.get(key);
       if (descriptor) Object.defineProperty(globalThis, key, descriptor);
       else delete (globalThis as Record<string, unknown>)[key];
     }
@@ -128,6 +164,9 @@ test('archive/restore broadcast 幂等收敛，archive 成功 response 无 broad
 
 test('损坏会话显示不可用提示且鼠标键盘和菜单均不可操作', async () => {
   const dom = new JSDOM('<!doctype html><div id="panel-root"></div>', { url: 'http://localhost/panel' });
+  const style = dom.window.document.createElement('style');
+  style.setAttribute('data-harness-ui', '');
+  dom.window.document.head.append(style);
   const globalKeys = ['window', 'document', 'HTMLElement'] as const;
   const previousGlobals = new Map(globalKeys.map((key) => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   Object.assign(globalThis, { window: dom.window, document: dom.window.document, HTMLElement: dom.window.HTMLElement });
@@ -145,6 +184,8 @@ test('损坏会话显示不可用提示且鼠标键盘和菜单均不可操作',
     await definition.mount(context);
     for (let attempt = 0; attempt < 20 && dom.window.document.querySelectorAll('.conversation-card').length < 2; attempt += 1) await new Promise((resolve) => setTimeout(resolve, 5));
     const broken = Array.from(dom.window.document.querySelectorAll<HTMLElement>('.conversation-card')).find((card) => card.textContent?.includes('无法读取的对话'))!;
+    assert.ok(broken.classList.contains('h-list-item'));
+    assert.equal(broken.getAttribute('aria-pressed'), 'false');
     assert.equal(broken.getAttribute('aria-disabled'), 'true');
     assert.equal(broken.tabIndex, -1);
     assert.match(broken.textContent || '', /数据损坏，暂不可用/);
@@ -155,6 +196,8 @@ test('损坏会话显示不可用提示且鼠标键盘和菜单均不可操作',
     assert.deepEqual(selectCalls, []);
 
     const healthy = Array.from(dom.window.document.querySelectorAll<HTMLElement>('.conversation-card')).find((card) => card.textContent?.includes('Healthy'))!;
+    assert.ok(healthy.classList.contains('h-list-item'));
+    assert.equal(healthy.getAttribute('aria-pressed'), 'true');
     healthy.click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     assert.deepEqual(selectCalls, ['harbors:healthy']);

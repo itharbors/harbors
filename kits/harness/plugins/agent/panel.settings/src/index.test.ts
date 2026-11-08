@@ -99,6 +99,6 @@ test('窄 iframe 可收缩且操作按钮完整换行', async () => {
   assert.match(css, /html, body\s*\{[^}]*min-width:\s*0/iu);
   assert.match(css, /#panel-root\s*\{[^}]*min-width:\s*0/iu);
   assert.match(css, /\.actions\s*\{[^}]*flex-wrap:\s*wrap/iu);
-  assert.match(css, /\.actions button\s*\{[^}]*flex:\s*1 1 112px[^}]*max-width:\s*100%/iu);
+  assert.match(css, /\.actions button\s*\{[^}]*flex:\s*0 1 auto[^}]*max-width:\s*100%/iu);
   dom.window.close();
 });

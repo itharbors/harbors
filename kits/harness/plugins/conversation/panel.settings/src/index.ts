@@ -33,9 +33,9 @@ function render(items: Archived[]): void {
     }
     card.append(meta);
     const actions = activeDocument!.createElement('div'); actions.className = 'archive-actions';
-    const restoreButton = activeDocument!.createElement('button'); restoreButton.type = 'button'; restoreButton.textContent = busy.has(item.id) ? '正在恢复…' : '恢复对话'; restoreButton.disabled = busy.has(item.id); restoreButton.setAttribute('aria-label', `恢复对话：${item.title}`);
+    const restoreButton = activeDocument!.createElement('button'); restoreButton.type = 'button'; restoreButton.className = 'h-button h-button--secondary'; restoreButton.textContent = busy.has(item.id) ? '正在恢复…' : '恢复对话'; restoreButton.disabled = busy.has(item.id); restoreButton.setAttribute('aria-label', `恢复对话：${item.title}`);
     restoreButton.addEventListener('click', () => { void restore(item.id); }); actions.append(restoreButton);
-    const deleteButton = activeDocument!.createElement('button'); deleteButton.type = 'button'; deleteButton.className = 'danger'; deleteButton.textContent = busy.has(item.id) ? '正在删除…' : '删除'; deleteButton.disabled = busy.has(item.id); deleteButton.setAttribute('aria-label', `删除归档对话：${item.title}`);
+    const deleteButton = activeDocument!.createElement('button'); deleteButton.type = 'button'; deleteButton.className = 'danger h-button h-button--danger'; deleteButton.textContent = busy.has(item.id) ? '正在删除…' : '删除'; deleteButton.disabled = busy.has(item.id); deleteButton.setAttribute('aria-label', `删除归档对话：${item.title}`);
     deleteButton.addEventListener('click', () => { void remove(item.id, item.title); }); actions.append(deleteButton);
     card.append(actions); list.append(card);
   }

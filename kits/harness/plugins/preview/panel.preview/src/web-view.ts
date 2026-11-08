@@ -51,11 +51,11 @@ export function webContentMarkup(content: WebViewContent): string {
   return `<div class="preview-web" data-preview-proxy-url="${escapeMarkup(content.proxyUrl || '')}">
     <div class="preview-web-controls" aria-label="网页视口控制">
       ${statusMarkup(content)}
-      <label>宽 <input type="number" data-preview-viewport-width="true" min="320" max="3840" step="1" value="${state.viewportWidth}"></label>
-      <label>高 <input type="number" data-preview-viewport-height="true" min="240" max="2160" step="1" value="${state.viewportHeight}"></label>
+      <label>宽 <input class="h-input" type="number" data-preview-viewport-width="true" min="320" max="3840" step="1" value="${state.viewportWidth}"></label>
+      <label>高 <input class="h-input" type="number" data-preview-viewport-height="true" min="240" max="2160" step="1" value="${state.viewportHeight}"></label>
       <div class="preview-interaction-switch" role="group" aria-label="网页交互模式">
-        <button type="button" data-preview-interaction-mode="direct" aria-pressed="${state.interactionMode === 'direct'}">直接交互</button>
-        <button type="button" data-preview-interaction-mode="virtual" aria-pressed="${state.interactionMode === 'virtual'}">模拟鼠标</button>
+        <button class="h-button h-button--secondary" type="button" data-preview-interaction-mode="direct" aria-pressed="${state.interactionMode === 'direct'}">直接交互</button>
+        <button class="h-button h-button--secondary" type="button" data-preview-interaction-mode="virtual" aria-pressed="${state.interactionMode === 'virtual'}">模拟鼠标</button>
       </div>
     </div>
     <div class="preview-body preview-web-body">${canvasMarkup(content, state)}</div>

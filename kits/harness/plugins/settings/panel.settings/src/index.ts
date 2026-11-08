@@ -54,28 +54,44 @@ const definition = {
       const frame = document.createElement('iframe');
       frame.className = 'settings-page-frame';
       frame.title = page.title;
+      frame.addEventListener('load', () => {
+        try {
+          const ui = (window as Window & { HarnessUI?: { install(root: Document): void } }).HarnessUI;
+          const childDocument = frame.contentDocument;
+          if (ui && childDocument) ui.install(childDocument);
+        } catch {
+          // Cross-origin pages and pages without Kit UI continue with their own styles.
+        }
+      });
       frame.src = appendSessionId(page.entry, ctx.sessionId);
       frame.setAttribute('allow', 'clipboard-read; clipboard-write');
       content.append(frame);
     };
 
     const renderPages = () => {
+      const selected = currentPages.find((page) => page.panel === selectedPanel) ?? currentPages[0];
+      selectedPanel = selected?.panel ?? null;
       pageList.replaceChildren();
       for (const page of currentPages) {
         const button = document.createElement('button');
         button.type = 'button';
-        button.className = 'settings-page-link';
+        button.className = `settings-page-link${document.head.querySelector('style[data-harness-ui]') ? ' h-list-item' : ''}`;
         button.textContent = page.title;
         button.dataset.panel = page.panel;
         button.setAttribute('aria-pressed', String(page.panel === selectedPanel));
         button.addEventListener('click', () => {
+          if (selectedPanel === page.panel) return;
+          const hadFocus = document.activeElement === button;
           selectedPanel = page.panel;
           renderPages();
+          if (hadFocus) {
+            const replacement = Array.from(pageList.querySelectorAll<HTMLButtonElement>('.settings-page-link'))
+              .find((item) => item.dataset.panel === page.panel);
+            replacement?.focus();
+          }
         });
         pageList.append(button);
       }
-      const selected = currentPages.find((page) => page.panel === selectedPanel) ?? currentPages[0];
-      if (selected && selected.panel !== selectedPanel) selectedPanel = selected.panel;
       renderPage(selected);
     };
 

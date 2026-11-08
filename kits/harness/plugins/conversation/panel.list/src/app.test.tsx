@@ -12,3 +12,10 @@ test('归档入口只请求 Conversation owner 并显式处理 envelope', async 
   assert.match(source, /result\.value\?\.id/);
   assert.match(source, /aria-busy/);
 });
+
+test('theme overrides preserve standalone defaults and provide variable fallbacks', async () => {
+  const css = await readFile(new URL('./index.css', import.meta.url), 'utf8');
+  const theme = css.slice(css.lastIndexOf('/* Harness UI theme */'));
+  assert.match(theme, /:where\(html:has\(> head > style\[data-harness-ui\]\)\)/);
+  assert.doesNotMatch(theme, /var\(--ce-[\w-]+\)/);
+});

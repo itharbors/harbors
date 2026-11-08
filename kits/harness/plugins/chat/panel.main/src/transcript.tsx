@@ -2,6 +2,7 @@ import { Fragment, memo, useEffect, useMemo, useRef, useState } from "react";
 import { marked, Renderer } from "marked";
 import DOMPurify from "dompurify";
 import type { ToolProcessEntry, TraceStep, TraceTurn } from "./trace-events.js";
+import { kitUiClass } from "./kit-ui.js";
 
 marked.setOptions({ gfm: true, breaks: true });
 
@@ -546,12 +547,12 @@ const PermissionRequestCard = memo(function PermissionRequestCard({
       </div>
       {request.justification && <p className="permission-card-justification">{request.justification}</p>}
       <div className="permission-card-actions">
-        <button type="button" onClick={() => void onResolvePermission(request.requestId, "rejected")} disabled={resolving}>
+        <button type="button" className={kitUiClass('h-button h-button--secondary')} onClick={() => void onResolvePermission(request.requestId, "rejected")} disabled={resolving}>
           拒绝
         </button>
         <button
           type="button"
-          className="approve"
+          className={`approve ${kitUiClass('h-button h-button--primary')}`}
           onClick={() => void onResolvePermission(request.requestId, "allowed-once")}
           disabled={resolving}
         >

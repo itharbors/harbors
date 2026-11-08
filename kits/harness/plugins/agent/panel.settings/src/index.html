@@ -9,7 +9,6 @@
     <main id="panel-root" aria-labelledby="settings-title">
       <header class="panel-header">
         <div>
-          <p class="eyebrow">AGENT</p>
           <h1 id="settings-title">Agent 设置</h1>
           <p class="subtitle">默认权限仅影响新对话。</p>
         </div>
@@ -19,7 +18,7 @@
           <h2 id="permissions-title">新对话权限</h2>
           <label class="field">
             <span class="field-label">默认沙盒模式</span>
-            <select id="sandbox-mode" name="sandboxMode">
+            <select class="h-select" id="sandbox-mode" name="sandboxMode">
               <option value="read-only">只读</option>
               <option value="workspace-write">工作区可写</option>
               <option value="danger-full-access">完全访问</option>
@@ -28,7 +27,7 @@
           </label>
           <label class="field">
             <span class="field-label">默认审批策略</span>
-            <select id="approval-policy" name="approvalPolicy">
+            <select class="h-select" id="approval-policy" name="approvalPolicy">
               <option value="ask">每次询问</option>
               <option value="always">始终允许</option>
             </select>
@@ -40,7 +39,7 @@
           <p class="source-row"><span>基础规则</span><code id="core-version">—</code></p>
           <label class="field" for="custom-instructions">
             <span class="field-label">全局自定义指令</span>
-            <textarea id="custom-instructions" name="customInstructions" rows="8" maxlength="8192"></textarea>
+            <textarea class="h-textarea" id="custom-instructions" name="customInstructions" rows="8" maxlength="8192"></textarea>
             <span class="field-help">这是宽泛偏好，不能覆盖 Core、当前直接请求或更具体的工作区规则。保存或重置后从下一 Turn 起对新旧对话生效。</span>
             <span id="custom-byte-count" class="byte-count">0 / 8192 bytes</span>
           </label>
@@ -52,12 +51,11 @@
           </div>
         </section>
         <div class="actions">
-          <button id="reset-button" class="secondary" type="button">恢复默认</button>
-          <button id="save-button" class="primary" type="submit">保存设置</button>
+          <button id="reset-button" class="secondary h-button h-button--secondary" type="button">恢复默认</button>
+          <button id="save-button" class="primary h-button h-button--primary" type="submit">保存设置</button>
         </div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
       </form>
     </main>
-    <script type="module" src="./index.js"></script>
   </body>
 </html>

@@ -7,6 +7,7 @@ import { captureLinkClick, createLinkClickedPayload, createLinkClickSequenceGate
 import { shouldIgnorePendingBottomScroll } from './update-scheduler.js';
 import { readModelCatalogPayload, selectModelForCatalog, type ModelCatalogOption } from './model-catalog.js';
 import { validateKnownProject } from './directory-picker.js';
+import { kitUiClass } from './kit-ui.js';
 import './index.css';
 
 type Source = 'harbors';
@@ -247,13 +248,14 @@ function DirectoryPicker({ ctx, initialPath, onCancel, onConfirm }: { ctx: any; 
         <div className="dir-picker-path">
           <input
             type="text"
+            className={kitUiClass('h-input')}
             value={manualPath}
             spellCheck={false}
             onChange={(event) => setManualPath(event.target.value)}
             onKeyDown={(event) => { if (event.key === 'Enter') void browse(manualPath.trim() || undefined); }}
             placeholder="输入目录路径后回车"
           />
-          <button type="button" onClick={() => void browse(manualPath.trim() || undefined)}>前往</button>
+          <button type="button" className={kitUiClass('h-button h-button--secondary')} onClick={() => void browse(manualPath.trim() || undefined)}>前往</button>
         </div>
         {error && <div className="dir-picker-error">{error}</div>}
         <div className="dir-picker-list">
@@ -271,8 +273,8 @@ function DirectoryPicker({ ctx, initialPath, onCancel, onConfirm }: { ctx: any; 
           ))}
         </div>
         <div className="dir-picker-actions">
-          <button type="button" onClick={onCancel}>取消</button>
-          <button type="button" className="primary" disabled={!listing} onClick={() => listing && onConfirm(listing.path)}>选择当前目录</button>
+          <button type="button" className={kitUiClass('h-button h-button--secondary')} onClick={onCancel}>取消</button>
+          <button type="button" className={`primary ${kitUiClass('h-button h-button--primary')}`} disabled={!listing} onClick={() => listing && onConfirm(listing.path)}>选择当前目录</button>
         </div>
       </div>
     </div>

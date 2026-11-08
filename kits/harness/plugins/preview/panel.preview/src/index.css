@@ -236,7 +236,7 @@ html, body, #panel-root {
   font-size: 11px;
 }
 
-.preview-web-controls input {
+:where(.preview-web-controls) input {
   width: 100%;
   min-width: 0;
   padding: 4px 5px;
@@ -255,7 +255,7 @@ html, body, #panel-root {
   gap: 2px;
 }
 
-.preview-web-controls button {
+:where(.preview-web-controls) button {
   min-width: 0;
   padding: 4px 8px;
   border: 1px solid #3a4352;
