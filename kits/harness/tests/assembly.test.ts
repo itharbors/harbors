@@ -8,7 +8,7 @@ import { createKitAssemblyHarness, type KitAssemblyHarness } from '@itharbors/se
 const kitDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(kitDirectory, '../..');
 const pluginNames = ['conversation', 'chat', 'model-service', 'agent-context-store', 'agent', 'plugin', 'preview', 'debug', 'settings', 'mermaid', 'ui-guide'];
-const layout = JSON.parse(fs.readFileSync(path.join(kitDirectory, 'layout.json'), 'utf8')) as { windows?: Array<{ id?: string }> };
+const layout = JSON.parse(fs.readFileSync(path.join(kitDirectory, 'layout.json'), 'utf8'));
 
 function createCredentialVault() {
   const records = new Map<string, string>();
@@ -172,7 +172,16 @@ describe('Harbors Harness Kit real assembly', () => {
     for (const plugin of pluginNames) expect(runtime.plugin.info(plugin)?.source.scope).toBe('kit');
     expect(runtime.kit.current()?.name).toBe('harness');
     expect(runtime.kit.current()?.menuRoot).toEqual({ id: 'harness', label: 'Harbors Harness' });
-    expect(layout.windows?.map((window) => window.id)).toEqual(['harness-main']);
+    expect(layout).toEqual({
+      windows: [{
+        id: 'harness-main', type: 'panel-area',
+        layout: { type: 'hsplit', sizes: [280, 1], children: [
+          { type: 'leaf', panel: 'conversation.list' },
+          { type: 'leaf', panel: 'chat.main' },
+        ] },
+      }],
+      activePanel: 'chat.main',
+    });
     expect(runtime.plugin.info('chat')?.contribute?.panel?.main).toBeDefined();
     expect(runtime.plugin.info('conversation')?.contribute?.panel?.list).toBeDefined();
     expect(runtime.plugin.info('settings')?.contribute?.menu).toEqual(expect.arrayContaining([
@@ -190,7 +199,6 @@ describe('Harbors Harness Kit real assembly', () => {
     await expect(runtime.messages.request('settings', 'openSettingsPanel')).resolves.toMatchObject({
       panelName: 'settings.settings',
     });
-
     for (const [plugin, id, message, panelName] of [
       ['preview', 'view/panels/ce-preview-preview', 'openPreviewPanel', 'preview.preview'],
       ['plugin', 'view/panels/harness-plugin-list', 'openPluginPanel', 'plugin.list'],

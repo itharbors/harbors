@@ -7,8 +7,7 @@
         "type": "hsplit",
         "sizes": [
           280,
-          1,
-          300
+          1
         ],
         "children": [
           {
@@ -18,43 +17,6 @@
           {
             "type": "leaf",
             "panel": "chat.main"
-          },
-          {
-            "type": "vsplit",
-            "sizes": [
-              1,
-              260
-            ],
-            "children": [
-              {
-                "type": "tab",
-                "activeIndex": 0,
-                "children": [
-                  {
-                    "type": "leaf",
-                    "panel": "preview.preview"
-                  },
-                  {
-                    "type": "leaf",
-                    "panel": "settings.settings"
-                  }
-                ]
-              },
-              {
-                "type": "tab",
-                "activeIndex": 0,
-                "children": [
-                  {
-                    "type": "leaf",
-                    "panel": "plugin.list"
-                  },
-                  {
-                    "type": "leaf",
-                    "panel": "debug.debug"
-                  }
-                ]
-              }
-            ]
           }
         ]
       }
