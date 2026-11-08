@@ -89,6 +89,7 @@ export class EditorApp extends HTMLElement {
   private handleFloatingPanelMinimize = (event: Event) => this.handleFloatingPanelAction(event, 'minimized');
   private handleFloatingPanelRestore = (event: Event) => this.handleFloatingPanelAction(event, 'open');
   private handleFloatingPanelClose = (event: Event) => this.handleFloatingPanelCloseAction(event);
+  private handleFloatingPanelGeometry = (event: Event) => this.updateFloatingPanelGeometry(event);
   private secondaryWindowCleanupSent = false;
   // 窗口缩放期间频繁触发 panel iframe 的重新布局，会让 WebGL/Canvas 面板反复 setSize 导致闪烁。
   // 我们用 debounce：第一次 resize 广播 layout-resize-start，停止 resize 一段时间后再广播 layout-resize-end。
@@ -147,6 +148,7 @@ export class EditorApp extends HTMLElement {
     this.addEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
     this.addEventListener('ce-floating-panel-restore', this.handleFloatingPanelRestore);
     this.addEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
+    this.addEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
     window.addEventListener('resize', this.handleWindowResize);
     window.addEventListener('message', this.handleWindowMessage);
     if (this.windowGroupKind === 'secondary') {
@@ -182,6 +184,7 @@ export class EditorApp extends HTMLElement {
     this.removeEventListener('ce-floating-panel-minimize', this.handleFloatingPanelMinimize);
     this.removeEventListener('ce-floating-panel-restore', this.handleFloatingPanelRestore);
     this.removeEventListener('ce-floating-panel-close', this.handleFloatingPanelClose);
+    this.removeEventListener('ce-floating-panel-geometry', this.handleFloatingPanelGeometry);
     window.removeEventListener('resize', this.handleWindowResize);
     window.removeEventListener('message', this.handleWindowMessage);
     window.removeEventListener('pagehide', this.handleSecondaryPageHide);
@@ -578,19 +581,15 @@ export class EditorApp extends HTMLElement {
 
   private upsertFloatingPanel(panelPayload: { id: string; panelName: string; state?: 'opening' | 'open' | 'minimized' }): void {
     const index = this.floatingPanels.findIndex((item) => item.id === panelPayload.id);
-    const nextPanel = this.createFloatingPanelState({
-      id: panelPayload.id,
-      panelName: panelPayload.panelName,
-      state: panelPayload.state === 'minimized' ? 'minimized' : 'open',
-      index: index >= 0 ? index : this.floatingPanels.length,
-    });
+    const current = index >= 0 ? this.floatingPanels[index] : undefined;
+    const state = panelPayload.state === 'minimized' ? 'minimized' : 'open';
+    if (current?.panelName === panelPayload.panelName && current.state === state) return;
+    const nextPanel = this.createFloatingPanelState({ id: panelPayload.id, panelName: panelPayload.panelName, state, index: index >= 0 ? index : this.floatingPanels.length });
     if (!nextPanel) return;
-
-    this.floatingPanels = [
-      ...this.floatingPanels.filter((item) => item.id !== nextPanel.id),
-      nextPanel,
-    ];
-    this.render();
+    if (current?.panelName === nextPanel.panelName && current.position) nextPanel.position = current.position;
+    if (current?.panelName === nextPanel.panelName && current.size) nextPanel.size = current.size;
+    this.floatingPanels = index < 0 ? [...this.floatingPanels, nextPanel] : this.floatingPanels.map((item, i) => i === index ? nextPanel : item);
+    this.syncFloatingPanelLayer();
   }
 
   private createFloatingPanelState(input: {
@@ -646,7 +645,7 @@ export class EditorApp extends HTMLElement {
     const next = this.floatingPanels.filter((item) => item.id !== panelInstanceId);
     if (next.length === this.floatingPanels.length) return;
     this.floatingPanels = next;
-    this.render();
+    this.syncFloatingPanelLayer();
   }
 
   private handleFloatingPanelAction(event: Event, state: 'open' | 'minimized'): void {
@@ -675,17 +674,35 @@ export class EditorApp extends HTMLElement {
     const current = index >= 0 ? this.floatingPanels[index] : undefined;
     if (!current) return null;
 
-    const next = this.createFloatingPanelState({
-      id: current.id,
-      panelName: current.panelName,
-      state,
-      index,
-    });
-    if (!next) return null;
-
-    this.floatingPanels = this.floatingPanels.map((item) => (item.id === panelInstanceId ? next : item));
-    this.render();
+    const next: FloatingPanelState = { ...current, state, edge: state === 'minimized' ? 'bottom' : undefined };
+    this.floatingPanels = this.floatingPanels.map((item) => item.id === panelInstanceId ? next : item);
+    this.syncFloatingPanelLayer();
     return next;
+  }
+
+  private syncFloatingPanelLayer(): void {
+    const layer = this.querySelector('floating-panel-layer');
+    if (!layer) return;
+    layer.setAttribute('data-state', JSON.stringify(this.floatingPanels));
+    queueMicrotask(() => {
+      if (this.isConnected) this.syncIframeThemes();
+    });
+  }
+
+  private updateFloatingPanelGeometry(event: Event): void {
+    const detail = (event as CustomEvent).detail as { panelInstanceId?: unknown; position?: { x?: unknown; y?: unknown }; size?: { width?: unknown; height?: unknown } } | undefined;
+    if (!detail || typeof detail.panelInstanceId !== 'string' || !detail.position || !detail.size) return;
+    const { x, y } = detail.position;
+    const { width, height } = detail.size;
+    if (typeof x !== 'number' || !Number.isFinite(x) || typeof y !== 'number' || !Number.isFinite(y)
+      || typeof width !== 'number' || !Number.isFinite(width) || width <= 0
+      || typeof height !== 'number' || !Number.isFinite(height) || height <= 0) return;
+    const index = this.floatingPanels.findIndex((item) => item.id === detail.panelInstanceId);
+    if (index < 0) return;
+    const current = this.floatingPanels[index];
+    if (current.position?.x === x && current.position?.y === y && current.size?.width === width && current.size?.height === height) return;
+    this.floatingPanels = this.floatingPanels.map((item, i) => i === index ? { ...item, position: { x, y }, size: { width, height } } : item);
+    this.syncFloatingPanelLayer();
   }
 
   private broadcastFloatingPanelState(panel: FloatingPanelState, state: 'open' | 'minimized' | 'closed'): void {
@@ -838,6 +855,7 @@ export class EditorApp extends HTMLElement {
         revision: record.revision,
       }
       : panel);
+    queueMicrotask(() => { if (this.isConnected) this.syncIframeThemes(); });
   }
 
   private applyPanelAvailabilityToElement(

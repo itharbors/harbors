@@ -697,6 +697,55 @@ describe('EditorApp default layout', () => {
     expect(layer.shadowRoot?.querySelector('.edge-chip')?.textContent?.trim()).toBe('日志');
   });
 
+  it('keeps main and other floating panel iframes across open, duplicate and close', async () => {
+    bootstrapResponse = () => Promise.resolve(createJsonResponse({
+      ...bootstrapPayload,
+      panelInstances: [
+        { id: 'float-one', panelName: '@itharbors/log.log', carrier: 'floating', state: 'open', windowGroupId: null },
+        { id: 'float-two', panelName: '@itharbors/plugin-list.list', carrier: 'floating', state: 'open', windowGroupId: null },
+      ],
+    }));
+    el = document.createElement('editor-app') as EditorApp;
+    document.body.appendChild(el);
+    await waitForBootstrap();
+    await Promise.resolve();
+    const mainFrame = el.querySelector('ce-panel[data-panel-name="@itharbors/log.log"]')!.shadowRoot!.querySelector('iframe');
+    const layer = el.querySelector('floating-panel-layer')!;
+    const frame = (id: string) => layer.shadowRoot!
+      .querySelector(`.floating-window[data-panel-instance-id="${id}"] ce-panel`)
+      ?.shadowRoot?.querySelector('iframe');
+    const first = frame('float-one');
+    const second = frame('float-two');
+    expect(mainFrame).toBeTruthy();
+    expect(first).toBeTruthy();
+    expect(second).toBeTruthy();
+    layer.dispatchEvent(new CustomEvent('ce-floating-panel-geometry', { bubbles: true, composed: true, detail: { panelInstanceId: 'float-one', position: { x: 170, y: 120 }, size: { width: 510, height: 350 } } }));
+    const firstWindow = layer.shadowRoot!.querySelector<HTMLElement>('.floating-window[data-panel-instance-id="float-one"]')!;
+    expect(firstWindow.style.left).toBe('170px');
+    expect(firstWindow.style.width).toBe('510px');
+    const notification = { type: 'ce-open-panel-floating', payload: { id: 'float-three', panelName: '@itharbors/message-debug.debug', carrier: 'floating', state: 'open', windowGroupId: null } };
+    window.dispatchEvent(new MessageEvent('message', { data: notification }));
+    const third = frame('float-three');
+    window.dispatchEvent(new MessageEvent('message', { data: notification }));
+    expect(frame('float-three')).toBe(third);
+    expect(frame('float-one')).toBe(first);
+    expect(frame('float-two')).toBe(second);
+    expect(el.querySelector('ce-panel[data-panel-name="@itharbors/log.log"]')!.shadowRoot!.querySelector('iframe')).toBe(mainFrame);
+
+    layer.shadowRoot!.querySelector<HTMLElement>('[data-floating-action="minimize"][data-panel-instance-id="float-one"]')!.click();
+    expect(frame('float-one')).toBe(first);
+    layer.shadowRoot!.querySelector<HTMLElement>('[data-floating-action="restore"][data-panel-instance-id="float-one"]')!.click();
+    expect(frame('float-one')).toBe(first);
+    expect(firstWindow.style.left).toBe('170px');
+    expect(firstWindow.style.top).toBe('120px');
+    expect(firstWindow.style.width).toBe('510px');
+    expect(firstWindow.style.height).toBe('350px');
+    layer.shadowRoot!.querySelector<HTMLElement>('[data-floating-action="close"][data-panel-instance-id="float-two"]')!.click();
+    expect(frame('float-one')).toBe(first);
+    expect(frame('float-three')).toBe(third);
+    expect(el.querySelector('ce-panel[data-panel-name="@itharbors/log.log"]')!.shadowRoot!.querySelector('iframe')).toBe(mainFrame);
+  });
+
   it('minimizes, restores, and closes floating panels from layer controls', async () => {
     bootstrapResponse = () => Promise.resolve(createJsonResponse({
       ...bootstrapPayload,
@@ -1183,6 +1232,11 @@ describe('EditorApp default layout', () => {
       .toContain('color-scheme: var(--ce-color-scheme, dark);');
 
     layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="minimize"]')?.click();
+    await Promise.resolve();
+    expect(layer.shadowRoot?.querySelector('ce-panel')?.shadowRoot?.querySelector('iframe')).toBe(floatingIframe);
+    expect(iframeDocument.documentElement.style.getPropertyValue('--ce-accent')).toBe('#abcdef');
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="restore"]')?.click();
+    layer.shadowRoot?.querySelector<HTMLElement>('[data-floating-action="close"]')?.click();
     await Promise.resolve();
     iframeDocument.documentElement.style.removeProperty('--ce-accent');
     iframeDocument.getElementById('ce-base-ui-theme')?.remove();
