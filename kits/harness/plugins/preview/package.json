@@ -16,13 +16,25 @@
         "request": {
           "readFile": ["readFile"],
           "openProxyPage": ["openProxyPage"],
-          "closeProxyPage": ["closeProxyPage"]
+          "closeProxyPage": ["closeProxyPage"],
+          "openPreviewPanel": ["openPreviewPanel"],
+          "getLocalPreviewPanel": ["getLocalPreviewPanel"]
         },
         "broadcast": {
           "chat.link.clicked": ["panel.onLinkClicked"],
           "conversation.selected": ["panel.onConversationSelected"]
         }
-      }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/ce-preview-preview",
+          "message": "openPreviewPanel",
+          "localMessage": "getLocalPreviewPanel",
+          "order": 990,
+          "label": "预览"
+        }
+      ]
     }
   },
   "dependencies": {

@@ -7,6 +7,7 @@ import { ProxyService } from './proxy/server.js';
 declare const editor: any;
 
 const proxyService = new ProxyService();
+let runtime: any;
 
 interface PreviewContent {
   kind: 'file' | 'url' | 'unsupported';
@@ -60,11 +61,20 @@ async function readTextFile(filePath: string): Promise<string> {
 
 const definition = {
   lifecycle: {
+    load(context: any) {
+      runtime = context;
+    },
     async unload() {
       await proxyService.close();
     },
   },
   methods: {
+    openPreviewPanel() {
+      return runtime.window.openPanel('preview.preview');
+    },
+    getLocalPreviewPanel() {
+      return { type: 'local-panel', panelName: 'preview.preview' };
+    },
     async readFile(payload: unknown): Promise<PreviewContent> {
       const validation = validatePreviewLink(payload);
       if ('error' in validation) {

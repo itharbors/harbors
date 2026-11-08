@@ -97,6 +97,10 @@ const definition = {
       const currentRuntime = assertRuntime();
       return currentRuntime.window.openPanel('settings.settings');
     },
+    getLocalSettingsPanel() {
+      assertRuntime();
+      return { type: 'local-panel', panelName: 'settings.settings' };
+    },
   },
 };
 

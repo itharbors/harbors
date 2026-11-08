@@ -20,6 +20,12 @@
           "getPluginSummary": [
             "getPluginSummary"
           ],
+          "openPluginPanel": [
+            "openPluginPanel"
+          ],
+          "getLocalPluginPanel": [
+            "getLocalPluginPanel"
+          ],
           "register": [
             "register"
           ],
@@ -36,7 +42,17 @@
             "restart"
           ]
         }
-      }
+      },
+      "menu": [
+        {
+          "type": "menu",
+          "id": "view/panels/harness-plugin-list",
+          "message": "openPluginPanel",
+          "localMessage": "getLocalPluginPanel",
+          "order": 1005,
+          "label": "插件"
+        }
+      ]
     }
   }
 }

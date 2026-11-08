@@ -19,6 +19,9 @@
           ],
           "openDebugPanel": [
             "openDebugPanel"
+          ],
+          "getLocalDebugPanel": [
+            "getLocalDebugPanel"
           ]
         },
         "broadcast": {
@@ -32,6 +35,7 @@
           "type": "menu",
           "id": "view/panels/ce-debug-debug",
           "message": "openDebugPanel",
+          "localMessage": "getLocalDebugPanel",
           "order": 1010,
           "label": "消息调试"
         }

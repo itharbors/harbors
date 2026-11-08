@@ -10,6 +10,17 @@ let definition: RuntimeDefinition | undefined;
 (globalThis as any).editor = { plugin: { define(value: RuntimeDefinition) { definition = value; } } };
 await import('./index.ts?settings-v3');
 
+test('local settings presentation does not open or alter a WindowManager panel', () => {
+  assert.ok(definition);
+  const calls: string[] = [];
+  definition.lifecycle.load({ window: { openPanel(name: string) { calls.push(name); return { opened: true }; } } });
+  assert.deepEqual(definition.methods.getLocalSettingsPanel(), { type: 'local-panel', panelName: 'settings.settings' });
+  assert.deepEqual(calls, []);
+  assert.deepEqual(definition.methods.openSettingsPanel(), { opened: true });
+  assert.deepEqual(calls, ['settings.settings']);
+  definition.lifecycle.unload();
+});
+
 test('registers, sorts, detaches, and derives page titles from panel info', () => {
   assert.ok(definition);
   const broadcasts: unknown[][] = [];

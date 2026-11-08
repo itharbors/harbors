@@ -7,7 +7,7 @@ import { createKitAssemblyHarness, type KitAssemblyHarness } from '@itharbors/se
 
 const kitDirectory = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const projectRoot = path.resolve(kitDirectory, '../..');
-const pluginNames = ['conversation', 'chat', 'model-service', 'agent-context-store', 'agent', 'plugin', 'preview', 'debug', 'settings', 'mermaid'];
+const pluginNames = ['conversation', 'chat', 'model-service', 'agent-context-store', 'agent', 'plugin', 'preview', 'debug', 'settings', 'mermaid', 'ui-guide'];
 const layout = JSON.parse(fs.readFileSync(path.join(kitDirectory, 'layout.json'), 'utf8')) as { windows?: Array<{ id?: string }> };
 
 function createCredentialVault() {
@@ -190,6 +190,39 @@ describe('Harbors Harness Kit real assembly', () => {
     await expect(runtime.messages.request('settings', 'openSettingsPanel')).resolves.toMatchObject({
       panelName: 'settings.settings',
     });
+
+    for (const [plugin, id, message, panelName] of [
+      ['preview', 'view/panels/ce-preview-preview', 'openPreviewPanel', 'preview.preview'],
+      ['plugin', 'view/panels/harness-plugin-list', 'openPluginPanel', 'plugin.list'],
+      ['debug', 'view/panels/ce-debug-debug', 'openDebugPanel', 'debug.debug'],
+    ] as const) {
+      expect(runtime.plugin.info(plugin)?.contribute?.menu).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id, message }),
+      ]));
+      expect(runtime.messages.queryRequest(plugin, message)).toMatchObject({
+        plugin, name: message, methods: [message], location: 'server',
+      });
+      await expect(runtime.messages.request(plugin, message)).resolves.toMatchObject({ panelName });
+    }
+    for (const [plugin, id, message, panelName] of [
+      ['plugin', 'view/panels/harness-plugin-list', 'getLocalPluginPanel', 'plugin.list'],
+      ['debug', 'view/panels/ce-debug-debug', 'getLocalDebugPanel', 'debug.debug'],
+      ['ui-guide', 'view/panels/harness-ui-guide', 'getLocalGuidePanel', 'ui-guide.main'],
+    ] as const) {
+      expect(runtime.plugin.info(plugin)?.contribute?.menu).toEqual(expect.arrayContaining([
+        expect.objectContaining({ id, localMessage: message }),
+      ]));
+      expect(runtime.messages.queryRequest(plugin, message)).toMatchObject({ plugin, name: message, methods: [message], location: 'server' });
+      await expect(runtime.messages.request(plugin, message)).resolves.toEqual({ type: 'local-panel', panelName });
+    }
+    expect(runtime.plugin.info('ui-guide')?.contribute?.menu).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'view/panels/harness-ui-guide', message: 'openGuide' }),
+    ]));
+    expect(runtime.plugin.info('ui-guide')?.contribute?.settings).toBeUndefined();
+    const settingsPages = await runtime.messages.request('settings', 'getPages') as Array<{ owner: string }>;
+    expect(settingsPages.map((page) => page.owner)).toEqual(expect.arrayContaining(['agent', 'conversation', 'model-service']));
+    expect(settingsPages.map((page) => page.owner)).not.toContain('ui-guide');
+    await expect(runtime.messages.request('ui-guide', 'openGuide')).resolves.toMatchObject({ panelName: 'ui-guide.main' });
 
     for (const [plugin, name] of [
       ['agent', 'createConversation'], ['agent', 'sendMessage'], ['agent', 'getConversationTrace'],

@@ -10,6 +10,9 @@ editor.plugin.define({
     openDebugPanel() {
       return runtime.window.openPanel('debug.debug');
     },
+    getLocalDebugPanel() {
+      return { type: 'local-panel', panelName: 'debug.debug' };
+    },
   },
 });
 

@@ -50,6 +50,13 @@ function resolveSource(info: any, kitPlugins: Set<unknown>): PluginSource {
 editor.plugin.define({
   lifecycle: { load(context: any) { runtime = context; } },
   methods: {
+    openPluginPanel() {
+      return runtime.window.openPanel('plugin.list');
+    },
+    getLocalPluginPanel() {
+      return { type: 'local-panel', panelName: 'plugin.list' };
+    },
+
     getPluginSummary() {
       const currentKit = runtime.kit.getCurrent();
       const kitPlugins = new Set<string>(currentKit?.plugins ?? []);

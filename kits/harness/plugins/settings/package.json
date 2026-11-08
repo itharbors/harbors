@@ -15,7 +15,8 @@
       "message": {
         "request": {
           "getPages": ["getPages"],
-          "openSettingsPanel": ["openSettingsPanel"]
+          "openSettingsPanel": ["openSettingsPanel"],
+          "getLocalSettingsPanel": ["getLocalSettingsPanel"]
         },
         "broadcast": {
           "settings.registry.changed": ["panel.onRegistryChanged"]
@@ -26,6 +27,7 @@
           "type": "menu",
           "id": "view/panels/ce-settings-settings",
           "message": "openSettingsPanel",
+          "localMessage": "getLocalSettingsPanel",
           "order": 1000,
           "label": "设置"
         }
