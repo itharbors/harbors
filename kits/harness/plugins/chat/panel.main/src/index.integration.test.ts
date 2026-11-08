@@ -16,11 +16,23 @@ test('mounted panel keeps a cached draft when the initial getState snapshot is s
 
   const { default: panel } = await import('../dist/index.js');
   const requests: string[] = [];
+  let releaseSnapshot!: (value: unknown) => void;
+  const initialSnapshot = new Promise<unknown>((resolve) => { releaseSnapshot = resolve; });
+  let snapshotProcessed = false;
+  let staleStateApplied = false;
+  let stateRequests = 0;
+  const previousConsoleError = console.error;
+  const stateErrors: unknown[][] = [];
+  console.error = (...args: unknown[]) => {
+    if (args.some((arg) => typeof arg === 'string' && arg.includes('加载对话界面状态失败'))) stateErrors.push(args);
+    else previousConsoleError(...args);
+  };
   const context = {
     message: {
       async request(_plugin: string, name: string): Promise<unknown> {
         requests.push(name);
         if (name === 'getState') {
+          if (stateRequests++ === 0) return initialSnapshot;
           return { selectedConversationId: null, draft: null, generation: 'reloaded-generation', revision: 0 };
         }
         return {};
@@ -38,7 +50,15 @@ test('mounted panel keeps a cached draft when the initial getState snapshot is s
       generation: 'draft-generation',
       revision: 1,
     });
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitFor(() => requests.includes('getState') && Boolean(document.querySelector('.message-input-container textarea')), 'cached draft and getState');
+    releaseSnapshot({
+      generation: 'reloaded-generation',
+      get revision() { queueMicrotask(() => { snapshotProcessed = true; }); return 0; },
+      get selectedConversationId() { staleStateApplied = true; return null; },
+      draft: null,
+    });
+    await waitFor(() => snapshotProcessed, 'stale snapshot processed');
+    assert.equal(staleStateApplied, false, 'stale snapshot must be rejected before applying its state');
 
     assert.ok(requests.includes('getState'));
     assert.ok(document.querySelector('.message-input-container'));
@@ -50,10 +70,12 @@ test('mounted panel keeps a cached draft when the initial getState snapshot is s
     assert.equal(dom.window.document.getElementById('panel-root')?.childElementCount, 0);
 
     await panel.mount(context);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await waitFor(() => Boolean(document.querySelector('.empty-state')), 'empty state after remount');
     assert.ok(document.querySelector('.empty-state'), '重新挂载不应重放旧会话缓存');
     assert.equal(document.querySelector('textarea'), null);
+    assert.deepEqual(stateErrors, [], '处理会话状态时不能吞掉错误');
   } finally {
+    console.error = previousConsoleError;
     panel.unmount();
     dom.window.close();
     for (const key of globalKeys) {
