@@ -1,4 +1,4 @@
-import { EditorTransport, getKitFromURL, getSessionIdFromURL } from '../core/transport';
+import { EditorTransport, getKitFromURL, getSessionIdFromURL, splitRuntimeSessionId } from '../core/transport';
 import type { BootstrapInfo, I18nChangeEvent, I18nVisibleSnapshot, LayoutNode } from '../core/session';
 import { ClientSession } from '../core/session';
 import { getStoredSessionId } from '../core/storage';
@@ -106,15 +106,18 @@ export class EditorApp extends HTMLElement {
     this.style.overflow = 'hidden';
     this.style.position = 'relative';
 
-    const sessionId = getSessionIdFromURL() || getStoredSessionId();
-    if (!sessionId) {
+    const sessionReference = getSessionIdFromURL() || getStoredSessionId();
+    if (!sessionReference) {
       this.innerHTML = '<div role="alert">无法打开工作台：缺少已验证的 Session。</div>';
       return;
     }
 
+    const parsed = this.windowGroupKind === 'secondary' ? splitRuntimeSessionId(sessionReference) : { sessionId: sessionReference, kit: undefined };
+    const sessionId = parsed.sessionId;
+    const kit = parsed.kit || getKitFromURL() || undefined;
     this.session = new ClientSession(sessionId);
-    this.transport = new EditorTransport(this.session, { kit: getKitFromURL() || undefined });
-    this.i18nClient = new I18nClient(sessionId);
+    this.transport = new EditorTransport(this.session, { kit });
+    this.i18nClient = new I18nClient(kit ? `${sessionId}::${kit}` : sessionId);
     this.channel = createSessionBroadcastChannel(sessionId);
     this.channel?.addEventListener('message', this.handleChannelMessageEvent);
     this.dragController = new TabDragController(this, {
@@ -225,6 +228,7 @@ export class EditorApp extends HTMLElement {
       const bootstrap = await this.transport!.fetchBootstrap();
       if (token !== this.initToken || !this.isConnected) return;
       this.bootstrap = bootstrap;
+      this.i18nClient = new I18nClient(bootstrap.sessionId);
       i18nStore.hydrate(bootstrap.i18n ?? createEmptyI18nSnapshot());
       this.mountMenuRuntime({
         sessionId: bootstrap.sessionId,

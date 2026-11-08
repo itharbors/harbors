@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { createEditor as createEditorWithOptions } from '../../src/editor/index';
 import { BrowserRequestBroker } from '../../src/framework/browser-request-broker';
 import { createBootstrapRouter } from '../../src/routes/bootstrap';
@@ -235,15 +235,26 @@ describe('framework routes', () => {
     const editor = createEditor('s1', { assembly: testAssembly });
     await editor.kit.load(testKitFixture.name);
 
-    const router = createWindowEntryRouter(new Map([['s1', editor]]));
-    const { res, body, statusCode } = mockRes();
-    await router(mockReq('GET', '/api/window-entry/secondary?sessionId=s1'), res);
-
-    expect(statusCode()).toBe(200);
-    const html = await body();
-    expect(html).toContain('<window-group-app></window-group-app>');
-    expect(html).toContain('data-ce-window-entry-style');
-    expect(html).toContain('<script type="module" src="/src/index.ts"></script>');
+    try {
+      vi.stubEnv('CE_CLIENT_ENTRY', '');
+      const router = createWindowEntryRouter(new Map([['s1', editor]]));
+      for (const mode of ['development', 'test', 'production']) {
+        vi.stubEnv('NODE_ENV', mode);
+        const { res, body, statusCode } = mockRes();
+        await router(mockReq('GET', '/api/window-entry/secondary?sessionId=s1'), res);
+        expect(statusCode()).toBe(200);
+        const html = await body();
+        expect(html).toContain('<window-group-app></window-group-app>');
+        expect(html).toContain('data-ce-window-entry-style');
+        expect(html).toContain('<script type="module" src="/assets/index.js"></script>');
+      }
+      vi.stubEnv('CE_CLIENT_ENTRY', '/src/index.ts');
+      const { res, body } = mockRes();
+      await router(mockReq('GET', '/api/window-entry/secondary?sessionId=s1'), res);
+      expect(await body()).toContain('<script type="module" src="/src/index.ts"></script>');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('window entry route accepts session query alias for secondary html', async () => {
@@ -256,6 +267,63 @@ describe('framework routes', () => {
 
     expect(statusCode()).toBe(200);
     expect(await body()).toContain('<window-group-app></window-group-app>');
+  });
+
+  it('uses the configured Vite entry for a kit with a built client entry', async () => {
+    const kitDir = mkdtempSync(path.join(tmpdir(), 'window-entry-client-'));
+    writeFileSync(path.join(kitDir, 'secondary.html'), '<html><head></head><body><window-group-app></window-group-app><script type="module" src="/assets/index.js"></script></body></html>');
+    const editor = {
+      kit: {
+        getCurrent: () => ({ windowEntries: { main: 'secondary.html', secondary: 'secondary.html' } }),
+        getCurrentDirectory: () => kitDir,
+      },
+    } as unknown as ReturnType<typeof createEditor>;
+    try {
+      vi.stubEnv('CE_CLIENT_ENTRY', '/src/index.ts');
+      const router = createWindowEntryRouter(new Map([['s1', editor]]));
+      const { res, body, statusCode } = mockRes();
+      await router(mockReq('GET', '/api/window-entry/secondary?sessionId=s1'), res);
+      expect(statusCode()).toBe(200);
+      expect(await body()).toContain('<script type="module" src="/src/index.ts"></script>');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(kitDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rewrites only the module client entry when src precedes type', async () => {
+    const kitDir = mkdtempSync(path.join(tmpdir(), 'window-entry-order-'));
+    const unrelated = '<script src="/assets/index.js" type="text/javascript"></script>';
+    const otherModule = '<script src="/plugin.js" type="module"></script>';
+    const dataOnly = '<script data-src="/assets/index.js" type="module"></script>';
+    const commented = '<!-- <script src="/assets/index.js" type="module"></script> -->';
+    writeFileSync(path.join(kitDir, 'secondary.html'), `<html><head></head><body>${commented}<script src="/assets/index.js" defer type="module"></script><script src="/src/index.ts" type="module"></script>${unrelated}${otherModule}${dataOnly}</body></html>`);
+    const editor = {
+      kit: {
+        getCurrent: () => ({ windowEntries: { main: 'secondary.html', secondary: 'secondary.html' } }),
+        getCurrentDirectory: () => kitDir,
+      },
+    } as unknown as ReturnType<typeof createEditor>;
+    try {
+      vi.stubEnv('CE_CLIENT_ENTRY', '/src/index.ts');
+      const router = createWindowEntryRouter(new Map([['s1', editor]]));
+      const { res, body, statusCode } = mockRes();
+      await router(mockReq('GET', '/api/window-entry/secondary?sessionId=s1'), res);
+      const html = await body();
+      expect(statusCode()).toBe(200);
+      expect(html).toContain('<script src="/src/index.ts" defer type="module"></script>');
+      expect(html).toContain(unrelated);
+      expect(html).toContain(otherModule);
+      expect(html).toContain(dataOnly);
+      expect(html).toContain(commented);
+      vi.stubEnv('CE_CLIENT_ENTRY', '');
+      const staticResponse = mockRes();
+      await router(mockReq('GET', '/api/window-entry/secondary?sessionId=s1'), staticResponse.res);
+      expect(await staticResponse.body()).toContain('<script src="/assets/index.js" type="module"></script>');
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(kitDir, { recursive: true, force: true });
+    }
   });
 
   it('window entry route acknowledges the loaded secondary window-group', async () => {

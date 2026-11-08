@@ -24,7 +24,10 @@ export class EditorTransport {
   ) {}
 
   async fetchSessionInfo(): Promise<SessionInfo> {
-    const resp = await fetch(`/api/session/${this.session.sessionId}`);
+    // Secondary window URLs carry the runtime identity (base Session + Kit),
+    // while the Session information endpoint accepts the base Session only.
+    const baseSessionId = splitRuntimeSessionId(this.session.sessionId).sessionId;
+    const resp = await fetch(`/api/session/${encodeURIComponent(baseSessionId)}`);
     if (!resp.ok) {
       throw new Error(`Failed to fetch session: ${resp.status}`);
     }
@@ -62,18 +65,22 @@ export class EditorTransport {
   }
 
   private initializeSession(): Promise<Response> {
+    const reference = splitRuntimeSessionId(this.session.sessionId);
+    const kit = this.options.kit || reference.kit;
     return fetch('/api/session', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        sessionId: this.session.sessionId,
-        ...(this.options.kit ? { kit: this.options.kit } : {}),
+        sessionId: reference.sessionId,
+        ...(kit ? { kit } : {}),
       }),
     });
   }
 
   private getRuntimeId(): string {
-    return this.options.kit ? `${this.session.sessionId}::${this.options.kit}` : this.session.sessionId;
+    const reference = splitRuntimeSessionId(this.session.sessionId);
+    const kit = this.options.kit || reference.kit;
+    return kit ? `${reference.sessionId}::${kit}` : reference.sessionId;
   }
 
   connectSSE(
@@ -115,7 +122,7 @@ export class EditorTransport {
     const resp = await fetch('/api/panel/open', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: this.session.sessionId, panelName }),
+      body: JSON.stringify({ sessionId: this.getRuntimeId(), panelName }),
     });
     if (!resp.ok) {
       throw new Error(`Failed to open panel: ${resp.status}`);
@@ -128,7 +135,7 @@ export class EditorTransport {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
-        sessionId: this.session.sessionId,
+        sessionId: this.getRuntimeId(),
         requestId,
         result,
       }),
@@ -142,7 +149,7 @@ export class EditorTransport {
     const resp = await fetch('/api/panel-instance/fallback', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: this.session.sessionId, panelInstanceId }),
+      body: JSON.stringify({ sessionId: this.getRuntimeId(), panelInstanceId }),
     });
     if (!resp.ok) {
       throw new Error(`Failed to mark panel floating: ${resp.status}`);
@@ -154,7 +161,7 @@ export class EditorTransport {
     const resp = await fetch('/api/panel-instance/close', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: this.session.sessionId, panelInstanceId }),
+      body: JSON.stringify({ sessionId: this.getRuntimeId(), panelInstanceId }),
     });
     if (!resp.ok) {
       throw new Error(`Failed to close panel instance: ${resp.status}`);
@@ -165,7 +172,7 @@ export class EditorTransport {
     const resp = await fetch('/api/panel-instance/state', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: this.session.sessionId, panelInstanceId, state }),
+      body: JSON.stringify({ sessionId: this.getRuntimeId(), panelInstanceId, state }),
     });
     if (!resp.ok) {
       throw new Error(`Failed to set panel instance state: ${resp.status}`);
@@ -173,7 +180,7 @@ export class EditorTransport {
   }
 
   async closeWindowGroup(windowGroupId: string, options: { beacon?: boolean } = {}): Promise<void> {
-    const body = JSON.stringify({ sessionId: this.session.sessionId, windowGroupId });
+    const body = JSON.stringify({ sessionId: this.getRuntimeId(), windowGroupId });
     if (options.beacon && typeof navigator.sendBeacon === 'function') {
       const sent = navigator.sendBeacon('/api/window-group/close', body);
       if (sent) return;
@@ -203,6 +210,12 @@ function assertSupportedProtocolVersion(value: unknown): void {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
+}
+
+export function splitRuntimeSessionId(value: string): { sessionId: string; kit?: string } {
+  const separator = value.indexOf('::');
+  if (separator <= 0 || separator + 2 >= value.length) return { sessionId: value };
+  return { sessionId: value.slice(0, separator), kit: value.slice(separator + 2) };
 }
 
 export function getSessionIdFromURL(): string {

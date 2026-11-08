@@ -164,7 +164,11 @@ function createEnvironment(config, ports, dataRoot) {
       SERVER_PORT: String(ports.server),
       CLIENT_PORT: String(ports.client),
     },
-    server: { ...common, PORT: String(ports.server) },
+    server: {
+      ...common,
+      CE_CLIENT_ENTRY: common.CE_CLIENT_ENTRY?.trim() ? common.CE_CLIENT_ENTRY : '/src/index.ts',
+      PORT: String(ports.server),
+    },
     client: { ...common, CLIENT_PORT: String(ports.client) },
   };
 }

@@ -117,6 +117,50 @@ describe('EditorTransport', () => {
     expect(existingSession.connected).toBe(true);
   });
 
+  it('uses the base Session for secondary window metadata and the composite ID for its runtime', async () => {
+    const secondary = new EditorTransport(new ClientSession('base-session::harness'));
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({ sessionId: 'base-session' }) } as Response);
+    fetchSpy.mockResolvedValueOnce({ ok: true, json: async () => ({ protocolVersion: 1, sessionId: 'base-session::harness', menuTree: [] }) } as Response);
+    await secondary.fetchSessionInfo();
+    await secondary.fetchBootstrap();
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/session/base-session');
+    expect(fetchSpy.mock.calls[1][0]).toBe('/api/bootstrap/base-session%3A%3Aharness');
+    secondary.connectSSE();
+    expect(MockEventSource.instances.at(-1)?.url).toMatch(/^\/sse\/base-session::harness\?/);
+  });
+
+  it('initializes a missing composite runtime using the base Session and Kit', async () => {
+    const secondary = new EditorTransport(new ClientSession('base-session::harness'));
+    fetchSpy.mockResolvedValueOnce({ ok: false, status: 404 } as Response)
+      .mockResolvedValueOnce({ ok: true } as Response)
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ protocolVersion: 1, sessionId: 'base-session::harness' }) } as Response);
+    await secondary.fetchBootstrap();
+    expect(fetchSpy).toHaveBeenNthCalledWith(2, '/api/session', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'base-session', kit: 'harness' }),
+    });
+    expect(fetchSpy.mock.calls[2][0]).toBe('/api/bootstrap/base-session%3A%3Aharness');
+  });
+
+  it('uses the composite runtime identity for panel and window mutations', async () => {
+    const primary = new EditorTransport(new ClientSession('base-session'), { kit: 'harness' });
+    fetchSpy.mockResolvedValue({ ok: true, json: async () => ({}) } as Response);
+    await primary.openPanel('panel');
+    await primary.sendMessageResult('request', { ok: true, value: null });
+    await primary.markPanelFloating('instance');
+    await primary.closePanelInstance('instance');
+    await primary.setPanelInstanceState('instance', 'open');
+    await primary.closeWindowGroup('window');
+    expect(fetchSpy.mock.calls.map(([url, options]) => [url, JSON.parse(options!.body as string).sessionId])).toEqual([
+      ['/api/panel/open', 'base-session::harness'],
+      ['/api/message/result', 'base-session::harness'],
+      ['/api/panel-instance/fallback', 'base-session::harness'],
+      ['/api/panel-instance/close', 'base-session::harness'],
+      ['/api/panel-instance/state', 'base-session::harness'],
+      ['/api/window-group/close', 'base-session::harness'],
+    ]);
+  });
+
   it('fetchSessionInfo throws when the read fails', async () => {
     fetchSpy.mockResolvedValueOnce({ ok: false, status: 500 } as Response);
 

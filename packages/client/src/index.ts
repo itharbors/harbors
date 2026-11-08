@@ -42,6 +42,9 @@ export async function startClientApp(
   authorizationPollDelayMs = 2000,
 ): Promise<void> {
   if (!(host instanceof HTMLElement)) return;
+  // A secondary Kit entry already owns its window-group shell. Replacing it
+  // with the primary picker destroys the requested secondary window.
+  if (host.querySelector(':scope > window-group-app')) return;
 
   // Remote access: check device authorization before proceeding.
   if (remoteAccess) {

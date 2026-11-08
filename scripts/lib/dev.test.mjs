@@ -67,6 +67,14 @@ test('exposes only the Gateway while keeping development upstreams on loopback',
   assert.equal(stack.gatewayEnv.HARBORS_BIND_HOST, '0.0.0.0');
   assert.equal(stack.serverEnv.HARBORS_BIND_HOST, '127.0.0.1');
   assert.equal(stack.clientEnv.HARBORS_BIND_HOST, '127.0.0.1');
+  assert.equal(stack.serverEnv.CE_CLIENT_ENTRY, '/src/index.ts');
+});
+
+test('preserves an explicit development client entry', () => {
+  const stack = createDevStackEnvironments({ CE_CLIENT_ENTRY: '/custom/client.js' }, '', 'development', [
+    { directory: '/repo/kits/default', source: 'builtin' },
+  ]);
+  assert.equal(stack.serverEnv.CE_CLIENT_ENTRY, '/custom/client.js');
 });
 
 test('passes a unified data root through the development environments', () => {

@@ -20,6 +20,17 @@ describe('client main entry', () => {
     expect(window.localStorage.getItem('harbors.sessionId')).toBe('s1');
   });
 
+  it('preserves the Kit-provided secondary shell without starting the primary picker', async () => {
+    const host = document.createElement('div');
+    host.innerHTML = '<window-group-app></window-group-app>';
+    const shell = host.firstElementChild;
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    await startClientApp(undefined, host, false);
+    expect(host.firstElementChild).toBe(shell);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('clears an invalid URL Session', () => {
     window.localStorage.setItem('harbors.sessionId', 'stale');
     window.history.replaceState({}, '', '/?session=missing');

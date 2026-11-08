@@ -30,7 +30,11 @@ export function createDevStackEnvironments(baseEnv, requestedKit, profile = 'dev
       SERVER_PORT: String(ports.server),
       CLIENT_PORT: String(ports.client),
     },
-    serverEnv: { ...createDevServerEnv(common, requestedKit, kitSources), PORT: String(ports.server) },
+    serverEnv: {
+      ...createDevServerEnv(common, requestedKit, kitSources),
+      CE_CLIENT_ENTRY: common.CE_CLIENT_ENTRY?.trim() ? common.CE_CLIENT_ENTRY : '/src/index.ts',
+      PORT: String(ports.server),
+    },
     clientEnv: { ...common, CLIENT_PORT: String(ports.client) },
   };
 }

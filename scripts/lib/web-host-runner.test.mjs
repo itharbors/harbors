@@ -60,6 +60,7 @@ test('starts a fully isolated Web Host contract and cleans every fixture child',
       HARBORS_PLUGIN_DATA_ROOT: '/do/not/use/plugins',
       HARBORS_PLUGIN_CACHE_ROOT: '/do/not/use/cache',
       HARBORS_PLUGIN_TEMP_ROOT: '/do/not/use/temp',
+      CE_CLIENT_ENTRY: '',
     },
     spawnProcess: (command, args, options) => {
       const child = fixtureChild();
@@ -87,6 +88,7 @@ test('starts a fully isolated Web Host contract and cleans every fixture child',
   assert.equal(calls[0].options.env.CE_DEFAULT_KIT, '@example/kit-alpha');
   assert.equal(calls[0].options.env.PORT, '40101');
   assert.equal(calls[1].options.env.PORT, '40102');
+  assert.equal(calls[1].options.env.CE_CLIENT_ENTRY, '/src/index.ts');
   assert.equal(calls[2].options.env.CLIENT_PORT, '40103');
   assert.equal(calls[0].options.env.HARBORS_BIND_HOST, '0.0.0.0');
   assert.equal(calls[1].options.env.HARBORS_BIND_HOST, '127.0.0.1');
@@ -114,6 +116,7 @@ test('preserves an external data root after normal stop', async () => {
     dataRoot: '/var/lib/harbors-fixture',
     kitSources: [{ directory: '/repo/kits/alpha', source: 'builtin' }],
     defaultKit: '@example/kit-alpha',
+    environment: { CE_CLIENT_ENTRY: '/custom/client.js' },
     allocatePorts: async () => ({ gateway: 40401, server: 40402, client: 40403, notification: 40404 }),
     makeTempDirectory: async () => '/tmp/web-host-external',
     removeDirectory: async (directory) => removed.push(directory),
@@ -126,6 +129,7 @@ test('preserves an external data root after normal stop', async () => {
   });
   assert.equal(handle.dataRoot, '/var/lib/harbors-fixture');
   assert.equal(calls[1].options.env.HARBORS_DATA_ROOT, '/var/lib/harbors-fixture');
+  assert.equal(calls[1].options.env.CE_CLIENT_ENTRY, '/custom/client.js');
   await handle.stop();
   assert.deepEqual(removed, ['/tmp/web-host-external']);
 });

@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { parse, type DefaultTreeAdapterMap } from 'parse5';
 import type { Editor } from '../editor/types';
 import { HttpError } from '../http/errors';
 
@@ -59,15 +60,31 @@ function renderWindowEntryHtml(html: string): string {
 
 function rewriteClientEntryScript(html: string): string {
   const clientEntry = getClientEntryScript();
-  return html.replace(
-    /(<script\b[^>]*\btype=["']module["'][^>]*\bsrc=["'])\/assets\/index\.js(["'][^>]*><\/script>)/gu,
-    `$1${clientEntry}$2`,
-  );
+  const replacements: Array<{ start: number; end: number }> = [];
+  const document = parse(html, { sourceCodeLocationInfo: true });
+  const visit = (node: DefaultTreeAdapterMap['node']): void => {
+    if ('tagName' in node && node.tagName === 'script') {
+      const type = node.attrs.find((attribute) => attribute.name === 'type')?.value;
+      const src = node.attrs.find((attribute) => attribute.name === 'src')?.value;
+      const location = node.sourceCodeLocation?.attrs?.src;
+      if (type?.toLowerCase() === 'module'
+        && (src === '/assets/index.js' || src === '/src/index.ts') && location) {
+        replacements.push({ start: location.startOffset, end: location.endOffset });
+      }
+    }
+    if ('childNodes' in node) node.childNodes.forEach(visit);
+  };
+  visit(document);
+  const escapedEntry = clientEntry.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;').replace(/</gu, '&lt;');
+  for (const { start, end } of replacements.sort((left, right) => right.start - left.start)) {
+    html = `${html.slice(0, start)}src="${escapedEntry}"${html.slice(end)}`;
+  }
+  return html;
 }
 
 function getClientEntryScript(): string {
   if (isNonEmptyString(process.env.CE_CLIENT_ENTRY)) return process.env.CE_CLIENT_ENTRY;
-  return process.env.NODE_ENV === 'production' ? '/assets/index.js' : '/src/index.ts';
+  return '/assets/index.js';
 }
 
 function ensureWindowEntryStyle(html: string): string {
