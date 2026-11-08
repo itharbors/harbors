@@ -198,6 +198,9 @@ importers:
       better-sqlite3:
         specifier: ^12.10.1
         version: 12.11.1
+      parse5:
+        specifier: 8.0.1
+        version: 8.0.1
     devDependencies:
       '@types/better-sqlite3':
         specifier: ^7.6.0

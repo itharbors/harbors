@@ -1,0 +1,14 @@
+{
+  "name": "ui-guide",
+  "version": "0.0.1",
+  "type": "module",
+  "main": "./main/dist/index.js",
+  "ce-editor": {
+    "schemaVersion": 1,
+    "contribute": {
+      "panel": { "main": { "entry": "./panel.main/dist/index.html", "title": "界面规范" } },
+      "message": { "request": { "openGuide": ["openGuide"], "getLocalGuidePanel": ["getLocalGuidePanel"] } },
+      "menu": [{ "type": "menu", "id": "view/panels/harness-ui-guide", "message": "openGuide", "localMessage": "getLocalGuidePanel", "order": 1020, "label": "界面规范" }]
+    }
+  }
+}

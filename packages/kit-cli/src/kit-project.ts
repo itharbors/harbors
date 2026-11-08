@@ -7,6 +7,7 @@ import {
 } from 'node:fs/promises';
 import path from 'node:path';
 import { parse as parseYaml } from 'yaml';
+import ts from 'typescript';
 
 import {
   normalizeArchivePath,
@@ -123,6 +124,20 @@ async function assertRegularFile(file: string, context: string): Promise<void> {
   if (!info.isFile()) {
     throw new Error(`${context} must be a regular file`);
   }
+}
+
+/** A Panel UI entry is a single self-contained browser module, not a resource tree. */
+function assertSinglePanelUiBundle(source: string): void {
+  const file = ts.createSourceFile('panel-ui.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node) || ts.isImportEqualsDeclaration(node)
+      || (ts.isExportDeclaration(node) && !!node.moduleSpecifier)
+      || (ts.isCallExpression(node) && node.expression.kind === ts.SyntaxKind.ImportKeyword)) {
+      throw new Error('panelUi must be a single bundle without runtime imports');
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
 }
 
 async function containsPackageJson(directory: string): Promise<boolean> {
@@ -541,6 +556,22 @@ export async function validateKit(directory: string): Promise<ValidatedKitProjec
     assertInside(kitDirectory, absolutePath, context);
     await assertRegularFile(absolutePath, context);
     await append(absolutePath, value);
+  }
+
+  if (kit.panelUi !== undefined) {
+    const entry = nonEmptyString(kit.panelUi, 'panelUi');
+    if (!/^[a-zA-Z0-9@._/-]+\.(?:m?js)$/u.test(entry) || path.posix.isAbsolute(entry)
+      || entry.split('/').some((part) => !part || part === '.' || part === '..')) {
+      throw new Error('panelUi must be a relative .js or .mjs file path');
+    }
+    const uiFile = path.resolve(kitDirectory, entry);
+    assertInside(kitDirectory, uiFile, 'panelUi');
+    await assertRegularFile(uiFile, 'panelUi');
+    const actualRoot = await realpath(kitDirectory);
+    const actualFile = await realpath(uiFile);
+    assertInside(actualRoot, actualFile, 'panelUi');
+    assertSinglePanelUiBundle(await readFile(uiFile, 'utf8'));
+    await append(uiFile, entry);
   }
 
   for (const plugin of plugins) {

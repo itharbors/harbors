@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
+import { parse } from 'parse5';
 import type { Editor } from '../editor/types';
 import type { I18nVisibleSnapshot } from '../framework/i18n/types';
 import type { PanelModule } from '../framework/panel';
@@ -8,8 +10,20 @@ import type { PanelRegistration } from '../framework/panel/types';
 import { PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
 import type { PanelRequestCapability } from './panel-request-capability';
 import { HttpError } from '../http/errors';
+import { resolveKitPanelUi } from '../framework/kit/panel-ui';
+import { hasEarlyPanelExecution } from './panel-html-order';
 
 export { createPanelFileRuntime, PANEL_FILE_RUNTIME_FACTORY_SOURCE } from './panel-file-runtime';
+
+function readKitPanelUi(root: string, entry: unknown): Buffer {
+  const value = resolveKitPanelUi(root, entry);
+  if (!value) throw new Error('No Kit UI entry');
+  return readFileSync(realpathSync(path.resolve(root, value)));
+}
+
+function kitUiFingerprint(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
+}
 
 function escapeForScript(value: string): string {
   return JSON.stringify(value).replace(/</g, '\\u003c');
@@ -109,11 +123,13 @@ function createPanelRuntimeScript(
   initialSnapshot: I18nVisibleSnapshot,
   sessionId: string | null,
   panelCapability?: string,
+  panelUiUrl?: string,
 ): string {
   const panelLiteral = escapeForScript(panelName);
   const panelPluginLiteral = escapeForScript(panelPluginName);
   const sessionLiteral = escapeForScript(sessionId ?? '');
   const panelCapabilityLiteral = panelCapability ? escapeForScript(panelCapability) : 'undefined';
+  const panelUiLiteral = panelUiUrl ? escapeForScript(panelUiUrl) : 'undefined';
   const snapshotLiteral = escapeForScript(JSON.stringify(initialSnapshot));
   const panelFileRuntimeFactory = PANEL_FILE_RUNTIME_FACTORY_SOURCE.replace(/<\/script/gi, '<\\/script');
 
@@ -122,6 +138,7 @@ function createPanelRuntimeScript(
     const panelPluginName = ${panelPluginLiteral};
     const sessionId = ${sessionLiteral};
     let panelCapability = ${panelCapabilityLiteral};
+    const panelUiUrl = ${panelUiLiteral};
     let panelCapabilityRefreshPromise = null;
     const panelFileRuntime = (${panelFileRuntimeFactory})(window, document);
     window.__panelI18n = {
@@ -131,7 +148,7 @@ function createPanelRuntimeScript(
     window.__panelDefinition = undefined;
     const channelName = \`ce-session:\${sessionId}\`;
     window.__panelChannel = createSessionChannel(channelName);
-    window.parent.postMessage({ type: 'panel-ready', panel: panelName }, '*');
+    if (!panelUiUrl) window.parent.postMessage({ type: 'panel-ready', panel: panelName }, '*');
 
     function createSessionChannel(name) {
       if (typeof BroadcastChannel !== 'function') return null;
@@ -410,6 +427,19 @@ function createPanelRuntimeScript(
       panelKey: panelName,
     };
 
+    if (panelUiUrl) {
+      try {
+        await import(panelUiUrl);
+      } catch (error) {
+        const message = document.createElement('p');
+        message.setAttribute('role', 'alert');
+        message.textContent = 'Kit UI 加载失败，面板未启动。';
+        document.body.appendChild(message);
+        console.error('Kit UI failed to load; panel was not mounted', error);
+        throw error;
+      }
+      window.parent.postMessage({ type: 'panel-ready', panel: panelName }, '*');
+    }
     const panelModule = sessionId
       ? await import(\`./index.js?sessionId=\${encodeURIComponent(sessionId)}\`)
       : await import('./index.js');
@@ -419,13 +449,18 @@ function createPanelRuntimeScript(
     }
     window.__panelDefinition = definition;
     await window.__panelDefinition?.mount?.(window.editor);
+    window.parent.postMessage({ type: 'panel-mounted', panel: panelName }, '*');
   </script>`;
 }
 
 function injectRuntimeIntoHtml(html: string, runtimeScript: string): string {
-  if (/<body(\s[^>]*)?>/i.test(html)) {
-    return html.replace(/<body(\s[^>]*)?>/i, (match) => `${match}\n${runtimeScript}`);
-  }
+  const document = parse(html, { sourceCodeLocationInfo: true });
+  const htmlElement = document.childNodes.find((node) => 'tagName' in node && node.tagName === 'html');
+  const body = htmlElement && 'childNodes' in htmlElement
+    ? htmlElement.childNodes.find((node) => 'tagName' in node && node.tagName === 'body')
+    : undefined;
+  const offset = body && 'tagName' in body ? body.sourceCodeLocation?.startTag?.endOffset : undefined;
+  if (offset !== undefined) return `${html.slice(0, offset)}\n${runtimeScript}${html.slice(offset)}`;
   return `${runtimeScript}\n${html}`;
 }
 
@@ -523,7 +558,11 @@ export function createPanelAssetRouter(
     const url = new URL(req.url || '/', 'http://localhost');
     const panelMatch = url.pathname.match(/^\/api\/assets\/panel\/([^/]+)\/(.+)$/);
     const pluginAssetMatch = url.pathname.match(/^\/api\/assets\/plugin\/([^/]+)\/(.+)$/);
+    const kitUiRequest = url.pathname === '/api/assets/kit-ui.js';
     const requestedSessionId = getSessionId(url);
+    if (kitUiRequest && (!requestedSessionId || url.searchParams.getAll('sessionId').length !== 1 || !options.assertSessionAccess)) {
+      throw new HttpError(403, 'SESSION_REQUIRED', 'Kit UI requests must identify an accessible Session');
+    }
     if (requestedSessionId) {
       options.assertSessionAccess?.(req, requestedSessionId);
     } else if (source instanceof Map && options.allowUnscopedFallback?.(req) === false) {
@@ -534,6 +573,34 @@ export function createPanelAssetRouter(
       res.statusCode = 404;
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ error: 'Not found' }));
+      return;
+    }
+
+    if (kitUiRequest) {
+      if ([...url.searchParams.keys()].some((key) => !['sessionId', 'kit', 'v'].includes(key))) {
+        throw new HttpError(404, 'KIT_UI_NOT_FOUND', 'Kit UI not found');
+      }
+      const editor = source instanceof Map && requestedSessionId ? source.get(requestedSessionId) : undefined;
+      const kit = editor?.kit.getCurrent();
+      const root = editor?.kit.getCurrentDirectory();
+      const expectedKit = url.searchParams.getAll('kit');
+      if (!editor || !kit || !root || expectedKit.length !== 1 || expectedKit[0] !== kit.name || !kit.panelUi) {
+        throw new HttpError(404, 'KIT_UI_NOT_FOUND', 'Kit UI not found');
+      }
+      let bytes: Buffer;
+      try {
+        bytes = readKitPanelUi(root, kit.panelUi);
+      } catch {
+        throw new HttpError(404, 'KIT_UI_NOT_FOUND', 'Kit UI not found');
+      }
+      const expectedFingerprint = url.searchParams.getAll('v');
+      if (expectedFingerprint.length !== 1 || expectedFingerprint[0] !== kitUiFingerprint(bytes)) {
+        throw new HttpError(404, 'KIT_UI_NOT_FOUND', 'Kit UI not found');
+      }
+      res.statusCode = 200;
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Content-Type', 'text/javascript; charset=utf-8');
+      res.end(bytes);
       return;
     }
 
@@ -592,8 +659,31 @@ export function createPanelAssetRouter(
       if (relativePath === 'index.html') {
         const editor = getEditor(source, panelName, sessionId);
         const initialSnapshot = editor?.i18n.getVisibleSnapshot() ?? emptyI18nSnapshot();
+        const kit = editor?.kit?.getCurrent();
+        let panelUiUrl: string | undefined;
+        if (url.searchParams.get('panelUi') === '1' && kit?.panelUi && !sessionId) {
+          throw new HttpError(403, 'SESSION_REQUIRED', 'Kit UI panels must identify an accessible Session');
+        }
+        const sourceHtml = readFileSync(reg.module, 'utf-8');
+        if (url.searchParams.get('panelUi') === '1' && sessionId && kit?.panelUi && editor) {
+          let fingerprint = 'unavailable';
+          try {
+            const root = editor.kit.getCurrentDirectory();
+            if (root) fingerprint = kitUiFingerprint(readKitPanelUi(root, kit.panelUi));
+          } catch { /* The runtime shows an error rather than starting without the Kit UI. */ }
+          panelUiUrl = `/api/assets/kit-ui.js?sessionId=${encodeURIComponent(sessionId)}&kit=${encodeURIComponent(kit.name)}&v=${fingerprint}`;
+        }
+        // Panel HTML must let the runtime establish UI registration first.
+        // This is an ordering contract, not a security/sanitization boundary.
+        if (panelUiUrl && hasEarlyPanelExecution(sourceHtml)) {
+          res.statusCode = 422;
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.end(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>面板无法启动</title></head><body><p role="alert">面板无法启动：启用 Kit UI 的直接面板 HTML 不允许包含脚本、内联事件或嵌套 srcdoc，也不允许 meta refresh；请由 Panel runtime 加载入口脚本。</p><!--${' '.repeat(512)}--></body></html>`);
+          return;
+        }
         const html = injectRuntimeIntoHtml(
-          scopeRelativePanelAssets(readFileSync(reg.module, 'utf-8'), sessionId),
+          scopeRelativePanelAssets(sourceHtml, sessionId),
           createPanelRuntimeScript(
             panelName,
             reg.owner,
@@ -606,6 +696,7 @@ export function createPanelAssetRouter(
                 ownerPlugin: reg.owner,
               })
               : undefined,
+            panelUiUrl,
           ),
         );
         res.statusCode = 200;

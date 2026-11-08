@@ -31,6 +31,44 @@ function mockRes(): { res: ServerResponse; body: () => string; statusCode: () =>
 }
 
 describe('createPanelAssetRouter', () => {
+  it('injects after the real body tag, not body-like text in comments or textarea', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-body-location-'));
+    try {
+      const entry = path.join(root, 'index.html');
+      const original = '<!doctype html><!-- <body>fake</body> --><html><head></head><body data-label="<body>"><textarea><body>example</textarea><main>正文</main></body></html>';
+      fs.writeFileSync(entry, original);
+      const panel = new PanelModule();
+      panel.register('owner.main', entry);
+      const response = mockRes();
+      createPanelAssetRouter(panel)(mockReq('GET', '/api/assets/panel/owner.main/index.html'), response.res);
+      expect(response.statusCode()).toBe(200);
+      const rendered = response.body();
+      expect(rendered).toContain('<!-- <body>fake</body> -->');
+      expect(rendered).toContain('<textarea><body>example</textarea>');
+      expect(rendered.indexOf('<body data-label="<body>">')).toBeLessThan(rendered.indexOf('<script type="module">'));
+      expect(rendered.indexOf('<script type="module">')).toBeLessThan(rendered.indexOf('<textarea>'));
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prepends the runtime when the document has no explicit body tag', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-implicit-body-'));
+    try {
+      const entry = path.join(root, 'index.html');
+      const original = '<!-- <body>not a tag</body> --><main>正文</main>';
+      fs.writeFileSync(entry, original);
+      const panel = new PanelModule();
+      panel.register('owner.main', entry);
+      const response = mockRes();
+      createPanelAssetRouter(panel)(mockReq('GET', '/api/assets/panel/owner.main/index.html'), response.res);
+      expect(response.body()).toMatch(/^<script type="module">/u);
+      expect(response.body()).toContain(original);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('serves HTML that injects runtime and imports the sibling index module', () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'panel-js-test-'));
     const panelPath = path.join(tmpDir, 'index.js');

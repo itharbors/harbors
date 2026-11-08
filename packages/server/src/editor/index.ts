@@ -7,6 +7,7 @@ import type { KitDescriptor, KitLayoutConfig, KitLayoutInputConfig } from '../fr
 import type { PanelConstraints } from '../framework/panel/types';
 import { KitModule, normalizeKitLayoutConfig } from '../framework/kit/index';
 import { normalizeKitTheme } from '../framework/kit/theme';
+import { resolveKitPanelUi } from '../framework/kit/panel-ui';
 import { MenuModule } from '../framework/menu/index';
 import { MessageModule, type MessageObservation } from '../framework/message/index';
 import { PanelModule } from '../framework/panel/index';
@@ -45,6 +46,7 @@ interface KitPackageJson {
     kit?: {
       layouts?: Record<string, string>;
       theme?: unknown;
+      panelUi?: unknown;
       plugin?: string[];
       startup?: {
         plugins?: string[];
@@ -357,6 +359,7 @@ export function createEditor(sessionId: string, options: CreateEditorOptions): E
       icon: pkg.icon,
       menuRoot: normalizeMenuRoot(pkg.name, pkg.label, pkg['ce-editor'].kit.menuRoot),
       theme: normalizeKitTheme(pkg['ce-editor'].kit.theme, pkg.name),
+      panelUi: resolveKitPanelUi(kitPath, pkg['ce-editor'].kit.panelUi),
       permissions: publication ? [...publication.permissions] : [],
       permissionGrants: publication?.permissionGrants
         ? Object.fromEntries(Object.entries(publication.permissionGrants).map(([permission, plugins]) => [

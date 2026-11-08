@@ -32,6 +32,30 @@ afterEach(async () => {
 });
 
 describe('validateKit', () => {
+  it('includes a self-contained Panel UI entry and rejects imports and unsafe paths', async () => {
+    const directory = await copyFixture();
+    const ui = path.join(directory, 'ui.js');
+    await writeFile(ui, 'customElements.define("kit-example", class extends HTMLElement {});');
+    await updateJson(path.join(directory, 'package.json'), (pkg) => { pkg['ce-editor'].kit.panelUi = 'ui.js'; });
+    expect((await validateKit(directory)).payload.map((file) => file.archivePath)).toContain('ui.js');
+    await writeFile(ui, 'import "./other.js";');
+    await expect(validateKit(directory)).rejects.toThrow(/single bundle without runtime imports/);
+    await writeFile(ui, 'await import("./other.js");');
+    await expect(validateKit(directory)).rejects.toThrow(/single bundle without runtime imports/);
+    await updateJson(path.join(directory, 'package.json'), (pkg) => { pkg['ce-editor'].kit.panelUi = '../outside.js'; });
+    await expect(validateKit(directory)).rejects.toThrow(/panelUi.*relative/);
+  });
+
+  it('rejects Panel UI entry symlinks outside the Kit', async () => {
+    const directory = await copyFixture();
+    const outside = path.join(path.dirname(directory), 'outside');
+    await mkdir(outside);
+    await writeFile(path.join(outside, 'ui.js'), '');
+    await symlink(outside, path.join(directory, 'linked'));
+    await updateJson(path.join(directory, 'package.json'), (pkg) => { pkg['ce-editor'].kit.panelUi = 'linked/ui.js'; });
+    await expect(validateKit(directory)).rejects.toThrow(/panelUi.*inside/);
+  });
+
   it('returns only the runtime files needed to publish a valid Kit', async () => {
     const project = await validateKit(fixtureDirectory);
 

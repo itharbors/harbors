@@ -24,6 +24,7 @@ export interface KitDescriptor {
   icon?: string;
   menuRoot: KitMenuRoot;
   theme?: Record<`--ce-${string}`, string>;
+  panelUi?: string;
   permissions?: KitPermission[];
   permissionGrants?: KitPermissionGrants;
   plugins: string[];

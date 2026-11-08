@@ -4,12 +4,13 @@
   "private": true,
   "scripts": {
     "build": "node ../../packages/kit-cli/dist/cli.js build .",
-    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:unit && pnpm run test:context-fixtures && pnpm run test:plugin && pnpm run test:assembly",
+    "test:kit": "node ../../packages/kit-cli/dist/cli.js validate . && pnpm run test:unit && pnpm run test:context-fixtures && pnpm run test:plugin && pnpm run test:assembly && pnpm run test:ui",
+    "test:ui": "pnpm --dir ../../packages/client exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts ui/panel-ui.test.ts",
     "test:unit": "pnpm run build && pnpm run test:unit:run",
     "test:unit:run": "pnpm --dir ../.. exec tsx --test \"kits/harness/plugins/**/{main/src,panel.*/src}/**/*.test.{ts,tsx}\" \"kits/harness/plugins/*/*.test.{ts,tsx}\"",
     "test:context-fixtures": "pnpm --dir ../.. exec tsx --test kits/harness/plugins/agent-context-store/eval/q30.fixture.test.ts",
     "test:plugin": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts plugins/conversation/tests/runtime.smoke.test.ts plugins/agent/tests/runtime.smoke.test.ts",
-    "test:assembly": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts tests/assembly.test.ts",
+    "test:assembly": "pnpm --dir ../../packages/server exec vitest run --root ../../kits/harness --config ../../kits/harness/vitest.config.ts tests/assembly.test.ts tests/viewport.test.ts",
     "eval:q30": "pnpm --dir ../.. exec tsx kits/harness/plugins/agent-context-store/eval/q30.runner.ts",
     "benchmark:p100": "pnpm --dir ../.. exec tsx kits/harness/plugins/agent-context-store/benchmark/p100.benchmark.ts",
     "smoke": "node tests/web-host.smoke.mjs"
@@ -37,14 +38,37 @@
         "preview",
         "debug",
         "settings",
-        "mermaid"
-      ]
+        "mermaid",
+        "ui-guide"
+      ],
+      "panelUi": "ui/panel-ui.js",
+      "theme": {
+        "--ce-color-neutral-0": "#0e1116",
+        "--ce-color-neutral-1": "#141920",
+        "--ce-color-neutral-2": "#1b222c",
+        "--ce-color-neutral-3": "#26303d",
+        "--ce-color-neutral-4": "#2a3440",
+        "--ce-color-neutral-5": "#475568",
+        "--ce-color-neutral-6": "#edf1f7",
+        "--ce-color-accent-500": "#2563eb",
+        "--ce-accent-hover": "#1d4ed8",
+        "--ce-text-on-accent": "#ffffff",
+        "--ce-text-muted": "#94a3b8",
+        "--ce-selection-bg": "#203957",
+        "--ce-radius-sm": "6px",
+        "--ce-radius-md": "8px",
+        "--ce-radius-lg": "12px"
+      }
     }
   },
   "harbors": {
     "distribution": "builtin",
-    "ci": { "runner": "ubuntu-latest" },
-    "docs": { "summary": "Harbors Harness AI Agent 工作台 Kit，提供对话、执行、模型服务、预览与调试能力" },
+    "ci": {
+      "runner": "ubuntu-latest"
+    },
+    "docs": {
+      "summary": "Harbors Harness AI Agent 工作台 Kit，提供对话、执行、模型服务、预览与调试能力"
+    },
     "resources": [],
     "scripts": {
       "build": "build",

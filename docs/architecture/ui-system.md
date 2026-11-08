@@ -79,6 +79,25 @@ BroadcastChannel、HTTP 和 SSE 协作：
 Panel 不应读取父页面私有对象，也不应假定存在 Node API。这样同一插件才能在
 浏览器、主窗口、次窗口和 floating carrier 中运行。
 
+### Kit UI 入口
+
+Kit 可通过 `ce-editor.kit.panelUi` 声明一个 Kit 内的 JS 文件，用于在工作台直接承载的每个
+Panel iframe 中注册自定义元素。加载顺序固定为：Framework Panel runtime、Kit UI 入口、插件
+Panel 入口及其 `mount`；UI 入口加载失败时插件不启动，并显示错误。未声明时维持原有行为。
+声明入口的 Kit，其直接 Panel 的 HTML 必须遵循只提供结构和样式的契约，不得自行加载脚本、
+内联事件或使用 `srcdoc`；不符合时 Framework 返回明确错误页。顺序约束不承担 HTML 安全过滤，
+插件自行加载的子 iframe 及其内容不在本期排序范围。
+
+入口为构建后的单文件 bundle，不依赖运行时导入其他 JS 文件；Kit 制品校验会检查该约束并收集
+文件，直接运行未经过制品校验的本地 Kit 仍属于受信代码。声明的文件不存在时 Kit 加载失败；
+已加载 Kit 的资源在 Panel 启动时无法读取或执行时，该 Panel 显示错误且不启动。
+资源由当前 Session 的 Kit 提供，不能通过资源请求指定任意文件。入口代码与插件运行在同一个
+iframe 的 JS 环境中，因此属于当前 Kit 的信任边界，而不是插件之间的隔离机制。每个 iframe 有
+自己的 Custom Elements 注册表，组件可使用原生 Shadow DOM 封装样式和 DOM。
+
+此机制只对工作台直接承载的 Panel 生效；插件内部自行嵌套的 iframe（包括设置页内的面板）不
+在注入范围。插件如需使用元素，只依赖元素名称、属性与事件这一公开接口，无须 import Kit 私有包。
+
 ## 国际化
 
 Server 的 I18nModule 持有当前 locale、默认 locale、消息层与 version。Client i18n store

@@ -94,6 +94,8 @@ importers:
 
   plugins/settings: {}
 
+  plugins/ui-guide: {}
+
 packages:
 
   '@ai-sdk/gateway@4.0.52':

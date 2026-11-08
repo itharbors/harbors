@@ -330,7 +330,8 @@ export function createApp(
     }
     if (
       url.startsWith('/api/assets/panel/') ||
-      url.startsWith('/api/assets/plugin/')
+      url.startsWith('/api/assets/plugin/') ||
+      url.startsWith('/api/assets/kit-ui.js?') || url === '/api/assets/kit-ui.js'
     ) {
       panelAssetRouter(req, res);
       return;

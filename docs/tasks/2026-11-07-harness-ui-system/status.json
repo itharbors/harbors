@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "taskId": "2026-11-07-harness-ui-system",
+  "type": "feature",
+  "updatedAt": "2026-11-08T07:02:11.900Z",
+  "stages": {
+    "requirements": "completed",
+    "design": "completed",
+    "implementation": "completed",
+    "verification": "blocked",
+    "consolidation": "pending"
+  },
+  "pullRequest": null
+}

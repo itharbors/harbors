@@ -1092,6 +1092,9 @@ export class EditorApp extends HTMLElement {
     const url = new URL(entry, window.location.origin || 'http://localhost');
     url.searchParams.set('sessionId', this.bootstrap?.sessionId ?? this.session?.sessionId ?? '');
     if (revision !== undefined) url.searchParams.set('panelRevision', String(revision));
+    // Only host-created panels opt into Kit UI initialization. This marker is
+    // not an authorization credential; the server validates the session.
+    url.searchParams.set('panelUi', '1');
     return `${url.pathname}${url.search}`;
   }
 

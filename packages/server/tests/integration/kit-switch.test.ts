@@ -194,6 +194,24 @@ function assemblyForKits(...kitDirectories: string[]) {
 }
 
 describe('kit lifecycle', () => {
+  it('rejects a missing Panel UI entry before activating the Kit', async () => {
+    const kitDir = createKit('panel-ui-missing-kit', []);
+    const manifestPath = path.join(kitDir, 'package.json');
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    manifest['ce-editor'].kit.panelUi = 'ui/missing.js';
+    writeJson(manifestPath, manifest);
+    const editor = createEditor('kit-ui-missing', { assembly: assemblyForKits(kitDir) });
+    try {
+      await expect(editor.kit.load(kitDir)).rejects.toThrow(/Kit panelUi file does not exist/);
+      expect(editor.kit.getCurrent()).toBeUndefined();
+      fs.mkdirSync(path.join(kitDir, 'ui'));
+      fs.writeFileSync(path.join(kitDir, 'ui', 'missing.js'), '');
+      await expect(editor.kit.load(kitDir)).resolves.toMatchObject({ panelUi: 'ui/missing.js' });
+    } finally {
+      removeKits(kitDir);
+    }
+  });
+
   it('keeps builtin plugins loaded and unloads external kit plugins on switch', async () => {
     const defaultKit = createDefaultKitFixture();
     const alternateKit = createAlternateKitFixture();
